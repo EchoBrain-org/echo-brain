@@ -9,9 +9,9 @@ profiles automatically.
 Provision Docker, Docker Compose v2, Cloudflare Tunnel, and registry access
 first. The EC2 security group remains closed to inbound traffic; the tunnel must
 target `127.0.0.1:80` for the Authority hostname. The wrapper does not install
-or configure host infrastructure. It accepts the release validator at the
-source-tree path `../release/clean-v1-release.py` or the installed deployment
-path `./release/clean-v1-release.py` used under `/srv/echo-authority-clean-v1`.
+or configure host infrastructure. It accepts the release and runtime-profile
+validators at their source-tree paths under `../release/` or their installed
+deployment paths under `./release/` in `/srv/echo-authority-clean-v1`.
 
 Deploy
 [`authority-observability-v1.template.json`](./authority-observability-v1.template.json)
@@ -33,6 +33,7 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 | --- | --- |
 | `onboarding.clean-v1.json` | Ordinary organization configuration, including the observability stack Region. Start from the committed example. |
 | `release.json` | Canonical clean-v1 release record. |
+| `runtime-profile.json` | Exact canonical runtime profile referenced by the release record. It contains the reviewed Compose and Caddy bytes, never a secret. |
 | `oidc-config.json` | OIDC configuration, including the exact callback above. |
 | `oidc-client-secret` | OIDC client secret. |
 | `slack-bot-token` | Slack bot token. |
@@ -47,7 +48,7 @@ mode-`0700` private data directory.
 cd deploy/organization-authority
 install -d -m 0700 /absolute/private/echo-onboarding
 cp onboarding.clean-v1.example.json /absolute/private/echo-onboarding/onboarding.clean-v1.json
-# Add the canonical release as release.json and the five provider files listed above.
+# Add the canonical release and its runtime profile, plus the provider files listed above.
 chmod 600 /absolute/private/echo-onboarding/*
 chmod 700 /absolute/private/echo-onboarding
 ./onboard-clean-v1.sh doctor --input-dir /absolute/private/echo-onboarding
@@ -213,6 +214,7 @@ is conclusively stopped. On the EC2 Authority host:
 After onboarding, use the exact-record replacement and checksum client reinstall
 procedure in [the clean-v1 release loop](../release/README.md), including
 [update-clean-v1.sh](./update-clean-v1.sh). It supports only
-baseline-preserving `clean-v1` image replacements, not schema migrations or
-automatic client updates. The current release record and clean state directory
-are the recovery unit.
+baseline-preserving `clean-v1` replacements, not schema migrations or automatic
+client updates. The recovery unit is the accepted image, its exact runtime
+profile, and the saved environment tuple; the release wrapper restores those
+together before it claims a recovered public Authority.

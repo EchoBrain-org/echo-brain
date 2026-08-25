@@ -12,15 +12,84 @@ import {
   writeFileSync,
 } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const DEPLOYMENT = "deploy/organization-authority";
+const RUNTIME_PROFILE_FILES = [
+  "Caddyfile.clean-v1",
+  "Caddyfile.clean-v1.ec2",
+  "compose.clean-v1.ec2.yaml",
+  "compose.clean-v1.yaml",
+] as const;
 
 function deploymentFile(name: string): string {
   return readFileSync(resolve(REPO, DEPLOYMENT, name), "utf8");
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function runtimeProfile(sourceSha: string) {
+  const files = Object.fromEntries(
+    RUNTIME_PROFILE_FILES.map((name) => [name, deploymentFile(name)]),
+  );
+  const bytes = `${canonicalJson({
+    files,
+    kind: "echo-clean-v1-runtime-profile",
+    schema_version: 1,
+    source_sha: sourceSha,
+  })}\n`;
+  return {
+    bytes,
+    digest: createHash("sha256").update(bytes, "utf8").digest("hex"),
+    files,
+  };
+}
+
+function releaseRecord({
+  image,
+  profile,
+  releaseId,
+  source,
+}: {
+  image: string;
+  profile: ReturnType<typeof runtimeProfile>;
+  releaseId: string;
+  source: string;
+}): string {
+  return `${canonicalJson({
+    authority_image: { reference: image },
+    baseline_compatibility_class: "clean-v1",
+    kind: "echo-clean-v1-release",
+    person_client: {
+      artifact_sha256: "b".repeat(64),
+      artifact_url: "https://downloads.example/echo-brain-person-client.tgz",
+      package: "@echo-brain/person-client",
+      version: "0.1.0-internal.1",
+    },
+    release_id: releaseId,
+    released_at: "2026-08-23T00:00:00Z",
+    runtime_profile: {
+      artifact_sha256: profile.digest,
+      artifact_url: "https://downloads.example/echo-brain-runtime-profile.json",
+      profile_version: "clean-v1-profile-1",
+    },
+    schema_version: 1,
+    source_sha: source,
+  })}\n`;
 }
 
 async function waitForFile(path: string): Promise<void> {
@@ -51,6 +120,8 @@ function preparedStatusFixture() {
   const installReleaseMarker = join(root, "credential-install-release");
   const image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const source = "c".repeat(40);
+  const releaseId = "clean-v1-status-test";
+  const profile = runtimeProfile(source);
   mkdirSync(release, { recursive: true });
   mkdirSync(privateDir, { recursive: true });
   mkdirSync(stateCredentialDir, { recursive: true });
@@ -58,8 +129,7 @@ function preparedStatusFixture() {
   mkdirSync(bin, { recursive: true });
   for (const file of [
     "onboard-clean-v1.sh",
-    "compose.clean-v1.yaml",
-    "compose.clean-v1.ec2.yaml",
+    ...RUNTIME_PROFILE_FILES,
   ]) {
     copyFileSync(resolve(REPO, DEPLOYMENT, file), join(deploy, file));
   }
@@ -67,26 +137,35 @@ function preparedStatusFixture() {
     resolve(REPO, "deploy/release/clean-v1-release.py"),
     join(release, "clean-v1-release.py"),
   );
+  copyFileSync(
+    resolve(REPO, "deploy/release/clean-v1-runtime-profile.py"),
+    join(release, "clean-v1-runtime-profile.py"),
+  );
   chmodSync(join(deploy, "onboard-clean-v1.sh"), 0o755);
-  const record = `${JSON.stringify({
-    authority_image: { reference: image },
-    baseline_compatibility_class: "clean-v1",
-    kind: "echo-clean-v1-release",
-    person_client: {
-      artifact_sha256: "b".repeat(64),
-      artifact_url: "https://downloads.example/echo-brain-person-client.tgz",
-      package: "@echo-brain/person-client",
-      version: "0.1.0-internal.1",
-    },
-    release_id: "clean-v1-status-test",
-    released_at: "2026-08-23T00:00:00Z",
-    schema_version: 1,
-    source_sha: source,
-  })}\n`;
+  const record = releaseRecord({ image, profile, releaseId, source });
   writeFileSync(join(releaseDir, "current.clean-v1.json"), record);
+  const profilesDir = join(releaseDir, "runtime-profiles");
+  const environmentsDir = join(releaseDir, "runtime-environments");
+  mkdirSync(profilesDir, { recursive: true });
+  mkdirSync(environmentsDir, { recursive: true });
+  writeFileSync(join(profilesDir, `${releaseId}.profile`), profile.bytes);
+  writeFileSync(join(releaseDir, "runtime-profile.active"), profile.bytes);
+  for (const name of RUNTIME_PROFILE_FILES) {
+    writeFileSync(join(deploy, name), profile.files[name]);
+  }
+  const environmentRecord = [
+    `ECHO_CLEAN_AUTHORITY_IMAGE=${image}`,
+    `ECHO_CLEAN_RELEASE_ID=${releaseId}`,
+    `ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${profile.digest}`,
+    "ECHO_CLEAN_RUNTIME_PROFILE_VERSION=clean-v1-profile-1",
+  ].join("\n") + "\n";
   writeFileSync(
     join(deploy, ".env.clean-v1"),
-    `ECHO_CLEAN_AUTHORITY_IMAGE=${image}\n`,
+    environmentRecord,
+  );
+  writeFileSync(
+    join(environmentsDir, `${releaseId}.env`),
+    environmentRecord,
   );
   chmodSync(privateDir, 0o700);
   const privateFiles: Record<string, string> = {
@@ -146,7 +225,8 @@ if [[ "$1" == compose ]]; then
       exit 0
       ;;
     *" run "*) printf '%s\\n' '{"next_step":"complete"}'; exit 0 ;;
-    *" ps -q authority "*) printf '%s\\n' fake-container; exit 0 ;;
+    *" ps -q authority "*) printf '%s\\n' fake-authority; exit 0 ;;
+    *" ps -q proxy "*) printf '%s\\n' fake-proxy; exit 0 ;;
   esac
   exit 0
 fi
@@ -157,6 +237,8 @@ if [[ "$1" == image && "$2" == inspect ]]; then
   exit 0
 fi
 if [[ "$1" == inspect ]]; then
+  if [[ "$*" == *io.echo-brain.release-id* ]]; then printf '%s\\n' "$ECHO_FAKE_RELEASE_ID"; exit 0; fi
+  if [[ "$*" == *io.echo-brain.runtime-profile-sha256* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNTIME_PROFILE_SHA256"; exit 0; fi
   if [[ "$*" == *.State.Running* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNNING"; exit 0; fi
   if [[ "$*" == *.State.Health* ]]; then printf '%s\\n' "$ECHO_FAKE_HEALTH"; exit 0; fi
   if [[ "$*" == *.Image* ]]; then printf '%s\\n' sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; exit 0; fi
@@ -170,6 +252,8 @@ exit 1
     PATH: `${bin}:${process.env.PATH}`,
     ECHO_FAKE_REPO_DIGEST: image,
     ECHO_FAKE_SOURCE: source,
+    ECHO_FAKE_RELEASE_ID: releaseId,
+    ECHO_FAKE_RUNTIME_PROFILE_SHA256: profile.digest,
     ECHO_FAKE_RUNNING: "true",
     ECHO_FAKE_HEALTH: "healthy",
     ECHO_FAKE_FAIL_FIRST_UP: "false",
@@ -205,6 +289,8 @@ exit 1
     installWaitMarker,
     installReleaseMarker,
     image,
+    profile,
+    releaseId,
     source,
     run,
     spawnRun,
@@ -233,6 +319,12 @@ describe("clean founder deployment profile", () => {
     expect(source).toContain("granola-owner-email");
     expect(source).toContain("clean-v1-release.py");
     expect(source).toContain('$DEPLOY_DIR/release/clean-v1-release.py');
+    expect(source).toContain("clean-v1-runtime-profile.py");
+    expect(source).toContain('$DEPLOY_DIR/release/clean-v1-runtime-profile.py');
+    expect(source).toContain("runtime-profile.json");
+    expect(source).toContain("runtime_profile_matches_prepared_tuple");
+    expect(source).toContain("service_uses_accepted_runtime_profile authority");
+    expect(source).toContain("service_uses_accepted_runtime_profile proxy");
     expect(source).toContain("< \"$PRIVATE_DIR/slack-bot-token\"");
     expect(source).toContain("docker image inspect");
     expect(source).toContain("compose_clean pull authority");
@@ -656,14 +748,17 @@ describe("clean founder deployment profile", () => {
       mkdirSync(bin, { recursive: true });
       for (const file of [
         "onboard-clean-v1.sh",
-        "compose.clean-v1.yaml",
-        "compose.clean-v1.ec2.yaml",
+        ...RUNTIME_PROFILE_FILES,
       ]) {
         copyFileSync(resolve(REPO, DEPLOYMENT, file), join(deploy, file));
       }
       copyFileSync(
         resolve(REPO, "deploy/release/clean-v1-release.py"),
         join(release, "clean-v1-release.py"),
+      );
+      copyFileSync(
+        resolve(REPO, "deploy/release/clean-v1-runtime-profile.py"),
+        join(release, "clean-v1-runtime-profile.py"),
       );
       chmodSync(join(deploy, "onboard-clean-v1.sh"), 0o755);
       const calls = join(root, "docker-calls");
@@ -682,24 +777,18 @@ describe("clean founder deployment profile", () => {
       const inputDir = join(root, "onboarding-input");
       mkdirSync(inputDir);
       chmodSync(inputDir, 0o700);
-      const releaseRecord = join(inputDir, "release.json");
+      const releasePath = join(inputDir, "release.json");
+      const source = "c".repeat(40);
+      const profile = runtimeProfile(source);
+      writeFileSync(join(inputDir, "runtime-profile.json"), profile.bytes);
       writeFileSync(
-        releaseRecord,
-        `${JSON.stringify({
-          authority_image: { reference: image },
-          baseline_compatibility_class: "clean-v1",
-          kind: "echo-clean-v1-release",
-          person_client: {
-            artifact_sha256: "b".repeat(64),
-            artifact_url: "https://downloads.example/echo-brain-person-client.tgz",
-            package: "@echo-brain/person-client",
-            version: "0.1.0-internal.1",
-          },
-          release_id: "clean-v1-onboarding-test",
-          released_at: "2026-08-23T00:00:00Z",
-          schema_version: 1,
-          source_sha: "c".repeat(40),
-        })}\n`,
+        releasePath,
+        releaseRecord({
+          image,
+          profile,
+          releaseId: "clean-v1-onboarding-test",
+          source,
+        }),
       );
       writeFileSync(
         join(inputDir, "onboarding.clean-v1.json"),
@@ -861,6 +950,36 @@ describe("clean founder deployment profile", () => {
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         "ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/authority.example.com",
       );
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        `ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${profile.digest}`,
+      );
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        "ECHO_CLEAN_RUNTIME_PROFILE_VERSION=clean-v1-profile-1",
+      );
+      expect(
+        readFileSync(
+          join(
+            deploy,
+            "clean-data/release/runtime-profiles/clean-v1-onboarding-test.profile",
+          ),
+          "utf8",
+        ),
+      ).toBe(profile.bytes);
+      expect(
+        readFileSync(
+          join(deploy, "clean-data/release/runtime-profile.active"),
+          "utf8",
+        ),
+      ).toBe(profile.bytes);
+      expect(
+        readFileSync(
+          join(
+            deploy,
+            "clean-data/release/runtime-environments/clean-v1-onboarding-test.env",
+          ),
+          "utf8",
+        ),
+      ).toBe(readFileSync(join(deploy, ".env.clean-v1"), "utf8"));
       expect(statSync(join(deploy, "clean-data")).uid).toBe(
         statSync(inputDir).uid,
       );
@@ -994,8 +1113,9 @@ describe("clean founder deployment profile", () => {
       deploymentFile("Caddyfile.clean-v1.ec2"),
     ].join("\n");
 
-    for (const forbidden of ["installation", "enrollment", "lease"]) {
+    for (const forbidden of ["installation", "enrollment"]) {
       expect(cleanFiles).not.toContain(forbidden);
     }
+    expect(cleanFiles).not.toContain("lease-token");
   });
 });

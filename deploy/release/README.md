@@ -4,12 +4,19 @@ This directory contains the small release boundary used after the first live
 organization release. It is deliberately an artifact-selection process, not a
 schema migration or client fleet-management system.
 
+The runtime-profile field is current-only. A pre-beta Authority prepared with
+an older release record has no compatibility bridge. While there are no live
+users, run `onboard-clean-v1.sh replace-rehearsal
+--confirm-no-live-users`, then prepare the organization again with the new
+release record and matching profile. Do not point this updater at the older
+accepted record.
+
 ## Release record
 
 For each candidate, create exactly one non-secret JSON record containing the
 source commit, immutable Authority image reference, Person-client package
-version, HTTPS artifact location, artifact SHA-256, and compatibility class.
-The only supported compatibility class is `clean-v1`.
+version and artifact, the reviewed Authority runtime profile, and compatibility
+class. The only supported compatibility class is `clean-v1`.
 
 Use the committed-source pack command first. Its JSON output supplies the
 client version and SHA-256:
@@ -29,6 +36,26 @@ container.
 npm run build:authority-image -- echo-organization-authority:release-candidate
 ```
 
+CI separately builds and exercises the Authority for Linux arm64 and records
+its OCI source label. It has no registry credentials: publishing the image and
+supplying the immutable ECR digest remain an explicit release-operator input.
+
+Create the runtime profile from the four reviewed deployment files in the same
+committed source, then validate and record its digest. This profile is a
+canonical, non-secret capture of both Compose and Caddy files. The release
+operator publishes or transfers it alongside the release record; CI never
+pushes it or an image to a registry.
+
+```sh
+npm run profile:clean-v1-runtime -- \
+  deploy/organization-authority \
+  /absolute/private/release-artifacts/runtime-profile.json
+node tools/clean-v1-runtime-profile.mjs validate \
+  /absolute/private/release-artifacts/runtime-profile.json
+node tools/clean-v1-runtime-profile.mjs digest \
+  /absolute/private/release-artifacts/runtime-profile.json
+```
+
 Create a non-secret draft record from the reviewed image digest and pack output,
 then canonicalize it once. The output path must not already exist.
 
@@ -42,7 +69,7 @@ node tools/clean-v1-release.mjs validate \
 Its canonical shape is:
 
 ```json
-{"authority_image":{"reference":"<aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:<64-lowercase-hex>"},"baseline_compatibility_class":"clean-v1","kind":"echo-clean-v1-release","person_client":{"artifact_sha256":"<64-lowercase-hex>","artifact_url":"https://downloads.example/echo-brain-person-client.tgz","package":"@echo-brain/person-client","version":"0.1.0-internal.1"},"release_id":"clean-v1-20260822-001","released_at":"2026-08-22T20:00:00Z","schema_version":1,"source_sha":"<40-lowercase-hex>"}
+{"authority_image":{"reference":"<aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:<64-lowercase-hex>"},"baseline_compatibility_class":"clean-v1","kind":"echo-clean-v1-release","person_client":{"artifact_sha256":"<64-lowercase-hex>","artifact_url":"https://downloads.example/echo-brain-person-client.tgz","package":"@echo-brain/person-client","version":"0.1.0-internal.1"},"release_id":"clean-v1-20260822-001","released_at":"2026-08-22T20:00:00Z","runtime_profile":{"artifact_sha256":"<64-lowercase-hex>","artifact_url":"https://downloads.example/echo-brain-authority-runtime-profile.json","profile_version":"clean-v1-profile-1"},"schema_version":1,"source_sha":"<40-lowercase-hex>"}
 ```
 
 The angle-bracket text above is explanatory only; it is not valid record data.
@@ -60,10 +87,13 @@ pre-install a `current.clean-v1.json` record by hand:
 cd /srv/echo-authority-clean-v1
 install -d -m 0755 release
 install -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
+install -m 0755 /absolute/reviewed/clean-v1-runtime-profile.py release/clean-v1-runtime-profile.py
 install -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh
 install -d -m 0700 clean-data/release
 python3 release/clean-v1-release.py validate /absolute/private/release.json
-./update-clean-v1.sh stage --release /absolute/private/release.json
+python3 release/clean-v1-runtime-profile.py validate /absolute/private/runtime-profile.json
+./update-clean-v1.sh stage --release /absolute/private/release.json \
+  --runtime-profile /absolute/private/runtime-profile.json
 ```
 
 For this first stage only, the existing configured image may still be the
@@ -78,30 +108,39 @@ checks the actual running container image digest plus descriptor and safe setup
 status, but does not accept it yet.
 
 ```sh
-./update-clean-v1.sh stage --release /absolute/private/candidate-release.json
+./update-clean-v1.sh stage --release /absolute/private/candidate-release.json \
+  --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
-Perform one bounded post-update canary with the normal product surface: create
-or edit one post-cutoff Granola note, approve one resulting Slack card, then
-list and search that record with the packaged Person client. If it passes,
-make the human confirmation explicit:
+Perform one bounded post-update Layer 3 canary with the normal product surface:
+create or edit one post-cutoff Granola note, approve one resulting Slack card,
+then list and search that record through the packaged Person client. If it
+passes, make the human confirmation explicit:
 
 ```sh
 ./update-clean-v1.sh promote --release /absolute/private/candidate-release.json --canary-passed
 ```
 
-If it fails, restore only the prior **same-clean-v1** image and leave the
-accepted record unchanged:
+If it fails, restore the prior **same-clean-v1** image, runtime profile, and
+environment tuple and leave the accepted record unchanged:
 
 ```sh
 ./update-clean-v1.sh rollback
 ```
 
+The operation lock prevents concurrent changes. The environment, active
+profile, and four materialized deployment files are replaced individually, so
+a host power loss or `SIGKILL` during activation can leave a mixed local cache.
+The staged candidate record remains the recovery marker: inspect with `status`,
+then run `rollback` to rematerialize and verify the complete accepted tuple
+before retrying. Do not edit individual tuple files to recover.
+
 For first deployment, a stage failure stops the candidate, marks the record
 failed, and accepts nothing. The environment remains pointed at that failed
 candidate; a later first stage replaces it with its own immutable digest. For a later
-replacement, rollback must restart and re-check the prior exact digest before
-claiming recovery; otherwise it reports recovery as unconfirmed.
+replacement, rollback must restart and re-check the prior exact image, profile,
+and public descriptor before claiming recovery; otherwise it reports recovery
+as unconfirmed.
 
 `./update-clean-v1.sh status` inspects the actual running Authority container
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It

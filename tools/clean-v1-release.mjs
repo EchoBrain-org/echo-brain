@@ -82,6 +82,7 @@ export function validateCleanV1Release(value) {
       'person_client',
       'release_id',
       'released_at',
+      'runtime_profile',
       'schema_version',
       'source_sha',
     ],
@@ -111,6 +112,22 @@ export function validateCleanV1Release(value) {
   const artifactUrl = text(personClient.artifact_url, 'person_client.artifact_url', /^https:\/\/[^\s?#]+(?:[?#][^\s]*)?$/);
   const artifactSha256 = text(personClient.artifact_sha256, 'person_client.artifact_sha256', SHA256);
 
+  const runtimeProfile = object(record.runtime_profile, 'runtime_profile');
+  exactKeys(runtimeProfile, ['artifact_sha256', 'artifact_url', 'profile_version'], 'runtime_profile');
+  const runtimeProfileUrl = text(
+    runtimeProfile.artifact_url,
+    'runtime_profile.artifact_url',
+    /^https:\/\/[^\s?#]+(?:[?#][^\s]*)?$/,
+  );
+  const runtimeProfileSha256 = text(
+    runtimeProfile.artifact_sha256,
+    'runtime_profile.artifact_sha256',
+    SHA256,
+  );
+  if (runtimeProfile.profile_version !== 'clean-v1-profile-1') {
+    fail('runtime_profile.profile_version must equal clean-v1-profile-1');
+  }
+
   return Object.freeze({
     schema_version: 1,
     kind: 'echo-clean-v1-release',
@@ -124,6 +141,11 @@ export function validateCleanV1Release(value) {
       version: clientVersion,
       artifact_url: artifactUrl,
       artifact_sha256: artifactSha256,
+    }),
+    runtime_profile: Object.freeze({
+      artifact_url: runtimeProfileUrl,
+      artifact_sha256: runtimeProfileSha256,
+      profile_version: 'clean-v1-profile-1',
     }),
   });
 }
@@ -184,6 +206,9 @@ function main(argv) {
     'client-url': record.person_client.artifact_url,
     'client-sha256': record.person_client.artifact_sha256,
     'client-version': record.person_client.version,
+    'runtime-profile-url': record.runtime_profile.artifact_url,
+    'runtime-profile-sha256': record.runtime_profile.artifact_sha256,
+    'runtime-profile-version': record.runtime_profile.profile_version,
     'source-sha': record.source_sha,
   };
   if (!Object.hasOwn(fields, field)) fail(usage());

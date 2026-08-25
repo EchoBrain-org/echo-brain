@@ -92,6 +92,11 @@ jobs:
           ' "$stderr_file"
 
           artifact_sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          runtime_profile="$RUNNER_TEMP/echo-clean-v1-runtime-profile.json"
+          npm run profile:clean-v1-runtime -- \
+            "$GITHUB_WORKSPACE/deploy/organization-authority" "$runtime_profile"
+          node tools/clean-v1-runtime-profile.mjs validate "$runtime_profile" >/dev/null
+          runtime_profile_sha="$(node tools/clean-v1-runtime-profile.mjs digest "$runtime_profile")"
           release_draft="$RUNNER_TEMP/echo-clean-v1-release-draft.json"
           release_record="$RUNNER_TEMP/echo-clean-v1-release.json"
           node -e '
@@ -112,9 +117,15 @@ jobs:
                 artifact_url: "https://downloads.example.test/echo-brain-person-client.tgz",
                 artifact_sha256: process.argv[3],
               },
+              runtime_profile: {
+                artifact_url: "https://downloads.example.test/echo-brain-authority-runtime-profile.json",
+                artifact_sha256: process.argv[4],
+                profile_version: "clean-v1-profile-1",
+              },
             }));
-          ' "$release_draft" "$package_version" "$artifact_sha"
+          ' "$release_draft" "$package_version" "$artifact_sha" "$runtime_profile_sha"
           node tools/clean-v1-release.mjs create "$release_draft" "$release_record"
+          node tools/clean-v1-release.mjs validate "$release_record" >/dev/null
           kit="$pack_dir/echo-person-onboarding-kit.tar.gz"
           npm run kit:person-onboarding -- \
             --release "$release_record" \
@@ -136,6 +147,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
@@ -154,17 +169,116 @@ jobs:
           export ECHO_CLEAN_AUTHORITY_UID="$(id -u)"
           export ECHO_CLEAN_AUTHORITY_GID="$(id -g)"
           export ECHO_CLEAN_AUTHORITY_HOST=localhost
+          export ECHO_CLEAN_AWS_REGION=us-west-2
+          export ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/localhost
           cleanup() {
             docker compose --file "$compose" down \
               --volumes --remove-orphans >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
-          npm run build:authority-image -- "$ECHO_CLEAN_AUTHORITY_IMAGE"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          docker buildx build --platform linux/arm64 --load \
+            --build-arg "ECHO_SOURCE_SHA=$GITHUB_SHA" \
+            --file "$deployment/Dockerfile" \
+            --tag "$ECHO_CLEAN_AUTHORITY_IMAGE" .
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          authority_platform="$(docker image inspect --format '{{.Os}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
+          authority_architecture="$(docker image inspect --format '{{.Architecture}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
+          authority_source_sha="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
+          test "$authority_platform" = linux
+          test "$authority_architecture" = arm64
+          test "$authority_source_sha" = "$GITHUB_SHA"
+          authority_node_version="$(docker run --rm --entrypoint node "$ECHO_CLEAN_AUTHORITY_IMAGE" --version)"
+          test "$authority_node_version" = "v$PRODUCT_NODE_VERSION"
+
+          runtime_profile="$RUNNER_TEMP/echo-clean-v1-runtime-profile.json"
+          npm run profile:clean-v1-runtime -- "$deployment" "$runtime_profile"
+          node tools/clean-v1-runtime-profile.mjs validate "$runtime_profile" >/dev/null
+          runtime_profile_sha="$(node tools/clean-v1-runtime-profile.mjs digest "$runtime_profile")"
+          export ECHO_CLEAN_RELEASE_ID="clean-v1-ci-${GITHUB_SHA:0:12}"
+          export ECHO_CLEAN_RUNTIME_PROFILE_SHA256="$runtime_profile_sha"
+          release_draft="$RUNNER_TEMP/echo-clean-v1-authority-release-draft.json"
+          release_record="$RUNNER_TEMP/echo-clean-v1-authority-release.json"
+          node -e '
+            const fs = require("node:fs");
+            fs.writeFileSync(process.argv[1], JSON.stringify({
+              schema_version: 1,
+              kind: "echo-clean-v1-release",
+              release_id: `clean-v1-ci-${process.env.GITHUB_SHA.slice(0, 12)}`,
+              released_at: "2026-08-24T00:00:00Z",
+              baseline_compatibility_class: "clean-v1",
+              source_sha: process.env.GITHUB_SHA,
+              authority_image: {
+                reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"b".repeat(64)}`,
+              },
+              person_client: {
+                package: "@echo-brain/person-client",
+                version: process.argv[2],
+                artifact_url: "https://downloads.example.test/echo-brain-person-client.tgz",
+                artifact_sha256: "c".repeat(64),
+              },
+              runtime_profile: {
+                artifact_url: "https://downloads.example.test/echo-brain-authority-runtime-profile.json",
+                artifact_sha256: process.argv[3],
+                profile_version: "clean-v1-profile-1",
+              },
+            }));
+          ' "$release_draft" "$(node -p 'require("./src/product/person-client/package.json").version')" "$runtime_profile_sha"
+          node tools/clean-v1-release.mjs create "$release_draft" "$release_record"
+          node tools/clean-v1-release.mjs validate "$release_record" >/dev/null
+          release_record_sha="$(shasum -a 256 "$release_record" | awk '{print $1}')"
+
+          receipt="$RUNNER_TEMP/echo-clean-v1-authority-ci-receipt.json"
+          node - "$receipt" "$authority_platform" "$authority_architecture" \
+            "$authority_source_sha" "$authority_node_version" "$runtime_profile_sha" \
+            "$release_record_sha" <<'NODE'
+          const fs = require("node:fs");
+          const [output, platform, architecture, sourceSha, nodeVersion, profileSha, releaseSha] = process.argv.slice(2);
+          const receipt = {
+            authority: {
+              architecture,
+              node_runtime_version: nodeVersion,
+              oci_source_sha: sourceSha,
+              platform,
+            },
+            kind: "echo-clean-v1-ci-authority-receipt",
+            release_record_sha256: releaseSha,
+            runtime_profile_sha256: profileSha,
+            schema_version: 1,
+          };
+          const canonical = (value) => {
+            if (value === null || typeof value !== "object") return JSON.stringify(value);
+            if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+            return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+          };
+          fs.writeFileSync(output, `${canonical(receipt)}\n`, { encoding: "utf8", mode: 0o600 });
+          NODE
+          node -e '
+            const fs = require("node:fs");
+            const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (
+              receipt.kind !== "echo-clean-v1-ci-authority-receipt" ||
+              receipt.authority?.platform !== "linux" ||
+              receipt.authority?.architecture !== "arm64" ||
+              receipt.authority?.oci_source_sha !== process.env.GITHUB_SHA ||
+              !/^v22\.22\.1$/.test(receipt.authority?.node_runtime_version ?? "") ||
+              !/^[0-9a-f]{64}$/.test(receipt.runtime_profile_sha256 ?? "") ||
+              !/^[0-9a-f]{64}$/.test(receipt.release_record_sha256 ?? "")
+            ) throw new Error(`unexpected sanitized CI receipt: ${JSON.stringify(receipt)}`);
+          ' "$receipt"
+          cat "$receipt" >> "$GITHUB_STEP_SUMMARY"
+
           docker compose --file "$compose" config --quiet
+          docker compose --file "$compose" --file "$deployment/compose.clean-v1.ec2.yaml" config --quiet
           docker run --rm \
             --env ECHO_CLEAN_AUTHORITY_HOST=localhost \
             --volume "$deployment/Caddyfile.clean-v1:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm \
+            --env ECHO_CLEAN_AUTHORITY_HOST=localhost \
+            --volume "$deployment/Caddyfile.clean-v1.ec2:/etc/caddy/Caddyfile:ro" \
             caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
