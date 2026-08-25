@@ -8,11 +8,13 @@ owners:
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-14
-reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
+reviewed_at: 2026-08-25
+reviewed_ref: 35875e49817c841ac1f8aa3abf669d6e9a636a83
 decision_ids:
   - ADR-0004
   - ADR-0006
+  - ADR-0008
+  - ADR-0009
 invariant_ids:
   - INV-IDENTITY-004
   - INV-RELEASE-001
@@ -23,6 +25,7 @@ failure_pattern_ids:
   - FP-OPERATIONS-001
 runbook_ids:
   - RB-OPERATIONS-001
+  - RB-OPERATIONS-002
 qualification_ids:
   - QMAT-JOB-A-STOPPED-001
   - QUAL-20260813-174902-001
@@ -66,6 +69,7 @@ identity no longer matches.
 
 - [Operations records](../operations/README.md)
 - [Minimal Authority observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md)
+- [Current Authority recovery-floor runbook](../operations/RB-OPERATIONS-002-authority-recovery-floor.md)
 - [Qualification and evidence](../qualification/README.md)
 - [`deploy/organization-authority/`](../../deploy/organization-authority)
 - [`tools/`](../../tools)
@@ -73,3 +77,13 @@ identity no longer matches.
 
 Operational documents must name prerequisites, permissions, expected evidence,
 stop conditions, rollback, and the last date the exact procedure was tested.
+The current-host recovery floor additionally requires private evidence that the
+live source EBS volume is encrypted, account-owned, and backed by an enabled,
+usable source key whose manager is recorded as either AWS or CUSTOMER. EBS
+recovery points inherit that source encryption; a backup vault does not
+independently re-encrypt them. The current same-account AWS-managed key blocks
+future cross-account copying, while a customer-managed-key migration belongs to
+the later data-volume/foundation decision. The recovery template cannot
+establish these live facts. Its qualifying backup stop/start is a durable,
+script-managed transaction with external backup acknowledgement and
+accepted-tuple/public-descriptor restart proof; it has not yet been rehearsed.

@@ -1,0 +1,64 @@
+# CloudFormation Guard 3.2.1 policy for the interim current-host recovery floor.
+# These rules intentionally bind the small stack to its reviewed exact shape.
+
+let all_resources = Resources.*
+let backup_plans = Resources.*[ Type == 'AWS::Backup::BackupPlan' ]
+let backup_selections = Resources.*[ Type == 'AWS::Backup::BackupSelection' ]
+let backup_vaults = Resources.*[ Type == 'AWS::Backup::BackupVault' ]
+let iam_roles = Resources.*[ Type == 'AWS::IAM::Role' ]
+
+rule exact_resource_inventory {
+    let resource_count = count(%all_resources)
+    let plan_count = count(%backup_plans)
+    let selection_count = count(%backup_selections)
+    let vault_count = count(%backup_vaults)
+    let role_count = count(%iam_roles)
+
+    %resource_count == 5
+    %plan_count == 1
+    %selection_count == 1
+    %vault_count == 1
+    %role_count == 2
+}
+
+rule retained_recovery_vault {
+    Resources.CurrentHostRecoveryVault.Type == 'AWS::Backup::BackupVault'
+    Resources.CurrentHostRecoveryVault.DeletionPolicy == 'Retain'
+    Resources.CurrentHostRecoveryVault.UpdateReplacePolicy == 'Retain'
+    Resources.CurrentHostRecoveryVault.Properties.EncryptionKeyArn not exists
+}
+
+rule exact_root_volume_selection {
+    Resources.CurrentAuthorityRootVolumeSelection.Type == 'AWS::Backup::BackupSelection'
+    Resources.CurrentAuthorityRootVolumeSelection.Properties.BackupSelection.SelectionName == 'current-authority-root-volume-only'
+    Resources.CurrentAuthorityRootVolumeSelection.Properties.BackupSelection.IamRoleArn == { "Fn::GetAtt": [ "CurrentHostBackupServiceRole", "Arn" ] }
+    Resources.CurrentAuthorityRootVolumeSelection.Properties.BackupSelection.Resources == [ { "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${AuthorityRootVolumeId}" } ]
+    Resources.CurrentAuthorityRootVolumeSelection.Properties.BackupSelection.Conditions not exists
+    Resources.CurrentAuthorityRootVolumeSelection.Properties.BackupSelection.ListOfTags not exists
+    Resources.CurrentAuthorityRootVolumeSelection.Properties.BackupSelection.NotResources not exists
+}
+
+rule exact_backup_and_restore_roles {
+    Resources.CurrentHostBackupServiceRole.Type == 'AWS::IAM::Role'
+    Resources.CurrentHostBackupServiceRole.Properties.RoleName not exists
+    Resources.CurrentHostBackupServiceRole.Properties.ManagedPolicyArns == [ { "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup" } ]
+    Resources.CurrentHostBackupServiceRole.Properties.AssumeRolePolicyDocument.Statement == [ { "Effect": "Allow", "Principal": { "Service": "backup.amazonaws.com" }, "Action": "sts:AssumeRole" } ]
+
+    Resources.CurrentHostRestoreServiceRole.Type == 'AWS::IAM::Role'
+    Resources.CurrentHostRestoreServiceRole.Properties.RoleName not exists
+    Resources.CurrentHostRestoreServiceRole.Properties.ManagedPolicyArns == [ { "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores" } ]
+    Resources.CurrentHostRestoreServiceRole.Properties.AssumeRolePolicyDocument.Statement == [ { "Effect": "Allow", "Principal": { "Service": "backup.amazonaws.com" }, "Action": "sts:AssumeRole" } ]
+}
+
+rule bounded_schedule_and_retention {
+    Resources.CurrentHostRecoveryPlan.Type == 'AWS::Backup::BackupPlan'
+    Resources.CurrentHostRecoveryPlan.Properties.BackupPlan.BackupPlanRule == [ {
+        "RuleName": "current-authority-root-volume",
+        "TargetBackupVault": { "Ref": "CurrentHostRecoveryVault" },
+        "ScheduleExpression": { "Ref": "BackupScheduleExpression" },
+        "StartWindowMinutes": { "Ref": "StartWindowMinutes" },
+        "CompletionWindowMinutes": { "Ref": "CompletionWindowMinutes" },
+        "Lifecycle": { "DeleteAfterDays": { "Ref": "RecoveryPointRetentionDays" } },
+        "RecoveryPointTags": { "Application": "echo-brain", "Purpose": "current-host-recovery-floor" }
+    } ]
+}

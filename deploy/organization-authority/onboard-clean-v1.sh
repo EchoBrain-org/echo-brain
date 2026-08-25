@@ -780,6 +780,17 @@ prepare() {
   require_host_prerequisites
   select_runtime_identity "$input_runtime_user"
   python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null
+  # The shared lock lives under clean-data. The successful doctor check above
+  # proved this parent safe; create only that parent before serializing the
+  # first preparation.
+  require_safe_directory_target "$DATA_DIR" 'clean data path'
+  install -d -m 0700 "$DATA_DIR"
+  chmod 0700 "$DATA_DIR"
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   require_safe_directory_target "$DATA_DIR" 'clean data path'
   require_safe_directory_target "$PRIVATE_DIR" 'clean private-input path'
   require_safe_directory_target "$RELEASE_DIR" 'clean release path'
@@ -872,6 +883,11 @@ bootstrap() {
 
 replace_rehearsal() {
   [[ $# -eq 1 && "$1" == --confirm-no-live-users ]] || usage
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   require_host_prerequisites
   [[ -d "$DATA_DIR" && ! -L "$DATA_DIR" ]] || \
     fail 'clean rehearsal data directory is unsafe'
@@ -1167,6 +1183,11 @@ finalize() {
 }
 
 resume() {
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   require_host_prerequisites
   require_prepared
   if staged_candidate_present; then

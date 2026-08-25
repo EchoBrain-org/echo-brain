@@ -23,6 +23,7 @@
   "scripts": {
     "clean": "node tools/build.mjs --clean",
     "build:authority-image": "node tools/build-authority-image.mjs",
+    "authority:local": "node tools/authority-local.mjs",
     "profile:clean-v1-runtime": "node tools/clean-v1-runtime-profile.mjs create",
     "pack:person-client": "node tools/pack-person-client.mjs",
     "bundle:person-client": "node deploy/release/create-offline-person-client-bundle.mjs",

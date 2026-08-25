@@ -69,7 +69,28 @@ node tools/clean-v1-release.mjs validate \
 Its canonical shape is:
 
 ```json
-{"authority_image":{"reference":"<aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:<64-lowercase-hex>"},"baseline_compatibility_class":"clean-v1","kind":"echo-clean-v1-release","person_client":{"artifact_sha256":"<64-lowercase-hex>","artifact_url":"https://downloads.example/echo-brain-person-client.tgz","package":"@echo-brain/person-client","version":"0.1.0-internal.1"},"release_id":"clean-v1-20260822-001","released_at":"2026-08-22T20:00:00Z","runtime_profile":{"artifact_sha256":"<64-lowercase-hex>","artifact_url":"https://downloads.example/echo-brain-authority-runtime-profile.json","profile_version":"clean-v1-profile-1"},"schema_version":1,"source_sha":"<40-lowercase-hex>"}
+{
+  "authority_image": {
+    "reference": "<aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:<64-lowercase-hex>"
+  },
+  "baseline_compatibility_class": "clean-v1",
+  "kind": "echo-clean-v1-release",
+  "person_client": {
+    "artifact_sha256": "<64-lowercase-hex>",
+    "artifact_url": "https://downloads.example/echo-brain-person-client.tgz",
+    "package": "@echo-brain/person-client",
+    "version": "0.1.0-internal.1"
+  },
+  "release_id": "clean-v1-20260822-001",
+  "released_at": "2026-08-22T20:00:00Z",
+  "runtime_profile": {
+    "artifact_sha256": "<64-lowercase-hex>",
+    "artifact_url": "https://downloads.example/echo-brain-authority-runtime-profile.json",
+    "profile_version": "clean-v1-profile-1"
+  },
+  "schema_version": 1,
+  "source_sha": "<40-lowercase-hex>"
+}
 ```
 
 The angle-bracket text above is explanatory only; it is not valid record data.
@@ -78,10 +99,12 @@ invitation, Slack, Granola, or model secret.
 
 ## EC2 Authority replacement
 
-Copy the release validator into the deployment directory beside the clean
-Compose files, then copy the update command there. The same `stage` and
-`promote` commands cover first deployment and ordinary replacement; do not
-pre-install a `current.clean-v1.json` record by hand:
+Copy the release validators and operational commands from the exact reviewed
+source checkout into the deployment directory beside the clean Compose files.
+Before copying, compare the SHA-256 of each source file with the private review
+receipt for that source commit. The same `stage` and `promote` commands cover
+first deployment and ordinary replacement; do not pre-install a
+`current.clean-v1.json` record by hand:
 
 ```sh
 cd /srv/echo-authority-clean-v1
@@ -89,12 +112,22 @@ install -d -m 0755 release
 install -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
 install -m 0755 /absolute/reviewed/clean-v1-runtime-profile.py release/clean-v1-runtime-profile.py
 install -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh
+install -o root -g root -m 0755 \
+  /absolute/reviewed/backup-authority-maintenance.sh \
+  ./backup-authority-maintenance.sh
 install -d -m 0700 clean-data/release
+sha256sum ./backup-authority-maintenance.sh
 python3 release/clean-v1-release.py validate /absolute/private/release.json
 python3 release/clean-v1-runtime-profile.py validate /absolute/private/runtime-profile.json
 ./update-clean-v1.sh stage --release /absolute/private/release.json \
   --runtime-profile /absolute/private/runtime-profile.json
 ```
+
+The printed maintenance-script digest must equal the reviewed receipt before
+the script is used. It is root-owned host tooling, not application state:
+release rollback does not replace or remove it. Replace or remove it only as a
+separately reviewed host-tooling change, and record the old and new digests in
+the private operator receipt.
 
 For this first stage only, the existing configured image may still be the
 documented local development value. With no accepted record and no running

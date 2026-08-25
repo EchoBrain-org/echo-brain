@@ -32,6 +32,7 @@ link to the maintained procedure.
 ## Current procedures
 
 - [RB-OPERATIONS-001: Deploy and rehearse minimal Authority observability](RB-OPERATIONS-001-authority-observability.md)
+- [RB-OPERATIONS-002: Establish and rehearse the current Authority recovery floor](RB-OPERATIONS-002-authority-recovery-floor.md)
 
 Existing Authority procedures remain under
 [`deploy/organization-authority/`](../../deploy/organization-authority). They

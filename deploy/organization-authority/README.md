@@ -4,6 +4,13 @@ This is the deployable clean V1 Authority only. It uses a new `clean-data/`
 directory, never imports previous Authority state, and uses both EC2 Compose
 profiles automatically.
 
+For local synthetic Authority development, do not create `clean-data/` beside
+this deployment directory and do not run this deployment wrapper. Use
+[`npm run authority:local`](../../README.md#local-authority-exercise) from the
+repository root. That separate harness creates only sentinel-owned state outside
+the checkout and applies a local overlay to the base profile; it never uses this
+EC2 profile or reads provider credentials.
+
 ## One-time preparation
 
 Provision Docker, Docker Compose v2, Cloudflare Tunnel, and registry access
@@ -29,16 +36,16 @@ The confidential OIDC client must allow
 directory, owned by the account running the wrapper and with mode `0700`.
 Put exactly these mode-`0600` regular, non-symlink files inside it:
 
-| File | Purpose |
-| --- | --- |
-| `onboarding.clean-v1.json` | Ordinary organization configuration, including the observability stack Region. Start from the committed example. |
-| `release.json` | Canonical clean-v1 release record. |
-| `runtime-profile.json` | Exact canonical runtime profile referenced by the release record. It contains the reviewed Compose and Caddy bytes, never a secret. |
-| `oidc-config.json` | OIDC configuration, including the exact callback above. |
-| `oidc-client-secret` | OIDC client secret. |
-| `slack-bot-token` | Slack bot token. |
-| `granola-credential` | Organization Granola credential. |
-| `llm-credential` | Retained LLM provider credential. |
+| File                       | Purpose                                                                                                                             |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `onboarding.clean-v1.json` | Ordinary organization configuration, including the observability stack Region. Start from the committed example.                    |
+| `release.json`             | Canonical clean-v1 release record.                                                                                                  |
+| `runtime-profile.json`     | Exact canonical runtime profile referenced by the release record. It contains the reviewed Compose and Caddy bytes, never a secret. |
+| `oidc-config.json`         | OIDC configuration, including the exact callback above.                                                                             |
+| `oidc-client-secret`       | OIDC client secret.                                                                                                                 |
+| `slack-bot-token`          | Slack bot token.                                                                                                                    |
+| `granola-credential`       | Organization Granola credential.                                                                                                    |
+| `llm-credential`           | Retained LLM provider credential.                                                                                                   |
 
 The secrets are never placed in command arguments or normal wrapper output.
 `prepare` installs byte-exact fixed server copies with mode `0600` under its
@@ -142,10 +149,10 @@ a supported status claim. Put both current replacement values in a separate
 current-executor-owned mode-`0700` directory containing exactly these
 mode-`0600` regular files:
 
-| File | Purpose |
-| --- | --- |
+| File                 | Purpose                                      |
+| -------------------- | -------------------------------------------- |
 | `granola-credential` | Replacement organization Granola credential. |
-| `llm-credential` | Replacement LLM provider credential. |
+| `llm-credential`     | Replacement LLM provider credential.         |
 
 Then run the single activation operation:
 
@@ -218,3 +225,40 @@ baseline-preserving `clean-v1` replacements, not schema migrations or automatic
 client updates. The recovery unit is the accepted image, its exact runtime
 profile, and the saved environment tuple; the release wrapper restores those
 together before it claims a recovered public Authority.
+
+### Current-host recovery floor
+
+The release recovery unit above restores accepted deployment configuration. It
+does not reconstruct `clean-data/` if the Authority root volume is lost or
+corrupted. Until the later retained-data-volume and replaceable-host programme
+exists, the whole current root volume is the off-host protection boundary for
+`clean-data/`, including its `state/`, `release/`, and `private/` directories.
+
+Use [RB-OPERATIONS-002](../../docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md)
+to complete the live source-volume encryption evidence gate, create the
+scheduled AWS Backup protection, and rehearse one quiesced recovery point. The
+release installation procedure must first install the exact reviewed
+`backup-authority-maintenance.sh` at
+`/srv/echo-authority-clean-v1/backup-authority-maintenance.sh`, owned by root
+with mode `0755`, and verify its SHA-256 against the private review receipt.
+Application release rollback does not replace this host tool. The
+template cannot itself inspect source-volume encryption. EBS recovery points
+inherit the source-volume encryption and are not independently re-encrypted by
+the backup vault. The current same-account `aws/ebs` AWS-managed key is valid;
+it prevents a future cross-account copy. Moving to a customer-managed key is a
+later data-volume/foundation migration, not this recovery floor. The runbook's
+qualifying point uses
+`backup-authority-maintenance.sh` under `systemd-run`, not a manual Compose
+stop, and proves an automatic exact-tuple/public-descriptor restart after the
+external backup coordinator acknowledges the completed job. Its restore is
+intentionally isolated: a restored root volume attaches to a clean helper only
+as a secondary device, mounts read-only without journal replay, and is
+inspected by `tools/verify-authority-recovery.mjs`. It is never booted or used
+to start a second Authority.
+
+The recurring schedule provides crash-consistent recovery points after the
+recorded evidence gate. The separate quiesced drill proves only structural
+readability and lineage on an offline copy; it does not prove current data,
+provider reconciliation, exact image availability, or a terminal-green serving
+Authority. [Issue #20](https://github.com/EchoBrain-org/echo-brain/issues/20)
+remains open for that full recovery path.

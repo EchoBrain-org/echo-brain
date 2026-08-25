@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "cfn_lint": {
+    "package": "cfn-lint",
+    "version": "1.55.1",
+    "source": "https://github.com/aws-cloudformation/cfn-lint/releases/tag/v1.55.1",
+    "wheel": {
+      "name": "cfn_lint-1.55.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/46/10/c0e57bb3864b7670fe21730fab920d8cc6673d944db63108fdae3065659a/cfn_lint-1.55.1-py3-none-any.whl",
+      "sha256": "4de4ced80c898ce0753b64fc5707bebf011601eb2d027d95e2ab3f91692b99d8"
+    }
+  },
+  "cfn_guard": {
+    "version": "3.2.1",
+    "source": "https://github.com/aws-cloudformation/cloudformation-guard/releases/tag/3.2.1",
+    "assets": {
+      "aarch64-linux": {
+        "name": "cfn-guard-v3-aarch64-linux-latest.tar.gz",
+        "sha256": "cd378026dad0f865926ab1d1c082e2faf825f7fd888a9fe6b5c142cdf175c129"
+      },
+      "aarch64-macos": {
+        "name": "cfn-guard-v3-aarch64-macos-latest.tar.gz",
+        "sha256": "4c1eb10c061731159eaaf0e7dbd465db9fa4b767b82186a4ab489671cc00b7d0"
+      },
+      "x86_64-linux": {
+        "name": "cfn-guard-v3-x86_64-linux-latest.tar.gz",
+        "sha256": "8c66efb19c63e6c2bf26b9a41bbcf2f85baa8a937b01d350940194faaf64cf1d"
+      },
+      "x86_64-macos": {
+        "name": "cfn-guard-v3-macos-latest.tar.gz",
+        "sha256": "ff87175c8f1ad4ad8c61a2d28e436bbf15fad69addb19273b285df069d3a6743"
+      }
+    }
+  }
+}

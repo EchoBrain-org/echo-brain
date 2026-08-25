@@ -1,15 +1,25 @@
 FROM node:22.22.1-bookworm-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS build
 
 WORKDIR /app
-COPY package.json npm-shrinkwrap.json tsconfig*.json ./
-COPY packages ./packages
+COPY package.json npm-shrinkwrap.json ./
+COPY packages/federation-protocol/package.json ./packages/federation-protocol/package.json
+COPY packages/organization-protocol/package.json ./packages/organization-protocol/package.json
+COPY packages/organization-api/package.json ./packages/organization-api/package.json
 COPY src/product/person-client/package.json ./src/product/person-client/package.json
+COPY services/organization-authority/package.json ./services/organization-authority/package.json
+COPY services/organization-control-plane/package.json ./services/organization-control-plane/package.json
+COPY services/organization-record/package.json ./services/organization-record/package.json
+COPY services/organization-retrieval/package.json ./services/organization-retrieval/package.json
+# Keep dependency installation independent of application source.  BuildKit can
+# reuse this layer when a source-only change is rebuilt in CI.
+RUN npm ci
+COPY tsconfig*.json ./
+COPY packages ./packages
 COPY services/organization-authority ./services/organization-authority
 COPY services/organization-control-plane ./services/organization-control-plane
 COPY services/organization-record ./services/organization-record
 COPY services/organization-retrieval ./services/organization-retrieval
-RUN npm ci \
-  && npm run build --workspace @echo-brain/organization-authority \
+RUN npm run build --workspace @echo-brain/organization-authority \
   && npm ci --omit=dev --workspace @echo-brain/organization-authority --include-workspace-root=false
 RUN find packages services -type f \( -name '*.d.ts' -o -name '*.tsbuildinfo' \) -delete
 
