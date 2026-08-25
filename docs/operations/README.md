@@ -31,6 +31,8 @@ link to the maintained procedure.
 
 ## Current procedures
 
+- [RB-OPERATIONS-001: Deploy and rehearse minimal Authority observability](RB-OPERATIONS-001-authority-observability.md)
+
 Existing Authority procedures remain under
 [`deploy/organization-authority/`](../../deploy/organization-authority). They
 will be indexed and separated from explanatory architecture incrementally.

@@ -1,0 +1,516 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Minimal private Authority availability and sanitized runtime failure alerting.",
+  "Parameters": {
+    "AuthorityHost": {
+      "Type": "String",
+      "AllowedPattern": "^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$",
+      "ConstraintDescription": "must be the public Authority DNS host without a scheme or path"
+    },
+    "AlertEmail": {
+      "Type": "String",
+      "AllowedPattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+      "ConstraintDescription": "must be an email address that can confirm the subscription"
+    },
+    "AuthorityHostRoleName": {
+      "Type": "String",
+      "AllowedPattern": "^[A-Za-z0-9+=,.@_-]{1,64}$",
+      "ConstraintDescription": "must name the existing EC2 role that runs Docker"
+    }
+  },
+  "Resources": {
+    "AlertTopicKey": {
+      "Type": "AWS::KMS::Key",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": "Encrypts minimal Authority operations alarm notifications.",
+        "EnableKeyRotation": true,
+        "PendingWindowInDays": 30,
+        "KeyPolicy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "EnableAccountAdministration",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+                }
+              },
+              "Action": "kms:*",
+              "Resource": "*"
+            },
+            {
+              "Sid": "AllowCloudWatchAlarmNotificationEncryption",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudwatch.amazonaws.com"
+              },
+              "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey*"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:*"
+                  }
+                }
+              }
+            },
+            {
+              "Sid": "AllowSnsTopicEncryption",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "sns.amazonaws.com"
+              },
+              "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey*"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "kms:EncryptionContext:aws:sns:topicArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-authority-alerts"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}-authority-alerts"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "AlertTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "TopicName": {
+          "Fn::Sub": "${AWS::StackName}-authority-alerts"
+        },
+        "KmsMasterKeyId": {
+          "Fn::GetAtt": [
+            "AlertTopicKey",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "AlertTopicPolicy": {
+      "Type": "AWS::SNS::TopicPolicy",
+      "Properties": {
+        "Topics": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowSameAccountCloudWatchAlarms",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudwatch.amazonaws.com"
+              },
+              "Action": "sns:Publish",
+              "Resource": {
+                "Ref": "AlertTopic"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:*"
+                  }
+                }
+              }
+            },
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sns:Publish",
+              "Resource": {
+                "Ref": "AlertTopic"
+              },
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "AlertEmailSubscription": {
+      "Type": "AWS::SNS::Subscription",
+      "Properties": {
+        "Endpoint": {
+          "Ref": "AlertEmail"
+        },
+        "Protocol": "email",
+        "TopicArn": {
+          "Ref": "AlertTopic"
+        }
+      }
+    },
+    "DockerRuntimeLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/echo-brain/authority/${AuthorityHost}"
+        },
+        "RetentionInDays": 14
+      }
+    },
+    "ExternalDescriptorCheckLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-descriptor-check"
+        },
+        "RetentionInDays": 14
+      }
+    },
+    "ExternalDescriptorCheckRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "write-descriptor-check-logs",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${ExternalDescriptorCheckLogGroup.Arn}:*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ExternalDescriptorCheck": {
+      "Type": "AWS::Lambda::Function",
+      "DependsOn": "ExternalDescriptorCheckLogGroup",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-descriptor-check"
+        },
+        "Description": "External public Authority descriptor availability check.",
+        "Runtime": "nodejs24.x",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "ExternalDescriptorCheckRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 10,
+        "MemorySize": 128,
+        "Environment": {
+          "Variables": {
+            "AUTHORITY_DESCRIPTOR_URL": {
+              "Fn::Sub": "https://${AuthorityHost}/v1/authority-descriptor"
+            }
+          }
+        },
+        "Code": {
+          "ZipFile": "const https = require('node:https');\n\nconst FAILURE = 'descriptor check failed';\n\nexports.handler = async () => {\n  const controller = new AbortController();\n  const timer = setTimeout(() => controller.abort(), 8000);\n  try {\n    await new Promise((resolve, reject) => {\n      let settled = false;\n      const fail = () => {\n        if (!settled) {\n          settled = true;\n          reject(new Error(FAILURE));\n        }\n      };\n      const request = https.get(process.env.AUTHORITY_DESCRIPTOR_URL, {\n        signal: controller.signal,\n        timeout: 8000,\n        headers: { 'user-agent': 'echo-authority-availability-check/1' }\n      }, (response) => {\n        const statusCode = response.statusCode || 0;\n        if (statusCode < 200 || statusCode >= 300) {\n          response.resume();\n          fail();\n          return;\n        }\n        let body = '';\n        response.setEncoding('utf8');\n        response.on('data', (chunk) => {\n          body += chunk;\n          if (body.length > 65536) {\n            response.destroy();\n            fail();\n          }\n        });\n        response.once('error', fail);\n        response.once('end', () => {\n          if (settled) return;\n          try {\n            const value = JSON.parse(body);\n            if (\n              value === null ||\n              typeof value !== 'object' ||\n              Array.isArray(value) ||\n              Object.keys(value).length !== 1 ||\n              value.authority_descriptor === null ||\n              typeof value.authority_descriptor !== 'object' ||\n              Array.isArray(value.authority_descriptor)\n            ) throw new Error(FAILURE);\n            settled = true;\n            resolve();\n          } catch {\n            fail();\n          }\n        });\n      });\n      request.once('timeout', () => {\n        request.destroy();\n        fail();\n      });\n      request.once('error', fail);\n    });\n  } catch {\n    throw new Error(FAILURE);\n  } finally {\n    clearTimeout(timer);\n  }\n};\n"
+        }
+      }
+    },
+    "ExternalDescriptorSchedule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "Description": "Runs the public Authority descriptor availability check every minute.",
+        "ScheduleExpression": "rate(1 minute)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "ExternalDescriptorCheck",
+                "Arn"
+              ]
+            },
+            "Id": "ExternalDescriptorCheck"
+          }
+        ]
+      }
+    },
+    "AllowEventBridgeDescriptorCheckInvocation": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "ExternalDescriptorCheck"
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "ExternalDescriptorSchedule",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "ExternalDescriptorFailureAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "The external Authority descriptor check failed.",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "Namespace": "AWS/Lambda",
+        "MetricName": "Errors",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "ExternalDescriptorCheck"
+            }
+          }
+        ],
+        "Statistic": "Sum",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "DatapointsToAlarm": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "ExternalDescriptorNoInvocationAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "The external Authority descriptor check did not run twice in succession.",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "Namespace": "AWS/Lambda",
+        "MetricName": "Invocations",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "ExternalDescriptorCheck"
+            }
+          }
+        ],
+        "Statistic": "Sum",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "DatapointsToAlarm": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching"
+      }
+    },
+    "WorkerFailureMetricFilter": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "DockerRuntimeLogGroup"
+        },
+        "FilterPattern": "{ $.kind = \"echo-clean-live-worker-failed-v1\" }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "EchoBrain/AuthorityOperations",
+            "MetricName": "WorkerFailure",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "RuntimeReadyMetricFilter": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "DockerRuntimeLogGroup"
+        },
+        "FilterPattern": "{ $.kind = \"echo-clean-live-runtime-ready-v1\" }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "EchoBrain/AuthorityOperations",
+            "MetricName": "RuntimeReady",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "RepeatedWorkerFailureAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "The Authority worker reported three failures in five minutes.",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "Namespace": "EchoBrain/AuthorityOperations",
+        "MetricName": "WorkerFailure",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Threshold": 3,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "RepeatedRuntimeReadyAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "The Authority emitted three runtime-ready events in five minutes.",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "Namespace": "EchoBrain/AuthorityOperations",
+        "MetricName": "RuntimeReady",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Threshold": 3,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "AuthorityDockerLogWritePolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "Lets the existing Authority host role write Docker runtime logs to this stack's log group.",
+        "Roles": [
+          {
+            "Ref": "AuthorityHostRoleName"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": {
+                "Fn::Sub": "${DockerRuntimeLogGroup.Arn}:*"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "AlertTopicArn": {
+      "Description": "Encrypted SNS topic for Authority operations alarms.",
+      "Value": {
+        "Ref": "AlertTopic"
+      }
+    },
+    "ExternalDescriptorCheckFunctionName": {
+      "Description": "Scheduled external HTTPS Authority descriptor check.",
+      "Value": {
+        "Ref": "ExternalDescriptorCheck"
+      }
+    },
+    "ExternalDescriptorFailureAlarmName": {
+      "Description": "Alarm used for the notification and recovery rehearsal.",
+      "Value": {
+        "Ref": "ExternalDescriptorFailureAlarm"
+      }
+    },
+    "RepeatedWorkerFailureAlarmName": {
+      "Description": "Alarm for repeated sanitized worker failures.",
+      "Value": {
+        "Ref": "RepeatedWorkerFailureAlarm"
+      }
+    },
+    "DockerRuntimeLogGroupName": {
+      "Description": "CloudWatch log group for sanitized Docker Authority runtime output.",
+      "Value": {
+        "Ref": "DockerRuntimeLogGroup"
+      }
+    },
+    "DockerAwslogsOptions": {
+      "Description": "Docker awslogs driver values for the Authority container.",
+      "Value": {
+        "Fn::Sub": "awslogs-group=${DockerRuntimeLogGroup};awslogs-region=${AWS::Region};awslogs-create-group=false"
+      }
+    }
+  }
+}

@@ -83,6 +83,7 @@ input_organization_name=''
 input_owner_display_name=''
 input_owner_email=''
 input_authority_host=''
+input_aws_region=''
 input_channel=''
 
 portable_stat_mode() {
@@ -108,7 +109,8 @@ read_input_manifest() {
       2) input_owner_display_name="$value" ;;
       3) input_owner_email="$value" ;;
       4) input_authority_host="$value" ;;
-      5) input_channel="$value" ;;
+      5) input_aws_region="$value" ;;
+      6) input_channel="$value" ;;
       *) return 1 ;;
     esac
     count=$((count + 1))
@@ -132,6 +134,7 @@ expected = {
     "owner_display_name",
     "owner_email",
     "authority_host",
+    "aws_region",
     "slack_approval_channel_id",
 }
 if not isinstance(value, dict) or set(value) != expected:
@@ -152,6 +155,7 @@ organization_name = text("organization_name")
 owner_display_name = text("owner_display_name")
 owner_email = text("owner_email", 254)
 authority_host = text("authority_host", 253)
+aws_region = text("aws_region", 32)
 channel = text("slack_approval_channel_id", 32)
 
 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", runtime_user):
@@ -170,12 +174,14 @@ if (
     raise SystemExit(1)
 if not re.fullmatch(r"[CG][A-Z0-9]{8,}", channel):
     raise SystemExit(1)
+if not re.fullmatch(r"[a-z]{2}(?:-[a-z0-9]+)+-[1-9][0-9]*", aws_region):
+    raise SystemExit(1)
 
-for item in (runtime_user, organization_name, owner_display_name, owner_email, authority_host, channel):
+for item in (runtime_user, organization_name, owner_display_name, owner_email, authority_host, aws_region, channel):
     print(item)
 PY
 )
-  [[ "$count" -eq 6 ]]
+  [[ "$count" -eq 7 ]]
 }
 
 validate_input_oidc_callback() {
@@ -636,6 +642,8 @@ owner_display_name=$input_owner_display_name
 owner_email=$input_owner_email
 authority_host=$input_authority_host
 authority_url=$authority_url
+aws_region=$input_aws_region
+authority_log_group=/echo-brain/authority/$input_authority_host
 slack_approval_channel_id=$input_channel
 release_id=$(release_field release-id)
 authority_image=$image
@@ -647,6 +655,8 @@ ECHO_CLEAN_AUTHORITY_URL=$authority_url
 ECHO_CLEAN_AUTHORITY_UID=$uid
 ECHO_CLEAN_AUTHORITY_GID=$gid
 ECHO_CLEAN_AUTHORITY_IMAGE=$image
+ECHO_CLEAN_AWS_REGION=$input_aws_region
+ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/$input_authority_host
 ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$input_channel
 ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
   write_exact_file "$SETUP_FILE" "$setup" 'setup configuration' runtime

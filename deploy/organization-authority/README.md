@@ -13,6 +13,17 @@ or configure host infrastructure. It accepts the release validator at the
 source-tree path `../release/clean-v1-release.py` or the installed deployment
 path `./release/clean-v1-release.py` used under `/srv/echo-authority-clean-v1`.
 
+Deploy
+[`authority-observability-v1.template.json`](./authority-observability-v1.template.json)
+before the first `prepare`. It takes the public Authority host, the existing
+EC2 host-role name, and one alert email. Confirm the SNS email subscription.
+The stack output `DockerRuntimeLogGroupName` must equal
+`/echo-brain/authority/<authority-host>`. Use
+[RB-OPERATIONS-001](../../docs/operations/RB-OPERATIONS-001-authority-observability.md)
+for the change-set review, deployment, notification rehearsal, controlled
+outage, and recovery checks. This intentionally creates one small observable
+loop, not a dashboard or tracing platform.
+
 The confidential OIDC client must allow
 `https://<authority-host>/v2/session/oidc/callback`. Create one private input
 directory, owned by the account running the wrapper and with mode `0700`.
@@ -20,7 +31,7 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 
 | File | Purpose |
 | --- | --- |
-| `onboarding.clean-v1.json` | Ordinary organization configuration. Start from the committed example. |
+| `onboarding.clean-v1.json` | Ordinary organization configuration, including the observability stack Region. Start from the committed example. |
 | `release.json` | Canonical clean-v1 release record. |
 | `oidc-config.json` | OIDC configuration, including the exact callback above. |
 | `oidc-client-secret` | OIDC client secret. |
@@ -49,7 +60,9 @@ checks the host tools, active `cloudflared-echo-authority.service`, private
 directory shape, canonical release, runtime user, persisted-path safety, and
 exact OIDC callback. It cannot prove that the tunnel is publicly routed or that
 the callback has been registered with Google; finish those provider steps
-before continuing. `prepare` repeats the same checks, derives the
+before continuing. It also validates `aws_region`; `prepare` uses that Region
+and the Authority host to bind Docker to the retained stack log group. `prepare`
+repeats the same checks, derives the
 immutable image, writes fixed `clean-data/private` files with mode `0600`, and
 renders the two Compose profiles offline. `runtime_user` in the manifest is
 the existing non-login OS account that owns mounted Authority state; on EC2 it

@@ -19,6 +19,16 @@ const PROCESS_IO: CliIo = {
   stderr: (value) => process.stderr.write(value),
 };
 
+const CLEAN_LIVE_WORKER_FAILURE_EVENT_V1 = canonicalJson({
+  schema_version: 1,
+  kind: "echo-clean-live-worker-failed-v1",
+} as never);
+
+const CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1 = canonicalJson({
+  schema_version: 1,
+  kind: "echo-clean-live-startup-failed-v1",
+} as never);
+
 function flags(
   argv: readonly string[],
 ): Readonly<Record<string, string | undefined>> {
@@ -116,11 +126,21 @@ export async function runCleanLiveCli(
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
       llm_credential_file: manifest.llm_credential_file,
-      on_worker_error: (error) => {
-        io.stderr(`clean live worker failed: ${error.message}\n`);
+      on_worker_error: () => {
+        io.stderr(`${CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
       },
       on_layer4_failure: (event) => {
-        io.stderr(`${canonicalJson(event as never)}\n`);
+        io.stderr(
+          `${canonicalJson({
+            schema_version: event.schema_version,
+            kind: event.kind,
+            stage: event.stage,
+            failure_class: event.failure_class,
+            elapsed_ms: event.elapsed_ms,
+            http_status: event.http_status,
+            finish_reason: event.finish_reason,
+          } as never)}\n`,
+        );
       },
       ...(parsed["--worker-interval-ms"] === undefined
         ? {}
@@ -135,8 +155,6 @@ export async function runCleanLiveCli(
       `${canonicalJson({
         schema_version: 1,
         kind: "echo-clean-live-runtime-ready-v1",
-        host: runtime.address.address,
-        port: runtime.address.port,
         processing: runtime.processing,
       } as never)}\n`,
     );
@@ -146,10 +164,8 @@ export async function runCleanLiveCli(
       process.once("SIGTERM", close);
     });
     return 0;
-  } catch (error) {
-    io.stderr(
-      `${error instanceof Error ? error.message : "clean live command failed"}\n`,
-    );
+  } catch {
+    io.stderr(`${CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1}\n`);
     return 1;
   }
 }
