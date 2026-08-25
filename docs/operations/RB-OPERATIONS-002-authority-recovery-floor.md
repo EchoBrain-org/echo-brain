@@ -162,7 +162,8 @@ Proceed only when all of the following are true and recorded privately:
   property;
 - the source-volume key reports that same `AWSAccountId`, `KeyManager` `AWS` or
   `CUSTOMER`, `KeyState` `Enabled`, `Enabled` `true`, and `KeyUsage`
-  `ENCRYPT_DECRYPT`; and
+  `ENCRYPT_DECRYPT`; its exact `Arn` is the privately supplied
+  `AuthorityRootVolumeKmsKeyArn` change-set parameter; and
 - the AWS Backup service role is usable for the planned same-account backup and
   restore. For a customer-managed key, review its policy and grants for a
   relevant deny or missing permission; for an AWS-managed key, record the
@@ -216,18 +217,26 @@ an unreviewed wildcard, or a selection that will silently protect future
 volumes. The later infrastructure foundation replaces or imports this interim
 exact selection into its `Org` tag-selected plan.
 
-The template emits `BackupServiceRoleArn` with the AWS-managed
-`AWSBackupServiceRolePolicyForBackup` policy and a distinct
-`RestoreServiceRoleArn` with `AWSBackupServiceRolePolicyForRestores`. AWS Backup
-assumes those roles; the restore caller still needs least-privilege
-`iam:PassRole` permission for the exact restore-role ARN.
+The template emits distinct `BackupServiceRoleArn` and
+`RestoreServiceRoleArn` values with EBS-only inline policies. It must not attach
+the mutable all-service `AWSBackupServiceRolePolicyForBackup` or
+`AWSBackupServiceRolePolicyForRestores` managed policy. The backup role may
+create snapshots only from the selected root volume and may operate only on
+regional EBS snapshots and the exact recovery vault. The restore role may
+create an unattached EBS volume and may use only the privately verified source
+KMS key through EC2. Neither role permits instance launch or termination,
+network changes, SSM, provider access, or wildcard KMS-key use. AWS Backup
+assumes those roles; each caller still needs least-privilege `iam:PassRole`
+permission for the exact applicable role ARN with
+`iam:PassedToService=backup.amazonaws.com`.
 
 Use a named CloudFormation change set for every create or update and review its
 complete resource and replacement list before execution. For a new stack,
 create the `CREATE` change set but do not execute it; CloudFormation leaves the
 empty stack shell in `REVIEW_IN_PROGRESS`. For an existing stack, use an
 `UPDATE` change set. Supply the approved cadence/retention/window parameters and
-the privately confirmed root-volume ID; acknowledge `CAPABILITY_IAM`. Wait for
+the privately confirmed root-volume ID and source KMS key ARN; acknowledge
+`CAPABILITY_IAM`. Wait for
 the change set's `CREATE_COMPLETE`, inspect the complete
 `describe-change-set` result, and record the change-set ARN privately.
 
@@ -244,6 +253,7 @@ aws cloudformation create-change-set \
   --template-body file://deploy/organization-authority/authority-current-host-recovery-v1.template.json \
   --parameters \
     ParameterKey=AuthorityRootVolumeId,ParameterValue=<confirmed-root-volume-id> \
+    ParameterKey=AuthorityRootVolumeKmsKeyArn,ParameterValue=<confirmed-source-kms-key-arn> \
     ParameterKey=BackupScheduleExpression,ParameterValue='<approved-cron-expression>' \
     ParameterKey=RecoveryPointRetentionDays,ParameterValue=<approved-days> \
     ParameterKey=StartWindowMinutes,ParameterValue=<approved-start-window> \
@@ -287,6 +297,11 @@ Before executing the plan change, inspect that it has all of the following:
 
 - the approved schedule and retention, with no unexpected expiry action;
 - only the identified root volume in its selection; and
+- no AWS Backup managed policy attachment; exactly one EBS-only inline policy
+  on each service role; no instance launch/termination, SSM, non-EBS data
+  service, `backup:CopyFromBackupVault`, wildcard action, or wildcard KMS-key
+  permission; and the restore KMS resource is exactly the privately verified
+  `AuthorityRootVolumeKmsKeyArn`;
 - a documented restore principal, exact `RestoreServiceRoleArn`,
   least-privilege `iam:PassRole` precondition, and job-completion check
   procedure; and
@@ -465,13 +480,19 @@ aws backup start-restore-job \
   --recovery-point-arn <qualifying-recovery-point-arn> \
   --resource-type EBS \
   --iam-role-arn <RestoreServiceRoleArn-output> \
-  --metadata availabilityZone=<helper-az>,encrypted=true,kmsKeyId=<approved-kms-key-id>,volumeType=<source-volume-type>,volumeSize=<source-size-gib> \
+  --metadata availabilityZone=<helper-az>,encrypted=true,kmsKeyId=<approved-source-kms-key-arn>,volumeType=<source-volume-type>,volumeSize=<source-size-gib>,iops=<source-iops>,throughput=<source-throughput> \
   --idempotency-token <private-restore-operation-id> \
   --region <approved-region> --profile <authority-account-profile>
 aws backup describe-restore-job \
   --restore-job-id <returned-restore-job-id> \
   --region <approved-region> --profile <authority-account-profile>
 ```
+
+For the current `gp3` source, `iops` and `throughput` are required reviewed
+inputs alongside type and size; do not silently accept restore defaults. The
+`kmsKeyId` value must be the exact source-key ARN supplied to the stack. A
+different destination key requires a separately reviewed role and change set;
+do not broaden the restore role during the drill.
 
 Poll to terminal `COMPLETED`, then identify its created EBS volume from the
 restore result and perform the independent EC2/KMS gates below. A successful

@@ -1,10 +1,15 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "AWS Backup recovery floor for one explicitly selected current Authority root EBS volume. Deployment is permitted only after the operator has separately verified source-volume encryption; this template cannot inspect it. Amazon EBS recovery points inherit source-volume encryption and are not independently encrypted by the backup vault. A separate restore role is emitted; an operator starting a restore must have iam:PassRole for that exact role.",
+  "Description": "AWS Backup recovery floor for one explicitly selected current Authority root EBS volume. Deployment is permitted only after the operator has separately verified source-volume encryption and supplied its exact KMS key ARN; this template cannot inspect either live resource. Amazon EBS recovery points inherit source-volume encryption and are not independently encrypted by the backup vault. Separate EBS-only backup and restore roles are emitted; an operator starting a job must have iam:PassRole for the exact applicable role.",
   "Parameters": {
     "AuthorityRootVolumeId": {
       "Type": "AWS::EC2::Volume::Id",
       "ConstraintDescription": "must be the current Authority root EBS volume ID, verified from the host instance block-device mapping"
+    },
+    "AuthorityRootVolumeKmsKeyArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:(aws|aws-us-gov|aws-cn):kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+$",
+      "ConstraintDescription": "must be the exact KMS key ARN reported by the verified encrypted current Authority root EBS volume"
     },
     "BackupScheduleExpression": {
       "Type": "String",
@@ -65,9 +70,75 @@
             }
           ]
         },
-        "ManagedPolicyArns": [
+        "Policies": [
           {
-            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
+            "PolicyName": "current-authority-root-volume-ebs-backup-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "CreateSnapshotsOnlyFromSelectedVolume",
+                  "Effect": "Allow",
+                  "Action": "ec2:CreateSnapshot",
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${AuthorityRootVolumeId}"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "DescribeEbsResources",
+                  "Effect": "Allow",
+                  "Action": ["ec2:DescribeVolumes", "ec2:DescribeSnapshots"],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "ManageBackupSnapshots",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CopySnapshot",
+                    "ec2:CreateTags",
+                    "ec2:DeleteSnapshot"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                  }
+                },
+                {
+                  "Sid": "ManageTierOnlyForAwsBackupSnapshots",
+                  "Effect": "Allow",
+                  "Action": "ec2:ModifySnapshotTier",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                  },
+                  "Condition": {
+                    "Null": {
+                      "aws:ResourceTag/aws:backup:source-resource": "false"
+                    }
+                  }
+                },
+                {
+                  "Sid": "ReadExactRecoveryVault",
+                  "Effect": "Allow",
+                  "Action": [
+                    "backup:DescribeBackupVault",
+                    "backup:CopyIntoBackupVault"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": ["CurrentHostRecoveryVault", "BackupVaultArn"]
+                  }
+                },
+                {
+                  "Sid": "ResolveSelectedBackupResources",
+                  "Effect": "Allow",
+                  "Action": "tag:GetResources",
+                  "Resource": "*"
+                }
+              ]
+            }
           }
         ]
       }
@@ -88,9 +159,76 @@
             }
           ]
         },
-        "ManagedPolicyArns": [
+        "Policies": [
           {
-            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
+            "PolicyName": "current-authority-root-volume-ebs-restore-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "RestoreOnlyAnEbsSnapshotToAnUnattachedVolume",
+                  "Effect": "Allow",
+                  "Action": ["ec2:CreateVolume", "ec2:DeleteVolume"],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "DescribeEbsRestoreInputs",
+                  "Effect": "Allow",
+                  "Action": ["ec2:DescribeSnapshots", "ec2:DescribeVolumes"],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "DescribeOnlyTheSelectedEbsKey",
+                  "Effect": "Allow",
+                  "Action": "kms:DescribeKey",
+                  "Resource": {
+                    "Ref": "AuthorityRootVolumeKmsKeyArn"
+                  }
+                },
+                {
+                  "Sid": "UseOnlyTheSelectedEbsKeyThroughEc2",
+                  "Effect": "Allow",
+                  "Action": [
+                    "kms:Decrypt",
+                    "kms:Encrypt",
+                    "kms:GenerateDataKey",
+                    "kms:GenerateDataKeyWithoutPlaintext",
+                    "kms:ReEncryptFrom",
+                    "kms:ReEncryptTo"
+                  ],
+                  "Resource": {
+                    "Ref": "AuthorityRootVolumeKmsKeyArn"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "ec2.${AWS::Region}.${AWS::URLSuffix}"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Sid": "GrantOnlyForAwsEbsRestoreOfSelectedKey",
+                  "Effect": "Allow",
+                  "Action": "kms:CreateGrant",
+                  "Resource": {
+                    "Ref": "AuthorityRootVolumeKmsKeyArn"
+                  },
+                  "Condition": {
+                    "Bool": {
+                      "kms:GrantIsForAWSResource": "true"
+                    }
+                  }
+                }
+              ]
+            }
           }
         ]
       }

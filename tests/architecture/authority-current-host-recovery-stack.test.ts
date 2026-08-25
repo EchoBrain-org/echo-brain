@@ -51,6 +51,26 @@ function resource(
   return value!;
 }
 
+function inlinePolicyStatements(
+  role: CloudFormationResource,
+): Record<string, unknown>[] {
+  const policies = role.Properties!.Policies as Record<string, unknown>[];
+  expect(policies).toHaveLength(1);
+  const document = policies[0]!.PolicyDocument as Record<string, unknown>;
+  expect(document.Version).toBe("2012-10-17");
+  return document.Statement as Record<string, unknown>[];
+}
+
+function actions(statements: readonly Record<string, unknown>[]): string[] {
+  return statements
+    .flatMap((statement) =>
+      Array.isArray(statement.Action)
+        ? (statement.Action as string[])
+        : [statement.Action as string],
+    )
+    .sort();
+}
+
 describe("Authority current-host recovery floor stack", () => {
   it("selects exactly one root EBS volume through a constrained parameter", () => {
     const stack = template();
@@ -63,6 +83,11 @@ describe("Authority current-host recovery floor stack", () => {
 
     expect(parameters.AuthorityRootVolumeId).toMatchObject({
       Type: "AWS::EC2::Volume::Id",
+    });
+    expect(parameters.AuthorityRootVolumeKmsKeyArn).toMatchObject({
+      Type: "String",
+      AllowedPattern:
+        "^arn:(aws|aws-us-gov|aws-cn):kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+$",
     });
     expect(body.SelectionName).toBe("current-authority-root-volume-only");
     expect(body.Resources).toEqual([
@@ -147,6 +172,8 @@ describe("Authority current-host recovery floor stack", () => {
     expect(restoreRole.Type).toBe("AWS::IAM::Role");
     expect(backupRole.Properties).not.toHaveProperty("RoleName");
     expect(restoreRole.Properties).not.toHaveProperty("RoleName");
+    expect(backupRole.Properties).not.toHaveProperty("ManagedPolicyArns");
+    expect(restoreRole.Properties).not.toHaveProperty("ManagedPolicyArns");
     expect(backupRole.Properties).toMatchObject({
       AssumeRolePolicyDocument: {
         Version: "2012-10-17",
@@ -158,12 +185,6 @@ describe("Authority current-host recovery floor stack", () => {
           },
         ],
       },
-      ManagedPolicyArns: [
-        {
-          "Fn::Sub":
-            "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup",
-        },
-      ],
     });
     expect(restoreRole.Properties).toMatchObject({
       AssumeRolePolicyDocument: {
@@ -176,13 +197,95 @@ describe("Authority current-host recovery floor stack", () => {
           },
         ],
       },
-      ManagedPolicyArns: [
-        {
-          "Fn::Sub":
-            "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores",
-        },
-      ],
     });
+
+    const backupPolicies = backupRole.Properties!.Policies as Record<
+      string,
+      unknown
+    >[];
+    const restorePolicies = restoreRole.Properties!.Policies as Record<
+      string,
+      unknown
+    >[];
+    expect(backupPolicies[0]!.PolicyName).toBe(
+      "current-authority-root-volume-ebs-backup-only",
+    );
+    expect(restorePolicies[0]!.PolicyName).toBe(
+      "current-authority-root-volume-ebs-restore-only",
+    );
+
+    const backupStatements = inlinePolicyStatements(backupRole);
+    const restoreStatements = inlinePolicyStatements(restoreRole);
+    expect(actions(backupStatements)).toEqual(
+      [
+        "backup:CopyIntoBackupVault",
+        "backup:DescribeBackupVault",
+        "ec2:CopySnapshot",
+        "ec2:CreateSnapshot",
+        "ec2:CreateTags",
+        "ec2:DeleteSnapshot",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeVolumes",
+        "ec2:ModifySnapshotTier",
+        "tag:GetResources",
+      ].sort(),
+    );
+    expect(actions(restoreStatements)).toEqual(
+      [
+        "ec2:CreateVolume",
+        "ec2:DeleteVolume",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeVolumes",
+        "kms:CreateGrant",
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKey",
+        "kms:GenerateDataKeyWithoutPlaintext",
+        "kms:ReEncryptFrom",
+        "kms:ReEncryptTo",
+      ].sort(),
+    );
+
+    const createSnapshot = backupStatements.find(
+      (statement) => statement.Sid === "CreateSnapshotsOnlyFromSelectedVolume",
+    );
+    expect(createSnapshot!.Resource).toEqual([
+      {
+        "Fn::Sub":
+          "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${AuthorityRootVolumeId}",
+      },
+      {
+        "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*",
+      },
+    ]);
+    const restoreKms = restoreStatements.find(
+      (statement) => statement.Sid === "UseOnlyTheSelectedEbsKeyThroughEc2",
+    );
+    expect(restoreKms).toMatchObject({
+      Resource: { Ref: "AuthorityRootVolumeKmsKeyArn" },
+      Condition: {
+        StringEquals: {
+          "kms:ViaService": {
+            "Fn::Sub": "ec2.${AWS::Region}.${AWS::URLSuffix}",
+          },
+        },
+      },
+    });
+    const restoreGrant = restoreStatements.find(
+      (statement) => statement.Sid === "GrantOnlyForAwsEbsRestoreOfSelectedKey",
+    );
+    expect(restoreGrant).toMatchObject({
+      Resource: { Ref: "AuthorityRootVolumeKmsKeyArn" },
+      Condition: { Bool: { "kms:GrantIsForAWSResource": "true" } },
+    });
+    const rolePolicies = JSON.stringify([
+      backupRole.Properties!.Policies,
+      restoreRole.Properties!.Policies,
+    ]);
+    expect(rolePolicies).not.toMatch(
+      /AWSBackupServiceRolePolicy|dynamodb:|rds:|elasticfilesystem:|fsx:|eks:|ssm:|ec2:RunInstances|ec2:TerminateInstances|iam:PassRole|backup:CopyFromBackupVault/,
+    );
     expect(body.IamRoleArn).toEqual({
       "Fn::GetAtt": ["CurrentHostBackupServiceRole", "Arn"],
     });
@@ -248,8 +351,10 @@ describe("Authority current-host recovery floor stack", () => {
     expect(guard).toContain("ListOfTags not exists");
     expect(guard).toContain("NotResources not exists");
     expect(guard).toContain("rule exact_backup_and_restore_roles");
-    expect(guard).toContain("AWSBackupServiceRolePolicyForBackup");
-    expect(guard).toContain("AWSBackupServiceRolePolicyForRestores");
+    expect(guard).toContain("ManagedPolicyArns not exists");
+    expect(guard).toContain("current-authority-root-volume-ebs-backup-only");
+    expect(guard).toContain("current-authority-root-volume-ebs-restore-only");
+    expect(guard).toContain("AuthorityRootVolumeKmsKeyArn");
     expect(guard).toContain("rule bounded_schedule_and_retention");
     expect(guard).toContain('"Ref": "RecoveryPointRetentionDays"');
     expect(validationTools.cfn_lint).toEqual({
@@ -296,7 +401,9 @@ describe("Authority current-host recovery floor stack", () => {
     const serialized = JSON.stringify(stack);
     const runbook = readFileSync(RUNBOOK, "utf8");
 
-    expect(stack.Description).toContain("this template cannot inspect it");
+    expect(stack.Description).toContain(
+      "this template cannot inspect either live resource",
+    );
     expect(serialized).toContain(
       "not independently encrypted by the backup vault",
     );
@@ -314,7 +421,7 @@ describe("Authority current-host recovery floor stack", () => {
     expect(runbook).toContain("`backup:GetRecoveryPointRestoreMetadata`");
     expect(runbook).toContain("`backup:StartRestoreJob`");
     expect(runbook).toContain("`backup:DescribeRestoreJob`");
-    expect(runbook).toContain("AWSBackupServiceRolePolicyForRestores");
+    expect(runbook).toContain("EBS-only inline policies");
     expect(runbook).toContain("Availability Zone");
     expect(runbook).toContain("This is validation of the restored volume's");
     expect(runbook).toContain("not a check of the helper root volume");
