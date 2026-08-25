@@ -5,6 +5,31 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      authority_runner:
+        description: Temporary Authority image-build runner for the CI measurement protocol.
+        required: false
+        default: native
+        type: choice
+        options:
+          - native
+          - qemu
+      authority_build_cache_mode:
+        description: Temporary BuildKit cache condition for the CI measurement protocol.
+        required: false
+        default: default
+        type: choice
+        options:
+          - default
+          - "off"
+          - unique
+          - writer
+          - reader
+      authority_build_cache_scope:
+        description: Required for unique, writer, and reader measurement cache modes.
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   # A newer commit may supersede a pull-request run. Every non-PR run has its
@@ -148,23 +173,75 @@ jobs:
 
   authority-container:
     name: Organization authority container
-    runs-on: ubuntu-24.04-arm
+    # These workflow_dispatch controls are an unmerged, one-time performance
+    # experiment. Normal pull-request, push, and manual-default proofs stay on
+    # the native runner and their existing protected cache boundary.
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.authority_runner == 'qemu' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Enable QEMU only for the x86 measurement cohort
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.authority_runner == 'qemu' }}
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - name: Assert a native arm64 runner
+      - name: Validate CI measurement inputs
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
-        run: test "$(uname -m)" = aarch64
+        env:
+          AUTHORITY_BUILD_CACHE_MODE: ${{ inputs.authority_build_cache_mode }}
+          AUTHORITY_BUILD_CACHE_SCOPE: ${{ inputs.authority_build_cache_scope }}
+          AUTHORITY_RUNNER: ${{ inputs.authority_runner }}
+        run: |
+          set -euo pipefail
+          case "$AUTHORITY_RUNNER" in native|qemu) ;; *) exit 1 ;; esac
+          case "$AUTHORITY_BUILD_CACHE_MODE" in default|off|unique|writer|reader) ;; *) exit 1 ;; esac
+          if [[ "$AUTHORITY_BUILD_CACHE_MODE" != default && "$AUTHORITY_BUILD_CACHE_MODE" != off ]]; then
+            test -n "$AUTHORITY_BUILD_CACHE_SCOPE"
+          fi
+      - name: Assert the selected Authority runner
+        shell: bash
+        env:
+          AUTHORITY_RUNNER: ${{ github.event_name == 'workflow_dispatch' && inputs.authority_runner || 'native' }}
+        run: |
+          set -euo pipefail
+          case "$AUTHORITY_RUNNER" in
+            native) test "$(uname -m)" = aarch64 ;;
+            qemu) test "$(uname -m)" = x86_64 ;;
+            *) exit 1 ;;
+          esac
       - name: Assert a clean checkout before the authority image build
         shell: bash
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Build the clean V1 authority image without BuildKit cache
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.authority_build_cache_mode == 'off' }}
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: deploy/organization-authority/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: echo-organization-authority:ci
+          build-args: ECHO_SOURCE_SHA=${{ github.sha }}
+      - name: Build the clean V1 authority image from read-only BuildKit cache
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.authority_build_cache_mode == 'reader' }}
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: deploy/organization-authority/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: echo-organization-authority:ci
+          build-args: ECHO_SOURCE_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=authority-container-arm64-${{ inputs.authority_build_cache_scope }}
       - name: Build the clean V1 authority image
+        if: ${{ github.event_name != 'workflow_dispatch' || (inputs.authority_build_cache_mode != 'off' && inputs.authority_build_cache_mode != 'reader') }}
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
@@ -178,8 +255,8 @@ jobs:
           # Pull-request scopes neither read nor write the canonical cache.
           # That prevents untrusted pull-request cache entries being consumed
           # by a main or manually dispatched proof.
-          cache-from: type=gha,scope=authority-container-arm64-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref_name) }}
-          cache-to: type=gha,mode=max,scope=authority-container-arm64-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref_name) }},ignore-error=true
+          cache-from: type=gha,scope=authority-container-arm64-${{ github.event_name == 'workflow_dispatch' && inputs.authority_build_cache_mode != 'default' && inputs.authority_build_cache_scope || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref_name) }}
+          cache-to: type=gha,mode=max,scope=authority-container-arm64-${{ github.event_name == 'workflow_dispatch' && inputs.authority_build_cache_mode != 'default' && inputs.authority_build_cache_scope || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref_name) }},ignore-error=true
       - name: Assert the authority image build left the checkout clean
         shell: bash
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
