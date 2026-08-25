@@ -22,6 +22,9 @@ services:
       - --client-secret-file
       - /echo-clean/private/oidc-client-secret
     user: "${ECHO_CLEAN_AUTHORITY_UID:-1000}:${ECHO_CLEAN_AUTHORITY_GID:-1000}"
+    labels:
+      io.echo-brain.release-id: "${ECHO_CLEAN_RELEASE_ID:?set ECHO_CLEAN_RELEASE_ID to the accepted release ID}"
+      io.echo-brain.runtime-profile-sha256: "${ECHO_CLEAN_RUNTIME_PROFILE_SHA256:?set ECHO_CLEAN_RUNTIME_PROFILE_SHA256 to the accepted runtime profile SHA-256}"
     restart: unless-stopped
     stop_grace_period: 45s
     volumes:
@@ -51,6 +54,9 @@ services:
         restart: true
     network_mode: service:authority
     restart: unless-stopped
+    labels:
+      io.echo-brain.release-id: "${ECHO_CLEAN_RELEASE_ID:?set ECHO_CLEAN_RELEASE_ID to the accepted release ID}"
+      io.echo-brain.runtime-profile-sha256: "${ECHO_CLEAN_RUNTIME_PROFILE_SHA256:?set ECHO_CLEAN_RUNTIME_PROFILE_SHA256 to the accepted runtime profile SHA-256}"
     environment:
       ECHO_CLEAN_AUTHORITY_HOST: ${ECHO_CLEAN_AUTHORITY_HOST:?set ECHO_CLEAN_AUTHORITY_HOST to the public DNS name}
     command:

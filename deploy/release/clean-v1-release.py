@@ -45,7 +45,7 @@ def timestamp(value, name):
 
 
 def validate(value):
-    exact_keys(value, ["authority_image", "baseline_compatibility_class", "kind", "person_client", "release_id", "released_at", "schema_version", "source_sha"], "$")
+    exact_keys(value, ["authority_image", "baseline_compatibility_class", "kind", "person_client", "release_id", "released_at", "runtime_profile", "schema_version", "source_sha"], "$")
     if type(value["schema_version"]) is not int or value["schema_version"] != 1:
         fail("schema_version must equal integer 1")
     if value["kind"] != "echo-clean-v1-release":
@@ -63,12 +63,17 @@ def validate(value):
     string(value["person_client"]["version"], "person_client.version", VERSION)
     string(value["person_client"]["artifact_url"], "person_client.artifact_url", URL)
     string(value["person_client"]["artifact_sha256"], "person_client.artifact_sha256", SHA256)
+    exact_keys(value["runtime_profile"], ["artifact_sha256", "artifact_url", "profile_version"], "runtime_profile")
+    string(value["runtime_profile"]["artifact_url"], "runtime_profile.artifact_url", URL)
+    string(value["runtime_profile"]["artifact_sha256"], "runtime_profile.artifact_sha256", SHA256)
+    if value["runtime_profile"]["profile_version"] != "clean-v1-profile-1":
+        fail("runtime_profile.profile_version must equal clean-v1-profile-1")
     return value
 
 
 def read(path):
     state = os.lstat(path)
-    if not stat.S_ISREG(state.st_mode) or state.st_size <= 0 or state.st_size > MAX_BYTES:
+    if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode) or state.st_size <= 0 or state.st_size > MAX_BYTES:
         fail("record must be a non-empty regular file no larger than 16 KiB")
     with open(path, "r", encoding="utf-8") as source:
         raw = source.read()
@@ -84,7 +89,7 @@ def read(path):
 
 def main(argv):
     if len(argv) not in (2, 3) or argv[0] not in ("validate", "field") or (argv[0] == "field" and len(argv) != 3):
-        fail("usage: clean-v1-release.py <validate|field> <record> [authority-image|baseline-class|client-url|client-sha256|client-version]")
+        fail("usage: clean-v1-release.py <validate|field> <record> [authority-image|baseline-class|client-url|client-sha256|client-version|runtime-profile-url|runtime-profile-sha256|runtime-profile-version]")
     record = read(argv[1])
     if argv[0] == "validate":
         sys.stdout.write(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
@@ -96,6 +101,9 @@ def main(argv):
         "client-url": record["person_client"]["artifact_url"],
         "client-sha256": record["person_client"]["artifact_sha256"],
         "client-version": record["person_client"]["version"],
+        "runtime-profile-url": record["runtime_profile"]["artifact_url"],
+        "runtime-profile-sha256": record["runtime_profile"]["artifact_sha256"],
+        "runtime-profile-version": record["runtime_profile"]["profile_version"],
         "source-sha": record["source_sha"],
     }
     if argv[2] not in fields:

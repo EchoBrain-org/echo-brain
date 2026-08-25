@@ -12,10 +12,17 @@ ENV_FILE="$DEPLOY_DIR/.env.clean-v1"
 SETUP_FILE="$PRIVATE_DIR/onboard-clean-v1.conf"
 RELEASE_FILE="$RELEASE_DIR/current.clean-v1.json"
 CANDIDATE_FILE="$RELEASE_DIR/candidate.clean-v1.json"
+RUNTIME_PROFILES_DIR="$RELEASE_DIR/runtime-profiles"
+RUNTIME_ENVIRONMENTS_DIR="$RELEASE_DIR/runtime-environments"
+ACTIVE_RUNTIME_PROFILE_FILE="$RELEASE_DIR/runtime-profile.active"
 OPERATION_LOCK_DIR="$DATA_DIR/.authority-operation-lock"
 RELEASE_TOOL="$DEPLOY_DIR/../release/clean-v1-release.py"
 if [[ -f "$DEPLOY_DIR/release/clean-v1-release.py" ]]; then
   RELEASE_TOOL="$DEPLOY_DIR/release/clean-v1-release.py"
+fi
+RUNTIME_PROFILE_TOOL="$DEPLOY_DIR/../release/clean-v1-runtime-profile.py"
+if [[ -f "$DEPLOY_DIR/release/clean-v1-runtime-profile.py" ]]; then
+  RUNTIME_PROFILE_TOOL="$DEPLOY_DIR/release/clean-v1-runtime-profile.py"
 fi
 FOUNDER_MAIN="services/organization-authority/dist/clean-founder-main.js"
 RUNTIME_UID=''
@@ -65,6 +72,7 @@ EOF
 
 INPUT_MANIFEST_NAME='onboarding.clean-v1.json'
 INPUT_RELEASE_NAME='release.json'
+INPUT_RUNTIME_PROFILE_NAME='runtime-profile.json'
 INPUT_OIDC_CONFIG_NAME='oidc-config.json'
 INPUT_OIDC_SECRET_NAME='oidc-client-secret'
 INPUT_SLACK_TOKEN_NAME='slack-bot-token'
@@ -73,6 +81,7 @@ INPUT_LLM_CREDENTIAL_NAME='llm-credential'
 
 input_dir=''
 input_release=''
+input_runtime_profile=''
 input_oidc_config=''
 input_oidc_secret=''
 input_slack_token=''
@@ -200,6 +209,40 @@ if not isinstance(value, dict) or value.get("redirect_uri") != f"https://{sys.ar
 PY
 }
 
+runtime_profile_digest() {
+  python3 - "$1" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+state = os.lstat(path)
+if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode):
+    raise SystemExit(1)
+digest = hashlib.sha256()
+with open(path, "rb") as source:
+    for chunk in iter(lambda: source.read(128 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+runtime_profile_field() {
+  python3 "$RUNTIME_PROFILE_TOOL" field "$1" "$2"
+}
+
+validate_runtime_profile_tuple() {
+  local record="$1" profile="$2" expected_digest expected_source actual_digest actual_source
+  python3 "$RUNTIME_PROFILE_TOOL" validate "$profile" >/dev/null || return 1
+  expected_digest="$(python3 "$RELEASE_TOOL" field "$record" runtime-profile-sha256)" || return 1
+  actual_digest="$(runtime_profile_digest "$profile")" || return 1
+  [[ "$actual_digest" == "$expected_digest" ]] || return 1
+  expected_source="$(python3 "$RELEASE_TOOL" field "$record" source-sha)" || return 1
+  actual_source="$(runtime_profile_field "$profile" source-sha)" || return 1
+  [[ "$actual_source" == "$expected_source" ]]
+}
+
 runtime_identity_is_valid() {
   local runtime_user="$1" uid
   [[ "$runtime_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || return 1
@@ -230,6 +273,7 @@ check_input_dir() {
   local -a expected=(
     "$INPUT_MANIFEST_NAME"
     "$INPUT_RELEASE_NAME"
+    "$INPUT_RUNTIME_PROFILE_NAME"
     "$INPUT_OIDC_CONFIG_NAME"
     "$INPUT_OIDC_SECRET_NAME"
     "$INPUT_SLACK_TOKEN_NAME"
@@ -248,6 +292,7 @@ check_input_dir() {
   [[ ${#entries[@]} -eq ${#expected[@]} ]] || return 1
 
   input_release="$input_dir/$INPUT_RELEASE_NAME"
+  input_runtime_profile="$input_dir/$INPUT_RUNTIME_PROFILE_NAME"
   input_oidc_config="$input_dir/$INPUT_OIDC_CONFIG_NAME"
   input_oidc_secret="$input_dir/$INPUT_OIDC_SECRET_NAME"
   input_slack_token="$input_dir/$INPUT_SLACK_TOKEN_NAME"
@@ -314,6 +359,7 @@ doctor() {
   if ! docker compose version >/dev/null 2>&1; then doctor_json false docker_compose_missing 'Install Docker Compose v2, then rerun doctor.'; return; fi
   if ! command -v python3 >/dev/null 2>&1; then doctor_json false python3_missing 'Install python3, then rerun doctor.'; return; fi
   if [[ ! -f "$RELEASE_TOOL" ]]; then doctor_json false release_validator_missing 'Install the clean-v1 release validator, then rerun doctor.'; return; fi
+  if [[ ! -f "$RUNTIME_PROFILE_TOOL" ]]; then doctor_json false runtime_profile_validator_missing 'Install the clean-v1 runtime profile validator, then rerun doctor.'; return; fi
   if ! command -v systemctl >/dev/null 2>&1; then doctor_json false systemctl_missing 'Provision the supported EC2 host, then rerun doctor.'; return; fi
   if ! systemctl is-active --quiet cloudflared-echo-authority.service >/dev/null 2>&1; then doctor_json false cloudflared_inactive 'Start cloudflared-echo-authority.service, then rerun doctor.'; return; fi
   if [[ ! -d "$input_dir" || -L "$input_dir" || "$input_dir" != /* ]]; then doctor_json false input_dir_invalid 'Create an absolute private input directory with mode 0700.'; return; fi
@@ -323,10 +369,13 @@ doctor() {
   if ! runtime_identity_is_valid "$input_runtime_user"; then doctor_json false runtime_user_invalid 'Create a non-root runtime user and run as root or that runtime user.'; return; fi
   if ! runtime_executor_can_prepare "$input_runtime_user"; then doctor_json false runtime_executor_invalid 'Run prepare as root or as the selected runtime user.'; return; fi
   if ! python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null 2>&1; then doctor_json false release_invalid 'Replace release.json with a canonical clean-v1 release record.'; return; fi
+  if ! validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" >/dev/null 2>&1; then doctor_json false runtime_profile_invalid 'Replace runtime-profile.json with the exact canonical profile named by release.json.'; return; fi
   if ! validate_input_oidc_callback >/dev/null 2>&1; then doctor_json false oidc_callback_invalid 'Set oidc-config.json redirect_uri to the exact Authority callback URL.'; return; fi
   if ! safe_directory_target "$DATA_DIR"; then doctor_json false clean_data_path_invalid 'Remove or repair the unsafe clean-data path before preparing.'; return; fi
   if ! safe_directory_target "$PRIVATE_DIR"; then doctor_json false clean_private_path_invalid 'Remove or repair the unsafe clean private-input path before preparing.'; return; fi
   if ! safe_directory_target "$RELEASE_DIR"; then doctor_json false clean_release_path_invalid 'Remove or repair the unsafe clean release path before preparing.'; return; fi
+  if ! safe_directory_target "$RUNTIME_PROFILES_DIR"; then doctor_json false clean_runtime_profiles_path_invalid 'Remove or repair the unsafe clean runtime-profiles path before preparing.'; return; fi
+  if ! safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR"; then doctor_json false clean_runtime_environments_path_invalid 'Remove or repair the unsafe clean runtime-environments path before preparing.'; return; fi
   doctor_json true ready 'Run prepare with the same input directory.'
 }
 
@@ -335,6 +384,7 @@ require_host_prerequisites() {
   docker compose version >/dev/null 2>&1 || fail 'Docker Compose v2 is unavailable. Provision Docker Compose before using this wrapper.'
   command -v python3 >/dev/null 2>&1 || fail 'python3 is required for canonical release validation.'
   [[ -f "$RELEASE_TOOL" ]] || fail 'clean-v1 release validator is missing from deploy/release.'
+  [[ -f "$RUNTIME_PROFILE_TOOL" ]] || fail 'clean-v1 runtime profile validator is missing from deploy/release.'
 }
 
 compose_clean() {
@@ -453,11 +503,96 @@ write_exact_file() {
   mv "$temporary" "$destination"
 }
 
+materialize_runtime_profile() {
+  local profile="$1" release_id="$2" staging filename destination
+  staging="$RELEASE_DIR/.runtime-profile-materialized-$release_id"
+  [[ ! -e "$staging" && ! -L "$staging" ]] || \
+    fail 'runtime profile materialization staging path already exists'
+  python3 "$RUNTIME_PROFILE_TOOL" materialize "$profile" "$staging" || \
+    fail 'could not materialize the canonical runtime profile'
+
+  for filename in Caddyfile.clean-v1 Caddyfile.clean-v1.ec2 compose.clean-v1.ec2.yaml compose.clean-v1.yaml; do
+    destination="$DEPLOY_DIR/$filename"
+    [[ -f "$staging/$filename" && ! -L "$staging/$filename" ]] || \
+      fail 'materialized runtime profile is incomplete'
+    if [[ -e "$destination" || -L "$destination" ]]; then
+      [[ -f "$destination" && ! -L "$destination" ]] || \
+        fail "deployment runtime profile target is unsafe: $filename"
+    fi
+  done
+
+  for filename in Caddyfile.clean-v1 Caddyfile.clean-v1.ec2 compose.clean-v1.ec2.yaml compose.clean-v1.yaml; do
+    install -m 0600 "$staging/$filename" "$DEPLOY_DIR/$filename" || \
+      fail "could not install runtime profile file: $filename"
+  done
+  rm -f "$staging"/Caddyfile.clean-v1 \
+    "$staging"/Caddyfile.clean-v1.ec2 \
+    "$staging"/compose.clean-v1.ec2.yaml \
+    "$staging"/compose.clean-v1.yaml
+  rmdir "$staging" || fail 'could not remove runtime profile materialization staging directory'
+}
+
+environment_value() {
+  local file="$1" key="$2" value
+  [[ -f "$file" && ! -L "$file" ]] || return 1
+  value="$(sed -n "s/^${key}=//p" "$file")"
+  [[ -n "$value" ]] || return 1
+  printf '%s\n' "$value"
+}
+
+accepted_runtime_profile_path() {
+  printf '%s/%s.profile\n' "$RUNTIME_PROFILES_DIR" "$(release_field release-id)"
+}
+
+accepted_runtime_environment_path() {
+  printf '%s/%s.env\n' "$RUNTIME_ENVIRONMENTS_DIR" "$(release_field release-id)"
+}
+
+runtime_profile_files_match_deployment() {
+  python3 - "$ACTIVE_RUNTIME_PROFILE_FILE" "$DEPLOY_DIR" <<'PY'
+import json
+import os
+import stat
+import sys
+
+profile_path, deployment = sys.argv[1:]
+with open(profile_path, encoding="utf-8") as source:
+    profile = json.load(source)
+for filename, contents in profile["files"].items():
+    path = os.path.join(deployment, filename)
+    state = os.lstat(path)
+    if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode):
+        raise SystemExit(1)
+    with open(path, "rb") as source:
+        if source.read() != contents.encode("utf-8"):
+            raise SystemExit(1)
+PY
+}
+
+runtime_profile_matches_prepared_tuple() {
+  local profile environment expected_digest expected_release
+  profile="$(accepted_runtime_profile_path)" || return 1
+  environment="$(accepted_runtime_environment_path)" || return 1
+  [[ -f "$profile" && ! -L "$profile" ]] || return 1
+  [[ -f "$ACTIVE_RUNTIME_PROFILE_FILE" && ! -L "$ACTIVE_RUNTIME_PROFILE_FILE" ]] || return 1
+  [[ -f "$environment" && ! -L "$environment" ]] || return 1
+  validate_runtime_profile_tuple "$RELEASE_FILE" "$profile" || return 1
+  validate_runtime_profile_tuple "$RELEASE_FILE" "$ACTIVE_RUNTIME_PROFILE_FILE" || return 1
+  cmp -s "$profile" "$ACTIVE_RUNTIME_PROFILE_FILE" || return 1
+  cmp -s "$environment" "$ENV_FILE" || return 1
+  expected_digest="$(release_field runtime-profile-sha256)" || return 1
+  expected_release="$(release_field release-id)" || return 1
+  [[ "$(environment_value "$ENV_FILE" ECHO_CLEAN_RUNTIME_PROFILE_SHA256)" == "$expected_digest" ]] || return 1
+  [[ "$(environment_value "$ENV_FILE" ECHO_CLEAN_RELEASE_ID)" == "$expected_release" ]] || return 1
+  runtime_profile_files_match_deployment
+}
+
 require_prepared() {
   [[ -f "$SETUP_FILE" && ! -L "$SETUP_FILE" ]] || fail 'run prepare first'
   [[ -f "$RELEASE_FILE" && ! -L "$RELEASE_FILE" ]] || fail 'clean release record is missing; run prepare again with the same record'
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Compose environment is missing; run prepare again with the same inputs'
   python3 "$RELEASE_TOOL" validate "$RELEASE_FILE" >/dev/null || fail 'persisted release record is no longer canonical clean-v1'
+  runtime_profile_matches_prepared_tuple || fail 'prepared runtime profile tuple is missing, noncanonical, or drifted from the accepted release'
   for required in oidc-config.json oidc-client-secret slack-bot-token granola-credential-source granola-owner-email llm-credential-source; do
     [[ -f "$PRIVATE_DIR/$required" && ! -L "$PRIVATE_DIR/$required" ]] || fail "fixed private input is missing: $required"
   done
@@ -572,10 +707,26 @@ authority_uses_accepted_image() {
   [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$running_image_id" 2>/dev/null)" == "$expected_source" ]]
 }
 
+service_uses_accepted_runtime_profile() {
+  local service="$1" id expected_release expected_digest
+  id="$(compose_clean ps -q "$service" 2>/dev/null)" || return 1
+  [[ -n "$id" ]] || return 1
+  expected_release="$(release_field release-id)" || return 1
+  expected_digest="$(release_field runtime-profile-sha256)" || return 1
+  [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.release-id"}}' "$id" 2>/dev/null)" == "$expected_release" ]] || return 1
+  [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.runtime-profile-sha256"}}' "$id" 2>/dev/null)" == "$expected_digest" ]]
+}
+
+runtime_uses_accepted_runtime_profile() {
+  runtime_profile_matches_prepared_tuple && \
+    service_uses_accepted_runtime_profile authority && \
+    service_uses_accepted_runtime_profile proxy
+}
+
 terminal_green() {
   local status_json="$1"
   [[ "$(next_step_from_status "$status_json")" == complete ]] || return 1
-  running_authority && healthy_authority && authority_uses_accepted_image
+  running_authority && healthy_authority && authority_uses_accepted_image && runtime_uses_accepted_runtime_profile
 }
 
 print_status() {
@@ -595,6 +746,11 @@ print_status() {
   else
     printf 'authority_exact_accepted_image=false\n'
   fi
+  if runtime_uses_accepted_runtime_profile; then
+    printf 'runtime_exact_accepted_profile=true\n'
+  else
+    printf 'runtime_exact_accepted_profile=false\n'
+  fi
   if terminal_green "$status_json"; then
     printf 'terminal_green=true\n'
   else
@@ -606,6 +762,7 @@ print_status() {
 print_staged_candidate_status() {
   printf 'release_state=staged_candidate\n'
   printf 'authority_exact_accepted_image=false\n'
+  printf 'runtime_exact_accepted_profile=false\n'
   printf 'terminal_green=false\n'
   printf 'next_action=Run update-clean-v1.sh status, then promote the candidate or roll it back.\n'
 }
@@ -618,7 +775,7 @@ prepare() {
   # Doctor runs the complete preflight. Read the same fixed sources again in
   # this process before persisting them, so prepare never accepts a different
   # shape than the one it just checked.
-  check_input_dir && read_input_manifest && validate_input_oidc_callback || \
+  check_input_dir && read_input_manifest && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && validate_input_oidc_callback || \
     fail 'input directory changed after doctor; rerun prepare'
   require_host_prerequisites
   select_runtime_identity "$input_runtime_user"
@@ -626,13 +783,24 @@ prepare() {
   require_safe_directory_target "$DATA_DIR" 'clean data path'
   require_safe_directory_target "$PRIVATE_DIR" 'clean private-input path'
   require_safe_directory_target "$RELEASE_DIR" 'clean release path'
-  install -d -m 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR"
-  chmod 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR"
+  require_safe_directory_target "$RUNTIME_PROFILES_DIR" 'clean runtime-profiles path'
+  require_safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR" 'clean runtime-environments path'
+  install -d -m 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR" \
+    "$RUNTIME_PROFILES_DIR" "$RUNTIME_ENVIRONMENTS_DIR"
+  chmod 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR" \
+    "$RUNTIME_PROFILES_DIR" "$RUNTIME_ENVIRONMENTS_DIR"
   own_for_runtime "$DATA_DIR"
   own_for_runtime "$PRIVATE_DIR"
+  own_for_runtime "$RUNTIME_PROFILES_DIR"
+  own_for_runtime "$RUNTIME_ENVIRONMENTS_DIR"
   copy_exact_private "$input_release" "$RELEASE_FILE" 'release record' host
-  local image uid gid authority_url setup env
+  local image uid gid authority_url setup env release_id runtime_profile_sha256 runtime_profile_version runtime_profile_path runtime_environment_path
   image="$(release_field authority-image)"
+  release_id="$(release_field release-id)"
+  runtime_profile_sha256="$(runtime_profile_digest "$input_runtime_profile")"
+  runtime_profile_version="$(release_field runtime-profile-version)"
+  runtime_profile_path="$RUNTIME_PROFILES_DIR/$release_id.profile"
+  runtime_environment_path="$RUNTIME_ENVIRONMENTS_DIR/$release_id.env"
   uid="$RUNTIME_UID"
   gid="$RUNTIME_GID"
   authority_url="https://$input_authority_host"
@@ -645,9 +813,10 @@ authority_url=$authority_url
 aws_region=$input_aws_region
 authority_log_group=/echo-brain/authority/$input_authority_host
 slack_approval_channel_id=$input_channel
-release_id=$(release_field release-id)
+release_id=$release_id
 authority_image=$image
 artifact_revision=$(release_field source-sha)
+runtime_profile_sha256=$runtime_profile_sha256
 authority_uid=$uid
 authority_gid=$gid"
   env="ECHO_CLEAN_AUTHORITY_HOST=$input_authority_host
@@ -655,18 +824,26 @@ ECHO_CLEAN_AUTHORITY_URL=$authority_url
 ECHO_CLEAN_AUTHORITY_UID=$uid
 ECHO_CLEAN_AUTHORITY_GID=$gid
 ECHO_CLEAN_AUTHORITY_IMAGE=$image
+ECHO_CLEAN_RELEASE_ID=$release_id
+ECHO_CLEAN_RELEASE_SOURCE_SHA=$(release_field source-sha)
+ECHO_CLEAN_RUNTIME_PROFILE_SHA256=$runtime_profile_sha256
+ECHO_CLEAN_RUNTIME_PROFILE_VERSION=$runtime_profile_version
 ECHO_CLEAN_AWS_REGION=$input_aws_region
 ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/$input_authority_host
 ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$input_channel
 ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
   write_exact_file "$SETUP_FILE" "$setup" 'setup configuration' runtime
   write_exact_file "$ENV_FILE" "$env" 'Compose environment'
+  write_exact_file "$runtime_environment_path" "$env" 'runtime environment snapshot' runtime
+  copy_exact_private "$input_runtime_profile" "$runtime_profile_path" 'runtime profile' host
+  copy_exact_private "$input_runtime_profile" "$ACTIVE_RUNTIME_PROFILE_FILE" 'active runtime profile' host
   copy_exact_private "$input_oidc_config" "$PRIVATE_DIR/oidc-config.json" 'OIDC configuration'
   copy_exact_private "$input_oidc_secret" "$PRIVATE_DIR/oidc-client-secret" 'OIDC client secret'
   copy_exact_private "$input_slack_token" "$PRIVATE_DIR/slack-bot-token" 'Slack bot token'
   copy_exact_private "$input_granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
   copy_exact_private "$input_llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
   write_exact_private "$PRIVATE_DIR/granola-owner-email" "$input_owner_email" 'Granola owner email'
+  materialize_runtime_profile "$ACTIVE_RUNTIME_PROFILE_FILE" "$release_id"
   # This render is intentionally offline: prepare never builds or pulls an image.
   compose_clean config >/dev/null
   printf 'prepared=true\nnext_action=Run onboard-clean-v1.sh resume on this server.\n'

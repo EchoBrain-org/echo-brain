@@ -7,10 +7,18 @@ RELEASE_TOOL="${ECHO_CLEAN_RELEASE_TOOL:-$DEPLOY_DIR/release/clean-v1-release.py
 if [[ ! -f "$RELEASE_TOOL" && -f "$DEPLOY_DIR/../release/clean-v1-release.py" ]]; then
   RELEASE_TOOL="$DEPLOY_DIR/../release/clean-v1-release.py"
 fi
+RUNTIME_PROFILE_TOOL="${ECHO_CLEAN_RUNTIME_PROFILE_TOOL:-$DEPLOY_DIR/release/clean-v1-runtime-profile.py}"
+if [[ ! -f "$RUNTIME_PROFILE_TOOL" && -f "$DEPLOY_DIR/../release/clean-v1-runtime-profile.py" ]]; then
+  RUNTIME_PROFILE_TOOL="$DEPLOY_DIR/../release/clean-v1-runtime-profile.py"
+fi
 ENV_FILE="${ECHO_CLEAN_ENV_FILE:-$DEPLOY_DIR/.env.clean-v1}"
+RUNTIME_CONFIG_DIR="${ECHO_CLEAN_RUNTIME_CONFIG_DIR:-$DEPLOY_DIR}"
 RELEASE_STATE_DIR="${ECHO_CLEAN_RELEASE_STATE_DIR:-$DEPLOY_DIR/clean-data/release}"
 CURRENT_RECORD="$RELEASE_STATE_DIR/current.clean-v1.json"
 CANDIDATE_RECORD="$RELEASE_STATE_DIR/candidate.clean-v1.json"
+RUNTIME_PROFILE_STATE_DIR="$RELEASE_STATE_DIR/runtime-profiles"
+ENVIRONMENT_STATE_DIR="$RELEASE_STATE_DIR/runtime-environments"
+ACTIVE_RUNTIME_PROFILE="$RELEASE_STATE_DIR/runtime-profile.active"
 OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.authority-operation-lock}"
 OPERATION_LOCK_HELD=false
 
@@ -37,22 +45,47 @@ acquire_operation_lock() {
 
 [[ -x /usr/bin/python3 || -x "$(command -v python3)" ]] || fail 'python3 is required'
 [[ -f "$RELEASE_TOOL" ]] || fail 'clean-v1 release validator is missing'
+[[ -f "$RUNTIME_PROFILE_TOOL" ]] || fail 'clean-v1 runtime profile validator is missing'
+[[ -d "$RUNTIME_CONFIG_DIR" && ! -L "$RUNTIME_CONFIG_DIR" ]] || fail 'clean Authority runtime configuration directory is missing or unsafe'
 [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Authority environment file is missing or unsafe'
 
 compose_clean() {
   docker compose --env-file "$ENV_FILE" \
-    -f "$DEPLOY_DIR/compose.clean-v1.yaml" \
-    -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@"
+    -f "$RUNTIME_CONFIG_DIR/compose.clean-v1.yaml" \
+    -f "$RUNTIME_CONFIG_DIR/compose.clean-v1.ec2.yaml" "$@"
 }
 
 field() { python3 "$RELEASE_TOOL" field "$1" "$2"; }
 validate() { python3 "$RELEASE_TOOL" validate "$1" >/dev/null; }
+profile_field() { python3 "$RUNTIME_PROFILE_TOOL" field "$1" "$2"; }
+validate_profile() { python3 "$RUNTIME_PROFILE_TOOL" validate "$1" >/dev/null; }
+
+ensure_state_directories() {
+  python3 - "$RELEASE_STATE_DIR" "$RUNTIME_PROFILE_STATE_DIR" "$ENVIRONMENT_STATE_DIR" \
+    "$RELEASE_STATE_DIR/history" "$RELEASE_STATE_DIR/failed" <<'PY'
+import os, pathlib, stat, sys
+
+for index, raw in enumerate(sys.argv[1:]):
+    path = pathlib.Path(raw)
+    try:
+        state = path.lstat()
+    except FileNotFoundError:
+        parent = path.parent
+        parent_state = parent.lstat()
+        if stat.S_ISLNK(parent_state.st_mode) or not stat.S_ISDIR(parent_state.st_mode):
+            raise SystemExit(str(parent) + ' is not a safe release-state parent directory')
+        path.mkdir(mode=0o700)
+        state = path.lstat()
+    if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+        raise SystemExit(str(path) + ' is not a safe release-state directory')
+PY
+}
 
 current_image() {
   python3 - "$ENV_FILE" <<'PY'
 import pathlib, re, stat, sys
 path = pathlib.Path(sys.argv[1])
-state = path.stat()
+state = path.lstat()
 if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode) or state.st_mode & 0o077:
     raise SystemExit('clean Authority environment must be a private regular file')
 rows = [line for line in path.read_text(encoding='utf-8').splitlines() if line.startswith('ECHO_CLEAN_AUTHORITY_IMAGE=')]
@@ -65,31 +98,231 @@ print(value)
 PY
 }
 
-replace_image() {
-  python3 - "$ENV_FILE" "$1" <<'PY'
-import os, pathlib, re, stat, sys, tempfile
-path, image = pathlib.Path(sys.argv[1]), sys.argv[2]
-if not re.fullmatch(r'[a-z0-9][a-z0-9.-]*(?:/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}', image):
-    raise SystemExit('replacement image is not an immutable digest reference')
-state = path.stat()
-if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode) or state.st_mode & 0o077:
+sha256_file() {
+  python3 - "$1" <<'PY'
+import hashlib, pathlib, stat, sys
+path = pathlib.Path(sys.argv[1])
+state = path.lstat()
+if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode):
+    raise SystemExit('runtime profile must be a regular file')
+digest = hashlib.sha256()
+with path.open('rb') as source:
+    for chunk in iter(lambda: source.read(1024 * 1024), b''):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+runtime_profile_path() {
+  printf '%s/%s.profile\n' "$RUNTIME_PROFILE_STATE_DIR" "$(field "$1" release-id)"
+}
+
+environment_snapshot_path() {
+  printf '%s/%s.env\n' "$ENVIRONMENT_STATE_DIR" "$(field "$1" release-id)"
+}
+
+verify_runtime_profile() {
+  local record="$1" profile="$2" expected_sha expected_source
+  validate_profile "$profile" || return 1
+  expected_sha="$(field "$record" runtime-profile-sha256)"
+  [[ "$(sha256_file "$profile")" == "$expected_sha" ]] || fail 'runtime profile SHA-256 does not match the release record'
+  expected_source="$(field "$record" source-sha)"
+  [[ "$(profile_field "$profile" source-sha)" == "$expected_source" ]] || fail 'runtime profile source_sha does not match the release record'
+}
+
+create_environment_snapshot() {
+  local destination="$1" record="$2"
+  python3 - "$ENV_FILE" "$destination" \
+    "$(field "$record" authority-image)" \
+    "$(field "$record" release-id)" \
+    "$(field "$record" source-sha)" \
+    "$(field "$record" runtime-profile-sha256)" \
+    "$(field "$record" runtime-profile-version)" <<'PY'
+import os, pathlib, stat, sys, tempfile
+
+source, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+image, release_id, source_sha, profile_sha, profile_version = sys.argv[3:]
+state = source.lstat()
+if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
     raise SystemExit('clean Authority environment must be a private regular file')
-lines = path.read_text(encoding='utf-8').splitlines()
-if sum(line.startswith('ECHO_CLEAN_AUTHORITY_IMAGE=') for line in lines) != 1:
-    raise SystemExit('clean Authority environment must contain exactly one ECHO_CLEAN_AUTHORITY_IMAGE')
-payload = '\n'.join(('ECHO_CLEAN_AUTHORITY_IMAGE=' + image) if line.startswith('ECHO_CLEAN_AUTHORITY_IMAGE=') else line for line in lines) + '\n'
-fd, temporary = tempfile.mkstemp(prefix='.env.clean-v1.', dir=path.parent)
+lines = source.read_text(encoding='utf-8').splitlines()
+names = {
+    'ECHO_CLEAN_AUTHORITY_IMAGE': image,
+    'ECHO_CLEAN_RELEASE_ID': release_id,
+    'ECHO_CLEAN_RELEASE_SOURCE_SHA': source_sha,
+    'ECHO_CLEAN_RUNTIME_PROFILE_SHA256': profile_sha,
+    'ECHO_CLEAN_RUNTIME_PROFILE_VERSION': profile_version,
+}
+for name in names:
+    if sum(line.startswith(name + '=') for line in lines) > 1:
+        raise SystemExit('clean Authority environment has duplicate ' + name)
+payload = [line for line in lines if not any(line.startswith(name + '=') for name in names)]
+payload.extend(name + '=' + value for name, value in names.items())
+destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+os.chmod(destination.parent, 0o700)
+fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as output:
-        output.write(payload); output.flush(); os.fsync(output.fileno())
-    os.replace(temporary, path)
-    directory = os.open(path.parent, os.O_RDONLY)
+        output.write('\n'.join(payload) + '\n')
+        output.flush(); os.fsync(output.fileno())
+    if destination.exists():
+        raise SystemExit('environment snapshot destination already exists')
+    os.link(temporary, destination)
+    os.unlink(temporary)
+    directory = os.open(destination.parent, os.O_RDONLY)
     try: os.fsync(directory)
     finally: os.close(directory)
 finally:
     if os.path.exists(temporary): os.unlink(temporary)
 PY
+}
+
+activate_release_tuple() {
+  local record="$1" profile env_snapshot stage_parent stage_dir
+  profile="$(runtime_profile_path "$record")"
+  env_snapshot="$(environment_snapshot_path "$record")"
+  [[ -f "$profile" && ! -L "$profile" ]] || fail 'stored runtime profile is missing or unsafe'
+  [[ -f "$env_snapshot" && ! -L "$env_snapshot" ]] || fail 'stored release environment snapshot is missing or unsafe'
+  verify_runtime_profile "$record" "$profile"
+  stage_parent="$(mktemp -d "$RUNTIME_CONFIG_DIR/.runtime-profile.XXXXXX")"
+  stage_dir="$stage_parent/materialized"
+  if ! python3 "$RUNTIME_PROFILE_TOOL" materialize "$profile" "$stage_dir"; then
+    rm -rf "$stage_parent"
+    fail 'could not materialize the selected runtime profile'
+  fi
+  if ! python3 - "$stage_dir" "$RUNTIME_CONFIG_DIR" "$env_snapshot" "$ENV_FILE" "$profile" "$ACTIVE_RUNTIME_PROFILE" <<'PY'
+import os, pathlib, stat, sys, tempfile
+
+source_dir, deploy_dir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+env_snapshot, env_file = pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4])
+profile, active_profile = pathlib.Path(sys.argv[5]), pathlib.Path(sys.argv[6])
+names = ('compose.clean-v1.yaml', 'compose.clean-v1.ec2.yaml', 'Caddyfile.clean-v1', 'Caddyfile.clean-v1.ec2')
+
+def regular(path, private=False):
+    state = path.lstat()
+    if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or (private and state.st_mode & 0o077):
+        raise SystemExit(str(path) + ' is not a safe regular file')
+
+regular(env_snapshot, private=True)
+regular(profile)
+for name in names:
+    regular(source_dir / name)
+if {path.name for path in source_dir.iterdir()} != set(names):
+    raise SystemExit('runtime profile materialization contains an unexpected file set')
+
+def replace_from(source, destination, mode):
+    fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'wb') as output, source.open('rb') as input:
+            while chunk := input.read(1024 * 1024): output.write(chunk)
+            output.flush(); os.fsync(output.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+
+replace_from(env_snapshot, env_file, 0o600)
+replace_from(profile, active_profile, 0o600)
+for name in names:
+    source, destination = source_dir / name, deploy_dir / name
+    replace_from(source, destination, stat.S_IMODE(source.stat().st_mode))
+directory = os.open(deploy_dir, os.O_RDONLY)
+try: os.fsync(directory)
+finally: os.close(directory)
+PY
+  then
+    rm -rf "$stage_parent"
+    fail 'could not activate the selected runtime profile'
+  fi
+  rm -rf "$stage_parent"
+}
+
+active_runtime_profile_matches() {
+  local record="$1" expected_sha expected_source actual_sha actual_source
+  [[ -f "$ACTIVE_RUNTIME_PROFILE" && ! -L "$ACTIVE_RUNTIME_PROFILE" ]] || fail 'runtime profile drifted from the accepted release record'
+  validate_profile "$ACTIVE_RUNTIME_PROFILE" || fail 'runtime profile drifted from the accepted release record'
+  expected_sha="$(field "$record" runtime-profile-sha256)"
+  expected_source="$(field "$record" source-sha)"
+  actual_sha="$(sha256_file "$ACTIVE_RUNTIME_PROFILE")" || fail 'runtime profile drifted from the accepted release record'
+  actual_source="$(profile_field "$ACTIVE_RUNTIME_PROFILE" source-sha)" || fail 'runtime profile drifted from the accepted release record'
+  [[ "$actual_sha" == "$expected_sha" && "$actual_source" == "$expected_source" ]] || fail 'runtime profile drifted from the accepted release record'
+}
+
+active_materialized_profile_matches() {
+  local stage_parent stage_dir name
+  stage_parent="$(mktemp -d "$RUNTIME_CONFIG_DIR/.runtime-profile-check.XXXXXX")"
+  stage_dir="$stage_parent/materialized"
+  if ! python3 "$RUNTIME_PROFILE_TOOL" materialize "$ACTIVE_RUNTIME_PROFILE" "$stage_dir"; then
+    rm -rf "$stage_parent"
+    fail 'runtime profile materialization drifted from the accepted release record'
+  fi
+  for name in Caddyfile.clean-v1 Caddyfile.clean-v1.ec2 compose.clean-v1.ec2.yaml compose.clean-v1.yaml; do
+    if [[ ! -f "$RUNTIME_CONFIG_DIR/$name" || -L "$RUNTIME_CONFIG_DIR/$name" ]] || ! cmp -s "$stage_dir/$name" "$RUNTIME_CONFIG_DIR/$name"; then
+      rm -rf "$stage_parent"
+      fail 'runtime profile materialization drifted from the accepted release record'
+    fi
+  done
+  rm -rf "$stage_parent"
+}
+
+stored_release_tuple_matches() {
+  local record="$1" profile snapshot
+  profile="$(runtime_profile_path "$record")"
+  snapshot="$(environment_snapshot_path "$record")"
+  [[ -f "$profile" && ! -L "$profile" ]] || fail 'stored runtime profile is missing or unsafe'
+  verify_runtime_profile "$record" "$profile"
+  [[ -f "$snapshot" && ! -L "$snapshot" ]] || fail 'release environment snapshot is missing or unsafe'
+  python3 - "$snapshot" \
+    "$(field "$record" authority-image)" \
+    "$(field "$record" release-id)" \
+    "$(field "$record" source-sha)" \
+    "$(field "$record" runtime-profile-sha256)" \
+    "$(field "$record" runtime-profile-version)" <<'PY'
+import pathlib, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+expected = dict(zip((
+    'ECHO_CLEAN_AUTHORITY_IMAGE',
+    'ECHO_CLEAN_RELEASE_ID',
+    'ECHO_CLEAN_RELEASE_SOURCE_SHA',
+    'ECHO_CLEAN_RUNTIME_PROFILE_SHA256',
+    'ECHO_CLEAN_RUNTIME_PROFILE_VERSION',
+), sys.argv[2:]))
+state = path.lstat()
+if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
+    raise SystemExit('release environment snapshot must be a private regular file')
+lines = path.read_text(encoding='utf-8').splitlines()
+for name, value in expected.items():
+    if [line for line in lines if line.startswith(name + '=')] != [name + '=' + value]:
+        raise SystemExit('release environment snapshot does not match the release record')
+PY
+}
+
+active_environment_matches() {
+  local record="$1" snapshot
+  stored_release_tuple_matches "$record"
+  snapshot="$(environment_snapshot_path "$record")"
+  cmp -s "$ENV_FILE" "$snapshot" || fail 'release environment drifted from the accepted release record'
+}
+
+store_release_tuple() {
+  local record="$1" supplied_profile="$2" stored_profile
+  verify_runtime_profile "$record" "$supplied_profile"
+  stored_profile="$(runtime_profile_path "$record")"
+  copy_record "$supplied_profile" "$stored_profile" no-replace
+  if ! create_environment_snapshot "$(environment_snapshot_path "$record")" "$record"; then
+    remove_record "$stored_profile" || true
+    return 1
+  fi
+}
+
+remove_release_tuple() {
+  local record="$1" profile env_snapshot
+  profile="$(runtime_profile_path "$record")"
+  env_snapshot="$(environment_snapshot_path "$record")"
+  [[ ! -e "$profile" ]] || remove_record "$profile"
+  [[ ! -e "$env_snapshot" ]] || remove_record "$env_snapshot"
 }
 
 copy_record() {
@@ -144,13 +377,14 @@ archive_candidate_as_failed() {
 release_id_unused() {
   local id="$1"
   [[ ! -e "$RELEASE_STATE_DIR/history/$id.json" && ! -e "$RELEASE_STATE_DIR/failed/$id.json" ]] || return 1
+  [[ ! -e "$RUNTIME_PROFILE_STATE_DIR/$id.profile" && ! -e "$ENVIRONMENT_STATE_DIR/$id.env" ]] || return 1
   if [[ -f "$CURRENT_RECORD" ]] && [[ "$(field "$CURRENT_RECORD" release-id)" == "$id" ]]; then return 1; fi
   if [[ -f "$CANDIDATE_RECORD" ]] && [[ "$(field "$CANDIDATE_RECORD" release-id)" == "$id" ]]; then return 1; fi
 }
 
 running_container_id() {
-  local id
-  id="$(compose_clean ps -q authority)"
+  local service="$1" id
+  id="$(compose_clean ps -q "$service")"
   [[ -n "$id" ]] || return 1
   [[ "$(docker inspect --format '{{.State.Running}}' "$id")" == true ]] || return 1
   printf '%s\n' "$id"
@@ -162,11 +396,18 @@ image_source_matches() {
 }
 
 running_exact_release() {
-  local record="$1" expected expected_source id image_id
+  local record="$1" expected expected_source expected_release expected_profile_sha authority_id proxy_id image_id
   expected="$(field "$record" authority-image)"
   expected_source="$(field "$record" source-sha)"
-  id="$(running_container_id)" || return 1
-  image_id="$(docker inspect --format '{{.Image}}' "$id")"
+  expected_release="$(field "$record" release-id)"
+  expected_profile_sha="$(field "$record" runtime-profile-sha256)"
+  authority_id="$(running_container_id authority)" || return 1
+  proxy_id="$(running_container_id proxy)" || return 1
+  [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.release-id"}}' "$authority_id")" == "$expected_release" ]] || return 1
+  [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.runtime-profile-sha256"}}' "$authority_id")" == "$expected_profile_sha" ]] || return 1
+  [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.release-id"}}' "$proxy_id")" == "$expected_release" ]] || return 1
+  [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.runtime-profile-sha256"}}' "$proxy_id")" == "$expected_profile_sha" ]] || return 1
+  image_id="$(docker inspect --format '{{.Image}}' "$authority_id")"
   [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
   docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id" | grep -Fqx "$expected" || return 1
   image_source_matches "$image_id" "$expected_source"
@@ -190,6 +431,43 @@ safe_setup_status() {
     status --state-dir /echo-clean/state
 }
 
+safe_public_descriptor_check() {
+  local host descriptor_url
+  host="$(python3 - "$ENV_FILE" <<'PY'
+import pathlib, re, stat, sys
+path = pathlib.Path(sys.argv[1])
+state = path.lstat()
+if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
+    raise SystemExit('clean Authority environment must be a private regular file')
+rows = [line for line in path.read_text(encoding='utf-8').splitlines() if line.startswith('ECHO_CLEAN_AUTHORITY_HOST=')]
+if len(rows) != 1 or not re.fullmatch(r'[a-z0-9][a-z0-9.-]*[a-z0-9]', rows[0].split('=', 1)[1]):
+    raise SystemExit('clean Authority environment must contain one valid ECHO_CLEAN_AUTHORITY_HOST')
+print(rows[0].split('=', 1)[1])
+PY
+)"
+  descriptor_url="https://$host/v1/authority-descriptor"
+  compose_clean exec -T authority node -e '
+const url = process.argv[1];
+Promise.all([
+  fetch(url, { redirect: "error", signal: AbortSignal.timeout(10_000) }),
+  fetch("http://127.0.0.1:39479/v1/authority-descriptor", {
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+  }),
+])
+  .then(async ([publicResponse, localResponse]) => {
+    if (!publicResponse.ok || !localResponse.ok) throw new Error("descriptor status");
+    const [publicBody, localBody] = await Promise.all([
+      publicResponse.text(),
+      localResponse.text(),
+    ]);
+    if (publicBody !== localBody || JSON.parse(publicBody)?.authority_descriptor === undefined)
+      throw new Error("descriptor identity");
+  })
+  .catch(() => process.exit(1));
+' "$descriptor_url" >/dev/null 2>&1
+}
+
 start_and_check() {
   local record="$1" expected expected_source
   expected="$(field "$record" authority-image)"
@@ -197,21 +475,24 @@ start_and_check() {
   compose_clean pull authority || return 1
   image_source_matches "$expected" "$expected_source" || return 1
   compose_clean up -d --no-build --wait --wait-timeout 90 || return 1
+  compose_clean restart proxy || return 1
+  compose_clean up -d --no-build --wait --wait-timeout 90 authority proxy || return 1
   running_exact_release "$record" || return 1
   safe_descriptor_check || return 1
   safe_setup_status || return 1
+  safe_public_descriptor_check
 }
 
 restore_accepted() {
   local accepted_record="$1"
-  replace_image "$(field "$accepted_record" authority-image)" || return 1
+  activate_release_tuple "$accepted_record" || return 1
   start_and_check "$accepted_record"
 }
 
 usage() {
   cat >&2 <<'EOF'
 usage:
-  update-clean-v1.sh stage --release <canonical-release.json>
+  update-clean-v1.sh stage --release <canonical-release.json> --runtime-profile <canonical-profile.json>
   update-clean-v1.sh promote --release <canonical-release.json> --canary-passed
   update-clean-v1.sh rollback
   update-clean-v1.sh status
@@ -225,11 +506,14 @@ trap 'release_operation_lock' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+ensure_state_directories || fail 'clean Authority release-state directories are missing or unsafe'
 case "$command" in
   stage)
-    [[ "${2:-}" == '--release' && -n "${3:-}" && $# -eq 3 ]] || usage
+    [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--runtime-profile' && -n "${5:-}" && $# -eq 5 ]] || usage
     candidate="$(cd "$(dirname "$3")" && pwd -P)/$(basename "$3")"
+    supplied_profile="$(cd "$(dirname "$5")" && pwd -P)/$(basename "$5")"
     validate "$candidate"
+    verify_runtime_profile "$candidate" "$supplied_profile"
     candidate_id="$(field "$candidate" release-id)"
     release_id_unused "$candidate_id" || fail 'release_id was already used by current, candidate, history, or failed state'
     [[ ! -e "$CANDIDATE_RECORD" ]] || fail 'a candidate is already staged; promote or roll it back first'
@@ -238,17 +522,24 @@ case "$command" in
       validate "$CURRENT_RECORD"
       [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
       [[ "$(field "$candidate" authority-image)" != "$(field "$CURRENT_RECORD" authority-image)" ]] || fail 'candidate image equals the current release image'
+      stored_release_tuple_matches "$CURRENT_RECORD"
+      active_runtime_profile_matches "$CURRENT_RECORD"
+      active_materialized_profile_matches
+      active_environment_matches "$CURRENT_RECORD"
       [[ "$(current_image)" == "$(field "$CURRENT_RECORD" authority-image)" ]] || fail 'environment image does not match the current accepted release record'
       running_exact_release "$CURRENT_RECORD" || fail 'current accepted release is stopped, source-unbound, or runtime image drifted'
-      previous_image="$(field "$CURRENT_RECORD" authority-image)"
     else
       first_deploy=true
-      if running_container_id >/dev/null; then
+      if running_container_id authority >/dev/null; then
         fail 'first deployment refuses to replace an unrecorded running Authority'
       fi
     fi
-    copy_record "$candidate" "$CANDIDATE_RECORD" no-replace
-    if replace_image "$(field "$candidate" authority-image)" && start_and_check "$CANDIDATE_RECORD"; then
+    store_release_tuple "$candidate" "$supplied_profile"
+    if ! copy_record "$candidate" "$CANDIDATE_RECORD" no-replace; then
+      remove_release_tuple "$candidate" || true
+      fail 'could not persist the staged candidate release record'
+    fi
+    if activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD"; then
       printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":%s,"next_action":"Run one bounded post-update canary, then promote with --canary-passed or run rollback."}\n' "$([[ "$first_deploy" == true ]] && printf false || printf true)"
       exit 0
     fi
@@ -259,7 +550,7 @@ case "$command" in
     fi
     restore_accepted "$CURRENT_RECORD" || fail 'candidate failed and rollback also failed; candidate remains staged so recovery can be retried'
     archive_candidate_as_failed || fail 'candidate recovery was verified but the candidate could not be marked failed; leave it staged and retry rollback'
-    fail 'candidate failed health/setup checks; previous compatible image was restored and verified'
+    fail 'candidate failed health/setup checks; previous accepted release tuple was restored and verified'
     ;;
   promote)
     [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--canary-passed' && $# -eq 4 ]] || usage
@@ -267,7 +558,11 @@ case "$command" in
     validate "$candidate"
     [[ -f "$CANDIDATE_RECORD" ]] || fail 'no staged candidate to promote'
     cmp -s "$candidate" "$CANDIDATE_RECORD" || fail 'promotion record does not match the staged candidate'
+    active_runtime_profile_matches "$CANDIDATE_RECORD"
+    active_materialized_profile_matches
+    active_environment_matches "$CANDIDATE_RECORD"
     running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped, source-unbound, or runtime image drifted'
+    safe_public_descriptor_check || fail 'candidate public descriptor is unavailable; roll back instead of promoting'
     if [[ -f "$CURRENT_RECORD" ]]; then
       validate "$CURRENT_RECORD"
       if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
@@ -276,6 +571,7 @@ case "$command" in
         exit 0
       fi
       [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
+      stored_release_tuple_matches "$CURRENT_RECORD"
       copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" no-replace
       copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" replace
     else
@@ -297,6 +593,7 @@ case "$command" in
       exit 0
     fi
     [[ "$(field "$CURRENT_RECORD" baseline-class)" == "$(field "$CANDIDATE_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the accepted release'
+    stored_release_tuple_matches "$CURRENT_RECORD"
     restore_accepted "$CURRENT_RECORD" || fail 'rollback failed; candidate remains staged and runtime recovery is unconfirmed'
     archive_candidate_as_failed || fail 'rollback recovery was verified but the candidate could not be marked failed; leave it staged and retry rollback'
     printf '{"ok":true,"stage":"rolled_back","baseline_compatibility_class":"clean-v1"}\n'
@@ -304,18 +601,24 @@ case "$command" in
   status)
     [[ $# -eq 1 ]] || usage
     if [[ -f "$CANDIDATE_RECORD" ]]; then
-      validate "$CANDIDATE_RECORD"
       accepted=false
       if [[ -e "$CURRENT_RECORD" || -L "$CURRENT_RECORD" ]]; then
         validate "$CURRENT_RECORD"
         accepted=true
       fi
+      validate "$CANDIDATE_RECORD"
+      active_runtime_profile_matches "$CANDIDATE_RECORD"
+      active_materialized_profile_matches
+      active_environment_matches "$CANDIDATE_RECORD"
       running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped, source-unbound, or runtime image drifted'
       printf '{"ok":true,"accepted_release_present":%s,"candidate_staged":true,"runtime_matches_staged_candidate":true}\n' "$accepted"
       exit 0
     fi
     [[ -f "$CURRENT_RECORD" ]] || fail 'no accepted or staged release record is available'
     validate "$CURRENT_RECORD"
+    active_runtime_profile_matches "$CURRENT_RECORD"
+    active_materialized_profile_matches
+    active_environment_matches "$CURRENT_RECORD"
     running_exact_release "$CURRENT_RECORD" || fail 'accepted release is stopped, source-unbound, or runtime image drifted'
     printf '{"ok":true,"accepted_release_present":true,"candidate_staged":false,"runtime_matches_accepted":true}\n'
     ;;
