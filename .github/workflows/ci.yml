@@ -35,7 +35,6 @@ jobs:
 
   person-client-package:
     name: macOS arm64 Person-client package
-    needs: check
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -146,7 +145,6 @@ jobs:
 
   authority-container:
     name: Organization authority container
-    needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
