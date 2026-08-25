@@ -973,6 +973,7 @@ describe("Person client", () => {
           stdout: { write: (value) => ((stdout += String(value)), true) },
           stderr: { write: () => true },
           home_directory: home,
+          now: () => NOW,
           fetch: async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === "/v2/session/oidc/begin") {
@@ -1408,6 +1409,7 @@ describe("Person client", () => {
           stdout: { write: (value) => ((stdout += String(value)), true) },
           stderr: { write: () => true },
           home_directory: home,
+          now: () => NOW,
           fetch: async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === "/v2/session/oidc/begin") {
@@ -1516,6 +1518,7 @@ describe("Person client", () => {
       let stderr = "";
       await new PersonClient({
         home_directory: home,
+        now: () => NOW,
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
       const linked = await runPersonClientCli(["slack-link"], {
