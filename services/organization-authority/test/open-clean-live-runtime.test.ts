@@ -23,6 +23,7 @@ import {
 } from "@echo-brain/organization-record/new-lineage-v1";
 import {
   buildCleanReadableSearchGenerationV1,
+  warmCleanReadableSearchActiveGenerationV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
@@ -1176,6 +1177,37 @@ describe("open clean live runtime", () => {
         list.list({ access_token: "synthetic-founder-token" }).records,
       ).toHaveLength(1);
 
+      const persistedPointer = rereadAuthority
+        .prepare(
+          `SELECT generation_id, manifest_sha256, retrieval_contract_sha256,
+                  record_head_position, record_head_hash
+             FROM authority_readable_search_active_generation
+            WHERE singleton = 1`,
+        )
+        .get() as {
+        generation_id: Sha256Digest;
+        manifest_sha256: Sha256Digest;
+        retrieval_contract_sha256: Sha256Digest;
+        record_head_position: number;
+        record_head_hash: Sha256Digest;
+      };
+      warmCleanReadableSearchActiveGenerationV1({
+        state_directory: fixture.initialized.state_directory,
+        active_generation: {
+          generation_id: persistedPointer.generation_id,
+          manifest_sha256: persistedPointer.manifest_sha256,
+          retrieval_contract_sha256:
+            persistedPointer.retrieval_contract_sha256,
+          exact_head: {
+            authority_id: fixture.initialized.authority_id,
+            organization_id: fixture.initialized.organization_id,
+            state_lineage_id: fixture.initialized.state_lineage_id,
+            position: persistedPointer.record_head_position,
+            record_sha256: persistedPointer.record_head_hash,
+          },
+        },
+      });
+
       const search = createCleanPersonRecordSearchRouteV1({
         state_directory: fixture.initialized.state_directory,
         authority_id: fixture.initialized.authority_id,
@@ -1307,6 +1339,15 @@ describe("open clean live runtime", () => {
           restricted.record_sha256,
           NOW,
         );
+      warmCleanReadableSearchActiveGenerationV1({
+        state_directory: fixture.initialized.state_directory,
+        active_generation: {
+          generation_id: built.manifest.generation_id,
+          manifest_sha256: built.manifest_sha256,
+          retrieval_contract_sha256: contract.retrieval_contract_sha256,
+          exact_head: built.manifest.exact_head,
+        },
+      });
 
       const origin = `http://127.0.0.1:${String(fixture.runtime.address.port)}`;
       const owner = await browserLogin(origin, {

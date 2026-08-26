@@ -6,6 +6,7 @@ import { canonicalJson, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   buildCleanReadableSearchGenerationV1,
+  CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
@@ -13,6 +14,7 @@ import {
   readableSearchPlaneBaselineSha256V1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   searchCleanReadableSearchGenerationV1,
+  warmCleanReadableSearchActiveGenerationV1,
   type BuildCleanReadableSearchGenerationV1Input,
   type CleanReadableSearchAtomV1,
 } from "../src/new-lineage-v1.js";
@@ -133,7 +135,78 @@ function atom(
   };
 }
 
+function atomWith(
+  id: string,
+  overrides: Partial<CleanReadableSearchAtomV1> = {},
+): CleanReadableSearchAtomV1 {
+  const base = atom(id, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2);
+  const value = { ...base, ...overrides };
+  return { ...value, text_sha256: digest(value.text) };
+}
+
 describe("clean immutable readable-search generation v1", () => {
+  it.each([
+    [
+      "maximum_atoms",
+      () =>
+        Array.from(
+          { length: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms + 1 },
+          (_, index) => atomWith(`atom-limit-${index}`),
+        ),
+    ],
+    [
+      "maximum_segments",
+      () =>
+        Array.from(
+          { length: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_segments },
+          (_, index) =>
+            atomWith(`segment-limit-${index}`, {
+              policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+              policy_contract_sha256: digest(
+                `policy-${RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2}`,
+              ),
+              reviewer_principal_id: `reviewer-${index}`,
+              reviewer_membership_id: `membership-${index}`,
+            }),
+        ),
+    ],
+    [
+      "maximum_atom_text_utf8_bytes",
+      () => [
+        atomWith("text-limit", {
+          text: "é".repeat(
+            CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atom_text_utf8_bytes /
+              2 +
+              1,
+          ),
+        }),
+      ],
+    ],
+    [
+      "maximum_postings",
+      () =>
+        Array.from(
+          { length: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms },
+          (_, index) =>
+            atomWith(`posting-limit-${index}`, {
+              text: Array.from(
+                { length: 17 },
+                (__, term) => `term${term}x${index}`,
+              ).join(" "),
+            }),
+        ),
+    ],
+  ])("rejects %s before staging", (dimension, atoms) => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    try {
+      expect(() =>
+        buildCleanReadableSearchGenerationV1(input(directory, atoms())),
+      ).toThrow(dimension);
+      expect(existsSync(join(directory, "record-retrieval"))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   it("builds an empty member generation from the exact head", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
     try {
@@ -243,6 +316,10 @@ describe("clean immutable readable-search generation v1", () => {
         retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
         exact_head: built.manifest.exact_head,
       };
+      warmCleanReadableSearchActiveGenerationV1({
+        state_directory: directory,
+        active_generation,
+      });
       const matching = searchCleanReadableSearchGenerationV1({
         state_directory: directory,
         active_generation,
@@ -286,7 +363,7 @@ describe("clean immutable readable-search generation v1", () => {
           reader: { principal_id: "prn_reader", membership_id: "mem_reader" },
           query: "searchable",
         }),
-      ).toThrow("active clean retrieval pointer does not bind this generation");
+      ).toThrow("active-generation handle is unavailable");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -314,7 +391,7 @@ describe("clean immutable readable-search generation v1", () => {
           reader: { principal_id: "prn_reader", membership_id: "mem_reader" },
           query: "searchable",
         }),
-      ).toThrow("clean retrieval state directory is missing");
+      ).toThrow("active-generation handle is unavailable");
       expect(existsSync(missing)).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });

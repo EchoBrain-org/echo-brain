@@ -61,7 +61,7 @@ function personRuntime(events: string[]): RunningCleanPersonRuntime {
 }
 
 describe("clean live runtime", () => {
-  it("starts the Person surface and runs the clean source, append, and generation reconciliation chain in order", async () => {
+  it("recovers and prewarms before starting Person, then retains worker ordering", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
     const runtime = await startCleanLiveRuntime(
@@ -72,14 +72,16 @@ describe("clean live runtime", () => {
           events.push("person-start");
           return personRuntime(events);
         },
+        clear_readable_search_handle: () => events.push("handle-clear"),
       },
     );
     await vi.advanceTimersByTimeAsync(0);
 
     expect(runtime.address.port).toBe(14_000);
     expect(events).toEqual([
-      "person-start",
+      "recover",
       "reconcile",
+      "person-start",
       "recover",
       "stage",
       "finalize",
@@ -89,14 +91,16 @@ describe("clean live runtime", () => {
 
     await runtime.close();
     expect(events).toEqual([
-      "person-start",
+      "recover",
       "reconcile",
+      "person-start",
       "recover",
       "stage",
       "finalize",
       "append",
       "reconcile",
       "person-close",
+      "handle-clear",
     ]);
     vi.useRealTimers();
   });
@@ -121,6 +125,7 @@ describe("clean live runtime", () => {
     );
     await vi.advanceTimersByTimeAsync(0);
     expect(events).toEqual([
+      "recover",
       "reconcile",
       "recover",
       "stage",
@@ -131,6 +136,7 @@ describe("clean live runtime", () => {
 
     await vi.advanceTimersByTimeAsync(100);
     expect(events).toEqual([
+      "recover",
       "reconcile",
       "recover",
       "stage",
@@ -170,45 +176,49 @@ describe("clean live runtime", () => {
     ]);
   });
 
-  it("retries a failed generation reconciliation on the next worker cycle", async () => {
-    vi.useFakeTimers();
+  it("rejects startup, clears the handle, and never starts Person when prewarm fails", async () => {
     const events: string[] = [];
-    const errors: string[] = [];
-    let reconciliationAttempts = 0;
-    const runtime = await startCleanLiveRuntime(
-      { person: personConfig, worker_interval_ms: 100 },
-      {
-        processing: processing(events, undefined, async () => {
-          reconciliationAttempts += 1;
-          if (reconciliationAttempts === 1) {
+    const startPerson = vi.fn(async () => personRuntime(events));
+    await expect(
+      startCleanLiveRuntime(
+        { person: personConfig, worker_interval_ms: 100 },
+        {
+          processing: processing(events, undefined, async () => {
             throw new Error("generation reconciliation interrupted");
-          }
-        }),
-        start_person_runtime: async () => personRuntime(events),
-        on_worker_error: (error) => {
-          errors.push(error.message);
+          }),
+          start_person_runtime: startPerson,
+          clear_readable_search_handle: () => events.push("handle-clear"),
         },
-      },
-    );
+      ),
+    ).rejects.toThrow("generation reconciliation interrupted");
+    expect(startPerson).not.toHaveBeenCalled();
+    expect(events).toEqual(["recover", "reconcile", "handle-clear"]);
+  });
 
-    await vi.advanceTimersByTimeAsync(0);
-    expect(events).toEqual(["reconcile"]);
-    expect(errors).toEqual(["generation reconciliation interrupted"]);
+  it("rejects startup before prewarm or Person when append recovery fails", async () => {
+    const events: string[] = [];
+    const startPerson = vi.fn(async () => personRuntime(events));
+    const startupProcessing = processing(events);
 
-    await vi.advanceTimersByTimeAsync(100);
-    expect(events).toEqual([
-      "reconcile",
-      "reconcile",
-      "recover",
-      "stage",
-      "finalize",
-      "append",
-      "reconcile",
-    ]);
-    expect(errors).toEqual(["generation reconciliation interrupted"]);
+    await expect(
+      startCleanLiveRuntime(
+        { person: personConfig, worker_interval_ms: 100 },
+        {
+          processing: {
+            ...startupProcessing,
+            recoverV4Appends: async () => {
+              events.push("recover");
+              throw new Error("append recovery interrupted");
+            },
+          },
+          start_person_runtime: startPerson,
+          clear_readable_search_handle: () => events.push("handle-clear"),
+        },
+      ),
+    ).rejects.toThrow("append recovery interrupted");
 
-    await runtime.close();
-    vi.useRealTimers();
+    expect(startPerson).not.toHaveBeenCalled();
+    expect(events).toEqual(["recover", "handle-clear"]);
   });
 
   it("does not reconcile after append observes cancellation", async () => {

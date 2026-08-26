@@ -9,6 +9,7 @@ import {
   type CleanPersonRuntimeDependencies,
   type RunningCleanPersonRuntime,
 } from "./clean-person-runtime.js";
+import { clearCleanReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 
 /**
  * The narrow durable-work seam for the clean live runtime. The concrete
@@ -47,6 +48,8 @@ export interface CleanLiveRuntimeDependencies {
     dependencies: CleanPersonRuntimeDependencies,
   ) => Promise<RunningCleanPersonRuntime>;
   readonly on_worker_error?: SerializedAuthorityMeetingWorkerOptions["onError"];
+  /** Test seam; production always clears the sole lean-V1 process handle. */
+  readonly clear_readable_search_handle?: () => void;
 }
 
 export interface RunningCleanLiveRuntime {
@@ -89,35 +92,48 @@ export async function startCleanLiveRuntime(
 ): Promise<RunningCleanLiveRuntime> {
   const startPerson =
     dependencies.start_person_runtime ?? startCleanPersonRuntime;
-  const person = await startPerson(config.person, dependencies.person ?? {});
+  const clearHandle =
+    dependencies.clear_readable_search_handle ??
+    clearCleanReadableSearchActiveGenerationV1;
+  const startup = new AbortController();
+  let person: RunningCleanPersonRuntime | undefined;
   try {
-    let startupReconciled = false;
+    // Recovery can append a finalized approval and advance the V4 head. Finish
+    // it before validating the generation that will be served at startup.
+    await dependencies.processing.recoverV4Appends(startup.signal);
+    startup.signal.throwIfAborted();
+    // A persisted pointer is not ready until its immutable generation has been
+    // validated into the sole process-local handle. Never bind the Person
+    // listener before that startup boundary succeeds.
+    await dependencies.processing.reconcileReadableSearchGeneration(
+      startup.signal,
+    );
+    startup.signal.throwIfAborted();
+    person = await startPerson(config.person, dependencies.person ?? {});
+    const startedPerson = person;
     const worker = new SerializedAuthorityMeetingWorker({
       intervalMs: config.worker_interval_ms,
-      runCycle: async (signal) => {
-        // Catch up a missing or stale exact-head generation before contacting
-        // any provider. A failure leaves source state untouched and retries
-        // this same startup reconciliation on the worker's next tick.
-        if (!startupReconciled) {
-          await dependencies.processing.reconcileReadableSearchGeneration(
-            signal,
-          );
-          signal.throwIfAborted();
-          startupReconciled = true;
-        }
-        await runCleanLiveProcessingCycleV1(dependencies.processing, signal);
-      },
+      runCycle: (signal) =>
+        runCleanLiveProcessingCycleV1(dependencies.processing, signal),
       onError: dependencies.on_worker_error,
     });
     return {
-      address: person.address,
+      address: startedPerson.address,
       close: async () => {
-        await worker.close();
-        await person.close();
+        try {
+          try {
+            await worker.close();
+          } finally {
+            await startedPerson.close();
+          }
+        } finally {
+          clearHandle();
+        }
       },
     };
   } catch (error) {
-    await person.close();
+    clearHandle();
+    await person?.close();
     throw error;
   }
 }
