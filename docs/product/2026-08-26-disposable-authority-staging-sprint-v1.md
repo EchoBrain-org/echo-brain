@@ -1,9 +1,9 @@
 # Disposable Authority staging sprint V1
 
-**Status:** code complete on `main` @ `a12f419`. No staging slot has been
-deployed, no host or tunnel has been qualified live, and no timing target has
-been proved.
-**Grounded at:** `main` @ `a12f419`.
+**Status:** implementation complete through the first-live transfer path; live
+qualification has not started. No staging slot has been deployed, no host or
+tunnel has been qualified live, and no timing target has been proved.
+**Grounded at:** `main` @ `950b526` (start of live-qualification work).
 **Scope:** one fixed staging edge and one replaceable AWS Authority host in
 ECHO's AWS account. This is deployment and operations work only. It does not
 change product behavior, release-record semantics, the production Authority, or
@@ -237,9 +237,20 @@ mistaken for optional observability.
 
 Create the persistent slot and host through reviewed AWS change sets, deploy
 the unmodified observability sibling stack, and instantiate once with throwaway
-provider accounts. Complete the existing `doctor`, `prepare`, and `resume`
-flow, the founder login, and the canary. This is the first point at which
-terminal green and the public descriptor can be claimed for staging.
+provider accounts. Transfer the private eight-file onboarding input through the
+dedicated versioned KMS-encrypted staging transfer bucket, never a terminal or
+SSH session. The host role receives `s3:GetObjectVersion` for one exact object
+version and its matching KMS decrypt context only while a reviewed,
+IAM-policy-only change set is active, with a 15-minute IAM expiry backstop. A
+bounded SSM command verifies the
+archive SHA-256, rejects every archive member except the eight exact regular
+files, suppresses onboarding output, and invokes the existing `doctor` then
+`prepare`. It must revoke the temporary policy and permanently delete and prove
+absent every version, delete marker, and multipart upload for the exact S3 key
+before local archive and receipt cleanup. Complete
+the existing `resume` flow, founder login, and canary afterward. This is the
+first point at which terminal green and the public descriptor can be claimed
+for staging.
 
 ### Phase 4: repeated host-replacement and timing qualification
 

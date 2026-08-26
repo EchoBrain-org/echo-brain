@@ -84,6 +84,8 @@ describe("Authority staging host stack", () => {
       "StagingPublicSubnet",
       "StagingHostSecurityGroup",
       "StagingHostSetupBundle",
+      "StagingOnboardingTransferKey",
+      "StagingOnboardingTransferBucket",
       "AuthorityTunnelTokenSecret",
       "StagingHostRole",
       "StagingDataVolume",
@@ -167,6 +169,8 @@ describe("Authority staging host stack", () => {
     const dataVolume = resource(stack, "StagingDataVolume");
     const secret = resource(stack, "AuthorityTunnelTokenSecret");
     const bucket = resource(stack, "StagingHostSetupBundle");
+    const onboardingBucket = resource(stack, "StagingOnboardingTransferBucket");
+    const onboardingKey = resource(stack, "StagingOnboardingTransferKey");
 
     for (const value of [dataVolume, secret, bucket]) {
       expect(value.DeletionPolicy).toBe("Retain");
@@ -197,6 +201,45 @@ describe("Authority staging host stack", () => {
         ],
       },
     });
+    for (const value of [onboardingBucket, onboardingKey]) {
+      expect(value.DeletionPolicy).toBe("Retain");
+      expect(value.UpdateReplacePolicy).toBe("Retain");
+    }
+    expect(onboardingBucket.Properties).toMatchObject({
+      VersioningConfiguration: { Status: "Enabled" },
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+      OwnershipControls: {
+        Rules: [{ ObjectOwnership: "BucketOwnerEnforced" }],
+      },
+      LifecycleConfiguration: {
+        Rules: [
+          expect.objectContaining({
+            Id: "short-lived-onboarding-transfer-backstop",
+            ExpirationInDays: 1,
+          }),
+        ],
+      },
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [
+          {
+            ServerSideEncryptionByDefault: {
+              SSEAlgorithm: "aws:kms",
+              KMSMasterKeyID: {
+                "Fn::GetAtt": ["StagingOnboardingTransferKey", "Arn"],
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(bucket.Properties).not.toHaveProperty("LifecycleConfiguration");
+    expect(bucket.Properties).not.toHaveProperty("OwnershipControls");
+    expect(onboardingKey.Properties).toMatchObject({ EnableKeyRotation: true });
   });
 
   it("uses an ARM64 launch template with IMDSv2 and a disposable encrypted root", () => {
@@ -259,6 +302,91 @@ describe("Authority staging host stack", () => {
     expect(serialized).not.toMatch(/ec2:|backup:|kms:\*|s3:\*/i);
   });
 
+  it("creates a separate temporary exact-version onboarding grant without changing host user data", () => {
+    const stack = template();
+    const access = resource(stack, "StagingHostOnboardingInputAccess");
+    const serialized = JSON.stringify(access.Properties);
+
+    expect(stack.Conditions.OnboardingInputTransferCondition).toEqual({
+      "Fn::And": [
+        { "Fn::Not": [{ "Fn::Equals": [{ Ref: "OnboardingInputObjectKey" }, ""] }] },
+        { "Fn::Not": [{ "Fn::Equals": [{ Ref: "OnboardingInputObjectVersion" }, ""] }] },
+        { "Fn::Not": [{ "Fn::Equals": [{ Ref: "OnboardingInputAccessExpiresAt" }, ""] }] },
+      ],
+    });
+    expect(access).toMatchObject({
+      Type: "AWS::IAM::Policy",
+      Condition: "OnboardingInputTransferCondition",
+      Properties: {
+        PolicyName: "read-exact-staging-onboarding-input",
+        Roles: [{ Ref: "StagingHostRole" }],
+      },
+    });
+    expect(serialized).toContain("s3:GetObjectVersion");
+    expect(serialized).toContain("s3:VersionId");
+    expect(serialized).toContain("kms:Decrypt");
+    expect(serialized).toContain("StagingOnboardingTransferBucket");
+    expect(serialized).toContain("StagingOnboardingTransferKey");
+    expect(serialized).not.toMatch(/s3:\*|kms:\*/i);
+    expect(access.Properties?.PolicyDocument).toEqual({
+      Version: "2012-10-17",
+      Statement: [
+        {
+          Effect: "Allow",
+          Action: "s3:GetObjectVersion",
+          Resource: {
+            "Fn::Sub":
+              "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}/${OnboardingInputObjectKey}",
+          },
+          Condition: {
+            StringEquals: {
+              "s3:VersionId": { Ref: "OnboardingInputObjectVersion" },
+            },
+            DateLessThan: {
+              "aws:CurrentTime": { Ref: "OnboardingInputAccessExpiresAt" },
+            },
+          },
+        },
+        {
+          Effect: "Allow",
+          Action: "kms:Decrypt",
+          Resource: { "Fn::GetAtt": ["StagingOnboardingTransferKey", "Arn"] },
+          Condition: {
+            StringEquals: {
+              "kms:ViaService": { "Fn::Sub": "s3.${AWS::Region}.amazonaws.com" },
+              "kms:EncryptionContext:aws:s3:arn": {
+                "Fn::Sub":
+                  "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}/${OnboardingInputObjectKey}",
+              },
+            },
+            DateLessThan: {
+              "aws:CurrentTime": { Ref: "OnboardingInputAccessExpiresAt" },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("makes the onboarding courier bucket TLS-only and require the exact CMK without granting access", () => {
+    const stack = template();
+    const policy = resource(stack, "StagingOnboardingTransferBucketPolicy");
+    const statements = (policy.Properties?.PolicyDocument as { Statement: readonly Record<string, unknown>[] }).Statement;
+
+    expect(policy).toMatchObject({
+      Type: "AWS::S3::BucketPolicy",
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
+      Properties: { Bucket: { Ref: "StagingOnboardingTransferBucket" } },
+    });
+    expect(statements).toHaveLength(4);
+    expect(statements.every((statement) => statement.Effect === "Deny")).toBe(true);
+    expect(statements.some((statement) => statement.Sid === "DenyInsecureTransport" && JSON.stringify(statement).includes("aws:SecureTransport"))).toBe(true);
+    expect(statements.some((statement) => statement.Sid === "DenyMissingEncryptionHeader" && JSON.stringify(statement).includes("s3:x-amz-server-side-encryption"))).toBe(true);
+    expect(statements.some((statement) => statement.Sid === "DenyMissingOrWrongEncryptionMode" && JSON.stringify(statement).includes("aws:kms"))).toBe(true);
+    expect(statements.some((statement) => statement.Sid === "DenyWrongEncryptionKey" && JSON.stringify(statement).includes("StagingOnboardingTransferKey"))).toBe(true);
+  });
+
   it("signals only machine configuration, tunnel connection, and retained-state materialization after the data attachment", () => {
     const stack = template();
     const launchTemplate = resource(stack, "StagingHostLaunchTemplate");
@@ -273,6 +401,9 @@ describe("Authority staging host stack", () => {
       "HostSetupObjectKey",
       "HostSetupObjectVersion",
       "HostSetupSha256",
+      "OnboardingInputObjectKey",
+      "OnboardingInputObjectVersion",
+      "OnboardingInputAccessExpiresAt",
       "AuthorityEcrRepositoryArn",
     ]) {
       expect(stack.Parameters[parameter]).toBeDefined();
@@ -361,6 +492,8 @@ describe("Authority staging host stack", () => {
     expect(Object.keys(stack.Outputs).sort()).toEqual([
       "AuthorityTunnelTokenSecretArn",
       "HostSetupArtifactBucketName",
+      "OnboardingTransferBucketName",
+      "OnboardingTransferKeyArn",
       "StagingDataVolumeId",
       "StagingHostInstanceId",
       "StagingHostReady",
@@ -376,7 +509,7 @@ describe("Authority staging host stack", () => {
     const guard = readFileSync(GUARD, "utf8");
     const validator = readFileSync(VALIDATOR, "utf8");
     expect(guard).toContain("CloudFormation Guard 3.2.1");
-    expect(guard).toContain("%resource_count == 22");
+    expect(guard).toContain("%resource_count == 26");
     expect(guard).toContain("%host_resource_count == 4");
     for (const rule of [
       "exact_staging_slot_inventory",
@@ -385,6 +518,8 @@ describe("Authority staging host stack", () => {
       "retained_state_and_trusted_delivery",
       "arm64_host_is_disposable_and_requires_imdsv2",
       "role_can_read_only_exact_bundle_and_own_secret",
+      "onboarding_transfer_is_exact_and_temporary",
+      "onboarding_transfer_bucket_denies_untrusted_writes",
       "readiness_waits_for_the_retained_volume",
       "wait_condition_curl_uses_empty_content_type",
     ]) {

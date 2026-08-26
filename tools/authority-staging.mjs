@@ -87,6 +87,9 @@ const PERSISTENT_LOGICAL_IDS = new Set([
   "StagingDataVolume",
   "AuthorityTunnelTokenSecret",
   "StagingHostSetupBundle",
+  "StagingOnboardingTransferKey",
+  "StagingOnboardingTransferBucket",
+  "StagingOnboardingTransferBucketPolicy",
   "StagingVpc",
   "StagingHostRole",
 ]);
