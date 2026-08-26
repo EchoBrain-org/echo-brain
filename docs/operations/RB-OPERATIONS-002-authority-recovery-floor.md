@@ -93,13 +93,14 @@ Prerequisites:
   ```sh
   cd /opt/echo-authority-recovery/source
   /opt/echo-authority-recovery/runtime/node --check tools/verify-authority-recovery.mjs
-  /opt/echo-authority-recovery/runtime/node node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/architecture/authority-recovery-verifier.test.ts
+  runuser -u ec2-user -- /opt/echo-authority-recovery/runtime/node node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/architecture/authority-recovery-verifier.test.ts
   ```
 
   Do not run `node --check tools/verify-authority-recovery.mjs` or
   `./node_modules/.bin/vitest run --config vitest.config.ts tests/architecture/authority-recovery-verifier.test.ts`
   through an unpinned system Node installation; the bundled runtime is the
-  checked artifact.
+  checked artifact. The synthetic fixture suite runs as AL2023's unprivileged
+  `ec2-user` because UID `0` is intentionally not a valid Authority owner.
 
 The helper must have no public IP, Authority host role, Cloudflare
 configuration, provider credentials, deployment directory, or route to general

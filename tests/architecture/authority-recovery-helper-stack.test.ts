@@ -261,6 +261,8 @@ describe("Authority isolated recovery helper stack", () => {
       "BundleSourceCommit",
       "v22.22.1",
       "npm_shrinkwrap_sha256!==h",
+      "id ec2-user",
+      "runuser -u ec2-user",
       "authority-recovery-verifier.test.ts",
       ".bundle-ready",
     ]) {
