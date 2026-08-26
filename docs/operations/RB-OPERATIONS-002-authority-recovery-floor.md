@@ -137,7 +137,8 @@ establish that the helper role has only SSM core access plus
 security group has no ingress and only HTTPS egress to the SSM endpoint group
 and supplied S3 prefix list; its route table has no NAT, internet-gateway, transit-gateway,
 or peering path; the SSM and `ssmmessages` endpoints accept HTTPS only from
-that helper group; and the S3 gateway endpoint policy is limited to that role,
+that helper group, whose only egress is self-referenced HTTPS so EC2 does not
+install its default allow-all egress rule; and the S3 gateway endpoint policy is limited to that role,
 object key, and object version. The reviewed path must have no route, endpoint
 policy, or role permission for Secrets Manager, ECR, Cloudflare, the tunnel,
 AWS Backup, or providers while restored state is attached. Do not attach the

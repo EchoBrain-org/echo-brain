@@ -141,6 +141,21 @@
         "Description": "Recovery helper only"
       }
     },
+    "RecoveryEndpointSelfEgress": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Fn::GetAtt": ["RecoveryEndpointSecurityGroup", "GroupId"]
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "DestinationSecurityGroupId": {
+          "Fn::GetAtt": ["RecoveryEndpointSecurityGroup", "GroupId"]
+        },
+        "Description": "Suppress default egress with endpoint-group HTTPS only"
+      }
+    },
     "RecoveryHelperSsmEgress": {
       "Type": "AWS::EC2::SecurityGroupEgress",
       "Properties": {

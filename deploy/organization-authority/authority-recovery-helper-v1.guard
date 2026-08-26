@@ -8,6 +8,7 @@ rule exact_helper_inventory {
     Resources.RecoveryHelperSecurityGroup.Type == 'AWS::EC2::SecurityGroup'
     Resources.RecoveryEndpointSecurityGroup.Type == 'AWS::EC2::SecurityGroup'
     Resources.RecoveryEndpointIngress.Type == 'AWS::EC2::SecurityGroupIngress'
+    Resources.RecoveryEndpointSelfEgress.Type == 'AWS::EC2::SecurityGroupEgress'
     Resources.RecoveryHelperSsmEgress.Type == 'AWS::EC2::SecurityGroupEgress'
     Resources.RecoveryHelperS3Egress.Type == 'AWS::EC2::SecurityGroupEgress'
     Resources.RecoverySsmEndpoint.Type == 'AWS::EC2::VPCEndpoint'
@@ -36,6 +37,7 @@ rule no_ingress_and_endpoint_only_egress {
     Resources.RecoveryEndpointSecurityGroup.Properties.SecurityGroupIngress == []
     Resources.RecoveryEndpointSecurityGroup.Properties.SecurityGroupEgress == []
     Resources.RecoveryEndpointIngress.Properties == { "GroupId": { "Fn::GetAtt": [ "RecoveryEndpointSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "SourceSecurityGroupId": { "Fn::GetAtt": [ "RecoveryHelperSecurityGroup", "GroupId" ] }, "Description": "Recovery helper only" }
+    Resources.RecoveryEndpointSelfEgress.Properties == { "GroupId": { "Fn::GetAtt": [ "RecoveryEndpointSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "DestinationSecurityGroupId": { "Fn::GetAtt": [ "RecoveryEndpointSecurityGroup", "GroupId" ] }, "Description": "Suppress default egress with endpoint-group HTTPS only" }
     Resources.RecoveryHelperSsmEgress.Properties == { "GroupId": { "Fn::GetAtt": [ "RecoveryHelperSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "DestinationSecurityGroupId": { "Fn::GetAtt": [ "RecoveryEndpointSecurityGroup", "GroupId" ] }, "Description": "Only SSM interface endpoints" }
     Resources.RecoveryHelperS3Egress.Properties == { "GroupId": { "Fn::GetAtt": [ "RecoveryHelperSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "DestinationPrefixListId": { "Ref": "S3PrefixListId" }, "Description": "Only the S3 gateway endpoint path for the pinned bundle" }
 }

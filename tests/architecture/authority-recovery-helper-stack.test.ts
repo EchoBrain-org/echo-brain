@@ -51,6 +51,7 @@ describe("Authority isolated recovery helper stack", () => {
       "RecoveryBundleS3Endpoint",
       "RecoveryEndpointIngress",
       "RecoveryEndpointSecurityGroup",
+      "RecoveryEndpointSelfEgress",
       "RecoveryHelper",
       "RecoveryHelperInstanceProfile",
       "RecoveryHelperRole",
@@ -100,6 +101,7 @@ describe("Authority isolated recovery helper stack", () => {
     const securityGroup = resource(stack, "RecoveryHelperSecurityGroup");
     const endpointGroup = resource(stack, "RecoveryEndpointSecurityGroup");
     const endpointIngress = resource(stack, "RecoveryEndpointIngress");
+    const endpointSelfEgress = resource(stack, "RecoveryEndpointSelfEgress");
     const ssmEgress = resource(stack, "RecoveryHelperSsmEgress");
     const s3Egress = resource(stack, "RecoveryHelperS3Egress");
     expect(helper.Properties.NetworkInterfaces).toEqual([
@@ -124,6 +126,18 @@ describe("Authority isolated recovery helper stack", () => {
       },
       FromPort: 443,
       ToPort: 443,
+    });
+    expect(endpointSelfEgress.Properties).toEqual({
+      GroupId: {
+        "Fn::GetAtt": ["RecoveryEndpointSecurityGroup", "GroupId"],
+      },
+      IpProtocol: "tcp",
+      FromPort: 443,
+      ToPort: 443,
+      DestinationSecurityGroupId: {
+        "Fn::GetAtt": ["RecoveryEndpointSecurityGroup", "GroupId"],
+      },
+      Description: "Suppress default egress with endpoint-group HTTPS only",
     });
     expect(ssmEgress.Properties).toMatchObject({
       GroupId: { "Fn::GetAtt": ["RecoveryHelperSecurityGroup", "GroupId"] },
