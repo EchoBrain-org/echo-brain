@@ -6,8 +6,8 @@ title: Establish and rehearse the current Authority recovery floor
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-25
-reviewed_at: 2026-08-25
-reviewed_ref: 35875e49817c841ac1f8aa3abf669d6e9a636a83
+reviewed_at: 2026-08-26
+reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
 tested_at: null
 ---
 
@@ -36,10 +36,19 @@ The full recovery path still requires a replaceable host, same-lineage restore,
 exact release/image availability, reconciliation, and terminal-green serving
 proof.
 
-The founder owns the decision to create, retain, restore, or delete recovery
-points. The operator owns this procedure. Escalate before changing a backup
-vault, KMS ownership, schedule, retention, restore permissions, or any live
-Authority host setting.
+The selected account owner authorizes creation, retention, restoration, or
+deletion of recovery points. For a default-hosted Authority that authority is
+the ECHO founder; for an organization-controlled account it is the
+organization's account administrator. The operator owns this procedure.
+Escalate to that authority before changing a backup vault, KMS ownership,
+schedule, retention, restore permissions, or any live Authority host setting.
+
+Under [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md),
+the operator is ECHO for a default-hosted Authority. For an Authority selected
+for an organization-controlled account before provisioning, the operator is
+the organization or an explicitly authorized support operator. The selected
+account controls the volume, backups, encryption boundary, logs, and
+infrastructure credentials.
 
 Before any mutation, record in the founder-private operator receipt:
 

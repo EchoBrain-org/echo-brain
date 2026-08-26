@@ -18,6 +18,18 @@ updates: []
 
 # ADR-0001: Organization-operated server-core processing
 
+## Current operator and custody relationship
+
+[ADR-0008](ADR-0008-echo-hosted-authority-by-default.md), accepted on
+2026-08-26, updates this ADR's operator and infrastructure-custody decision.
+ECHO-hosted operation is now the default, with an organization-controlled
+account available when selected before provisioning. The historical rationale
+below is preserved, but its claims that every organization operates its own
+server and that ECHO has no operational visibility are no longer universal.
+This ADR remains current for server-core processing, one-organization scope,
+provider-source rules, pre-record governance, and the Person-to-Authority
+product boundary.
+
 ## Context and options
 
 Today every enrolled machine is a complete instance of the product: it

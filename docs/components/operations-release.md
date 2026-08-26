@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-25
-reviewed_ref: 35875e49817c841ac1f8aa3abf669d6e9a636a83
+reviewed_at: 2026-08-26
+reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
 decision_ids:
   - ADR-0004
   - ADR-0006
