@@ -20,6 +20,8 @@ must record an outcome and evidence for that exact assertion set.
 
 Primary minimum-V1 records:
 
+- [Authority CI efficiency V1 measurement matrix](ci-efficiency-v1-matrix.md)
+- [Authority CI efficiency V1 measurement qualification](QUAL-20260826-034420-001-authority-ci-efficiency-v1.md)
 - [Readable-search minimum-V1 Layers 1-3 matrix](readable-search-minimum-v1-source-readiness-matrix.md)
 - [Readable-search Layers 1-3 founder-live qualification](QUAL-20260814-194049-001-readable-search-minimum-v1.md)
 - [Person-client minimum lean V1 foundation matrix](person-client-foundation-v1-matrix.md)
