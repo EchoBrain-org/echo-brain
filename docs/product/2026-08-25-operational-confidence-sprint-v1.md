@@ -362,6 +362,11 @@ External operator work:
   the latest job, and whether automated job-failure notification is implemented
   or explicitly deferred to C1;
 - observe at least one successful schedule-produced recovery point;
+- run the maintenance transaction's no-outage `preflight` and require the
+  complete PR #66 release/runtime-profile/environment/materialization tuple.
+  A pre-profile live release keeps scheduled crash-consistent protection but
+  blocks the qualifying outage until a separately approved normal release;
+  this sprint does not backfill or add a compatibility reader for that record;
 - during a maintenance window, use the durable
   `backup-authority-maintenance.sh` transaction under `systemd-run` to settle
   the Authority operation lock, stop both Compose services, flush filesystem

@@ -444,6 +444,24 @@ identity, stops both EC2 Compose services, flushes writes, requires an external
 acknowledgement, and automatically restarts and proves the accepted tuple on
 every exit path it can handle.
 
+Before approving the outage, run the script's no-outage transaction
+preflight:
+
+```sh
+sudo /srv/echo-authority-clean-v1/backup-authority-maintenance.sh preflight
+```
+
+It must emit exactly `maintenance_preflight_ready=true`. The preflight acquires
+and releases the shared operation lock and proves the canonical accepted
+release, runtime profile, environment snapshot, active materialization,
+running containers, descriptors, and completed onboarding without stopping or
+restarting either service. A current Authority whose accepted record predates
+the runtime-profile tuple introduced by PR #66 fails here. Continue its
+scheduled crash-consistent protection, but do not start the qualifying outage
+until a separately approved normal same-baseline release has established that
+tuple. This runbook does not backfill or reinterpret the earlier release
+record.
+
 Start the durable transaction from an SSM or other controlled host session. Use
 the installed deployment path and a bounded timeout appropriate to the approved
 window:

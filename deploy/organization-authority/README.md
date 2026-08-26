@@ -256,6 +256,12 @@ as a secondary device, mounts read-only without journal replay, and is
 inspected by `tools/verify-authority-recovery.mjs`. It is never booted or used
 to start a second Authority.
 
+Before approving that outage, run
+`sudo /srv/echo-authority-clean-v1/backup-authority-maintenance.sh preflight`.
+It must report `maintenance_preflight_ready=true`; otherwise leave the
+scheduled protection active and resolve the release/onboarding precondition
+through its normal procedure without stopping the Authority for this drill.
+
 The recurring schedule provides crash-consistent recovery points after the
 recorded evidence gate. The separate quiesced drill proves only structural
 readability and lineage on an offline copy; it does not prove current data,

@@ -283,6 +283,48 @@ describe("current-host backup maintenance transaction", () => {
     expect(existsSync(join(subject.root, "restart"))).toBe(false);
   });
 
+  it("proves the complete accepted tuple without stopping or restarting the Authority", () => {
+    const subject = fixture();
+
+    const result = run(["preflight"], subject.environment);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("maintenance_preflight_ready=true\n");
+    expect(result.stderr).toBe("");
+    expect(existsSync(join(subject.root, "down"))).toBe(false);
+    expect(existsSync(join(subject.root, "restart"))).toBe(false);
+    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
+      false,
+    );
+  });
+
+  it("refuses a pre-runtime-profile release before any outage", () => {
+    const subject = fixture();
+    const current = join(
+      subject.data,
+      "release",
+      "current.clean-v1.json",
+    );
+    const legacy = JSON.parse(readFileSync(current, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete legacy.runtime_profile;
+    writeFileSync(current, `${canonical(legacy)}\n`, { mode: 0o600 });
+
+    const result = run(["preflight"], subject.environment);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "accepted release record is not canonical clean-v1",
+    );
+    expect(existsSync(join(subject.root, "down"))).toBe(false);
+    expect(existsSync(join(subject.root, "restart"))).toBe(false);
+    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
+      false,
+    );
+  });
+
   it("will not overwrite an explicit recovery_required status with a new transaction", () => {
     const subject = fixture();
     const maintenance = join(subject.data, "backup-maintenance");

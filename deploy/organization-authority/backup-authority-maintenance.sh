@@ -37,6 +37,7 @@ fail() { printf 'backup-authority-maintenance: %s\n' "$*" >&2; exit 1; }
 usage() {
   cat >&2 <<'EOF'
 usage:
+  backup-authority-maintenance.sh preflight
   backup-authority-maintenance.sh maintain [--ack-timeout-seconds <1-3600>]
   backup-authority-maintenance.sh acknowledge --operation-id <id> --nonce <nonce>
   backup-authority-maintenance.sh status
@@ -380,6 +381,20 @@ verify_running_release() {
   safe_public_descriptor_check
 }
 
+preflight() {
+  [[ $# -eq 0 ]] || usage
+  ensure_maintenance_dir
+  refuse_unresolved_maintenance_state
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  verify_preconditions
+  verify_running_release || fail 'Authority is not healthy on the exact accepted tuple with matching local and public descriptors'
+  require_complete_onboarding
+  release_operation_lock
+  trap - EXIT
+  printf 'maintenance_preflight_ready=true\n'
+}
+
 verify_services_absent() {
   [[ -z "$(compose_clean ps -aq authority)" ]] || return 1
   [[ -z "$(compose_clean ps -aq proxy)" ]]
@@ -562,6 +577,7 @@ status() {
 }
 
 case "${1:-}" in
+  preflight) shift; preflight "$@" ;;
   maintain) shift; maintain "$@" ;;
   acknowledge) shift; acknowledge "$@" ;;
   status) [[ $# -eq 1 ]] || usage; status ;;
