@@ -1,0 +1,350 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "AWS Backup recovery floor for one explicitly selected current Authority root EBS volume. Deployment is permitted only after the operator has separately verified source-volume encryption and supplied its exact KMS key ARN; this template cannot inspect either live resource. Amazon EBS recovery points inherit source-volume encryption and are not independently encrypted by the backup vault. Separate EBS-only backup and restore roles are emitted; an operator starting a job must have iam:PassRole for the exact applicable role.",
+  "Parameters": {
+    "AuthorityRootVolumeId": {
+      "Type": "AWS::EC2::Volume::Id",
+      "ConstraintDescription": "must be the current Authority root EBS volume ID, verified from the host instance block-device mapping"
+    },
+    "AuthorityRootVolumeKmsKeyArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:(aws|aws-us-gov|aws-cn):kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+$",
+      "ConstraintDescription": "must be the exact KMS key ARN reported by the verified encrypted current Authority root EBS volume"
+    },
+    "BackupScheduleExpression": {
+      "Type": "String",
+      "Default": "cron(0 9 ? * * *)",
+      "AllowedPattern": "^cron\\(.+\\)$",
+      "ConstraintDescription": "must be an AWS Backup cron expression"
+    },
+    "RecoveryPointRetentionDays": {
+      "Type": "Number",
+      "Default": 35,
+      "MinValue": 1,
+      "MaxValue": 3650,
+      "ConstraintDescription": "must retain recovery points from 1 through 3650 days"
+    },
+    "StartWindowMinutes": {
+      "Type": "Number",
+      "Default": 60,
+      "MinValue": 60,
+      "MaxValue": 10080,
+      "ConstraintDescription": "must allow AWS Backup at least 60 minutes to start a job"
+    },
+    "CompletionWindowMinutes": {
+      "Type": "Number",
+      "Default": 180,
+      "MinValue": 1,
+      "MaxValue": 10080,
+      "ConstraintDescription": "must allow from 1 through 10080 minutes for a job to complete"
+    }
+  },
+  "Resources": {
+    "CurrentHostRecoveryVault": {
+      "Type": "AWS::Backup::BackupVault",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BackupVaultName": {
+          "Fn::Sub": "echo-authority-current-host-recovery-${AWS::AccountId}"
+        },
+        "BackupVaultTags": {
+          "Application": "echo-brain",
+          "Purpose": "current-host-recovery-floor"
+        }
+      }
+    },
+    "CurrentHostBackupServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Description": "AWS Backup service role for the current Authority root-volume recovery floor.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "backup.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "current-authority-root-volume-ebs-backup-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "CreateSnapshotsOnlyFromSelectedVolume",
+                  "Effect": "Allow",
+                  "Action": "ec2:CreateSnapshot",
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${AuthorityRootVolumeId}"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "DescribeEbsResources",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:DescribeVolumes",
+                    "ec2:DescribeSnapshots",
+                    "ec2:DescribeTags"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "ManageBackupSnapshots",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CopySnapshot",
+                    "ec2:CreateTags",
+                    "ec2:DeleteSnapshot"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                  }
+                },
+                {
+                  "Sid": "ManageTierOnlyForAwsBackupSnapshots",
+                  "Effect": "Allow",
+                  "Action": "ec2:ModifySnapshotTier",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                  },
+                  "Condition": {
+                    "Null": {
+                      "aws:ResourceTag/aws:backup:source-resource": "false"
+                    }
+                  }
+                },
+                {
+                  "Sid": "ReadExactRecoveryVault",
+                  "Effect": "Allow",
+                  "Action": [
+                    "backup:DescribeBackupVault",
+                    "backup:CopyIntoBackupVault"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": ["CurrentHostRecoveryVault", "BackupVaultArn"]
+                  }
+                },
+                {
+                  "Sid": "ResolveSelectedBackupResources",
+                  "Effect": "Allow",
+                  "Action": "tag:GetResources",
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "CurrentHostRestoreServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Description": "AWS Backup restore-only service role for the current Authority root-volume recovery floor.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "backup.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "current-authority-root-volume-ebs-restore-only",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "RestoreOnlyAnEbsSnapshotToAnUnattachedVolume",
+                  "Effect": "Allow",
+                  "Action": ["ec2:CreateVolume", "ec2:DeleteVolume"],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "DescribeEbsRestoreInputs",
+                  "Effect": "Allow",
+                  "Action": ["ec2:DescribeSnapshots", "ec2:DescribeVolumes"],
+                  "Resource": "*"
+                },
+                {
+                  "Sid": "DescribeOnlyTheSelectedEbsKey",
+                  "Effect": "Allow",
+                  "Action": "kms:DescribeKey",
+                  "Resource": {
+                    "Ref": "AuthorityRootVolumeKmsKeyArn"
+                  }
+                },
+                {
+                  "Sid": "UseOnlyTheSelectedEbsKeyThroughEc2",
+                  "Effect": "Allow",
+                  "Action": [
+                    "kms:Decrypt",
+                    "kms:Encrypt",
+                    "kms:GenerateDataKey",
+                    "kms:GenerateDataKeyWithoutPlaintext",
+                    "kms:ReEncryptFrom",
+                    "kms:ReEncryptTo"
+                  ],
+                  "Resource": {
+                    "Ref": "AuthorityRootVolumeKmsKeyArn"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "ec2.${AWS::Region}.${AWS::URLSuffix}"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Sid": "GrantOnlyForAwsEbsRestoreOfSelectedKey",
+                  "Effect": "Allow",
+                  "Action": "kms:CreateGrant",
+                  "Resource": {
+                    "Ref": "AuthorityRootVolumeKmsKeyArn"
+                  },
+                  "Condition": {
+                    "Bool": {
+                      "kms:GrantIsForAWSResource": "true"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "CurrentHostRecoveryPlan": {
+      "Type": "AWS::Backup::BackupPlan",
+      "Properties": {
+        "BackupPlan": {
+          "BackupPlanName": {
+            "Fn::Sub": "echo-authority-current-host-recovery-${AWS::AccountId}"
+          },
+          "BackupPlanRule": [
+            {
+              "RuleName": "current-authority-root-volume",
+              "TargetBackupVault": {
+                "Ref": "CurrentHostRecoveryVault"
+              },
+              "ScheduleExpression": {
+                "Ref": "BackupScheduleExpression"
+              },
+              "StartWindowMinutes": {
+                "Ref": "StartWindowMinutes"
+              },
+              "CompletionWindowMinutes": {
+                "Ref": "CompletionWindowMinutes"
+              },
+              "Lifecycle": {
+                "DeleteAfterDays": {
+                  "Ref": "RecoveryPointRetentionDays"
+                }
+              },
+              "RecoveryPointTags": {
+                "Application": "echo-brain",
+                "Purpose": "current-host-recovery-floor"
+              }
+            }
+          ]
+        },
+        "BackupPlanTags": {
+          "Application": "echo-brain",
+          "Purpose": "current-host-recovery-floor"
+        }
+      }
+    },
+    "CurrentAuthorityRootVolumeSelection": {
+      "Type": "AWS::Backup::BackupSelection",
+      "Properties": {
+        "BackupPlanId": {
+          "Ref": "CurrentHostRecoveryPlan"
+        },
+        "BackupSelection": {
+          "SelectionName": "current-authority-root-volume-only",
+          "IamRoleArn": {
+            "Fn::GetAtt": ["CurrentHostBackupServiceRole", "Arn"]
+          },
+          "Resources": [
+            {
+              "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${AuthorityRootVolumeId}"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "SelectedRootVolumeArn": {
+      "Description": "The exact root EBS volume ARN selected by this backup plan.",
+      "Value": {
+        "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/${AuthorityRootVolumeId}"
+      }
+    },
+    "BackupVaultName": {
+      "Description": "Name of the retained AWS Backup vault for this recovery floor.",
+      "Value": {
+        "Ref": "CurrentHostRecoveryVault"
+      }
+    },
+    "BackupVaultArn": {
+      "Description": "ARN of the retained AWS Backup vault for this recovery floor.",
+      "Value": {
+        "Fn::GetAtt": ["CurrentHostRecoveryVault", "BackupVaultArn"]
+      }
+    },
+    "BackupPlanId": {
+      "Description": "AWS Backup plan ID to inspect for scheduled recovery points.",
+      "Value": {
+        "Ref": "CurrentHostRecoveryPlan"
+      }
+    },
+    "BackupPlanArn": {
+      "Description": "AWS Backup plan ARN to inspect for scheduled recovery points.",
+      "Value": {
+        "Fn::GetAtt": ["CurrentHostRecoveryPlan", "BackupPlanArn"]
+      }
+    },
+    "BackupSelectionId": {
+      "Description": "AWS Backup selection ID binding the plan to one root volume.",
+      "Value": {
+        "Ref": "CurrentAuthorityRootVolumeSelection"
+      }
+    },
+    "BackupServiceRoleArn": {
+      "Description": "AWS Backup service role used by the root-volume selection.",
+      "Value": {
+        "Fn::GetAtt": ["CurrentHostBackupServiceRole", "Arn"]
+      }
+    },
+    "RestoreServiceRoleArn": {
+      "Description": "AWS Backup restore-only role. A restore caller must be authorized to iam:PassRole this exact ARN.",
+      "Value": {
+        "Fn::GetAtt": ["CurrentHostRestoreServiceRole", "Arn"]
+      }
+    }
+  }
+}

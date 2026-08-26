@@ -111,6 +111,54 @@ Clean operation uses `compose.clean-v1.yaml` locally and
 `compose.clean-v1.ec2.yaml` for the EC2 host shape. The accepted release and
 update workflows are documented under `deploy/release/`.
 
+### Local Authority exercise
+
+For a disposable, local-only Authority exercise, use the committed harness. It
+creates synthetic state outside the checkout, uses a distinct Compose project,
+and binds two high loopback ports. It does not read deployment state, a release
+record, or any provider credential.
+
+```bash
+npm run authority:local -- up
+npm run authority:local -- reset
+npm run authority:local -- down
+```
+
+`up` prints the local HTTPS origin and the path to Caddy's generated local root
+certificate. It verifies that origin with the built `PersonAuthorityClient`,
+using Caddy's local root certificate through `NODE_EXTRA_CA_CERTS`. `up` is
+repeatable with complete tool-owned synthetic state.
+`reset` is the only destructive command: it stops that one project and replaces
+only its synthetic state. `down` removes that project's containers, network,
+and generated Docker volumes but retains its synthetic bind-mounted state.
+
+Choose a different owned state directory or high loopback ports before the
+first run when needed:
+
+```bash
+ECHO_LOCAL_AUTHORITY_HTTP_PORT=45678 \
+ECHO_LOCAL_AUTHORITY_HTTPS_PORT=45679 \
+npm run authority:local -- up --state-dir /absolute/path/outside/this/repository
+```
+
+The packaged Person client requires HTTPS. Do not treat `curl --insecure` as a
+client trust test. Use the local Caddy CA printed by `up`, for example:
+
+```bash
+export NODE_EXTRA_CA_CERTS="$(npm run --silent authority:local -- ca-path)"
+# Run the built or packaged Person client against the HTTPS origin printed by up.
+```
+
+The harness uses the base Compose profile plus a generated local overlay. It
+never uses `compose.clean-v1.ec2.yaml`, and it never changes the byte-bound
+deployment profile or its 80/443 bindings.
+
+The state directory is a same-user local development boundary, not a defense
+against another process running as your account. The harness checks ownership,
+modes, regular-file types, and symlink-free generated/state paths immediately
+before destructive or Docker lifecycle actions. Do not run it concurrently
+with another process that can alter the same state directory.
+
 The public descriptor health endpoint is:
 
 ```text

@@ -15,10 +15,13 @@ failures, operations, and proof for exact runs.
   [server-core lean-down plan v4](product/2026-08-20-server-core-migration-lean-down-plan-v4.md).
   V2, v3, and existing qualification reports remain historical context, not
   the current deletion sequence.
-- Running the next sprint: use the locked
+- Running the active sprint: use the accepted sequencing plan in
+  [operational confidence sprint V1](product/2026-08-25-operational-confidence-sprint-v1.md).
+  Its implementation is in progress: ADR-0008 and ADR-0009 remain proposed,
+  the recovery rehearsal remains untested, and sprint exit has not been
+  claimed. The earlier
   [organization onboarding and employee rollout V1](product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md)
-  scope. It productizes the clean runtime under ADR-0006 before broad legacy
-  deletion resumes.
+  remains historical product-scope context while its issue lane is paused.
 - Closing its first gate: review the
   [Phase 0 closure ledger](product/2026-08-20-server-core-migration-phase-0-closure.md),
   [test-contract inventory](product/2026-08-20-server-core-migration-phase-0-test-contract-inventory.md),

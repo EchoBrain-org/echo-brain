@@ -20,15 +20,17 @@ separately.
 
 ## Index
 
-| ADR                                                          | Title                                        | Status     |
-| ------------------------------------------------------------ | -------------------------------------------- | ---------- |
-| [ADR-0001](ADR-0001-organization-operated-server-core.md)    | Organization-operated server-core processing | accepted   |
-| [ADR-0002](ADR-0002-external-oidc-person-sessions.md)        | External OIDC person sessions                | accepted   |
-| [ADR-0003](ADR-0003-server-core-lean-authority-contracts.md) | Server-core lean Authority contracts         | superseded |
-| [ADR-0004](ADR-0004-founder-authority-clean-state-reset.md)  | Founder Authority clean-state reset          | superseded |
-| [ADR-0005](ADR-0005-person-content-policy-v2-lineage.md)     | Person content-policy v2 lineage             | superseded |
-| [ADR-0006](ADR-0006-permission-aware-clean-v1-completion.md) | Permission-aware clean V1 completion         | accepted   |
-| [ADR-0007](ADR-0007-lean-layer-4-answer-composition-v1.md)   | Lean Layer 4 answer composition V1            | accepted   |
+| ADR                                                                      | Title                                            | Status     |
+| ------------------------------------------------------------------------ | ------------------------------------------------ | ---------- |
+| [ADR-0001](ADR-0001-organization-operated-server-core.md)                | Organization-operated server-core processing     | accepted   |
+| [ADR-0002](ADR-0002-external-oidc-person-sessions.md)                    | External OIDC person sessions                    | accepted   |
+| [ADR-0003](ADR-0003-server-core-lean-authority-contracts.md)             | Server-core lean Authority contracts             | superseded |
+| [ADR-0004](ADR-0004-founder-authority-clean-state-reset.md)              | Founder Authority clean-state reset              | superseded |
+| [ADR-0005](ADR-0005-person-content-policy-v2-lineage.md)                 | Person content-policy v2 lineage                 | superseded |
+| [ADR-0006](ADR-0006-permission-aware-clean-v1-completion.md)             | Permission-aware clean V1 completion             | accepted   |
+| [ADR-0007](ADR-0007-lean-layer-4-answer-composition-v1.md)               | Lean Layer 4 answer composition V1               | accepted   |
+| [ADR-0008](ADR-0008-organization-owned-authority-account-and-custody.md) | Organization-owned Authority account and custody | proposed   |
+| [ADR-0009](ADR-0009-retained-authority-data-volume-boundary.md)          | Retained Authority data-volume boundary          | proposed   |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

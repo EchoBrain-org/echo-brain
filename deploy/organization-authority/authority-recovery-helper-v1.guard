@@ -1,0 +1,99 @@
+# CloudFormation Guard 3.2.1 policy for the disposable offline recovery helper.
+# Its narrow shape prevents a future convenience edit from becoming a second Authority.
+
+let all_resources = Resources.*
+let standalone_routes = Resources.*[ Type == 'AWS::EC2::Route' ]
+
+rule exact_helper_inventory {
+    let resource_count = count(%all_resources)
+    let standalone_route_count = count(%standalone_routes)
+
+    %resource_count == 15
+    %standalone_route_count == 0
+    Resources.RecoveryHelperSubnet.Type == 'AWS::EC2::Subnet'
+    Resources.RecoveryHelperRouteTable.Type == 'AWS::EC2::RouteTable'
+    Resources.RecoveryHelperRouteTableAssociation.Type == 'AWS::EC2::SubnetRouteTableAssociation'
+    Resources.RecoveryHelperSecurityGroup.Type == 'AWS::EC2::SecurityGroup'
+    Resources.RecoveryEndpointSecurityGroup.Type == 'AWS::EC2::SecurityGroup'
+    Resources.RecoveryEndpointIngress.Type == 'AWS::EC2::SecurityGroupIngress'
+    Resources.RecoveryEndpointSelfEgress.Type == 'AWS::EC2::SecurityGroupEgress'
+    Resources.RecoveryHelperSsmEgress.Type == 'AWS::EC2::SecurityGroupEgress'
+    Resources.RecoveryHelperS3Egress.Type == 'AWS::EC2::SecurityGroupEgress'
+    Resources.RecoverySsmEndpoint.Type == 'AWS::EC2::VPCEndpoint'
+    Resources.RecoverySsmMessagesEndpoint.Type == 'AWS::EC2::VPCEndpoint'
+    Resources.RecoveryBundleS3Endpoint.Type == 'AWS::EC2::VPCEndpoint'
+    Resources.RecoveryHelperRole.Type == 'AWS::IAM::Role'
+    Resources.RecoveryHelperInstanceProfile.Type == 'AWS::IAM::InstanceProfile'
+    Resources.RecoveryHelper.Type == 'AWS::EC2::Instance'
+}
+
+rule isolated_subnet_and_route_table {
+    Resources.RecoveryHelperSubnet.Type == 'AWS::EC2::Subnet'
+    Resources.RecoveryHelperSubnet.Properties.MapPublicIpOnLaunch == false
+    Resources.RecoveryHelperRouteTable.Type == 'AWS::EC2::RouteTable'
+    Resources.RecoveryHelperRouteTable.Properties.Routes not exists
+    Resources.RecoveryHelperRouteTableAssociation.Type == 'AWS::EC2::SubnetRouteTableAssociation'
+    Resources.RecoveryHelperRouteTableAssociation.Properties.SubnetId == { "Ref": "RecoveryHelperSubnet" }
+    Resources.RecoveryHelperRouteTableAssociation.Properties.RouteTableId == { "Ref": "RecoveryHelperRouteTable" }
+}
+
+rule no_ingress_and_endpoint_only_egress {
+    Resources.RecoveryHelperSecurityGroup.Type == 'AWS::EC2::SecurityGroup'
+    Resources.RecoveryHelperSecurityGroup.Properties.SecurityGroupIngress == []
+    Resources.RecoveryHelperSecurityGroup.Properties.SecurityGroupEgress == []
+    Resources.RecoveryEndpointSecurityGroup.Type == 'AWS::EC2::SecurityGroup'
+    Resources.RecoveryEndpointSecurityGroup.Properties.SecurityGroupIngress == []
+    Resources.RecoveryEndpointSecurityGroup.Properties.SecurityGroupEgress == []
+    Resources.RecoveryEndpointIngress.Properties == { "GroupId": { "Fn::GetAtt": [ "RecoveryEndpointSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "SourceSecurityGroupId": { "Fn::GetAtt": [ "RecoveryHelperSecurityGroup", "GroupId" ] }, "Description": "Recovery helper only" }
+    Resources.RecoveryEndpointSelfEgress.Properties == { "GroupId": { "Fn::GetAtt": [ "RecoveryEndpointSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "DestinationSecurityGroupId": { "Fn::GetAtt": [ "RecoveryEndpointSecurityGroup", "GroupId" ] }, "Description": "Suppress default egress with endpoint-group HTTPS only" }
+    Resources.RecoveryHelperSsmEgress.Properties == { "GroupId": { "Fn::GetAtt": [ "RecoveryHelperSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "DestinationSecurityGroupId": { "Fn::GetAtt": [ "RecoveryEndpointSecurityGroup", "GroupId" ] }, "Description": "Only SSM interface endpoints" }
+    Resources.RecoveryHelperS3Egress.Properties == { "GroupId": { "Fn::GetAtt": [ "RecoveryHelperSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "DestinationPrefixListId": { "Ref": "S3PrefixListId" }, "Description": "Only the S3 gateway endpoint path for the pinned bundle" }
+}
+
+rule endpoint_boundary {
+    Resources.RecoverySsmEndpoint.Properties.VpcEndpointType == 'Interface'
+    Resources.RecoverySsmEndpoint.Properties.ServiceName == { "Fn::Sub": "com.amazonaws.${AWS::Region}.ssm" }
+    Resources.RecoverySsmEndpoint.Properties.PrivateDnsEnabled == true
+    Resources.RecoverySsmMessagesEndpoint.Properties.VpcEndpointType == 'Interface'
+    Resources.RecoverySsmMessagesEndpoint.Properties.ServiceName == { "Fn::Sub": "com.amazonaws.${AWS::Region}.ssmmessages" }
+    Resources.RecoverySsmMessagesEndpoint.Properties.PrivateDnsEnabled == true
+    Resources.RecoveryBundleS3Endpoint.Properties.VpcEndpointType == 'Gateway'
+    Resources.RecoveryBundleS3Endpoint.Properties.ServiceName == { "Fn::Sub": "com.amazonaws.${AWS::Region}.s3" }
+    Resources.RecoveryBundleS3Endpoint.Properties.RouteTableIds == [ { "Ref": "RecoveryHelperRouteTable" } ]
+    Resources.RecoveryBundleS3Endpoint.Properties.PolicyDocument.Statement == [ {
+        "Effect": "Allow",
+        "Principal": "*",
+        "Action": "s3:GetObjectVersion",
+        "Resource": { "Fn::Sub": "arn:${AWS::Partition}:s3:::${BundleBucketName}/${BundleObjectKey}" },
+        "Condition": { "StringEquals": { "aws:PrincipalArn": { "Fn::GetAtt": [ "RecoveryHelperRole", "Arn" ] }, "s3:VersionId": { "Ref": "BundleObjectVersion" } } }
+    } ]
+}
+
+rule helper_role_has_no_operational_or_secret_access {
+    Resources.RecoveryHelperRole.Properties.ManagedPolicyArns == [ { "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore" } ]
+    Resources.RecoveryHelperRole.Properties.Policies == [ {
+        "PolicyName": "read-exact-recovery-verifier-bundle",
+        "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [ {
+                "Effect": "Allow",
+                "Action": "s3:GetObjectVersion",
+                "Resource": { "Fn::Sub": "arn:${AWS::Partition}:s3:::${BundleBucketName}/${BundleObjectKey}" },
+                "Condition": { "StringEquals": { "s3:VersionId": { "Ref": "BundleObjectVersion" } } }
+            } ]
+        }
+    } ]
+}
+
+rule arm64_non_public_immutable_helper {
+    Resources.RecoveryHelper.Type == 'AWS::EC2::Instance'
+    Resources.RecoveryHelper.Properties.InstanceType == { "Ref": "HelperInstanceType" }
+    Resources.RecoveryHelper.Properties.NetworkInterfaces == [ { "DeviceIndex": "0", "SubnetId": { "Ref": "RecoveryHelperSubnet" }, "GroupSet": [ { "Fn::GetAtt": [ "RecoveryHelperSecurityGroup", "GroupId" ] } ], "AssociatePublicIpAddress": false, "DeleteOnTermination": true } ]
+    Resources.RecoveryHelper.Properties.MetadataOptions == { "HttpTokens": "required", "HttpEndpoint": "enabled", "HttpPutResponseHopLimit": 1 }
+    Resources.RecoveryHelper.Properties.BlockDeviceMappings == [ { "DeviceName": "/dev/xvda", "Ebs": { "Encrypted": true, "DeleteOnTermination": true, "VolumeType": "gp3" } } ]
+    Resources.RecoveryHelper.Properties.InstanceInitiatedShutdownBehavior == 'terminate'
+}
+
+rule bounded_bundle_bootstrap {
+    Resources.RecoveryHelper.Properties.UserData exists
+}

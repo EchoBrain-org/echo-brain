@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-CENTRAL-ORGANIZATION
 created_at: 2026-08-13
-reviewed_at: 2026-08-14
-reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
+reviewed_at: 2026-08-25
+reviewed_ref: 35875e49817c841ac1f8aa3abf669d6e9a636a83
 decision_ids:
   - ADR-0001
   - ADR-0002
@@ -17,6 +17,7 @@ decision_ids:
   - ADR-0004
   - ADR-0006
   - ADR-0007
+  - ADR-0008
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -48,12 +49,12 @@ qualification_ids:
 
 The customer-hosted Authority process composes four central workspaces:
 
-| Workspace | Owns |
-| --- | --- |
-| `organization-authority` | Organization identity, access, HTTP boundary, and composition |
+| Workspace                    | Owns                                                                         |
+| ---------------------------- | ---------------------------------------------------------------------------- |
+| `organization-authority`     | Organization identity, access, HTTP boundary, and composition                |
 | `organization-control-plane` | Provider connection, identity links, bindings, grants, and integration audit |
-| `organization-record` | Append-only approved record and deterministic append-side projections |
-| `organization-retrieval` | Rebuildable permission-aware retrieval generations |
+| `organization-record`        | Append-only approved record and deterministic append-side projections        |
+| `organization-retrieval`     | Rebuildable permission-aware retrieval generations                           |
 
 Only `organization-authority` is a process entry point. The other three are
 libraries linked into the Authority runtime. The deployment also includes a
