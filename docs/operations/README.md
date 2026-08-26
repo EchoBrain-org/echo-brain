@@ -33,6 +33,7 @@ link to the maintained procedure.
 
 - [RB-OPERATIONS-001: Deploy and rehearse minimal Authority observability](RB-OPERATIONS-001-authority-observability.md)
 - [RB-OPERATIONS-002: Establish and rehearse the current Authority recovery floor](RB-OPERATIONS-002-authority-recovery-floor.md)
+- [RB-OPERATIONS-003: Protect canonical source and immutable clean-beta releases](RB-OPERATIONS-003-protect-canonical-source-and-releases.md)
 
 Existing Authority procedures remain under
 [`deploy/organization-authority/`](../../deploy/organization-authority). They

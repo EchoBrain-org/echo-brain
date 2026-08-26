@@ -26,6 +26,7 @@ failure_pattern_ids:
 runbook_ids:
   - RB-OPERATIONS-001
   - RB-OPERATIONS-002
+  - RB-OPERATIONS-003
 qualification_ids:
   - QMAT-JOB-A-STOPPED-001
   - QUAL-20260813-174902-001
@@ -72,6 +73,7 @@ identity no longer matches.
 - [Operations records](../operations/README.md)
 - [Minimal Authority observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md)
 - [Current Authority recovery-floor runbook](../operations/RB-OPERATIONS-002-authority-recovery-floor.md)
+- [Canonical source and immutable clean-beta release runbook](../operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md)
 - [Qualification and evidence](../qualification/README.md)
 - [`deploy/organization-authority/`](../../deploy/organization-authority)
 - [`tools/`](../../tools)
