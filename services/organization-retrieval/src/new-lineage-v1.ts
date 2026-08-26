@@ -47,6 +47,25 @@ export type CleanReadableSearchPolicyIdV1 =
 type Plane = "facts" | "content" | "lexical";
 type SegmentKind = "organization-member" | "reviewer";
 
+/**
+ * Lean V1 admission ceiling. The values leave room for roughly one thousand
+ * approved signal atoms while bounding every collection traversed by the
+ * synchronous reader. Validation happens before retrieval staging is touched.
+ */
+export const CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
+  maximum_atoms: 1_024,
+  maximum_segments: 32,
+  maximum_atom_text_utf8_bytes: 4_096,
+  maximum_postings: 16_384,
+});
+
+export const CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
+  active_generation_cache_entries: 1,
+  cache_miss: "bounded-unavailable",
+  request_segments: "member-plus-exact-reviewer-tuple",
+  validation: "complete-before-publication-or-current-status",
+});
+
 export interface CleanReadableSearchLineagePlaneV1 {
   readonly database_schema_version: 1;
   readonly schema_sha256: Sha256Digest;
@@ -674,6 +693,48 @@ function inputRoot(
   });
 }
 
+function assertWithinAdmissionBudget(
+  input: BuildCleanReadableSearchGenerationV1Input,
+): void {
+  const budget = CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1;
+  if (input.atoms.length > budget.maximum_atoms)
+    throw new Error("clean retrieval generation exceeds maximum_atoms");
+  const segments = new Set<string>();
+  segments.add(
+    segmentIdentity(
+      input.lineage,
+      ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+      input.organization_member_policy_contract_sha256,
+      null,
+      null,
+    ).segment_id,
+  );
+  let postings = 0;
+  for (const atom of input.atoms) {
+    if (
+      Buffer.byteLength(atom.text, "utf8") >
+      budget.maximum_atom_text_utf8_bytes
+    )
+      throw new Error(
+        "clean retrieval generation exceeds maximum_atom_text_utf8_bytes",
+      );
+    segments.add(
+      segmentIdentity(
+        input.lineage,
+        atom.policy_id,
+        atom.policy_contract_sha256,
+        atom.reviewer_principal_id,
+        atom.reviewer_membership_id,
+      ).segment_id,
+    );
+    postings += analyzeReadableSearchDocument(atom.text).size;
+    if (postings > budget.maximum_postings)
+      throw new Error("clean retrieval generation exceeds maximum_postings");
+  }
+  if (segments.size > budget.maximum_segments)
+    throw new Error("clean retrieval generation exceeds maximum_segments");
+}
+
 /** Builds one immutable Layer 2 generation solely from an exact materialized Layer 1 head. */
 export function buildCleanReadableSearchGenerationV1(
   input: BuildCleanReadableSearchGenerationV1Input,
@@ -725,6 +786,7 @@ export function buildCleanReadableSearchGenerationV1(
       throw new Error("duplicate clean retrieval atom identity");
     seen.add(atom.atom_id);
   }
+  assertWithinAdmissionBudget(input);
   const root = join(input.state_directory, RETRIEVAL_DIRECTORY);
   const generations = join(root, GENERATIONS_DIRECTORY);
   ensurePrivateDirectory(
@@ -1016,6 +1078,31 @@ interface CleanSegmentRows {
   readonly facts: readonly CleanFactRow[];
   readonly content_by_atom: ReadonlyMap<Sha256Digest, CleanContentRow>;
   readonly postings: readonly CleanTermPostingRow[];
+}
+
+interface ValidatedActiveGenerationHandleV1 {
+  readonly key: string;
+  readonly manifest: CleanReadableSearchGenerationManifestV1;
+  readonly segments: readonly CleanSegmentRows[];
+}
+
+let validatedActiveGenerationHandleV1: ValidatedActiveGenerationHandleV1 | null =
+  null;
+
+function activeGenerationKey(
+  active: CleanReadableSearchActiveGenerationV1,
+): string {
+  return canonicalJson({
+    generation_id: active.generation_id,
+    manifest_sha256: active.manifest_sha256,
+    retrieval_contract_sha256: active.retrieval_contract_sha256,
+    exact_head: active.exact_head,
+  });
+}
+
+/** Drops the sole process-local handle, primarily for shutdown and tests. */
+export function clearCleanReadableSearchActiveGenerationV1(): void {
+  validatedActiveGenerationHandleV1 = null;
 }
 
 function assertCanonicalAbsoluteDirectory(path: string, label: string): void {
@@ -1510,7 +1597,7 @@ function readAndValidateCleanSegment(
  * Reads one active, immutable Layer 2 generation. It does not open Authority,
  * record, or a migration ledger, and it never creates or modifies state.
  */
-export function searchCleanReadableSearchGenerationV1(
+function validateAndWarmCleanReadableSearchGenerationV1(
   input: SearchCleanReadableSearchGenerationV1Input,
 ): CleanReadableSearchResultV1 {
   assertCanonicalAbsoluteDirectory(
@@ -1611,6 +1698,7 @@ export function searchCleanReadableSearchGenerationV1(
     throw new Error("clean retrieval generation roots are invalid");
   const seenSegments = new Set<string>();
   const seenAtoms = new Set<string>();
+  const validatedSegments: CleanSegmentRows[] = [];
   const admitted: CleanSegmentRows[] = [];
   for (const entry of manifest.segments) {
     if (seenSegments.has(entry.segment_id))
@@ -1621,6 +1709,7 @@ export function searchCleanReadableSearchGenerationV1(
       manifest,
       entry,
     );
+    validatedSegments.push(segment);
     for (const fact of segment.facts) {
       if (seenAtoms.has(fact.atom_id))
         throw new Error("clean retrieval generation repeats an atom");
@@ -1650,6 +1739,32 @@ export function searchCleanReadableSearchGenerationV1(
   });
   if (!seenSegments.has(memberSegmentId))
     throw new Error("clean retrieval generation omits its member segment");
+  const budget = CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1;
+  const postingCount = validatedSegments.reduce(
+    (sum, segment) => sum + segment.postings.length,
+    0,
+  );
+  if (
+    seenAtoms.size > budget.maximum_atoms ||
+    validatedSegments.length > budget.maximum_segments ||
+    postingCount > budget.maximum_postings ||
+    validatedSegments.some((segment) =>
+      [...segment.content_by_atom.values()].some(
+        (item) =>
+          Buffer.byteLength(item.text, "utf8") >
+          budget.maximum_atom_text_utf8_bytes,
+      ),
+    )
+  )
+    throw new Error("clean retrieval generation exceeds current admission budget");
+  // Replacement is deliberately one-for-one. No generation survives beside
+  // the newly validated immutable rows.
+  validatedActiveGenerationHandleV1 = null;
+  validatedActiveGenerationHandleV1 = Object.freeze({
+    key: activeGenerationKey(active),
+    manifest,
+    segments: Object.freeze(validatedSegments),
+  });
   const candidates: Array<{
     readonly fact: CleanFactRow;
     readonly content: CleanContentRow;
@@ -1699,6 +1814,101 @@ export function searchCleanReadableSearchGenerationV1(
           item_kind: candidate.content.item_kind,
           text: candidate.content.text,
           policy_id: candidate.fact.policy_id,
+        }),
+      ),
+    ),
+  });
+}
+
+/** Fully validates and replaces the sole eligible active-generation handle. */
+export function warmCleanReadableSearchActiveGenerationV1(input: {
+  readonly state_directory: string;
+  readonly active_generation: CleanReadableSearchActiveGenerationV1;
+}): void {
+  validatedActiveGenerationHandleV1 = null;
+  validateAndWarmCleanReadableSearchGenerationV1({
+    ...input,
+    reader: { principal_id: "warm-validator", membership_id: "warm-validator" },
+    query: "warm",
+    limit: 1,
+  });
+}
+
+/** Searches only immutable rows in the exact, already validated one-entry handle. */
+export function searchCleanReadableSearchGenerationV1(
+  input: SearchCleanReadableSearchGenerationV1Input,
+): CleanReadableSearchResultV1 {
+  text(input.reader.principal_id, "reader principal_id");
+  text(input.reader.membership_id, "reader membership_id");
+  const limit = input.limit ?? 10;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
+    throw new Error(
+      "clean retrieval limit must be a safe integer from one through ten",
+    );
+  const handle = validatedActiveGenerationHandleV1;
+  if (
+    handle === null ||
+    handle.key !== activeGenerationKey(input.active_generation)
+  )
+    throw new Error("clean retrieval active-generation handle is unavailable");
+  const terms = analyzeReadableSearchQuery(input.query);
+  const admitted = handle.segments.filter(
+    (segment) =>
+      segment.manifest.policy_id ===
+        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
+      (segment.manifest.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
+        segment.manifest.reviewer_principal_id === input.reader.principal_id &&
+        segment.manifest.reviewer_membership_id === input.reader.membership_id),
+  );
+  const candidates: Array<{
+    readonly fact: CleanFactRow;
+    readonly content: CleanContentRow;
+    readonly score: number;
+  }> = [];
+  for (const segment of admitted) {
+    const scoreByAtom = new Map<Sha256Digest, number>();
+    for (const posting of segment.postings)
+      if (terms.includes(posting.term))
+        scoreByAtom.set(
+          posting.atom_id,
+          (scoreByAtom.get(posting.atom_id) ?? 0) + posting.term_frequency,
+        );
+    for (const fact of segment.facts) {
+      const score = scoreByAtom.get(fact.atom_id);
+      const content = segment.content_by_atom.get(fact.atom_id);
+      if (score !== undefined && content !== undefined)
+        candidates.push({ fact, content, score });
+    }
+  }
+  candidates.sort((left, right) =>
+    compareReadableSearchCandidates(
+      {
+        score: left.score,
+        log_position: left.fact.log_position,
+        atom_order: left.fact.atom_order,
+        atom_id: left.fact.atom_id,
+      },
+      {
+        score: right.score,
+        log_position: right.fact.log_position,
+        atom_order: right.fact.atom_order,
+        atom_id: right.fact.atom_id,
+      },
+    ),
+  );
+  return Object.freeze({
+    generation_id: handle.manifest.generation_id,
+    exact_head: handle.manifest.exact_head,
+    items: Object.freeze(
+      candidates.slice(0, limit).map(({ fact, content }) =>
+        Object.freeze({
+          atom_id: fact.atom_id,
+          record_position: fact.log_position,
+          record_sha256: fact.record_hash,
+          envelope_sha256: fact.envelope_sha256,
+          item_kind: content.item_kind,
+          text: content.text,
+          policy_id: fact.policy_id,
         }),
       ),
     ),

@@ -4,6 +4,7 @@ import {
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import {
+  clearCleanReadableSearchActiveGenerationV1,
   searchCleanReadableSearchGenerationV1,
   type CleanReadableSearchResultItemV1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
@@ -295,10 +296,13 @@ export function createCleanPersonRecordSearchRouteV1(
       pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 ||
       !sameHead(pointer, head)
     ) {
+      clearCleanReadableSearchActiveGenerationV1();
       unavailable();
     }
-    const results = input.queries.map((query) =>
-      search({
+    let results;
+    try {
+      results = input.queries.map((query) =>
+        search({
         state_directory: options.state_directory,
         active_generation: {
           generation_id: pointer.generation_id,
@@ -318,8 +322,17 @@ export function createCleanPersonRecordSearchRouteV1(
         },
         query,
         ...(input.limit === undefined ? {} : { limit: input.limit }),
-      }),
-    );
+        }),
+      );
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message ===
+          "clean retrieval active-generation handle is unavailable"
+      )
+        unavailable();
+      throw error;
+    }
     for (const result of results) {
       if (
         result.generation_id !== pointer.generation_id ||

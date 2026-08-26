@@ -9,6 +9,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/new-lineage-v1";
+import {
+  clearCleanReadableSearchActiveGenerationV1,
+  searchCleanReadableSearchGenerationV1,
+} from "@echo-brain/organization-retrieval/new-lineage-v1";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { DevelopmentFileOrganizationAuthoritySigner } from "../src/adapters/security/development-file-authority-signer.js";
 import { createCleanReadableSearchGenerationReconcilerV1 } from "../src/composition/clean-readable-search-runtime.js";
@@ -95,12 +99,42 @@ describe("clean readable-search runtime composition", () => {
       );
       expect(generations).toEqual([pointer.generation_id]);
 
+      const active_generation = {
+        generation_id: pointer.generation_id as `sha256:${string}`,
+        manifest_sha256: pointer.manifest_sha256 as `sha256:${string}`,
+        retrieval_contract_sha256:
+          pointer.retrieval_contract_sha256 as `sha256:${string}`,
+        exact_head: {
+          authority_id: initialized.authority_id,
+          organization_id: initialized.organization_id,
+          state_lineage_id: lineage.root.state_lineage_id,
+          position: 0,
+          record_sha256: null,
+        },
+      };
+      clearCleanReadableSearchActiveGenerationV1();
+      expect(() =>
+        searchCleanReadableSearchGenerationV1({
+          state_directory: initialized.state_directory,
+          active_generation,
+          reader: { principal_id: "restart", membership_id: "restart" },
+          query: "restart",
+        }),
+      ).toThrow("active-generation handle is unavailable");
       expect(
         await reconciler.reconcile(new AbortController().signal),
       ).toMatchObject({
         status: "current",
         record_head: { position: 0, record_sha256: null },
       });
+      expect(
+        searchCleanReadableSearchGenerationV1({
+          state_directory: initialized.state_directory,
+          active_generation,
+          reader: { principal_id: "restart", membership_id: "restart" },
+          query: "restart",
+        }).items,
+      ).toEqual([]);
       expect(
         readdirSync(
           join(

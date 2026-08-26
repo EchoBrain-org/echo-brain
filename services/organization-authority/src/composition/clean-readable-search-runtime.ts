@@ -17,11 +17,15 @@ import {
 } from "@echo-brain/organization-record/new-lineage-v1";
 import {
   buildCleanReadableSearchGenerationV1,
+  clearCleanReadableSearchActiveGenerationV1,
+  CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
+  CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   readableSearchPlaneBaselineSha256V1,
+  warmCleanReadableSearchActiveGenerationV1,
   type CleanReadableSearchAtomV1,
   type CleanReadableSearchLineagePlaneV1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
@@ -60,6 +64,8 @@ const CLEAN_READABLE_SEARCH_BUILDER_RELEASE_V1 = Object.freeze({
   source_revision: CLEAN_READABLE_SEARCH_SOURCE_REVISION_V1,
   input: "verified-organization-record-envelope-v4-layer1-snapshot",
   output: "immutable-baseline-only-three-plane-generation-v1",
+  admission_budget: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
+  reader_behavior: CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1,
 });
 
 export interface CleanReadableSearchRuntimeContractV1 {
@@ -125,6 +131,8 @@ export function cleanReadableSearchRuntimeContractV1(): CleanReadableSearchRunti
         ],
         maximum_items: 10,
       },
+      admission_budget: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
+      reader_behavior: CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1,
     }),
     organization_member_policy_contract_sha256: organizationMemberPolicy,
     restricted_reviewer_policy_contract_sha256: restrictedReviewerPolicy,
@@ -336,6 +344,23 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
         }),
       });
     },
+    prepare_generation: (generation) =>
+      warmCleanReadableSearchActiveGenerationV1({
+        state_directory: input.state_directory,
+        active_generation: {
+          generation_id: generation.generation_id,
+          manifest_sha256: generation.manifest_sha256,
+          retrieval_contract_sha256: generation.retrieval_contract_sha256,
+          exact_head: {
+            authority_id: input.root.authority_id,
+            organization_id: input.root.organization_id,
+            state_lineage_id: input.root.state_lineage_id,
+            position: generation.record_head.position,
+            record_sha256: generation.record_head.record_sha256,
+          },
+        },
+      }),
+    invalidate_generation: clearCleanReadableSearchActiveGenerationV1,
     ...(input.now === undefined ? {} : { now: input.now }),
   });
 }
