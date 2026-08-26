@@ -1,7 +1,8 @@
 # Operational confidence sprint V1
 
 **Status:** sequencing plan accepted; implementation in progress since
-2026-08-25. Sprint exit has not been claimed.
+2026-08-25. DEC-A and DEC-B were accepted on 2026-08-26. Sprint exit has not
+been claimed.
 **Grounded at:** `main` @ `35875e49817c841ac1f8aa3abf669d6e9a636a83`
 (merge of PR #67), inspected 2026-08-25.
 **Scope:** current-Authority recovery floor, developer tooling, and DEC-A/DEC-B
@@ -477,44 +478,49 @@ reconciliation, and terminal-green proof.
 
 Record decisions only; do not implement host or data-volume changes.
 
-### DEC-A candidate: operator and account boundary
+### DEC-A accepted: operator and account boundary
 
-Likely documentation group:
+The decision is recorded in:
 
-- `ADR-0008` using the ADR template;
+- `ADR-0008`;
 - decisions index;
 - `component_ids: [CMP-OPERATIONS-RELEASE]` and the component's `decision_ids`
   backlink; and
-- an exact `updates` or `supersedes` relation to ADR-0001 when required.
+- an exact `updates` relation to ADR-0001.
 
-The ADR must state whether ECHO runs each Authority or ships infrastructure for
-the organization to run. A customer-account decision preserves ADR-0001's
-custody boundary. An ECHO-account decision changes the accepted claim that the
-organization owns operations, database, backups, ingress, logs, and keys and
-therefore requires an explicit superseding custody decision; it cannot be
-described as deployment-only housekeeping.
+[ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md)
+selects one ECHO-hosted, single-organization Authority in ECHO's AWS account as
+the default. An organization may request its own account before provisioning.
+That explicit opt-in model preserves organization account custody for that
+Authority; the default model gives ECHO operational custody and updates
+ADR-0001's contrary custody claims. A post-onboarding request is a separately
+reviewed account and data migration, not an in-place configuration change.
+This decision does not implement either provisioning path.
 
-### DEC-B candidate: retained data-volume boundary
+### DEC-B accepted: retained data-volume boundary
 
-Likely documentation group:
+The decision is recorded in:
 
-- `ADR-0009` or a justified combined ADR with DEC-A;
+- `ADR-0009`;
 - decisions index; and
 - `component_ids: [CMP-OPERATIONS-RELEASE]` and the component's `decision_ids`
   backlink.
 
-The dedicated volume mounts at
+[ADR-0009](../decisions/ADR-0009-retained-authority-data-volume-boundary.md)
+accepts a dedicated volume mounted at
 `/srv/echo-authority-clean-v1/clean-data`, not over the whole deployment
 directory. Code, Compose files, Caddy files, and release tooling remain
 replaceable host material. The decision pins the deployment root and numeric
-`echo-authority` UID/GID; requires the mount before Docker/Compose; and requires
-startup to refuse a missing, symlinked, unmounted, or wrongly owned target. It
-preserves the `private/`, `state/`, and `release/` ownership and modes.
+`echo-authority` UID/GID; requires the later implementation to mount the data
+volume before Docker/Compose; and requires that startup implementation to
+refuse a missing, symlinked, unmounted, or wrongly owned target. It must
+preserve the `private/`, `state/`, and `release/` ownership and modes.
 
-The migration procedure must settle the Authority operation lock, stop the
+The later migration procedure must settle the Authority operation lock, stop the
 Authority, copy state with metadata verification to a detached volume, validate
 it offline, retain the source rollback point, mount and revalidate the target,
-and only then cut over. Stack deletion retains the data volume.
+and only then cut over. The future stack must retain the data volume on
+deletion.
 
 Acceptance:
 

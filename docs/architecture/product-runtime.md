@@ -58,7 +58,9 @@ container workflow.
 
 The product has two operational artifacts:
 
-- the organization-operated Authority container; and
+- the single-organization Authority container, whose hosting and custody model
+  is defined by
+  [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md); and
 - the thin Person CLI tarball.
 
 The repository root is workspace orchestration only. It is private and has no

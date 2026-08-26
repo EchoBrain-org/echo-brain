@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-CENTRAL-ORGANIZATION
 created_at: 2026-08-13
-reviewed_at: 2026-08-25
-reviewed_ref: 35875e49817c841ac1f8aa3abf669d6e9a636a83
+reviewed_at: 2026-08-26
+reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
 decision_ids:
   - ADR-0001
   - ADR-0002
@@ -47,7 +47,9 @@ qualification_ids:
 
 ## Responsibility
 
-The customer-hosted Authority process composes four central workspaces:
+The single-organization Authority process composes four central workspaces.
+Its hosting account and operator are selected under
+[ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md):
 
 | Workspace                    | Owns                                                                         |
 | ---------------------------- | ---------------------------------------------------------------------------- |

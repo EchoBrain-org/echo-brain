@@ -17,9 +17,9 @@ failures, operations, and proof for exact runs.
   the current deletion sequence.
 - Running the active sprint: use the accepted sequencing plan in
   [operational confidence sprint V1](product/2026-08-25-operational-confidence-sprint-v1.md).
-  Its implementation is in progress: ADR-0008 and ADR-0009 remain proposed,
-  the recovery rehearsal remains untested, and sprint exit has not been
-  claimed. The earlier
+  Its implementation is in progress: ADR-0008 and ADR-0009 are accepted and
+  scheduled backup protection is active, while the qualifying recovery
+  rehearsal remains untested and sprint exit has not been claimed. The earlier
   [organization onboarding and employee rollout V1](product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md)
   remains historical product-scope context while its issue lane is paused.
 - Closing its first gate: review the
