@@ -1,5 +1,6 @@
 # Release-governance boundary. The main-branch ruleset requires Code Owner
 # approval for these paths; keep this list aligned with the architecture test.
+# Disposable verification change for issue #25; this branch must not be merged.
 /.github/ @EchoBrain-org
 /tools/ @EchoBrain-org
 /deploy/release/ @EchoBrain-org
