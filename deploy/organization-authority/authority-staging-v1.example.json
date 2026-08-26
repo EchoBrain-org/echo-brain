@@ -1,0 +1,21 @@
+{
+  "region": "us-west-2",
+  "operationId": "staging-example-slot-init-001",
+  "slotId": "staging-example-slot",
+  "stack": {
+    "name": "echo-authority-staging-example",
+    "parameters": {
+      "OrgSlug": "example-staging",
+      "AvailabilityZone": "us-west-2a",
+      "StagingAmiId": "ami-0123456789abcdef0",
+      "StagingInstanceType": "t4g.small",
+      "DataVolumeSizeGiB": "30",
+      "AuthorityEcrRepositoryArn": "arn:aws:ecr:us-west-2:123456789012:repository/echo-brain/authority"
+    }
+  },
+  "edge": {
+    "accountId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "zoneId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "hostname": "authority-staging.example.invalid"
+  }
+}

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-AWS_REGION=us-west-2
-TOKEN_REFERENCE='{{resolve:secretsmanager:echo/org1-prod/cloudflare-tunnel-token}}'
+CONFIG_FILE=/etc/echo-authority/tunnel-token.conf
+AWS_REGION=
+TOKEN_REFERENCE=
 ASM_EXEC=/usr/local/bin/asm-exec
 TARGET=/etc/cloudflared/tunnel.token
 RESOLUTION_ATTEMPTS=4
@@ -10,6 +11,54 @@ RESOLUTION_ATTEMPTS=4
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: install-cloudflare-tunnel-token.sh [--config /etc/echo-authority/tunnel-token.conf] [--region <aws-region> --tunnel-secret-reference <dynamic-reference>] [--check|install]
+
+The installer accepts only a Secrets Manager dynamic reference, never a raw
+Tunnel token. The reference is passed to asm-exec and resolved only inside its
+short-lived child process.
+USAGE
+  exit 2
+}
+
+validate_region() {
+  [[ $1 =~ ^[a-z]{2}(-[a-z0-9]+)+-[0-9]+$ ]] || fail 'AWS Region has an unsafe shape'
+}
+
+validate_reference() {
+  [[ $1 =~ ^\{\{resolve:secretsmanager:arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+:SecretString:token\}\}$ ]] \
+    || fail 'Tunnel secret reference must select the token JSON key from one exact Secrets Manager ARN'
+}
+
+config_value() {
+  local key=$1 matches value
+  matches="$(awk -F= -v key="$key" '$1 == key { print $0 }' "$CONFIG_FILE")"
+  [[ $(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ') -le 1 ]] \
+    || fail "Tunnel configuration contains more than one $key entry"
+  value=${matches#*=}
+  printf '%s' "$value"
+}
+
+load_config() {
+  if [[ ! -e $CONFIG_FILE ]]; then
+    [[ -n $AWS_REGION && -n $TOKEN_REFERENCE ]] && return 0
+    fail 'Tunnel configuration file is missing and no complete explicit configuration was supplied'
+  fi
+  [[ -f $CONFIG_FILE && ! -L $CONFIG_FILE ]] \
+    || fail 'Tunnel configuration file must be a regular non-symlink file'
+  [[ $(stat -c '%u:%a' "$CONFIG_FILE") == '0:600' ]] \
+    || fail 'Tunnel configuration file must be owned by root with mode 0600'
+  [[ -n $AWS_REGION ]] || AWS_REGION=$(config_value AWS_REGION)
+  [[ -n $TOKEN_REFERENCE ]] || TOKEN_REFERENCE=$(config_value TUNNEL_SECRET_REFERENCE)
+}
+
+load_and_validate_config() {
+  load_config
+  validate_region "$AWS_REGION"
+  validate_reference "$TOKEN_REFERENCE"
 }
 
 validate_resolved_token() {
@@ -36,7 +85,50 @@ run_resolved_action() {
   done
 }
 
-case ${1:-install} in
+action=install
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --config)
+      [[ $# -ge 2 && $2 == /* ]] || usage
+      CONFIG_FILE=$2
+      shift 2
+      ;;
+    --region)
+      [[ $# -ge 2 ]] || usage
+      AWS_REGION=$2
+      shift 2
+      ;;
+    --tunnel-secret-reference)
+      [[ $# -ge 2 ]] || usage
+      TOKEN_REFERENCE=$2
+      shift 2
+      ;;
+    --check)
+      action=--check
+      shift
+      ;;
+    --resolved-check)
+      action=--resolved-check
+      shift
+      ;;
+    --resolved-install)
+      action=--resolved-install
+      shift
+      ;;
+    install)
+      action=install
+      shift
+      ;;
+    --help|-h)
+      usage
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+case $action in
   --resolved-check)
     validate_resolved_token
     printf 'Cloudflare Tunnel secret resolution succeeded.\n'
@@ -63,6 +155,7 @@ case ${1:-install} in
     printf 'Cloudflare Tunnel token installed with private permissions.\n'
     ;;
   --check)
+    load_and_validate_config
     [[ -x $ASM_EXEC ]] || fail "missing $ASM_EXEC"
     export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
     export PATH="/snap/bin:$PATH"
@@ -71,6 +164,7 @@ case ${1:-install} in
     run_resolved_action --resolved-check
     ;;
   install)
+    load_and_validate_config
     [[ ${EUID} -eq 0 ]] || fail 'installation must run as root'
     [[ -x $ASM_EXEC ]] || fail "missing $ASM_EXEC"
     export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
@@ -80,6 +174,6 @@ case ${1:-install} in
     run_resolved_action --resolved-install
     ;;
   *)
-    fail 'usage: install-cloudflare-tunnel-token.sh [--check|install]'
+    usage
     ;;
 esac

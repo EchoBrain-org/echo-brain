@@ -1,0 +1,129 @@
+# CloudFormation Guard 3.2.1 policy for the persistent Authority staging slot.
+# Only HostEnabled controls the disposable EC2 host. Data, credential container,
+# and trusted bootstrap delivery remain stable across host recreation.
+
+let all_resources = Resources.*
+let host_resources = Resources.*[ Condition == 'HostEnabledCondition' ]
+
+rule exact_staging_slot_inventory {
+    let resource_count = count(%all_resources)
+    let host_resource_count = count(%host_resources)
+
+    %resource_count == 22
+    %host_resource_count == 4
+    Resources.StagingVpc.Type == 'AWS::EC2::VPC'
+    Resources.StagingInternetGateway.Type == 'AWS::EC2::InternetGateway'
+    Resources.StagingInternetGatewayAttachment.Type == 'AWS::EC2::VPCGatewayAttachment'
+    Resources.StagingPublicSubnet.Type == 'AWS::EC2::Subnet'
+    Resources.StagingPublicRouteTable.Type == 'AWS::EC2::RouteTable'
+    Resources.StagingInternetRoute.Type == 'AWS::EC2::Route'
+    Resources.StagingPublicRouteTableAssociation.Type == 'AWS::EC2::SubnetRouteTableAssociation'
+    Resources.StagingHostSecurityGroup.Type == 'AWS::EC2::SecurityGroup'
+    Resources.StagingHostHttpsEgress.Type == 'AWS::EC2::SecurityGroupEgress'
+    Resources.StagingHostAptHttpEgress.Type == 'AWS::EC2::SecurityGroupEgress'
+    Resources.StagingHostCloudflaredTcpEgress.Type == 'AWS::EC2::SecurityGroupEgress'
+    Resources.StagingHostCloudflaredUdpEgress.Type == 'AWS::EC2::SecurityGroupEgress'
+    Resources.StagingHostSetupBundle.Type == 'AWS::S3::Bucket'
+    Resources.AuthorityTunnelTokenSecret.Type == 'AWS::SecretsManager::Secret'
+    Resources.StagingHostRole.Type == 'AWS::IAM::Role'
+    Resources.StagingHostInstanceProfile.Type == 'AWS::IAM::InstanceProfile'
+    Resources.StagingDataVolume.Type == 'AWS::EC2::Volume'
+    Resources.StagingHostLaunchTemplate.Type == 'AWS::EC2::LaunchTemplate'
+    Resources.StagingReadyHandle.Type == 'AWS::CloudFormation::WaitConditionHandle'
+    Resources.StagingHost.Type == 'AWS::EC2::Instance'
+    Resources.StagingDataVolumeAttachment.Type == 'AWS::EC2::VolumeAttachment'
+    Resources.StagingReady.Type == 'AWS::CloudFormation::WaitCondition'
+}
+
+rule host_toggle_leaves_the_slot_boundary_persistent {
+    Resources.StagingDataVolume.Condition not exists
+    Resources.AuthorityTunnelTokenSecret.Condition not exists
+    Resources.StagingHostSetupBundle.Condition not exists
+    Resources.StagingHostRole.Condition not exists
+    Resources.StagingVpc.Condition not exists
+    Resources.StagingHost.Condition == 'HostEnabledCondition'
+    Resources.StagingDataVolumeAttachment.Condition == 'HostEnabledCondition'
+    Resources.StagingReadyHandle.Condition == 'HostEnabledCondition'
+    Resources.StagingReady.Condition == 'HostEnabledCondition'
+}
+
+rule network_has_no_ingress_and_required_bootstrap_and_tunnel_egress {
+    Resources.StagingPublicSubnet.Properties.MapPublicIpOnLaunch == true
+    Resources.StagingInternetRoute.Properties == { "DestinationCidrBlock": "0.0.0.0/0", "GatewayId": { "Ref": "StagingInternetGateway" }, "RouteTableId": { "Ref": "StagingPublicRouteTable" } }
+    Resources.StagingHostSecurityGroup.Properties.SecurityGroupIngress == []
+    Resources.StagingHostSecurityGroup.Properties.SecurityGroupEgress == []
+    Resources.StagingHostHttpsEgress.Properties == { "GroupId": { "Fn::GetAtt": [ "StagingHostSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "CidrIp": "0.0.0.0/0", "Description": "HTTPS for version-pinned bootstrap, registry, SSM, and tunnel control traffic" }
+    Resources.StagingHostAptHttpEgress.Properties == { "GroupId": { "Fn::GetAtt": [ "StagingHostSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "CidrIp": "0.0.0.0/0", "Description": "HTTP for Ubuntu package mirrors during bootstrap" }
+    Resources.StagingHostCloudflaredTcpEgress.Properties == { "GroupId": { "Fn::GetAtt": [ "StagingHostSecurityGroup", "GroupId" ] }, "IpProtocol": "tcp", "FromPort": 7844, "ToPort": 7844, "CidrIp": "0.0.0.0/0", "Description": "Cloudflare Tunnel TCP transport" }
+    Resources.StagingHostCloudflaredUdpEgress.Properties == { "GroupId": { "Fn::GetAtt": [ "StagingHostSecurityGroup", "GroupId" ] }, "IpProtocol": "udp", "FromPort": 7844, "ToPort": 7844, "CidrIp": "0.0.0.0/0", "Description": "Cloudflare Tunnel QUIC transport" }
+}
+
+rule retained_state_and_trusted_delivery {
+    Resources.StagingDataVolume.DeletionPolicy == 'Retain'
+    Resources.StagingDataVolume.UpdateReplacePolicy == 'Retain'
+    Resources.AuthorityTunnelTokenSecret.DeletionPolicy == 'Retain'
+    Resources.AuthorityTunnelTokenSecret.UpdateReplacePolicy == 'Retain'
+    Resources.StagingHostSetupBundle.DeletionPolicy == 'Retain'
+    Resources.StagingHostSetupBundle.UpdateReplacePolicy == 'Retain'
+    Resources.StagingDataVolume.Properties.Encrypted == true
+    Resources.StagingDataVolume.Properties.VolumeType == 'gp3'
+    Resources.StagingHostSetupBundle.Properties.VersioningConfiguration.Status == 'Enabled'
+    Resources.StagingHostSetupBundle.Properties.PublicAccessBlockConfiguration == { "BlockPublicAcls": true, "BlockPublicPolicy": true, "IgnorePublicAcls": true, "RestrictPublicBuckets": true }
+    Resources.StagingHostSetupBundle.Properties.BucketEncryption.ServerSideEncryptionConfiguration[*].ServerSideEncryptionByDefault.SSEAlgorithm == 'AES256'
+    Resources.AuthorityTunnelTokenSecret.Properties.SecretString not exists
+    Resources.AuthorityTunnelTokenSecret.Properties.GenerateSecretString not exists
+    Resources.AuthorityTunnelTokenSecret.Properties.Name not exists
+}
+
+rule arm64_host_is_disposable_and_requires_imdsv2 {
+    Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.ImageId == { "Ref": "StagingAmiId" }
+    Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.InstanceType == { "Ref": "StagingInstanceType" }
+    Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.MetadataOptions == { "HttpTokens": "required", "HttpEndpoint": "enabled", "HttpPutResponseHopLimit": 2 }
+    Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.BlockDeviceMappings == [ { "DeviceName": "/dev/xvda", "Ebs": { "DeleteOnTermination": true, "Encrypted": true, "VolumeSize": 30, "VolumeType": "gp3" } } ]
+    Resources.StagingHost.Properties.InstanceInitiatedShutdownBehavior == 'terminate'
+}
+
+rule role_can_read_only_exact_bundle_and_own_secret {
+    Resources.StagingHostRole.Properties.ManagedPolicyArns == [ { "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore" } ]
+    Resources.StagingHostRole.Properties.Policies == [ {
+        "PolicyName": "read-exact-staging-host-setup-bundle",
+        "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "s3:GetObjectVersion",
+                    "Resource": { "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingHostSetupBundle}/${HostSetupObjectKey}" },
+                    "Condition": { "StringEquals": { "s3:VersionId": { "Ref": "HostSetupObjectVersion" } } }
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "secretsmanager:GetSecretValue",
+                    "Resource": { "Ref": "AuthorityTunnelTokenSecret" }
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "ecr:GetAuthorizationToken",
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [ "ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer" ],
+                    "Resource": { "Ref": "AuthorityEcrRepositoryArn" }
+                }
+            ]
+        }
+    } ]
+}
+
+rule readiness_waits_for_the_retained_volume {
+    Resources.StagingDataVolumeAttachment.DeletionPolicy not exists
+    Resources.StagingDataVolumeAttachment.UpdateReplacePolicy not exists
+    Resources.StagingDataVolumeAttachment.Properties == { "Device": "/dev/sdf", "InstanceId": { "Ref": "StagingHost" }, "VolumeId": { "Ref": "StagingDataVolume" } }
+    Resources.StagingReady.DependsOn == 'StagingDataVolumeAttachment'
+    Resources.StagingReady.Properties == { "Count": 1, "Handle": { "Ref": "StagingReadyHandle" }, "Timeout": "900" }
+}
+
+rule wait_condition_curl_uses_empty_content_type {
+    some Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.UserData.'Fn::Base64'.'Fn::Sub'[*] == /--header 'Content-Type:'/
+}
