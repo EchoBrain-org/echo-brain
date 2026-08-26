@@ -16,7 +16,6 @@
   "edge": {
     "accountId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "zoneId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "hostname": "authority-staging.example.invalid",
-    "tunnelName": "echo-authority-staging-example"
+    "hostname": "authority-staging.example.invalid"
   }
 }

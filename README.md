@@ -203,6 +203,9 @@ npm run authority:staging -- slot-init \
 The controller pins every local AWS and `asm-exec` subprocess to `echo-prod`
 and removes ambient static credential overrides. You do not need to export a
 profile, and an unrelated shell profile cannot redirect the staging operation.
+It derives the reserved Cloudflare tunnel name as `echo-authority-${slotId}`;
+the stable slot ID is limited to 48 characters and the private input does not
+accept an operator-selected tunnel name.
 
 Create the restricted Cloudflare management token once, with Tunnel Edit for
 the selected staging account and DNS Edit for the selected staging zone. Record

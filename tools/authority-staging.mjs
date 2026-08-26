@@ -30,7 +30,9 @@ const S3_KEY = /^[A-Za-z0-9][A-Za-z0-9._/-]{1,900}\.tar\.gz$/;
 const S3_VERSION = /^[A-Za-z0-9._/+=-]{8,1024}$/;
 const S3_BUCKET = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 const PARAMETER_VALUE = /^[\x20-\x7e]{1,2048}$/;
-const SLOT_ID = /^staging-[a-z0-9][a-z0-9-]{7,63}$/;
+// Cloudflare tunnel names are derived as `echo-authority-${slotId}` and are
+// limited to 63 characters, leaving 48 characters for the stable slot ID.
+const SLOT_ID = /^staging-[a-z0-9][a-z0-9-]{7,39}$/;
 const CHANGE_ACTION = /^(Add|Modify|Remove|Import|Dynamic)$/;
 const LOGICAL_ID = /^[A-Za-z][A-Za-z0-9]{0,254}$/;
 const RESOURCE_TYPE = /^AWS::[A-Za-z0-9:]+$/;
@@ -159,7 +161,7 @@ function validateEdge(value) {
   const raw = requiredObject(value, "edge_invalid");
   onlyKeys(
     raw,
-    new Set(["accountId", "zoneId", "hostname", "tunnelName"]),
+    new Set(["accountId", "zoneId", "hostname"]),
     "edge_property_not_allowed",
   );
   return Object.freeze({
@@ -173,11 +175,6 @@ function validateEdge(value) {
       /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
       "edge_hostname_invalid",
     ).toLowerCase(),
-    tunnelName: exactString(
-      raw.tunnelName,
-      /^[a-z0-9][a-z0-9-]{2,62}$/,
-      "edge_tunnel_name_invalid",
-    ),
     zoneId: exactString(raw.zoneId, /^[a-f0-9]{32}$/i, "edge_zone_invalid"),
   });
 }
@@ -555,6 +552,7 @@ async function executePlannedStack(input, plan, dependencies) {
     await executeChangeSet({
       changeSetId: plan.id,
       changeSetType: plan.changeSetType,
+      clientRequestToken: input.operationId,
       region: input.region,
       stackName: input.stack.name,
     });
@@ -1306,17 +1304,27 @@ export function createAwsCliAdapters() {
       async executeChangeSet({
         changeSetId,
         changeSetType,
+        clientRequestToken,
         region,
         stackName,
       }) {
-        await awsJson([
+        const request = [
           "cloudformation",
           "execute-change-set",
           "--region",
           region,
           "--change-set-name",
           changeSetId,
-        ]);
+          "--client-request-token",
+          clientRequestToken,
+        ];
+        try {
+          await awsJson(request);
+        } catch {
+          // The service accepts a client token precisely so an uncertain
+          // request can be retried without starting a second update.
+          await awsJson(request);
+        }
         try {
           await awsJson([
             "cloudformation",

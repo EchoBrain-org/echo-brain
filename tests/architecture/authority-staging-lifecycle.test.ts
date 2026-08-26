@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import {
   createAwsCliAdapters,
   runAuthorityStaging,
+  validateStagingLifecycleInput,
 } from "../../tools/authority-staging.mjs";
 
 const TOKEN = "cf-management-token-not-a-real-secret";
@@ -25,6 +26,7 @@ const SECRET_ARN =
 function withFakeAws() {
   const root = mkdtempSync(join(tmpdir(), "echo-authority-staging-aws-"));
   const aws = join(root, "aws");
+  const executeCount = join(root, "execute-count");
   const log = join(root, "calls.log");
   const stdin = join(root, "stdin.json");
   writeFileSync(
@@ -42,6 +44,15 @@ printf 'CONFIG_FILE_ENV=%s\\n' "\${AWS_CONFIG_FILE-unset}" >>"$FAKE_AWS_LOG"
 printf 'CREDENTIALS_FILE_ENV=%s\\n' "\${AWS_SHARED_CREDENTIALS_FILE-unset}" >>"$FAKE_AWS_LOG"
 printf 'TOKEN_ENV=%s\\nEND\\n' "\${ECHO_CLOUDFLARE_API_TOKEN-unset}" >>"$FAKE_AWS_LOG"
 case " $* " in
+  *" cloudformation execute-change-set "*)
+    count=0
+    if [ -f "$FAKE_AWS_EXECUTE_COUNT" ]; then count=$(cat "$FAKE_AWS_EXECUTE_COUNT"); fi
+    count=$((count + 1))
+    printf '%s\\n' "$count" >"$FAKE_AWS_EXECUTE_COUNT"
+    if [ "$count" -le "\${FAKE_AWS_EXECUTE_FAILURES:-0}" ]; then exit 75; fi
+    ;;
+esac
+case " $* " in
   *" secretsmanager put-secret-value "*) cat >"$FAKE_AWS_STDIN" ;;
   *) cat >/dev/null ;;
 esac
@@ -53,7 +64,7 @@ esac
     { mode: 0o700 },
   );
   chmodSync(aws, 0o700);
-  return { aws, log, root, stdin };
+  return { aws, executeCount, log, root, stdin };
 }
 
 function withFakeAsmExec() {
@@ -102,7 +113,6 @@ const INPUT = Object.freeze({
     accountId: "a".repeat(32),
     zoneId: "b".repeat(32),
     hostname: "staging.example.com",
-    tunnelName: "echo-staging-green",
   },
   hostSetup: {
     path: "/private/tmp/authority-staging-host-setup.tar.gz",
@@ -832,6 +842,27 @@ describe("Authority staging lifecycle", () => {
     ).rejects.toThrow("input_property_not_allowed");
   });
 
+  it("bounds the slot identifier used to derive the Cloudflare tunnel name", () => {
+    expect(() =>
+      validateStagingLifecycleInput({
+        ...INPUT,
+        slotId: `staging-${"a".repeat(40)}`,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateStagingLifecycleInput({
+        ...INPUT,
+        slotId: `staging-${"a".repeat(41)}`,
+      }),
+    ).toThrow("slot_id_invalid");
+    expect(() =>
+      validateStagingLifecycleInput({
+        ...INPUT,
+        edge: { ...INPUT.edge, tunnelName: "operator-selected-name" },
+      }),
+    ).toThrow("edge_property_not_allowed");
+  });
+
   it("uses only the committed template and keeps AWS secret access write-only", async () => {
     const fixture = dependencies();
     await expect(
@@ -926,6 +957,105 @@ describe("Authority staging lifecycle", () => {
       expect(call).toContain("TOKEN_KIND=dynamic");
       expect(call).not.toContain("cloudflare-management-abc");
     } finally {
+      rmSync(fake.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries an uncertain ExecuteChangeSet request with the same client token", async () => {
+    const fake = withFakeAws();
+    const previous = {
+      count: process.env.FAKE_AWS_EXECUTE_COUNT,
+      failures: process.env.FAKE_AWS_EXECUTE_FAILURES,
+      log: process.env.FAKE_AWS_LOG,
+      path: process.env.PATH,
+    };
+    try {
+      process.env.FAKE_AWS_EXECUTE_COUNT = fake.executeCount;
+      process.env.FAKE_AWS_EXECUTE_FAILURES = "1";
+      process.env.FAKE_AWS_LOG = fake.log;
+      process.env.PATH = `${fake.root}:${previous.path ?? ""}`;
+      const adapters = createAwsCliAdapters();
+      await adapters.cloudFormation!.executeChangeSet({
+        changeSetId: "change-set-execute-retry",
+        changeSetType: "UPDATE",
+        clientRequestToken: INPUT.operationId,
+        region: INPUT.region,
+        stackName: INPUT.stack.name,
+      });
+      const calls = readFileSync(fake.log, "utf8");
+      expect(readFileSync(fake.executeCount, "utf8")).toBe("2\n");
+      expect(
+        calls.match(
+          new RegExp(
+            `ARG=--client-request-token\\nARG=${INPUT.operationId}`,
+            "g",
+          ),
+        ),
+      ).toHaveLength(2);
+      expect(calls).toContain("ARG=wait\nARG=stack-update-complete");
+    } finally {
+      if (previous.count === undefined)
+        delete process.env.FAKE_AWS_EXECUTE_COUNT;
+      else process.env.FAKE_AWS_EXECUTE_COUNT = previous.count;
+      if (previous.failures === undefined)
+        delete process.env.FAKE_AWS_EXECUTE_FAILURES;
+      else process.env.FAKE_AWS_EXECUTE_FAILURES = previous.failures;
+      if (previous.log === undefined) delete process.env.FAKE_AWS_LOG;
+      else process.env.FAKE_AWS_LOG = previous.log;
+      if (previous.path === undefined) delete process.env.PATH;
+      else process.env.PATH = previous.path;
+      rmSync(fake.root, { force: true, recursive: true });
+    }
+  });
+
+  it("leaves a quiesced host stopped when both idempotent execute attempts are uncertain", async () => {
+    const fake = withFakeAws();
+    const fixture = dependencies({ initialStack: stack(true) });
+    const previous = {
+      count: process.env.FAKE_AWS_EXECUTE_COUNT,
+      failures: process.env.FAKE_AWS_EXECUTE_FAILURES,
+      log: process.env.FAKE_AWS_LOG,
+      path: process.env.PATH,
+    };
+    try {
+      process.env.FAKE_AWS_EXECUTE_COUNT = fake.executeCount;
+      process.env.FAKE_AWS_EXECUTE_FAILURES = "2";
+      process.env.FAKE_AWS_LOG = fake.log;
+      process.env.PATH = `${fake.root}:${previous.path ?? ""}`;
+      const adapters = createAwsCliAdapters();
+      await expect(
+        runAuthorityStaging("down", INPUT, {
+          ...fixture.dependencies,
+          cloudFormation: {
+            ...fixture.dependencies.cloudFormation,
+            executeChangeSet: adapters.cloudFormation!.executeChangeSet,
+          },
+          execute: true,
+        }),
+      ).rejects.toThrow("change_set_execute_failed_host_recovery_failed");
+      const calls = readFileSync(fake.log, "utf8");
+      expect(readFileSync(fake.executeCount, "utf8")).toBe("2\n");
+      expect(
+        calls.match(
+          new RegExp(
+            `ARG=--client-request-token\\nARG=${INPUT.operationId}`,
+            "g",
+          ),
+        ),
+      ).toHaveLength(2);
+      expect(fixture.events).toContain("ssm-quiesce-host");
+      expect(fixture.events).not.toContain("ssm-recover-host");
+    } finally {
+      if (previous.count === undefined)
+        delete process.env.FAKE_AWS_EXECUTE_COUNT;
+      else process.env.FAKE_AWS_EXECUTE_COUNT = previous.count;
+      if (previous.failures === undefined)
+        delete process.env.FAKE_AWS_EXECUTE_FAILURES;
+      else process.env.FAKE_AWS_EXECUTE_FAILURES = previous.failures;
+      if (previous.log === undefined) delete process.env.FAKE_AWS_LOG;
+      else process.env.FAKE_AWS_LOG = previous.log;
+      if (previous.path === undefined) delete process.env.PATH;
+      else process.env.PATH = previous.path;
       rmSync(fake.root, { force: true, recursive: true });
     }
   });

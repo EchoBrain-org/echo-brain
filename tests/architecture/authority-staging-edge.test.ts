@@ -4,13 +4,13 @@ import {
   installStagingEdgeToken,
   reconcileStagingEdge,
   stagingEdgeStatus,
+  validateStagingEdgeInput,
 } from "../../tools/authority-staging-edge.mjs";
 
 const INPUT = Object.freeze({
   accountId: "a".repeat(32),
   zoneId: "b".repeat(32),
   hostname: "staging.example.com",
-  tunnelName: "echo-staging-green",
   secretArn:
     "arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/tunnel-abc",
   slotId: "staging-green-slot",
@@ -19,6 +19,7 @@ const INPUT = Object.freeze({
 });
 const TUNNEL_ID = "11111111-2222-3333-4444-555555555555";
 const CONNECTOR_TOKEN = "connector-token-not-a-real-secret";
+const TUNNEL_NAME = `echo-authority-${INPUT.slotId}`;
 
 function response(result: unknown, ok = true) {
   return { ok, json: async () => ({ success: ok, result }) };
@@ -48,7 +49,9 @@ function edgeFetch(
   const events: string[] = [];
   const tunnel = options.tunnel ?? [];
   const dns = options.dns ?? [];
-  const configuration = options.configuration ?? expectedConfiguration();
+  const configuration = Object.hasOwn(options, "configuration")
+    ? options.configuration
+    : expectedConfiguration();
   const fetchImpl = async (url: string, init: Record<string, unknown> = {}) => {
     calls.push({ url, init });
     const method = (init.method as string | undefined) ?? "GET";
@@ -59,7 +62,7 @@ function edgeFetch(
     if (url.endsWith("/cfd_tunnel") && init.method === "POST")
       return response({
         id: TUNNEL_ID,
-        name: INPUT.tunnelName,
+        name: TUNNEL_NAME,
         remote_config: true,
       });
     if (
@@ -88,7 +91,7 @@ function edgeFetch(
 }
 
 function configuredTunnel() {
-  return [{ id: TUNNEL_ID, name: INPUT.tunnelName, config_src: "cloudflare" }];
+  return [{ id: TUNNEL_ID, name: TUNNEL_NAME, config_src: "cloudflare" }];
 }
 
 function configuredDns() {
@@ -104,7 +107,74 @@ function configuredDns() {
   ];
 }
 
+function persistentRetryFetch(
+  firstPut: "applied-response-lost" | "not-applied",
+) {
+  const calls: Array<{ url: string; init: Record<string, unknown> }> = [];
+  let configuration: unknown;
+  let exists = false;
+  let firstPutPending = true;
+  const fetchImpl = async (url: string, init: Record<string, unknown> = {}) => {
+    calls.push({ url, init });
+    if (url.includes("/cfd_tunnel?") && init.method === undefined)
+      return response(
+        exists
+          ? [{ id: TUNNEL_ID, name: TUNNEL_NAME, config_src: "cloudflare" }]
+          : [],
+      );
+    if (url.endsWith("/cfd_tunnel") && init.method === "POST") {
+      exists = true;
+      return response({
+        id: TUNNEL_ID,
+        name: TUNNEL_NAME,
+        remote_config: true,
+      });
+    }
+    if (
+      url.endsWith(`/cfd_tunnel/${TUNNEL_ID}/configurations`) &&
+      init.method === "PUT"
+    ) {
+      if (firstPutPending) {
+        firstPutPending = false;
+        if (firstPut === "applied-response-lost")
+          configuration = expectedConfiguration();
+        return response({}, false);
+      }
+      configuration = expectedConfiguration();
+      return response({});
+    }
+    if (url.endsWith(`/cfd_tunnel/${TUNNEL_ID}/configurations`))
+      return response(
+        configuration === undefined ? {} : { config: configuration },
+      );
+    if (url.includes("/dns_records?") && init.method === undefined)
+      return response([]);
+    throw new Error(`unexpected request ${url}`);
+  };
+  return { calls, fetchImpl };
+}
+
 describe("Authority staging Cloudflare edge", () => {
+  it("derives one tunnel name from a bounded slot ID and rejects direct names", () => {
+    const maximumSlotId = `staging-${"a".repeat(40)}`;
+    expect(maximumSlotId).toHaveLength(48);
+    expect(
+      validateStagingEdgeInput({ ...INPUT, slotId: maximumSlotId }).tunnelName,
+    ).toBe(`echo-authority-${maximumSlotId}`);
+    expect(
+      validateStagingEdgeInput({ ...INPUT, slotId: maximumSlotId }).tunnelName,
+    ).toHaveLength(63);
+    expect(() =>
+      validateStagingEdgeInput({
+        ...INPUT,
+        slotId: `staging-${"a".repeat(41)}`,
+      }),
+    ).toThrow("slot_id_invalid");
+    expect(() =>
+      validateStagingEdgeInput({ ...INPUT, tunnelName: "operator-chosen" }),
+    ).toThrow("input_property_not_allowed");
+  });
+
   it("prepares a missing tunnel without publishing a DNS route", async () => {
     const { calls, fetchImpl } = edgeFetch();
     const result = await reconcileStagingEdge(INPUT, { fetchImpl });
@@ -120,17 +190,15 @@ describe("Authority staging Cloudflare edge", () => {
     expect(JSON.stringify(result)).not.toContain(INPUT.apiToken);
     expect(JSON.stringify(result)).not.toContain(CONNECTOR_TOKEN);
     expect(calls).toHaveLength(4);
-    expect(new URL(calls[0]!.url).searchParams.get("name")).toBe(
-      INPUT.tunnelName,
-    );
+    expect(new URL(calls[0]!.url).searchParams.get("name")).toBe(TUNNEL_NAME);
     expect(calls[1]!.init.body).toBe(
-      JSON.stringify({ name: INPUT.tunnelName, config_src: "cloudflare" }),
+      JSON.stringify({ name: TUNNEL_NAME, config_src: "cloudflare" }),
     );
-    expect(calls[2]!.init.body).toBe(
-      JSON.stringify({ config: expectedConfiguration() }),
-    );
-    expect(new URL(calls[3]!.url).pathname).toBe(
+    expect(new URL(calls[2]!.url).pathname).toBe(
       `/client/v4/zones/${INPUT.zoneId}/dns_records`,
+    );
+    expect(calls[3]!.init.body).toBe(
+      JSON.stringify({ config: expectedConfiguration() }),
     );
     expect(
       calls.some(
@@ -156,12 +224,113 @@ describe("Authority staging Cloudflare edge", () => {
     expect(calls.some((call) => call.init.method === "POST")).toBe(false);
   });
 
+  it("retries a persisted tunnel after its first configuration request does not apply", async () => {
+    const persistent = persistentRetryFetch("not-applied");
+    await expect(
+      reconcileStagingEdge(INPUT, { fetchImpl: persistent.fetchImpl }),
+    ).rejects.toThrow("cloudflare_tunnel_configure_failed");
+    await expect(
+      reconcileStagingEdge(INPUT, { fetchImpl: persistent.fetchImpl }),
+    ).resolves.toMatchObject({
+      state: "incomplete",
+      tunnel_created: false,
+      tunnel_configured: true,
+    });
+    expect(
+      persistent.calls.filter(
+        (call) =>
+          call.url.endsWith("/cfd_tunnel") && call.init.method === "POST",
+      ),
+    ).toHaveLength(1);
+    expect(
+      persistent.calls.filter(
+        (call) =>
+          call.url.endsWith(`/cfd_tunnel/${TUNNEL_ID}/configurations`) &&
+          call.init.method === "PUT",
+      ),
+    ).toHaveLength(2);
+    expect(persistent.calls.some((call) => call.init.method === "DELETE")).toBe(
+      false,
+    );
+  });
+
+  it("accepts a persisted configuration when Cloudflare applied the first PUT but its response was lost", async () => {
+    const persistent = persistentRetryFetch("applied-response-lost");
+    await expect(
+      reconcileStagingEdge(INPUT, { fetchImpl: persistent.fetchImpl }),
+    ).rejects.toThrow("cloudflare_tunnel_configure_failed");
+    await expect(
+      reconcileStagingEdge(INPUT, { fetchImpl: persistent.fetchImpl }),
+    ).resolves.toMatchObject({
+      state: "incomplete",
+      tunnel_created: false,
+      tunnel_configured: true,
+    });
+    expect(
+      persistent.calls.filter(
+        (call) =>
+          call.url.endsWith(`/cfd_tunnel/${TUNNEL_ID}/configurations`) &&
+          call.init.method === "PUT",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("configures only precisely empty existing configurations and reports them incomplete in status", async () => {
+    for (const configuration of [{}, { ingress: [] }]) {
+      const { calls, fetchImpl } = edgeFetch({
+        tunnel: configuredTunnel(),
+        configuration,
+      });
+      await expect(
+        reconcileStagingEdge(INPUT, { fetchImpl }),
+      ).resolves.toMatchObject({
+        state: "incomplete",
+        tunnel_created: false,
+      });
+      expect(calls.some((call) => call.init.method === "PUT")).toBe(true);
+    }
+
+    const absentConfig = edgeFetch({ tunnel: configuredTunnel() });
+    const statusFetch = async (
+      ...args: Parameters<typeof absentConfig.fetchImpl>
+    ) => {
+      const responseValue = await absentConfig.fetchImpl(...args);
+      if (args[0].endsWith(`/cfd_tunnel/${TUNNEL_ID}/configurations`))
+        return response({});
+      return responseValue;
+    };
+    await expect(
+      stagingEdgeStatus(INPUT, { fetchImpl: statusFetch }),
+    ).resolves.toMatchObject({ state: "incomplete", ready: false });
+    expect(absentConfig.calls.some((call) => call.init.method === "PUT")).toBe(
+      false,
+    );
+
+    for (const configuration of [
+      null,
+      { ingress: null },
+      { originRequest: {} },
+      { ingress: [], originRequest: {} },
+    ]) {
+      const drift = edgeFetch({
+        tunnel: configuredTunnel(),
+        configuration,
+      });
+      await expect(
+        reconcileStagingEdge(INPUT, { fetchImpl: drift.fetchImpl }),
+      ).rejects.toThrow("cloudflare_tunnel_configuration_conflict");
+      expect(drift.calls.some((call) => call.init.method === "PUT")).toBe(
+        false,
+      );
+    }
+  });
+
   it("accepts Cloudflare's current remote_config response and rejects contradictory management mode", async () => {
     const currentResponse = edgeFetch({
       tunnel: [
         {
           id: TUNNEL_ID,
-          name: INPUT.tunnelName,
+          name: TUNNEL_NAME,
           remote_config: true,
         },
       ],
@@ -175,7 +344,7 @@ describe("Authority staging Cloudflare edge", () => {
       tunnel: [
         {
           id: TUNNEL_ID,
-          name: INPUT.tunnelName,
+          name: TUNNEL_NAME,
           config_src: "cloudflare",
           remote_config: false,
         },
@@ -303,8 +472,8 @@ describe("Authority staging Cloudflare edge", () => {
     expect(events).toEqual([
       `GET /client/v4/accounts/${INPUT.accountId}/cfd_tunnel`,
       `POST /client/v4/accounts/${INPUT.accountId}/cfd_tunnel`,
-      `PUT /client/v4/accounts/${INPUT.accountId}/cfd_tunnel/${TUNNEL_ID}/configurations`,
       `GET /client/v4/zones/${INPUT.zoneId}/dns_records`,
+      `PUT /client/v4/accounts/${INPUT.accountId}/cfd_tunnel/${TUNNEL_ID}/configurations`,
       `GET /client/v4/accounts/${INPUT.accountId}/cfd_tunnel/${TUNNEL_ID}/token`,
       "secret write",
       `POST /client/v4/zones/${INPUT.zoneId}/dns_records`,

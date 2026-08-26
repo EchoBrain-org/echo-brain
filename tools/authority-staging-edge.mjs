@@ -17,6 +17,7 @@ const DNS_NAME =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const TUNNEL_NAME = /^[a-z0-9][a-z0-9-]{2,62}$/;
 const OPERATION_ID = /^staging-[a-z0-9][a-z0-9-]{7,63}$/;
+const SLOT_ID = /^staging-[a-z0-9][a-z0-9-]{7,39}$/;
 const SECRET_ARN =
   /^arn:(aws|aws-us-gov|aws-cn):secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$/;
 const TUNNEL_ID =
@@ -56,6 +57,17 @@ export function validateStagingEdgeInput(input) {
   if (input === null || typeof input !== "object" || Array.isArray(input))
     refuse("input_invalid");
   const value = input;
+  const allowedKeys = new Set([
+    "accountId",
+    "apiToken",
+    "hostname",
+    "operationId",
+    "secretArn",
+    "slotId",
+    "zoneId",
+  ]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key)))
+    refuse("input_property_not_allowed");
   const accountId = exactString(
     value.accountId,
     ACCOUNT_ID,
@@ -71,17 +83,17 @@ export function validateStagingEdgeInput(input) {
     DNS_NAME,
     "hostname_invalid",
   ).toLowerCase();
-  const tunnelName = exactString(
-    value.tunnelName,
-    TUNNEL_NAME,
-    "tunnel_name_invalid",
-  );
   const operationId = exactString(
     value.operationId,
     OPERATION_ID,
     "operation_id_invalid",
   );
-  const slotId = exactString(value.slotId, OPERATION_ID, "slot_id_invalid");
+  const slotId = exactString(value.slotId, SLOT_ID, "slot_id_invalid");
+  const tunnelName = exactString(
+    `echo-authority-${slotId}`,
+    TUNNEL_NAME,
+    "tunnel_name_invalid",
+  );
   const secretArn = exactString(
     value.secretArn,
     SECRET_ARN,
@@ -284,14 +296,6 @@ async function configureTunnel(fetchImpl, input, tunnel) {
   );
 }
 
-async function ensureExactTunnelConfiguration(fetchImpl, input, tunnel) {
-  if (tunnel.created) {
-    await configureTunnel(fetchImpl, input, tunnel);
-    return;
-  }
-  await readTunnelConfiguration(fetchImpl, input, tunnel);
-}
-
 function dnsFromList(result, input, tunnel) {
   if (!Array.isArray(result)) refuse("cloudflare_dns_list_response_invalid");
   const matches = result.filter(
@@ -363,6 +367,17 @@ async function ensureDnsRecord(fetchImpl, input, tunnel, create) {
   return true;
 }
 
+function isEmptyTunnelConfiguration(result) {
+  if (!Object.hasOwn(result, "config")) return true;
+  const config = result.config;
+  return (
+    hasExactlyKeys(config, []) ||
+    (hasExactlyKeys(config, ["ingress"]) &&
+      Array.isArray(config.ingress) &&
+      config.ingress.length === 0)
+  );
+}
+
 async function readTunnelConfiguration(fetchImpl, input, tunnel) {
   const result = await cloudflareRequest(
     fetchImpl,
@@ -372,15 +387,22 @@ async function readTunnelConfiguration(fetchImpl, input, tunnel) {
       `/accounts/${input.accountId}/cfd_tunnel/${tunnel.id}/configurations`,
     ),
   );
-  if (
-    !result ||
-    typeof result !== "object" ||
-    !result.config ||
-    typeof result.config !== "object" ||
-    !hasExpectedIngress(result.config.ingress, input.hostname)
-  ) {
+  if (!result || typeof result !== "object")
     refuse("cloudflare_tunnel_configuration_conflict");
+  if (
+    result.config &&
+    typeof result.config === "object" &&
+    hasExpectedIngress(result.config.ingress, input.hostname)
+  ) {
+    return "exact";
   }
+  if (isEmptyTunnelConfiguration(result)) return "empty";
+  refuse("cloudflare_tunnel_configuration_conflict");
+}
+
+async function tunnelConfigurationState(fetchImpl, input, tunnel) {
+  if (tunnel.created) return "empty";
+  return readTunnelConfiguration(fetchImpl, input, tunnel);
 }
 
 async function fetchConnectorToken(fetchImpl, input, tunnel) {
@@ -407,8 +429,14 @@ export async function reconcileStagingEdge(
   const input = validateStagingEdgeInput(rawInput);
   if (typeof fetchImpl !== "function") refuse("fetch_unavailable");
   const tunnel = await ensureTunnel(fetchImpl, input, true);
-  await ensureExactTunnelConfiguration(fetchImpl, input, tunnel);
+  const configuration = await tunnelConfigurationState(
+    fetchImpl,
+    input,
+    tunnel,
+  );
   const dns = await ensureDnsRecord(fetchImpl, input, tunnel, false);
+  if (configuration === "empty")
+    await configureTunnel(fetchImpl, input, tunnel);
   return receipt(
     input,
     "reconcile",
@@ -432,7 +460,8 @@ export async function stagingEdgeStatus(
   const tunnel = await ensureTunnel(fetchImpl, input, false);
   if (tunnel === undefined)
     return receipt(input, "status", "absent", { ready: false });
-  await readTunnelConfiguration(fetchImpl, input, tunnel);
+  if ((await readTunnelConfiguration(fetchImpl, input, tunnel)) === "empty")
+    return receipt(input, "status", "incomplete", { ready: false });
   const dns = await ensureDnsRecord(fetchImpl, input, tunnel, false);
   if (dns === undefined)
     return receipt(input, "status", "incomplete", { ready: false });
@@ -453,8 +482,14 @@ export async function installStagingEdgeToken(
   if (typeof fetchImpl !== "function") refuse("fetch_unavailable");
   if (typeof putSecretValue !== "function") refuse("secret_writer_required");
   const tunnel = await ensureTunnel(fetchImpl, input, true);
-  await ensureExactTunnelConfiguration(fetchImpl, input, tunnel);
+  const configuration = await tunnelConfigurationState(
+    fetchImpl,
+    input,
+    tunnel,
+  );
   const existingDns = await findDnsRecord(fetchImpl, input, tunnel);
+  if (configuration === "empty")
+    await configureTunnel(fetchImpl, input, tunnel);
   const token = await fetchConnectorToken(fetchImpl, input, tunnel);
   try {
     await putSecretValue({

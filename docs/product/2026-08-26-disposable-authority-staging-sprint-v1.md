@@ -80,6 +80,17 @@ focused tests:
    secret container without printing it, returning it, or placing it in a
    release record, plan, or state file.
 
+The controller derives the tunnel name as `echo-authority-${slotId}`; the slot
+ID is limited to 48 characters and operators cannot supply an arbitrary tunnel
+name. Within this one-slot, ECHO-controlled, single-operator V1, that reserved
+name is the provider-level retry identity. A later command may finish the exact
+named tunnel only when its remote
+configuration is provably empty. It accepts the exact intended ingress and
+refuses every other configuration, duplicate name, or conflicting DNS record.
+This naming convention is not a cryptographic ownership proof and must not be
+reused as the multi-operator or customer-account design. Manual creation or
+mutation inside the reserved namespace is unsupported.
+
 Cloudflare documents the API lifecycle for remotely managed tunnels, ingress,
 and DNS records at [Create a tunnel by API](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel-api/)
 and documents the same tunnel, configuration, and token methods in its
@@ -112,7 +123,7 @@ remain first-live human steps; none is implied by slot materialization.
 
 | Command     | Authority                                                                    | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `slot-init` | Reviewed Cloudflare and AWS authority after the one-time API-token bootstrap | Creates the persistent AWS slot with the host disabled, creates or verifies the persistent tunnel, ingress and CNAME, and writes the connector token directly into the stack-created empty secret container. It is idempotent and refuses a hostname or tunnel owned by another staging slot.                                                                                                                                                                                                                 |
+| `slot-init` | Reviewed Cloudflare and AWS authority after the one-time API-token bootstrap | Creates the persistent AWS slot with the host disabled, creates or verifies the reserved tunnel, ingress and CNAME, and writes the connector token directly into the stack-created empty secret container. Exact retry converges after an interrupted tunnel create or configuration write; duplicate names, configured ingress drift, and conflicting DNS fail closed.                                                                                                                                       |
 | `up`        | ECHO AWS deployment authority only; no Cloudflare dashboard action           | Materializes the retained slot on a disposable host: uploads and pins the immutable machine-setup bundle, installs the fixed-ID machine configuration, verifies the retained `clean-data` mount, and connects `cloudflared` using the existing connector token resolved only at runtime. It establishes **machine-and-connector readiness** only. It does not deploy observability, resume onboarding, start an accepted release, or prove public HTTPS or the Authority descriptor.                          |
 | `down`      | ECHO AWS deployment authority only; no Cloudflare dashboard action           | Quiesces the application, verifies the exact data mount is unmounted, then updates the persistent slot stack with the host disabled. It removes only EC2, its attachment, and root material, leaving the persistent tunnel, hostname, secret container, retained data volume, and evidence required to recreate the host. If CloudFormation rolls the update back, it re-reads the stack and attempts recovery only against the current proved host; otherwise it emits a distinct recovery-required failure. |
 | `status`    | Read-only AWS and Cloudflare authority                                       | Reports absent, planned, failed-create, unprotected, update-rolled-back, incomplete, or ready state. Failed-create, unprotected, and update-rolled-back states do not call Cloudflare and name the exact lifecycle recovery action. A healthy stack checks the exact tunnel, ingress, and DNS record without changing them.                                                                                                                                                                                   |
@@ -177,11 +188,12 @@ measure descriptor readiness using the retained staging state.
 
 ### Phase 1: fixed-edge control plane
 
-Build and test the Node edge command. It accepts only the staging slug,
+Build and test the Node edge command. It accepts only the stable slot ID,
 hostname, Cloudflare account/zone identifiers, and references to credentials
-in the controlled operator environment. It records only non-secret tunnel and
-DNS identity facts in its receipt. It must make repeated `slot-init` safe and
-refuse an unexpected CNAME target or remote ingress.
+in the controlled operator environment. The tunnel name is derived from the
+slot ID. The command records only non-secret tunnel and DNS identity facts in
+its receipt. It must make repeated `slot-init` safe and refuse an unexpected
+CNAME target or remote ingress.
 
 Controlled slot retirement, including an `edge-destroy` operation, is deferred
 from this sprint. It remains important and must be reviewed before it exists:

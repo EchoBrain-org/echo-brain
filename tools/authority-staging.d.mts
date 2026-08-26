@@ -16,7 +16,6 @@ export type StagingLifecycleInput = Readonly<{
     accountId: string;
     zoneId: string;
     hostname: string;
-    tunnelName: string;
   }>;
   hostSetup?: Readonly<{ path: string; key: string; sha256: string }>;
 }>;
@@ -78,6 +77,7 @@ export type CloudFormationAdapter = Readonly<{
       stackName: string;
       changeSetId: string;
       changeSetType: "CREATE" | "UPDATE";
+      clientRequestToken: string;
     }>,
   ): Promise<void>;
   ensureTerminationProtection(

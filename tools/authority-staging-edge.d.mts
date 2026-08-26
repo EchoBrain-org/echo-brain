@@ -2,12 +2,14 @@ export type StagingEdgeInput = Readonly<{
   accountId: string;
   zoneId: string;
   hostname: string;
-  tunnelName: string;
   secretArn: string;
   slotId: string;
   operationId: string;
   apiToken: string;
 }>;
+
+export type ValidatedStagingEdgeInput = StagingEdgeInput &
+  Readonly<{ tunnelName: string }>;
 
 export type StagingEdgeReceipt = Readonly<{
   schema_version: 1;
@@ -36,7 +38,9 @@ export type PutSecretValue = (
   }>,
 ) => Promise<void>;
 
-export function validateStagingEdgeInput(input: unknown): StagingEdgeInput;
+export function validateStagingEdgeInput(
+  input: unknown,
+): ValidatedStagingEdgeInput;
 export function reconcileStagingEdge(
   input: StagingEdgeInput,
   dependencies?: Readonly<{ fetchImpl?: FetchLike }>,
