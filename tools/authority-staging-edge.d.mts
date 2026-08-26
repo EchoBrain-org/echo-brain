@@ -1,0 +1,54 @@
+export type StagingEdgeInput = Readonly<{
+  accountId: string;
+  zoneId: string;
+  hostname: string;
+  tunnelName: string;
+  secretArn: string;
+  slotId: string;
+  operationId: string;
+  apiToken: string;
+}>;
+
+export type StagingEdgeReceipt = Readonly<{
+  schema_version: 1;
+  kind: "echo-authority-staging-edge-v1";
+  action: "reconcile" | "status" | "install-token";
+  state: "ready" | "absent" | "incomplete";
+  hostname: string;
+  tunnel_name: string;
+  operation_id: string;
+  readonly [field: string]: string | number | boolean;
+}>;
+
+export type FetchLike = (
+  input: string,
+  init?: Readonly<Record<string, unknown>>,
+) => Promise<{
+  readonly ok: boolean;
+  json(): Promise<unknown>;
+}>;
+
+export type PutSecretValue = (
+  input: Readonly<{
+    clientRequestToken: string;
+    secretArn: string;
+    secretString: string;
+  }>,
+) => Promise<void>;
+
+export function validateStagingEdgeInput(input: unknown): StagingEdgeInput;
+export function reconcileStagingEdge(
+  input: StagingEdgeInput,
+  dependencies?: Readonly<{ fetchImpl?: FetchLike }>,
+): Promise<StagingEdgeReceipt>;
+export function stagingEdgeStatus(
+  input: StagingEdgeInput,
+  dependencies?: Readonly<{ fetchImpl?: FetchLike }>,
+): Promise<StagingEdgeReceipt>;
+export function installStagingEdgeToken(
+  input: StagingEdgeInput,
+  dependencies?: Readonly<{
+    fetchImpl?: FetchLike;
+    putSecretValue?: PutSecretValue;
+  }>,
+): Promise<StagingEdgeReceipt>;

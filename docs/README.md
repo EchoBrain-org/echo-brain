@@ -15,11 +15,13 @@ failures, operations, and proof for exact runs.
   [server-core lean-down plan v4](product/2026-08-20-server-core-migration-lean-down-plan-v4.md).
   V2, v3, and existing qualification reports remain historical context, not
   the current deletion sequence.
-- Running the active sprint: use the accepted sequencing plan in
-  [operational confidence sprint V1](product/2026-08-25-operational-confidence-sprint-v1.md).
-  Its implementation is in progress: ADR-0008 and ADR-0009 are accepted and
-  scheduled backup protection is active, while the qualifying recovery
-  rehearsal remains untested and sprint exit has not been claimed. The earlier
+- Running the active sprint: use
+  [disposable Authority staging sprint V1](product/2026-08-26-disposable-authority-staging-sprint-v1.md).
+  Its implementation is in progress; no staging slot, live qualification, or
+  timing result has been claimed. The preceding
+  [operational confidence sprint V1](product/2026-08-25-operational-confidence-sprint-v1.md)
+  remains the evidence boundary for scheduled backup and observability
+  rehearsals. The earlier
   [organization onboarding and employee rollout V1](product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md)
   remains historical product-scope context while its issue lane is paused.
 - Closing its first gate: review the

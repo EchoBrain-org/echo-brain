@@ -1,0 +1,573 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Persistent ECHO-hosted staging slot for one disposable ARM64 Authority host. The slot retains its dedicated encrypted data volume, empty tunnel-secret container, and versioned bootstrap-artifact bucket while HostEnabled controls only the EC2 host lifecycle. Bootstrap accepts only one exact S3 object version and SHA-256; no secret value is present in this template.",
+  "Parameters": {
+    "OrgSlug": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+      "ConstraintDescription": "must be a lowercase organization slug from 1 through 63 characters"
+    },
+    "AvailabilityZone": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z]{2}(?:-[a-z0-9]+)+-[1-9][0-9]*[a-z]$",
+      "ConstraintDescription": "must be the single Availability Zone for this staging slot"
+    },
+    "VpcCidr": {
+      "Type": "String",
+      "Default": "10.238.0.0/16",
+      "AllowedPattern": "^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}/(?:[0-9]|[12][0-9]|3[0-2])$",
+      "ConstraintDescription": "must be the dedicated staging VPC IPv4 CIDR"
+    },
+    "PublicSubnetCidr": {
+      "Type": "String",
+      "Default": "10.238.1.0/24",
+      "AllowedPattern": "^[0-9]{1,3}(?:\\.[0-9]{1,3}){3}/(?:[0-9]|[12][0-9]|3[0-2])$",
+      "ConstraintDescription": "must be a public-subnet IPv4 CIDR within VpcCidr"
+    },
+    "HostEnabled": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": ["true", "false"],
+      "ConstraintDescription": "must be true only after an exact bootstrap artifact is uploaded"
+    },
+    "InitializeBlankDataVolume": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": ["true", "false"],
+      "ConstraintDescription": "must be true only for the first bootstrap of a verified blank staging data volume"
+    },
+    "StagingAmiId": {
+      "Type": "AWS::EC2::Image::Id",
+      "ConstraintDescription": "must be a reviewed ARM64 Ubuntu base AMI with CloudFormation helpers and the SSM Agent"
+    },
+    "StagingInstanceType": {
+      "Type": "String",
+      "Default": "t4g.small",
+      "AllowedValues": ["t4g.nano", "t4g.small", "t4g.medium"],
+      "ConstraintDescription": "must be an ARM64 Graviton instance type"
+    },
+    "DataVolumeSizeGiB": {
+      "Type": "Number",
+      "Default": 30,
+      "MinValue": 20,
+      "MaxValue": 1024,
+      "ConstraintDescription": "must provision from 20 through 1024 GiB of encrypted staging state"
+    },
+    "AuthorityEcrRepositoryArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:(aws|aws-us-gov|aws-cn):ecr:[a-z0-9-]+:[0-9]{12}:repository/[A-Za-z0-9._/-]+$",
+      "ConstraintDescription": "must be the exact ECR repository ARN from which this Authority host may pull images"
+    },
+    "HostSetupObjectKey": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^[A-Za-z0-9][A-Za-z0-9._/-]{1,900}\\.tar\\.gz$",
+      "ConstraintDescription": "must be empty while HostEnabled is false or a safe .tar.gz artifact key"
+    },
+    "HostSetupObjectVersion": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^[A-Za-z0-9._/+=-]{8,1024}$",
+      "ConstraintDescription": "must be empty while HostEnabled is false or a non-null S3 object version ID"
+    },
+    "HostSetupSha256": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^[0-9a-f]{64}$",
+      "ConstraintDescription": "must be empty while HostEnabled is false or the exact lowercase SHA-256 of the setup artifact"
+    }
+  },
+  "Conditions": {
+    "HostEnabledCondition": {
+      "Fn::Equals": [{ "Ref": "HostEnabled" }, "true"]
+    },
+    "InitializeBlankDataVolumeCondition": {
+      "Fn::Equals": [{ "Ref": "InitializeBlankDataVolume" }, "true"]
+    }
+  },
+  "Rules": {
+    "BlankInitializationRequiresHostEnabled": {
+      "RuleCondition": {
+        "Fn::Equals": [{ "Ref": "InitializeBlankDataVolume" }, "true"]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [{ "Ref": "HostEnabled" }, "true"]
+          },
+          "AssertDescription": "InitializeBlankDataVolume may be true only on an explicitly reviewed host-creation change set"
+        }
+      ]
+    },
+    "BootstrapArtifactRequiredWhenHostEnabled": {
+      "RuleCondition": {
+        "Fn::Equals": [{ "Ref": "HostEnabled" }, "true"]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [{ "Fn::Equals": [{ "Ref": "HostSetupObjectKey" }, ""] }]
+          },
+          "AssertDescription": "HostSetupObjectKey is required when HostEnabled is true"
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              { "Fn::Equals": [{ "Ref": "HostSetupObjectVersion" }, ""] }
+            ]
+          },
+          "AssertDescription": "HostSetupObjectVersion is required when HostEnabled is true"
+        },
+        {
+          "Assert": {
+            "Fn::Not": [{ "Fn::Equals": [{ "Ref": "HostSetupSha256" }, ""] }]
+          },
+          "AssertDescription": "HostSetupSha256 is required when HostEnabled is true"
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "StagingVpc": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": { "Ref": "VpcCidr" },
+        "EnableDnsHostnames": true,
+        "EnableDnsSupport": true,
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-staging-slot" }
+        ]
+      }
+    },
+    "StagingInternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-staging-slot" }
+        ]
+      }
+    },
+    "StagingInternetGatewayAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "InternetGatewayId": { "Ref": "StagingInternetGateway" },
+        "VpcId": { "Ref": "StagingVpc" }
+      }
+    },
+    "StagingPublicSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "AvailabilityZone": { "Ref": "AvailabilityZone" },
+        "CidrBlock": { "Ref": "PublicSubnetCidr" },
+        "MapPublicIpOnLaunch": true,
+        "VpcId": { "Ref": "StagingVpc" },
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-staging-slot" }
+        ]
+      }
+    },
+    "StagingPublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": { "Ref": "StagingVpc" },
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-staging-slot" }
+        ]
+      }
+    },
+    "StagingInternetRoute": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "StagingInternetGatewayAttachment",
+      "Properties": {
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": { "Ref": "StagingInternetGateway" },
+        "RouteTableId": { "Ref": "StagingPublicRouteTable" }
+      }
+    },
+    "StagingPublicRouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "RouteTableId": { "Ref": "StagingPublicRouteTable" },
+        "SubnetId": { "Ref": "StagingPublicSubnet" }
+      }
+    },
+    "StagingHostSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "No-ingress staging Authority host; narrowly scoped bootstrap, package, registry, SSM, and Cloudflare Tunnel egress.",
+        "VpcId": { "Ref": "StagingVpc" },
+        "SecurityGroupIngress": [],
+        "SecurityGroupEgress": [],
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-staging-slot" }
+        ]
+      }
+    },
+    "StagingHostHttpsEgress": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] },
+        "IpProtocol": "tcp",
+        "FromPort": 443,
+        "ToPort": 443,
+        "CidrIp": "0.0.0.0/0",
+        "Description": "HTTPS for version-pinned bootstrap, registry, SSM, and tunnel control traffic"
+      }
+    },
+    "StagingHostAptHttpEgress": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] },
+        "IpProtocol": "tcp",
+        "FromPort": 80,
+        "ToPort": 80,
+        "CidrIp": "0.0.0.0/0",
+        "Description": "HTTP for Ubuntu package mirrors during bootstrap"
+      }
+    },
+    "StagingHostCloudflaredTcpEgress": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] },
+        "IpProtocol": "tcp",
+        "FromPort": 7844,
+        "ToPort": 7844,
+        "CidrIp": "0.0.0.0/0",
+        "Description": "Cloudflare Tunnel TCP transport"
+      }
+    },
+    "StagingHostCloudflaredUdpEgress": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] },
+        "IpProtocol": "udp",
+        "FromPort": 7844,
+        "ToPort": 7844,
+        "CidrIp": "0.0.0.0/0",
+        "Description": "Cloudflare Tunnel QUIC transport"
+      }
+    },
+    "StagingHostSetupBundle": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            { "ServerSideEncryptionByDefault": { "SSEAlgorithm": "AES256" } }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": { "Status": "Enabled" },
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-staging-bootstrap" }
+        ]
+      }
+    },
+    "AuthorityTunnelTokenSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": "Empty staging Authority tunnel credential container. Its value is installed out of band after the slot exists.",
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-tunnel-credential-container" }
+        ]
+      }
+    },
+    "StagingHostRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "Description": "Staging Authority host can use Systems Manager, read one checksum-pinned bootstrap artifact, and resolve only its own tunnel credential at runtime.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": "ec2.amazonaws.com" },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "read-exact-staging-host-setup-bundle",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:GetObjectVersion",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingHostSetupBundle}/${HostSetupObjectKey}"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:VersionId": { "Ref": "HostSetupObjectVersion" }
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": { "Ref": "AuthorityTunnelTokenSecret" }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "ecr:GetAuthorizationToken",
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:BatchGetImage",
+                    "ecr:GetDownloadUrlForLayer"
+                  ],
+                  "Resource": { "Ref": "AuthorityEcrRepositoryArn" }
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-staging-slot" }
+        ]
+      }
+    },
+    "StagingHostInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": [{ "Ref": "StagingHostRole" }]
+      }
+    },
+    "StagingDataVolume": {
+      "Type": "AWS::EC2::Volume",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "AvailabilityZone": { "Ref": "AvailabilityZone" },
+        "Encrypted": true,
+        "Size": { "Ref": "DataVolumeSizeGiB" },
+        "VolumeType": "gp3",
+        "Tags": [
+          { "Key": "Application", "Value": "echo-brain" },
+          { "Key": "Environment", "Value": "staging" },
+          { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+          { "Key": "Purpose", "Value": "authority-clean-data" },
+          {
+            "Key": "MountPath",
+            "Value": "/srv/echo-authority-clean-v1/clean-data"
+          }
+        ]
+      }
+    },
+    "StagingHostLaunchTemplate": {
+      "Type": "AWS::EC2::LaunchTemplate",
+      "Properties": {
+        "VersionDescription": "Staging Authority host: ARM64, IMDSv2, no ingress, encrypted disposable root.",
+        "LaunchTemplateData": {
+          "ImageId": { "Ref": "StagingAmiId" },
+          "InstanceType": { "Ref": "StagingInstanceType" },
+          "IamInstanceProfile": {
+            "Name": { "Ref": "StagingHostInstanceProfile" }
+          },
+          "MetadataOptions": {
+            "HttpTokens": "required",
+            "HttpEndpoint": "enabled",
+            "HttpPutResponseHopLimit": 2
+          },
+          "NetworkInterfaces": [
+            {
+              "AssociatePublicIpAddress": true,
+              "DeleteOnTermination": true,
+              "DeviceIndex": 0,
+              "Groups": [
+                { "Fn::GetAtt": ["StagingHostSecurityGroup", "GroupId"] }
+              ],
+              "SubnetId": { "Ref": "StagingPublicSubnet" }
+            }
+          ],
+          "BlockDeviceMappings": [
+            {
+              "DeviceName": "/dev/xvda",
+              "Ebs": {
+                "DeleteOnTermination": true,
+                "Encrypted": true,
+                "VolumeSize": 30,
+                "VolumeType": "gp3"
+              }
+            }
+          ],
+          "TagSpecifications": [
+            {
+              "ResourceType": "instance",
+              "Tags": [
+                { "Key": "Application", "Value": "echo-brain" },
+                { "Key": "Environment", "Value": "staging" },
+                { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+                { "Key": "Purpose", "Value": "authority-staging-host" }
+              ]
+            }
+          ],
+          "UserData": {
+            "Fn::Base64": {
+              "Fn::Sub": [
+                "#!/bin/bash\nset -euo pipefail\nready_handle='${ReadyHandle}'\nsignal_failure() {\n  curl --fail --silent --show-error --retry 3 --retry-delay 2 --request PUT --header 'Content-Type:' --data-binary '{\"Status\":\"FAILURE\",\"Reason\":\"staging host machine configuration, tunnel connection, or retained-state materialization failed\",\"UniqueId\":\"staging-host\",\"Data\":\"machine-tunnel-materialization-not-ready\"}' \"$ready_handle\" || true\n}\nsignal_success() {\n  curl --fail --silent --show-error --retry 3 --retry-delay 2 --request PUT --header 'Content-Type:' --data-binary '{\"Status\":\"SUCCESS\",\"Reason\":\"staging host machine configuration, tunnel connection, and retained-state materialization are ready\",\"UniqueId\":\"staging-host\",\"Data\":\"machine-tunnel-materialization-ready\"}' \"$ready_handle\"\n}\ntrap 'signal_failure; exit 1' ERR\nexport DEBIAN_FRONTEND=noninteractive\napt-get update\napt-get install -y --no-install-recommends ca-certificates curl snapd\nsystemctl enable --now snapd.socket\nif ! snap list aws-cli >/dev/null 2>&1; then\n  snap install aws-cli --classic\nfi\n/snap/bin/aws s3api get-object --region '${AWS::Region}' --expected-bucket-owner '${AWS::AccountId}' --bucket '${StagingHostSetupBundle}' --key '${HostSetupObjectKey}' --version-id '${HostSetupObjectVersion}' /var/tmp/authority-staging-host-setup.tar.gz\nprintf '%s  %s\\n' '${HostSetupSha256}' /var/tmp/authority-staging-host-setup.tar.gz | sha256sum -c -\nworkdir=/opt/echo-authority-staging-bootstrap\nmkdir -p \"$workdir\"\ntar --extract --gzip --file /var/tmp/authority-staging-host-setup.tar.gz --directory \"$workdir\" --no-same-owner\nexpected_volume_serial=$(printf '%s' '${StagingDataVolume}' | tr -d '-')\nfor attempt in $(seq 1 90); do\n  if lsblk -dn -o SERIAL | tr -d '-' | grep -qx \"$expected_volume_serial\"; then\n    break\n  fi\n  sleep 2\ndone\nlsblk -dn -o SERIAL | tr -d '-' | grep -qx \"$expected_volume_serial\"\n\"$workdir/bootstrap-ubuntu-arm64.sh\" --region '${AWS::Region}' --tunnel-secret-arn '${AuthorityTunnelTokenSecret}' --ecr-registry '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}' --data-volume-id '${StagingDataVolume}' ${InitializeBlankDataVolumeArgument}\n/usr/local/sbin/install-echo-authority-tunnel-token\nsystemctl enable --now cloudflared-echo-authority.service\ntunnel_ready=false\nfor attempt in $(seq 1 90); do\n  if curl --fail --silent --show-error http://127.0.0.1:20241/ready; then\n    tunnel_ready=true\n    break\n  fi\n  sleep 5\ndone\n[[ $tunnel_ready == true ]]\n/srv/echo-authority-clean-v1/restore-clean-v1-host.sh materialize\nsignal_success\ntrap - ERR\n",
+                {
+                  "ReadyHandle": {
+                    "Fn::If": [
+                      "HostEnabledCondition",
+                      { "Ref": "StagingReadyHandle" },
+                      ""
+                    ]
+                  },
+                  "InitializeBlankDataVolumeArgument": {
+                    "Fn::If": [
+                      "InitializeBlankDataVolumeCondition",
+                      "--initialize-blank-data-volume",
+                      ""
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "TagSpecifications": [
+          {
+            "ResourceType": "launch-template",
+            "Tags": [
+              { "Key": "Application", "Value": "echo-brain" },
+              { "Key": "Environment", "Value": "staging" },
+              { "Key": "Org", "Value": { "Ref": "OrgSlug" } },
+              { "Key": "Purpose", "Value": "authority-staging-slot" }
+            ]
+          }
+        ]
+      }
+    },
+    "StagingReadyHandle": {
+      "Type": "AWS::CloudFormation::WaitConditionHandle",
+      "Condition": "HostEnabledCondition"
+    },
+    "StagingHost": {
+      "Type": "AWS::EC2::Instance",
+      "Condition": "HostEnabledCondition",
+      "DependsOn": [
+        "StagingDataVolume",
+        "StagingInternetRoute",
+        "StagingPublicRouteTableAssociation"
+      ],
+      "Properties": {
+        "AvailabilityZone": { "Ref": "AvailabilityZone" },
+        "InstanceInitiatedShutdownBehavior": "terminate",
+        "LaunchTemplate": {
+          "LaunchTemplateId": { "Ref": "StagingHostLaunchTemplate" },
+          "Version": {
+            "Fn::GetAtt": ["StagingHostLaunchTemplate", "LatestVersionNumber"]
+          }
+        }
+      }
+    },
+    "StagingDataVolumeAttachment": {
+      "Type": "AWS::EC2::VolumeAttachment",
+      "Condition": "HostEnabledCondition",
+      "Properties": {
+        "Device": "/dev/sdf",
+        "InstanceId": { "Ref": "StagingHost" },
+        "VolumeId": { "Ref": "StagingDataVolume" }
+      }
+    },
+    "StagingReady": {
+      "Type": "AWS::CloudFormation::WaitCondition",
+      "Condition": "HostEnabledCondition",
+      "DependsOn": "StagingDataVolumeAttachment",
+      "Properties": {
+        "Count": 1,
+        "Handle": { "Ref": "StagingReadyHandle" },
+        "Timeout": "900"
+      }
+    }
+  },
+  "Outputs": {
+    "StagingVpcId": {
+      "Description": "Dedicated staging-slot VPC identifier.",
+      "Value": { "Ref": "StagingVpc" }
+    },
+    "StagingPublicSubnetId": {
+      "Description": "Dedicated staging public-subnet identifier.",
+      "Value": { "Ref": "StagingPublicSubnet" }
+    },
+    "StagingHostInstanceId": {
+      "Description": "Current staging host instance ID, or disabled when HostEnabled is false.",
+      "Value": {
+        "Fn::If": ["HostEnabledCondition", { "Ref": "StagingHost" }, "disabled"]
+      }
+    },
+    "StagingHostPrivateIp": {
+      "Description": "Current staging host private IP, or disabled when HostEnabled is false.",
+      "Value": {
+        "Fn::If": [
+          "HostEnabledCondition",
+          { "Fn::GetAtt": ["StagingHost", "PrivateIp"] },
+          "disabled"
+        ]
+      }
+    },
+    "StagingDataVolumeId": {
+      "Description": "Retained dedicated clean-data EBS volume identifier.",
+      "Value": { "Ref": "StagingDataVolume" }
+    },
+    "AuthorityTunnelTokenSecretArn": {
+      "Description": "Empty tunnel credential container ARN. This output never contains a credential value.",
+      "Value": { "Ref": "AuthorityTunnelTokenSecret" }
+    },
+    "StagingHostRoleName": {
+      "Description": "Staging host IAM role name for the wrapped observability stack.",
+      "Value": { "Ref": "StagingHostRole" }
+    },
+    "HostSetupArtifactBucketName": {
+      "Description": "Private versioned bucket for checksum-pinned staging host setup artifacts.",
+      "Value": { "Ref": "StagingHostSetupBundle" }
+    },
+    "StagingHostReady": {
+      "Description": "Whether this update completed machine configuration, tunnel connection, and retained-state materialization after the data mount. It does not attest application or public HTTPS readiness.",
+      "Value": { "Fn::If": ["HostEnabledCondition", "true", "false"] }
+    }
+  }
+}

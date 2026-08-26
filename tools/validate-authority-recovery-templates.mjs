@@ -37,6 +37,13 @@ const PAIRS = Object.freeze([
     ),
     guard: join(DEPLOYMENT, "authority-recovery-helper-v1.guard"),
   }),
+  Object.freeze({
+    template: join(
+      DEPLOYMENT,
+      "authority-staging-host-v1.template.json",
+    ),
+    guard: join(DEPLOYMENT, "authority-staging-host-v1.guard"),
+  }),
 ]);
 
 function text(value, label) {
@@ -248,7 +255,7 @@ try {
     ]);
   }
   console.log(
-    `authority recovery templates: cfn-lint ${lintVersion} and cfn-guard ${guardVersion} passed`,
+    `authority infrastructure templates: cfn-lint ${lintVersion} and cfn-guard ${guardVersion} passed`,
   );
 } finally {
   rmSync(temporary, { recursive: true, force: true });

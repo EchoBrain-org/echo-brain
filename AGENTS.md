@@ -1,4 +1,5 @@
 <!-- BEGIN ECHO -->
+
 # ECHO
 
 ECHO context is available through the `echo` MCP server at `http://127.0.0.1:39478/mcp`.
@@ -12,6 +13,13 @@ On founder-live machines, those instructions also bind every ECHO-using turn to 
 
 # AWS Guidance
 
+- Do not use `aws login` for this repository and do not sign in as the AWS
+  account root user. Authenticate through IAM Identity Center with
+  `aws sso login --profile echo-prod` and pass `--profile echo-prod` to AWS CLI
+  commands.
+- Access EC2 hosts only through AWS Systems Manager Session Manager or bounded
+  SSM Run Command documents. Do not use SSH, `su`, `sudo -i`, or an interactive
+  root shell.
 - Prefer the AWS MCP Server for AWS interactions — it provides sandboxed
   execution, observability, and audit logging. If unavailable, use the
   AWS CLI directly.
