@@ -221,3 +221,4 @@ publication must follow the final section. Keep `tested_at: null` until the
 publication procedure itself has been rehearsed against an exact release.
 
 <!-- Fresh issue #25 routing probe; this disposable branch must never merge. -->
+<!-- Second probe commit verifies that the preceding approval becomes stale. -->
