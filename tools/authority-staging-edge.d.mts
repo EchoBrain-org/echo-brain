@@ -11,11 +11,13 @@ export type StagingEdgeInput = Readonly<{
 export type ValidatedStagingEdgeInput = StagingEdgeInput &
   Readonly<{ tunnelName: string }>;
 
+export type StagingEdgeState = "ready" | "absent" | "incomplete";
+
 export type StagingEdgeReceipt = Readonly<{
   schema_version: 1;
   kind: "echo-authority-staging-edge-v1";
-  action: "reconcile" | "status" | "install-token";
-  state: "ready" | "absent" | "incomplete";
+  action: "status" | "install-token";
+  state: StagingEdgeState;
   hostname: string;
   tunnel_name: string;
   operation_id: string;
@@ -41,10 +43,6 @@ export type PutSecretValue = (
 export function validateStagingEdgeInput(
   input: unknown,
 ): ValidatedStagingEdgeInput;
-export function reconcileStagingEdge(
-  input: StagingEdgeInput,
-  dependencies?: Readonly<{ fetchImpl?: FetchLike }>,
-): Promise<StagingEdgeReceipt>;
 export function stagingEdgeStatus(
   input: StagingEdgeInput,
   dependencies?: Readonly<{ fetchImpl?: FetchLike }>,

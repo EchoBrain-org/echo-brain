@@ -77,15 +77,15 @@ describe("Authority staging host bootstrap", () => {
       "--tunnel-secret-reference",
       "--ecr-registry",
       "--data-volume-id",
-      "--config",
     ]) {
       expect(script).toContain(option);
     }
     expect(script).toContain("CONFIG_FILE=\"$CONFIG_DIR/host-bootstrap.conf\"");
-    expect(script).toContain("TUNNEL_CONFIG_FILE=\"$CONFIG_DIR/tunnel-token.conf\"");
     expect(script).toContain("install -d -o root -g root -m 0700 \"$CONFIG_DIR\"");
     expect(script).toContain("configuration file must be owned by root with mode 0600");
-    expect(script).toContain("Tunnel configuration file must be owned by root with mode 0600");
+    expect(script).not.toContain("TUNNEL_CONFIG_FILE");
+    expect(script).not.toContain("write_tunnel_config");
+    expect(script).not.toMatch(/--config\s+<\/etc/);
     expect(script).not.toMatch(/org1-prod|echo\/org1/i);
   });
 
@@ -227,20 +227,21 @@ describe("Authority staging host bootstrap", () => {
     expect(script).toMatch(/sha256sum --check --status[\s\S]+cloudflared package checksum mismatch/);
   });
 
-  it("makes the installed token helper parameterized and rejects a raw-token interface", () => {
+  it("uses the combined host bootstrap configuration for the installed token helper and rejects a raw-token interface", () => {
     const script = tunnelInstaller();
 
-    expect(script).toContain("CONFIG_FILE=/etc/echo-authority/tunnel-token.conf");
+    expect(script).toContain("CONFIG_FILE=/etc/echo-authority/host-bootstrap.conf");
     expect(script).toContain("--tunnel-secret-reference");
     expect(script).toContain("validate_reference");
     expect(script).toContain(":SecretString:token");
     expect(script).toContain('"$ASM_EXEC" -- "$0" "$resolved_action"');
     expect(script).toContain("unset ECHO_CLOUDFLARE_TUNNEL_TOKEN");
+    expect(script).not.toContain("--config");
     expect(script).not.toContain("--token");
     expect(script).not.toMatch(/get-secret-value|batch-get-secret-value/i);
   });
 
-  it.each(["explicit arguments", "custom config"])(
+  it.each(["explicit arguments", "combined host config"])(
     "preserves %s across the asm-exec child boundary",
     (configuration) => {
       const fixture = executableTunnelInstaller();
@@ -258,13 +259,39 @@ describe("Authority staging host bootstrap", () => {
             "--check",
           ];
         } else {
-          const config = join(fixture.root, "custom-tunnel.conf");
+          const config = join(fixture.root, "host-bootstrap.conf");
           writeFileSync(
             config,
-            `AWS_REGION=us-west-2\nTUNNEL_SECRET_REFERENCE=${reference}\n`,
+            [
+              "AWS_REGION=us-west-2",
+              `TUNNEL_SECRET_REFERENCE=${reference}`,
+              "ECR_REGISTRY=123456789012.dkr.ecr.us-west-2.amazonaws.com",
+              "DATA_VOLUME_ID=vol-0123456789abcdef0",
+              "DATA_DEVICE=/dev/nvme1n1",
+              "",
+            ].join("\n"),
             { mode: 0o600 },
           );
-          args = [fixture.installer, "--config", config, "--check"];
+          const configuredInstaller = join(
+            fixture.root,
+            "configured-install-cloudflare-tunnel-token.sh",
+          );
+          writeFileSync(
+            configuredInstaller,
+            tunnelInstaller()
+              .replace(
+                "ASM_EXEC=/usr/local/bin/asm-exec",
+                `ASM_EXEC=${join(fixture.root, "asm-exec")}`,
+              )
+              .replace("RESOLUTION_ATTEMPTS=4", "RESOLUTION_ATTEMPTS=1")
+              .replace(
+                "CONFIG_FILE=/etc/echo-authority/host-bootstrap.conf",
+                `CONFIG_FILE=${config}`,
+              ),
+            { mode: 0o700 },
+          );
+          chmodSync(configuredInstaller, 0o700);
+          args = [configuredInstaller, "--check"];
         }
         const result = spawnSync("bash", args, {
           encoding: "utf8",

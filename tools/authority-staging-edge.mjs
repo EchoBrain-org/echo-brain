@@ -1,12 +1,11 @@
 /**
- * Reconcile a single remotely-managed Cloudflare Tunnel staging edge.
+ * Install and inspect one remotely-managed Cloudflare Tunnel staging edge.
  *
  * This is a library boundary called only by the public lifecycle controller,
  * which owns the Cloudflare management-token resolution boundary. The connector
  * token is fetched only by install-token and is handed directly, in memory, to
- * an injected secret writer. Reconcile may prepare an unexposed Tunnel, but
- * never creates DNS: install-token writes the connector token before publishing
- * the owned CNAME.
+ * an injected secret writer. Install-token prepares the Tunnel, writes the
+ * connector token, then publishes the owned CNAME in one crash-safe operation.
  */
 
 import { createHash } from "node:crypto";
@@ -314,9 +313,7 @@ function dnsFromList(result, input, tunnel) {
   ) {
     refuse("cloudflare_dns_conflict");
   }
-  return Object.freeze({
-    id: typeof record.id === "string" ? record.id : undefined,
-  });
+  return true;
 }
 
 async function findDnsRecord(fetchImpl, input, tunnel) {
@@ -357,14 +354,6 @@ async function createDnsRecord(fetchImpl, input, tunnel) {
   ) {
     refuse("cloudflare_dns_create_response_invalid");
   }
-}
-
-async function ensureDnsRecord(fetchImpl, input, tunnel, create) {
-  const existing = await findDnsRecord(fetchImpl, input, tunnel);
-  if (existing !== undefined) return false;
-  if (!create) return undefined;
-  await createDnsRecord(fetchImpl, input, tunnel);
-  return true;
 }
 
 function isEmptyTunnelConfiguration(result) {
@@ -417,39 +406,6 @@ async function fetchConnectorToken(fetchImpl, input, tunnel) {
   return result;
 }
 
-/**
- * Prepare the remote Tunnel and exact ingress configuration. This command never
- * creates DNS because it has no secret writer; a missing CNAME is intentionally
- * reported as incomplete until install-token writes the connector token first.
- */
-export async function reconcileStagingEdge(
-  rawInput,
-  { fetchImpl = globalThis.fetch } = {},
-) {
-  const input = validateStagingEdgeInput(rawInput);
-  if (typeof fetchImpl !== "function") refuse("fetch_unavailable");
-  const tunnel = await ensureTunnel(fetchImpl, input, true);
-  const configuration = await tunnelConfigurationState(
-    fetchImpl,
-    input,
-    tunnel,
-  );
-  const dns = await ensureDnsRecord(fetchImpl, input, tunnel, false);
-  if (configuration === "empty")
-    await configureTunnel(fetchImpl, input, tunnel);
-  return receipt(
-    input,
-    "reconcile",
-    dns === undefined ? "incomplete" : "ready",
-    {
-      tunnel_created: tunnel.created,
-      tunnel_configured: true,
-      dns_created: false,
-      dns_configured: dns !== undefined,
-    },
-  );
-}
-
 /** Check the edge without creating a tunnel, DNS record, or connector token. */
 export async function stagingEdgeStatus(
   rawInput,
@@ -462,7 +418,7 @@ export async function stagingEdgeStatus(
     return receipt(input, "status", "absent", { ready: false });
   if ((await readTunnelConfiguration(fetchImpl, input, tunnel)) === "empty")
     return receipt(input, "status", "incomplete", { ready: false });
-  const dns = await ensureDnsRecord(fetchImpl, input, tunnel, false);
+  const dns = await findDnsRecord(fetchImpl, input, tunnel);
   if (dns === undefined)
     return receipt(input, "status", "incomplete", { ready: false });
   return receipt(input, "status", "ready", { ready: true });
