@@ -96,6 +96,7 @@ export type StagingLifecycleReceipt = Readonly<{
     | "absent"
     | "incomplete"
     | "failed_create"
+    | "update_rolled_back"
     | "unprotected";
   operation_id: string;
   stack_name: string;

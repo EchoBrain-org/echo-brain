@@ -15,6 +15,26 @@ import {
   runAuthorityStaging,
   validateStagingLifecycleInput,
 } from "../../tools/authority-staging.mjs";
+import type { StagingLifecycleReceipt } from "../../tools/authority-staging.mjs";
+
+const DECLARED_LIFECYCLE_STATES = [
+  "planned",
+  "ready",
+  "executed",
+  "absent",
+  "incomplete",
+  "failed_create",
+  "update_rolled_back",
+  "unprotected",
+] as const satisfies readonly StagingLifecycleReceipt["state"][];
+
+type MissingDeclaredLifecycleState = Exclude<
+  StagingLifecycleReceipt["state"],
+  (typeof DECLARED_LIFECYCLE_STATES)[number]
+>;
+const ALL_DECLARED_LIFECYCLE_STATES_ARE_COVERED: MissingDeclaredLifecycleState extends never
+  ? true
+  : never = true;
 
 const TOKEN = "cf-management-token-not-a-real-secret";
 const CLI = fileURLToPath(
@@ -22,6 +42,11 @@ const CLI = fileURLToPath(
 );
 const SECRET_ARN =
   "arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/tunnel-abc";
+
+it("keeps every public lifecycle receipt state typechecked", () => {
+  expect(ALL_DECLARED_LIFECYCLE_STATES_ARE_COVERED).toBe(true);
+  expect(DECLARED_LIFECYCLE_STATES).toContain("update_rolled_back");
+});
 
 function withFakeAws() {
   const root = mkdtempSync(join(tmpdir(), "echo-authority-staging-aws-"));
