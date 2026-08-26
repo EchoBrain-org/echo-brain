@@ -18,8 +18,8 @@ tested_at: null
 Use this runbook before closing
 [#25](https://github.com/EchoBrain-org/echo-brain/issues/25) and before
 publishing the first clean beta. The outcome is an active GitHub ruleset that
-protects `main`, mandatory owner review for changes to the CI and release
-boundary, and release immutability for every future release. This procedure
+protects `main`, requires independent review and Code Owner approval for the CI
+and release boundary, and makes every future release immutable. This procedure
 does not deploy a product or publish a release.
 
 Repository settings are the enforcement boundary. Merging this runbook or its
@@ -35,24 +35,36 @@ they existed. The personal-repository boundary is:
 
 - the base branch's [`.github/CODEOWNERS`](../../.github/CODEOWNERS) assigns
   the policy and release surfaces to `@EchoBrain-org`;
-- the `main` ruleset requires Code Owner approval when one of those paths
-  changes; and
+- the `main` ruleset requires one approving review for every pull request and
+  additionally requires Code Owner approval for those paths; and
 - GitHub evaluates `CODEOWNERS` from the pull request's base branch, so a pull
-  request cannot remove its own owner-review requirement.
+  request cannot change the ownership mapping that governs itself.
 
-This closes the self-modifying-workflow gap through explicit trusted review,
-not through the repository's status check alone. It does not prevent the
-personal repository owner from changing settings administratively. Any such
-change must be recorded in an issue or pull request and reverified before a
-release, but repository-local policy cannot make the owner's Settings access
-independent of the owner.
+The mandatory one-review gate is the general fail-closed boundary. For an owned
+path, GitHub's documented ruleset behavior additionally requires an approval
+from a matching Code Owner. The live probe did not expose an automatic owner
+review request, so explicitly request `@EchoBrain-org` when routing does not
+occur. The manual request supplies the missing notification; the active ruleset
+and base-branch `CODEOWNERS` file supply the enforcement. Because one owner
+approval satisfies both configured review conditions, the probe verifies their
+combined boundary rather than isolating which condition caused each blocked
+state. Keep write access limited to trusted reviewers and review any access
+change before a release. This closes the self-modifying-workflow gap through
+explicit trusted review, not through the repository's status check alone. It
+does not prevent the personal repository owner from changing settings
+administratively. Any such change must be recorded in an issue or pull request
+and reverified before a release, but repository-local policy cannot make the
+owner's Settings access independent of the owner.
 
 Stop and keep issue #25 open if any of these conditions is true:
 
 - the repository-administrator role cannot be limited to pull-request-only
   bypass or an account other than `@EchoBrain-org` has that role;
 - `CI required checks` cannot be pinned to GitHub Actions in strict mode;
-- a protected-path pull request can merge without `@EchoBrain-org` approval;
+- an ordinary-author pull request can merge after green CI without an
+  independent approval, a protected-path pull request can merge without a
+  matching Code Owner's approval, or write access includes an untrusted
+  reviewer;
 - force-push or deletion protection is absent; or
 - repository release immutability cannot be enabled and read back.
 
@@ -79,9 +91,11 @@ asserts the dependency topology and each success test. Requiring the four
 implementation checks separately would duplicate the committed topology in
 GitHub settings and make safe CI evolution brittle.
 
-The aggregate proves the current repository checks. Code Owner review protects
-the workflow, release tools, build configuration, and the tests that define
-that proof from being weakened unnoticed in the same pull request.
+The aggregate proves the current repository checks. Mandatory independent
+review and Code Owner approval protect the workflow, release tools, build
+configuration, and the tests that define that proof from being weakened
+unnoticed in the same pull request. Automatic owner routing was not observed in
+the live probe, so the operator explicitly requested the owner review.
 
 ## Apply the rules
 
@@ -97,7 +111,8 @@ The architecture test
 keeps the complete protected-path list exact and prevents a later catch-all
 rule from silently overriding it. If a new workflow, workspace manifest, build
 configuration, release tool, or deployment entry point is added, update
-`CODEOWNERS` and the test together through an owner-approved pull request.
+`CODEOWNERS` and the test together through an owner-approved pull request,
+explicitly requesting `@EchoBrain-org` if GitHub does not route it.
 
 ### 2. Create the active `main` ruleset
 
@@ -109,8 +124,9 @@ In **Settings > Rules > Rulesets**, create one active branch ruleset named
   actor, with **For pull requests only** selected, after confirming that
   `@EchoBrain-org` is the repository's only administrator;
 - require a pull request before merging;
-- require zero general approvals and require review from Code Owners, keeping
-  review ceremony limited to the protected paths;
+- require one approving review and enable **Require review from Code Owners**;
+  the general requirement gates every pull request, while the Code Owner
+  requirement additionally gates protected paths;
 - dismiss stale approvals when new reviewable commits are pushed;
 - require `CI required checks`, expected from GitHub Actions application
   `15368`, with **Require branches to be up to date before merging** enabled;
@@ -156,20 +172,28 @@ No credential or token belongs in the receipt.
    non-fast-forward restriction.
 4. Confirm release immutability is enabled for future releases.
 5. After `CODEOWNERS` reaches `main`, open or reuse a harmless ordinary-author
-   pull request that changes a protected path. Confirm GitHub requests
-   `@EchoBrain-org`, blocks merge before that approval, dismisses an approval
-   after a new reviewable push, and still requires the aggregate check.
-6. Inspect the ruleset result for `main` and the pull request merge box. Do not
+   pull request that changes a protected path. After every CI check is green,
+   confirm the pull request remains blocked and requires a review. If GitHub
+   did not automatically request `@EchoBrain-org`, explicitly request that
+   review. Treat the absent automatic request as an operational routing gap to
+   work around, not as evidence that the Code Owner rule is disabled.
+6. Obtain `@EchoBrain-org` approval for this probe, then push a new reviewable
+   commit and confirm GitHub dismisses that approval. Confirm the pull request
+   is blocked again and still requires the aggregate check. Record that the
+   same owner approval satisfies both configured review conditions, so this
+   transition proves their combined effect rather than each condition in
+   isolation.
+7. Inspect the ruleset result for `main` and the pull request merge box. Do not
    test force-push or deletion by risking a real update to `main`; the active
    rule definition is the evidence for those destructive denials.
-7. Verify that the owner sees a bypass option only inside a pull request. Do
+8. Verify that the owner sees a bypass option only inside a pull request. Do
    not exercise it merely to produce evidence.
 
 Useful read-only checks for an authenticated operator are:
 
 ```sh
 gh ruleset list --repo EchoBrain-org/echo-brain
-gh ruleset check main --repo EchoBrain-org/echo-brain
+gh ruleset check --repo EchoBrain-org/echo-brain main
 gh api repos/EchoBrain-org/echo-brain/rulesets
 gh api repos/EchoBrain-org/echo-brain/branches/main
 gh api repos/EchoBrain-org/echo-brain/immutable-releases
@@ -215,7 +239,12 @@ request path, and publish a higher version.
 
 Issue #25 is complete when the repository contract is merged, all checks are
 green, the active ruleset and immutable-release setting pass the readback, and
-the first protected-path pull request proves the Code Owner gate. The beta does
-not need to be published to close the configuration issue; its future
-publication must follow the final section. Keep `tested_at: null` until the
-publication procedure itself has been rehearsed against an exact release.
+an ordinary-author protected-path pull request remains blocked after green CI,
+receives an explicit owner review request when GitHub did not add one, receives
+owner approval, and returns to blocked after a new commit dismisses that
+approval. That evidence verifies the combined review boundary and stale-review
+dismissal; the ruleset readback and base-branch `CODEOWNERS` file establish the
+two configured review conditions. The beta does not need to be published to
+close the configuration issue; its future publication must follow the final
+section. Keep `tested_at: null` until the publication procedure itself has been
+rehearsed against an exact release.
