@@ -16,6 +16,9 @@ AUTHORITY_UID=999
 AUTHORITY_GID=988
 DEPLOY_DIR=/srv/echo-authority-clean-v1
 DATA_DIR="$DEPLOY_DIR/clean-data"
+DATA_VOLUME_LABEL=echo-auth-data
+VOLUME_INITIALIZATION_MARKER=.echo-authority-volume-initialization-v1
+VOLUME_INITIALIZATION_SCHEMA=echo-authority-volume-initialization-v1
 CONFIG_DIR=/etc/echo-authority
 CONFIG_FILE="$CONFIG_DIR/host-bootstrap.conf"
 TUNNEL_CONFIG_FILE="$CONFIG_DIR/tunnel-token.conf"
@@ -247,8 +250,51 @@ ensure_fstab_mount() {
   mv -f -- "$temporary" /etc/fstab
 }
 
+write_volume_initialization_seed() {
+  local seed_dir=$1 marker="$seed_dir/$VOLUME_INITIALIZATION_MARKER"
+  printf 'schema=%s\ndata_volume_id=%s\n' \
+    "$VOLUME_INITIALIZATION_SCHEMA" "$DATA_VOLUME_ID" >"$marker"
+  chmod 0600 "$marker"
+  chown root:root "$marker"
+}
+
+finish_pending_volume_initialization() {
+  local marker="$DATA_DIR/$VOLUME_INITIALIZATION_MARKER"
+  local expected_body marker_body marker_size root_state unexpected
+  [[ $INITIALIZE_BLANK_DATA_VOLUME == true ]] \
+    || fail 'unfinished blank data volume initialization requires --initialize-blank-data-volume'
+  [[ -f $marker && ! -L $marker ]] \
+    || fail 'blank data volume initialization marker is missing or unsafe'
+  [[ $(stat -c '%u:%g:%a' "$marker") == '0:0:600' ]] \
+    || fail 'blank data volume initialization marker permissions are unsafe'
+  expected_body="schema=$VOLUME_INITIALIZATION_SCHEMA"$'\n'"data_volume_id=$DATA_VOLUME_ID"
+  marker_body=$(cat -- "$marker")
+  marker_size=$(stat -c '%s' "$marker")
+  [[ $marker_body == "$expected_body" && $marker_size -eq $((${#expected_body} + 1)) ]] \
+    || fail 'blank data volume initialization marker does not match this volume'
+  [[ -d $DATA_DIR/lost+found && ! -L $DATA_DIR/lost+found ]] \
+    || fail 'blank data volume does not contain the expected lost+found directory'
+  [[ $(stat -c '%u:%g:%a' "$DATA_DIR/lost+found") == '0:0:700' ]] \
+    || fail 'blank data volume lost+found permissions are unsafe'
+  [[ -z $(find "$DATA_DIR/lost+found" -mindepth 1 -print -quit) ]] \
+    || fail 'blank data volume lost+found directory is not empty'
+  unexpected=$(find "$DATA_DIR" -mindepth 1 -maxdepth 1 \
+    ! -name lost+found ! -name "$VOLUME_INITIALIZATION_MARKER" -print -quit)
+  [[ -z $unexpected ]] \
+    || fail 'blank data volume contains state outside its initialization marker'
+  root_state=$(stat -c '%u:%g:%a' "$DATA_DIR")
+  [[ $root_state == '0:0:755' || $root_state == "$AUTHORITY_UID:$AUTHORITY_GID:755" \
+    || $root_state == "$AUTHORITY_UID:$AUTHORITY_GID:700" ]] \
+    || fail 'blank data volume root is outside the allowed initialization states'
+  chown "$AUTHORITY_UID:$AUTHORITY_GID" "$DATA_DIR"
+  chmod 0700 "$DATA_DIR"
+  [[ $(stat -c '%u:%g:%a' "$DATA_DIR") == "$AUTHORITY_UID:$AUTHORITY_GID:700" ]] \
+    || fail 'blank data volume ownership initialization did not complete'
+  rm -f -- "$marker"
+}
+
 mount_data_volume() {
-  local device=$1 filesystem mounted_source signature created_filesystem=false
+  local device=$1 filesystem filesystem_label initialization_seed mounted_source signature
   [[ -d $DATA_DIR && ! -L $DATA_DIR ]] || fail 'Authority data mount path must be an existing non-symlink directory'
   if mountpoint -q "$DATA_DIR"; then
     mounted_source=$(findmnt -n -o SOURCE --target "$DATA_DIR")
@@ -265,9 +311,15 @@ mount_data_volume() {
         || fail 'blank data volume requires --initialize-blank-data-volume before formatting'
       signature=$(wipefs -n "$device" || true)
       [[ -z $signature ]] || fail 'refusing to format a device that contains an unrecognized signature'
-      mkfs.ext4 -F -L echo-authority-clean-data "$device" >/dev/null
+      initialization_seed=$(mktemp -d /run/echo-authority-volume-init.XXXXXX)
+      trap '[[ -z ${initialization_seed:-} ]] || rm -rf -- "$initialization_seed"' RETURN
+      write_volume_initialization_seed "$initialization_seed"
+      mkfs.ext4 -F -L "$DATA_VOLUME_LABEL" \
+        -E root_owner=0:0,root_perms=0755 -d "$initialization_seed" "$device" >/dev/null
+      rm -rf -- "$initialization_seed"
+      initialization_seed=
+      trap - RETURN
       filesystem=ext4
-      created_filesystem=true
     fi
     [[ $filesystem == ext4 ]] || fail 'Authority data volume must use ext4'
     ensure_fstab_mount "$device"
@@ -275,18 +327,15 @@ mount_data_volume() {
   fi
   [[ $(findmnt -n -o FSTYPE --target "$DATA_DIR") == ext4 ]] \
     || fail 'Authority data path is not an ext4 mount'
+  filesystem_label=$(blkid -o value -s LABEL "$device" || true)
+  [[ $filesystem_label == "$DATA_VOLUME_LABEL" ]] \
+    || fail 'Authority data volume has an unexpected filesystem label'
   ensure_fstab_mount "$device"
-  [[ $(stat -c '%u:%g' "$DATA_DIR") == "$AUTHORITY_UID:$AUTHORITY_GID" ]] \
-    || {
-      if [[ $created_filesystem == true ]]; then
-        chown "$AUTHORITY_UID:$AUTHORITY_GID" "$DATA_DIR"
-        chmod 0700 "$DATA_DIR"
-      else
-        fail 'mounted Authority data root has an unexpected owner; refusing to rewrite existing state ownership'
-      fi
-    }
+  if [[ -e $DATA_DIR/$VOLUME_INITIALIZATION_MARKER ]]; then
+    finish_pending_volume_initialization
+  fi
   [[ $(stat -c '%u:%g:%a' "$DATA_DIR") == "$AUTHORITY_UID:$AUTHORITY_GID:700" ]] \
-    || fail 'mounted Authority data root must be owned by 999:988 with mode 0700'
+    || fail 'mounted Authority data root has unexpected ownership; refusing to rewrite existing state ownership'
 }
 
 install_docker_mount_guard() {
@@ -499,7 +548,7 @@ systemctl disable --now docker.service >/dev/null 2>&1 || true
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl docker.io docker-compose-v2 amazon-ecr-credential-helper \
-  patch snapd sqlite3
+  e2fsprogs patch snapd sqlite3
 # Package post-install hooks may have started Docker again. Stop it until its
 # data-volume precondition is installed and systemd has reloaded it.
 systemctl disable --now docker.socket >/dev/null 2>&1 || true

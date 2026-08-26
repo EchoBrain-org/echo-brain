@@ -113,17 +113,51 @@ describe("Authority staging host bootstrap", () => {
     expect(script).toContain("refusing to format a device that contains an unrecognized signature");
     expect(script).toContain("refusing to mount over non-empty root-volume Authority data path");
     expect(script).toContain("mount -o noexec,nodev,nosuid \"$device\" \"$DATA_DIR\"");
-    expect(script).toContain("mounted Authority data root must be owned by 999:988 with mode 0700");
+    expect(script).toContain(
+      "mounted Authority data root has unexpected ownership; refusing to rewrite existing state ownership",
+    );
   });
 
-  it("initializes ownership only when it created the filesystem, not from the post-mount directory contents", () => {
+  it("uses a volume-bound filesystem marker to resume only pristine blank-volume initialization", () => {
     const script = bootstrap();
 
-    expect(script).toContain("created_filesystem=false");
-    expect(script).toContain("created_filesystem=true");
-    expect(script).toContain("if [[ $created_filesystem == true ]]; then");
-    expect(script).toContain('chown "$AUTHORITY_UID:$AUTHORITY_GID" "$DATA_DIR"');
-    expect(script).not.toMatch(/INITIALIZE_BLANK_DATA_VOLUME[^\n]*find \"\$DATA_DIR\"/);
+    expect(script).toContain("DATA_VOLUME_LABEL=echo-auth-data");
+    expect(script).toContain(
+      "VOLUME_INITIALIZATION_MARKER=.echo-authority-volume-initialization-v1",
+    );
+    expect(script).toContain('mkfs.ext4 -F -L "$DATA_VOLUME_LABEL"');
+    expect(script).toContain("-E root_owner=0:0,root_perms=0755");
+    expect(script).toContain('-d "$initialization_seed"');
+    expect(script).toContain("data_volume_id=%s");
+    expect(script).toContain("finish_pending_volume_initialization");
+    expect(script).toContain(
+      "unfinished blank data volume initialization requires --initialize-blank-data-volume",
+    );
+    expect(script).toContain(
+      "blank data volume contains state outside its initialization marker",
+    );
+    expect(script).toContain(
+      "blank data volume initialization marker does not match this volume",
+    );
+    expect(script).toContain(
+      'chown "$AUTHORITY_UID:$AUTHORITY_GID" "$DATA_DIR"',
+    );
+    expect(script).toContain('rm -f -- "$marker"');
+    expect(script).not.toMatch(/chown\s+(?:-[^\s]+\s+)*-R/);
+
+    const initialize = script.indexOf(
+      "finish_pending_volume_initialization() {",
+    );
+    const chown = script.indexOf(
+      'chown "$AUTHORITY_UID:$AUTHORITY_GID" "$DATA_DIR"',
+      initialize,
+    );
+    const chmod = script.indexOf('chmod 0700 "$DATA_DIR"', chown);
+    const removeMarker = script.indexOf('rm -f -- "$marker"', chmod);
+    expect(initialize).toBeGreaterThan(-1);
+    expect(chown).toBeGreaterThan(initialize);
+    expect(chmod).toBeGreaterThan(chown);
+    expect(removeMarker).toBeGreaterThan(chmod);
   });
 
   it("fails closed before Docker can restart containers without the exact verified data mount", () => {
