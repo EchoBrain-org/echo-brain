@@ -219,3 +219,5 @@ the first protected-path pull request proves the Code Owner gate. The beta does
 not need to be published to close the configuration issue; its future
 publication must follow the final section. Keep `tested_at: null` until the
 publication procedure itself has been rehearsed against an exact release.
+
+<!-- Fresh issue #25 routing probe; this disposable branch must never merge. -->
