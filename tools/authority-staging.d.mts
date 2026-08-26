@@ -1,6 +1,7 @@
 import type {
   FetchLike,
   PutSecretValue,
+  StagingEdgeState,
   StagingEdgeInput,
 } from "./authority-staging-edge.mjs";
 
@@ -162,27 +163,20 @@ export type LifecycleDependencies = Readonly<{
     >;
   }>;
   edge?: Readonly<{
-    reconcile(
-      input: StagingEdgeInput,
-      dependencies?: Readonly<{
-        fetchImpl?: FetchLike;
-        putSecretValue?: PutSecretValue;
-      }>,
-    ): Promise<Readonly<{ state: string }>>;
     installToken(
       input: StagingEdgeInput,
       dependencies?: Readonly<{
         fetchImpl?: FetchLike;
         putSecretValue?: PutSecretValue;
       }>,
-    ): Promise<Readonly<{ state: string }>>;
+    ): Promise<Readonly<{ state: StagingEdgeState }>>;
     status(
       input: StagingEdgeInput,
       dependencies?: Readonly<{
         fetchImpl?: FetchLike;
         putSecretValue?: PutSecretValue;
       }>,
-    ): Promise<Readonly<{ state: string }>>;
+    ): Promise<Readonly<{ state: StagingEdgeState }>>;
   }>;
 }>;
 

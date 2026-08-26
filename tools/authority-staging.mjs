@@ -18,7 +18,6 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   installStagingEdgeToken,
-  reconcileStagingEdge,
   stagingEdgeStatus,
 } from "./authority-staging-edge.mjs";
 
@@ -38,6 +37,7 @@ const LOGICAL_ID = /^[A-Za-z][A-Za-z0-9]{0,254}$/;
 const RESOURCE_TYPE = /^AWS::[A-Za-z0-9:]+$/;
 const HEALTHY_STACK_STATUSES = new Set(["CREATE_COMPLETE", "UPDATE_COMPLETE"]);
 const RECOVERABLE_UPDATE_STACK_STATUS = "UPDATE_ROLLBACK_COMPLETE";
+const EDGE_RECEIPT_STATES = new Set(["ready", "incomplete", "absent"]);
 const ECHO_HOSTED_STAGING_AWS_PROFILE = "echo-prod";
 const AMBIENT_AWS_CREDENTIAL_KEYS = Object.freeze([
   "AWS_ACCESS_KEY_ID",
@@ -585,7 +585,6 @@ function publicPlan(plan, hostEnabled) {
 function edgeFunctions(dependencies) {
   return Object.freeze({
     install: dependencies?.edge?.installToken ?? installStagingEdgeToken,
-    reconcile: dependencies?.edge?.reconcile ?? reconcileStagingEdge,
     status: dependencies?.edge?.status ?? stagingEdgeStatus,
   });
 }
@@ -617,8 +616,19 @@ function edgeDependencies(dependencies) {
 function safeEdgeState(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     refuse("edge_receipt_invalid");
-  if (typeof value.state !== "string") refuse("edge_receipt_invalid");
+  if (typeof value.state !== "string" || !EDGE_RECEIPT_STATES.has(value.state))
+    refuse("edge_receipt_invalid");
   return value.state;
+}
+
+async function initializedProtectedStack(input, dependencies) {
+  const current = await describeExactStack(input, dependencies);
+  if (current === undefined) refuse("slot_init_required");
+  if (current.pendingCreate) refuse("slot_init_not_executed");
+  if (current.failedCreate) refuse("slot_init_recovery_required");
+  if (!current.terminationProtection)
+    refuse("slot_termination_protection_required");
+  return current;
 }
 
 async function prepareSetupArtifact(input, outputs, dependencies) {
@@ -818,19 +828,10 @@ async function runSlotInit(input, { execute = false, ...dependencies } = {}) {
   );
   const edge = edgeFunctions(dependencies);
   const edgeConfig = edgeInput(input, secretArn, dependencies);
-  const prepared = await edge.reconcile(
-    edgeConfig,
-    edgeDependencies(dependencies),
-  );
   const installed = await edge.install(
     edgeConfig,
     edgeDependencies(dependencies),
   );
-  if (
-    safeEdgeState(prepared) !== "ready" &&
-    safeEdgeState(prepared) !== "incomplete"
-  )
-    refuse("edge_reconcile_unready");
   if (safeEdgeState(installed) !== "ready") refuse("edge_install_unready");
   return lifecycleReceipt(input, "slot-init", "ready", {
     ...publicPlan(planned.plan, false),
@@ -845,12 +846,7 @@ async function runUp(
   { execute = false, initializeBlankDataVolume = false, ...dependencies } = {},
 ) {
   if (input.hostSetup === undefined) refuse("host_setup_required");
-  const current = await describeExactStack(input, dependencies);
-  if (current === undefined) refuse("slot_init_required");
-  if (current.pendingCreate) refuse("slot_init_not_executed");
-  if (current.failedCreate) refuse("slot_init_recovery_required");
-  if (!current.terminationProtection)
-    refuse("slot_termination_protection_required");
+  const current = await initializedProtectedStack(input, dependencies);
   if (requiredOutput(current.outputs, "StagingHostReady") === "true")
     refuse("host_already_enabled");
   const setupArtifact = execute
@@ -892,12 +888,7 @@ async function runUp(
 }
 
 async function runDown(input, { execute = false, ...dependencies } = {}) {
-  const current = await describeExactStack(input, dependencies);
-  if (current === undefined) refuse("slot_init_required");
-  if (current.pendingCreate) refuse("slot_init_not_executed");
-  if (current.failedCreate) refuse("slot_init_recovery_required");
-  if (!current.terminationProtection)
-    refuse("slot_termination_protection_required");
+  const current = await initializedProtectedStack(input, dependencies);
   const hostEnabled =
     requiredOutput(current.outputs, "StagingHostReady") === "true";
   const planned = execute

@@ -50,7 +50,7 @@ function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function fixture({ referencedPatch = false } = {}) {
+function fixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-staging-host-bundle-"));
   roots.push(root);
   const authority = join(root, "deploy", "organization-authority");
@@ -60,9 +60,7 @@ function fixture({ referencedPatch = false } = {}) {
   mkdirSync(authority, { recursive: true, mode: 0o700 });
   mkdirSync(release, { recursive: true, mode: 0o700 });
   chmodSync(output, 0o700);
-  let bootstrap = readFileSync(BOOTSTRAP, "utf8");
-  if (referencedPatch)
-    bootstrap += '\nPATCH_SOURCE="$SCRIPT_DIR/asm-exec.patch"\n';
+  const bootstrap = readFileSync(BOOTSTRAP);
   writeFileSync(join(authority, "bootstrap-ubuntu-arm64.sh"), bootstrap, {
     mode: 0o755,
   });
@@ -87,10 +85,6 @@ function fixture({ referencedPatch = false } = {}) {
     readFileSync(INSTALLER),
     { mode: 0o755 },
   );
-  if (referencedPatch)
-    writeFileSync(join(authority, "asm-exec.patch"), "patch payload\n", {
-      mode: 0o644,
-    });
   writeFileSync(join(root, ".env.clean-v1"), "must-not-be-packaged=true\n", {
     mode: 0o600,
   });
@@ -120,7 +114,7 @@ function build(sourceRoot: string, output: string) {
 
 describe("Authority staging host bundle", () => {
   it("packages exactly the host and non-secret deployment controls with deterministic private receipts", () => {
-    const subject = fixture({ referencedPatch: true });
+    const subject = fixture();
     const first = join(subject.output, "first.tar.gz");
     const second = join(subject.output, "second.tar.gz");
 
@@ -141,10 +135,6 @@ describe("Authority staging host bundle", () => {
       archive_sha256: sha256(first),
     });
     expect(manifest.files).toEqual([
-      expect.objectContaining({
-        path: "deploy/organization-authority/asm-exec.patch",
-        mode: "0644",
-      }),
       expect.objectContaining({
         path: "deploy/organization-authority/bootstrap-ubuntu-arm64.sh",
         mode: "0755",
@@ -183,7 +173,6 @@ describe("Authority staging host bundle", () => {
       .split("\n")
       .sort();
     expect(listed).toEqual([
-      "asm-exec.patch",
       "bootstrap-ubuntu-arm64.sh",
       "clean-v1-release.py",
       "clean-v1-runtime-profile.py",

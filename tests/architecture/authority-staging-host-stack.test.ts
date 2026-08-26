@@ -363,11 +363,8 @@ describe("Authority staging host stack", () => {
       "HostSetupArtifactBucketName",
       "StagingDataVolumeId",
       "StagingHostInstanceId",
-      "StagingHostPrivateIp",
       "StagingHostReady",
       "StagingHostRoleName",
-      "StagingPublicSubnetId",
-      "StagingVpcId",
     ]);
     const serialized = JSON.stringify(stack.Outputs);
     expect(serialized).not.toMatch(

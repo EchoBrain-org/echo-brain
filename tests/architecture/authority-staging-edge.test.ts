@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   installStagingEdgeToken,
-  reconcileStagingEdge,
   stagingEdgeStatus,
   validateStagingEdgeInput,
+} from "../../tools/authority-staging-edge.mjs";
+import type {
+  FetchLike,
+  StagingEdgeInput,
 } from "../../tools/authority-staging-edge.mjs";
 
 const INPUT = Object.freeze({
@@ -107,6 +110,13 @@ function configuredDns() {
   ];
 }
 
+function install(input: StagingEdgeInput, fetchImpl: FetchLike) {
+  return installStagingEdgeToken(input, {
+    fetchImpl,
+    putSecretValue: async () => {},
+  });
+}
+
 function persistentRetryFetch(
   firstPut: "applied-response-lost" | "not-applied",
 ) {
@@ -147,8 +157,18 @@ function persistentRetryFetch(
       return response(
         configuration === undefined ? {} : { config: configuration },
       );
+    if (url.endsWith(`/cfd_tunnel/${TUNNEL_ID}/token`))
+      return response(CONNECTOR_TOKEN);
     if (url.includes("/dns_records?") && init.method === undefined)
       return response([]);
+    if (url.endsWith("/dns_records") && init.method === "POST")
+      return response({
+        type: "CNAME",
+        name: INPUT.hostname,
+        content: `${TUNNEL_ID}.cfargotunnel.com`,
+        proxied: true,
+        comment: `echo-brain staging edge ${INPUT.slotId}`,
+      });
     throw new Error(`unexpected request ${url}`);
   };
   return { calls, fetchImpl };
@@ -175,64 +195,13 @@ describe("Authority staging Cloudflare edge", () => {
     ).toThrow("input_property_not_allowed");
   });
 
-  it("prepares a missing tunnel without publishing a DNS route", async () => {
-    const { calls, fetchImpl } = edgeFetch();
-    const result = await reconcileStagingEdge(INPUT, { fetchImpl });
-
-    expect(result).toMatchObject({
-      action: "reconcile",
-      state: "incomplete",
-      tunnel_created: true,
-      tunnel_configured: true,
-      dns_created: false,
-      dns_configured: false,
-    });
-    expect(JSON.stringify(result)).not.toContain(INPUT.apiToken);
-    expect(JSON.stringify(result)).not.toContain(CONNECTOR_TOKEN);
-    expect(calls).toHaveLength(4);
-    expect(new URL(calls[0]!.url).searchParams.get("name")).toBe(TUNNEL_NAME);
-    expect(calls[1]!.init.body).toBe(
-      JSON.stringify({ name: TUNNEL_NAME, config_src: "cloudflare" }),
-    );
-    expect(new URL(calls[2]!.url).pathname).toBe(
-      `/client/v4/zones/${INPUT.zoneId}/dns_records`,
-    );
-    expect(calls[3]!.init.body).toBe(
-      JSON.stringify({ config: expectedConfiguration() }),
-    );
-    expect(
-      calls.some(
-        (call) =>
-          call.url.endsWith("/dns_records") && call.init.method === "POST",
-      ),
-    ).toBe(false);
-    expect(calls.some((call) => call.url.endsWith("/token"))).toBe(false);
-  });
-
-  it("validates an existing edge without overwriting its remote ingress", async () => {
-    const { calls, fetchImpl } = edgeFetch({
-      tunnel: configuredTunnel(),
-      dns: configuredDns(),
-    });
-    const result = await reconcileStagingEdge(INPUT, { fetchImpl });
-
-    expect(result).toMatchObject({ state: "ready", tunnel_created: false });
-    expect(calls).toHaveLength(3);
-    expect(calls[1]!.url).toContain("/configurations");
-    expect(calls[1]!.init.method).toBeUndefined();
-    expect(calls.some((call) => call.init.method === "PUT")).toBe(false);
-    expect(calls.some((call) => call.init.method === "POST")).toBe(false);
-  });
-
   it("retries a persisted tunnel after its first configuration request does not apply", async () => {
     const persistent = persistentRetryFetch("not-applied");
-    await expect(
-      reconcileStagingEdge(INPUT, { fetchImpl: persistent.fetchImpl }),
-    ).rejects.toThrow("cloudflare_tunnel_configure_failed");
-    await expect(
-      reconcileStagingEdge(INPUT, { fetchImpl: persistent.fetchImpl }),
-    ).resolves.toMatchObject({
-      state: "incomplete",
+    await expect(install(INPUT, persistent.fetchImpl)).rejects.toThrow(
+      "cloudflare_tunnel_configure_failed",
+    );
+    await expect(install(INPUT, persistent.fetchImpl)).resolves.toMatchObject({
+      state: "ready",
       tunnel_created: false,
       tunnel_configured: true,
     });
@@ -256,13 +225,11 @@ describe("Authority staging Cloudflare edge", () => {
 
   it("accepts a persisted configuration when Cloudflare applied the first PUT but its response was lost", async () => {
     const persistent = persistentRetryFetch("applied-response-lost");
-    await expect(
-      reconcileStagingEdge(INPUT, { fetchImpl: persistent.fetchImpl }),
-    ).rejects.toThrow("cloudflare_tunnel_configure_failed");
-    await expect(
-      reconcileStagingEdge(INPUT, { fetchImpl: persistent.fetchImpl }),
-    ).resolves.toMatchObject({
-      state: "incomplete",
+    await expect(install(INPUT, persistent.fetchImpl)).rejects.toThrow(
+      "cloudflare_tunnel_configure_failed",
+    );
+    await expect(install(INPUT, persistent.fetchImpl)).resolves.toMatchObject({
+      state: "ready",
       tunnel_created: false,
       tunnel_configured: true,
     });
@@ -281,10 +248,8 @@ describe("Authority staging Cloudflare edge", () => {
         tunnel: configuredTunnel(),
         configuration,
       });
-      await expect(
-        reconcileStagingEdge(INPUT, { fetchImpl }),
-      ).resolves.toMatchObject({
-        state: "incomplete",
+      await expect(install(INPUT, fetchImpl)).resolves.toMatchObject({
+        state: "ready",
         tunnel_created: false,
       });
       expect(calls.some((call) => call.init.method === "PUT")).toBe(true);
@@ -316,9 +281,9 @@ describe("Authority staging Cloudflare edge", () => {
         tunnel: configuredTunnel(),
         configuration,
       });
-      await expect(
-        reconcileStagingEdge(INPUT, { fetchImpl: drift.fetchImpl }),
-      ).rejects.toThrow("cloudflare_tunnel_configuration_conflict");
+      await expect(install(INPUT, drift.fetchImpl)).rejects.toThrow(
+        "cloudflare_tunnel_configuration_conflict",
+      );
       expect(drift.calls.some((call) => call.init.method === "PUT")).toBe(
         false,
       );
@@ -337,7 +302,7 @@ describe("Authority staging Cloudflare edge", () => {
       dns: configuredDns(),
     });
     await expect(
-      reconcileStagingEdge(INPUT, { fetchImpl: currentResponse.fetchImpl }),
+      install(INPUT, currentResponse.fetchImpl),
     ).resolves.toMatchObject({ state: "ready", tunnel_created: false });
 
     const contradictory = edgeFetch({
@@ -350,9 +315,9 @@ describe("Authority staging Cloudflare edge", () => {
         },
       ],
     });
-    await expect(
-      reconcileStagingEdge(INPUT, { fetchImpl: contradictory.fetchImpl }),
-    ).rejects.toThrow("cloudflare_tunnel_conflict");
+    await expect(install(INPUT, contradictory.fetchImpl)).rejects.toThrow(
+      "cloudflare_tunnel_conflict",
+    );
   });
 
   it("refuses existing ingress drift instead of overwriting it", async () => {
@@ -360,7 +325,7 @@ describe("Authority staging Cloudflare edge", () => {
       tunnel: configuredTunnel(),
       configuration: { ingress: [{ service: "http_status:418" }] },
     });
-    await expect(reconcileStagingEdge(INPUT, { fetchImpl })).rejects.toThrow(
+    await expect(install(INPUT, fetchImpl)).rejects.toThrow(
       "cloudflare_tunnel_configuration_conflict",
     );
     expect(calls.some((call) => call.init.method === "PUT")).toBe(false);
@@ -408,20 +373,21 @@ describe("Authority staging Cloudflare edge", () => {
 
   it("fails closed on duplicate or conflicting existing names", async () => {
     await expect(
-      reconcileStagingEdge(INPUT, {
-        fetchImpl: edgeFetch({
-          tunnel: [...configuredTunnel(), ...configuredTunnel()],
-        }).fetchImpl,
-      }),
+      install(
+        INPUT,
+        edgeFetch({ tunnel: [...configuredTunnel(), ...configuredTunnel()] })
+          .fetchImpl,
+      ),
     ).rejects.toThrow("cloudflare_tunnel_duplicate");
 
     await expect(
-      reconcileStagingEdge(INPUT, {
-        fetchImpl: edgeFetch({
+      install(
+        INPUT,
+        edgeFetch({
           tunnel: configuredTunnel(),
           dns: [{ ...configuredDns()[0], proxied: false }],
         }).fetchImpl,
-      }),
+      ),
     ).rejects.toThrow("cloudflare_dns_conflict");
   });
 
@@ -574,32 +540,39 @@ describe("Authority staging Cloudflare edge", () => {
 
   it("rejects unresolved dynamic references and does not reflect secret-bearing failures", async () => {
     await expect(
-      reconcileStagingEdge(
+      install(
         { ...INPUT, apiToken: "{{resolve:secretsmanager:edge/api}}" },
-        { fetchImpl: edgeFetch().fetchImpl },
+        edgeFetch().fetchImpl,
       ),
     ).rejects.toThrow("cloudflare_api_token_invalid");
 
     const { fetchImpl } = edgeFetch();
     await expect(
-      reconcileStagingEdge(INPUT, {
-        fetchImpl: async (...args) => {
-          const value = await fetchImpl(...args);
-          if (args[0].endsWith("/cfd_tunnel"))
-            return { ok: false, json: value.json };
-          return value;
-        },
+      install(INPUT, async (...args) => {
+        const value = await fetchImpl(...args);
+        if (args[0].endsWith("/cfd_tunnel"))
+          return { ok: false, json: value.json };
+        return value;
       }),
     ).rejects.not.toThrow(CONNECTOR_TOKEN);
 
+    const secretFailure = edgeFetch({ tunnel: configuredTunnel() });
     await expect(
       installStagingEdgeToken(INPUT, {
-        fetchImpl: edgeFetch({ tunnel: configuredTunnel() }).fetchImpl,
+        fetchImpl: secretFailure.fetchImpl,
         putSecretValue: async () => {
           throw new Error(CONNECTOR_TOKEN);
         },
       }),
     ).rejects.not.toThrow(CONNECTOR_TOKEN);
+    expect(secretFailure.events).toContain(
+      `GET /client/v4/accounts/${INPUT.accountId}/cfd_tunnel/${TUNNEL_ID}/token`,
+    );
+    expect(
+      secretFailure.events.some((event) =>
+        event.startsWith(`POST /client/v4/zones/${INPUT.zoneId}/dns_records`),
+      ),
+    ).toBe(false);
   });
 
   it("uses stable slot ownership across new operation IDs", async () => {

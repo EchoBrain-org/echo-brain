@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG_FILE=/etc/echo-authority/tunnel-token.conf
+CONFIG_FILE=/etc/echo-authority/host-bootstrap.conf
 AWS_REGION=
 TOKEN_REFERENCE=
 ASM_EXEC=/usr/local/bin/asm-exec
@@ -15,11 +15,12 @@ fail() {
 
 usage() {
   cat >&2 <<'USAGE'
-usage: install-cloudflare-tunnel-token.sh [--config /etc/echo-authority/tunnel-token.conf] [--region <aws-region> --tunnel-secret-reference <dynamic-reference>] [--check|install]
+usage: install-cloudflare-tunnel-token.sh [--region <aws-region> --tunnel-secret-reference <dynamic-reference>] [--check|install]
 
 The installer accepts only a Secrets Manager dynamic reference, never a raw
-Tunnel token. The reference is passed to asm-exec and resolved only inside its
-short-lived child process.
+Tunnel token. By default it reads the Authority host bootstrap configuration;
+the reference is passed to asm-exec and resolved only inside its short-lived
+child process.
 USAGE
   exit 2
 }
@@ -45,12 +46,12 @@ config_value() {
 load_config() {
   if [[ ! -e $CONFIG_FILE ]]; then
     [[ -n $AWS_REGION && -n $TOKEN_REFERENCE ]] && return 0
-    fail 'Tunnel configuration file is missing and no complete explicit configuration was supplied'
+    fail 'Authority host bootstrap configuration is missing and no complete explicit configuration was supplied'
   fi
   [[ -f $CONFIG_FILE && ! -L $CONFIG_FILE ]] \
-    || fail 'Tunnel configuration file must be a regular non-symlink file'
+    || fail 'Authority host bootstrap configuration must be a regular non-symlink file'
   [[ $(stat -c '%u:%a' "$CONFIG_FILE") == '0:600' ]] \
-    || fail 'Tunnel configuration file must be owned by root with mode 0600'
+    || fail 'Authority host bootstrap configuration must be owned by root with mode 0600'
   [[ -n $AWS_REGION ]] || AWS_REGION=$(config_value AWS_REGION)
   [[ -n $TOKEN_REFERENCE ]] || TOKEN_REFERENCE=$(config_value TUNNEL_SECRET_REFERENCE)
 }
@@ -88,11 +89,6 @@ run_resolved_action() {
 action=install
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --config)
-      [[ $# -ge 2 && $2 == /* ]] || usage
-      CONFIG_FILE=$2
-      shift 2
-      ;;
     --region)
       [[ $# -ge 2 ]] || usage
       AWS_REGION=$2

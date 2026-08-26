@@ -525,28 +525,10 @@
     }
   },
   "Outputs": {
-    "StagingVpcId": {
-      "Description": "Dedicated staging-slot VPC identifier.",
-      "Value": { "Ref": "StagingVpc" }
-    },
-    "StagingPublicSubnetId": {
-      "Description": "Dedicated staging public-subnet identifier.",
-      "Value": { "Ref": "StagingPublicSubnet" }
-    },
     "StagingHostInstanceId": {
       "Description": "Current staging host instance ID, or disabled when HostEnabled is false.",
       "Value": {
         "Fn::If": ["HostEnabledCondition", { "Ref": "StagingHost" }, "disabled"]
-      }
-    },
-    "StagingHostPrivateIp": {
-      "Description": "Current staging host private IP, or disabled when HostEnabled is false.",
-      "Value": {
-        "Fn::If": [
-          "HostEnabledCondition",
-          { "Fn::GetAtt": ["StagingHost", "PrivateIp"] },
-          "disabled"
-        ]
       }
     },
     "StagingDataVolumeId": {

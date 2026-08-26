@@ -355,19 +355,14 @@ function dependencies(
   const edgeInputs: Array<Record<string, unknown>> = [];
   const recoveredInstanceIds: string[] = [];
   const edge = {
-    reconcile: async (input: Record<string, unknown>) => {
-      events.push("edge-reconcile");
-      edgeInputs.push(input);
-      return { state: "incomplete" };
-    },
     installToken: async (input: Record<string, unknown>) => {
       events.push("edge-install-token");
       edgeInputs.push(input);
-      return { state: "ready" };
+      return { state: "ready" as const };
     },
     status: async () => {
       events.push("edge-status");
-      return { state: "ready" };
+      return { state: "ready" as const };
     },
   };
   const s3 = {
@@ -464,11 +459,28 @@ describe("Authority staging lifecycle", () => {
       "describe-stack",
       "ensure-termination-protection",
       "describe-stack",
-      "edge-reconcile",
       "edge-install-token",
     ]);
     expect(JSON.stringify(receipt)).not.toContain(TOKEN);
     expect(JSON.stringify(receipt)).not.toContain(SECRET_ARN);
+  });
+
+  it.each([
+    ["unknown", "edge_receipt_invalid"],
+    ["incomplete", "edge_install_unready"],
+  ])("refuses an installed edge state of %s", async (state, failure) => {
+    const fixture = dependencies();
+
+    await expect(
+      runAuthorityStaging("slot-init", INPUT, {
+        ...fixture.dependencies,
+        edge: {
+          ...fixture.dependencies.edge,
+          installToken: async () => ({ state: state as "ready" }),
+        },
+        execute: true,
+      }),
+    ).rejects.toThrow(failure);
   });
 
   it("reuses a CREATE plan while CloudFormation reports REVIEW_IN_PROGRESS", async () => {
@@ -551,7 +563,7 @@ describe("Authority staging lifecycle", () => {
         execute: true,
       }),
     ).rejects.toThrow("slot_termination_protection_failed");
-    expect(fixture.events).not.toContain("edge-reconcile");
+    expect(fixture.events).not.toContain("edge-install-token");
 
     await expect(
       runAuthorityStaging("status", INPUT, fixture.dependencies),
@@ -577,7 +589,7 @@ describe("Authority staging lifecycle", () => {
     });
     expect(
       fixture.events.lastIndexOf("ensure-termination-protection"),
-    ).toBeLessThan(fixture.events.lastIndexOf("edge-reconcile"));
+    ).toBeLessThan(fixture.events.lastIndexOf("edge-install-token"));
   });
 
   it("uploads and verifies a local bundle to the exact stack output before planning up", async () => {
@@ -715,7 +727,6 @@ describe("Authority staging lifecycle", () => {
     await expect(
       runAuthorityStaging("slot-init", INPUT, fixture.dependencies),
     ).rejects.toThrow("slot_init_update_rollback_requires_lifecycle_retry");
-    expect(fixture.events).not.toContain("edge-reconcile");
     expect(fixture.events).not.toContain("edge-install-token");
   });
 
@@ -864,7 +875,7 @@ describe("Authority staging lifecycle", () => {
       execute: true,
     });
 
-    expect(fixture.edgeInputs).toHaveLength(4);
+    expect(fixture.edgeInputs).toHaveLength(2);
     expect(new Set(fixture.edgeInputs.map((value) => value.slotId))).toEqual(
       new Set([INPUT.slotId]),
     );
@@ -879,7 +890,7 @@ describe("Authority staging lifecycle", () => {
       runAuthorityStaging("slot-init", INPUT, fixture.dependencies),
     ).rejects.toThrow("slot_init_existing_stack_change");
     expect(fixture.events).not.toContain("execute-change-set");
-    expect(fixture.events).not.toContain("edge-reconcile");
+    expect(fixture.events).not.toContain("edge-install-token");
   });
 
   it("rejects a raw management token in lifecycle input", async () => {

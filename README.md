@@ -169,25 +169,31 @@ Live meeting processing remains disabled until an administrator installs an
 explicit processing-source configuration binding. Identity/session testing
 does not enable meeting ingestion by itself.
 
-### AWS staging slot (implementation in progress)
+### AWS staging slot
 
-The staging controller creates a fixed Cloudflare edge and retained EBS data
-volume around a disposable EC2 host. The code is structurally tested but has
-not yet passed its first live qualification. See the
+The staging controller holds one fixed Cloudflare edge and retained EBS data
+volume around a disposable EC2 host. Its code is complete and structurally
+tested, but the slot has not been live-qualified. The
 [staging sprint specification](docs/product/2026-08-26-disposable-authority-staging-sprint-v1.md)
-for the exact claim boundary.
+is the source of truth for recovery, safety boundaries, and live qualification.
 
-`slot-init` creates the retained staging-slot boundary; `up` only materializes
-that retained machine and data boundary on a disposable host. Neither command
-deploys the observability sibling stack, resumes onboarding, starts an accepted
-release, or proves the public Authority descriptor. Those are explicit
-first-live steps after the slot exists.
+| Command     | Purpose                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slot-init` | Creates or repairs the retained AWS boundary, then creates or verifies its Cloudflare tunnel, ingress, DNS record, and connector-token deposit. |
+| `up`        | Creates a disposable host and attaches the retained data volume. It does not start an accepted release or prove application readiness.          |
+| `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain.                                          |
+| `status`    | Reads the lifecycle state. It reads AWS first and only checks Cloudflare when AWS is healthy.                                                   |
 
-Copy the committed slot input outside the checkout and replace every
-placeholder with the reviewed staging values. The hostname must be inside the
-selected Cloudflare zone. Keep one `operationId` unchanged between a plan and
-its execute; use a new one for the next operation. The first plan needs the
-non-root AWS session, but it does not need `asm-exec` or the Cloudflare secret.
+Prerequisites: an `echo-prod` IAM Identity Center session, `asm-exec`, the
+exact ARM64 Ubuntu AMI ID, and the ECR repository. Use neither `aws login` nor
+an AWS account-root session. Never SSH or open an interactive root shell on a
+staging host: the controller uses bounded SSM Run Command operations only.
+
+Copy the committed input outside the checkout and replace each placeholder
+with the reviewed staging values. The hostname must be in the selected
+Cloudflare zone. A single `operationId` identifies one reviewed plan and its
+execute: do not change it between those two commands. Set a new `operationId`
+before each later `slot-init`, `up`, or `down` plan.
 
 ```bash
 install -d -m 0700 /absolute/private/authority-staging
@@ -196,74 +202,31 @@ cp deploy/organization-authority/authority-staging-v1.example.json \
 chmod 0600 /absolute/private/authority-staging/input.json
 
 aws sso login --profile echo-prod
-npm run authority:staging -- slot-init \
-  --input /absolute/private/authority-staging/input.json
 ```
 
-The controller pins every local AWS and `asm-exec` subprocess to `echo-prod`
-and removes ambient static credential overrides. You do not need to export a
-profile, and an unrelated shell profile cannot redirect the staging operation.
-It derives the reserved Cloudflare tunnel name as `echo-authority-${slotId}`;
-the stable slot ID is limited to 48 characters and the private input does not
-accept an operator-selected tunnel name.
-
-Create the restricted Cloudflare management token once, with Tunnel Edit for
-the selected staging account and DNS Edit for the selected staging zone. Record
-the Cloudflare Account ID and Zone ID in the private input. Store the token once
-in a JSON secret named for staging, in the same ECHO AWS account and region as
-the private input, with the shape
-`{"cloudflare_api_token":"<value entered out of band>"}`. Never paste the value
-into a shell command or repository file. The operator needs read authority for
-that one management secret through `asm-exec` and write-only authority for the
-stack-created connector secret. Export only the management secret's dynamic
-reference because the controller re-executes under `asm-exec` and never accepts
-a raw management-token flag. Replace `EXACT_SECRET_ARN` below only in the
-operator shell.
-
-`status` describes the AWS stack before it resolves that reference. Absent,
-failed-create, unprotected, and rolled-back stacks therefore return their AWS
-recovery receipt even when the Cloudflare management secret is unavailable. A
-healthy stack resolves the token only when it proceeds to the edge check.
+Create the restricted Cloudflare management token once with Tunnel Edit for the
+staging account and DNS Edit for the staging zone, and store it in the reviewed
+JSON secret shape `{"cloudflare_api_token":"<entered out of band>"}`. Never
+paste its value into a command or repository file.
+Export only its dynamic reference: the controller re-executes under `asm-exec`
+and does not accept raw tokens. It pins AWS and `asm-exec` subprocesses to
+`echo-prod` and removes ambient static credential overrides.
 
 ```bash
+# Plan first. This does not resolve the Cloudflare management token.
+npm run authority:staging -- slot-init \
+  --input /absolute/private/authority-staging/input.json
+
 export ECHO_CLOUDFLARE_API_TOKEN='{{resolve:secretsmanager:EXACT_SECRET_ARN:SecretString:cloudflare_api_token}}'
 
-# Review the sanitized CloudFormation actions, then execute that exact plan.
+# Review this plan, then execute it with the unchanged operationId.
 npm run authority:staging -- slot-init \
   --input /absolute/private/authority-staging/input.json --execute
 ```
 
-Do not use `aws login`, an AWS account-root session, SSH, or an interactive root
-shell. The lifecycle controller reaches staging hosts only through bounded SSM
-Run Command operations.
-
-Initial `CREATE` plans preserve successfully created resources on failure rather
-than rolling retained state out of CloudFormation ownership. `status` reports
-`failed_create` or `unprotected` without touching Cloudflare. For either state,
-do not delete the stack or choose another stack name: inspect its sanitized
-CloudFormation events, correct the cause, set a new `operationId`, then run the
-same `slot-init` plan and execute pair against the same stack. Every successful
-`slot-init`, including a no-change retry, enables and re-verifies termination
-protection before it publishes or checks the Cloudflare edge.
-
-A failed update that CloudFormation safely restores is reported as
-`update_rolled_back`, without a Cloudflare check. Follow its `recovery_action`
-with a new operation ID and a new reviewed `up` or `down` plan. `slot-init`
-cannot mask that state, and updates remain blocked until an in-progress or
-failed rollback is repaired to a terminal state.
-
-The first `up` must make blank-volume initialization visible in both the plan
-and execute commands. Every later `up` omits that flag. `down` always plans
-first and, on execute, stops containers, syncs, and unmounts the retained volume
-before CloudFormation removes its attachment. If that CloudFormation update
-rolls back completely, the controller re-reads the stack and uses SSM against
-the currently reported host, which may be a replacement, to remount the volume
-and restart every existing container. Its controlled failure code says whether
-that recovery was proved or needs operator attention.
-
 After `slot-init` is ready, set a new `operationId`, build the immutable host
-bundle from the clean commit into the private directory, and add this object to
-the private input using the digest from the generated manifest:
+bundle from the clean commit, and add the resulting `hostSetup` object to the
+private input using the digest from its generated manifest:
 
 ```json
 "hostSetup": {
@@ -280,6 +243,7 @@ npm run bundle:authority-staging-host -- \
 ```
 
 ```bash
+# First host only: review, then execute the visible blank-volume initialization.
 npm run authority:staging -- up \
   --input /absolute/private/authority-staging/input.json \
   --initialize-blank-data-volume
@@ -287,20 +251,29 @@ npm run authority:staging -- up \
   --input /absolute/private/authority-staging/input.json \
   --initialize-blank-data-volume --execute
 
-# Set a new operationId in the private input before this new plan.
+# Set a new operationId before this separate plan and execute.
 npm run authority:staging -- down \
   --input /absolute/private/authority-staging/input.json
 npm run authority:staging -- down \
   --input /absolute/private/authority-staging/input.json --execute
+
+# After down, set another new operationId. Later up omits initialization.
+npm run authority:staging -- up \
+  --input /absolute/private/authority-staging/input.json
+npm run authority:staging -- up \
+  --input /absolute/private/authority-staging/input.json --execute
+
+# Read only. In healthy state, this also checks the Cloudflare edge.
+npm run authority:staging -- status \
+  --input /absolute/private/authority-staging/input.json
 ```
 
-`asm-exec`, an authenticated AWS CLI session, the exact ARM64 Ubuntu AMI ID,
-and the ECR repository are operator prerequisites. The initial token creation,
-SNS email confirmation, provider applications, founder login, and first canary
-remain explicit human steps; routine host replacement requires no Cloudflare
-dashboard, DNS, callback, or provider reconfiguration. V1 remains a
-single-operator lifecycle; do not run two staging commands for this slot at the
-same time from different terminals or machines.
+The initial token creation, SNS email confirmation, provider applications,
+founder login, observability deployment, and first canary remain explicit human
+steps. V1 is single-operator: never run overlapping lifecycle commands for this
+slot from different terminals or machines. For failed-create, rollback, mount,
+and recovery procedures, follow the full staging specification rather than
+deleting or renaming the stack.
 
 ## Design records
 

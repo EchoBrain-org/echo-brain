@@ -21,7 +21,6 @@ VOLUME_INITIALIZATION_MARKER=.echo-authority-volume-initialization-v1
 VOLUME_INITIALIZATION_SCHEMA=echo-authority-volume-initialization-v1
 CONFIG_DIR=/etc/echo-authority
 CONFIG_FILE="$CONFIG_DIR/host-bootstrap.conf"
-TUNNEL_CONFIG_FILE="$CONFIG_DIR/tunnel-token.conf"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 UNIT_SOURCE="$SCRIPT_DIR/cloudflared-echo-authority.service"
 TOKEN_INSTALLER_SOURCE="$SCRIPT_DIR/install-cloudflare-tunnel-token.sh"
@@ -57,18 +56,12 @@ Required on the first run (or supplied by a root-owned config file):
 Optional:
   --data-device </dev/...>              Verify this attached device against the volume ID.
   --initialize-blank-data-volume        Format an otherwise signature-free volume as ext4.
-  --config </etc/...>                   Root-owned 0600 non-secret configuration file.
 
 No raw Cloudflare Tunnel token is accepted by this script. Install it later with
 install-echo-authority-tunnel-token, which resolves the configured dynamic
 Secrets Manager reference only at runtime through asm-exec.
 USAGE
   exit 2
-}
-
-validate_absolute_path() {
-  [[ $1 == /etc/* && $1 != /etc/ && $1 != *$'\n'* ]] \
-    || fail 'configuration path must be a safe absolute path beneath /etc'
 }
 
 validate_region() {
@@ -143,30 +136,6 @@ EOF
       || fail 'existing host bootstrap configuration differs; review it instead of replacing it'
   else
     install -o root -g root -m 0600 "$temporary" "$CONFIG_FILE"
-  fi
-  trap - RETURN
-  rm -f -- "$temporary"
-}
-
-write_tunnel_config() {
-  local temporary
-  temporary="$(mktemp "$CONFIG_DIR/.tunnel-token.conf.XXXXXX")"
-  trap 'rm -f -- "$temporary"' RETURN
-  cat >"$temporary" <<EOF
-AWS_REGION=$AWS_REGION
-TUNNEL_SECRET_REFERENCE=$TUNNEL_SECRET_REFERENCE
-EOF
-  chmod 0600 "$temporary"
-  chown root:root "$temporary"
-  if [[ -e $TUNNEL_CONFIG_FILE ]]; then
-    [[ -f $TUNNEL_CONFIG_FILE && ! -L $TUNNEL_CONFIG_FILE ]] \
-      || fail 'Tunnel configuration file must be a regular non-symlink file'
-    [[ $(stat -c '%u:%a' "$TUNNEL_CONFIG_FILE") == '0:600' ]] \
-      || fail 'Tunnel configuration file must be owned by root with mode 0600'
-    cmp -s "$temporary" "$TUNNEL_CONFIG_FILE" \
-      || fail 'existing Tunnel configuration differs; review it instead of replacing it'
-  else
-    install -o root -g root -m 0600 "$temporary" "$TUNNEL_CONFIG_FILE"
   fi
   trap - RETURN
   rm -f -- "$temporary"
@@ -465,13 +434,6 @@ install_authority_application_control_material() {
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --config)
-      [[ $# -ge 2 ]] || usage
-      CONFIG_FILE=$2
-      CONFIG_DIR=$(dirname -- "$CONFIG_FILE")
-      TUNNEL_CONFIG_FILE="$CONFIG_DIR/tunnel-token.conf"
-      shift 2
-      ;;
     --region)
       [[ $# -ge 2 ]] || usage
       AWS_REGION=$2
@@ -521,7 +483,6 @@ done
 # shellcheck disable=SC1091
 . /etc/os-release
 [[ ${ID:-} == ubuntu ]] || fail 'this bootstrap supports Ubuntu only'
-validate_absolute_path "$CONFIG_FILE"
 for required_source in \
   "$UNIT_SOURCE" "$TOKEN_INSTALLER_SOURCE" "$ONBOARD_SOURCE" "$UPDATER_SOURCE" \
   "$RESTORER_SOURCE" "$RELEASE_VALIDATOR_SOURCE" "$RUNTIME_PROFILE_VALIDATOR_SOURCE"; do
@@ -538,7 +499,6 @@ validate_ecr_registry "$ECR_REGISTRY"
 validate_volume_id "$DATA_VOLUME_ID"
 [[ -z $DATA_DEVICE || $DATA_DEVICE == /dev/* ]] || fail 'data device must be an absolute /dev path'
 write_config_if_needed
-write_tunnel_config
 
 export DEBIAN_FRONTEND=noninteractive
 # Do not leave a package-installed or previously enabled Docker unit able to

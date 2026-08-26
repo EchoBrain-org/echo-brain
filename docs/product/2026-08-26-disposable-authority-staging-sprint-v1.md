@@ -1,8 +1,9 @@
 # Disposable Authority staging sprint V1
 
-**Status:** implementation in progress. No staging slot has been deployed, no
-host or tunnel has been qualified live, and no timing target has been proved.
-**Grounded at:** `origin/main` @ `a7dd568`.
+**Status:** code complete on `main` @ `a12f419`. No staging slot has been
+deployed, no host or tunnel has been qualified live, and no timing target has
+been proved.
+**Grounded at:** `main` @ `a12f419`.
 **Scope:** one fixed staging edge and one replaceable AWS Authority host in
 ECHO's AWS account. This is deployment and operations work only. It does not
 change product behavior, release-record semantics, the production Authority, or
@@ -32,7 +33,7 @@ same staging edge and retained staging data volume.
 
 ## Entry gates
 
-Before implementation starts:
+Before the first live run:
 
 1. ADR-0008 is accepted with the ECHO-hosted default and its custody,
    support, logs, backup, and incident consequences are acknowledged for this
@@ -105,7 +106,7 @@ Cloudflare dashboard work. See
 
 ## Lifecycle design and qualification boundary
 
-The implementation-in-progress defines four operator commands with explicit,
+The code-complete implementation defines four operator commands with explicit,
 machine-readable receipts. A command existing in the repository is not itself
 live evidence; the live phases below say what must be observed before we call a
 stage qualified.

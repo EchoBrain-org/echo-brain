@@ -46,8 +46,8 @@ const REQUIRED_FILES = Object.freeze([
   UNIT,
   TOKEN_INSTALLER,
   ONBOARD,
-  UPDATER,
   RESTORER,
+  UPDATER,
   RELEASE_VALIDATOR,
   RUNTIME_PROFILE_VALIDATOR,
 ]);
@@ -141,21 +141,8 @@ function checkedCommit(sourceRoot) {
   return commit;
 }
 
-function referencedPatches(sourceRoot) {
-  const bootstrap = readFileSync(join(sourceRoot, BOOTSTRAP), "utf8");
-  const matches = [
-    ...bootstrap.matchAll(
-      /\$SCRIPT_DIR\/([A-Za-z0-9][A-Za-z0-9._-]*\.patch)\b/g,
-    ),
-  ].map((match) => match[1]);
-  return [...new Set(matches)]
-    .sort()
-    .map((name) => `deploy/organization-authority/${name}`);
-}
-
 function bundleFiles(sourceRoot) {
-  const paths = [...REQUIRED_FILES, ...referencedPatches(sourceRoot)].sort();
-  const files = paths.map((path) => {
+  const files = REQUIRED_FILES.map((path) => {
     regularFile(join(sourceRoot, path), path);
     const mode = path.endsWith(".sh") ? 0o755 : 0o644;
     return Object.freeze({
