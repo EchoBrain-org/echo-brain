@@ -83,8 +83,8 @@ Provider verification occurs before activation. A failed, incomplete, or
 unavailable verification leaves no active connection; absence therefore means
 inactive.
 
-Raw bot-token bytes are written only to the customer-owned Authority secret
-directory as a mode-0600 file. `integrations.sqlite` receives an opaque
+Raw bot-token bytes are written only to the organization-scoped Authority
+private directory as a mode-0600 file. `integrations.sqlite` receives an opaque
 `sch_*` handle plus the verified workspace, bot identity, granted scopes,
 public channel configuration, evidence digests, and activation audit. The
 database never receives the token.
@@ -247,7 +247,7 @@ The connection and permission service must preserve these rules:
 - On the retained V1 path, authenticate the caller as the exact enrolled
   installation and installation key named by the binding. Loopback networking
   alone is not authentication.
-- Store provider tokens in a private mode-0600 file under customer-owned
+- Store provider tokens in a private mode-0600 file under organization-scoped
   Authority state for the single-Authority milestone. SQLite stores only an
   opaque `sch_*` handle, never token bytes, authorization codes, or raw PKCE
   material.

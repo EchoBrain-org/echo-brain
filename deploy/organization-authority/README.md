@@ -4,6 +4,13 @@ This is the deployable clean V1 Authority only. It uses a new `clean-data/`
 directory, never imports previous Authority state, and uses both EC2 Compose
 profiles automatically.
 
+[ADR-0008](../../docs/decisions/ADR-0008-echo-hosted-authority-by-default.md)
+defines the operator. ECHO operates the default deployment in ECHO's AWS
+account. When an organization requests its own account before provisioning,
+that organization or its explicitly authorized support operator runs this
+procedure. The selected account controls the volume, backups, encryption
+boundary, logs, and infrastructure credentials.
+
 For local synthetic Authority development, do not create `clean-data/` beside
 this deployment directory and do not run this deployment wrapper. Use
 [`npm run authority:local`](../../README.md#local-authority-exercise) from the

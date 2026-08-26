@@ -6,8 +6,8 @@ title: Deploy and rehearse minimal Authority observability
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-25
-reviewed_at: 2026-08-25
-reviewed_ref: d3694510a24a8ae1c9b94e22d74fba6335c750a8
+reviewed_at: 2026-08-26
+reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
 tested_at: 2026-08-25
 ---
 
@@ -23,9 +23,18 @@ observability stack changes. The outcome is one small, verified loop:
 - repeated probe, worker, or restart failures enter alarm state;
 - one confirmed email destination receives alarm and recovery messages.
 
-The operator owns the procedure. Escalate to the founder before changing the
-Authority host, IAM role, alert destination, or retention policy, or whenever a
-step would expose organization content.
+The operator owns the procedure. Before changing the Authority host, IAM role,
+alert destination, or retention policy, or whenever a step would expose
+organization content, escalate to the ECHO founder for a default-hosted
+Authority or to the organization's account administrator for an
+organization-controlled account.
+
+Under [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md),
+the operator is ECHO for a default-hosted Authority. For an Authority selected
+for an organization-controlled account before provisioning, the operator is
+the organization or an explicitly authorized support operator. The selected
+account controls the host, logs, alerting resources, keys, and infrastructure
+credentials.
 
 Prerequisites:
 

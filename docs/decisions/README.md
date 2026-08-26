@@ -29,8 +29,8 @@ separately.
 | [ADR-0005](ADR-0005-person-content-policy-v2-lineage.md)                 | Person content-policy v2 lineage                 | superseded |
 | [ADR-0006](ADR-0006-permission-aware-clean-v1-completion.md)             | Permission-aware clean V1 completion             | accepted   |
 | [ADR-0007](ADR-0007-lean-layer-4-answer-composition-v1.md)               | Lean Layer 4 answer composition V1               | accepted   |
-| [ADR-0008](ADR-0008-organization-owned-authority-account-and-custody.md) | Organization-owned Authority account and custody | proposed   |
-| [ADR-0009](ADR-0009-retained-authority-data-volume-boundary.md)          | Retained Authority data-volume boundary          | proposed   |
+| [ADR-0008](ADR-0008-echo-hosted-authority-by-default.md)                 | ECHO-hosted Authority by default                  | accepted   |
+| [ADR-0009](ADR-0009-retained-authority-data-volume-boundary.md)          | Retained Authority data-volume boundary          | accepted   |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

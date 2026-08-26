@@ -173,6 +173,8 @@ does not enable meeting ingestion by itself.
 
 - [Organization-operated server core](docs/decisions/ADR-0001-organization-operated-server-core.md)
 - [External OIDC Person sessions](docs/decisions/ADR-0002-external-oidc-person-sessions.md)
+- [ECHO-hosted Authority by default](docs/decisions/ADR-0008-echo-hosted-authority-by-default.md)
+- [Retained Authority data-volume boundary](docs/decisions/ADR-0009-retained-authority-data-volume-boundary.md)
 - [Workspace boundaries](docs/architecture/organization-workspace-boundaries.md)
 - [Product runtime boundary](docs/architecture/product-runtime.md)
 

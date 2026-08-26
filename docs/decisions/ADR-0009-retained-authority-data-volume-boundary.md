@@ -6,9 +6,9 @@ title: Retained Authority data-volume boundary
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-25
-reviewed_at: 2026-08-25
-reviewed_ref: 35875e49817c841ac1f8aa3abf669d6e9a636a83
-status: proposed
+reviewed_at: 2026-08-26
+reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
+status: accepted
 supersedes: []
 superseded_by: []
 updates: []
@@ -37,20 +37,24 @@ replaceable host material.
 | B. Root-volume-only state               | Keep `clean-data/` on the instance root volume.                                                                                      | A host replacement remains a data-recovery event; it cannot prove replaceability.         |
 | C. Mount the whole deployment directory | Put code, host configuration, and state on one retained volume.                                                                      | Makes host configuration durable state and blurs the replacement boundary.                |
 
-## Candidate decision and consequences
+## Decision and consequences
 
-**Candidate recommendation: option A.** Each Authority receives one dedicated
-encrypted data volume, mounted exactly at:
+**The founder accepted option A on 2026-08-26.** Each Authority must receive
+one dedicated encrypted data volume, mounted exactly at:
 
 ```text
 /srv/echo-authority-clean-v1/clean-data
 ```
 
-Its lifecycle is independent of the instance and host stack. The eventual
-infrastructure definition retains the volume on stack deletion and enrolls it
-in the organization backup policy. The host root volume contains the deployment
-root and replaceable material only; it must not become a second live source of
-organization state after cutover.
+Its lifecycle must be independent of the instance and host stack. The eventual
+infrastructure definition must retain the volume on stack deletion and enroll
+it in the organization backup policy. The host root volume must contain the
+deployment root and replaceable material only; it must not become a second live
+source of organization state after cutover.
+
+When provisioned, the retained volume, backup policy, and encryption boundary
+will live in the Authority's selected operating account under
+[ADR-0008](ADR-0008-echo-hosted-authority-by-default.md).
 
 The `clean-data` mount must be present, a real directory rather than a
 symlink, mounted from the intended data volume, and owned by the fixed numeric
@@ -64,10 +68,10 @@ inspection of the existing Authority host on 2026-08-25. The private operator
 receipt retains the host identifier; this decision records only the reusable
 numeric identity and the observed state ownership:
 
-| Required value               | Candidate value |
-| ---------------------------- | --------------- |
-| `echo-authority` UID         | `999`           |
-| `echo-authority` primary GID | `988`           |
+| Required value               | Accepted value |
+| ---------------------------- | -------------- |
+| `echo-authority` UID         | `999`          |
+| `echo-authority` primary GID | `988`          |
 
 The inspection also found the existing `clean-data/` and `clean-data/private/`
 directories owned by `999:988`. A local default such as `1000:1000`, a new
@@ -77,8 +81,8 @@ the data volume is mounted or any container reads it.
 
 ## Migration, rollback, and evidence
 
-This proposed decision does not implement or claim a migration. Acceptance
-only establishes the target boundary; a later reviewed runbook and
+This decision does not implement or claim a migration. Acceptance establishes
+the target boundary; a later reviewed runbook and
 implementation must carry out the change.
 
 That later migration must, at minimum:
@@ -99,8 +103,9 @@ failed cutover means stopping the Authority and returning to the preserved
 source state under a separately reviewed procedure; it does not mean merging
 or copying divergent state trees.
 
-Before this candidate can become `accepted`, the founder must confirm the
-verified UID and GID above and approve the retained-volume lifecycle,
-encryption owner, backup enrollment, and cutover/rollback plan. After
-acceptance, a successful rebuild and restore drill is still required before
+The founder confirmed the verified UID and GID above and approved the retained
+volume boundary on 2026-08-26. The selected operating account determines the
+encryption and backup owner under ADR-0008. The later implementation still
+requires a reviewed retained-volume lifecycle, backup enrollment,
+cutover/rollback procedure, and successful rebuild and restore drill before
 claiming a replaceable-host recovery capability.
