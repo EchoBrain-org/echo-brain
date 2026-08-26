@@ -49,9 +49,8 @@ independent of the owner.
 
 Stop and keep issue #25 open if any of these conditions is true:
 
-- the owner account cannot be selected as both Code Owner and user-specific
-  pull-request-only bypass actor;
-- the ruleset does not apply to administrators;
+- the repository-administrator role cannot be limited to pull-request-only
+  bypass or an account other than `@EchoBrain-org` has that role;
 - `CI required checks` cannot be pinned to GitHub Actions in strict mode;
 - a protected-path pull request can merge without `@EchoBrain-org` approval;
 - force-push or deletion protection is absent; or
@@ -106,8 +105,9 @@ In **Settings > Rules > Rulesets**, create one active branch ruleset named
 `Protect canonical main` with this exact policy:
 
 - target only `refs/heads/main`;
-- add user `@EchoBrain-org` (public user ID `302292153`) as the only bypass
-  actor, with **For pull requests only** selected;
+- add **Repository administrators** (repository role ID `5`) as the only bypass
+  actor, with **For pull requests only** selected, after confirming that
+  `@EchoBrain-org` is the repository's only administrator;
 - require a pull request before merging;
 - require zero general approvals and require review from Code Owners, keeping
   review ceremony limited to the protected paths;
@@ -117,14 +117,16 @@ In **Settings > Rules > Rulesets**, create one active branch ruleset named
 - restrict deletions; and
 - block force pushes.
 
-Do not add a repository role, collaborator, deploy key, or application bypass.
-Do not select an always-allow or exempt bypass. The named user may bypass a
-gate only from a pull request, leaving the pull-request, review, ruleset-bypass,
-and merge trail. The bypass does not authorize direct pushes, force pushes,
+Do not add the write or maintain role, a collaborator, deploy key, or
+application bypass. Do not select an always-allow or exempt bypass. The
+administrator role may bypass a gate only from a pull request, leaving the
+pull-request, review, ruleset-bypass, and merge trail. Adding another
+administrator would widen this emergency path and requires a recorded policy
+review first. The bypass does not authorize direct pushes, force pushes,
 branch deletion, tag movement, or release mutation.
 
-GitHub documents the rule types, strict status checks, user bypass actors, and
-the `pull_request` bypass mode in its
+GitHub documents the rule types, strict status checks, repository-role bypass
+actors, and the `pull_request` bypass mode in its
 [rulesets REST reference](https://docs.github.com/en/rest/repos/rules). GitHub
 also documents that Code Owner approval is required independently for owned
 paths and that the base-branch file governs a pull request in
@@ -147,8 +149,8 @@ No credential or token belongs in the receipt.
 
 1. Read the ruleset back and confirm its source is this repository, its state
    is active, and it targets only `refs/heads/main`.
-2. Confirm the only bypass entry is user `EchoBrain-org` in `pull_request`
-   mode. Confirm there is no role-wide administrator exemption.
+2. Confirm the only bypass entry is repository role `5` in `pull_request`
+   mode and that `EchoBrain-org` remains the only repository administrator.
 3. Confirm the rule list contains pull requests, strict required status
    `CI required checks` from app `15368`, deletion restriction, and
    non-fast-forward restriction.
