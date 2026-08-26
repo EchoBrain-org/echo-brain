@@ -91,25 +91,116 @@ Prerequisites:
   passing:
 
   ```sh
-  node --check tools/verify-authority-recovery.mjs
-  ./node_modules/.bin/vitest run --config vitest.config.ts tests/architecture/authority-recovery-verifier.test.ts
+  cd /opt/echo-authority-recovery/source
+  /opt/echo-authority-recovery/runtime/node --check tools/verify-authority-recovery.mjs
+  /opt/echo-authority-recovery/runtime/node node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/architecture/authority-recovery-verifier.test.ts
   ```
+
+  Do not run `node --check tools/verify-authority-recovery.mjs` or
+  `./node_modules/.bin/vitest run --config vitest.config.ts tests/architecture/authority-recovery-verifier.test.ts`
+  through an unpinned system Node installation; the bundled runtime is the
+  checked artifact.
 
 The helper must have no public IP, Authority host role, Cloudflare
 configuration, provider credentials, deployment directory, or route to general
-ingress or egress. Before attachment, retain a founder-private reviewed-IaC
-receipt showing the helper-only instance role, helper security group, subnet
-route table, every interface-endpoint security group, and every endpoint policy.
-The receipt must establish that the helper role has only SSM core access plus
-the minimum pre-staged-bundle read permission when used; its security group has
-no ingress and only HTTPS egress to the approved endpoint security groups; its
-route table has no NAT, internet-gateway, transit-gateway, or peering path; the
-SSM and `ssmmessages` endpoints accept HTTPS only from that helper group; and
-any temporary S3 endpoint policy is limited to the checksum-verified bundle.
-The reviewed path must have no route, endpoint policy, or role permission for
-Secrets Manager, ECR, Cloudflare, the tunnel, or providers while restored state
-is attached. Do not attach the restored volume to the live Authority or any
-machine that could run its startup path.
+ingress or egress. Create it only with the reviewed
+`deploy/organization-authority/authority-recovery-helper-v1.template.json` and
+validate that template with its paired
+`authority-recovery-helper-v1.guard` policy before its change set is executed.
+The stack requires, rather than discovers, the existing VPC, one unused subnet
+CIDR, exact helper Availability Zone, regional Amazon S3 managed prefix-list ID,
+ARM64 helper AMI, and one versioned bundle object, object version, digest,
+source commit, operation ID, and expiry time. The exact helper Availability
+Zone is the value passed to `start-restore-job`; a restored EBS volume cannot
+be attached across Availability Zones.
+
+Use an ARM64 Amazon Linux 2023 AMI whose private AMI evidence records SSM Agent
+`3.3.40.0` or newer, AWS CLI, `tar`, and Python 3 with the SQLite module. That
+SSM Agent version uses `ssmmessages` whenever available, so the two reviewed
+interface endpoints are `ssm` and `ssmmessages`, deliberately without an
+`ec2messages` endpoint. Before restored attachment, require the helper's SSM
+node to report `PingStatus` `Online` and retain its agent-version evidence
+privately. See [AWS's message-endpoint precedence documentation](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-setting-up-messageAPIs.html).
+
+The two SSM interface-endpoint policies are necessarily permissive to the SSM
+service (`Principal: "*"`, service-local actions, and service-local resources).
+They do not grant the helper access by themselves: the helper security group
+can reach only those endpoints and the helper role is the sole EC2 identity
+with SSM permissions. The S3 gateway endpoint is different: its policy binds
+both exact `aws:PrincipalArn` and exact `s3:VersionId` conditions.
+
+Before attachment, retain a founder-private reviewed-IaC receipt showing the
+helper-only instance role, helper security group, subnet route table, every
+interface-endpoint security group, and every endpoint policy. The receipt must
+establish that the helper role has only SSM core access plus
+`s3:GetObjectVersion` for the one checksum-verified bundle version; its
+security group has no ingress and only HTTPS egress to the SSM endpoint group
+and supplied S3 prefix list; its route table has no NAT, internet-gateway, transit-gateway,
+or peering path; the SSM and `ssmmessages` endpoints accept HTTPS only from
+that helper group; and the S3 gateway endpoint policy is limited to that role,
+object key, and object version. The reviewed path must have no route, endpoint
+policy, or role permission for Secrets Manager, ECR, Cloudflare, the tunnel,
+AWS Backup, or providers while restored state is attached. Do not attach the
+restored volume to the live Authority or any machine that could run its startup
+path.
+
+Create the bundle only from a clean Linux ARM64 checkout using Node `22.22.1`:
+
+```sh
+node tools/build-authority-recovery-helper-bundle.mjs \
+  --source-root <clean-reviewed-source-root> \
+  --output <new-content-addressed-bundle.tar.gz>
+```
+
+The repeatable operator path is the manually dispatched
+`.github/workflows/authority-recovery-helper-bundle.yml` workflow at the exact
+reviewed source commit. It runs this builder on GitHub's native ARM64 runner,
+executes the bundle's offline smoke proof, and retains the archive plus sidecar
+manifest for one day. Download that exact workflow artifact; do not substitute
+an artifact built by the x86/QEMU timing experiment or a developer workstation.
+
+Run it only after `npm ci` has established the locked dependency tree. The
+command refuses dirty or non-Linux/ARM64 input, builds the workspace, stages the
+committed source plus the required dependency tree and built workspace output,
+runs the offline verifier smoke suite before packaging, and emits a sidecar
+manifest with source commit, Node version, lockfile digest, and archive
+SHA-256. Upload the archive to a pre-existing private, versioned S3 bucket
+without changing its bytes. Record its resulting object version and digest
+privately. The helper AMI must already provide the AWS CLI, `tar`, and Python 3
+with the SQLite module; it needs no system Node installation. The helper
+downloads only that version, validates the digest, verifies Python SQLite and
+the bundled Node runtime, runs the same smoke suite, and writes its private
+`.bundle-ready` marker before any restored volume is attached.
+
+Treat `BundleObjectVersion` as an opaque identifier. The helper template permits
+the documented base64-style `/`, `+`, and `=` characters but rejects quotes,
+whitespace, shell expansion characters, and backslashes; it places the value
+only inside a single-quoted `aws s3api get-object --version-id` argument. The
+S3 gateway endpoint policy uses `Principal: "*"` only because a gateway-endpoint
+policy evaluates the caller identity separately; its exact
+`aws:PrincipalArn`, object-key, and `s3:VersionId` conditions still admit only
+this helper role reading this one object version.
+
+Before attachment, run and retain the following post-bootstrap gate through the
+controlled operator account. All commands must report success; a missing marker,
+non-zero `cloud-init` result, non-`Online` SSM status, or agent version below
+`3.3.40.0` stops the drill:
+
+```sh
+aws ssm describe-instance-information \
+  --filters Key=InstanceIds,Values=<RecoveryHelperInstanceId-output> \
+  --query 'InstanceInformationList[0].{PingStatus:PingStatus,AgentVersion:AgentVersion}' \
+  --output json --region <approved-region> --profile <authority-account-profile>
+aws ssm send-command \
+  --document-name AWS-RunShellScript \
+  --instance-ids <RecoveryHelperInstanceId-output> \
+  --parameters 'commands=["set -eu","cloud-init status --wait","test -f /opt/echo-authority-recovery/.bundle-ready"]' \
+  --region <approved-region> --profile <authority-account-profile>
+aws ssm get-command-invocation \
+  --command-id <returned-command-id> \
+  --instance-id <RecoveryHelperInstanceId-output> \
+  --region <approved-region> --profile <authority-account-profile>
+```
 
 Stop before mutation if the root volume cannot be identified unambiguously, the
 AWS Backup selection would include more than that one volume, `Encrypted` is
@@ -145,7 +236,7 @@ tickets, or the repository.
 ```sh
 aws sts get-caller-identity --output json
 aws ec2 describe-volumes --volume-ids <confirmed-root-volume-id> \
-  --query 'Volumes[0].{VolumeId:VolumeId,Encrypted:Encrypted,KmsKeyId:KmsKeyId,State:State,Attachments:Attachments}' \
+  --query 'Volumes[0].{VolumeId:VolumeId,Encrypted:Encrypted,KmsKeyId:KmsKeyId,State:State,Attachments:Attachments,AvailabilityZone:AvailabilityZone,VolumeType:VolumeType,Size:Size,Iops:Iops,Throughput:Throughput}' \
   --output json
 aws kms describe-key --key-id <source-volume-kms-key-id> \
   --query 'KeyMetadata.{Arn:Arn,AWSAccountId:AWSAccountId,KeyManager:KeyManager,KeyState:KeyState,Enabled:Enabled,KeyUsage:KeyUsage}' \
@@ -168,6 +259,13 @@ Proceed only when all of the following are true and recorded privately:
   restore. For a customer-managed key, review its policy and grants for a
   relevant deny or missing permission; for an AWS-managed key, record the
   manager and rely on the completed backup job as the operational proof.
+
+Also retain the source volume's `VolumeType`, `Size`, `Iops`, and `Throughput`
+privately for the restore map. AWS Backup recovery-point metadata can omit
+`volumeType`, `volumeSize`, `iops`, or `throughput`; it is not a substitute for
+the pre-backup EC2 source-volume receipt. For the current `gp3` root volume,
+preserve reviewed IOPS and throughput explicitly rather than accepting an
+unrecorded restore default.
 
 The verified current `aws/ebs` class is an AWS-managed source key and is valid
 for this same-account recovery floor. It blocks a future cross-account copy
@@ -468,8 +566,13 @@ is `available` with no attachments. This is validation of the restored volume's
 identity and encryption, not a check of the helper root volume.
 
 First call `get-recovery-point-restore-metadata` and retain its private output.
-Build the EBS metadata map from those reviewed source facts, overriding the
-destination controls explicitly. The command shape is:
+Build the EBS metadata map from the pre-backup EC2 source-volume receipt,
+cross-checking every value that is present in the AWS Backup recovery-point
+metadata. Recovery-point metadata can omit `volumeType`, `volumeSize`, `iops`,
+and `throughput`, so do not derive those missing values from a default. Override
+the destination Availability Zone, encryption, and KMS boundary explicitly. For
+the current `gp3` source, all of `volumeType`, `volumeSize`, `iops`, and
+`throughput` are required. The command shape is:
 
 ```sh
 aws backup get-recovery-point-restore-metadata \
@@ -559,9 +662,9 @@ verification, and the verifier must already have passed its offline synthetic
 fixture smoke test above. The staged source root is outside the restored volume:
 
 ```sh
-node tools/verify-authority-recovery.mjs \
+/opt/echo-authority-recovery/runtime/node /opt/echo-authority-recovery/source/tools/verify-authority-recovery.mjs \
   --clean-data <read-only-mount>/srv/echo-authority-clean-v1/clean-data \
-  --source-root <checksum-verified-authority-source-root>
+  --source-root /opt/echo-authority-recovery/source
 ```
 
 The verifier emits one canonical JSON line with a fixed schema identifier and
@@ -597,10 +700,34 @@ wait until account-scoped `describe-volumes` reports that exact restored volume
 as `available` with zero attachments before deletion. Re-confirm the volume
 identity against the restore receipt immediately before deletion; delete only
 that restored drill volume, never the helper root, the live Authority volume,
-or any source volume. Then terminate the helper. Do not retain a mounted
-restored copy, an attached helper, or copied private state as a convenience
-environment. Record only sanitized cleanup booleans: unmounted, detached,
-availability-confirmed, restored-volume-deleted, and helper-terminated.
+or any source volume. Do not terminate the helper independently. Delete the
+helper CloudFormation stack only after restored-volume cleanup so its instance,
+instance profile, role, endpoints, subnet, route table, and security groups are
+removed as one reviewed unit:
+
+```sh
+aws cloudformation list-stack-resources \
+  --stack-name <recovery-helper-stack-name> \
+  --query 'StackResourceSummaries[].LogicalResourceId' --output json \
+  --region <approved-region> --profile <authority-account-profile>
+aws cloudformation delete-stack \
+  --stack-name <recovery-helper-stack-name> \
+  --region <approved-region> --profile <authority-account-profile>
+aws cloudformation wait stack-delete-complete \
+  --stack-name <recovery-helper-stack-name> \
+  --region <approved-region> --profile <authority-account-profile>
+aws cloudformation describe-stacks \
+  --stack-name <recovery-helper-stack-name> \
+  --region <approved-region> --profile <authority-account-profile>
+```
+
+The final `describe-stacks` command must fail with the expected not-found
+validation error. Also query the account for zero remaining helper-tagged EC2
+instances, subnets, route tables, security groups, and VPC endpoints using the
+private `OperationId`. Do not retain a mounted restored copy, an attached
+helper, or copied private state as a convenience environment. Record only
+sanitized cleanup booleans: unmounted, detached, availability-confirmed,
+restored-volume-deleted, helper-stack-deleted, and helper-resource-tag-query-empty.
 
 Write a timestamped qualification record only after this external drill
 completes. The committed record contains source commit, configured cadence,
@@ -626,8 +753,8 @@ as an emergency boot disk.
 If helper isolation, secondary-device attachment, read-only no-replay mounting,
 or offline verification cannot be proven, detach the restored volume and
 use the same wait-for-`available`, identity re-confirmation, restored-volume
-only deletion, and sanitized cleanup confirmation before terminating the
-helper. Preserve only the founder-private operator receipt and sanitized
+only deletion, helper-stack deletion, and sanitized cleanup confirmation.
+Preserve only the founder-private operator receipt and sanitized
 finding. The failure is evidence that the recovery floor has not been rehearsed,
 not permission to relax the isolation boundary.
 
@@ -648,8 +775,8 @@ Record only:
   no-replay-mount, no-network, and no-Authority-start booleans;
 - sanitized verifier booleans and counts; and
 - sanitized unmount, detachment, availability confirmation, restored-volume
-  deletion, and helper-termination booleans, with no private entry names or
-  paths.
+  deletion, helper-stack deletion, and helper-resource-tag-query-empty
+  booleans, with no private entry names or paths.
 
 Set `tested_at` only after the schedule has produced a recovery point, the
 quiesced qualifying point has been restored, the secondary no-replay inspection
