@@ -298,6 +298,31 @@ describe("current-host backup maintenance transaction", () => {
     );
   });
 
+  it("does not report readiness when the preflight lock cannot be removed", () => {
+    const subject = fixture();
+    const rmdir = join(subject.root, "bin", "rmdir");
+    writeFileSync(
+      rmdir,
+      `#!/usr/bin/env bash
+exit 1
+`,
+      { mode: 0o755 },
+    );
+
+    const result = run(["preflight"], subject.environment);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain("maintenance_preflight_ready=true");
+    expect(result.stderr).toContain(
+      "could not release the Authority operation lock after preflight",
+    );
+    expect(existsSync(join(subject.root, "down"))).toBe(false);
+    expect(existsSync(join(subject.root, "restart"))).toBe(false);
+    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
+      true,
+    );
+  });
+
   it("refuses a pre-runtime-profile release before any outage", () => {
     const subject = fixture();
     const current = join(
@@ -313,6 +338,36 @@ describe("current-host backup maintenance transaction", () => {
     writeFileSync(current, `${canonical(legacy)}\n`, { mode: 0o600 });
 
     const result = run(["preflight"], subject.environment);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "accepted release record is not canonical clean-v1",
+    );
+    expect(existsSync(join(subject.root, "down"))).toBe(false);
+    expect(existsSync(join(subject.root, "restart"))).toBe(false);
+    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
+      false,
+    );
+  });
+
+  it("refuses a pre-runtime-profile release through maintain before any outage", () => {
+    const subject = fixture();
+    const current = join(
+      subject.data,
+      "release",
+      "current.clean-v1.json",
+    );
+    const legacy = JSON.parse(readFileSync(current, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete legacy.runtime_profile;
+    writeFileSync(current, `${canonical(legacy)}\n`, { mode: 0o600 });
+
+    const result = run(
+      ["maintain", "--ack-timeout-seconds", "1"],
+      subject.environment,
+    );
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(

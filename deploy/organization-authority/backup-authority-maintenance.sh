@@ -391,6 +391,8 @@ preflight() {
   verify_running_release || fail 'Authority is not healthy on the exact accepted tuple with matching local and public descriptors'
   require_complete_onboarding
   release_operation_lock
+  [[ ! -e "$OPERATION_LOCK_DIR" && ! -L "$OPERATION_LOCK_DIR" ]] || \
+    fail 'could not release the Authority operation lock after preflight'
   trap - EXIT
   printf 'maintenance_preflight_ready=true\n'
 }
