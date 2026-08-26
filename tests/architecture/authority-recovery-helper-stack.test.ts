@@ -262,6 +262,7 @@ describe("Authority isolated recovery helper stack", () => {
       "v22.22.1",
       "npm_shrinkwrap_sha256!==h",
       "id ec2-user",
+      'install -d -o ec2-user -g ec2-user -m 0755 \\"$source/node_modules/.vite-temp\\"',
       "runuser -u ec2-user",
       "authority-recovery-verifier.test.ts",
       ".bundle-ready",
