@@ -32,14 +32,57 @@ function withFakeAws() {
     `#!/bin/sh
 set -eu
 for argument in "$@"; do printf 'ARG=%s\\n' "$argument" >>"$FAKE_AWS_LOG"; done
+printf 'PROFILE_ENV=%s\\n' "\${AWS_PROFILE-unset}" >>"$FAKE_AWS_LOG"
+printf 'DEFAULT_PROFILE_ENV=%s\\n' "\${AWS_DEFAULT_PROFILE-unset}" >>"$FAKE_AWS_LOG"
+printf 'ACCESS_KEY_ENV=%s\\n' "\${AWS_ACCESS_KEY_ID-unset}" >>"$FAKE_AWS_LOG"
+printf 'SECRET_KEY_ENV=%s\\n' "\${AWS_SECRET_ACCESS_KEY-unset}" >>"$FAKE_AWS_LOG"
+printf 'SESSION_TOKEN_ENV=%s\\n' "\${AWS_SESSION_TOKEN-unset}" >>"$FAKE_AWS_LOG"
+printf 'WEB_IDENTITY_ENV=%s\\n' "\${AWS_WEB_IDENTITY_TOKEN_FILE-unset}" >>"$FAKE_AWS_LOG"
+printf 'CONFIG_FILE_ENV=%s\\n' "\${AWS_CONFIG_FILE-unset}" >>"$FAKE_AWS_LOG"
+printf 'CREDENTIALS_FILE_ENV=%s\\n' "\${AWS_SHARED_CREDENTIALS_FILE-unset}" >>"$FAKE_AWS_LOG"
 printf 'TOKEN_ENV=%s\\nEND\\n' "\${ECHO_CLOUDFLARE_API_TOKEN-unset}" >>"$FAKE_AWS_LOG"
-if [ "\${3-}" = put-secret-value ]; then cat >"$FAKE_AWS_STDIN"; else cat >/dev/null; fi
-if [ "\${3-}" = describe-change-set ]; then printf '%s\\n' "$FAKE_AWS_DESCRIBE_RESPONSE"; else printf '{}\\n'; fi
+case " $* " in
+  *" secretsmanager put-secret-value "*) cat >"$FAKE_AWS_STDIN" ;;
+  *) cat >/dev/null ;;
+esac
+case " $* " in
+  *" cloudformation describe-change-set "*) printf '%s\\n' "$FAKE_AWS_DESCRIBE_RESPONSE" ;;
+  *) printf '{}\\n' ;;
+esac
 `,
     { mode: 0o700 },
   );
   chmodSync(aws, 0o700);
   return { aws, log, root, stdin };
+}
+
+function withFakeAsmExec() {
+  const root = mkdtempSync(join(tmpdir(), "echo-authority-staging-asm-"));
+  const asmExec = join(root, "asm-exec");
+  const log = join(root, "calls.log");
+  writeFileSync(
+    asmExec,
+    `#!/bin/sh
+set -eu
+case "\${ECHO_CLOUDFLARE_API_TOKEN-}" in
+  '{{resolve:secretsmanager:'*) token_kind=dynamic ;;
+  *) token_kind=unexpected ;;
+esac
+printf 'PROFILE_ENV=%s\\n' "\${AWS_PROFILE-unset}" >"$FAKE_ASM_LOG"
+printf 'DEFAULT_PROFILE_ENV=%s\\n' "\${AWS_DEFAULT_PROFILE-unset}" >>"$FAKE_ASM_LOG"
+printf 'ACCESS_KEY_ENV=%s\\n' "\${AWS_ACCESS_KEY_ID-unset}" >>"$FAKE_ASM_LOG"
+printf 'SECRET_KEY_ENV=%s\\n' "\${AWS_SECRET_ACCESS_KEY-unset}" >>"$FAKE_ASM_LOG"
+printf 'SESSION_TOKEN_ENV=%s\\n' "\${AWS_SESSION_TOKEN-unset}" >>"$FAKE_ASM_LOG"
+printf 'WEB_IDENTITY_ENV=%s\\n' "\${AWS_WEB_IDENTITY_TOKEN_FILE-unset}" >>"$FAKE_ASM_LOG"
+printf 'CONFIG_FILE_ENV=%s\\n' "\${AWS_CONFIG_FILE-unset}" >>"$FAKE_ASM_LOG"
+printf 'CREDENTIALS_FILE_ENV=%s\\n' "\${AWS_SHARED_CREDENTIALS_FILE-unset}" >>"$FAKE_ASM_LOG"
+printf 'TOKEN_KIND=%s\\n' "$token_kind" >>"$FAKE_ASM_LOG"
+exit 86
+`,
+    { mode: 0o700 },
+  );
+  chmodSync(asmExec, 0o700);
+  return { asmExec, log, root };
 }
 const INPUT = Object.freeze({
   region: "us-west-2",
@@ -115,6 +158,8 @@ function dependencies(
     readonly quiesce?: "success" | "failure";
     readonly recover?: "success" | "failure";
     readonly executeFailure?: boolean;
+    readonly rollbackInstanceId?: string;
+    readonly updateFailureStatus?: string;
     readonly terminationProtectionFailures?: number;
     readonly slotInitExistingChange?: boolean;
     readonly changeAction?: {
@@ -134,11 +179,13 @@ function dependencies(
   let terminationProtectionFailures =
     options.terminationProtectionFailures ?? 0;
   let executeFailures = options.executeFailure === true ? 1 : 0;
+  let plannedHostEnabled = false;
   const plan = (request: {
     readonly parameters: Record<string, string>;
     readonly changeSetType: "CREATE" | "UPDATE";
     readonly changeSetName: string;
   }) => {
+    plannedHostEnabled = request.parameters.HostEnabled === "true";
     if (
       request.changeSetType === "UPDATE" &&
       request.changeSetName.includes("-slot-init-") &&
@@ -210,9 +257,30 @@ function dependencies(
             status: "CREATE_FAILED",
             terminationProtection: false,
           };
+        else if (status.exists)
+          status = {
+            ...status,
+            outputs: {
+              ...status.outputs,
+              StagingHostInstanceId:
+                options.rollbackInstanceId ??
+                status.outputs.StagingHostInstanceId,
+            },
+            status: options.updateFailureStatus ?? "UPDATE_ROLLBACK_COMPLETE",
+          };
         throw new Error("simulated failure");
       }
-      status = stack(false, false);
+      status = {
+        ...stack(plannedHostEnabled),
+        status:
+          request.changeSetType === "CREATE"
+            ? "CREATE_COMPLETE"
+            : "UPDATE_COMPLETE",
+        terminationProtection:
+          request.changeSetType === "UPDATE" && status.exists
+            ? status.terminationProtection
+            : false,
+      };
     },
     ensureTerminationProtection: async () => {
       events.push("ensure-termination-protection");
@@ -224,6 +292,7 @@ function dependencies(
     },
   };
   const edgeInputs: Array<Record<string, unknown>> = [];
+  const recoveredInstanceIds: string[] = [];
   const edge = {
     reconcile: async (input: Record<string, unknown>) => {
       events.push("edge-reconcile");
@@ -266,8 +335,9 @@ function dependencies(
         volumeUnmounted: true,
       };
     },
-    recoverHost: async () => {
+    recoverHost: async ({ instanceId }: { readonly instanceId: string }) => {
       events.push("ssm-recover-host");
+      recoveredInstanceIds.push(instanceId);
       if (options.recover === "failure") throw new Error("not recoverable");
       return {
         dockerStarted: true,
@@ -280,6 +350,7 @@ function dependencies(
     edgeInputs,
     events,
     plans,
+    recoveredInstanceIds,
     dependencies: { cloudFormation, cloudflareApiToken: TOKEN, edge, s3, ssm },
   };
 }
@@ -522,7 +593,7 @@ describe("Authority staging lifecycle", () => {
     expect(fixture.events).toEqual(["describe-stack"]);
   });
 
-  it("refuses to plan against a non-terminal stack", async () => {
+  it("reports a completed update rollback and executes a newly reviewed matching retry", async () => {
     const fixture = dependencies({
       initialStack: {
         ...stack(false),
@@ -530,8 +601,61 @@ describe("Authority staging lifecycle", () => {
       },
     });
     await expect(
+      runAuthorityStaging("status", INPUT, fixture.dependencies),
+    ).resolves.toMatchObject({
+      edge_checked: false,
+      recovery_action: "up",
+      stack_status: "UPDATE_ROLLBACK_COMPLETE",
+      state: "update_rolled_back",
+    });
+    await expect(
+      runAuthorityStaging("up", INPUT, fixture.dependencies),
+    ).resolves.toMatchObject({
+      action: "up",
+      change_set_ready_for_review: true,
+      state: "planned",
+    });
+    expect(fixture.events).not.toContain("edge-status");
+    expect(fixture.events).toContain("plan:UPDATE:true");
+    await expect(
+      runAuthorityStaging("up", INPUT, {
+        ...fixture.dependencies,
+        execute: true,
+      }),
+    ).resolves.toMatchObject({
+      action: "up",
+      stack_status: "UPDATE_COMPLETE",
+      state: "executed",
+    });
+  });
+
+  it.each([
+    "UPDATE_ROLLBACK_IN_PROGRESS",
+    "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
+    "UPDATE_ROLLBACK_FAILED",
+    "ROLLBACK_COMPLETE",
+  ])("blocks lifecycle mutation while the stack is %s", async (status) => {
+    const fixture = dependencies({
+      initialStack: { ...stack(false), status },
+    });
+    await expect(
       runAuthorityStaging("up", INPUT, fixture.dependencies),
     ).rejects.toThrow("stack_status_invalid");
+    expect(fixture.events).toEqual(["describe-stack"]);
+  });
+
+  it("does not let slot-init mask a completed update rollback", async () => {
+    const fixture = dependencies({
+      initialStack: {
+        ...stack(false),
+        status: "UPDATE_ROLLBACK_COMPLETE",
+      },
+    });
+    await expect(
+      runAuthorityStaging("slot-init", INPUT, fixture.dependencies),
+    ).rejects.toThrow("slot_init_update_rollback_requires_lifecycle_retry");
+    expect(fixture.events).not.toContain("edge-reconcile");
+    expect(fixture.events).not.toContain("edge-install-token");
   });
 
   it("quiesces the exact current host before an already-reviewed down executes", async () => {
@@ -563,10 +687,12 @@ describe("Authority staging lifecycle", () => {
     expect(fixture.events).not.toContain("execute-change-set");
   });
 
-  it("recovers the mounted host when CloudFormation fails after quiescence", async () => {
+  it("recovers the current rolled-back host when CloudFormation fails after quiescence", async () => {
+    const replacementInstanceId = "i-fedcba98765432100";
     const fixture = dependencies({
       initialStack: stack(true),
       executeFailure: true,
+      rollbackInstanceId: replacementInstanceId,
     });
     await runAuthorityStaging("down", INPUT, fixture.dependencies);
     await expect(
@@ -575,11 +701,13 @@ describe("Authority staging lifecycle", () => {
         execute: true,
       }),
     ).rejects.toThrow("change_set_execute_failed_host_recovered");
-    expect(fixture.events.slice(-3)).toEqual([
+    expect(fixture.events.slice(-4)).toEqual([
       "ssm-quiesce-host",
       "execute-change-set",
+      "describe-stack",
       "ssm-recover-host",
     ]);
+    expect(fixture.recoveredInstanceIds).toEqual([replacementInstanceId]);
   });
 
   it("reports an explicit failure when a quiesced host cannot be recovered", async () => {
@@ -596,6 +724,22 @@ describe("Authority staging lifecycle", () => {
       }),
     ).rejects.toThrow("change_set_execute_failed_host_recovery_failed");
     expect(fixture.events).toContain("ssm-recover-host");
+  });
+
+  it("refuses host recovery until CloudFormation reaches a proven rollback-complete state", async () => {
+    const fixture = dependencies({
+      initialStack: stack(true),
+      executeFailure: true,
+      updateFailureStatus: "UPDATE_ROLLBACK_IN_PROGRESS",
+    });
+    await runAuthorityStaging("down", INPUT, fixture.dependencies);
+    await expect(
+      runAuthorityStaging("down", INPUT, {
+        ...fixture.dependencies,
+        execute: true,
+      }),
+    ).rejects.toThrow("change_set_execute_failed_host_recovery_failed");
+    expect(fixture.events).not.toContain("ssm-recover-host");
   });
 
   it("refuses any reviewed plan that removes a retained state boundary", async () => {
@@ -704,6 +848,11 @@ describe("Authority staging lifecycle", () => {
     expect(source).toContain(
       '"--secret-string",\n          "file:///dev/stdin"',
     );
+    expect(source).toContain(
+      '"describe-events",\n      "--region",\n      region,',
+    );
+    expect(source).toContain('"--filters",\n      "FailedEvents=true"');
+    expect(source).not.toContain('"describe-stack-events"');
     expect(source).toContain("delete environment.ECHO_CLOUDFLARE_API_TOKEN");
   });
 
@@ -740,20 +889,79 @@ describe("Authority staging lifecycle", () => {
     expect(result.stderr).not.toContain("cloudflare_api_token");
   });
 
+  it("pins and sanitizes the AWS profile used by asm-exec", () => {
+    const fake = withFakeAsmExec();
+    try {
+      const environment: NodeJS.ProcessEnv = {
+        ...process.env,
+        AWS_ACCESS_KEY_ID: "fake-ambient-access-key",
+        AWS_CONFIG_FILE: "/private/tmp/wrong-aws-config",
+        AWS_DEFAULT_PROFILE: "wrong-default-profile",
+        AWS_PROFILE: "wrong-profile",
+        AWS_SECRET_ACCESS_KEY: "fake-ambient-secret-key",
+        AWS_SESSION_TOKEN: "fake-ambient-session-token",
+        AWS_SHARED_CREDENTIALS_FILE: "/private/tmp/wrong-aws-credentials",
+        AWS_WEB_IDENTITY_TOKEN_FILE: "/private/tmp/wrong-web-identity",
+        ECHO_CLOUDFLARE_API_TOKEN:
+          "{{resolve:secretsmanager:arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/cloudflare-management-abc:SecretString:cloudflare_api_token}}",
+        FAKE_ASM_LOG: fake.log,
+        PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+      };
+      delete environment.ECHO_AUTHORITY_STAGING_ASM_EXEC;
+      const result = spawnSync(
+        process.execPath,
+        [CLI, "slot-init", "--input", "missing.json", "--execute"],
+        { encoding: "utf8", env: environment },
+      );
+      expect(result.status).toBe(86);
+      const call = readFileSync(fake.log, "utf8");
+      expect(call).toContain("PROFILE_ENV=echo-prod");
+      expect(call).toContain("DEFAULT_PROFILE_ENV=echo-prod");
+      expect(call).toContain("ACCESS_KEY_ENV=unset");
+      expect(call).toContain("SECRET_KEY_ENV=unset");
+      expect(call).toContain("SESSION_TOKEN_ENV=unset");
+      expect(call).toContain("WEB_IDENTITY_ENV=unset");
+      expect(call).toContain("CONFIG_FILE_ENV=unset");
+      expect(call).toContain("CREDENTIALS_FILE_ENV=unset");
+      expect(call).toContain("TOKEN_KIND=dynamic");
+      expect(call).not.toContain("cloudflare-management-abc");
+    } finally {
+      rmSync(fake.root, { force: true, recursive: true });
+    }
+  });
+
   it("drives the default AWS CLI adapter with bounded create and write-only secret arguments", async () => {
     const fake = withFakeAws();
     const previous = {
+      accessKey: process.env.AWS_ACCESS_KEY_ID,
+      configFile: process.env.AWS_CONFIG_FILE,
+      defaultProfile: process.env.AWS_DEFAULT_PROFILE,
       describe: process.env.FAKE_AWS_DESCRIBE_RESPONSE,
       log: process.env.FAKE_AWS_LOG,
       path: process.env.PATH,
+      profile: process.env.AWS_PROFILE,
+      secretKey: process.env.AWS_SECRET_ACCESS_KEY,
+      sessionToken: process.env.AWS_SESSION_TOKEN,
+      sharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
       stdin: process.env.FAKE_AWS_STDIN,
       token: process.env.ECHO_CLOUDFLARE_API_TOKEN,
+      webIdentity: process.env.AWS_WEB_IDENTITY_TOKEN_FILE,
     };
     try {
       process.env.PATH = `${fake.root}:${previous.path ?? ""}`;
       process.env.FAKE_AWS_LOG = fake.log;
       process.env.FAKE_AWS_STDIN = fake.stdin;
       process.env.ECHO_CLOUDFLARE_API_TOKEN = TOKEN;
+      process.env.AWS_ACCESS_KEY_ID = "fake-ambient-access-key";
+      process.env.AWS_CONFIG_FILE = "/private/tmp/wrong-aws-config";
+      process.env.AWS_DEFAULT_PROFILE = "wrong-default-profile";
+      process.env.AWS_PROFILE = "wrong-profile";
+      process.env.AWS_SECRET_ACCESS_KEY = "fake-ambient-secret-key";
+      process.env.AWS_SESSION_TOKEN = "fake-ambient-session-token";
+      process.env.AWS_SHARED_CREDENTIALS_FILE =
+        "/private/tmp/wrong-aws-credentials";
+      process.env.AWS_WEB_IDENTITY_TOKEN_FILE =
+        "/private/tmp/wrong-web-identity";
       const adapters = createAwsCliAdapters();
       await adapters.putSecretValue!({
         clientRequestToken: "d".repeat(64),
@@ -762,11 +970,20 @@ describe("Authority staging lifecycle", () => {
       });
       const secretCall = readFileSync(fake.log, "utf8");
       expect(secretCall).toContain("ARG=secretsmanager\nARG=put-secret-value");
+      expect(secretCall).toContain("ARG=--profile\nARG=echo-prod");
       expect(secretCall).toContain("ARG=--region\nARG=us-west-2");
       expect(secretCall).toContain(
         "ARG=--secret-string\nARG=file:///dev/stdin",
       );
       expect(secretCall).toContain("TOKEN_ENV=unset");
+      expect(secretCall).toContain("PROFILE_ENV=echo-prod");
+      expect(secretCall).toContain("DEFAULT_PROFILE_ENV=echo-prod");
+      expect(secretCall).toContain("ACCESS_KEY_ENV=unset");
+      expect(secretCall).toContain("SECRET_KEY_ENV=unset");
+      expect(secretCall).toContain("SESSION_TOKEN_ENV=unset");
+      expect(secretCall).toContain("WEB_IDENTITY_ENV=unset");
+      expect(secretCall).toContain("CONFIG_FILE_ENV=unset");
+      expect(secretCall).toContain("CREDENTIALS_FILE_ENV=unset");
       expect(secretCall).not.toContain(TOKEN);
       expect(secretCall).not.toContain("connector-token-not-a-real-secret");
       expect(JSON.parse(readFileSync(fake.stdin, "utf8"))).toEqual({
@@ -811,8 +1028,21 @@ describe("Authority staging lifecycle", () => {
       });
       const createCalls = readFileSync(fake.log, "utf8");
       expect(createCalls).toContain("ARG=--on-stack-failure\nARG=DO_NOTHING");
-      expect(createCalls.match(/TOKEN_ENV=unset/g)).toHaveLength(3);
+      expect(createCalls.match(/ARG=--profile\nARG=echo-prod/g)).toHaveLength(
+        3,
+      );
+      expect(createCalls.match(/^PROFILE_ENV=echo-prod$/gm)).toHaveLength(3);
+      expect(createCalls.match(/ACCESS_KEY_ENV=unset/g)).toHaveLength(3);
+      expect(createCalls.match(/^TOKEN_ENV=unset$/gm)).toHaveLength(3);
     } finally {
+      if (previous.accessKey === undefined)
+        delete process.env.AWS_ACCESS_KEY_ID;
+      else process.env.AWS_ACCESS_KEY_ID = previous.accessKey;
+      if (previous.configFile === undefined) delete process.env.AWS_CONFIG_FILE;
+      else process.env.AWS_CONFIG_FILE = previous.configFile;
+      if (previous.defaultProfile === undefined)
+        delete process.env.AWS_DEFAULT_PROFILE;
+      else process.env.AWS_DEFAULT_PROFILE = previous.defaultProfile;
       if (previous.describe === undefined)
         delete process.env.FAKE_AWS_DESCRIBE_RESPONSE;
       else process.env.FAKE_AWS_DESCRIBE_RESPONSE = previous.describe;
@@ -820,11 +1050,27 @@ describe("Authority staging lifecycle", () => {
       else process.env.FAKE_AWS_LOG = previous.log;
       if (previous.path === undefined) delete process.env.PATH;
       else process.env.PATH = previous.path;
+      if (previous.profile === undefined) delete process.env.AWS_PROFILE;
+      else process.env.AWS_PROFILE = previous.profile;
+      if (previous.secretKey === undefined)
+        delete process.env.AWS_SECRET_ACCESS_KEY;
+      else process.env.AWS_SECRET_ACCESS_KEY = previous.secretKey;
+      if (previous.sessionToken === undefined)
+        delete process.env.AWS_SESSION_TOKEN;
+      else process.env.AWS_SESSION_TOKEN = previous.sessionToken;
+      if (previous.sharedCredentialsFile === undefined)
+        delete process.env.AWS_SHARED_CREDENTIALS_FILE;
+      else
+        process.env.AWS_SHARED_CREDENTIALS_FILE =
+          previous.sharedCredentialsFile;
       if (previous.stdin === undefined) delete process.env.FAKE_AWS_STDIN;
       else process.env.FAKE_AWS_STDIN = previous.stdin;
       if (previous.token === undefined)
         delete process.env.ECHO_CLOUDFLARE_API_TOKEN;
       else process.env.ECHO_CLOUDFLARE_API_TOKEN = previous.token;
+      if (previous.webIdentity === undefined)
+        delete process.env.AWS_WEB_IDENTITY_TOKEN_FILE;
+      else process.env.AWS_WEB_IDENTITY_TOKEN_FILE = previous.webIdentity;
       rmSync(fake.root, { force: true, recursive: true });
     }
   });

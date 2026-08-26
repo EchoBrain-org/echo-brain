@@ -1,5 +1,13 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -18,6 +26,35 @@ function bootstrap(): string {
 
 function tunnelInstaller(): string {
   return readFileSync(TUNNEL_INSTALLER, "utf8");
+}
+
+function executableTunnelInstaller() {
+  const root = mkdtempSync(join(tmpdir(), "echo-tunnel-installer-"));
+  const installer = join(root, "install-cloudflare-tunnel-token.sh");
+  const asmExec = join(root, "asm-exec");
+  const stat = join(root, "stat");
+  writeFileSync(
+    installer,
+    tunnelInstaller()
+      .replace("ASM_EXEC=/usr/local/bin/asm-exec", `ASM_EXEC=${asmExec}`)
+      .replace("RESOLUTION_ATTEMPTS=4", "RESOLUTION_ATTEMPTS=1"),
+    { mode: 0o700 },
+  );
+  writeFileSync(
+    asmExec,
+    `#!/bin/sh
+set -eu
+[ "\${1-}" = -- ]
+shift
+ECHO_CLOUDFLARE_TUNNEL_TOKEN=resolved-test-placeholder exec "$@"
+`,
+    { mode: 0o700 },
+  );
+  writeFileSync(stat, "#!/bin/sh\nprintf '0:600\\n'\n", { mode: 0o700 });
+  chmodSync(installer, 0o700);
+  chmodSync(asmExec, 0o700);
+  chmodSync(stat, 0o700);
+  return { installer, root };
 }
 
 describe("Authority staging host bootstrap", () => {
@@ -168,4 +205,49 @@ describe("Authority staging host bootstrap", () => {
     expect(script).not.toContain("--token");
     expect(script).not.toMatch(/get-secret-value|batch-get-secret-value/i);
   });
+
+  it.each(["explicit arguments", "custom config"])(
+    "preserves %s across the asm-exec child boundary",
+    (configuration) => {
+      const fixture = executableTunnelInstaller();
+      try {
+        const reference =
+          "{{resolve:secretsmanager:arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/tunnel-abc:SecretString:token}}";
+        let args: string[];
+        if (configuration === "explicit arguments") {
+          args = [
+            fixture.installer,
+            "--region",
+            "us-west-2",
+            "--tunnel-secret-reference",
+            reference,
+            "--check",
+          ];
+        } else {
+          const config = join(fixture.root, "custom-tunnel.conf");
+          writeFileSync(
+            config,
+            `AWS_REGION=us-west-2\nTUNNEL_SECRET_REFERENCE=${reference}\n`,
+            { mode: 0o600 },
+          );
+          args = [fixture.installer, "--config", config, "--check"];
+        }
+        const result = spawnSync("bash", args, {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${fixture.root}:${process.env.PATH ?? ""}`,
+          },
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          "Cloudflare Tunnel secret resolution succeeded.",
+        );
+        expect(result.stdout).not.toContain("resolved-test-placeholder");
+        expect(result.stderr).not.toContain("resolved-test-placeholder");
+      } finally {
+        rmSync(fixture.root, { force: true, recursive: true });
+      }
+    },
+  );
 });

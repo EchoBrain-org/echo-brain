@@ -55,6 +55,12 @@ load_config() {
   [[ -n $TOKEN_REFERENCE ]] || TOKEN_REFERENCE=$(config_value TUNNEL_SECRET_REFERENCE)
 }
 
+load_and_validate_config() {
+  load_config
+  validate_region "$AWS_REGION"
+  validate_reference "$TOKEN_REFERENCE"
+}
+
 validate_resolved_token() {
   [[ -n ${ECHO_CLOUDFLARE_TUNNEL_TOKEN:-} ]] \
     || fail 'the resolved Tunnel token is empty'
@@ -122,10 +128,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-load_config
-validate_region "$AWS_REGION"
-validate_reference "$TOKEN_REFERENCE"
-
 case $action in
   --resolved-check)
     validate_resolved_token
@@ -153,6 +155,7 @@ case $action in
     printf 'Cloudflare Tunnel token installed with private permissions.\n'
     ;;
   --check)
+    load_and_validate_config
     [[ -x $ASM_EXEC ]] || fail "missing $ASM_EXEC"
     export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"
     export PATH="/snap/bin:$PATH"
@@ -161,6 +164,7 @@ case $action in
     run_resolved_action --resolved-check
     ;;
   install)
+    load_and_validate_config
     [[ ${EUID} -eq 0 ]] || fail 'installation must run as root'
     [[ -x $ASM_EXEC ]] || fail "missing $ASM_EXEC"
     export AWS_REGION AWS_DEFAULT_REGION="$AWS_REGION"

@@ -196,10 +196,13 @@ cp deploy/organization-authority/authority-staging-v1.example.json \
 chmod 0600 /absolute/private/authority-staging/input.json
 
 aws sso login --profile echo-prod
-export AWS_PROFILE=echo-prod
 npm run authority:staging -- slot-init \
   --input /absolute/private/authority-staging/input.json
 ```
+
+The controller pins every local AWS and `asm-exec` subprocess to `echo-prod`
+and removes ambient static credential overrides. You do not need to export a
+profile, and an unrelated shell profile cannot redirect the staging operation.
 
 Create the restricted Cloudflare management token once, with Tunnel Edit for
 the selected staging account and DNS Edit for the selected staging zone. Record
@@ -235,13 +238,20 @@ same `slot-init` plan and execute pair against the same stack. Every successful
 `slot-init`, including a no-change retry, enables and re-verifies termination
 protection before it publishes or checks the Cloudflare edge.
 
+A failed update that CloudFormation safely restores is reported as
+`update_rolled_back`, without a Cloudflare check. Follow its `recovery_action`
+with a new operation ID and a new reviewed `up` or `down` plan. `slot-init`
+cannot mask that state, and updates remain blocked until an in-progress or
+failed rollback is repaired to a terminal state.
+
 The first `up` must make blank-volume initialization visible in both the plan
 and execute commands. Every later `up` omits that flag. `down` always plans
 first and, on execute, stops containers, syncs, and unmounts the retained volume
 before CloudFormation removes its attachment. If that CloudFormation update
-fails while the original host still answers SSM, the controller remounts the
-volume and restarts every existing container; its controlled failure code says
-whether that recovery was proved or needs operator attention.
+rolls back completely, the controller re-reads the stack and uses SSM against
+the currently reported host, which may be a replacement, to remount the volume
+and restart every existing container. Its controlled failure code says whether
+that recovery was proved or needs operator attention.
 
 After `slot-init` is ready, set a new `operationId`, build the immutable host
 bundle from the clean commit into the private directory, and add this object to

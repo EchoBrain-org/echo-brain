@@ -34,7 +34,24 @@ const SLOT_ID = /^staging-[a-z0-9][a-z0-9-]{7,63}$/;
 const CHANGE_ACTION = /^(Add|Modify|Remove|Import|Dynamic)$/;
 const LOGICAL_ID = /^[A-Za-z][A-Za-z0-9]{0,254}$/;
 const RESOURCE_TYPE = /^AWS::[A-Za-z0-9:]+$/;
-const STABLE_STACK_STATUS = /^(CREATE|UPDATE)_COMPLETE$/;
+const HEALTHY_STACK_STATUSES = new Set(["CREATE_COMPLETE", "UPDATE_COMPLETE"]);
+const RECOVERABLE_UPDATE_STACK_STATUS = "UPDATE_ROLLBACK_COMPLETE";
+const ECHO_HOSTED_STAGING_AWS_PROFILE = "echo-prod";
+const AMBIENT_AWS_CREDENTIAL_KEYS = Object.freeze([
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_SECURITY_TOKEN",
+  "AWS_ROLE_ARN",
+  "AWS_ROLE_SESSION_NAME",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+  "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+  "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+  "AWS_CONFIG_FILE",
+  "AWS_SHARED_CREDENTIALS_FILE",
+]);
 const TEMPLATE_MAX_BYTES = 51200;
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_TEMPLATE_PATH = resolve(
@@ -279,10 +296,16 @@ function outputMap(stack) {
       terminationProtection: stack.terminationProtection,
       outputs: Object.freeze({ ...outputs }),
     });
-  if (!STABLE_STACK_STATUS.test(stack.status)) refuse("stack_status_invalid");
+  if (
+    !HEALTHY_STACK_STATUSES.has(stack.status) &&
+    stack.status !== RECOVERABLE_UPDATE_STACK_STATUS
+  ) {
+    refuse("stack_status_invalid");
+  }
   return Object.freeze({
     failedCreate: false,
     pendingCreate: false,
+    updateRolledBack: stack.status === RECOVERABLE_UPDATE_STACK_STATUS,
     status: stack.status,
     terminationProtection: stack.terminationProtection,
     outputs: Object.freeze({ ...outputs }),
@@ -542,6 +565,8 @@ async function executePlannedStack(input, plan, dependencies) {
   }
   const current = await describeExactStack(input, dependencies);
   if (current === undefined) refuse("stack_missing_after_execute");
+  if (current.updateRolledBack === true)
+    refuse("change_set_execute_rolled_back");
   return current;
 }
 
@@ -730,7 +755,21 @@ async function recoverExactHost(input, outputs, dependencies) {
   }
 }
 
+async function recoverCurrentRolledBackHost(input, dependencies) {
+  const current = await describeExactStack(input, dependencies);
+  if (
+    current === undefined ||
+    current.updateRolledBack !== true ||
+    requiredOutput(current.outputs, "StagingHostReady") !== "true"
+  ) {
+    refuse("host_recovery_state_unproven");
+  }
+  await recoverExactHost(input, current.outputs, dependencies);
+}
+
 function assertSlotInitPlan(planned) {
+  if (planned.existing?.updateRolledBack === true)
+    refuse("slot_init_update_rollback_requires_lifecycle_retry");
   if (
     planned.existing !== undefined &&
     planned.existing.pendingCreate !== true &&
@@ -878,7 +917,9 @@ async function runDown(input, { execute = false, ...dependencies } = {}) {
   } catch (error) {
     if (!hostEnabled) throw error;
     try {
-      await recoverExactHost(input, current.outputs, dependencies);
+      // CloudFormation can recreate the host while rolling an update back.
+      // Re-read the terminal rollback outputs before touching any instance.
+      await recoverCurrentRolledBackHost(input, dependencies);
     } catch {
       throw new LifecycleError(
         "change_set_execute_failed_host_recovery_failed",
@@ -911,6 +952,16 @@ async function runStatus(input, dependencies = {}) {
     return lifecycleReceipt(input, "status", "failed_create", {
       edge_checked: false,
       recovery_action: "slot-init",
+      stack_status: stack.status,
+      termination_protection: stack.terminationProtection,
+    });
+  if (stack.updateRolledBack)
+    return lifecycleReceipt(input, "status", "update_rolled_back", {
+      edge_checked: false,
+      recovery_action:
+        requiredOutput(stack.outputs, "StagingHostReady") === "true"
+          ? "down"
+          : "up",
       stack_status: stack.status,
       termination_protection: stack.terminationProtection,
     });
@@ -950,18 +1001,25 @@ export async function runAuthorityStaging(action, rawInput, dependencies = {}) {
   refuse("usage");
 }
 
-function privateAwsEnvironment() {
+function echoHostedAwsEnvironment({ preserveCloudflareToken = false } = {}) {
   const environment = { ...process.env };
-  delete environment.ECHO_CLOUDFLARE_API_TOKEN;
+  for (const key of AMBIENT_AWS_CREDENTIAL_KEYS) delete environment[key];
+  environment.AWS_PROFILE = ECHO_HOSTED_STAGING_AWS_PROFILE;
+  environment.AWS_DEFAULT_PROFILE = ECHO_HOSTED_STAGING_AWS_PROFILE;
+  if (!preserveCloudflareToken) delete environment.ECHO_CLOUDFLARE_API_TOKEN;
   return environment;
 }
 
 function awsJson(args, { stdin } = {}) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn("aws", ["--no-cli-pager", ...args], {
-      env: privateAwsEnvironment(),
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawn(
+      "aws",
+      ["--no-cli-pager", "--profile", ECHO_HOSTED_STAGING_AWS_PROFILE, ...args],
+      {
+        env: echoHostedAwsEnvironment(),
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -1092,8 +1150,8 @@ async function describeAwsChangeSet(expected) {
 }
 
 function safeFailureEvents(payload) {
-  if (!Array.isArray(payload.StackEvents)) return [];
-  return payload.StackEvents.flatMap((item) => {
+  if (!Array.isArray(payload.OperationEvents)) return [];
+  return payload.OperationEvents.flatMap((item) => {
     if (
       item?.ResourceStatus !== "CREATE_FAILED" &&
       item?.ResourceStatus !== "UPDATE_FAILED" &&
@@ -1123,11 +1181,13 @@ async function failedStackEvents(region, stackName) {
   try {
     const result = await awsJson([
       "cloudformation",
-      "describe-stack-events",
+      "describe-events",
       "--region",
       region,
       "--stack-name",
       stackName,
+      "--filters",
+      "FailedEvents=true",
       "--output",
       "json",
     ]);
@@ -1601,7 +1661,7 @@ async function reexecWithAsmExecIfNeeded() {
   if (!isDynamicCloudflareReference(token))
     throw new LifecycleError("cloudflare_api_token_dynamic_reference_required");
   const environment = {
-    ...process.env,
+    ...echoHostedAwsEnvironment({ preserveCloudflareToken: true }),
     ECHO_AUTHORITY_STAGING_ASM_EXEC: "1",
   };
   const child = spawn(
