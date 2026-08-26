@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest";
 const REPO = resolve(import.meta.dirname, "../..");
 const WORKFLOW = resolve(REPO, ".github/workflows/ci.yml");
 const DOCKERFILE = resolve(REPO, "deploy/organization-authority/Dockerfile");
+const RECOVERY_VALIDATOR = resolve(
+  REPO,
+  "tools/validate-authority-recovery-templates.mjs",
+);
 
 function workflow() {
   return readFileSync(WORKFLOW, "utf8");
@@ -67,11 +71,44 @@ describe("CI workflow", () => {
 
     expect(source).toMatch(/required-checks:\s*\n\s+name: CI required checks/);
     expect(source).toMatch(
-      /needs: \[check, person-client-package, authority-container\]/,
+      /needs: \[check, person-client-package, authority-container, authority-recovery-infrastructure\]/,
     );
     expect(source).toContain('test "$CHECK_RESULT" = success');
     expect(source).toContain('test "$PERSON_CLIENT_PACKAGE_RESULT" = success');
     expect(source).toContain('test "$AUTHORITY_CONTAINER_RESULT" = success');
+    expect(source).toContain(
+      'test "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" = success',
+    );
+  });
+
+  it("executes exact recovery-template validation as an independent proof", () => {
+    const source = workflow();
+    const validator = readFileSync(RECOVERY_VALIDATOR, "utf8");
+    const job = source.slice(
+      source.indexOf("  authority-recovery-infrastructure:"),
+      source.indexOf("  required-checks:"),
+    );
+
+    expect(job).toContain("name: Authority recovery infrastructure");
+    expect(job).toContain(
+      "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
+    );
+    expect(job).toContain('python-version: "3.10"');
+    expect(job).toContain("npm run check:authority-recovery-infrastructure");
+    for (const required of [
+      "authority-current-host-recovery-v1.template.json",
+      "authority-current-host-recovery-v1.guard",
+      "authority-recovery-helper-v1.template.json",
+      "authority-recovery-helper-v1.guard",
+      "authority-current-host-recovery-v1.validation-tools.json",
+      "downloadVerified",
+      '"--output-format"',
+      '"--no-index"',
+      '"--no-deps"',
+      '"check"',
+    ]) {
+      expect(validator).toContain(required);
+    }
   });
 
   it("makes the dependency install depend only on the lockfile and workspace manifests", () => {

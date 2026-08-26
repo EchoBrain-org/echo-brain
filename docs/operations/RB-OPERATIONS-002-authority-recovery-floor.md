@@ -284,32 +284,37 @@ release and CloudFormation Guard 3.2.1 from the official
 `aws-cloudformation/cloudformation-guard` release. Install them only in a
 disposable operator environment, record both version outputs and the source
 asset in the private receipt, and verify the `cfn-lint` wheel and Guard archive
-against their pinned SHA-256 values before installation or extraction. Do not
-use the remote installer script or an unpinned tool. Exact source URLs, asset
-names, and platform checksums are pinned in
+against their pinned SHA-256 values before installation or extraction. The
+validator pins Python 3.10 and the complete `cfn-lint` dependency wheel set,
+installs only those verified local wheels with dependency resolution disabled,
+and then runs `pip check`. Do not use the remote installer script or an unpinned
+tool. Exact source URLs, asset names, and platform checksums are pinned in
 `deploy/organization-authority/authority-current-host-recovery-v1.validation-tools.json`.
 The checked-in Guard policy is
 `deploy/organization-authority/authority-current-host-recovery-v1.guard`.
 
-From the exact reviewed source root, all three validations must exit `0`:
+From the exact reviewed source root, run the same checksum-pinned local
+validation used by CI. It validates both the current-host recovery template
+and the disposable helper template against their paired Guard policies. The
+command must exit `0` and report exactly `cfn-lint` 1.55.1 and `cfn-guard`
+3.2.1:
 
 ```sh
-cfn-lint --version
-cfn-guard --version
-cfn-lint deploy/organization-authority/authority-current-host-recovery-v1.template.json
-cfn-guard validate \
-  --rules deploy/organization-authority/authority-current-host-recovery-v1.guard \
-  --data deploy/organization-authority/authority-current-host-recovery-v1.template.json
+npm run check:authority-recovery-infrastructure
 aws cloudformation validate-template \
   --template-body file://deploy/organization-authority/authority-current-host-recovery-v1.template.json \
   --region <approved-region> --profile <authority-account-profile>
+aws cloudformation validate-template \
+  --template-body file://deploy/organization-authority/authority-recovery-helper-v1.template.json \
+  --region <approved-region> --profile <authority-account-profile>
 ```
 
-The version commands must report exactly `cfn-lint` 1.55.1 and
-`cfn-guard` 3.2.1. A parse warning, lint warning/error, failed Guard rule, wrong
-version, or CloudFormation validation error stops the change. Keep the command
-outcomes in the private receipt; do not copy private parameters into committed
-logs.
+The local command downloads the pinned wheel set and platform-specific Guard
+archive into a disposable directory, verifies every SHA-256 value before use,
+and removes the directory on exit. A missing dependency, parse warning, lint
+warning/error, failed Guard rule, wrong version, or CloudFormation validation
+error stops the change. Keep the command outcomes in the private receipt; do
+not copy private parameters into committed logs.
 
 Create or update an AWS Backup plan in the Authority account that selects that
 one volume by exact resource selection. Do not use an account-wide selection,

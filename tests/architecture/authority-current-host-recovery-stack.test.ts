@@ -330,8 +330,16 @@ describe("Authority current-host recovery floor stack", () => {
       cfn_lint: {
         package: string;
         version: string;
+        python_version: string;
         source: string;
         wheel: { name: string; url: string; sha256: string };
+        dependencies: {
+          universal: { name: string; url: string; sha256: string }[];
+          assets: Record<
+            string,
+            { name: string; url: string; sha256: string }[]
+          >;
+        };
       };
       cfn_guard: {
         version: string;
@@ -358,9 +366,10 @@ describe("Authority current-host recovery floor stack", () => {
     expect(guard).toContain("AuthorityRootVolumeKmsKeyArn");
     expect(guard).toContain("rule bounded_schedule_and_retention");
     expect(guard).toContain('"Ref": "RecoveryPointRetentionDays"');
-    expect(validationTools.cfn_lint).toEqual({
+    expect(validationTools.cfn_lint).toMatchObject({
       package: "cfn-lint",
       version: "1.55.1",
+      python_version: "3.10",
       source:
         "https://github.com/aws-cloudformation/cfn-lint/releases/tag/v1.55.1",
       wheel: {
@@ -370,6 +379,18 @@ describe("Authority current-host recovery floor stack", () => {
           "4de4ced80c898ce0753b64fc5707bebf011601eb2d027d95e2ab3f91692b99d8",
       },
     });
+    expect(validationTools.cfn_lint.dependencies.universal).toHaveLength(6);
+    expect(
+      Object.keys(validationTools.cfn_lint.dependencies.assets).sort(),
+    ).toEqual(["aarch64-macos", "x86_64-linux"]);
+    for (const dependency of [
+      ...validationTools.cfn_lint.dependencies.universal,
+      ...Object.values(validationTools.cfn_lint.dependencies.assets).flat(),
+    ]) {
+      expect(dependency.name).toMatch(/\.whl$/);
+      expect(dependency.url).toMatch(/^https:\/\/files\.pythonhosted\.org\//);
+      expect(dependency.sha256).toMatch(/^[0-9a-f]{64}$/);
+    }
     expect(validationTools.cfn_guard.version).toBe("3.2.1");
     expect(validationTools.cfn_guard.source).toBe(
       "https://github.com/aws-cloudformation/cloudformation-guard/releases/tag/3.2.1",
@@ -390,7 +411,12 @@ describe("Authority current-host recovery floor stack", () => {
       "authority-current-host-recovery-v1.validation-tools.json",
     );
     expect(runbook).toContain("authority-current-host-recovery-v1.guard");
-    expect(runbook).toContain("cfn-guard validate \\");
+    expect(runbook).toContain(
+      "npm run check:authority-recovery-infrastructure",
+    );
+    expect(runbook).toContain(
+      "authority-recovery-helper-v1.template.json",
+    );
     expect(runbook).toContain("aws cloudformation validate-template \\");
     expect(runbook).toContain("`REVIEW_IN_PROGRESS`");
     expect(runbook).toContain("EnableTerminationProtection=true");

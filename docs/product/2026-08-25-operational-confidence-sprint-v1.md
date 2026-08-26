@@ -112,9 +112,9 @@ The marker was then removed and left no worktree change. This proves the layer
 input boundary, not a GitHub cache-speed result; the required post-change
 workflow measurements remain outstanding.
 
-Local recovery-template validation on 2026-08-25 passed with pinned
-`cfn-lint` 1.55.1 and checksum-verified CloudFormation Guard 3.2.1 against the
-checked-in policy. The Authority-account CloudFormation `validate-template`
+Local recovery-template validation on 2026-08-25 passed with Python 3.10, the
+complete checksum-pinned `cfn-lint` 1.55.1 wheel set, and checksum-verified
+CloudFormation Guard 3.2.1 against the checked-in policy. The Authority-account CloudFormation `validate-template`
 call also passed and reported the expected `CAPABILITY_IAM` requirement. No
 change set or AWS resource was created; cadence approval and unexecuted
 change-set review remain outstanding.
@@ -242,8 +242,8 @@ sequence owned by one CI author:
 4. retain the full shared check, standalone macOS Person package, and exact
    Authority-image/runtime proof;
 5. add a stable-named `if: always()` aggregate job that explicitly fails unless
-   `check`, `person-client-package`, and `authority-container` all report
-   `success`; and
+   `check`, `person-client-package`, `authority-container`, and the later
+   checksum-pinned recovery-infrastructure proof all report `success`; and
 6. record before/after wall time and total runner time on comparable runs.
 
 Conditional optimizations follow the graph change; they are not independent

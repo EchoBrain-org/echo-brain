@@ -1,7 +1,15 @@
 # CloudFormation Guard 3.2.1 policy for the disposable offline recovery helper.
 # Its narrow shape prevents a future convenience edit from becoming a second Authority.
 
+let all_resources = Resources.*
+let standalone_routes = Resources.*[ Type == 'AWS::EC2::Route' ]
+
 rule exact_helper_inventory {
+    let resource_count = count(%all_resources)
+    let standalone_route_count = count(%standalone_routes)
+
+    %resource_count == 15
+    %standalone_route_count == 0
     Resources.RecoveryHelperSubnet.Type == 'AWS::EC2::Subnet'
     Resources.RecoveryHelperRouteTable.Type == 'AWS::EC2::RouteTable'
     Resources.RecoveryHelperRouteTableAssociation.Type == 'AWS::EC2::SubnetRouteTableAssociation'

@@ -341,6 +341,10 @@ describe("Authority isolated recovery helper stack", () => {
 
   it("locks the helper shape with the committed Guard policy", () => {
     const guard = readFileSync(GUARD, "utf8");
+    expect(guard).toContain("let all_resources = Resources.*");
+    expect(guard).toContain("let standalone_routes = Resources.*[");
+    expect(guard).toContain("%resource_count == 15");
+    expect(guard).toContain("%standalone_route_count == 0");
     for (const rule of [
       "exact_helper_inventory",
       "no_ingress_and_endpoint_only_egress",

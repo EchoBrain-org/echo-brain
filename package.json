@@ -45,6 +45,7 @@
     "test:person": "node tools/build.mjs --person-client && vitest run --config vitest.config.ts tests/person-client",
     "check:boundary": "node tools/check-boundary.mjs",
     "check:docs": "node tools/check-docs.mjs",
+    "check:authority-recovery-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
     "check": "npm run check:boundary && npm run check:docs && npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
