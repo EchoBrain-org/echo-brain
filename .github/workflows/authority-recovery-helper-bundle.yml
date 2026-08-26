@@ -45,7 +45,7 @@ jobs:
               value.node_version !== `v${process.env.PRODUCT_NODE_VERSION}` ||
               value.platform !== "linux" ||
               value.architecture !== "arm64" ||
-              !/^[0-9a-f]{64}$/.test(value.package_lock_sha256) ||
+              !/^[0-9a-f]{64}$/.test(value.npm_shrinkwrap_sha256) ||
               !/^[0-9a-f]{64}$/.test(value.archive_sha256)
             ) throw new Error("unexpected recovery-helper bundle manifest");
           ' "$archive.manifest.json"

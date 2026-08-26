@@ -246,7 +246,7 @@ describe("Authority isolated recovery helper stack", () => {
       "recovery-helper-bundle.manifest.json",
       "BundleSourceCommit",
       "v22.22.1",
-      "package_lock_sha256!==h",
+      "npm_shrinkwrap_sha256!==h",
       "authority-recovery-verifier.test.ts",
       ".bundle-ready",
     ]) {
@@ -271,6 +271,8 @@ describe("Authority isolated recovery helper stack", () => {
       'NODE_VERSION = "v22.22.1"',
       '"--porcelain=v1"',
       'run("npm", ["run", "build:workspaces"]',
+      '"npm-shrinkwrap.json"',
+      "npm_shrinkwrap_sha256",
       "services/organization-authority/dist/composition/verify-clean-state-lineage.js",
       "authority-recovery-verifier.test.ts",
       "archive_sha256",
@@ -289,6 +291,7 @@ describe("Authority isolated recovery helper stack", () => {
       "build-authority-recovery-helper-bundle.mjs",
       'test "$(uname -m)" = aarch64',
       "value.source_commit !== process.env.GITHUB_SHA",
+      "value.npm_shrinkwrap_sha256",
       "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
       "retention-days: 1",
     ]) {

@@ -113,7 +113,7 @@ function checkedCommit(sourceRoot) {
 
 function requiredBuildPaths(sourceRoot) {
   const paths = [
-    "package-lock.json",
+    "npm-shrinkwrap.json",
     "node_modules",
     "tools/verify-authority-recovery.mjs",
     "tools/clean-v1-release.mjs",
@@ -160,7 +160,7 @@ function makeBundle({ sourceRoot, output }) {
   const commit = checkedCommit(sourceRoot);
   run("npm", ["run", "build:workspaces"], { cwd: sourceRoot });
   const requiredPaths = requiredBuildPaths(sourceRoot);
-  const lockDigest = sha256(join(sourceRoot, "package-lock.json"));
+  const lockDigest = sha256(join(sourceRoot, "npm-shrinkwrap.json"));
   mkdirSync(dirname(output), { recursive: true, mode: 0o700 });
   const stageRoot = mkdtempSync(
     join(tmpdir(), "echo-authority-recovery-bundle-"),
@@ -202,7 +202,7 @@ function makeBundle({ sourceRoot, output }) {
           node_version: process.version,
           platform: process.platform,
           architecture: process.arch,
-          package_lock_sha256: lockDigest,
+          npm_shrinkwrap_sha256: lockDigest,
           required_paths: requiredPaths,
         },
         null,
@@ -239,7 +239,7 @@ function makeBundle({ sourceRoot, output }) {
     node_version: process.version,
     platform: process.platform,
     architecture: process.arch,
-    package_lock_sha256: lockDigest,
+    npm_shrinkwrap_sha256: lockDigest,
     archive_sha256: sha256(output),
     required_paths: requiredPaths,
   });
