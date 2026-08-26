@@ -28,6 +28,6 @@ npx vitest run --config vitest.config.ts services/organization-authority/test/cl
 ```
 
 On 2026-08-26, the 1,000-atom, 16-segment, 15,974-posting fixture measured
-5,266.7 ms build, 504.4 ms prewarm, 12.6 ms for the four-query request, and
-13.7 ms event-loop delay. The fixture contains member and restricted-reviewer
+4,721.4 ms build, 566.8 ms prewarm, 11.7 ms for the four-query request, and
+12.0 ms event-loop delay. The fixture contains member and restricted-reviewer
 segments and asserts that a member batch releases only member atoms.

@@ -191,7 +191,9 @@ function policyAtom(input: {
 
 function benchmarkAtom(index: number): CleanReadableSearchAtomV1 {
   const reviewer = index >= 500;
-  const reviewerIndex = reviewer ? index % 15 : 0;
+  // Fourteen benchmark reviewer tuples plus the exact owner tuple used by the
+  // policy fixture yield fifteen reviewer segments and one member segment.
+  const reviewerIndex = reviewer ? index % 14 : 0;
   const text = Array.from(
     { length: 16 },
     (_, term) => `benchmark${term}`,
@@ -476,7 +478,7 @@ describe("clean Person Layer 2 route", () => {
       ).toBe(true);
       console.info("clean-readable-search lean-v1 benchmark", {
         atoms: 1_000,
-        segments: 16,
+        segments: built.manifest.segments.length,
         postings: 15_974,
         buildMilliseconds,
         prewarmMilliseconds,
