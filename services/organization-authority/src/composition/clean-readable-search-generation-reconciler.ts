@@ -48,6 +48,11 @@ export interface CleanReadableSearchGenerationReconcilerV1Options<
   readonly build_generation: (
     snapshot: Snapshot,
   ) => BuiltCleanReadableSearchGenerationV1;
+  /** Complete immutable validation must succeed before current/publication. */
+  readonly prepare_generation?: (
+    generation: BuiltCleanReadableSearchGenerationV1,
+  ) => void;
+  readonly invalidate_generation?: () => void;
   readonly now?: () => string;
 }
 
@@ -155,6 +160,12 @@ export class CleanReadableSearchGenerationReconcilerV1<
         this.options.retrieval_contract_sha256 &&
       sameHead(pointerHead(active), observedHead)
     ) {
+      this.options.prepare_generation?.({
+        generation_id: active.generation_id,
+        manifest_sha256: active.manifest_sha256,
+        retrieval_contract_sha256: active.retrieval_contract_sha256,
+        record_head: pointerHead(active),
+      });
       return Object.freeze({ status: "current", record_head: observedHead });
     }
 
@@ -186,6 +197,7 @@ export class CleanReadableSearchGenerationReconcilerV1<
     }
     digest(built.generation_id, "clean readable-search generation_id");
     digest(built.manifest_sha256, "clean readable-search manifest");
+    this.options.prepare_generation?.(built);
     signal.throwIfAborted();
 
     const currentHead = head(
@@ -193,6 +205,7 @@ export class CleanReadableSearchGenerationReconcilerV1<
       "clean readable-search publish record head",
     );
     if (!sameHead(currentHead, capturedHead)) {
+      this.options.invalidate_generation?.();
       return Object.freeze({
         status: "superseded",
         captured_head: capturedHead,

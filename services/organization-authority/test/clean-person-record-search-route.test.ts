@@ -1,6 +1,7 @@
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   canonicalJson,
   canonicalSha256,
@@ -19,6 +20,7 @@ import {
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   readableSearchPlaneBaselineSha256V1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+  warmCleanReadableSearchActiveGenerationV1,
   type BuildCleanReadableSearchGenerationV1Input,
   type CleanReadableSearchAtomV1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
@@ -187,6 +189,41 @@ function policyAtom(input: {
   };
 }
 
+function benchmarkAtom(index: number): CleanReadableSearchAtomV1 {
+  const reviewer = index >= 500;
+  const reviewerIndex = reviewer ? index % 15 : 0;
+  const text = Array.from(
+    { length: 16 },
+    (_, term) => `benchmark${term}`,
+  ).join(" ");
+  return {
+    ...policyAtom({
+      id: reviewer ? "restricted" : "member",
+      policy_id: reviewer
+        ? RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
+        : ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+    }),
+    record_position: 1,
+    record_sha256: sha256Digest(`benchmark-record-${index}`),
+    envelope_sha256: sha256Digest(`benchmark-envelope-${index}`),
+    approval_id: `benchmark-approval-${index}`,
+    atom_id: sha256Digest(`benchmark-atom-${index}`),
+    atom_order: index,
+    signal_id_sha256: sha256Digest(`benchmark-signal-${index}`),
+    text,
+    text_sha256: sha256Digest(text),
+    authorization_audit_event_id: `benchmark-audit-${index}`,
+    authorization_audit_sequence: index + 1,
+    authorization_audit_entry_sha256: sha256Digest(
+      `benchmark-audit-entry-${index}`,
+    ),
+    provider_action_sha256: sha256Digest(`benchmark-provider-${index}`),
+    authorization_proof_sha256: sha256Digest(`benchmark-proof-${index}`),
+    reviewer_principal_id: reviewer ? `reviewer-${reviewerIndex}` : null,
+    reviewer_membership_id: reviewer ? `membership-${reviewerIndex}` : null,
+  };
+}
+
 afterEach(() => {
   for (const value of roots.splice(0)) {
     rmSync(value, { recursive: true, force: true });
@@ -320,7 +357,7 @@ describe("clean Person Layer 2 route", () => {
     }
   });
 
-  it("releases each policy only to the authenticated active member tuple it admits", () => {
+  it("releases each policy only to the authenticated active member tuple it admits", async () => {
     const value = setup(false);
     const record = new Database(":memory:");
     record.exec(
@@ -332,6 +369,7 @@ describe("clean Person Layer 2 route", () => {
         "INSERT INTO organization_record_log (position, record_sha256) VALUES (?, ?)",
       )
       .run(2, restrictedRecordHash);
+    const buildStarted = performance.now();
     const built = buildCleanReadableSearchGenerationV1(
       realGenerationInput(value.state_directory, [
         policyAtom({
@@ -342,8 +380,23 @@ describe("clean Person Layer 2 route", () => {
           id: "restricted",
           policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
         }),
+        ...Array.from({ length: 998 }, (_, index) =>
+          benchmarkAtom(index + 2),
+        ),
       ]),
     );
+    const buildMilliseconds = performance.now() - buildStarted;
+    const prewarmStarted = performance.now();
+    warmCleanReadableSearchActiveGenerationV1({
+      state_directory: value.state_directory,
+      active_generation: {
+        generation_id: built.manifest.generation_id,
+        manifest_sha256: built.manifest_sha256,
+        retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
+        exact_head: built.manifest.exact_head,
+      },
+    });
+    const prewarmMilliseconds = performance.now() - prewarmStarted;
     value.authority
       .prepare(
         `INSERT INTO authority_readable_search_active_generation
@@ -401,6 +454,34 @@ describe("clean Person Layer 2 route", () => {
       const owner = route.search({
         access_token: "owner-bearer",
         query: "policy",
+      });
+      const eventLoopStarted = performance.now();
+      const eventLoopProbe = new Promise<number>((resolve) =>
+        setImmediate(() => resolve(performance.now() - eventLoopStarted)),
+      );
+      const requestStarted = performance.now();
+      const benchmark = route.searchBatch({
+        access_token: "owner-bearer",
+        queries: ["benchmark0", "benchmark1", "benchmark2", "benchmark3"],
+      });
+      const requestMilliseconds = performance.now() - requestStarted;
+      const eventLoopDelayMilliseconds = await eventLoopProbe;
+      expect(benchmark.response.items).toHaveLength(10);
+      expect(
+        benchmark.response.items.every(
+          (item) =>
+            item.policy_id ===
+            ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+        ),
+      ).toBe(true);
+      console.info("clean-readable-search lean-v1 benchmark", {
+        atoms: 1_000,
+        segments: 16,
+        postings: 15_974,
+        buildMilliseconds,
+        prewarmMilliseconds,
+        fourQueryRequestMilliseconds: requestMilliseconds,
+        eventLoopDelayMilliseconds,
       });
       expect(owner).toMatchObject({
         generation_id: built.manifest.generation_id,
