@@ -595,6 +595,8 @@ function edgeInput(input, secretArn, dependencies) {
     dependencies?.cloudflareApiToken ?? process.env.ECHO_CLOUDFLARE_API_TOKEN;
   if (typeof apiToken !== "string" || apiToken.length === 0)
     refuse("cloudflare_api_token_required");
+  if (isDynamicCloudflareReference(apiToken))
+    refuse("cloudflare_api_token_resolution_required");
   return Object.freeze({
     ...input.edge,
     apiToken,
@@ -1664,8 +1666,30 @@ async function reexecWithAsmExecIfNeeded() {
   if (process.env.ECHO_AUTHORITY_STAGING_ASM_EXEC === "1") {
     if (typeof token !== "string" || token.length === 0)
       throw new LifecycleError("cloudflare_api_token_required");
+    if (isDynamicCloudflareReference(token))
+      throw new LifecycleError("cloudflare_api_token_resolution_failed");
     return false;
   }
+  // Status must describe AWS first: several recovery states deliberately skip
+  // Cloudflare. A healthy status reaches edgeInput, whose controlled sentinel
+  // below triggers the same resolved re-exec only when the edge is required.
+  if (action === "status") {
+    if (
+      typeof token === "string" &&
+      token.length > 0 &&
+      !isDynamicCloudflareReference(token)
+    ) {
+      throw new LifecycleError(
+        "cloudflare_api_token_dynamic_reference_required",
+      );
+    }
+    return false;
+  }
+  return reexecWithAsmExec();
+}
+
+async function reexecWithAsmExec() {
+  const token = process.env.ECHO_CLOUDFLARE_API_TOKEN;
   if (!isDynamicCloudflareReference(token))
     throw new LifecycleError("cloudflare_api_token_dynamic_reference_required");
   const environment = {
@@ -1690,16 +1714,34 @@ async function reexecWithAsmExecIfNeeded() {
   return true;
 }
 
+async function runCli() {
+  if (await reexecWithAsmExecIfNeeded()) {
+    process.exitCode ??= 1;
+    return;
+  }
+  try {
+    const result = await main();
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } catch (error) {
+    if (
+      process.argv[2] === "status" &&
+      process.env.ECHO_AUTHORITY_STAGING_ASM_EXEC !== "1" &&
+      error instanceof LifecycleError &&
+      error.code === "cloudflare_api_token_resolution_required"
+    ) {
+      if (await reexecWithAsmExec()) process.exitCode ??= 1;
+      return;
+    }
+    throw error;
+  }
+}
+
 if (
   process.argv[1] !== undefined &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   try {
-    if (await reexecWithAsmExecIfNeeded()) process.exitCode ??= 1;
-    else {
-      const result = await main();
-      process.stdout.write(`${JSON.stringify(result)}\n`);
-    }
+    await runCli();
   } catch (error) {
     // Error strings can contain provider responses. Keep the command's output
     // a controlled code so a connector or management token cannot leak.

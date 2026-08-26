@@ -58,6 +58,13 @@ case " $* " in
 esac
 case " $* " in
   *" cloudformation describe-change-set "*) printf '%s\\n' "$FAKE_AWS_DESCRIBE_RESPONSE" ;;
+  *" cloudformation describe-stacks "*)
+    if [ -n "\${FAKE_AWS_STACK_RESPONSE-}" ]; then
+      printf '%s\\n' "$FAKE_AWS_STACK_RESPONSE"
+    else
+      printf '{}\\n'
+    fi
+    ;;
   *) printf '{}\\n' ;;
 esac
 `,
@@ -94,6 +101,25 @@ exit 86
   );
   chmodSync(asmExec, 0o700);
   return { asmExec, log, root };
+}
+
+function withReexecingFakeAsmExec() {
+  const root = mkdtempSync(join(tmpdir(), "echo-authority-staging-asm-child-"));
+  const asmExec = join(root, "asm-exec");
+  writeFileSync(
+    asmExec,
+    `#!/bin/sh
+set -eu
+test "$1" = "--"
+shift
+export ECHO_CLOUDFLARE_API_TOKEN='resolved-test-token-not-a-real-secret'
+export FAKE_AWS_STACK_RESPONSE="$FAKE_AWS_STACK_RESPONSE_AFTER_ASM"
+exec "$@"
+`,
+    { mode: 0o700 },
+  );
+  chmodSync(asmExec, 0o700);
+  return { asmExec, root };
 }
 const INPUT = Object.freeze({
   region: "us-west-2",
@@ -918,6 +944,201 @@ describe("Authority staging lifecycle", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("input_file_invalid");
     expect(result.stderr).not.toContain("cloudflare_api_token");
+  });
+
+  it("rejects a raw status token before describing AWS", () => {
+    const aws = withFakeAws();
+    const inputPath = join(aws.root, "input.json");
+    writeFileSync(inputPath, JSON.stringify(INPUT), { mode: 0o600 });
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [CLI, "status", "--input", inputPath],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ECHO_CLOUDFLARE_API_TOKEN: TOKEN,
+            FAKE_AWS_LOG: aws.log,
+            PATH: `${aws.root}:${process.env.PATH ?? ""}`,
+          },
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "cloudflare_api_token_dynamic_reference_required",
+      );
+      expect(result.stderr).not.toContain(TOKEN);
+      expect(() => readFileSync(aws.log, "utf8")).toThrow();
+    } finally {
+      rmSync(aws.root, { force: true, recursive: true });
+    }
+  });
+
+  it("reports an AWS-only recovery status before resolving the Cloudflare token", () => {
+    const aws = withFakeAws();
+    const asm = withFakeAsmExec();
+    const inputPath = join(aws.root, "input.json");
+    writeFileSync(inputPath, JSON.stringify(INPUT), { mode: 0o600 });
+    try {
+      const environment: NodeJS.ProcessEnv = {
+        ...process.env,
+        ECHO_CLOUDFLARE_API_TOKEN:
+          "{{resolve:secretsmanager:arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/cloudflare-management-abc:SecretString:cloudflare_api_token}}",
+        FAKE_ASM_LOG: asm.log,
+        FAKE_AWS_LOG: aws.log,
+        FAKE_AWS_STACK_RESPONSE: JSON.stringify({
+          Stacks: [
+            {
+              EnableTerminationProtection: false,
+              Outputs: [],
+              StackStatus: "CREATE_FAILED",
+            },
+          ],
+        }),
+        PATH: `${aws.root}:${asm.root}:${process.env.PATH ?? ""}`,
+      };
+      delete environment.ECHO_AUTHORITY_STAGING_ASM_EXEC;
+      const result = spawnSync(
+        process.execPath,
+        [CLI, "status", "--input", inputPath],
+        { encoding: "utf8", env: environment },
+      );
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        action: "status",
+        edge_checked: false,
+        recovery_action: "slot-init",
+        state: "failed_create",
+      });
+      expect(readFileSync(aws.log, "utf8")).toContain(
+        "ARG=cloudformation\nARG=describe-stacks",
+      );
+      expect(readFileSync(aws.log, "utf8")).toContain("TOKEN_ENV=unset");
+      expect(() => readFileSync(asm.log, "utf8")).toThrow();
+    } finally {
+      rmSync(aws.root, { force: true, recursive: true });
+      rmSync(asm.root, { force: true, recursive: true });
+    }
+  });
+
+  it("resolves the Cloudflare token only after status proves the stack is healthy", () => {
+    const aws = withFakeAws();
+    const asm = withFakeAsmExec();
+    const inputPath = join(aws.root, "input.json");
+    writeFileSync(inputPath, JSON.stringify(INPUT), { mode: 0o600 });
+    try {
+      const environment: NodeJS.ProcessEnv = {
+        ...process.env,
+        ECHO_CLOUDFLARE_API_TOKEN:
+          "{{resolve:secretsmanager:arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/cloudflare-management-abc:SecretString:cloudflare_api_token}}",
+        FAKE_ASM_LOG: asm.log,
+        FAKE_AWS_LOG: aws.log,
+        FAKE_AWS_STACK_RESPONSE: JSON.stringify({
+          Stacks: [
+            {
+              EnableTerminationProtection: true,
+              Outputs: [
+                {
+                  OutputKey: "AuthorityTunnelTokenSecretArn",
+                  OutputValue: SECRET_ARN,
+                },
+                {
+                  OutputKey: "StagingHostReady",
+                  OutputValue: "false",
+                },
+              ],
+              StackStatus: "UPDATE_COMPLETE",
+            },
+          ],
+        }),
+        PATH: `${aws.root}:${asm.root}:${process.env.PATH ?? ""}`,
+      };
+      delete environment.ECHO_AUTHORITY_STAGING_ASM_EXEC;
+      const result = spawnSync(
+        process.execPath,
+        [CLI, "status", "--input", inputPath],
+        { encoding: "utf8", env: environment },
+      );
+      expect(result.status).toBe(86);
+      expect(readFileSync(aws.log, "utf8")).toContain(
+        "ARG=cloudformation\nARG=describe-stacks",
+      );
+      const call = readFileSync(asm.log, "utf8");
+      expect(call).toContain("TOKEN_KIND=dynamic");
+      expect(call).not.toContain("cloudflare-management-abc");
+    } finally {
+      rmSync(aws.root, { force: true, recursive: true });
+      rmSync(asm.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rechecks AWS in the resolved child before touching an edge whose stack rolled back", () => {
+    const aws = withFakeAws();
+    const asm = withReexecingFakeAsmExec();
+    const inputPath = join(aws.root, "input.json");
+    writeFileSync(inputPath, JSON.stringify(INPUT), { mode: 0o600 });
+    const healthy = {
+      Stacks: [
+        {
+          EnableTerminationProtection: true,
+          Outputs: [
+            {
+              OutputKey: "AuthorityTunnelTokenSecretArn",
+              OutputValue: SECRET_ARN,
+            },
+            { OutputKey: "StagingHostReady", OutputValue: "false" },
+          ],
+          StackStatus: "UPDATE_COMPLETE",
+        },
+      ],
+    };
+    const rolledBack = {
+      Stacks: [
+        {
+          EnableTerminationProtection: true,
+          Outputs: [
+            {
+              OutputKey: "AuthorityTunnelTokenSecretArn",
+              OutputValue: SECRET_ARN,
+            },
+            { OutputKey: "StagingHostReady", OutputValue: "false" },
+          ],
+          StackStatus: "UPDATE_ROLLBACK_COMPLETE",
+        },
+      ],
+    };
+    try {
+      const environment: NodeJS.ProcessEnv = {
+        ...process.env,
+        ECHO_CLOUDFLARE_API_TOKEN:
+          "{{resolve:secretsmanager:arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/cloudflare-management-abc:SecretString:cloudflare_api_token}}",
+        FAKE_AWS_LOG: aws.log,
+        FAKE_AWS_STACK_RESPONSE: JSON.stringify(healthy),
+        FAKE_AWS_STACK_RESPONSE_AFTER_ASM: JSON.stringify(rolledBack),
+        PATH: `${aws.root}:${asm.root}:${process.env.PATH ?? ""}`,
+      };
+      delete environment.ECHO_AUTHORITY_STAGING_ASM_EXEC;
+      const result = spawnSync(
+        process.execPath,
+        [CLI, "status", "--input", inputPath],
+        { encoding: "utf8", env: environment },
+      );
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        action: "status",
+        edge_checked: false,
+        recovery_action: "up",
+        state: "update_rolled_back",
+      });
+      const calls = readFileSync(aws.log, "utf8");
+      expect(calls.match(/ARG=describe-stacks/g)).toHaveLength(2);
+      expect(result.stdout).not.toContain("resolved-test-token");
+      expect(result.stderr).not.toContain("resolved-test-token");
+    } finally {
+      rmSync(aws.root, { force: true, recursive: true });
+      rmSync(asm.root, { force: true, recursive: true });
+    }
   });
 
   it("pins and sanitizes the AWS profile used by asm-exec", () => {

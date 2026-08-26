@@ -220,6 +220,11 @@ reference because the controller re-executes under `asm-exec` and never accepts
 a raw management-token flag. Replace `EXACT_SECRET_ARN` below only in the
 operator shell.
 
+`status` describes the AWS stack before it resolves that reference. Absent,
+failed-create, unprotected, and rolled-back stacks therefore return their AWS
+recovery receipt even when the Cloudflare management secret is unavailable. A
+healthy stack resolves the token only when it proceeds to the edge check.
+
 ```bash
 export ECHO_CLOUDFLARE_API_TOKEN='{{resolve:secretsmanager:EXACT_SECRET_ARN:SecretString:cloudflare_api_token}}'
 
