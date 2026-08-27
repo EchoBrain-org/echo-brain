@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -162,6 +163,50 @@ describe("Authority staging host bootstrap", () => {
     expect(chown).toBeGreaterThan(initialize);
     expect(chmod).toBeGreaterThan(chown);
     expect(removeMarker).toBeGreaterThan(chmod);
+  });
+
+  it("writes the volume initialization marker under Bash nounset", () => {
+    const definition = bootstrap().match(
+      /^write_volume_initialization_seed\(\) \{\n[\s\S]*?^\}$/m,
+    )?.[0];
+    if (!definition) {
+      throw new Error("volume initialization seed writer is missing");
+    }
+
+    const seedDir = mkdtempSync(join(tmpdir(), "echo-volume-seed-"));
+    try {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+VOLUME_INITIALIZATION_MARKER=.echo-authority-volume-initialization-v1
+VOLUME_INITIALIZATION_SCHEMA=echo-authority-volume-initialization-v1
+DATA_VOLUME_ID=vol-0123456789abcdef0
+chown() { :; }
+${definition}
+unset seed_dir marker
+write_volume_initialization_seed "$1"
+`,
+          "bootstrap-seed-test",
+          seedDir,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const marker = join(
+        seedDir,
+        ".echo-authority-volume-initialization-v1",
+      );
+      expect(readFileSync(marker, "utf8")).toBe(
+        "schema=echo-authority-volume-initialization-v1\n" +
+          "data_volume_id=vol-0123456789abcdef0\n",
+      );
+      expect(statSync(marker).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(seedDir, { force: true, recursive: true });
+    }
   });
 
   it("fails closed before Docker can restart containers without the exact verified data mount", () => {
