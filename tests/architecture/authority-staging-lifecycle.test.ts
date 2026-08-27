@@ -48,6 +48,12 @@ it("keeps every public lifecycle receipt state typechecked", () => {
   expect(DECLARED_LIFECYCLE_STATES).toContain("update_rolled_back");
 });
 
+it("keeps remote lifecycle scripts portable to AWS-RunShellScript sh", () => {
+  const source = readFileSync(CLI, "utf8");
+  expect(source).not.toContain('"set -euo pipefail"');
+  expect(source.match(/          "set -eu",/g)).toHaveLength(2);
+});
+
 function withFakeAws() {
   const root = mkdtempSync(join(tmpdir(), "echo-authority-staging-aws-"));
   const aws = join(root, "aws");
