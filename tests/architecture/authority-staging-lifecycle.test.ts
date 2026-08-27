@@ -437,6 +437,26 @@ describe("Authority staging lifecycle", () => {
     expect(fixture.plans[0]?.onStackFailure).toBe("DO_NOTHING");
   });
 
+  it.each(["Dynamic", "Import"])(
+    "rejects %s actions for slot-init before any edge mutation",
+    async (action) => {
+      const fixture = dependencies({
+        changeAction: {
+          action,
+          logicalId: "StagingVpc",
+          replacement: false,
+          resourceType: "AWS::EC2::VPC",
+        },
+        initialStack: { exists: false },
+      });
+
+      await expect(
+        runAuthorityStaging("slot-init", INPUT, fixture.dependencies),
+      ).rejects.toThrow("change_set_host_boundary_violation");
+      expect(fixture.events).not.toContain("edge-install-token");
+    },
+  );
+
   it("only executes the already-created slot-init change set, then installs the fixed edge", async () => {
     const fixture = dependencies({ initialStack: { exists: false } });
     await runAuthorityStaging("slot-init", INPUT, fixture.dependencies);
@@ -1379,9 +1399,8 @@ describe("Authority staging lifecycle", () => {
 
       writeFileSync(fake.log, "");
       const templateSha256 = "e".repeat(64);
-      process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify({
+      const changeSetResponse = {
         ChangeSetId: "change-set-default-adapter",
-        ChangeSetType: "CREATE",
         Changes: [
           {
             ResourceChange: {
@@ -1391,16 +1410,102 @@ describe("Authority staging lifecycle", () => {
             },
           },
         ],
-        Description: `echo-authority-staging-template-${templateSha256}`,
-        OnStackFailure: "DO_NOTHING",
         Parameters: [{ ParameterKey: "HostEnabled", ParameterValue: "false" }],
         Status: "CREATE_COMPLETE",
+      };
+      const typeCases = [
+        {
+          expectedMatch: true,
+          name: "omitted CREATE response type",
+          requestType: "CREATE" as const,
+          response: {
+            ...changeSetResponse,
+            Description: `echo-authority-staging-template-${templateSha256}-CREATE`,
+            OnStackFailure: "DO_NOTHING",
+          },
+        },
+        {
+          expectedMatch: true,
+          name: "null CREATE response type",
+          requestType: "CREATE" as const,
+          response: {
+            ...changeSetResponse,
+            ChangeSetType: null,
+            Description: `echo-authority-staging-template-${templateSha256}-CREATE`,
+            OnStackFailure: "DO_NOTHING",
+          },
+        },
+        {
+          expectedMatch: true,
+          name: "omitted UPDATE response type and failure policy",
+          requestType: "UPDATE" as const,
+          response: {
+            ...changeSetResponse,
+            Description: `echo-authority-staging-template-${templateSha256}-UPDATE`,
+          },
+        },
+        {
+          expectedMatch: true,
+          name: "null UPDATE response type",
+          requestType: "UPDATE" as const,
+          response: {
+            ...changeSetResponse,
+            ChangeSetType: null,
+            Description: `echo-authority-staging-template-${templateSha256}-UPDATE`,
+            OnStackFailure: null,
+          },
+        },
+        {
+          expectedMatch: false,
+          name: "UPDATE request with explicit CREATE response type",
+          requestType: "UPDATE" as const,
+          response: {
+            ...changeSetResponse,
+            ChangeSetType: "CREATE",
+            Description: `echo-authority-staging-template-${templateSha256}-UPDATE`,
+          },
+        },
+      ];
+      for (const [index, typeCase] of typeCases.entries()) {
+        process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify(
+          typeCase.response,
+        );
+        const plan = await adapters.cloudFormation!.createChangeSet({
+          capabilities: ["CAPABILITY_IAM"],
+          changeSetName: `echo-authority-${typeCase.requestType.toLowerCase()}-staging-adapter-test-${index}`,
+          changeSetType: typeCase.requestType,
+          clientToken: `staging-adapter-test-00${index + 1}`,
+          ...(typeCase.requestType === "CREATE"
+            ? { onStackFailure: "DO_NOTHING" as const }
+            : {}),
+          parameters: { HostEnabled: "false" },
+          region: "us-west-2",
+          stackName: "echo-authority-staging-adapter-test",
+          templatePath: "/private/tmp/committed-template.json",
+          templateSha256,
+        });
+        expect(plan.matchesExpected, typeCase.name).toBe(
+          typeCase.expectedMatch,
+        );
+        if (typeCase.expectedMatch)
+          expect(plan).toMatchObject({
+            changeSetType: typeCase.requestType,
+            status: "CREATE_COMPLETE",
+          });
+      }
+
+      // The pre-binding live description remains non-reviewable, even though
+      // its other fields would have matched a CREATE request.
+      process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify({
+        ...changeSetResponse,
+        Description: `echo-authority-staging-template-${templateSha256}`,
+        OnStackFailure: "DO_NOTHING",
       });
-      const plan = await adapters.cloudFormation!.createChangeSet({
+      const legacyCreate = await adapters.cloudFormation!.createChangeSet({
         capabilities: ["CAPABILITY_IAM"],
-        changeSetName: "echo-authority-slot-init-staging-adapter-test",
+        changeSetName: "echo-authority-slot-init-staging-adapter-test-legacy",
         changeSetType: "CREATE",
-        clientToken: "staging-adapter-test-001",
+        clientToken: "staging-adapter-test-003",
         onStackFailure: "DO_NOTHING",
         parameters: { HostEnabled: "false" },
         region: "us-west-2",
@@ -1408,19 +1513,37 @@ describe("Authority staging lifecycle", () => {
         templatePath: "/private/tmp/committed-template.json",
         templateSha256,
       });
-      expect(plan).toMatchObject({
-        changeSetType: "CREATE",
-        matchesExpected: true,
-        status: "CREATE_COMPLETE",
+      expect(legacyCreate.matchesExpected).toBe(false);
+
+      // Nor can an explicit, conflicting response type be used as a CREATE
+      // plan just because its request-bound description matches.
+      process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify({
+        ...changeSetResponse,
+        ChangeSetType: "UPDATE",
+        Description: `echo-authority-staging-template-${templateSha256}-CREATE`,
+        OnStackFailure: "DO_NOTHING",
       });
+      const conflictingCreate = await adapters.cloudFormation!.createChangeSet({
+        capabilities: ["CAPABILITY_IAM"],
+        changeSetName: "echo-authority-slot-init-staging-adapter-test-conflict",
+        changeSetType: "CREATE",
+        clientToken: "staging-adapter-test-004",
+        onStackFailure: "DO_NOTHING",
+        parameters: { HostEnabled: "false" },
+        region: "us-west-2",
+        stackName: "echo-authority-staging-adapter-test",
+        templatePath: "/private/tmp/committed-template.json",
+        templateSha256,
+      });
+      expect(conflictingCreate.matchesExpected).toBe(false);
       const createCalls = readFileSync(fake.log, "utf8");
       expect(createCalls).toContain("ARG=--on-stack-failure\nARG=DO_NOTHING");
       expect(createCalls.match(/ARG=--profile\nARG=echo-prod/g)).toHaveLength(
-        3,
+        21,
       );
-      expect(createCalls.match(/^PROFILE_ENV=echo-prod$/gm)).toHaveLength(3);
-      expect(createCalls.match(/ACCESS_KEY_ENV=unset/g)).toHaveLength(3);
-      expect(createCalls.match(/^TOKEN_ENV=unset$/gm)).toHaveLength(3);
+      expect(createCalls.match(/^PROFILE_ENV=echo-prod$/gm)).toHaveLength(21);
+      expect(createCalls.match(/ACCESS_KEY_ENV=unset/g)).toHaveLength(21);
+      expect(createCalls.match(/^TOKEN_ENV=unset$/gm)).toHaveLength(21);
     } finally {
       if (previous.accessKey === undefined)
         delete process.env.AWS_ACCESS_KEY_ID;
