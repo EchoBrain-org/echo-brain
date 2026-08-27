@@ -220,7 +220,10 @@ ensure_fstab_mount() {
 }
 
 write_volume_initialization_seed() {
-  local seed_dir=$1 marker="$seed_dir/$VOLUME_INITIALIZATION_MARKER"
+  local seed_dir marker
+  # Assign before deriving marker: same-statement local expansion fails under set -u.
+  seed_dir=$1
+  marker="$seed_dir/$VOLUME_INITIALIZATION_MARKER"
   printf 'schema=%s\ndata_volume_id=%s\n' \
     "$VOLUME_INITIALIZATION_SCHEMA" "$DATA_VOLUME_ID" >"$marker"
   chmod 0600 "$marker"
