@@ -365,7 +365,9 @@ EOF
 }
 
 install_asm_exec() {
-  local temporary=$1 asm_exec="$temporary/asm-exec"
+  local temporary asm_exec
+  temporary=$1
+  asm_exec="$temporary/asm-exec"
   curl --fail --location --proto '=https' --tlsv1.2 --output "$asm_exec" \
     "https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/${AGENT_TOOLKIT_COMMIT}/plugins/aws-core/skills/aws-secrets-manager/references/asm-exec"
   printf '%s  %s\n' "$ASM_EXEC_UPSTREAM_SHA256" "$asm_exec" | sha256sum --check --status \
@@ -392,7 +394,9 @@ PATCH
 }
 
 install_cloudflared() {
-  local temporary=$1 package="$temporary/cloudflared-linux-arm64.deb"
+  local temporary package
+  temporary=$1
+  package="$temporary/cloudflared-linux-arm64.deb"
   curl --fail --location --proto '=https' --tlsv1.2 --output "$package" \
     "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-arm64.deb"
   printf '%s  %s\n' "$CLOUDFLARED_SHA256" "$package" | sha256sum --check --status \
@@ -403,7 +407,9 @@ install_cloudflared() {
 }
 
 install_ecr_helper_config() {
-  local temporary=$1 config="$temporary/docker-config.json"
+  local temporary config
+  temporary=$1
+  config="$temporary/docker-config.json"
   install -d -o root -g root -m 0700 /root/.docker
   printf '{\n  "credHelpers": {\n    "%s": "ecr-login"\n  }\n}\n' "$ECR_REGISTRY" >"$config"
   if [[ -e /root/.docker/config.json ]] && ! cmp -s "$config" /root/.docker/config.json; then
