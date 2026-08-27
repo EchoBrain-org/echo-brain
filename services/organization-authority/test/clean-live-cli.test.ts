@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 type WorkerErrorObserver = (error: Error) => void;
 type Layer4FailureObserver = (event: object) => void;
+type WorkerTelemetryObserver = (event: object) => void;
 
 const runtimeState = vi.hoisted(() => ({
   worker_error: undefined as WorkerErrorObserver | undefined,
+  worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
   layer4_failure: undefined as Layer4FailureObserver | undefined,
   startup_error: undefined as Error | undefined,
 }));
@@ -32,10 +34,12 @@ vi.mock("../src/composition/clean-person-cli.js", () => ({
 vi.mock("../src/composition/open-clean-live-runtime.js", () => ({
   openCleanLiveRuntime: async (config: {
     readonly on_worker_error?: WorkerErrorObserver;
+    readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly on_layer4_failure?: Layer4FailureObserver;
   }) => {
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
     runtimeState.worker_error = config.on_worker_error;
+    runtimeState.worker_telemetry = config.on_worker_telemetry;
     runtimeState.layer4_failure = config.on_layer4_failure;
     return {
       address: { address: "127.0.0.1", port: 43179 },
@@ -51,6 +55,7 @@ const { runCleanLiveCli } = await import(
 
 afterEach(() => {
   runtimeState.worker_error = undefined;
+  runtimeState.worker_telemetry = undefined;
   runtimeState.layer4_failure = undefined;
   runtimeState.startup_error = undefined;
 });
@@ -71,6 +76,36 @@ function start(io: { readonly stderr: (value: string) => void }) {
 }
 
 describe("clean live CLI runtime events", () => {
+  it("writes the closed worker lifecycle event without mutation", async () => {
+    const stderr: string[] = [];
+    const running = start({ stderr: (value) => stderr.push(value) });
+    await vi.waitFor(() => expect(runtimeState.worker_telemetry).toBeDefined());
+
+    runtimeState.worker_telemetry!({
+      schema_version: 1,
+      kind: "echo-clean-live-worker-phase-v1",
+      event: "failed",
+      cycle_phase: "extraction",
+      elapsed_ms: 120_000,
+      failure_class: "unknown",
+      retryable: true,
+    });
+    process.emit("SIGTERM");
+    await expect(running).resolves.toBe(0);
+
+    expect(stderr).toContain(
+      `${canonicalJson({
+        schema_version: 1,
+        kind: "echo-clean-live-worker-phase-v1",
+        event: "failed",
+        cycle_phase: "extraction",
+        elapsed_ms: 120_000,
+        failure_class: "unknown",
+        retryable: true,
+      } as never)}\n`,
+    );
+  });
+
   it("does not disclose startup failure contents to the live server log", async () => {
     const stderr: string[] = [];
     runtimeState.startup_error = new Error(

@@ -129,6 +129,10 @@ export async function runCleanLiveCli(
       on_worker_error: () => {
         io.stderr(`${CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
       },
+      on_worker_telemetry: (event) => {
+        // The lifecycle reporter constructs this closed, content-free schema.
+        io.stderr(`${canonicalJson(event as never)}\n`);
+      },
       on_layer4_failure: (event) => {
         io.stderr(
           `${canonicalJson({

@@ -69,6 +69,7 @@ import type { PersonSlackApprovalObserverV2 } from "@echo-brain/organization-con
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import { createOpenRouterStructuredOutput } from "../answer-composition/openrouter-structured-output.js";
 import type { CleanLayer4FailureEventV1 } from "./clean-person-answer-route.js";
+import type { CleanLiveWorkerPhaseRunnerV1 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
 
 export interface OpenCleanLiveRuntimeConfig {
   readonly state_directory: string;
@@ -85,6 +86,10 @@ export interface OpenCleanLiveRuntimeConfig {
   readonly worker_interval_ms?: number;
   /** Observational only: a failed cycle is retried by the serialized worker. */
   readonly on_worker_error?: (error: Error) => void;
+  /** Observational only: bounded, content-free worker lifecycle events. */
+  readonly on_worker_telemetry?: (
+    event: import("../processing/clean-v1/clean-live-worker-lifecycle.js").CleanLiveWorkerTelemetryEventV1,
+  ) => void;
   /** Observational only: redacted Layer 4 model-stage failures. */
   readonly on_layer4_failure?: (event: CleanLayer4FailureEventV1) => void;
 }
@@ -406,11 +411,16 @@ interface CleanReadableSearchReconcilerV1 {
 }
 
 class CombinedCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
+  readonly hasFineGrainedSourceLifecycle = true;
   constructor(
     private readonly source: CleanLiveOnlySourceCycleV1,
     private readonly d2d3: CleanD2ToD3ProcessingCoordinatorV1,
     private readonly readableSearch: CleanReadableSearchReconcilerV1,
   ) {}
+
+  setWorkerLifecycle(lifecycle: CleanLiveWorkerPhaseRunnerV1): void {
+    this.source.setWorkerLifecycle(lifecycle);
+  }
 
   recoverV4Appends(signal: AbortSignal): Promise<void> {
     return this.d2d3.recoverV4Appends(signal);
@@ -519,9 +529,14 @@ export async function openCleanLiveRuntime(
         processing: new IdleCleanLiveProcessing(),
         person: dependencies.person,
         on_worker_error: config.on_worker_error,
+        on_worker_telemetry: config.on_worker_telemetry,
       },
     );
-    return { ...runtime, processing: "idle_until_finalize" };
+    return {
+      address: runtime.address,
+      processing: "idle_until_finalize",
+      close: () => runtime.close(),
+    };
   }
   if (dependencies.active_processing !== undefined) {
     authority.close();
@@ -531,9 +546,14 @@ export async function openCleanLiveRuntime(
         processing: dependencies.active_processing,
         person: dependencies.person,
         on_worker_error: config.on_worker_error,
+        on_worker_telemetry: config.on_worker_telemetry,
       },
     );
-    return { ...runtime, processing: "active" };
+    return {
+      address: runtime.address,
+      processing: "active",
+      close: () => runtime.close(),
+    };
   }
   const control = openOrganizationControlDatabase(
     join(config.state_directory, "integrations.sqlite"),
@@ -704,6 +724,7 @@ export async function openCleanLiveRuntime(
               : { answer_failure: config.on_layer4_failure }),
         },
         on_worker_error: config.on_worker_error,
+        on_worker_telemetry: config.on_worker_telemetry,
       },
     );
     return {

@@ -4,6 +4,7 @@ import {
   startCleanLiveRuntime,
   type CleanLiveProcessingCycleV1,
 } from "../src/composition/clean-live-runtime.js";
+import type { CleanLiveWorkerTelemetryEventV1 } from "../src/processing/clean-v1/clean-live-worker-lifecycle.js";
 import type {
   CleanPersonRuntimeConfig,
   RunningCleanPersonRuntime,
@@ -61,6 +62,32 @@ function personRuntime(events: string[]): RunningCleanPersonRuntime {
 }
 
 describe("clean live runtime", () => {
+  it("emits a successful content-free heartbeat for an empty cycle", async () => {
+    vi.useFakeTimers();
+    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    let now = 1_000;
+    const runtime = await startCleanLiveRuntime(
+      { person: personConfig, worker_interval_ms: 1_000 },
+      {
+        processing: processing([]),
+        start_person_runtime: async () => personRuntime([]),
+        on_worker_telemetry: (event) => events.push(event),
+        worker_telemetry_now: () => now,
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    now += 25;
+
+    expect(events).toContainEqual({
+      schema_version: 1,
+      kind: "echo-clean-live-worker-cycle-v1",
+      event: "succeeded",
+      elapsed_ms: 0,
+    });
+    expect(JSON.stringify(events)).not.toContain("personConfig");
+    await runtime.close();
+  });
+
   it("recovers and prewarms before starting Person, then retains worker ordering", async () => {
     vi.useFakeTimers();
     const events: string[] = [];

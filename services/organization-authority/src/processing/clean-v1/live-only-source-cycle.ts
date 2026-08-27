@@ -8,6 +8,10 @@ import {
   type MeetingSourceAdapter,
 } from "../core/index.js";
 import { granolaCursorPhase } from "../adapters/meeting-sources/granola/index.js";
+import type {
+  CleanLiveWorkerPhaseRunnerV1,
+  CleanLiveWorkerPhaseV1,
+} from "./clean-live-worker-lifecycle.js";
 
 const MAXIMUM_PULL_LIMIT = 1;
 
@@ -153,6 +157,8 @@ export interface CleanLiveOnlySourceCycleV1Options {
   readonly processor: DecisionProcessorAdapter;
   readonly state: CleanLiveOnlySourceStateV1;
   readonly stager: CleanApprovalStagerV1;
+  /** Optional content-free lifecycle reporter owned by the live worker. */
+  readonly worker_lifecycle?: CleanLiveWorkerPhaseRunnerV1;
 }
 
 function assertAdmissionMatchesAdapters(
@@ -212,8 +218,15 @@ function inputFingerprint(
  */
 export class CleanLiveOnlySourceCycleV1 {
   private running: Promise<CleanLiveOnlySourceCycleResultV1> | undefined;
+  private workerLifecycle: CleanLiveWorkerPhaseRunnerV1 | undefined;
 
-  constructor(private readonly options: CleanLiveOnlySourceCycleV1Options) {}
+  constructor(private readonly options: CleanLiveOnlySourceCycleV1Options) {
+    this.workerLifecycle = options.worker_lifecycle;
+  }
+
+  setWorkerLifecycle(lifecycle: CleanLiveWorkerPhaseRunnerV1): void {
+    this.workerLifecycle = lifecycle;
+  }
 
   runOnce(signal?: AbortSignal): Promise<CleanLiveOnlySourceCycleResultV1> {
     if (this.running !== undefined) return this.running;
@@ -238,23 +251,30 @@ export class CleanLiveOnlySourceCycleV1 {
         ? signal.reason
         : new Error("clean live-only source cycle was cancelled");
     }
-    const admission = await this.options.state.readAdmission();
-    assertAdmissionMatchesAdapters(
-      admission,
-      this.options.source,
-      this.options.processor,
-    );
-    const batch = await this.options.source.pull(
-      { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
-      signal === undefined ? undefined : { signal },
-    );
-    assertCanonicalMeetingBatch(batch);
-    if (batch.meetings.length > MAXIMUM_PULL_LIMIT) {
-      throw new Error(
-        "clean live-only source cycle accepts at most one meeting per poll",
+    const source = await this.phase("source_intake", async () => {
+      const admission = await this.options.state.readAdmission();
+      assertAdmissionMatchesAdapters(
+        admission,
+        this.options.source,
+        this.options.processor,
       );
-    }
-    const meeting = batch.meetings[0];
+      const batch = await this.options.source.pull(
+        { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
+        signal === undefined ? undefined : { signal },
+      );
+      assertCanonicalMeetingBatch(batch);
+      if (batch.meetings.length > MAXIMUM_PULL_LIMIT) {
+        throw new Error(
+          "clean live-only source cycle accepts at most one meeting per poll",
+        );
+      }
+      const meeting = batch.meetings[0];
+      if (meeting !== undefined) {
+        assertCanonicalMeetingDocument(meeting, this.options.source.identity);
+      }
+      return { admission, batch, meeting };
+    });
+    const { admission, batch, meeting } = source;
     if (meeting === undefined) {
       if (
         batch.next_cursor === undefined ||
@@ -276,7 +296,6 @@ export class CleanLiveOnlySourceCycleV1 {
       };
     }
 
-    assertCanonicalMeetingDocument(meeting, this.options.source.identity);
     const frozen = await this.options.state.readFrozenCandidateForSourceRevision(
       {
         external_id: meeting.provenance.external_id,
@@ -285,14 +304,16 @@ export class CleanLiveOnlySourceCycleV1 {
     );
     if (frozen !== undefined) {
       if (frozen.state !== "staged") {
-        const staged = await this.options.stager.stage(
-          {
-            admission: frozen.admission,
-            candidate: frozen,
-            meeting: frozen.meeting,
-            decisions: frozen.decisions,
-          },
-          signal === undefined ? undefined : { signal },
+        const staged = await this.phase("approval_staging", () =>
+          this.options.stager.stage(
+            {
+              admission: frozen.admission,
+              candidate: frozen,
+              meeting: frozen.meeting,
+              decisions: frozen.decisions,
+            },
+            signal === undefined ? undefined : { signal },
+          ),
         );
         if (staged.kind !== "staged") {
           return {
@@ -348,19 +369,22 @@ export class CleanLiveOnlySourceCycleV1 {
         cursor_advanced: false,
       };
     }
-    const decisions = await this.options.processor.extract(
-      meeting,
-      {
-        processor_version: this.options.processor.identity.version,
-        input_fingerprint: inputFingerprint(meeting, this.options.processor),
-      },
-      signal === undefined ? undefined : { signal },
-    );
-    assertCanonicalDecisionSet(
-      decisions,
-      meeting,
-      this.options.processor.identity,
-    );
+    const decisions = await this.phase("extraction", async () => {
+      const extracted = await this.options.processor.extract(
+        meeting,
+        {
+          processor_version: this.options.processor.identity.version,
+          input_fingerprint: inputFingerprint(meeting, this.options.processor),
+        },
+        signal === undefined ? undefined : { signal },
+      );
+      assertCanonicalDecisionSet(
+        extracted,
+        meeting,
+        this.options.processor.identity,
+      );
+      return extracted;
+    });
     if (decisions.signals.length === 0) {
       if (
         batch.next_cursor === undefined ||
@@ -381,15 +405,17 @@ export class CleanLiveOnlySourceCycleV1 {
         cursor_advanced: false,
       };
     }
-    const candidate = await this.options.state.stageCandidate({
-      admission,
-      meeting,
-      decisions,
+    const staged = await this.phase("approval_staging", async () => {
+      const candidate = await this.options.state.stageCandidate({
+        admission,
+        meeting,
+        decisions,
+      });
+      return this.options.stager.stage(
+        { admission, candidate, meeting, decisions },
+        signal === undefined ? undefined : { signal },
+      );
     });
-    const staged = await this.options.stager.stage(
-      { admission, candidate, meeting, decisions },
-      signal === undefined ? undefined : { signal },
-    );
     if (staged.kind !== "staged") {
       return {
         kind: "not_staged",
@@ -420,5 +446,12 @@ export class CleanLiveOnlySourceCycleV1 {
       };
     }
     return { kind: "staged", stage_id: staged.stage_id, cursor_advanced: true };
+  }
+
+  private phase<T>(
+    phase: CleanLiveWorkerPhaseV1,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.workerLifecycle?.runPhase(phase, operation) ?? operation();
   }
 }
