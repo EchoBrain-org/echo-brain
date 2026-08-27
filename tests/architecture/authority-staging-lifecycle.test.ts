@@ -89,6 +89,16 @@ case " $* " in
 esac
 case " $* " in
   *" cloudformation describe-change-set "*) printf '%s\\n' "$FAKE_AWS_DESCRIBE_RESPONSE" ;;
+  *" ssm send-command "*)
+    if [ "\${FAKE_AWS_SSM_COMMAND_ID_MODE-}" = missing ]; then
+      printf '{}\\n'
+    else
+      printf '%s\\n' '{"Command":{"CommandId":"command-123"}}'
+    fi
+    ;;
+  *" ssm get-command-invocation "*)
+    printf '{"Status":"Success","StandardOutputContent":"%s\\\\n"}\\n' "$FAKE_AWS_SSM_MARKER"
+    ;;
   *" cloudformation describe-stacks "*)
     if [ -n "\${FAKE_AWS_STACK_RESPONSE-}" ]; then
       printf '%s\\n' "$FAKE_AWS_STACK_RESPONSE"
@@ -103,6 +113,26 @@ esac
   );
   chmodSync(aws, 0o700);
   return { aws, executeCount, log, root, stdin };
+}
+
+function useFakeAwsEnvironment(
+  fake: ReturnType<typeof withFakeAws>,
+  values: Readonly<Record<string, string | undefined>>,
+) {
+  const previous = Object.fromEntries(
+    Object.keys(values).map((key) => [key, process.env[key]]),
+  );
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  return () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(fake.root, { force: true, recursive: true });
+  };
 }
 
 function withFakeAsmExec() {
@@ -1246,17 +1276,13 @@ describe("Authority staging lifecycle", () => {
 
   it("retries an uncertain ExecuteChangeSet request with the same client token", async () => {
     const fake = withFakeAws();
-    const previous = {
-      count: process.env.FAKE_AWS_EXECUTE_COUNT,
-      failures: process.env.FAKE_AWS_EXECUTE_FAILURES,
-      log: process.env.FAKE_AWS_LOG,
-      path: process.env.PATH,
-    };
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_EXECUTE_COUNT: fake.executeCount,
+      FAKE_AWS_EXECUTE_FAILURES: "1",
+      FAKE_AWS_LOG: fake.log,
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
     try {
-      process.env.FAKE_AWS_EXECUTE_COUNT = fake.executeCount;
-      process.env.FAKE_AWS_EXECUTE_FAILURES = "1";
-      process.env.FAKE_AWS_LOG = fake.log;
-      process.env.PATH = `${fake.root}:${previous.path ?? ""}`;
       const adapters = createAwsCliAdapters();
       await adapters.cloudFormation!.executeChangeSet({
         changeSetId: "change-set-execute-retry",
@@ -1277,34 +1303,20 @@ describe("Authority staging lifecycle", () => {
       ).toHaveLength(2);
       expect(calls).toContain("ARG=wait\nARG=stack-update-complete");
     } finally {
-      if (previous.count === undefined)
-        delete process.env.FAKE_AWS_EXECUTE_COUNT;
-      else process.env.FAKE_AWS_EXECUTE_COUNT = previous.count;
-      if (previous.failures === undefined)
-        delete process.env.FAKE_AWS_EXECUTE_FAILURES;
-      else process.env.FAKE_AWS_EXECUTE_FAILURES = previous.failures;
-      if (previous.log === undefined) delete process.env.FAKE_AWS_LOG;
-      else process.env.FAKE_AWS_LOG = previous.log;
-      if (previous.path === undefined) delete process.env.PATH;
-      else process.env.PATH = previous.path;
-      rmSync(fake.root, { force: true, recursive: true });
+      restore();
     }
   });
 
   it("leaves a quiesced host stopped when both idempotent execute attempts are uncertain", async () => {
     const fake = withFakeAws();
     const fixture = dependencies({ initialStack: stack(true) });
-    const previous = {
-      count: process.env.FAKE_AWS_EXECUTE_COUNT,
-      failures: process.env.FAKE_AWS_EXECUTE_FAILURES,
-      log: process.env.FAKE_AWS_LOG,
-      path: process.env.PATH,
-    };
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_EXECUTE_COUNT: fake.executeCount,
+      FAKE_AWS_EXECUTE_FAILURES: "2",
+      FAKE_AWS_LOG: fake.log,
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
     try {
-      process.env.FAKE_AWS_EXECUTE_COUNT = fake.executeCount;
-      process.env.FAKE_AWS_EXECUTE_FAILURES = "2";
-      process.env.FAKE_AWS_LOG = fake.log;
-      process.env.PATH = `${fake.root}:${previous.path ?? ""}`;
       const adapters = createAwsCliAdapters();
       await expect(
         runAuthorityStaging("down", INPUT, {
@@ -1329,52 +1341,95 @@ describe("Authority staging lifecycle", () => {
       expect(fixture.events).toContain("ssm-quiesce-host");
       expect(fixture.events).not.toContain("ssm-recover-host");
     } finally {
-      if (previous.count === undefined)
-        delete process.env.FAKE_AWS_EXECUTE_COUNT;
-      else process.env.FAKE_AWS_EXECUTE_COUNT = previous.count;
-      if (previous.failures === undefined)
-        delete process.env.FAKE_AWS_EXECUTE_FAILURES;
-      else process.env.FAKE_AWS_EXECUTE_FAILURES = previous.failures;
-      if (previous.log === undefined) delete process.env.FAKE_AWS_LOG;
-      else process.env.FAKE_AWS_LOG = previous.log;
-      if (previous.path === undefined) delete process.env.PATH;
-      else process.env.PATH = previous.path;
-      rmSync(fake.root, { force: true, recursive: true });
+      restore();
+    }
+  });
+
+  it("proves default SSM actions with exact, action-specific output", async () => {
+    const fake = withFakeAws();
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_LOG: fake.log,
+      FAKE_AWS_SSM_COMMAND_ID_MODE: undefined,
+      FAKE_AWS_SSM_MARKER: "authority-staging-quiesced",
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    try {
+      const adapters = createAwsCliAdapters();
+      const instanceId = "i-0123456789abcdef0";
+      const request = {
+        instanceId,
+        mountPath: "/srv/echo-authority-clean-v1/clean-data",
+        region: "us-west-2",
+      };
+      const cases = [
+        {
+          expectedReceipt: {
+            composeStopped: true,
+            dockerStopped: true,
+            syncComplete: true,
+            volumeSafe: true,
+            volumeUnmounted: true,
+          },
+          marker: "authority-staging-quiesced",
+          run: () => adapters.ssm!.quiesceHost(request),
+          unprovenCode: "ssm_quiesce_unproven",
+        },
+        {
+          expectedReceipt: {
+            dockerStarted: true,
+            existingContainersStarted: true,
+            volumeMounted: true,
+          },
+          marker: "authority-staging-recovered",
+          run: () => adapters.ssm!.recoverHost(request),
+          unprovenCode: "ssm_recovery_unproven",
+        },
+      ];
+      for (const testCase of cases) {
+        process.env.FAKE_AWS_SSM_MARKER = testCase.marker;
+        writeFileSync(fake.log, "");
+        await expect(testCase.run()).resolves.toEqual(testCase.expectedReceipt);
+        const calls = readFileSync(fake.log, "utf8");
+        expect(calls).toContain(`ARG=--parameters\nARG={"commands":["set -eu",`);
+        expect(calls).toContain(`${testCase.marker}\\\\n`);
+        expect(calls).toContain(
+          `ARG=--region\nARG=us-west-2\nARG=--document-name\nARG=AWS-RunShellScript\nARG=--instance-ids\nARG=${instanceId}`,
+        );
+        expect(calls.match(/ARG=--command-id\nARG=command-123/g)).toHaveLength(2);
+        expect(calls).toMatch(
+          /ARG=ssm\nARG=send-command[\s\S]*ARG=ssm\nARG=wait\nARG=command-executed[\s\S]*ARG=ssm\nARG=get-command-invocation/,
+        );
+        process.env.FAKE_AWS_SSM_MARKER = `${testCase.marker}-wrong`;
+        await expect(testCase.run()).rejects.toThrow(testCase.unprovenCode);
+      }
+      process.env.FAKE_AWS_SSM_COMMAND_ID_MODE = "missing";
+      for (const testCase of cases)
+        await expect(testCase.run()).rejects.toThrow(
+          "ssm_command_response_invalid",
+        );
+    } finally {
+      restore();
     }
   });
 
   it("drives the default AWS CLI adapter with bounded create and write-only secret arguments", async () => {
     const fake = withFakeAws();
-    const previous = {
-      accessKey: process.env.AWS_ACCESS_KEY_ID,
-      configFile: process.env.AWS_CONFIG_FILE,
-      defaultProfile: process.env.AWS_DEFAULT_PROFILE,
-      describe: process.env.FAKE_AWS_DESCRIBE_RESPONSE,
-      log: process.env.FAKE_AWS_LOG,
-      path: process.env.PATH,
-      profile: process.env.AWS_PROFILE,
-      secretKey: process.env.AWS_SECRET_ACCESS_KEY,
-      sessionToken: process.env.AWS_SESSION_TOKEN,
-      sharedCredentialsFile: process.env.AWS_SHARED_CREDENTIALS_FILE,
-      stdin: process.env.FAKE_AWS_STDIN,
-      token: process.env.ECHO_CLOUDFLARE_API_TOKEN,
-      webIdentity: process.env.AWS_WEB_IDENTITY_TOKEN_FILE,
-    };
+    const restore = useFakeAwsEnvironment(fake, {
+      AWS_ACCESS_KEY_ID: "fake-ambient-access-key",
+      AWS_CONFIG_FILE: "/private/tmp/wrong-aws-config",
+      AWS_DEFAULT_PROFILE: "wrong-default-profile",
+      AWS_PROFILE: "wrong-profile",
+      AWS_SECRET_ACCESS_KEY: "fake-ambient-secret-key",
+      AWS_SESSION_TOKEN: "fake-ambient-session-token",
+      AWS_SHARED_CREDENTIALS_FILE: "/private/tmp/wrong-aws-credentials",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "/private/tmp/wrong-web-identity",
+      ECHO_CLOUDFLARE_API_TOKEN: TOKEN,
+      FAKE_AWS_DESCRIBE_RESPONSE: undefined,
+      FAKE_AWS_LOG: fake.log,
+      FAKE_AWS_STDIN: fake.stdin,
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
     try {
-      process.env.PATH = `${fake.root}:${previous.path ?? ""}`;
-      process.env.FAKE_AWS_LOG = fake.log;
-      process.env.FAKE_AWS_STDIN = fake.stdin;
-      process.env.ECHO_CLOUDFLARE_API_TOKEN = TOKEN;
-      process.env.AWS_ACCESS_KEY_ID = "fake-ambient-access-key";
-      process.env.AWS_CONFIG_FILE = "/private/tmp/wrong-aws-config";
-      process.env.AWS_DEFAULT_PROFILE = "wrong-default-profile";
-      process.env.AWS_PROFILE = "wrong-profile";
-      process.env.AWS_SECRET_ACCESS_KEY = "fake-ambient-secret-key";
-      process.env.AWS_SESSION_TOKEN = "fake-ambient-session-token";
-      process.env.AWS_SHARED_CREDENTIALS_FILE =
-        "/private/tmp/wrong-aws-credentials";
-      process.env.AWS_WEB_IDENTITY_TOKEN_FILE =
-        "/private/tmp/wrong-web-identity";
       const adapters = createAwsCliAdapters();
       await adapters.putSecretValue!({
         clientRequestToken: "d".repeat(64),
@@ -1551,43 +1606,7 @@ describe("Authority staging lifecycle", () => {
       expect(createCalls.match(/ACCESS_KEY_ENV=unset/g)).toHaveLength(21);
       expect(createCalls.match(/^TOKEN_ENV=unset$/gm)).toHaveLength(21);
     } finally {
-      if (previous.accessKey === undefined)
-        delete process.env.AWS_ACCESS_KEY_ID;
-      else process.env.AWS_ACCESS_KEY_ID = previous.accessKey;
-      if (previous.configFile === undefined) delete process.env.AWS_CONFIG_FILE;
-      else process.env.AWS_CONFIG_FILE = previous.configFile;
-      if (previous.defaultProfile === undefined)
-        delete process.env.AWS_DEFAULT_PROFILE;
-      else process.env.AWS_DEFAULT_PROFILE = previous.defaultProfile;
-      if (previous.describe === undefined)
-        delete process.env.FAKE_AWS_DESCRIBE_RESPONSE;
-      else process.env.FAKE_AWS_DESCRIBE_RESPONSE = previous.describe;
-      if (previous.log === undefined) delete process.env.FAKE_AWS_LOG;
-      else process.env.FAKE_AWS_LOG = previous.log;
-      if (previous.path === undefined) delete process.env.PATH;
-      else process.env.PATH = previous.path;
-      if (previous.profile === undefined) delete process.env.AWS_PROFILE;
-      else process.env.AWS_PROFILE = previous.profile;
-      if (previous.secretKey === undefined)
-        delete process.env.AWS_SECRET_ACCESS_KEY;
-      else process.env.AWS_SECRET_ACCESS_KEY = previous.secretKey;
-      if (previous.sessionToken === undefined)
-        delete process.env.AWS_SESSION_TOKEN;
-      else process.env.AWS_SESSION_TOKEN = previous.sessionToken;
-      if (previous.sharedCredentialsFile === undefined)
-        delete process.env.AWS_SHARED_CREDENTIALS_FILE;
-      else
-        process.env.AWS_SHARED_CREDENTIALS_FILE =
-          previous.sharedCredentialsFile;
-      if (previous.stdin === undefined) delete process.env.FAKE_AWS_STDIN;
-      else process.env.FAKE_AWS_STDIN = previous.stdin;
-      if (previous.token === undefined)
-        delete process.env.ECHO_CLOUDFLARE_API_TOKEN;
-      else process.env.ECHO_CLOUDFLARE_API_TOKEN = previous.token;
-      if (previous.webIdentity === undefined)
-        delete process.env.AWS_WEB_IDENTITY_TOKEN_FILE;
-      else process.env.AWS_WEB_IDENTITY_TOKEN_FILE = previous.webIdentity;
-      rmSync(fake.root, { force: true, recursive: true });
+      restore();
     }
   });
 });

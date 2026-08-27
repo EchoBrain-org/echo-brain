@@ -145,11 +145,12 @@ function bundleFiles(sourceRoot) {
   const files = REQUIRED_FILES.map((path) => {
     regularFile(join(sourceRoot, path), path);
     const mode = path.endsWith(".sh") ? 0o755 : 0o644;
+    const content = readFileSync(join(sourceRoot, path));
     return Object.freeze({
       path,
-      content: readFileSync(join(sourceRoot, path)),
+      content,
       mode,
-      sha256: sha256(readFileSync(join(sourceRoot, path))),
+      sha256: sha256(content),
     });
   });
   return Object.freeze(files);

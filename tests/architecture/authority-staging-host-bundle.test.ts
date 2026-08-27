@@ -10,35 +10,22 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const BUILDER = join(REPO, "tools", "build-authority-staging-host-bundle.mjs");
-const BOOTSTRAP = join(
-  REPO,
-  "deploy/organization-authority/bootstrap-ubuntu-arm64.sh",
-);
-const UNIT = join(
-  REPO,
-  "deploy/organization-authority/cloudflared-echo-authority.service",
-);
-const INSTALLER = join(
-  REPO,
-  "deploy/organization-authority/install-cloudflare-tunnel-token.sh",
-);
-const ONBOARD = join(REPO, "deploy/organization-authority/onboard-clean-v1.sh");
-const UPDATER = join(REPO, "deploy/organization-authority/update-clean-v1.sh");
-const RESTORER = join(
-  REPO,
-  "deploy/organization-authority/restore-clean-v1-host.sh",
-);
-const RELEASE_VALIDATOR = join(REPO, "deploy/release/clean-v1-release.py");
-const RUNTIME_PROFILE_VALIDATOR = join(
-  REPO,
-  "deploy/release/clean-v1-runtime-profile.py",
-);
+const FIXTURE_FILES = [
+  ["deploy/organization-authority/bootstrap-ubuntu-arm64.sh", 0o755],
+  ["deploy/organization-authority/cloudflared-echo-authority.service", 0o644],
+  ["deploy/organization-authority/install-cloudflare-tunnel-token.sh", 0o755],
+  ["deploy/organization-authority/onboard-clean-v1.sh", 0o755],
+  ["deploy/organization-authority/restore-clean-v1-host.sh", 0o755],
+  ["deploy/organization-authority/update-clean-v1.sh", 0o755],
+  ["deploy/release/clean-v1-release.py", 0o755],
+  ["deploy/release/clean-v1-runtime-profile.py", 0o755],
+] as const;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -53,38 +40,14 @@ function sha256(path: string): string {
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-staging-host-bundle-"));
   roots.push(root);
-  const authority = join(root, "deploy", "organization-authority");
-  const release = join(root, "deploy", "release");
   const output = mkdtempSync(join(tmpdir(), "echo-staging-host-output-"));
   roots.push(output);
-  mkdirSync(authority, { recursive: true, mode: 0o700 });
-  mkdirSync(release, { recursive: true, mode: 0o700 });
   chmodSync(output, 0o700);
-  const bootstrap = readFileSync(BOOTSTRAP);
-  writeFileSync(join(authority, "bootstrap-ubuntu-arm64.sh"), bootstrap, {
-    mode: 0o755,
-  });
-  writeFileSync(
-    join(authority, "cloudflared-echo-authority.service"),
-    readFileSync(UNIT),
-    { mode: 0o644 },
-  );
-  for (const [name, source, mode, destination] of [
-    ["onboard-clean-v1.sh", ONBOARD, 0o755, authority],
-    ["update-clean-v1.sh", UPDATER, 0o755, authority],
-    ["restore-clean-v1-host.sh", RESTORER, 0o755, authority],
-    ["clean-v1-release.py", RELEASE_VALIDATOR, 0o755, release],
-    ["clean-v1-runtime-profile.py", RUNTIME_PROFILE_VALIDATOR, 0o755, release],
-  ] as const) {
-    writeFileSync(join(destination, name), readFileSync(source), {
-      mode,
-    });
+  for (const [path, mode] of FIXTURE_FILES) {
+    const destination = join(root, path);
+    mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+    writeFileSync(destination, readFileSync(join(REPO, path)), { mode });
   }
-  writeFileSync(
-    join(authority, "install-cloudflare-tunnel-token.sh"),
-    readFileSync(INSTALLER),
-    { mode: 0o755 },
-  );
   writeFileSync(join(root, ".env.clean-v1"), "must-not-be-packaged=true\n", {
     mode: 0o600,
   });
@@ -168,6 +131,8 @@ describe("Authority staging host bundle", () => {
         mode: "0644",
       }),
     ]);
+    for (const file of manifest.files)
+      expect(file.sha256).toBe(sha256(join(subject.root, file.path)));
     const listed = execFileSync("tar", ["-tzf", first], { encoding: "utf8" })
       .trim()
       .split("\n")

@@ -313,95 +313,28 @@ balancer, direct SSH, or public host listener. Egress is limited to the
 protocols required by bootstrap, AWS control-plane access, DNS, time sync, and
 Cloudflare Tunnel, then measured before a narrower endpoint design is claimed.
 
-## Exact acceptance
+## Recorded acceptance and result
 
-The sprint has three distinct completion levels. Passing an earlier level is
-not a substitute for a later live rehearsal.
+All three completion levels passed on 2026-08-27:
 
-## Recorded live-qualification result
+- A: the host, retained-state, fixed-edge, and plan-first lifecycle boundaries
+  passed structural and architecture checks;
+- B: the reviewed first-live slot, observability sibling, real canary,
+  authenticated Layer 1 and Layer 2 checks, terminal-green state, and exact
+  public/local descriptor comparison passed; and
+- C: three post-commit fresh-host rehearsals retained the same edge and data
+  volume, required no callback or DNS edit, reached descriptor readiness in
+  less than 10 minutes, and ended with expected-only cross-stack drift.
 
-Phase B passed before any host-replacement rehearsal. A reviewed change set had
-created the persistent slot and enabled host. The required observability sibling
-reached `CREATE_COMPLETE`; its subscription was confirmed and all four alarm
-and OK actions targeted that destination. The accepted
-`clean-v1-staging-20260827-004` release at source
-`825707b4a5356d3e3a1baf2c75aee6484ba426d9` reached terminal green; its public
-HTTPS descriptor returned `200` and exactly equaled the local descriptor; and
-authenticated Layer 1 and Layer 2 checks passed.
+The [qualification matrix](../qualification/authority-staging-host-replacement-v1-matrix.md)
+owns the exact assertion set. The [qualification
+report](../qualification/QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md)
+owns the source and artifact identities, timings, evidence IDs, deviations, and
+test counts for the accepted run. This product specification continues to own
+the lifecycle and safety boundaries, not the exact-run proof.
 
-At controller revision `f0d2f95214246501bfcca59b156a30105fce947d`, three
-consecutive retained-state `down` then fresh-host `up` rehearsals passed. The
-AWS-authoritative lifecycle elapsed measurements were 245.630 seconds, 272.446
-seconds, and 236.185 seconds, all within the 10-minute requirement. Each clock
-started at the stack-level CloudFormation `UPDATE_IN_PROGRESS` event for the
-reviewed `up` and ended at SSM `ExecutionEndDateTime` for the successful
-public-versus-direct-in-container descriptor probe, after source equality,
-explicit resume, and terminal-green proof. Every cycle used a distinct fresh
-host while retaining the same hostname, tunnel, and data volume; required no
-callback or DNS edit; verified input-archive hash equality and host-bundle
-`source_commit` equality with the accepted source SHA; explicitly ran
-`restore-clean-v1-host.sh resume`; used the accepted image and runtime profile;
-reached terminal green; and returned public `200` equal to the direct
-in-container descriptor.
-
-Each normal `down` removed only `StagingHost`,
-`StagingDataVolumeAttachment`, `StagingReadyHandle`, and `StagingReady`; the
-role and launch template were modified in place. Drift detection found only the
-expected cross-stack `StagingHostRole` `ManagedPolicyArns/0` difference owned
-by the observability sibling's `AuthorityDockerLogWritePolicy`, with no
-unexpected drift. The pre-rehearsal POSIX `sh` `pipefail` failure was found
-before any CloudFormation execute and corrected/tested in the stated controller
-revision. One successful byte-identical pre-commit shakedown was excluded so
-all three qualifying cycles postdate and map exactly to that revision.
-
-Closure verification passed all five focused staging architecture suites (102
-tests) and `npm run check` (99 test files and 862 tests).
-
-The detailed assertion record is the [Authority staging host-replacement V1
-qualification](../qualification/QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md).
-
-### A. Code-complete host-and-edge infrastructure
-
-1. One initial API-token bootstrap is the only Cloudflare dashboard step in the
-   designed recurring lifecycle. Repeated `slot-init`, `up`, and `down` use the
-   REST API and AWS APIs without a dashboard action and do not expose the
-   bootstrap or connector token.
-2. `slot-init` code creates or verifies exactly one named remote tunnel, its
-   exact remote ingress policy, and one proxied CNAME for the staging hostname.
-   A repeated run is idempotent and refuses drift.
-3. The AWS template and its tests define a disposable host plus a retained
-   encrypted `clean-data` volume, zero-ingress network, bounded secret access,
-   and an explicit host-role output for the unmodified observability template.
-4. The host configuration refuses to start Compose without the intended
-   non-symlink volume mount at `/srv/echo-authority-clean-v1/clean-data` and
-   ownership `999:988`.
-5. `npm run check` and focused architecture tests for the edge, host module,
-   materialization, and lifecycle pass.
-
-### B. First live staging onboarding and application qualification
-
-1. A reviewed change set has created the persistent slot and an enabled host;
-   the existing observability stack has been deployed as its unmodified sibling
-   and its alarm destination has been confirmed.
-2. Initial staging onboarding reaches terminal green through the existing
-   canary, using throwaway providers.
-3. The public HTTPS descriptor returns `200` and equals the local descriptor on
-   the accepted digest-pinned release tuple.
-
-### C. Repeated host-replacement and timing qualification
-
-1. Three consecutive `down` then fresh-host `up` rehearsals, followed by the
-   explicit source-commit equality check and resume of the accepted release,
-   each reach the descriptor-ready condition in 10 minutes or less, retain the same
-   hostname/tunnel and staging data volume, and require no callback or DNS edit.
-2. After each rehearsal, `onboard-clean-v1.sh status` is terminal green and
-   the public descriptor equals the local descriptor on the accepted
-   digest-pinned release tuple.
-3. A second apply has no unexpected drift. The normal `down` receipt proves
-   that only disposable host material was removed; it did not delete the
-   persistent edge, retained data volume, or unrelated resource.
-4. Receipts distinguish implementation tests, machine-and-connector readiness,
-   first-live application qualification, and repeated timing rehearsals.
+The result does not qualify a snapshot restore, close GAP-01 or issue #20, or
+claim GAP-04 closure.
 
 ## Non-goals and residual work
 

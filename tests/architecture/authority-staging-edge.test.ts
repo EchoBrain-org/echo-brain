@@ -43,9 +43,11 @@ function expectedConfiguration() {
 
 function edgeFetch(
   options: {
-    readonly tunnel?: unknown[];
-    readonly dns?: unknown[];
+    readonly tunnel?: readonly unknown[];
+    readonly dns?: readonly unknown[];
     readonly configuration?: unknown;
+    readonly createdTunnel?: unknown;
+    readonly createdDns?: unknown;
   } = {},
 ) {
   const calls: Array<{ url: string; init: Record<string, unknown> }> = [];
@@ -55,6 +57,12 @@ function edgeFetch(
   const configuration = Object.hasOwn(options, "configuration")
     ? options.configuration
     : expectedConfiguration();
+  const createdTunnel = Object.hasOwn(options, "createdTunnel")
+    ? options.createdTunnel
+    : { id: TUNNEL_ID, name: TUNNEL_NAME, remote_config: true };
+  const createdDns = Object.hasOwn(options, "createdDns")
+    ? options.createdDns
+    : ownedDns();
   const fetchImpl = async (url: string, init: Record<string, unknown> = {}) => {
     calls.push({ url, init });
     const method = (init.method as string | undefined) ?? "GET";
@@ -63,11 +71,7 @@ function edgeFetch(
     if (url.includes("/cfd_tunnel?") && init.method === undefined)
       return response(tunnel);
     if (url.endsWith("/cfd_tunnel") && init.method === "POST")
-      return response({
-        id: TUNNEL_ID,
-        name: TUNNEL_NAME,
-        remote_config: true,
-      });
+      return response(createdTunnel);
     if (
       url.endsWith(`/cfd_tunnel/${TUNNEL_ID}/configurations`) &&
       init.method === "PUT"
@@ -80,14 +84,7 @@ function edgeFetch(
     if (url.includes("/dns_records?") && init.method === undefined)
       return response(dns);
     if (url.endsWith("/dns_records") && init.method === "POST")
-      return response({
-        id: "dns-record-id",
-        type: "CNAME",
-        name: INPUT.hostname,
-        content: `${TUNNEL_ID}.cfargotunnel.com`,
-        proxied: true,
-        comment: `echo-brain staging edge ${INPUT.slotId}`,
-      });
+      return response(createdDns);
     throw new Error(`unexpected request ${url}`);
   };
   return { calls, events, fetchImpl };
@@ -98,16 +95,18 @@ function configuredTunnel() {
 }
 
 function configuredDns() {
-  return [
-    {
-      id: "dns-record-id",
-      type: "CNAME",
-      name: INPUT.hostname,
-      content: `${TUNNEL_ID}.cfargotunnel.com`,
-      proxied: true,
-      comment: `echo-brain staging edge ${INPUT.slotId}`,
-    },
-  ];
+  return [ownedDns()];
+}
+
+function ownedDns() {
+  return {
+    id: "dns-record-id",
+    type: "CNAME",
+    name: INPUT.hostname,
+    content: `${TUNNEL_ID}.cfargotunnel.com`,
+    proxied: true,
+    comment: `echo-brain staging edge ${INPUT.slotId}`,
+  };
 }
 
 function install(input: StagingEdgeInput, fetchImpl: FetchLike) {
@@ -290,7 +289,7 @@ describe("Authority staging Cloudflare edge", () => {
     }
   });
 
-  it("accepts Cloudflare's current remote_config response and rejects contradictory management mode", async () => {
+  it("accepts Cloudflare's current remote_config response", async () => {
     const currentResponse = edgeFetch({
       tunnel: [
         {
@@ -304,20 +303,33 @@ describe("Authority staging Cloudflare edge", () => {
     await expect(
       install(INPUT, currentResponse.fetchImpl),
     ).resolves.toMatchObject({ state: "ready", tunnel_created: false });
+  });
 
-    const contradictory = edgeFetch({
-      tunnel: [
-        {
-          id: TUNNEL_ID,
-          name: TUNNEL_NAME,
-          config_src: "cloudflare",
-          remote_config: false,
-        },
+  it("retains caller-specific refusal codes for invalid ownership", async () => {
+    const tunnel = {
+      id: TUNNEL_ID,
+      name: TUNNEL_NAME,
+      config_src: "cloudflare",
+      remote_config: false,
+    };
+    const dns = { ...ownedDns(), proxied: false };
+    const cases = [
+      [{ tunnel: [tunnel] }, "cloudflare_tunnel_conflict"],
+      [{ createdTunnel: tunnel }, "cloudflare_tunnel_create_response_invalid"],
+      [
+        { tunnel: configuredTunnel(), dns: [dns] },
+        "cloudflare_dns_conflict",
       ],
-    });
-    await expect(install(INPUT, contradictory.fetchImpl)).rejects.toThrow(
-      "cloudflare_tunnel_conflict",
-    );
+      [
+        { tunnel: configuredTunnel(), createdDns: dns },
+        "cloudflare_dns_create_response_invalid",
+      ],
+    ] as const;
+
+    for (const [options, refusal] of cases)
+      await expect(
+        install(INPUT, edgeFetch(options).fetchImpl),
+      ).rejects.toThrow(refusal);
   });
 
   it("refuses existing ingress drift instead of overwriting it", async () => {
@@ -371,7 +383,7 @@ describe("Authority staging Cloudflare edge", () => {
     ).rejects.toThrow("cloudflare_tunnel_configuration_conflict");
   });
 
-  it("fails closed on duplicate or conflicting existing names", async () => {
+  it("fails closed on duplicate existing names", async () => {
     await expect(
       install(
         INPUT,
@@ -380,15 +392,6 @@ describe("Authority staging Cloudflare edge", () => {
       ),
     ).rejects.toThrow("cloudflare_tunnel_duplicate");
 
-    await expect(
-      install(
-        INPUT,
-        edgeFetch({
-          tunnel: configuredTunnel(),
-          dns: [{ ...configuredDns()[0], proxied: false }],
-        }).fetchImpl,
-      ),
-    ).rejects.toThrow("cloudflare_dns_conflict");
   });
 
   it("checks exact configuration without creating resources or fetching a connector token", async () => {
