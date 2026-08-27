@@ -27,7 +27,6 @@ const REGION = /^[a-z]{2}(?:-[a-z0-9]+)+-[1-9][0-9]*$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const S3_KEY = /^[A-Za-z0-9][A-Za-z0-9._/-]{1,900}\.tar\.gz$/;
 const S3_VERSION = /^[A-Za-z0-9._/+=-]{8,1024}$/;
-const S3_BUCKET = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 const PARAMETER_VALUE = /^[\x20-\x7e]{1,2048}$/;
 // Cloudflare tunnel names are derived as `echo-authority-${slotId}` and are
 // limited to 63 characters, leaving 48 characters for the stable slot ID.
@@ -1213,6 +1212,61 @@ async function failedStackEvents(region, stackName) {
  * put-secret-value child's stdin rather than in an argument, receipt, or log.
  */
 export function createAwsCliAdapters() {
+  async function runSsmCommandWithExactSuccess({
+    commands,
+    instanceId,
+    region,
+    successMarker,
+    unprovenCode,
+  }) {
+    const sent = await awsJson([
+      "ssm",
+      "send-command",
+      "--region",
+      region,
+      "--document-name",
+      "AWS-RunShellScript",
+      "--instance-ids",
+      instanceId,
+      "--parameters",
+      JSON.stringify({ commands }),
+      "--output",
+      "json",
+    ]);
+    const commandId = sent.Command?.CommandId;
+    if (typeof commandId !== "string" || commandId.length === 0)
+      throw new AwsCliError("ssm_command_response_invalid");
+    await awsJson([
+      "ssm",
+      "wait",
+      "command-executed",
+      "--region",
+      region,
+      "--command-id",
+      commandId,
+      "--instance-id",
+      instanceId,
+    ]);
+    const result = await awsJson([
+      "ssm",
+      "get-command-invocation",
+      "--region",
+      region,
+      "--command-id",
+      commandId,
+      "--instance-id",
+      instanceId,
+      "--output",
+      "json",
+    ]);
+    if (
+      result.Status !== "Success" ||
+      result.StandardOutputContent !== successMarker
+    ) {
+      throw new AwsCliError(unprovenCode);
+    }
+  }
+
   return Object.freeze({
     cloudFormation: Object.freeze({
       async describeStack({ region, stackName }) {
@@ -1470,52 +1524,13 @@ export function createAwsCliAdapters() {
           `! mountpoint -q '${mountPath}'`,
           "printf 'authority-staging-quiesced\\n'",
         ];
-        const sent = await awsJson([
-          "ssm",
-          "send-command",
-          "--region",
-          region,
-          "--document-name",
-          "AWS-RunShellScript",
-          "--instance-ids",
+        await runSsmCommandWithExactSuccess({
+          commands,
           instanceId,
-          "--parameters",
-          JSON.stringify({ commands }),
-          "--output",
-          "json",
-        ]);
-        const commandId = sent.Command?.CommandId;
-        if (typeof commandId !== "string" || commandId.length === 0)
-          throw new AwsCliError("ssm_command_response_invalid");
-        await awsJson([
-          "ssm",
-          "wait",
-          "command-executed",
-          "--region",
           region,
-          "--command-id",
-          commandId,
-          "--instance-id",
-          instanceId,
-        ]);
-        const result = await awsJson([
-          "ssm",
-          "get-command-invocation",
-          "--region",
-          region,
-          "--command-id",
-          commandId,
-          "--instance-id",
-          instanceId,
-          "--output",
-          "json",
-        ]);
-        if (
-          result.Status !== "Success" ||
-          result.StandardOutputContent !== "authority-staging-quiesced\n"
-        ) {
-          throw new AwsCliError("ssm_quiesce_unproven");
-        }
+          successMarker: "authority-staging-quiesced\n",
+          unprovenCode: "ssm_quiesce_unproven",
+        });
         return Object.freeze({
           composeStopped: true,
           dockerStopped: true,
@@ -1536,52 +1551,13 @@ export function createAwsCliAdapters() {
           'test "$(docker ps --all --quiet | sort)" = "$(docker ps --quiet | sort)"',
           "printf 'authority-staging-recovered\\n'",
         ];
-        const sent = await awsJson([
-          "ssm",
-          "send-command",
-          "--region",
-          region,
-          "--document-name",
-          "AWS-RunShellScript",
-          "--instance-ids",
+        await runSsmCommandWithExactSuccess({
+          commands,
           instanceId,
-          "--parameters",
-          JSON.stringify({ commands }),
-          "--output",
-          "json",
-        ]);
-        const commandId = sent.Command?.CommandId;
-        if (typeof commandId !== "string" || commandId.length === 0)
-          throw new AwsCliError("ssm_command_response_invalid");
-        await awsJson([
-          "ssm",
-          "wait",
-          "command-executed",
-          "--region",
           region,
-          "--command-id",
-          commandId,
-          "--instance-id",
-          instanceId,
-        ]);
-        const result = await awsJson([
-          "ssm",
-          "get-command-invocation",
-          "--region",
-          region,
-          "--command-id",
-          commandId,
-          "--instance-id",
-          instanceId,
-          "--output",
-          "json",
-        ]);
-        if (
-          result.Status !== "Success" ||
-          result.StandardOutputContent !== "authority-staging-recovered\n"
-        ) {
-          throw new AwsCliError("ssm_recovery_unproven");
-        }
+          successMarker: "authority-staging-recovered\n",
+          unprovenCode: "ssm_recovery_unproven",
+        });
         return Object.freeze({
           dockerStarted: true,
           existingContainersStarted: true,

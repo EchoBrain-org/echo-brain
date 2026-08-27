@@ -176,7 +176,10 @@ volume around a disposable EC2 host. Its first-live onboarding and three
 retained-state host-replacement cycles have passed qualification; this does not
 claim a snapshot restore, GAP-01/#20 closure, or GAP-04 closure. The
 [staging sprint specification](docs/product/2026-08-26-disposable-authority-staging-sprint-v1.md)
-is the source of truth for recovery, safety boundaries, and live qualification.
+owns the recovery and safety boundaries. The [assertion
+matrix](docs/qualification/authority-staging-host-replacement-v1-matrix.md) and
+[qualification report](docs/qualification/QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md)
+own the passed assertions and exact-run evidence.
 
 | Command     | Purpose                                                                                                                                         |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -62,6 +62,7 @@ function fakeAws(options: {
   headMismatchAfterPut?: boolean;
   invocationMissingCount?: number;
   inventoryMode?: "delete-marker" | "multipart" | "truncated";
+  truncateCleanupInventory?: boolean;
   grantWaitAdvanceMs?: number;
   ssmStatuses?: string[];
 } = {}) {
@@ -74,6 +75,7 @@ function fakeAws(options: {
   let deleteFails = options.deleteFailsOnce === true ? 1 : 0;
   let putAttempted = false;
   let deleteAttempted = false;
+  let deleteCalls = 0;
   let objectVersions = options.preexistingKey ? ["preexist-0001"] : [];
   let invocationMissing = options.invocationMissingCount ?? 0;
   const stack = () => ({
@@ -141,6 +143,7 @@ function fakeAws(options: {
       return { Status: status, StandardOutputContent: status === "Success" ? "authority-staging-onboarding-input-transferred\n" : "" };
     }
     if (command === "s3api delete-object") {
+      deleteCalls += 1;
       if (deleteFails > 0) {
         deleteAttempted = true;
         return {};
@@ -150,6 +153,8 @@ function fakeAws(options: {
       return {};
     }
     if (command === "s3api list-object-versions") {
+      if (options.truncateCleanupInventory === true && deleteCalls > 0)
+        return { Versions: [], DeleteMarkers: [], IsTruncated: true };
       if (options.inventoryMode === "truncated") return { Versions: [], DeleteMarkers: [], IsTruncated: true };
       if (options.inventoryFailsAfterPut && putAttempted) throw new Error("inventory unavailable");
       if (deleteAttempted && deleteFails > 0) deleteFails -= 1;
@@ -208,6 +213,17 @@ function privateConfig(source: string, archive: string) {
   }), { mode: 0o600 });
   chmodSync(path, 0o600);
   return path;
+}
+
+function called(
+  fake: ReturnType<typeof fakeAws>,
+  service: string,
+  operation: string,
+) {
+  return fake.calls.some(
+    ([actualService, actualOperation]) =>
+      actualService === service && actualOperation === operation,
+  );
 }
 
 afterEach(() => {
@@ -325,7 +341,7 @@ describe("Authority staging onboarding transfer", () => {
       ...fake,
       replaceReceipt: () => { throw new Error("disk unavailable"); },
     })).toThrow("ssm_command_submission_unproven");
-    expect(fake.calls.some((args) => args[0] === "ssm" && args[1] === "send-command")).toBe(false);
+    expect(called(fake, "ssm", "send-command")).toBe(false);
   });
 
   it("quarantines a post-send receipt-write failure until grant expiry plus the bounded delivery and execution margin", () => {
@@ -345,7 +361,7 @@ describe("Authority staging onboarding transfer", () => {
     })).toThrow("ssm_command_submission_unproven");
     expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
     expect(() => cleanupOnboardingTransfer(plan.receipt_path, fake)).toThrow("ssm_command_submission_quarantined");
-    expect(fake.calls.some((args) => args[0] === "s3api" && args[1] === "delete-object")).toBe(false);
+    expect(called(fake, "s3api", "delete-object")).toBe(false);
     expect(fake.calls.filter((args) => args[0] === "cloudformation" && args[1] === "execute-change-set")).toHaveLength(1);
     const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
     fake.setClock(Date.parse(receipt.access_expires_at) + 12 * 60 * 1000);
@@ -397,8 +413,8 @@ describe("Authority staging onboarding transfer", () => {
     const send = fake.calls.find((args) => args[0] === "ssm" && args[1] === "send-command")!;
     const parameters = JSON.parse(send[send.indexOf("--parameters") + 1]!) as { executionTimeout: string[] };
     expect(parameters.executionTimeout).toEqual(["300"]);
-    expect(fake.calls.some((args) => args[0] === "ssm" && args[1] === "cancel-command")).toBe(true);
-    expect(fake.calls.some((args) => args[0] === "s3api" && args[1] === "delete-object")).toBe(false);
+    expect(called(fake, "ssm", "cancel-command")).toBe(true);
+    expect(called(fake, "s3api", "delete-object")).toBe(false);
     expect(existsSync(plan.receipt_path)).toBe(true);
   });
 
@@ -409,7 +425,7 @@ describe("Authority staging onboarding transfer", () => {
     const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
     expect(() => executeOnboardingTransfer(plan.receipt_path, fake)).toThrow("ssm_command_terminal_unproven");
     expect(() => cleanupOnboardingTransfer(plan.receipt_path, fake)).toThrow("ssm_command_terminal_unproven");
-    expect(fake.calls.some((args) => args[0] === "s3api" && args[1] === "delete-object")).toBe(false);
+    expect(called(fake, "s3api", "delete-object")).toBe(false);
     fake.setSsmStatuses(["Success"]);
     expect(cleanupOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "cleanup", state: "prepared_cleaned" });
     expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
@@ -421,8 +437,8 @@ describe("Authority staging onboarding transfer", () => {
     const fake = fakeAws({ ssmStatuses: [...Array(73).fill("InProgress"), "Failed"] });
     const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
     expect(() => executeOnboardingTransfer(plan.receipt_path, fake)).toThrow("onboarding_transfer_failed_cleaned");
-    expect(fake.calls.some((args) => args[0] === "ssm" && args[1] === "cancel-command")).toBe(true);
-    expect(fake.calls.some((args) => args[0] === "s3api" && args[1] === "delete-object")).toBe(true);
+    expect(called(fake, "ssm", "cancel-command")).toBe(true);
+    expect(called(fake, "s3api", "delete-object")).toBe(true);
   });
 
   it("accepts the exact success marker when cancellation races with completion", () => {
@@ -431,7 +447,7 @@ describe("Authority staging onboarding transfer", () => {
     const fake = fakeAws({ ssmStatuses: [...Array(73).fill("InProgress"), "Cancelling", "Success"] });
     const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
     expect(executeOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "execute", state: "prepared" });
-    expect(fake.calls.some((args) => args[0] === "ssm" && args[1] === "cancel-command")).toBe(true);
+    expect(called(fake, "ssm", "cancel-command")).toBe(true);
   });
 
   it("cleans a head-verification failure and rejects a non-IAM change set without leaving recovery material", () => {
@@ -556,6 +572,23 @@ describe("Authority staging onboarding transfer", () => {
     expect(existsSync(plan.receipt_path)).toBe(true);
     expect(cleanupOnboardingTransfer(plan.receipt_path, fake)).toEqual({ action: "cleanup", state: "prepared_cleaned" });
     expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
+  });
+
+  it("refuses cleanup when post-delete exact-key inventory is truncated", () => {
+    const source = inputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const fake = fakeAws({ truncateCleanupInventory: true });
+    const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
+    const inventoryCall = (args: string[]) =>
+      args[0] === "s3api" &&
+      ["list-object-versions", "list-multipart-uploads"].includes(args[1]!);
+    const inventoryCalls = fake.calls.filter(inventoryCall).length;
+
+    expect(() => cleanupOnboardingTransfer(plan.receipt_path, fake)).toThrow(
+      "object_key_absence_unproven",
+    );
+    expect(fake.calls.filter(inventoryCall)).toHaveLength(inventoryCalls + 2);
+    expect(existsSync(plan.receipt_path)).toBe(true);
   });
 
   it("refuses an expiring grant before execution and cleans its courier object", () => {

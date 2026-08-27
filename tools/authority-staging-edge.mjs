@@ -210,13 +210,7 @@ function tunnelFromList(result, input) {
   if (matches.length > 1) refuse("cloudflare_tunnel_duplicate");
   if (matches.length === 0) return undefined;
   const tunnel = matches[0];
-  if (
-    typeof tunnel.id !== "string" ||
-    !TUNNEL_ID.test(tunnel.id) ||
-    !isRemotelyManagedTunnel(tunnel)
-  ) {
-    refuse("cloudflare_tunnel_conflict");
-  }
+  if (!isOwnedTunnel(tunnel, input)) refuse("cloudflare_tunnel_conflict");
   return Object.freeze({ id: tunnel.id });
 }
 
@@ -226,6 +220,17 @@ function isRemotelyManagedTunnel(value) {
   if (value.remote_config !== undefined && value.remote_config !== true)
     return false;
   return value.config_src === "cloudflare" || value.remote_config === true;
+}
+
+function isOwnedTunnel(value, input) {
+  return (
+    value &&
+    typeof value === "object" &&
+    value.name === input.tunnelName &&
+    typeof value.id === "string" &&
+    TUNNEL_ID.test(value.id) &&
+    isRemotelyManagedTunnel(value)
+  );
 }
 
 async function findTunnel(fetchImpl, input) {
@@ -256,16 +261,8 @@ async function createTunnel(fetchImpl, input) {
       }),
     },
   );
-  if (
-    !result ||
-    typeof result !== "object" ||
-    typeof result.id !== "string" ||
-    !TUNNEL_ID.test(result.id) ||
-    result.name !== input.tunnelName ||
-    !isRemotelyManagedTunnel(result)
-  ) {
+  if (!isOwnedTunnel(result, input))
     refuse("cloudflare_tunnel_create_response_invalid");
-  }
   return Object.freeze({ id: result.id });
 }
 
@@ -303,17 +300,21 @@ function dnsFromList(result, input, tunnel) {
   );
   if (matches.length > 1) refuse("cloudflare_dns_duplicate");
   if (matches.length === 0) return undefined;
-  const record = matches[0];
-  const target = `${tunnel.id}.cfargotunnel.com`;
-  if (
-    record.type !== "CNAME" ||
-    record.content !== target ||
-    record.proxied !== true ||
-    record.comment !== ownershipComment(input.slotId)
-  ) {
+  if (!isOwnedDnsRecord(matches[0], input, tunnel))
     refuse("cloudflare_dns_conflict");
-  }
   return true;
+}
+
+function isOwnedDnsRecord(value, input, tunnel) {
+  return (
+    value &&
+    typeof value === "object" &&
+    value.type === "CNAME" &&
+    value.name === input.hostname &&
+    value.content === `${tunnel.id}.cfargotunnel.com` &&
+    value.proxied === true &&
+    value.comment === ownershipComment(input.slotId)
+  );
 }
 
 async function findDnsRecord(fetchImpl, input, tunnel) {
@@ -343,17 +344,8 @@ async function createDnsRecord(fetchImpl, input, tunnel) {
       }),
     },
   );
-  if (
-    !result ||
-    typeof result !== "object" ||
-    result.type !== "CNAME" ||
-    result.name !== input.hostname ||
-    result.content !== `${tunnel.id}.cfargotunnel.com` ||
-    result.proxied !== true ||
-    result.comment !== ownershipComment(input.slotId)
-  ) {
+  if (!isOwnedDnsRecord(result, input, tunnel))
     refuse("cloudflare_dns_create_response_invalid");
-  }
 }
 
 function isEmptyTunnelConfiguration(result) {

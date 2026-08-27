@@ -354,7 +354,11 @@ function accountFromKeyArn(keyArn) {
   return keyArn.split(":")[4];
 }
 
-function exactKeyInventory({ bucket, key, keyArn, region }, aws) {
+function exactKeyInventory(
+  { bucket, key, keyArn, region },
+  aws,
+  unprovenCode = "object_key_inventory_unproven",
+) {
   const owner = accountFromKeyArn(keyArn);
   const versions = awsJson([
     "s3api", "list-object-versions", "--region", region, "--bucket", bucket,
@@ -365,7 +369,7 @@ function exactKeyInventory({ bucket, key, keyArn, region }, aws) {
     "--prefix", key, "--expected-bucket-owner", owner, "--output", "json",
   ], aws);
   if (versions.IsTruncated === true || multipart.IsTruncated === true)
-    refuse("object_key_inventory_unproven");
+    refuse(unprovenCode);
   return Object.freeze({
     versions: Object.freeze((versions.Versions ?? []).filter((item) => item?.Key === key)),
     deleteMarkers: Object.freeze((versions.DeleteMarkers ?? []).filter((item) => item?.Key === key)),
@@ -475,7 +479,7 @@ function parameters(values, previousKeys) {
 }
 
 function newChangeSetName(operationId, purpose) {
-  return `echo-authority-${purpose}-${operationId}`.slice(0, 128);
+  return `echo-authority-${purpose}-${operationId}`;
 }
 
 function clientToken(purpose, changeSetId) {
@@ -550,7 +554,7 @@ function createAndReadChangeSet({ region, stackName, operationId, purpose, value
   ) {
     refuse("change_set_boundary_violation");
   }
-  return Object.freeze({ changeSetId: response.ChangeSetId, changeSetName });
+  return response.ChangeSetId;
 }
 
 function executeChangeSet({ region, stackName, purpose, changeSetId }, aws) {
@@ -724,41 +728,17 @@ function deleteExactObject({ artifact, region }, aws) {
     "--output",
     "json",
   ], aws);
-  const versions = awsJson([
-    "s3api",
-    "list-object-versions",
-    "--region",
-    region,
-    "--bucket",
-    artifact.bucket,
-    "--prefix",
-    artifact.key,
-    "--expected-bucket-owner",
-    accountFromKeyArn(artifact.keyArn),
-    "--output",
-    "json",
-  ], aws);
-  const multipart = awsJson([
-    "s3api",
-    "list-multipart-uploads",
-    "--region",
-    region,
-    "--bucket",
-    artifact.bucket,
-    "--prefix",
-    artifact.key,
-    "--expected-bucket-owner",
-    accountFromKeyArn(artifact.keyArn),
-    "--output",
-    "json",
-  ], aws);
+  const inventory = exactKeyInventory(
+    { ...artifact, region },
+    aws,
+    "object_key_absence_unproven",
+  );
   if (
-    versions.IsTruncated === true ||
-    multipart.IsTruncated === true ||
-    (versions.Versions ?? []).some((item) => item?.Key === artifact.key) ||
-    (versions.DeleteMarkers ?? []).some((item) => item?.Key === artifact.key) ||
-    (multipart.Uploads ?? []).some((item) => item?.Key === artifact.key)
-  ) refuse("object_key_absence_unproven");
+    inventory.versions.length ||
+    inventory.deleteMarkers.length ||
+    inventory.uploads.length
+  )
+    refuse("object_key_absence_unproven");
 }
 
 function writeReceipt(path, receipt) {
@@ -898,7 +878,7 @@ function grantIsAbsent(receipt, aws) {
     values.OnboardingInputObjectVersion !== receipt.object_version ||
     values.OnboardingInputAccessExpiresAt !== receipt.access_expires_at
   ) refuse("onboarding_grant_state_unexpected");
-  const clear = createAndReadChangeSet({
+  const changeSetId = createAndReadChangeSet({
     region: receipt.region,
     stackName: receipt.stack_name,
     operationId: receipt.operation_id,
@@ -909,7 +889,7 @@ function grantIsAbsent(receipt, aws) {
     region: receipt.region,
     stackName: receipt.stack_name,
     purpose: "onboarding-clear",
-    changeSetId: clear.changeSetId,
+    changeSetId,
   }, aws);
   const after = checkedStack(receipt.region, receipt.stack_name, aws).parameterValues;
   return (
@@ -966,7 +946,6 @@ export function planOnboardingTransfer(configPath, { aws = DEFAULT_AWS, writeRec
   const config = parseConfig(configPath);
   const plannedReceiptPath = preflightReceiptPath(receiptPath(config));
   let archive;
-  let artifact;
   let receipt;
   let path;
   try {
@@ -1012,7 +991,7 @@ export function planOnboardingTransfer(configPath, { aws = DEFAULT_AWS, writeRec
       template_sha256: templateSha256(),
     });
     path = persistReceipt(plannedReceiptPath, receipt);
-    artifact = uploadExactObject({
+    const artifact = uploadExactObject({
       archive,
       bucket: stack.bucket,
       key: receipt.object_key,
@@ -1026,14 +1005,18 @@ export function planOnboardingTransfer(configPath, { aws = DEFAULT_AWS, writeRec
     });
     replaceReceipt(path, receipt);
     verifyExactObject(artifact, config.region, aws);
-    const change = createAndReadChangeSet({
+    const changeSetId = createAndReadChangeSet({
       region: config.region,
       stackName: config.stackName,
       operationId: config.operationId,
       purpose: "onboarding-grant",
       values: grantParameters(artifact, receipt.access_expires_at),
     }, aws);
-    receipt = Object.freeze({ ...receipt, state: "planned", change_set_id: change.changeSetId });
+    receipt = Object.freeze({
+      ...receipt,
+      state: "planned",
+      change_set_id: changeSetId,
+    });
     replaceReceipt(path, receipt);
     return Object.freeze({ action: "plan", state: "planned", receipt_path: path });
   } catch (error) {
