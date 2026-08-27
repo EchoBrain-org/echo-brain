@@ -259,6 +259,8 @@ describe("Authority staging onboarding transfer", () => {
     });
     const joined = commands.join("\n");
 
+    expect(commands[0]).toBe("set -eu");
+    expect(joined).not.toContain("pipefail");
     expect(joined).toContain("for attempt in $(seq 1 20)");
     expect(joined).toContain("--version-id 'version-0001'");
     expect(joined).toContain("--expected-bucket-owner '123456789012'");

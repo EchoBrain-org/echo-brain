@@ -599,7 +599,7 @@ function clearParameters() {
 /** The only remote code path. It emits one fixed success marker and nothing else. */
 export function onboardingTransferSsmCommands({ artifact, region }) {
   return Object.freeze([
-    "set -euo pipefail",
+    "set -eu",
     "umask 077",
     "workdir=$(mktemp -d /var/tmp/echo-authority-onboarding.XXXXXX)",
     'trap \'rm -rf -- "$workdir"\' EXIT',
