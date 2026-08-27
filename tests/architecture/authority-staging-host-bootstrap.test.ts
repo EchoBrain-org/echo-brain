@@ -209,6 +209,53 @@ write_volume_initialization_seed "$1"
     }
   });
 
+  it.each([
+    ["install_asm_exec", "curl --fail", "asm_exec", "asm-exec"],
+    [
+      "install_cloudflared",
+      "curl --fail",
+      "package",
+      "cloudflared-linux-arm64.deb",
+    ],
+    [
+      "install_ecr_helper_config",
+      "install -d",
+      "config",
+      "docker-config.json",
+    ],
+  ])(
+    "initializes the %s derived path under Bash nounset",
+    (helper, firstEffect, derivedVariable, filename) => {
+      const script = bootstrap();
+      const bodyStart = script.indexOf(`${helper}() {\n`) + helper.length + 5;
+      const firstEffectStart = script.indexOf(`  ${firstEffect}`, bodyStart);
+      if (bodyStart < helper.length + 5 || firstEffectStart < bodyStart) {
+        throw new Error(`${helper} initialization is missing`);
+      }
+      const initialization = script.slice(bodyStart, firstEffectStart);
+      const temporary = join(tmpdir(), "echo-post-docker-helper");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+probe() {
+${initialization}  printf '%s\\n' "$${derivedVariable}"
+}
+unset temporary ${derivedVariable}
+probe "$1"
+`,
+          "post-docker-helper-test",
+          temporary,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(`${join(temporary, filename)}\n`);
+    },
+  );
+
   it("fails closed before Docker can restart containers without the exact verified data mount", () => {
     const script = bootstrap();
 
