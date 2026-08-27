@@ -532,11 +532,7 @@ export async function openCleanLiveRuntime(
         on_worker_telemetry: config.on_worker_telemetry,
       },
     );
-    return {
-      address: runtime.address,
-      processing: "idle_until_finalize",
-      close: () => runtime.close(),
-    };
+    return { ...runtime, processing: "idle_until_finalize" };
   }
   if (dependencies.active_processing !== undefined) {
     authority.close();
@@ -549,11 +545,7 @@ export async function openCleanLiveRuntime(
         on_worker_telemetry: config.on_worker_telemetry,
       },
     );
-    return {
-      address: runtime.address,
-      processing: "active",
-      close: () => runtime.close(),
-    };
+    return { ...runtime, processing: "active" };
   }
   const control = openOrganizationControlDatabase(
     join(config.state_directory, "integrations.sqlite"),

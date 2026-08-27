@@ -157,8 +157,6 @@ export interface CleanLiveOnlySourceCycleV1Options {
   readonly processor: DecisionProcessorAdapter;
   readonly state: CleanLiveOnlySourceStateV1;
   readonly stager: CleanApprovalStagerV1;
-  /** Optional content-free lifecycle reporter owned by the live worker. */
-  readonly worker_lifecycle?: CleanLiveWorkerPhaseRunnerV1;
 }
 
 function assertAdmissionMatchesAdapters(
@@ -220,9 +218,7 @@ export class CleanLiveOnlySourceCycleV1 {
   private running: Promise<CleanLiveOnlySourceCycleResultV1> | undefined;
   private workerLifecycle: CleanLiveWorkerPhaseRunnerV1 | undefined;
 
-  constructor(private readonly options: CleanLiveOnlySourceCycleV1Options) {
-    this.workerLifecycle = options.worker_lifecycle;
-  }
+  constructor(private readonly options: CleanLiveOnlySourceCycleV1Options) {}
 
   setWorkerLifecycle(lifecycle: CleanLiveWorkerPhaseRunnerV1): void {
     this.workerLifecycle = lifecycle;

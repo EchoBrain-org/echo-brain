@@ -209,10 +209,10 @@ describe("clean live-only source cycle", () => {
       processor: processor(),
       state: new FakeState(admission()),
       stager: stager({ kind: "staged", stage_id: "stage-1" }),
-      worker_lifecycle: new CleanLiveWorkerLifecycleV1((event) =>
-        events.push(event),
-      ),
     });
+    cycle.setWorkerLifecycle(
+      new CleanLiveWorkerLifecycleV1((event) => events.push(event)),
+    );
 
     await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "staged" });
 
