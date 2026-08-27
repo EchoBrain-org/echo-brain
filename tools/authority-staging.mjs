@@ -1458,7 +1458,7 @@ export function createAwsCliAdapters() {
     ssm: Object.freeze({
       async quiesceHost({ instanceId, mountPath, region }) {
         const commands = [
-          "set -euo pipefail",
+          "set -eu",
           "containers=$(docker ps --quiet)",
           'if [ -n "$containers" ]; then docker stop $containers >/dev/null; fi',
           'test -z "$(docker ps --quiet)"',
@@ -1526,7 +1526,7 @@ export function createAwsCliAdapters() {
       },
       async recoverHost({ instanceId, mountPath, region }) {
         const commands = [
-          "set -euo pipefail",
+          "set -eu",
           `mountpoint -q '${mountPath}' || mount '${mountPath}'`,
           `mountpoint -q '${mountPath}'`,
           "systemctl start docker",

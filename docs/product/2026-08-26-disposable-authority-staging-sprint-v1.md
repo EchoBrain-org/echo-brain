@@ -1,9 +1,11 @@
 # Disposable Authority staging sprint V1
 
-**Status:** implementation complete through the first-live transfer path; live
-qualification has not started. No staging slot has been deployed, no host or
-tunnel has been qualified live, and no timing target has been proved.
-**Grounded at:** `main` @ `950b526` (start of live-qualification work).
+**Status:** first-live staging and repeated retained-state host-replacement
+qualification passed on 2026-08-27, with sanitized founder-private evidence
+digests indexed. This status does not claim a snapshot restore, GAP-01 or issue
+#20 closure, or GAP-04 closure.
+**Grounded at:** staging controller revision
+`f0d2f95214246501bfcca59b156a30105fce947d`.
 **Scope:** one fixed staging edge and one replaceable AWS Authority host in
 ECHO's AWS account. This is deployment and operations work only. It does not
 change product behavior, release-record semantics, the production Authority, or
@@ -154,12 +156,12 @@ retry based on the retained host state. `slot-init` cannot clear or hide that
 condition. Rollback-in-progress and rollback-failed states remain mutation
 blocked until CloudFormation reaches a terminal, usable state.
 
-`up` by itself has no application-readiness or timing claim. **Ten minutes or
-less is a candidate timing target, not a current claim.** Repeated-up timing is
-only meaningful after the first-live phase has prepared the retained staging
-volume, reached terminal green, and recorded the accepted digest-pinned release
-tuple. The later rehearsal explicitly resumes that accepted release after host
-materialization; it is not a fresh onboarding measurement.
+`up` by itself has no application-readiness or timing claim. The qualified
+ten-minute lifecycle target applies only after the first-live phase has prepared
+the retained staging volume, reached terminal green, and recorded the accepted
+digest-pinned release tuple. The later rehearsal explicitly resumes that
+accepted release after host materialization; it is not a fresh onboarding
+measurement. The measured result under that boundary is recorded below.
 
 Machine-and-connector readiness means all of the following:
 
@@ -315,6 +317,48 @@ Cloudflare Tunnel, then measured before a narrower endpoint design is claimed.
 
 The sprint has three distinct completion levels. Passing an earlier level is
 not a substitute for a later live rehearsal.
+
+## Recorded live-qualification result
+
+Phase B passed before any host-replacement rehearsal. A reviewed change set had
+created the persistent slot and enabled host. The required observability sibling
+reached `CREATE_COMPLETE`; its subscription was confirmed and all four alarm
+and OK actions targeted that destination. The accepted
+`clean-v1-staging-20260827-004` release at source
+`825707b4a5356d3e3a1baf2c75aee6484ba426d9` reached terminal green; its public
+HTTPS descriptor returned `200` and exactly equaled the local descriptor; and
+authenticated Layer 1 and Layer 2 checks passed.
+
+At controller revision `f0d2f95214246501bfcca59b156a30105fce947d`, three
+consecutive retained-state `down` then fresh-host `up` rehearsals passed. The
+AWS-authoritative lifecycle elapsed measurements were 245.630 seconds, 272.446
+seconds, and 236.185 seconds, all within the 10-minute requirement. Each clock
+started at the stack-level CloudFormation `UPDATE_IN_PROGRESS` event for the
+reviewed `up` and ended at SSM `ExecutionEndDateTime` for the successful
+public-versus-direct-in-container descriptor probe, after source equality,
+explicit resume, and terminal-green proof. Every cycle used a distinct fresh
+host while retaining the same hostname, tunnel, and data volume; required no
+callback or DNS edit; verified input-archive hash equality and host-bundle
+`source_commit` equality with the accepted source SHA; explicitly ran
+`restore-clean-v1-host.sh resume`; used the accepted image and runtime profile;
+reached terminal green; and returned public `200` equal to the direct
+in-container descriptor.
+
+Each normal `down` removed only `StagingHost`,
+`StagingDataVolumeAttachment`, `StagingReadyHandle`, and `StagingReady`; the
+role and launch template were modified in place. Drift detection found only the
+expected cross-stack `StagingHostRole` `ManagedPolicyArns/0` difference owned
+by the observability sibling's `AuthorityDockerLogWritePolicy`, with no
+unexpected drift. The pre-rehearsal POSIX `sh` `pipefail` failure was found
+before any CloudFormation execute and corrected/tested in the stated controller
+revision. One successful byte-identical pre-commit shakedown was excluded so
+all three qualifying cycles postdate and map exactly to that revision.
+
+Closure verification passed all five focused staging architecture suites (102
+tests) and `npm run check` (99 test files and 862 tests).
+
+The detailed assertion record is the [Authority staging host-replacement V1
+qualification](../qualification/QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md).
 
 ### A. Code-complete host-and-edge infrastructure
 

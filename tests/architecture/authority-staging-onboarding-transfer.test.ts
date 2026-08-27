@@ -215,6 +215,15 @@ afterEach(() => {
 });
 
 describe("Authority staging onboarding transfer", () => {
+  it("leaves thirty minutes for review before the fixed access expiry", () => {
+    const source = inputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const plan = planOnboardingTransfer(privateConfig(source, archive), fakeAws());
+    const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
+
+    expect(receipt.access_expires_at).toBe("1970-01-01T00:30:00Z");
+  });
+
   it("creates a deterministic private archive from exactly the established input leaves", () => {
     const source = inputDirectory();
     const output = privateDirectory("echo-authority-onboarding-archive-");
@@ -259,6 +268,8 @@ describe("Authority staging onboarding transfer", () => {
     });
     const joined = commands.join("\n");
 
+    expect(commands[0]).toBe("set -eu");
+    expect(joined).not.toContain("pipefail");
     expect(joined).toContain("for attempt in $(seq 1 20)");
     expect(joined).toContain("--version-id 'version-0001'");
     expect(joined).toContain("--expected-bucket-owner '123456789012'");
@@ -344,7 +355,7 @@ describe("Authority staging onboarding transfer", () => {
   it("bases quarantine on the later pre-send timestamp and never reports an unknown send as prepared", () => {
     const source = inputDirectory();
     const archive = privateDirectory("echo-authority-onboarding-archive-");
-    const fake = fakeAws({ grantWaitAdvanceMs: 20 * 60 * 1000 });
+    const fake = fakeAws({ grantWaitAdvanceMs: 40 * 60 * 1000 });
     const plan = planOnboardingTransfer(privateConfig(source, archive), fake);
     let replacements = 0;
     const persist = (path: string, receipt: unknown) => {

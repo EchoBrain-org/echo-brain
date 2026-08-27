@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-26
-reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
+reviewed_at: 2026-08-27
+reviewed_ref: f0d2f95214246501bfcca59b156a30105fce947d
 decision_ids:
   - ADR-0004
   - ADR-0006
@@ -38,6 +38,8 @@ qualification_ids:
   - QUAL-20260819-193536-001
   - QMAT-CI-EFFICIENCY-V1-001
   - QUAL-20260826-034420-001
+  - QMAT-AUTHORITY-STAGING-HOST-REPLACEMENT-V1-001
+  - QUAL-20260827-174106-001
 ---
 
 # Operations and release

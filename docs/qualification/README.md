@@ -20,6 +20,8 @@ must record an outcome and evidence for that exact assertion set.
 
 Primary minimum-V1 records:
 
+- [Authority staging host-replacement V1 matrix](authority-staging-host-replacement-v1-matrix.md)
+- [Authority staging host-replacement V1 qualification](QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md)
 - [Authority CI efficiency V1 measurement matrix](ci-efficiency-v1-matrix.md)
 - [Authority CI efficiency V1 measurement qualification](QUAL-20260826-034420-001-authority-ci-efficiency-v1.md)
 - [Readable-search minimum-V1 Layers 1-3 matrix](readable-search-minimum-v1-source-readiness-matrix.md)
