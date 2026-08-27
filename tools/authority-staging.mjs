@@ -444,9 +444,9 @@ function assertChangeBoundary(plan, action) {
     ) {
       refuse("change_set_persistent_boundary_violation");
     }
-    if (action !== "up" && action !== "down") continue;
     if (change.action === "Dynamic" || change.action === "Import")
       refuse("change_set_host_boundary_violation");
+    if (action !== "up" && action !== "down") continue;
     if (action === "up" && change.action === "Remove")
       refuse("change_set_host_boundary_violation");
     if (action === "down" && change.action === "Add")
@@ -1050,8 +1050,8 @@ function cloudFormationParameters(parameters) {
   }));
 }
 
-function changeSetDescription(templateSha256) {
-  return `echo-authority-staging-template-${templateSha256}`;
+function changeSetDescription(templateSha256, changeSetType) {
+  return `echo-authority-staging-template-${templateSha256}-${changeSetType}`;
 }
 
 function changeActions(payload) {
@@ -1065,14 +1065,27 @@ function changeActions(payload) {
 }
 
 function parametersMatch(payload, expected) {
-  if (payload.Description !== changeSetDescription(expected.templateSha256))
-    return false;
-  if (payload.ChangeSetType !== expected.changeSetType) return false;
   if (
-    expected.changeSetType === "CREATE" &&
-    payload.OnStackFailure !== expected.onStackFailure
-  )
+    payload.Description !==
+    changeSetDescription(expected.templateSha256, expected.changeSetType)
+  ) {
     return false;
+  }
+  if (
+    payload.ChangeSetType !== undefined &&
+    payload.ChangeSetType !== null &&
+    payload.ChangeSetType !== expected.changeSetType
+  ) {
+    return false;
+  }
+  if (expected.changeSetType === "CREATE") {
+    if (payload.OnStackFailure !== expected.onStackFailure) return false;
+  } else if (
+    payload.OnStackFailure !== undefined &&
+    payload.OnStackFailure !== null
+  ) {
+    return false;
+  }
   if (!Array.isArray(payload.Parameters)) return false;
   const actual = new Map(
     payload.Parameters.map((item) => [
@@ -1087,6 +1100,9 @@ function parametersMatch(payload, expected) {
 
 function normalizedChangeSet(payload, expected) {
   const matchesExpected = parametersMatch(payload, expected);
+  // DescribeChangeSet does not return ChangeSetType reliably. Only an exact
+  // request-bound description lets us derive it from the request we created.
+  const changeSetType = matchesExpected ? expected.changeSetType : undefined;
   const parameters = new Map(
     Array.isArray(payload.Parameters)
       ? payload.Parameters.map((item) => [
@@ -1111,7 +1127,7 @@ function normalizedChangeSet(payload, expected) {
     )
   ) {
     return Object.freeze({
-      changeSetType: payload.ChangeSetType,
+      changeSetType,
       kind: "no_changes",
       matchesExpected,
     });
@@ -1119,7 +1135,7 @@ function normalizedChangeSet(payload, expected) {
   return Object.freeze({
     actions: changeActions(payload),
     artifact,
-    changeSetType: payload.ChangeSetType,
+    changeSetType,
     id: payload.ChangeSetId,
     kind: "change_set",
     matchesExpected,
@@ -1256,7 +1272,10 @@ export function createAwsCliAdapters() {
             "--template-body",
             `file://${expected.templatePath}`,
             "--description",
-            changeSetDescription(expected.templateSha256),
+            changeSetDescription(
+              expected.templateSha256,
+              expected.changeSetType,
+            ),
             "--capabilities",
             ...expected.capabilities,
             "--parameters",

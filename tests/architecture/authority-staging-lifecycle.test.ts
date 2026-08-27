@@ -437,6 +437,26 @@ describe("Authority staging lifecycle", () => {
     expect(fixture.plans[0]?.onStackFailure).toBe("DO_NOTHING");
   });
 
+  it.each(["Dynamic", "Import"])(
+    "rejects %s actions for slot-init before any edge mutation",
+    async (action) => {
+      const fixture = dependencies({
+        changeAction: {
+          action,
+          logicalId: "StagingVpc",
+          replacement: false,
+          resourceType: "AWS::EC2::VPC",
+        },
+        initialStack: { exists: false },
+      });
+
+      await expect(
+        runAuthorityStaging("slot-init", INPUT, fixture.dependencies),
+      ).rejects.toThrow("change_set_host_boundary_violation");
+      expect(fixture.events).not.toContain("edge-install-token");
+    },
+  );
+
   it("only executes the already-created slot-init change set, then installs the fixed edge", async () => {
     const fixture = dependencies({ initialStack: { exists: false } });
     await runAuthorityStaging("slot-init", INPUT, fixture.dependencies);
@@ -1379,9 +1399,8 @@ describe("Authority staging lifecycle", () => {
 
       writeFileSync(fake.log, "");
       const templateSha256 = "e".repeat(64);
-      process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify({
+      const changeSetResponse = {
         ChangeSetId: "change-set-default-adapter",
-        ChangeSetType: "CREATE",
         Changes: [
           {
             ResourceChange: {
@@ -1391,11 +1410,14 @@ describe("Authority staging lifecycle", () => {
             },
           },
         ],
-        Description: `echo-authority-staging-template-${templateSha256}`,
+        Description: `echo-authority-staging-template-${templateSha256}-CREATE`,
         OnStackFailure: "DO_NOTHING",
         Parameters: [{ ParameterKey: "HostEnabled", ParameterValue: "false" }],
         Status: "CREATE_COMPLETE",
-      });
+      };
+      // AWS can omit ChangeSetType from DescribeChangeSet for a CREATE set.
+      process.env.FAKE_AWS_DESCRIBE_RESPONSE =
+        JSON.stringify(changeSetResponse);
       const plan = await adapters.cloudFormation!.createChangeSet({
         capabilities: ["CAPABILITY_IAM"],
         changeSetName: "echo-authority-slot-init-staging-adapter-test",
@@ -1413,14 +1435,81 @@ describe("Authority staging lifecycle", () => {
         matchesExpected: true,
         status: "CREATE_COMPLETE",
       });
+
+      // The response also omits ChangeSetType for UPDATE. Its exact,
+      // request-bound description is the authorization to derive UPDATE.
+      process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify({
+        ChangeSetId: "change-set-default-adapter-update",
+        Changes: changeSetResponse.Changes,
+        Description: `echo-authority-staging-template-${templateSha256}-UPDATE`,
+        OnStackFailure: null,
+        Parameters: changeSetResponse.Parameters,
+        Status: "CREATE_COMPLETE",
+      });
+      const omittedUpdate = await adapters.cloudFormation!.createChangeSet({
+        capabilities: ["CAPABILITY_IAM"],
+        changeSetName: "echo-authority-down-staging-adapter-test",
+        changeSetType: "UPDATE",
+        clientToken: "staging-adapter-test-002",
+        parameters: { HostEnabled: "false" },
+        region: "us-west-2",
+        stackName: "echo-authority-staging-adapter-test",
+        templatePath: "/private/tmp/committed-template.json",
+        templateSha256,
+      });
+      expect(omittedUpdate).toMatchObject({
+        changeSetType: "UPDATE",
+        matchesExpected: true,
+        status: "CREATE_COMPLETE",
+      });
+
+      // The pre-binding live description remains non-reviewable, even though
+      // its other fields would have matched a CREATE request.
+      process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify({
+        ...changeSetResponse,
+        Description: `echo-authority-staging-template-${templateSha256}`,
+      });
+      const legacyCreate = await adapters.cloudFormation!.createChangeSet({
+        capabilities: ["CAPABILITY_IAM"],
+        changeSetName: "echo-authority-slot-init-staging-adapter-test-legacy",
+        changeSetType: "CREATE",
+        clientToken: "staging-adapter-test-003",
+        onStackFailure: "DO_NOTHING",
+        parameters: { HostEnabled: "false" },
+        region: "us-west-2",
+        stackName: "echo-authority-staging-adapter-test",
+        templatePath: "/private/tmp/committed-template.json",
+        templateSha256,
+      });
+      expect(legacyCreate.matchesExpected).toBe(false);
+
+      // Nor can an explicit, conflicting response type be used as a CREATE
+      // plan just because its request-bound description matches.
+      process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify({
+        ...changeSetResponse,
+        ChangeSetType: "UPDATE",
+      });
+      const conflictingCreate = await adapters.cloudFormation!.createChangeSet({
+        capabilities: ["CAPABILITY_IAM"],
+        changeSetName: "echo-authority-slot-init-staging-adapter-test-conflict",
+        changeSetType: "CREATE",
+        clientToken: "staging-adapter-test-004",
+        onStackFailure: "DO_NOTHING",
+        parameters: { HostEnabled: "false" },
+        region: "us-west-2",
+        stackName: "echo-authority-staging-adapter-test",
+        templatePath: "/private/tmp/committed-template.json",
+        templateSha256,
+      });
+      expect(conflictingCreate.matchesExpected).toBe(false);
       const createCalls = readFileSync(fake.log, "utf8");
       expect(createCalls).toContain("ARG=--on-stack-failure\nARG=DO_NOTHING");
       expect(createCalls.match(/ARG=--profile\nARG=echo-prod/g)).toHaveLength(
-        3,
+        12,
       );
-      expect(createCalls.match(/^PROFILE_ENV=echo-prod$/gm)).toHaveLength(3);
-      expect(createCalls.match(/ACCESS_KEY_ENV=unset/g)).toHaveLength(3);
-      expect(createCalls.match(/^TOKEN_ENV=unset$/gm)).toHaveLength(3);
+      expect(createCalls.match(/^PROFILE_ENV=echo-prod$/gm)).toHaveLength(12);
+      expect(createCalls.match(/ACCESS_KEY_ENV=unset/g)).toHaveLength(12);
+      expect(createCalls.match(/^TOKEN_ENV=unset$/gm)).toHaveLength(12);
     } finally {
       if (previous.accessKey === undefined)
         delete process.env.AWS_ACCESS_KEY_ID;
