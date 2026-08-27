@@ -59,6 +59,7 @@ export interface CleanLiveWorkerPhaseRunnerV1 {
     phase: CleanLiveWorkerPhaseV1,
     operation: () => Promise<T>,
     signal?: AbortSignal,
+    retryableOnFailure?: boolean,
   ): Promise<T>;
 }
 
@@ -149,6 +150,7 @@ export class CleanLiveWorkerLifecycleV1
     phase: CleanLiveWorkerPhaseV1,
     operation: () => Promise<T>,
     signal?: AbortSignal,
+    retryableOnFailure = true,
   ): Promise<T> {
     const startedAt = this.now();
     this.report({
@@ -170,13 +172,16 @@ export class CleanLiveWorkerLifecycleV1
       });
       return value;
     } catch (error) {
+      const failure = classifyFailure(error, signal?.aborted === true);
       this.report({
         schema_version: 1,
         kind: "echo-clean-live-worker-phase-v1",
         event: "failed",
         cycle_phase: phase,
         elapsed_ms: elapsed(startedAt, this.now),
-        ...classifyFailure(error, signal?.aborted === true),
+        ...failure,
+        retryable:
+          failure.failure_class === "cancelled" ? false : retryableOnFailure,
       });
       throw error;
     }

@@ -231,7 +231,7 @@ describe("clean live runtime", () => {
         event: "failed",
         cycle_phase: "search_reconciliation",
         failure_class: "unknown",
-        retryable: true,
+        retryable: false,
       },
     ]);
   });
@@ -268,7 +268,7 @@ describe("clean live runtime", () => {
         event: "failed",
         cycle_phase: "recovery",
         failure_class: "unknown",
-        retryable: true,
+        retryable: false,
       },
     ]);
   });

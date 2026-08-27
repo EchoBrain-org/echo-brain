@@ -137,6 +137,7 @@ export async function startCleanLiveRuntime(
       "recovery",
       () => dependencies.processing.recoverV4Appends(startup.signal),
       startup.signal,
+      false,
     );
     startup.signal.throwIfAborted();
     // A persisted pointer is not ready until its immutable generation has been
@@ -146,6 +147,7 @@ export async function startCleanLiveRuntime(
       "search_reconciliation",
       () => dependencies.processing.reconcileReadableSearchGeneration(startup.signal),
       startup.signal,
+      false,
     );
     startup.signal.throwIfAborted();
     person = await startPerson(config.person, dependencies.person ?? {});

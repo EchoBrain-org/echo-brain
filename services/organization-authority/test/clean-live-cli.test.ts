@@ -108,7 +108,9 @@ describe("clean live CLI runtime events", () => {
     );
   });
 
-  it("redacts generic and typed runtime failures end-to-end through the CLI observer", async () => {
+  // This covers the lifecycle-schema to CLI-serialization seam. Runtime
+  // lifecycle behavior is covered separately by clean-live-runtime tests.
+  it("redacts generic and typed lifecycle failures through the CLI observer", async () => {
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) });
     await vi.waitFor(() => expect(runtimeState.worker_telemetry).toBeDefined());

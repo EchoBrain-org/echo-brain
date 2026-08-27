@@ -205,11 +205,13 @@ fields @timestamp, kind, event, cycle_phase, elapsed_ms, failure_class, retryabl
 ```
 
 The phase events are content-free and tool-agnostic. A `started` event without
-a terminal event is either currently in flight or possibly stalled relative to
-the expected operation timeout. A cycle `succeeded` event is also the heartbeat
-for an empty source poll. On a non-cancelled failure, `retryable: true` means
-the serialized worker will automatically begin a later cycle. `cancelled` with
-`retryable: false` means shutdown stopped the in-flight work.
+a terminal event is inconclusive: it may be in flight, stalled relative to the
+expected operation timeout, terminated with the process, or absent because log
+delivery was interrupted. A cycle `succeeded` event is also the heartbeat for
+an empty source poll. For failures inside a started worker cycle,
+`retryable: true` means the serialized worker will automatically begin a later
+cycle. `cancelled` with `retryable: false` means shutdown stopped the in-flight
+work; startup failures are also non-retryable because no worker cycle exists.
 
 Do not place or infer meeting/provider content, identifiers, credentials,
 prompts, raw errors, or stack traces from these fields. The legacy
