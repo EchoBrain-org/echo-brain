@@ -17,8 +17,9 @@ failures, operations, and proof for exact runs.
   the current deletion sequence.
 - Running the active sprint: use
   [disposable Authority staging sprint V1](product/2026-08-26-disposable-authority-staging-sprint-v1.md).
-  Its implementation is in progress; no staging slot, live qualification, or
-  timing result has been claimed. The preceding
+  Its first-live and three retained-state host-replacement qualification cycles
+  passed and their sanitized private evidence digests are indexed. It makes no
+  snapshot-restore, GAP-01/#20 closure, or GAP-04 claim. The preceding
   [operational confidence sprint V1](product/2026-08-25-operational-confidence-sprint-v1.md)
   remains the evidence boundary for scheduled backup and observability
   rehearsals. The earlier

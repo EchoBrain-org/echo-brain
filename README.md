@@ -172,8 +172,9 @@ does not enable meeting ingestion by itself.
 ### AWS staging slot
 
 The staging controller holds one fixed Cloudflare edge and retained EBS data
-volume around a disposable EC2 host. Its code is complete and structurally
-tested, but the slot has not been live-qualified. The
+volume around a disposable EC2 host. Its first-live onboarding and three
+retained-state host-replacement cycles have passed qualification; this does not
+claim a snapshot restore, GAP-01/#20 closure, or GAP-04 closure. The
 [staging sprint specification](docs/product/2026-08-26-disposable-authority-staging-sprint-v1.md)
 is the source of truth for recovery, safety boundaries, and live qualification.
 
