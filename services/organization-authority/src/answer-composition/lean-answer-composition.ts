@@ -216,6 +216,17 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value);
+  return (
+    actual.length === expected.length &&
+    expected.every((key) => Object.hasOwn(value, key))
+  );
+}
+
 function nonEmpty(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new LeanAnswerCompositionError(`${label} is invalid`);
@@ -262,7 +273,10 @@ function timeout(value: number | undefined): number {
 
 function parsePlan(value: unknown, originalQuestion: string): readonly string[] {
   const body = record(value);
-  const raw = body?.queries;
+  if (body === null || !hasExactKeys(body, ["queries"])) {
+    throw new LeanAnswerCompositionError("planner response is invalid");
+  }
+  const raw = body.queries;
   if (!Array.isArray(raw) || raw.length > LAYER4_MAX_ADDITIONAL_QUERIES) {
     throw new LeanAnswerCompositionError("planner response is invalid");
   }
@@ -354,9 +368,12 @@ function parseAnswer(value: unknown, context: readonly ContextAtom[]): {
   readonly citations: readonly ContextAtom[];
 } {
   const body = record(value);
-  const status = body?.status;
-  const answer = body?.answer;
-  const rawCitations = body?.citations;
+  if (body === null || !hasExactKeys(body, ["status", "answer", "citations"])) {
+    throw new LeanAnswerCompositionError("answer response is invalid");
+  }
+  const status = body.status;
+  const answer = body.answer;
+  const rawCitations = body.citations;
   if (
     (status !== "answered" && status !== "insufficient_evidence") ||
     typeof answer !== "string" ||
@@ -535,7 +552,7 @@ export function createLeanAnswerComposition(options: LeanAnswerCompositionOption
           timeout_ms: requestTimeout,
         });
       input.signal?.throwIfAborted();
-      let plan: readonly string[] = Object.freeze([question]);
+      let plan: readonly string[];
       const plannerStartedAt = now();
       try {
         plan = parsePlan(
@@ -546,9 +563,6 @@ export function createLeanAnswerComposition(options: LeanAnswerCompositionOption
           question,
         );
       } catch (error) {
-        // Query expansion improves recall but is not an authorization or
-        // correctness gate. The validated original question remains a safe,
-        // complete Layer 3 request when the planner is unavailable or invalid.
         input.signal?.throwIfAborted();
         reportModelFailure(options, {
           stage: "planner",
@@ -556,6 +570,7 @@ export function createLeanAnswerComposition(options: LeanAnswerCompositionOption
           started_at_ms: plannerStartedAt,
           retrieval_generation_id: null,
         });
+        throw error;
       }
       const release = await options.layer3.retrieve({
         queries: plan,

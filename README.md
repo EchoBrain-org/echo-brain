@@ -38,11 +38,14 @@ Tokens are never printed by successful commands.
 - organization authorization and audit;
 - meeting-source, decision-processing, approval, and Slack delivery adapters;
 - the append-only organization record; and
-- deterministic, permission-aware record reads.
+- deterministic, permission-aware record reads and cited answers.
 
 The server starts only from the seven byte-pinned clean baselines. Historical
 migration runners and compatibility APIs are not shipped. Layer 3 is the sole
-release boundary; no Layer 4 product or runtime is present.
+release boundary. The only Layer 4 runtime is one synchronous Person `ask`
+path: one bounded plan, one Layer 3 batch, at most one answer call, and
+citations limited to that request's released atoms. It has no agents, tools,
+memory, streaming, or direct Layer 1/2 access.
 
 ## Repository layout
 
