@@ -85,7 +85,7 @@ export async function runCleanLiveProcessingCycleV1(
   const phase = <T>(
     name: Parameters<CleanLiveWorkerPhaseRunnerV1["runPhase"]>[0],
     operation: () => Promise<T>,
-  ): Promise<T> => lifecycle?.runPhase(name, operation) ?? operation();
+  ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
   await phase("recovery", () => processing.recoverV4Appends(signal));
   signal.throwIfAborted();
   if (processing.hasFineGrainedSourceLifecycle === true) {
@@ -124,26 +124,32 @@ export async function startCleanLiveRuntime(
     dependencies.clear_readable_search_handle ??
     clearCleanReadableSearchActiveGenerationV1;
   const startup = new AbortController();
+  const lifecycle = new CleanLiveWorkerLifecycleV1(
+    dependencies.on_worker_telemetry ?? (() => undefined),
+    dependencies.worker_telemetry_now,
+  );
+  dependencies.processing.setWorkerLifecycle?.(lifecycle);
   let person: RunningCleanPersonRuntime | undefined;
   try {
     // Recovery can append a finalized approval and advance the V4 head. Finish
     // it before validating the generation that will be served at startup.
-    await dependencies.processing.recoverV4Appends(startup.signal);
+    await lifecycle.runPhase(
+      "recovery",
+      () => dependencies.processing.recoverV4Appends(startup.signal),
+      startup.signal,
+    );
     startup.signal.throwIfAborted();
     // A persisted pointer is not ready until its immutable generation has been
     // validated into the sole process-local handle. Never bind the Person
     // listener before that startup boundary succeeds.
-    await dependencies.processing.reconcileReadableSearchGeneration(
+    await lifecycle.runPhase(
+      "search_reconciliation",
+      () => dependencies.processing.reconcileReadableSearchGeneration(startup.signal),
       startup.signal,
     );
     startup.signal.throwIfAborted();
     person = await startPerson(config.person, dependencies.person ?? {});
     const startedPerson = person;
-    const lifecycle = new CleanLiveWorkerLifecycleV1(
-      dependencies.on_worker_telemetry ?? (() => undefined),
-      dependencies.worker_telemetry_now,
-    );
-    dependencies.processing.setWorkerLifecycle?.(lifecycle);
     const worker = new SerializedAuthorityMeetingWorker({
       intervalMs: config.worker_interval_ms,
       runCycle: async (signal) => {

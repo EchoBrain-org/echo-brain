@@ -58,6 +58,7 @@ export interface CleanLiveWorkerPhaseRunnerV1 {
   runPhase<T>(
     phase: CleanLiveWorkerPhaseV1,
     operation: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T>;
 }
 
@@ -65,13 +66,14 @@ function elapsed(startedAt: number, now: () => number): number {
   return Math.max(0, Math.floor(now() - startedAt));
 }
 
-function classifyFailure(error: unknown): {
+function classifyFailure(error: unknown, cancelled = false): {
   readonly failure_class: CleanLiveWorkerFailureClassV1;
   readonly retryable: boolean;
 } {
   // Never inspect or serialize message, stack, cause, or arbitrary properties.
   // AdapterError is the core typed failure contract. Everything else remains
   // unknown rather than deriving an operational claim from opaque text.
+  if (cancelled) return { failure_class: "cancelled", retryable: false };
   if (error instanceof AdapterError) {
     const failure_class = {
       invalid_config: "invalid_contract",
@@ -85,7 +87,9 @@ function classifyFailure(error: unknown): {
       typeof error.code,
       Exclude<CleanLiveWorkerFailureClassV1, "cancelled">
     >;
-    return { failure_class: failure_class[error.code], retryable: error.retryable };
+    // The serialized worker always starts a later cycle after every
+    // non-aborted failure, regardless of an adapter's local retry hint.
+    return { failure_class: failure_class[error.code], retryable: true };
   }
   return { failure_class: "unknown", retryable: true };
 }
@@ -130,9 +134,7 @@ export class CleanLiveWorkerLifecycleV1
   failCycle(error: unknown, cancelled = false): void {
     if (this.cycleStartedAt === undefined) return;
     const elapsed_ms = elapsed(this.cycleStartedAt, this.now);
-    const failure = cancelled
-      ? { failure_class: "cancelled" as const, retryable: false }
-      : classifyFailure(error);
+    const failure = classifyFailure(error, cancelled);
     this.cycleStartedAt = undefined;
     this.report({
       schema_version: 1,
@@ -146,6 +148,7 @@ export class CleanLiveWorkerLifecycleV1
   async runPhase<T>(
     phase: CleanLiveWorkerPhaseV1,
     operation: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
     const startedAt = this.now();
     this.report({
@@ -157,6 +160,7 @@ export class CleanLiveWorkerLifecycleV1
     });
     try {
       const value = await operation();
+      signal?.throwIfAborted();
       this.report({
         schema_version: 1,
         kind: "echo-clean-live-worker-phase-v1",
@@ -172,7 +176,7 @@ export class CleanLiveWorkerLifecycleV1
         event: "failed",
         cycle_phase: phase,
         elapsed_ms: elapsed(startedAt, this.now),
-        ...classifyFailure(error),
+        ...classifyFailure(error, signal?.aborted === true),
       });
       throw error;
     }

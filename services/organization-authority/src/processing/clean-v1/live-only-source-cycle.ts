@@ -273,7 +273,7 @@ export class CleanLiveOnlySourceCycleV1 {
         assertCanonicalMeetingDocument(meeting, this.options.source.identity);
       }
       return { admission, batch, meeting };
-    });
+    }, signal);
     const { admission, batch, meeting } = source;
     if (meeting === undefined) {
       if (
@@ -304,16 +304,19 @@ export class CleanLiveOnlySourceCycleV1 {
     );
     if (frozen !== undefined) {
       if (frozen.state !== "staged") {
-        const staged = await this.phase("approval_staging", () =>
-          this.options.stager.stage(
-            {
-              admission: frozen.admission,
-              candidate: frozen,
-              meeting: frozen.meeting,
-              decisions: frozen.decisions,
-            },
-            signal === undefined ? undefined : { signal },
-          ),
+        const staged = await this.phase(
+          "approval_staging",
+          () =>
+            this.options.stager.stage(
+              {
+                admission: frozen.admission,
+                candidate: frozen,
+                meeting: frozen.meeting,
+                decisions: frozen.decisions,
+              },
+              signal === undefined ? undefined : { signal },
+            ),
+          signal,
         );
         if (staged.kind !== "staged") {
           return {
@@ -384,7 +387,7 @@ export class CleanLiveOnlySourceCycleV1 {
         this.options.processor.identity,
       );
       return extracted;
-    });
+    }, signal);
     if (decisions.signals.length === 0) {
       if (
         batch.next_cursor === undefined ||
@@ -415,7 +418,7 @@ export class CleanLiveOnlySourceCycleV1 {
         { admission, candidate, meeting, decisions },
         signal === undefined ? undefined : { signal },
       );
-    });
+    }, signal);
     if (staged.kind !== "staged") {
       return {
         kind: "not_staged",
@@ -451,7 +454,8 @@ export class CleanLiveOnlySourceCycleV1 {
   private phase<T>(
     phase: CleanLiveWorkerPhaseV1,
     operation: () => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
-    return this.workerLifecycle?.runPhase(phase, operation) ?? operation();
+    return this.workerLifecycle?.runPhase(phase, operation, signal) ?? operation();
   }
 }

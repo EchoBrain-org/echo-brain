@@ -183,7 +183,41 @@ Expected evidence is one alarm email and one recovery email. The scheduled
 metric evaluation can also restore the real state; verify the final alarm state
 rather than assuming the manual `OK` persists.
 
-### 5. Rehearse the sanitized worker-failure signal
+### 5. Inspect core worker lifecycle events
+
+Resolve the retained runtime log group from the stack rather than guessing a
+host-derived name:
+
+```sh
+authority_log_group=$(aws cloudformation describe-stacks \
+  --region "$observability_region" \
+  --stack-name "$observability_stack" \
+  --query "Stacks[0].Outputs[?OutputKey=='DockerRuntimeLogGroupName'].OutputValue | [0]" \
+  --output text)
+```
+
+In CloudWatch Logs Insights, select `$authority_log_group` and use this query:
+
+```
+fields @timestamp, kind, event, cycle_phase, elapsed_ms, failure_class, retryable
+| filter kind in ["echo-clean-live-worker-phase-v1", "echo-clean-live-worker-cycle-v1"]
+| sort @timestamp desc
+```
+
+The phase events are content-free and tool-agnostic. A `started` event without
+a terminal event is either currently in flight or possibly stalled relative to
+the expected operation timeout. A cycle `succeeded` event is also the heartbeat
+for an empty source poll. On a non-cancelled failure, `retryable: true` means
+the serialized worker will automatically begin a later cycle. `cancelled` with
+`retryable: false` means shutdown stopped the in-flight work.
+
+Do not place or infer meeting/provider content, identifiers, credentials,
+prompts, raw errors, or stack traces from these fields. The legacy
+`echo-clean-live-worker-failed-v1` event remains only for the existing aggregate
+metric and alarm. It is not part of new lifecycle diagnosis, and this slice
+does not add alarms, a status API, correlation, or close #87.
+
+### 6. Rehearse the sanitized worker-failure signal
 
 Use a dedicated rehearsal stream and only the fixed schema event. Emit three
 events inside five minutes so the repeated-failure alarm has a deterministic
@@ -218,7 +252,7 @@ worker-failure alarm entering `ALARM`, and the alarm later returning to `OK`
 when the five-minute evaluation window clears. Do not synthesize an exception
 containing product data.
 
-### 6. Rehearse the real public failure path
+### 7. Rehearse the real public failure path
 
 From the Authority deployment directory during the maintenance window:
 

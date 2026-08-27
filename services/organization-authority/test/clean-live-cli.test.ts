@@ -1,5 +1,7 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AdapterError } from "../src/processing/core/contracts/adapter.js";
+import { CleanLiveWorkerLifecycleV1 } from "../src/processing/clean-v1/clean-live-worker-lifecycle.js";
 
 type WorkerErrorObserver = (error: Error) => void;
 type Layer4FailureObserver = (event: object) => void;
@@ -104,6 +106,47 @@ describe("clean live CLI runtime events", () => {
         retryable: true,
       } as never)}\n`,
     );
+  });
+
+  it("redacts generic and typed runtime failures end-to-end through the CLI observer", async () => {
+    const stderr: string[] = [];
+    const running = start({ stderr: (value) => stderr.push(value) });
+    await vi.waitFor(() => expect(runtimeState.worker_telemetry).toBeDefined());
+    const lifecycle = new CleanLiveWorkerLifecycleV1(
+      (event) => runtimeState.worker_telemetry!(event),
+      () => 1_000,
+    );
+    lifecycle.startCycle();
+    await expect(
+      lifecycle.runPhase("extraction", async () => {
+        throw new Error("generic-runtime-sentinel prompt-sentinel");
+      }),
+    ).rejects.toThrow("generic-runtime-sentinel");
+    await expect(
+      lifecycle.runPhase("approval_staging", async () => {
+        throw new AdapterError(
+          "unauthorized",
+          "typed-runtime-sentinel credential-sentinel",
+          false,
+        );
+      }),
+    ).rejects.toThrow("typed-runtime-sentinel");
+    lifecycle.failCycle(new Error("cycle-runtime-sentinel"));
+    process.emit("SIGTERM");
+    await expect(running).resolves.toBe(0);
+
+    const output = stderr.join("");
+    for (const sentinel of [
+      "generic-runtime-sentinel",
+      "prompt-sentinel",
+      "typed-runtime-sentinel",
+      "credential-sentinel",
+      "cycle-runtime-sentinel",
+    ]) {
+      expect(output).not.toContain(sentinel);
+    }
+    expect(output).toContain('"failure_class":"unknown"');
+    expect(output).toContain('"failure_class":"authorization"');
   });
 
   it("does not disclose startup failure contents to the live server log", async () => {

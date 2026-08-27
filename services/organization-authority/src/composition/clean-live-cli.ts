@@ -24,6 +24,10 @@ const CLEAN_LIVE_WORKER_FAILURE_EVENT_V1 = canonicalJson({
   kind: "echo-clean-live-worker-failed-v1",
 } as never);
 
+// Retained solely for the existing CloudWatch metric/alarm compatibility.
+// New operational diagnostics query the ordered lifecycle events instead:
+// phase failed, then cycle failed, then this legacy marker.
+
 const CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1 = canonicalJson({
   schema_version: 1,
   kind: "echo-clean-live-startup-failed-v1",
