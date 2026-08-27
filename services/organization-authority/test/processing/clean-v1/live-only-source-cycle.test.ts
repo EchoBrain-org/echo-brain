@@ -17,6 +17,7 @@ import {
   type CleanGranolaSourceAdmissionV1,
   type CleanLiveOnlySourceStateV1,
 } from "../../../src/processing/clean-v1/live-only-source-cycle.js";
+import { cleanReviewInputSha256V1 } from "../../../src/processing/clean-v1/review-lineage-semantics.js";
 
 const CUT_OFF = "2026-08-22T02:03:04.005Z";
 const SOURCE = {
@@ -31,6 +32,13 @@ const PROCESSOR = {
   instance_id: "founder-llm",
   version: "1.3.0",
 };
+const REVIEW_POLICY = Object.freeze({
+  policy_id: "organization-member-readable-person-v2",
+  policy_contract_sha256: `sha256:${"c".repeat(64)}`,
+  policy_consequence_text: "Approving makes this review member-readable.",
+  policy_consequence_sha256: `sha256:${"d".repeat(64)}`,
+});
+const reviewPolicy = () => REVIEW_POLICY;
 
 const admission = (): CleanGranolaSourceAdmissionV1 => ({
   source: {
@@ -127,17 +135,86 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
     );
   }
 
+  async readFrozenCandidateForReviewInput(input: {
+    readonly external_id: string;
+    readonly review_input_sha256: string;
+  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
+    return [...this.sourceRevisions.values()].find(
+      (candidate) =>
+        candidate.meeting.provenance.external_id === input.external_id &&
+        candidate.review_input_sha256 === input.review_input_sha256,
+    );
+  }
+
   async stageCandidate(
     input: CleanLiveCandidateSnapshotInputV1,
   ): Promise<CleanLiveCandidateV1> {
     this.candidates.push(input);
-    const candidate = {
-      candidate_id: "cnd_test",
-      candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-      approval_id: "apr_test",
-      stage_command_id: "pas_test",
-      state: "queued",
-    } as const;
+    const reviewInputSha256 = cleanReviewInputSha256V1({
+      meeting: input.meeting,
+      review_policy: input.review_policy,
+      processor: input.admission.processor,
+    });
+    const reusable = [...this.sourceRevisions.values()].find(
+      (candidate) =>
+        candidate.meeting.provenance.external_id ===
+          input.meeting.provenance.external_id &&
+        candidate.review_input_sha256 === reviewInputSha256,
+    );
+    const actionable = input.decisions.signals.length > 0;
+    const reviewPolicyFields = {
+      review_policy_id: input.review_policy.policy_id,
+      review_policy_contract_sha256:
+        input.review_policy.policy_contract_sha256,
+      review_policy_consequence_text:
+        input.review_policy.policy_consequence_text,
+      review_policy_consequence_sha256:
+        input.review_policy.policy_consequence_sha256,
+    };
+    const candidate: CleanLiveCandidateV1 = reusable !== undefined
+      ? {
+          ...reviewPolicyFields,
+          candidate_id: "cnd_test_coalesced",
+          candidate_semantic_sha256: `sha256:${"e".repeat(64)}`,
+          review_lineage_id: reusable.review_lineage_id,
+          review_input_sha256: reviewInputSha256,
+          review_semantic_sha256: reusable.review_semantic_sha256,
+          review_round: reusable.review_round,
+          disposition: "coalesced",
+          approval_id: null,
+          stage_command_id: null,
+          state: "coalesced",
+          superseded_approval_id: null,
+        }
+      : actionable
+      ? {
+          ...reviewPolicyFields,
+          candidate_id: "cnd_test",
+          candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+          review_lineage_id: "rli_test",
+          review_input_sha256: reviewInputSha256,
+          review_semantic_sha256: `sha256:${"d".repeat(64)}`,
+          review_round: 1,
+          disposition: "actionable",
+          approval_id: "apr_test",
+          stage_command_id: "pas_test",
+          state: "queued",
+          superseded_approval_id: null,
+        }
+      : {
+          ...reviewPolicyFields,
+          candidate_id: "cnd_test",
+          candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+          review_lineage_id: "rli_test",
+          review_input_sha256: reviewInputSha256,
+          review_semantic_sha256: `sha256:${"d".repeat(64)}`,
+          review_round: 0,
+          disposition: "no_signals",
+          approval_id: null,
+          stage_command_id: null,
+          state: "no_signals",
+          superseded_approval_id: null,
+        };
     this.sourceRevisions.set(
       `${input.meeting.provenance.external_id}:${input.meeting.provenance.canonical_revision}`,
       { ...candidate, ...input },
@@ -193,7 +270,26 @@ function stager(
       calls += 1;
       return result;
     },
+    tombstoneSuperseded: async () => {},
   };
+}
+
+function liveCycle(
+  options: Omit<
+    ConstructorParameters<typeof CleanLiveOnlySourceCycleV1>[0],
+    "review_policy"
+  > &
+    Partial<
+      Pick<
+        ConstructorParameters<typeof CleanLiveOnlySourceCycleV1>[0],
+        "review_policy"
+      >
+    >,
+): CleanLiveOnlySourceCycleV1 {
+  return new CleanLiveOnlySourceCycleV1({
+    ...options,
+    review_policy: options.review_policy ?? reviewPolicy,
+  });
 }
 
 describe("clean live-only source cycle", () => {
@@ -201,7 +297,7 @@ describe("clean live-only source cycle", () => {
     const current = admission();
     const state = new FakeState(current);
     const downstream = stager({ kind: "staged", stage_id: "stage-1" });
-    const cycle = new CleanLiveOnlySourceCycleV1({
+    const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
       processor: processor(),
       state,
@@ -229,7 +325,7 @@ describe("clean live-only source cycle", () => {
       { kind: "state_drift" } as const,
     ]) {
       const state = new FakeState(admission());
-      const cycle = new CleanLiveOnlySourceCycleV1({
+      const cycle = liveCycle({
         source: source({
           meetings: [meeting()],
           next_cursor: "granola:v1:next",
@@ -249,7 +345,7 @@ describe("clean live-only source cycle", () => {
 
   it("keeps a durable staged item visible when the Authority cursor fence drifts", async () => {
     const state = new FakeState(admission(), "state_drift");
-    const cycle = new CleanLiveOnlySourceCycleV1({
+    const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
       processor: processor(),
       state,
@@ -267,7 +363,7 @@ describe("clean live-only source cycle", () => {
   it("CAS advances an empty Granola page with a distinct next cursor", async () => {
     const current = admission();
     const emptyState = new FakeState(current);
-    const empty = new CleanLiveOnlySourceCycleV1({
+    const empty = liveCycle({
       source: source({ meetings: [], next_cursor: "granola:v1:next" }),
       processor: processor(),
       state: emptyState,
@@ -288,7 +384,7 @@ describe("clean live-only source cycle", () => {
   it("never advances an empty page when its cursor fence drifts or is revoked", async () => {
     for (const result of ["state_drift", "revoked"] as const) {
       const state = new FakeState(admission(), result);
-      const cycle = new CleanLiveOnlySourceCycleV1({
+      const cycle = liveCycle({
         source: source({ meetings: [], next_cursor: "granola:v1:next" }),
         processor: processor(),
         state,
@@ -304,11 +400,11 @@ describe("clean live-only source cycle", () => {
     }
   });
 
-  it("skips candidate and Slack staging for no-signal meetings, then CAS advances", async () => {
+  it("records no-signal revisions without Slack staging, then CAS advances", async () => {
     const current = admission();
     const state = new FakeState(current);
     const downstream = stager({ kind: "staged", stage_id: "never" });
-    const cycle = new CleanLiveOnlySourceCycleV1({
+    const cycle = liveCycle({
       source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
       processor: processor(noSignals),
       state,
@@ -318,7 +414,8 @@ describe("clean live-only source cycle", () => {
       kind: "no_signals_cursor_advanced",
       cursor_advanced: true,
     });
-    expect(state.candidates).toEqual([]);
+    expect(state.candidates).toHaveLength(1);
+    expect(state.candidates[0]!.decisions.signals).toEqual([]);
     expect(downstream.calls).toBe(0);
     expect(state.advances).toEqual([
       {
@@ -326,6 +423,99 @@ describe("clean live-only source cycle", () => {
         next_cursor: "granola:v1:next",
       },
     ]);
+  });
+
+  it("reuses extraction and coalesces a same-policy folder-only revision", async () => {
+    const current = admission();
+    const state = new FakeState(current);
+    const downstream = stager({ kind: "staged", stage_id: "stage-1" });
+    let extracts = 0;
+    const countingProcessor = processor((value) => {
+      extracts += 1;
+      const extracted = decisions(value);
+      return {
+        ...extracted,
+        signals: extracted.signals.map((signal) => ({
+          ...signal,
+          evidence: signal.evidence.map((evidence) => ({
+            ...evidence,
+            ...(value.content[0]?.started_at === undefined
+              ? {}
+              : { started_at: value.content[0].started_at }),
+            ...(value.content[0]?.ended_at === undefined
+              ? {}
+              : { ended_at: value.content[0].ended_at }),
+          })),
+        })),
+      };
+    });
+    const original: MeetingDocument = {
+      ...meeting(),
+      content: [
+        {
+          ...meeting().content[0]!,
+          started_at: "2026-08-22T02:04:10.000Z",
+          ended_at: "2026-08-22T02:04:12.000Z",
+        },
+      ],
+    };
+    const first = liveCycle({
+      source: source({ meetings: [original] }),
+      processor: countingProcessor,
+      state,
+      stager: downstream,
+    });
+    await expect(first.runOnce()).resolves.toMatchObject({ kind: "staged" });
+
+    const folderOnly: MeetingDocument = {
+      ...original,
+      provenance: {
+        ...original.provenance,
+        canonical_revision: "sha256:folder-only",
+      },
+      extensions: {
+        granola: {
+          folder_membership: [{ id: "folder-notes", name: "notes" }],
+        },
+      },
+      content: [
+        {
+          ...original.content[0]!,
+          started_at: "2026-08-22T02:04:11.000Z",
+          ended_at: "2026-08-22T02:04:13.000Z",
+        },
+      ],
+    };
+    const second = liveCycle({
+      source: source({ meetings: [folderOnly] }),
+      processor: countingProcessor,
+      state,
+      stager: downstream,
+    });
+    await expect(second.runOnce()).resolves.toEqual({
+      kind: "already_processed",
+      cursor_advanced: false,
+    });
+    expect(extracts).toBe(1);
+    expect(downstream.calls).toBe(1);
+    expect(state.candidates.at(-1)).toMatchObject({
+      meeting: folderOnly,
+      decisions: {
+        meeting_revision: folderOnly.provenance.canonical_revision,
+        signals: [
+          {
+            evidence: [
+              {
+                meeting_id: folderOnly.id,
+                block_id: "block-1",
+                started_at: "2026-08-22T02:04:11.000Z",
+                ended_at: "2026-08-22T02:04:13.000Z",
+              },
+            ],
+          },
+        ],
+      },
+    });
   });
 
   it("retries queued and posted revisions with only their frozen snapshots", async () => {
@@ -337,9 +527,22 @@ describe("clean live-only source cycle", () => {
       state.seedFrozenCandidate({
         candidate_id: `cnd_${stateName}`,
         candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+        review_lineage_id: "rli_test",
+        review_input_sha256: `sha256:${"c".repeat(64)}`,
+        review_semantic_sha256: `sha256:${"d".repeat(64)}`,
+        review_round: 1,
+        review_policy_id: REVIEW_POLICY.policy_id,
+        review_policy_contract_sha256:
+          REVIEW_POLICY.policy_contract_sha256,
+        review_policy_consequence_text:
+          REVIEW_POLICY.policy_consequence_text,
+        review_policy_consequence_sha256:
+          REVIEW_POLICY.policy_consequence_sha256,
+        disposition: "actionable",
         approval_id: `apr_${stateName}`,
         stage_command_id: `pas_${stateName}`,
         state: stateName,
+        superseded_approval_id: null,
         admission: current,
         meeting: originalMeeting,
         decisions: originalDecisions,
@@ -351,6 +554,7 @@ describe("clean live-only source cycle", () => {
           retried = input;
           return { kind: "staged", stage_id: "stage-1" };
         },
+        tombstoneSuperseded: async () => {},
       };
       const changedObservation: MeetingDocument = {
         ...originalMeeting,
@@ -359,7 +563,7 @@ describe("clean live-only source cycle", () => {
           observed_at: "2026-08-22T02:06:04.005Z",
         },
       };
-      const cycle = new CleanLiveOnlySourceCycleV1({
+      const cycle = liveCycle({
         source: source({
           meetings: [changedObservation],
           next_cursor: current.source.cursor,
@@ -370,6 +574,11 @@ describe("clean live-only source cycle", () => {
         }),
         state,
         stager: downstream,
+        review_policy: () => ({
+          ...REVIEW_POLICY,
+          policy_contract_sha256: `sha256:${"f".repeat(64)}`,
+          policy_consequence_text: "A changed runtime policy.",
+        }),
       });
 
       await expect(cycle.runOnce()).resolves.toEqual({
@@ -380,7 +589,13 @@ describe("clean live-only source cycle", () => {
       expect(extracts).toBe(0);
       expect(retried).toEqual({
         admission: current,
-        candidate: expect.objectContaining({ state: stateName }),
+        candidate: expect.objectContaining({
+          state: stateName,
+          review_policy_contract_sha256:
+            REVIEW_POLICY.policy_contract_sha256,
+          review_policy_consequence_text:
+            REVIEW_POLICY.policy_consequence_text,
+        }),
         meeting: originalMeeting,
         decisions: originalDecisions,
       });
@@ -395,9 +610,20 @@ describe("clean live-only source cycle", () => {
     state.seedFrozenCandidate({
       candidate_id: "cnd_staged",
       candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+      review_lineage_id: "rli_test",
+      review_input_sha256: `sha256:${"c".repeat(64)}`,
+      review_semantic_sha256: `sha256:${"d".repeat(64)}`,
+      review_round: 1,
+      review_policy_id: REVIEW_POLICY.policy_id,
+      review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
+      review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
+      review_policy_consequence_sha256:
+        REVIEW_POLICY.policy_consequence_sha256,
+      disposition: "actionable",
       approval_id: "apr_staged",
       stage_command_id: "pas_staged",
       state: "staged",
+      superseded_approval_id: null,
       admission: current,
       meeting: originalMeeting,
       decisions: decisions(originalMeeting),
@@ -413,9 +639,10 @@ describe("clean live-only source cycle", () => {
         stages += 1;
         return { kind: "staged", stage_id: "stage-1" };
       },
+      tombstoneSuperseded: async () => {},
     };
 
-    const repeated = new CleanLiveOnlySourceCycleV1({
+    const repeated = liveCycle({
       source: source({
         meetings: [
           {
@@ -444,7 +671,7 @@ describe("clean live-only source cycle", () => {
         canonical_revision: "sha256:note-2",
       },
     };
-    const revised = new CleanLiveOnlySourceCycleV1({
+    const revised = liveCycle({
       source: source({
         meetings: [revisedMeeting],
         next_cursor: current.source.cursor,
@@ -468,7 +695,7 @@ describe("clean live-only source cycle", () => {
     for (const result of ["state_drift", "revoked"] as const) {
       const state = new FakeState(admission(), result);
       const downstream = stager({ kind: "staged", stage_id: "never" });
-      const cycle = new CleanLiveOnlySourceCycleV1({
+      const cycle = liveCycle({
         source: source({
           meetings: [meeting()],
           next_cursor: "granola:v1:next",
@@ -482,7 +709,8 @@ describe("clean live-only source cycle", () => {
         reason: result,
         cursor_advanced: false,
       });
-      expect(state.candidates).toEqual([]);
+      expect(state.candidates).toHaveLength(1);
+      expect(state.candidates[0]!.decisions.signals).toEqual([]);
       expect(downstream.calls).toBe(0);
       expect(state.advances).toHaveLength(1);
     }
@@ -490,7 +718,7 @@ describe("clean live-only source cycle", () => {
 
   it("does not advance a terminal empty poll, accept historical cursors, or process a page larger than one", async () => {
     const emptyState = new FakeState(admission());
-    const empty = new CleanLiveOnlySourceCycleV1({
+    const empty = liveCycle({
       source: source({ meetings: [] }),
       processor: processor(),
       state: emptyState,
@@ -507,7 +735,7 @@ describe("clean live-only source cycle", () => {
       ...admitted,
       source: { ...admitted.source, cursor: "2020-01-01T00:00:00.000Z" },
     };
-    const historyCycle = new CleanLiveOnlySourceCycleV1({
+    const historyCycle = liveCycle({
       source: source({ meetings: [], next_cursor: "granola:v1:next" }),
       processor: processor(),
       state: new FakeState(historical),
@@ -517,7 +745,7 @@ describe("clean live-only source cycle", () => {
       "live-only Granola state",
     );
 
-    const pageCycle = new CleanLiveOnlySourceCycleV1({
+    const pageCycle = liveCycle({
       source: source({
         meetings: [meeting(), { ...meeting(), id: "meeting-2" }],
       }),
@@ -540,7 +768,7 @@ describe("clean live-only source cycle", () => {
       await reached;
       return { meetings: [meeting()] };
     };
-    const cycle = new CleanLiveOnlySourceCycleV1({
+    const cycle = liveCycle({
       source: slowSource,
       processor: processor(),
       state: new FakeState(admission()),

@@ -263,6 +263,7 @@ function setup(action: PersonApprovalAction) {
     authority_fence: {
       async withStablePersonSlackApprovalFence(commit) {
         return commit({
+          approvalIsCurrent: () => true,
           currentMembership: ({ principal_id, membership_id }) =>
             principal_id === link.principal_id &&
             membership_id === link.membership_id

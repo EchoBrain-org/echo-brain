@@ -697,7 +697,12 @@ async function activeFixture(
       provenance: {
         ...meeting.provenance,
         external_id: variant.external_id,
-        canonical_revision: canonicalSha256({ note: variant.external_id }),
+        canonical_revision: canonicalSha256({
+          note: variant.external_id,
+          title: variant.title,
+          text: variant.text,
+          folder_membership: variant.folder_membership ?? [],
+        }),
       },
       content: [{ id: variant.external_id, kind: "note", text: variant.text }],
       ...(variant.folder_membership === undefined
@@ -716,6 +721,7 @@ async function activeFixture(
   );
   const reaction = fakeReaction(action);
   const posted: string[] = [];
+  const tombstoned: string[] = [];
   const errors: Error[] = [];
   const config: OpenCleanLiveRuntimeConfig = {
     state_directory: initialized.state_directory,
@@ -753,6 +759,9 @@ async function activeFixture(
             provider_message_ts: `1724112000.${String(posted.length).padStart(6, "0")}`,
           };
         },
+        async tombstone(input) {
+          tombstoned.push(input.approval_id);
+        },
       },
       approval_observer: reaction,
     },
@@ -764,6 +773,7 @@ async function activeFixture(
     processorIdentity,
     reaction,
     posted,
+    tombstoned,
     errors,
     runtime,
   };
@@ -1135,6 +1145,7 @@ describe("open clean live runtime", () => {
           async post() {
             throw new Error("restart must not post a duplicate approval card");
           },
+          async tombstone() {},
         },
         approval_observer: fixture.reaction,
       },
@@ -1233,6 +1244,77 @@ describe("open clean live runtime", () => {
     } finally {
       rereadRecord.close();
       rereadAuthority.close();
+    }
+  });
+
+  it("keeps one approval card while preserving a folder-only provider revision", async () => {
+    const fixture = await activeFixture("approve", undefined, [
+      {
+        title: "Folder move review",
+        external_id: "folder-move-note",
+        text: "Keep this review singular.",
+      },
+      {
+        title: "Folder move review",
+        external_id: "folder-move-note",
+        text: "Keep this review singular.",
+        folder_membership: [{ name: "notes" }],
+      },
+    ]);
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 ||
+          (
+            authority
+              .prepare(
+                "SELECT count(*) AS count FROM authority_clean_live_candidates_v1",
+              )
+              .get() as { count: number }
+          ).count === 2,
+        "both folder-only source revisions",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(
+        authority
+          .prepare(
+            `SELECT disposition, count(*) AS count
+               FROM authority_clean_live_candidates_v1
+              GROUP BY disposition
+              ORDER BY disposition`,
+          )
+          .all(),
+      ).toEqual([
+        { disposition: "actionable", count: 1 },
+        { disposition: "coalesced", count: 1 },
+      ]);
+      expect(
+        authority
+          .prepare(
+            "SELECT count(*) AS count FROM authority_clean_live_approval_outbox_v1",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(
+        record
+          .prepare("SELECT count(*) AS count FROM organization_record_log")
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(fixture.posted).toHaveLength(1);
+      expect(fixture.tombstoned).toEqual([]);
+      expect(fixture.reaction.calls()).toBe(1);
+    } finally {
+      record.close();
+      authority.close();
+      await fixture.runtime.close();
     }
   });
 

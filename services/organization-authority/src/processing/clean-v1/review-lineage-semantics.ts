@@ -1,0 +1,111 @@
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import type {
+  ApprovalContractSha256,
+  PersonApprovalPolicyId,
+} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+import type {
+  DecisionSet,
+  ExtractedSignal,
+  MeetingDocument,
+} from "../core/index.js";
+
+/** The policy commitment that changes the human-review boundary. */
+export interface CleanReviewPolicyCommitmentV1 {
+  readonly policy_id: PersonApprovalPolicyId;
+  readonly policy_contract_sha256: ApprovalContractSha256;
+  readonly policy_consequence_sha256: ApprovalContractSha256;
+}
+
+/** The exact human-facing policy material frozen with one review candidate. */
+export interface CleanReviewPolicySnapshotV1
+  extends CleanReviewPolicyCommitmentV1 {
+  readonly policy_consequence_text: string;
+}
+
+export interface CleanReviewProcessorCommitmentV1 {
+  readonly adapter_id: string;
+  readonly instance_id: string;
+  readonly version: string;
+  readonly configuration_sha256: string;
+}
+
+/** Stable across revisions of one meeting, but never across source instances. */
+export function cleanReviewLineageIdV1(input: {
+  readonly adapter_id: string;
+  readonly instance_id: string;
+  readonly external_id: string;
+}): string {
+  return `rli_${canonicalSha256({
+    schema_version: 1,
+    kind: "echo-clean-live-review-lineage-v1",
+    source: input,
+  }).slice("sha256:".length)}`;
+}
+
+/** Mirrors the bounded material actually supplied to extraction. */
+export function cleanReviewInputSha256V1(input: {
+  readonly meeting: MeetingDocument;
+  readonly review_policy: CleanReviewPolicySnapshotV1;
+  readonly processor: CleanReviewProcessorCommitmentV1;
+}): string {
+  return canonicalSha256({
+    schema_version: 1,
+    kind: "echo-clean-live-review-input-v1",
+    source: {
+      adapter_id: input.meeting.provenance.source.adapter_id,
+      instance_id: input.meeting.provenance.source.instance_id,
+      external_id: input.meeting.provenance.external_id,
+    },
+    processor: input.processor,
+    review_policy: input.review_policy,
+    title: input.meeting.title ?? null,
+    participants: input.meeting.participants.map((participant) =>
+      participant.display_name ?? participant.id,
+    ),
+    content: input.meeting.content
+      .filter((block) => block.text.trim().length > 0)
+      .map((block) => ({ id: block.id, kind: block.kind, text: block.text })),
+  });
+}
+
+/**
+ * The material a human must reconsider. Provider revisions, timestamps, and
+ * extraction/evidence identifiers cannot create work on their own.
+ */
+export function cleanReviewSemanticSha256V1(input: {
+  readonly meeting: MeetingDocument;
+  readonly decisions: DecisionSet;
+  readonly review_policy: CleanReviewPolicySnapshotV1;
+  readonly processor: CleanReviewProcessorCommitmentV1;
+}): string {
+  return canonicalSha256({
+    schema_version: 1,
+    kind: "echo-clean-live-review-semantic-v1",
+    processor: input.processor,
+    review_policy: input.review_policy,
+    meeting: {
+      title: input.meeting.title ?? null,
+      participants: input.meeting.participants.map((participant) =>
+        participant.display_name ?? participant.id,
+      ),
+    },
+    signals: input.decisions.signals.map(semanticSignal),
+  });
+}
+
+function semanticSignal(signal: ExtractedSignal): Readonly<Record<string, unknown>> {
+  const base = {
+    kind: signal.kind,
+    text: signal.text,
+    subject: signal.subject,
+    confidence: signal.confidence,
+  };
+  switch (signal.kind) {
+    case "decision":
+      return { ...base, status: signal.status };
+    case "action":
+      return { ...base, owner: signal.owner, due_at: signal.due_at };
+    case "rationale":
+      return base;
+  }
+}

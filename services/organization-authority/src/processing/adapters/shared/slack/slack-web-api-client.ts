@@ -35,6 +35,20 @@ export interface SlackPostMessageInput {
   mrkdwn?: boolean;
 }
 
+/** Input for changing the presentation of an existing bot-authored message. */
+export interface SlackUpdateMessageInput {
+  channel: string;
+  ts: string;
+  text: string;
+  blocks?: readonly unknown[];
+  /** Disable link previews for meeting-derived content by default. */
+  unfurlLinks?: boolean;
+  /** Disable media previews for meeting-derived content by default. */
+  unfurlMedia?: boolean;
+  /** See {@link SlackPostMessageInput.mrkdwn}. */
+  mrkdwn?: boolean;
+}
+
 export interface SlackPostedMessage {
   channel: string;
   ts: string;
@@ -469,6 +483,67 @@ export class SlackWebApiClient {
       throw new SlackApiError(
         "unknown_outcome",
         "Slack did not return the exact posted message identity",
+        true,
+      );
+    }
+    return { channel, ts };
+  }
+
+  /**
+   * Replace an identified message authored by this app. As with posting, a
+   * transport failure is an unknown outcome: Slack may have committed the
+   * update before the client lost its response. Callers therefore supply one
+   * deterministic replacement payload on every retry.
+   */
+  async updateMessage(
+    input: SlackUpdateMessageInput,
+    signal?: AbortSignal,
+  ): Promise<SlackPostedMessage> {
+    if (!SLACK_CONVERSATION_ID_RE.test(input.channel)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack chat.update requires a canonical conversation ID",
+        false,
+      );
+    }
+    if (!SLACK_MESSAGE_TS_RE.test(input.ts)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack chat.update requires a canonical message timestamp",
+        false,
+      );
+    }
+    const body = await this.call(
+      "chat.update",
+      {
+        channel: input.channel,
+        ts: input.ts,
+        text: input.text,
+        unfurl_links: input.unfurlLinks ?? false,
+        unfurl_media: input.unfurlMedia ?? false,
+        ...(input.mrkdwn === undefined ? {} : { mrkdwn: input.mrkdwn }),
+        ...(input.blocks === undefined ? {} : { blocks: input.blocks }),
+      },
+      { signal, unknownOutcomeOnTransportFailure: true },
+    );
+    const channel = body["channel"];
+    const ts = body["ts"];
+    if (!isNonEmptyString(channel) || !isNonEmptyString(ts)) {
+      throw new SlackApiError(
+        "unknown_outcome",
+        "Slack accepted the update but returned no channel/ts identity",
+        true,
+      );
+    }
+    if (
+      channel !== input.channel ||
+      ts !== input.ts ||
+      !SLACK_CONVERSATION_ID_RE.test(channel) ||
+      !SLACK_MESSAGE_TS_RE.test(ts)
+    ) {
+      throw new SlackApiError(
+        "unknown_outcome",
+        "Slack did not return the exact updated message identity",
         true,
       );
     }

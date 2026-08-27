@@ -32,6 +32,31 @@ export interface CleanSlackApprovalCardPosterV1 {
     input: { readonly approval_id: string; readonly text: string },
     signal?: AbortSignal,
   ): Promise<{ readonly provider_message_ts: string }>;
+  /** Replace an obsolete bot card with deterministic non-actionable text. */
+  tombstone(
+    input: {
+      readonly approval_id: string;
+      readonly successor_id: string;
+      readonly provider_message_ts: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<void>;
+}
+
+export interface CleanSlackApprovalSupersessionInputV1 {
+  readonly superseded_approval_id: string;
+  /** An opaque current approval or candidate ID. */
+  readonly successor_id: string;
+}
+
+function tombstoneText(input: CleanSlackApprovalSupersessionInputV1): string {
+  return [
+    "Superseded",
+    "A newer version of this meeting replaced this review. This card can no longer be approved or rejected.",
+    "",
+    `[approval:${input.superseded_approval_id}]`,
+    `[superseded-by:${input.successor_id}]`,
+  ].join("\n");
 }
 
 /** A small concrete `chat.postMessage` adapter with no legacy policy surface. */
@@ -61,6 +86,30 @@ export class SlackWebApiCleanApprovalCardPosterV1 implements CleanSlackApprovalC
     );
     return { provider_message_ts: posted.ts };
   }
+
+  async tombstone(
+    input: {
+      readonly approval_id: string;
+      readonly successor_id: string;
+      readonly provider_message_ts: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.client.updateMessage(
+      {
+        channel: this.channel_id,
+        ts: input.provider_message_ts,
+        text: tombstoneText({
+          superseded_approval_id: input.approval_id,
+          successor_id: input.successor_id,
+        }),
+        blocks: [],
+        unfurlLinks: false,
+        unfurlMedia: false,
+      },
+      signal,
+    );
+  }
 }
 
 /**
@@ -77,10 +126,38 @@ export class CleanSlackApprovalStagerV1 implements CleanApprovalStagerV1 {
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
+  /**
+   * Make a prior Slack presentation visibly non-actionable. The Authority
+   * snapshot and Control-plane approval are deliberately untouched: this is
+   * only a presentation change. A not-yet-posted old card has no Slack work.
+   */
+  async tombstoneSuperseded(
+    input: CleanSlackApprovalSupersessionInputV1,
+    context?: { readonly signal: AbortSignal },
+  ): Promise<void> {
+    const obsolete = this.authority.readSupersededApprovalCard(
+      input.superseded_approval_id,
+    );
+    if (obsolete?.provider_message_ts === null || obsolete === undefined) {
+      return;
+    }
+    await this.poster.tombstone(
+      {
+        approval_id: input.superseded_approval_id,
+        successor_id: input.successor_id,
+        provider_message_ts: obsolete.provider_message_ts,
+      },
+      context?.signal,
+    );
+  }
+
   async stage(
     input: CleanApprovalStageInputV1,
     context?: { readonly signal: AbortSignal },
-  ): Promise<{ readonly kind: "staged"; readonly stage_id: string }> {
+  ): Promise<
+    | { readonly kind: "staged"; readonly stage_id: string }
+    | { readonly kind: "state_drift" }
+  > {
     let outbox = this.authority.readCandidateByApprovalId(
       input.candidate.approval_id,
     );
@@ -92,7 +169,20 @@ export class CleanSlackApprovalStagerV1 implements CleanApprovalStagerV1 {
         "clean Slack approval stage has no durable Authority candidate",
       );
     }
+    if (await this.tombstoneIfSuperseded(outbox, context)) {
+      return { kind: "state_drift" };
+    }
     if (outbox.state === "queued") {
+      const supersededApprovalId = input.candidate.superseded_approval_id;
+      if (supersededApprovalId !== null) {
+        await this.tombstoneSuperseded(
+          {
+            superseded_approval_id: supersededApprovalId,
+            successor_id: outbox.approval_id,
+          },
+          context,
+        );
+      }
       const card = this.card_factory.build(input);
       const posted = await this.poster.post(
         { approval_id: outbox.approval_id, text: card.text },
@@ -104,6 +194,15 @@ export class CleanSlackApprovalStagerV1 implements CleanApprovalStagerV1 {
         frozen_card_sha256: card.frozen_card_sha256,
         approved_snapshot: card.approved_snapshot,
       });
+      if (await this.tombstoneIfSuperseded(outbox, context)) {
+        return { kind: "state_drift" };
+      }
+    }
+    outbox =
+      this.authority.readCandidateByApprovalId(input.candidate.approval_id) ??
+      outbox;
+    if (await this.tombstoneIfSuperseded(outbox, context)) {
+      return { kind: "state_drift" };
     }
     const staged = stagePersonSlackPendingApprovalV1({
       database: this.control_database,
@@ -117,6 +216,27 @@ export class CleanSlackApprovalStagerV1 implements CleanApprovalStagerV1 {
       candidate_id: outbox.candidate_id,
       control_approval_sha256: staged.approval_sha256,
     });
+    if (await this.tombstoneIfSuperseded(durable, context)) {
+      return { kind: "state_drift" };
+    }
     return { kind: "staged", stage_id: durable.approval_id };
+  }
+
+  private async tombstoneIfSuperseded(
+    outbox: CleanLiveApprovalOutboxV1,
+    context?: { readonly signal: AbortSignal },
+  ): Promise<boolean> {
+    if (outbox.state !== "superseded") return false;
+    if (outbox.superseded_by_candidate_id === null) {
+      throw new Error("clean superseded approval has no successor candidate");
+    }
+    await this.tombstoneSuperseded(
+      {
+        superseded_approval_id: outbox.approval_id,
+        successor_id: outbox.superseded_by_candidate_id,
+      },
+      context,
+    );
+    return true;
   }
 }
