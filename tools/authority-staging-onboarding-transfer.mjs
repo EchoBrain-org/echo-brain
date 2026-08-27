@@ -42,6 +42,9 @@ const VERSION = /^[A-Za-z0-9._/+=-]{8,1024}$/;
 const BUCKET = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 const INSTANCE = /^i-[a-f0-9]{8,17}$/;
 const SUCCESS = "authority-staging-onboarding-input-transferred\n";
+// The expiry is fixed in the reviewed change set. Leave enough runway for a
+// human approval without weakening the eight-minute pre-execution safety gate.
+const PLAN_ACCESS_WINDOW_MS = 30 * 60 * 1000;
 // SendCommand delivery and the RunShellScript plugin each have a 300-second
 // bound. Add two minutes for clock skew and final propagation before treating
 // an accepted send with no returned/persisted command ID as statically dead.
@@ -573,7 +576,7 @@ function executeChangeSet({ region, stackName, purpose, changeSetId }, aws) {
 }
 
 function accessExpiry(now = Date.now) {
-  return new Date(now() + 15 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  return new Date(now() + PLAN_ACCESS_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 function timestamp(now = Date.now) {
