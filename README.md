@@ -275,6 +275,101 @@ slot from different terminals or machines. For failed-create, rollback, mount,
 and recovery procedures, follow the full staging specification rather than
 deleting or renaming the stack.
 
+### First-live onboarding input transfer
+
+Do not SSH, copy credentials into a terminal, or open a root shell. The first
+staging onboarding input moves through one short-lived, KMS-encrypted and
+versioned transfer bucket. The host receives permission for only the exact
+object version during one bounded SSM command, with a 15-minute IAM expiry as
+a backstop that starts when the plan is made. Execute refuses a grant with less
+than eight minutes left for CloudFormation plus the 300-second Run Command
+plugin timeout. The controller polls for a terminal SSM result for up to six
+minutes, cancels on local timeout, and waits up to two more minutes for terminal
+cancellation before it permits any cleanup. It verifies the archive digest,
+accepts exactly the eight established regular input files, runs `doctor` and
+`prepare` without exposing their output, then revokes the host permission and
+permanently deletes that exact S3 version. The private local archive and receipt
+are removed only after both remote cleanup steps are proved.
+
+Before it sends the SSM command, the controller atomically records an
+`ssm_submitting` receipt; immediately after SSM returns an exact command ID it
+atomically advances it to `ssm_submitted`. A receipt with a command ID always
+reconciles that exact invocation before cleanup: only the fixed success marker
+advances it to `remote_prepared`; a proved terminal non-success may be cleaned
+as an unproved onboarding outcome. Never retry by creating a second SSM command
+for the same receipt.
+
+If SSM accepted the send but the command-ID receipt write is lost, the retained
+`ssm_submitting` receipt has no ID to reconcile. Cleanup is deliberately
+quarantined until `max(access_expires_at, submission_started_at + 10 minutes) + 2 minutes`:
+the IAM grant has expired, the 300-second SendCommand delivery
+window and 300-second RunShellScript limit have both elapsed from the actual
+pre-send timestamp, and the extra two minutes cover clock skew and final
+propagation. Before that exact time, cleanup refuses to revoke or delete. After
+quarantine cleanup, the outcome is still unproved: inspect retained Authority
+state before deciding whether a fresh operation is safe; it never reports
+`prepared`.
+
+Create a private controller input outside the checkout. Its `privateInputDir`
+must contain exactly the eight mode-`0600` files accepted by
+`onboard-clean-v1.sh`; `archiveDir` must be an existing mode-`0700` directory
+outside the checkout. No secret values belong in this controller JSON.
+
+```json
+{
+  "region": "us-west-2",
+  "operationId": "onboarding-<new-unique-operation-id>",
+  "stackName": "<existing-staging-stack-name>",
+  "privateInputDir": "/absolute/private/staging-onboarding-input",
+  "archiveDir": "/absolute/private/staging-onboarding-transfer"
+}
+```
+
+```bash
+# Builds and verifies the deterministic private archive, uploads one exact
+# object version, and creates a reviewable IAM-grant-only change set.
+npm run authority:staging-onboarding-transfer -- plan \
+  --input /absolute/private/staging-onboarding-transfer/input.json
+
+# Review the change set named in the private receipt, then execute exactly it.
+# This runs only a bounded SSM command, never an interactive root session.
+npm run authority:staging-onboarding-transfer -- execute \
+  --receipt /absolute/private/staging-onboarding-transfer/onboarding-transfer-<operation-id>.json
+```
+
+If `execute` exits nonzero with `onboarding_transfer_failed_cleaned`, the
+transfer outcome was not proved and all temporary material was removed: inspect
+the retained Authority state before deciding whether a fresh operation is safe.
+If it reports `cleanup_required`, do not create
+another input archive. Preserve the private receipt and archive and retry only
+the bounded cleanup after the stack is again stable:
+
+```bash
+npm run authority:staging-onboarding-transfer -- cleanup \
+  --receipt /absolute/private/staging-onboarding-transfer/onboarding-transfer-<operation-id>.json
+```
+
+Cleanup first proves that the temporary policy is absent, then proves that the
+exact object key has no versions, delete markers, or multipart uploads. It
+removes local recovery material only after those proofs succeed.
+If a successful `doctor` and `prepare` reached the host before cleanup stalled,
+the private receipt is marked `remote_prepared`; its later `cleanup` returns
+`prepared_cleaned`. Do not run transfer again: continue with the established
+`onboard-clean-v1.sh resume` flow.
+
+An uncertain `PutObject` is also a `cleanup_required` condition. In that case
+the private receipt is deliberately retained in `uploading` state without a
+trusted object version. Run only the same `cleanup` command: it first proves
+the temporary grant is absent, then adopts a sole version only if its SHA-256
+metadata and KMS key exactly match the private receipt. Only that proved-owned
+version is deleted and absence is rechecked. A different, multiple, marked, or
+multipart object is a collision: it is never deleted by this controller.
+Do not reuse the operation ID until cleanup has proved absence.
+
+The first `slot-init` must use this template. No staging slot exists before this
+rollout; deliberately, there is no controller path for upgrading an older slot
+before a credential transfer.
+
 ## Design records
 
 - [Organization-operated server core](docs/decisions/ADR-0001-organization-operated-server-core.md)

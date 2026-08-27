@@ -9,7 +9,7 @@ rule exact_staging_slot_inventory {
     let resource_count = count(%all_resources)
     let host_resource_count = count(%host_resources)
 
-    %resource_count == 22
+    %resource_count == 26
     %host_resource_count == 4
     Resources.StagingVpc.Type == 'AWS::EC2::VPC'
     Resources.StagingInternetGateway.Type == 'AWS::EC2::InternetGateway'
@@ -24,8 +24,12 @@ rule exact_staging_slot_inventory {
     Resources.StagingHostCloudflaredTcpEgress.Type == 'AWS::EC2::SecurityGroupEgress'
     Resources.StagingHostCloudflaredUdpEgress.Type == 'AWS::EC2::SecurityGroupEgress'
     Resources.StagingHostSetupBundle.Type == 'AWS::S3::Bucket'
+    Resources.StagingOnboardingTransferKey.Type == 'AWS::KMS::Key'
+    Resources.StagingOnboardingTransferBucket.Type == 'AWS::S3::Bucket'
     Resources.AuthorityTunnelTokenSecret.Type == 'AWS::SecretsManager::Secret'
     Resources.StagingHostRole.Type == 'AWS::IAM::Role'
+    Resources.StagingHostOnboardingInputAccess.Type == 'AWS::IAM::Policy'
+    Resources.StagingOnboardingTransferBucketPolicy.Type == 'AWS::S3::BucketPolicy'
     Resources.StagingHostInstanceProfile.Type == 'AWS::IAM::InstanceProfile'
     Resources.StagingDataVolume.Type == 'AWS::EC2::Volume'
     Resources.StagingHostLaunchTemplate.Type == 'AWS::EC2::LaunchTemplate'
@@ -39,7 +43,11 @@ rule host_toggle_leaves_the_slot_boundary_persistent {
     Resources.StagingDataVolume.Condition not exists
     Resources.AuthorityTunnelTokenSecret.Condition not exists
     Resources.StagingHostSetupBundle.Condition not exists
+    Resources.StagingOnboardingTransferKey.Condition not exists
+    Resources.StagingOnboardingTransferBucket.Condition not exists
+    Resources.StagingOnboardingTransferBucketPolicy.Condition not exists
     Resources.StagingHostRole.Condition not exists
+    Resources.StagingHostOnboardingInputAccess.Condition == 'OnboardingInputTransferCondition'
     Resources.StagingVpc.Condition not exists
     Resources.StagingHost.Condition == 'HostEnabledCondition'
     Resources.StagingDataVolumeAttachment.Condition == 'HostEnabledCondition'
@@ -65,14 +73,41 @@ rule retained_state_and_trusted_delivery {
     Resources.AuthorityTunnelTokenSecret.UpdateReplacePolicy == 'Retain'
     Resources.StagingHostSetupBundle.DeletionPolicy == 'Retain'
     Resources.StagingHostSetupBundle.UpdateReplacePolicy == 'Retain'
+    Resources.StagingOnboardingTransferKey.DeletionPolicy == 'Retain'
+    Resources.StagingOnboardingTransferKey.UpdateReplacePolicy == 'Retain'
+    Resources.StagingOnboardingTransferBucket.DeletionPolicy == 'Retain'
+    Resources.StagingOnboardingTransferBucket.UpdateReplacePolicy == 'Retain'
+    Resources.StagingOnboardingTransferBucketPolicy.DeletionPolicy == 'Retain'
+    Resources.StagingOnboardingTransferBucketPolicy.UpdateReplacePolicy == 'Retain'
     Resources.StagingDataVolume.Properties.Encrypted == true
     Resources.StagingDataVolume.Properties.VolumeType == 'gp3'
     Resources.StagingHostSetupBundle.Properties.VersioningConfiguration.Status == 'Enabled'
     Resources.StagingHostSetupBundle.Properties.PublicAccessBlockConfiguration == { "BlockPublicAcls": true, "BlockPublicPolicy": true, "IgnorePublicAcls": true, "RestrictPublicBuckets": true }
     Resources.StagingHostSetupBundle.Properties.BucketEncryption.ServerSideEncryptionConfiguration[*].ServerSideEncryptionByDefault.SSEAlgorithm == 'AES256'
+    Resources.StagingOnboardingTransferBucket.Properties.VersioningConfiguration.Status == 'Enabled'
+    Resources.StagingOnboardingTransferBucket.Properties.PublicAccessBlockConfiguration == { "BlockPublicAcls": true, "BlockPublicPolicy": true, "IgnorePublicAcls": true, "RestrictPublicBuckets": true }
+    Resources.StagingOnboardingTransferBucket.Properties.BucketEncryption.ServerSideEncryptionConfiguration[*].ServerSideEncryptionByDefault.SSEAlgorithm == 'aws:kms'
+    Resources.StagingOnboardingTransferKey.Properties.EnableKeyRotation == true
     Resources.AuthorityTunnelTokenSecret.Properties.SecretString not exists
     Resources.AuthorityTunnelTokenSecret.Properties.GenerateSecretString not exists
     Resources.AuthorityTunnelTokenSecret.Properties.Name not exists
+}
+
+rule onboarding_transfer_is_exact_and_temporary {
+    Resources.StagingHostOnboardingInputAccess.Properties.PolicyName == 'read-exact-staging-onboarding-input'
+    Resources.StagingHostOnboardingInputAccess.Properties.Roles == [ { "Ref": "StagingHostRole" } ]
+    Resources.StagingHostOnboardingInputAccess.Properties.PolicyDocument.Statement[*].Action IN [ 's3:GetObjectVersion', 'kms:Decrypt' ]
+    some Resources.StagingHostOnboardingInputAccess.Properties.PolicyDocument.Statement[*] == { "Effect": "Allow", "Action": "s3:GetObjectVersion", "Resource": { "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}/${OnboardingInputObjectKey}" }, "Condition": { "StringEquals": { "s3:VersionId": { "Ref": "OnboardingInputObjectVersion" } }, "DateLessThan": { "aws:CurrentTime": { "Ref": "OnboardingInputAccessExpiresAt" } } } }
+    some Resources.StagingHostOnboardingInputAccess.Properties.PolicyDocument.Statement[*] == { "Effect": "Allow", "Action": "kms:Decrypt", "Resource": { "Fn::GetAtt": [ "StagingOnboardingTransferKey", "Arn" ] }, "Condition": { "StringEquals": { "kms:ViaService": { "Fn::Sub": "s3.${AWS::Region}.amazonaws.com" }, "kms:EncryptionContext:aws:s3:arn": { "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}/${OnboardingInputObjectKey}" } }, "DateLessThan": { "aws:CurrentTime": { "Ref": "OnboardingInputAccessExpiresAt" } } } }
+}
+
+rule onboarding_transfer_bucket_denies_untrusted_writes {
+    Resources.StagingOnboardingTransferBucketPolicy.Properties.Bucket == { "Ref": "StagingOnboardingTransferBucket" }
+    Resources.StagingOnboardingTransferBucketPolicy.Properties.PolicyDocument.Statement[*].Effect == 'Deny'
+    some Resources.StagingOnboardingTransferBucketPolicy.Properties.PolicyDocument.Statement[*] == { "Sid": "DenyInsecureTransport", "Effect": "Deny", "Principal": "*", "Action": "s3:*", "Resource": [ { "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}" }, { "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}/*" } ], "Condition": { "Bool": { "aws:SecureTransport": "false" } } }
+    some Resources.StagingOnboardingTransferBucketPolicy.Properties.PolicyDocument.Statement[*] == { "Sid": "DenyMissingEncryptionHeader", "Effect": "Deny", "Principal": "*", "Action": "s3:PutObject", "Resource": { "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}/*" }, "Condition": { "Null": { "s3:x-amz-server-side-encryption": "true" } } }
+    some Resources.StagingOnboardingTransferBucketPolicy.Properties.PolicyDocument.Statement[*] == { "Sid": "DenyMissingOrWrongEncryptionMode", "Effect": "Deny", "Principal": "*", "Action": "s3:PutObject", "Resource": { "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}/*" }, "Condition": { "StringNotEquals": { "s3:x-amz-server-side-encryption": "aws:kms" } } }
+    some Resources.StagingOnboardingTransferBucketPolicy.Properties.PolicyDocument.Statement[*] == { "Sid": "DenyWrongEncryptionKey", "Effect": "Deny", "Principal": "*", "Action": "s3:PutObject", "Resource": { "Fn::Sub": "arn:${AWS::Partition}:s3:::${StagingOnboardingTransferBucket}/*" }, "Condition": { "StringNotEquals": { "s3:x-amz-server-side-encryption-aws-kms-key-id": { "Fn::GetAtt": [ "StagingOnboardingTransferKey", "Arn" ] } } } }
 }
 
 rule arm64_host_is_disposable_and_requires_imdsv2 {

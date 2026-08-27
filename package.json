@@ -26,6 +26,7 @@
     "bundle:authority-staging-host": "node tools/build-authority-staging-host-bundle.mjs",
     "authority:local": "node tools/authority-local.mjs",
     "authority:staging": "node tools/authority-staging.mjs",
+    "authority:staging-onboarding-transfer": "node tools/authority-staging-onboarding-transfer.mjs",
     "profile:clean-v1-runtime": "node tools/clean-v1-runtime-profile.mjs create",
     "pack:person-client": "node tools/pack-person-client.mjs",
     "bundle:person-client": "node deploy/release/create-offline-person-client-bundle.mjs",
