@@ -411,7 +411,7 @@ describe("Authority staging host stack", () => {
     for (const required of [
       "apt-get install -y --no-install-recommends ca-certificates curl snapd",
       "snap install aws-cli --classic",
-      "/snap/bin/aws s3api get-object",
+      "timeout 20 /snap/bin/aws --cli-connect-timeout 5 --cli-read-timeout 15 s3api get-object",
       "--region '${AWS::Region}'",
       "--version-id '${HostSetupObjectVersion}'",
       "sha256sum -c -",
@@ -429,21 +429,38 @@ describe("Authority staging host stack", () => {
       "tunnel_ready=true",
       "/srv/echo-authority-clean-v1/restore-clean-v1-host.sh materialize",
       "machine-tunnel-materialization-ready",
-      "machine-tunnel-materialization-not-ready",
+      "bootstrap-not-started",
+      "bootstrap-stage-unavailable",
+      "bootstrap_stage_file=/run/echo-authority-staging-bootstrap-stage",
+      "timeout --signal=TERM --kill-after=10 800 bash -Eeuo pipefail -c bootstrap_main",
+      "--connect-timeout 5 --max-time 15",
+      "staging bootstrap stage: %s",
       "machine configuration, tunnel connection, and retained-state materialization are ready",
-      "machine configuration, tunnel connection, or retained-state materialization failed",
       "--header 'Content-Type:'",
+      "apt-get update",
+      "apt-get install -y --no-install-recommends ca-certificates curl snapd",
+      "systemctl enable --now snapd.socket",
+      "timeout 60 snap wait system seed.loaded",
+      "timeout 120 snap install aws-cli --classic",
+      "set_bootstrap_stage aws-cli-ready",
+      "/snap/bin/aws --version >/dev/null",
+      "retry 6 10 download_setup_bundle",
     ]) {
       expect(userData).toContain(required);
     }
     expect(userData).toContain("--initialize-blank-data-volume");
     expect(userData).toContain('"InitializeBlankDataVolumeCondition"');
     expect(userData).toContain("signal_failure");
+    expect(userData).toContain(
+      "bootstrap-not-started|initial-apt-update|initial-apt-install|snapd-socket|snapd-ready|aws-cli-install|aws-cli-ready|setup-bundle-download|setup-bundle-verify|setup-bundle-extract|data-volume-discovery|machine-bootstrap|tunnel-token-install|tunnel-service|tunnel-ready|retained-state-materialization|ready-signal",
+    );
     expect(userData.match(/--header 'Content-Type:'/g)).toHaveLength(2);
     expect(userData).not.toMatch(
       /github\.com|raw\.githubusercontent|secretstring/i,
     );
     expect(userData).not.toMatch(/terminal_green|authority-descriptor|https/i);
+    expect(userData).not.toMatch(/retry [0-9]+ [0-9]+ apt-get/);
+    expect(userData).not.toMatch(/retry [0-9]+ [0-9]+ systemctl/);
     expect(attachment.DeletionPolicy).toBeUndefined();
     expect(attachment.UpdateReplacePolicy).toBeUndefined();
     expect(attachment.Properties).toEqual({
@@ -462,6 +479,7 @@ describe("Authority staging host stack", () => {
   it("renders executable shell quoting and valid WaitCondition JSON", () => {
     const stack = template();
     const launchTemplate = resource(stack, "StagingHostLaunchTemplate");
+    const ready = resource(stack, "StagingReady");
     const userData = (
       (launchTemplate.Properties!.LaunchTemplateData as Record<string, unknown>)
         .UserData as {
@@ -475,14 +493,126 @@ describe("Authority staging host stack", () => {
     expect(() =>
       execFileSync("bash", ["-n"], { input: userData }),
     ).not.toThrow();
-    const payloads = [
-      ...userData.matchAll(/--data-binary '([^']+)' "\$ready_handle"/g),
-    ].map((match) => JSON.parse(match[1]!) as { readonly Status: string });
-    expect(payloads.map((payload) => payload.Status)).toEqual([
-      "FAILURE",
-      "SUCCESS",
-    ]);
+    const successPayload = userData.match(/--data-binary '([^']+)' "\$ready_handle"/);
+    expect(successPayload).not.toBeNull();
+    expect(JSON.parse(successPayload![1]!) as { readonly Status: string }).toMatchObject({
+      Status: "SUCCESS",
+    });
+    const failureFunction = userData.match(/signal_failure\(\) \{([\s\S]*?)\n\}/);
+    expect(failureFunction).not.toBeNull();
+    expect(failureFunction![1]).toContain("safe_stage=$(safe_bootstrap_stage)");
+    expect(failureFunction![1]).toContain('"Data":"%s"');
+    expect(failureFunction![1]).toContain('"$safe_stage" "$safe_stage"');
+    expect(failureFunction![1]).not.toMatch(
+      /BASH_COMMAND|LINENO|printenv|env|journal|tail|secret|token|password/i,
+    );
+    const failureFormat = failureFunction![1].match(
+      /printf '([^']+)' "\$safe_stage" "\$safe_stage"/,
+    );
+    expect(failureFormat).not.toBeNull();
+    const renderedFailure = failureFormat![1]!
+      .replace("%s", "machine-bootstrap")
+      .replace("%s", "machine-bootstrap");
+    expect(JSON.parse(renderedFailure)).toEqual({
+      Status: "FAILURE",
+      Reason: "staging bootstrap stage: machine-bootstrap",
+      UniqueId: "staging-host",
+      Data: "machine-bootstrap",
+    });
+    const stageWriter = userData.match(
+      /set_bootstrap_stage\(\) \{([\s\S]*?)\n\}/,
+    );
+    expect(stageWriter).not.toBeNull();
+    expect(stageWriter![1]).toContain('printf \'%s\\n\' "$stage" >"$bootstrap_stage_file"');
+    expect(stageWriter![1]).not.toMatch(
+      /BASH_COMMAND|LINENO|\$\?|error|log|journal|tail|secret|token|password/i,
+    );
+    expect(userData).toContain(
+      'install -o root -g root -m 0600 /dev/null "$bootstrap_stage_file"',
+    );
+    expect(userData).toContain(
+      "export -f allowed_bootstrap_stage set_bootstrap_stage retry download_setup_bundle bootstrap_main",
+    );
+    const deadline = userData.match(
+      /timeout --signal=TERM --kill-after=10 ([0-9]+) bash -Eeuo pipefail -c bootstrap_main/,
+    );
+    expect(deadline).not.toBeNull();
+    expect(Number(deadline![1]) + 10 + 3 * 15 + 2).toBeLessThan(
+      Number(ready.Properties?.Timeout),
+    );
+    expect(userData.match(/--connect-timeout 5 --max-time 15/g)).toHaveLength(2);
+    const successSignal = userData.lastIndexOf("signal_success\n");
+    const disableErrTrap = userData.lastIndexOf("trap - ERR\n");
+    const removeStageFile = userData.lastIndexOf(
+      'rm -f -- "$bootstrap_stage_file"',
+    );
+    expect(successSignal).toBeLessThan(disableErrTrap);
+    expect(disableErrTrap).toBeLessThan(removeStageFile);
+
+    const bootstrapMain = userData.match(
+      /bootstrap_main\(\) \{([\s\S]*?)\n\}/,
+    );
+    expect(bootstrapMain).not.toBeNull();
+    const stagedOperations = [
+      ["initial-apt-update", "apt-get update"],
+      [
+        "initial-apt-install",
+        "apt-get install -y --no-install-recommends ca-certificates curl snapd",
+      ],
+      ["snapd-socket", "systemctl enable --now snapd.socket"],
+      ["snapd-ready", "timeout 60 snap wait system seed.loaded"],
+      ["aws-cli-install", "timeout 120 snap install aws-cli --classic"],
+      ["aws-cli-ready", "/snap/bin/aws --version >/dev/null"],
+      ["setup-bundle-download", "retry 6 10 download_setup_bundle"],
+      ["setup-bundle-verify", "sha256sum -c -"],
+      ["setup-bundle-extract", "tar --extract --gzip"],
+      ["data-volume-discovery", "expected_volume_serial="],
+      ["machine-bootstrap", '"$workdir/bootstrap-ubuntu-arm64.sh"'],
+      [
+        "tunnel-token-install",
+        "/usr/local/sbin/install-echo-authority-tunnel-token",
+      ],
+      [
+        "tunnel-service",
+        "systemctl enable --now cloudflared-echo-authority.service",
+      ],
+      ["tunnel-ready", "[[ $tunnel_ready == true ]]"],
+      [
+        "retained-state-materialization",
+        "/srv/echo-authority-clean-v1/restore-clean-v1-host.sh materialize",
+      ],
+    ] as const;
+    for (const [stage, operation] of stagedOperations) {
+      const assignment = bootstrapMain![1]!.indexOf(
+        `set_bootstrap_stage ${stage}`,
+      );
+      const operationIndex = bootstrapMain![1]!.indexOf(operation, assignment);
+      const nextAssignment = bootstrapMain![1]!.indexOf(
+        "\n  set_bootstrap_stage ",
+        assignment + 1,
+      );
+      expect(assignment, stage).toBeGreaterThan(-1);
+      expect(operationIndex, stage).toBeGreaterThan(assignment);
+      if (nextAssignment !== -1) {
+        expect(operationIndex, stage).toBeLessThan(nextAssignment);
+      }
+    }
+    expect(bootstrapMain![1]).toContain("set_bootstrap_stage ready-signal");
+    const downloadFunction = userData.match(
+      /download_setup_bundle\(\) \{([\s\S]*?)\n\}/,
+    );
+    expect(downloadFunction).not.toBeNull();
+    const removePartial = downloadFunction![1]!.indexOf(
+      'rm -f -- "$setup_bundle_partial"',
+    );
+    const getExactObject = downloadFunction![1]!.indexOf(
+      "timeout 20 /snap/bin/aws --cli-connect-timeout 5 --cli-read-timeout 15 s3api get-object",
+    );
+    expect(removePartial).toBeGreaterThan(-1);
+    expect(getExactObject).toBeGreaterThan(removePartial);
     expect(userData).toContain('mkdir -p "$workdir"');
+    expect(userData).toContain('setup_bundle_partial="$setup_bundle.partial"');
+    expect(userData).toContain('mv "$setup_bundle_partial" "$setup_bundle"');
     expect(userData).toContain('grep -qx "$expected_volume_serial"');
     expect(userData).toContain('"$workdir/bootstrap-ubuntu-arm64.sh"');
   });

@@ -268,6 +268,12 @@ npm run authority:staging -- status \
   --input /absolute/private/authority-staging/input.json
 ```
 
+Until the first `up` reaches ready, every reviewed retry must use a new
+`operationId` and retain `--initialize-blank-data-volume`. That flag permits
+the marker-bound completion of an interrupted blank-volume initialization; it
+does not permit reformatting a volume that already has a filesystem. Omit the
+flag only after the first host has reached ready.
+
 The initial token creation, SNS email confirmation, provider applications,
 founder login, observability deployment, and first canary remain explicit human
 steps. V1 is single-operator: never run overlapping lifecycle commands for this

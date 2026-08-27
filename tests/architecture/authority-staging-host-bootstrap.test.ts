@@ -126,7 +126,11 @@ describe("Authority staging host bootstrap", () => {
       "VOLUME_INITIALIZATION_MARKER=.echo-authority-volume-initialization-v1",
     );
     expect(script).toContain('mkfs.ext4 -F -L "$DATA_VOLUME_LABEL"');
-    expect(script).toContain("-E root_owner=0:0,root_perms=0755");
+    expect(script).toContain(
+      "Ubuntu Noble e2fsprogs 1.47.0 accepts root_owner but not root_perms",
+    );
+    expect(script).toContain('-E root_owner=0:0 -d "$initialization_seed"');
+    expect(script).not.toContain("root_perms=");
     expect(script).toContain('-d "$initialization_seed"');
     expect(script).toContain("data_volume_id=%s");
     expect(script).toContain("finish_pending_volume_initialization");

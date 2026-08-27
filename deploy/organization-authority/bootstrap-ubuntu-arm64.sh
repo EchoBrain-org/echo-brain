@@ -283,8 +283,11 @@ mount_data_volume() {
       initialization_seed=$(mktemp -d /run/echo-authority-volume-init.XXXXXX)
       trap '[[ -z ${initialization_seed:-} ]] || rm -rf -- "$initialization_seed"' RETURN
       write_volume_initialization_seed "$initialization_seed"
+      # Ubuntu Noble e2fsprogs 1.47.0 accepts root_owner but not root_perms.
+      # ext4 initializes its root as root:root 0755; completion below verifies
+      # that safe intermediate state before setting Authority ownership and mode.
       mkfs.ext4 -F -L "$DATA_VOLUME_LABEL" \
-        -E root_owner=0:0,root_perms=0755 -d "$initialization_seed" "$device" >/dev/null
+        -E root_owner=0:0 -d "$initialization_seed" "$device" >/dev/null
       rm -rf -- "$initialization_seed"
       initialization_seed=
       trap - RETURN
