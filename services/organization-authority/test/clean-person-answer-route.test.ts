@@ -187,6 +187,10 @@ describe("clean Person Layer 4 answer route", () => {
         60_000,
         60_000,
       ]);
+      expect(value.modelInputs.map((input) => input.model)).toEqual([
+        "deepseek/deepseek-v3.2",
+        "deepseek/deepseek-v3.2",
+      ]);
       expect(value.events).toEqual(["batch", "revalidate", "audit"]);
       expect(value.append).toHaveBeenCalledOnce();
       expect(response).toEqual({
