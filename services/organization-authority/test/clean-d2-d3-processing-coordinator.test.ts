@@ -300,6 +300,7 @@ function setup(action: PersonApprovalAction) {
     authority_fence: {
       async withStablePersonSlackApprovalFence(commit) {
         return commit({
+          approvalIsCurrent: () => true,
           currentMembership: ({ principal_id, membership_id }) =>
             principal_id === link.principal_id &&
             membership_id === link.membership_id
@@ -411,6 +412,9 @@ describe("clean D2 to D3 processing coordinator", () => {
       const inputs: unknown[] = [];
       const authority: CleanD2ToD3AuthorityStateV1 = {
         async listStagedApprovalIds() {
+          return recorded ? [] : [candidate.approval_id];
+        },
+        async listV4RecoveryApprovalIds() {
           return recorded ? [] : [candidate.approval_id];
         },
         async readFrozenCandidateForApproval() {

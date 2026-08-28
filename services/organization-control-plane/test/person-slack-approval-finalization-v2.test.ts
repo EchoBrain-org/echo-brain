@@ -92,6 +92,7 @@ class FakeCoordinator implements PersonSlackApprovalFinalizationCoordinatorV2 {
   readonly binding;
   readonly link;
   approval: ReprovedFrozenPersonSlackApprovalV2;
+  approvalCurrent = true;
   bindingCurrent = true;
   surfaceEligible = true;
   linkCurrent = true;
@@ -340,6 +341,8 @@ class FakeCoordinator implements PersonSlackApprovalFinalizationCoordinatorV2 {
       const result = commit({
         reprovedFrozenApprovalById: (approvalId) =>
           approvalId === this.approval.approval_id ? this.approval : undefined,
+        approvalIsCurrent: (approvalId) =>
+          this.approvalCurrent && approvalId === this.approval.approval_id,
         currentMembership: ({ principal_id, membership_id }) => {
           const membership = this.memberships.get(membership_id);
           return membership?.principal_id === principal_id ? membership : undefined;
@@ -602,6 +605,19 @@ describe("private Person Slack approval finalization v2", () => {
     expect(fixture.store.durable.size).toBe(0);
   });
 
+  it("does not observe or persist a superseded pending approval", async () => {
+    const fixture = harness();
+    fixture.store.approvalCurrent = false;
+
+    await expect(fixture.run()).resolves.toEqual({
+      kind: "not_resolved",
+      reason: "superseded",
+    });
+    expect(fixture.provider.calls).toBe(0);
+    expect(fixture.store.saveCount).toBe(0);
+    expect(fixture.store.durable.size).toBe(0);
+  });
+
   it("discards an in-flight result when any current identity edge changes", async () => {
     const cases: Array<(store: FakeCoordinator) => void> = [
       (store) => {
@@ -634,10 +650,26 @@ describe("private Person Slack approval finalization v2", () => {
     }
   });
 
+  it("does not persist an observed reaction when its approval is superseded in flight", async () => {
+    const fixture = harness();
+    fixture.provider.afterObserve = () => {
+      fixture.store.approvalCurrent = false;
+    };
+
+    await expect(fixture.run()).resolves.toEqual({
+      kind: "not_resolved",
+      reason: "superseded",
+    });
+    expect(fixture.provider.calls).toBe(1);
+    expect(fixture.store.saveCount).toBe(0);
+    expect(fixture.store.durable.size).toBe(0);
+  });
+
   it("replays byte-identical history after every current edge is revoked", async () => {
     const fixture = harness();
     const first = resolved(await fixture.run());
     fixture.store.bindingCurrent = false;
+    fixture.store.approvalCurrent = false;
     fixture.store.linkCurrent = false;
     fixture.store.capabilitiesCurrent = false;
     fixture.store.memberships.clear();

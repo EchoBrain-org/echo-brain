@@ -3,7 +3,10 @@ import {
   type StagePersonSlackPendingApprovalCommandV1,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import type Database from "better-sqlite3";
-import { SlackWebApiClient } from "../adapters/shared/slack/slack-web-api-client.js";
+import {
+  SlackApiError,
+  SlackWebApiClient,
+} from "../adapters/shared/slack/slack-web-api-client.js";
 import type {
   CleanApprovalStageInputV1,
   CleanApprovalStagerV1,
@@ -12,6 +15,14 @@ import {
   type CleanLiveApprovalOutboxV1,
   SqliteCleanLiveOnlySourceStateV1,
 } from "./sqlite-live-only-source-state.js";
+
+const POST_RECONCILIATION_LOOKBACK_MS = 5 * 60 * 1_000;
+const POST_RECONCILIATION_LOOKAHEAD_MS = 10 * 60 * 1_000;
+const DEFINITIVE_POST_FAILURE_CODES = new Set([
+  "auth",
+  "rate_limited",
+  "invalid",
+]);
 
 export interface CleanSlackApprovalCardV1 {
   readonly text: string;
@@ -27,16 +38,146 @@ export interface CleanSlackApprovalCardFactoryV1 {
   }): StagePersonSlackPendingApprovalCommandV1["approval"];
 }
 
+/**
+ * One explicit delivery outcome shared by the initial write and recovery.
+ * The create operation posts only an inert marker, so `retry_allowed` can
+ * preserve liveness without creating a second actionable approval card.
+ */
+export type CleanSlackApprovalPostOutcomeV1 =
+  | { readonly kind: "posted"; readonly provider_message_ts: string }
+  | { readonly kind: "retry_allowed" }
+  | { readonly kind: "uncertain" };
+
+export type CleanSlackApprovalUpdateOutcomeV1 =
+  { readonly kind: "done" } | { readonly kind: "uncertain" };
+
 export interface CleanSlackApprovalCardPosterV1 {
   post(
-    input: { readonly approval_id: string; readonly text: string },
+    input: { readonly approval_id: string },
     signal?: AbortSignal,
-  ): Promise<{ readonly provider_message_ts: string }>;
+  ): Promise<CleanSlackApprovalPostOutcomeV1>;
+  /** Resolve a durable ambiguous write without conflating absence and error. */
+  reconcile(
+    input: {
+      readonly approval_id: string;
+      readonly post_started_at: string;
+      readonly reconciliation_started_at: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<CleanSlackApprovalPostOutcomeV1>;
+  /** Publish the human-reviewable card onto one identified inert marker. */
+  publish(
+    input: {
+      readonly approval_id: string;
+      readonly text: string;
+      readonly provider_message_ts: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<CleanSlackApprovalUpdateOutcomeV1>;
+  /** Replace an obsolete bot card with deterministic non-actionable text. */
+  tombstone(
+    input: {
+      readonly approval_id: string;
+      readonly successor_id: string;
+      readonly provider_message_ts: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<CleanSlackApprovalUpdateOutcomeV1>;
+}
+
+export interface CleanSlackApprovalSupersessionInputV1 {
+  readonly approval_id: string;
+  /** An opaque current approval or candidate ID. */
+  readonly successor_id: string;
+}
+
+function tombstoneText(input: CleanSlackApprovalSupersessionInputV1): string {
+  return [
+    "Superseded",
+    "A newer version of this meeting replaced this review. This card can no longer be approved or rejected.",
+    "",
+    `[approval:${input.approval_id}]`,
+    `[superseded-by:${input.successor_id}]`,
+  ].join("\n");
+}
+
+function duplicateTombstoneText(input: {
+  readonly approval_id: string;
+  readonly canonical_provider_message_ts: string;
+}): string {
+  return [
+    "Duplicate approval card",
+    "This duplicate card was replaced by the earliest matching approval card. This card can no longer be approved or rejected.",
+    "",
+    `[approval:${input.approval_id}]`,
+    `[duplicate-of:${input.canonical_provider_message_ts}]`,
+  ].join("\n");
+}
+
+function renderedPostText(input: { readonly approval_id: string; readonly text: string }): string {
+  return `${input.text}\n\n[approval:${input.approval_id}]`;
+}
+
+function inertPostText(approvalId: string): string {
+  return [
+    "Preparing approval review",
+    "This delivery marker is not actionable.",
+    "",
+    `[approval:${approvalId}]`,
+  ].join("\n");
+}
+
+function compareSlackTimestamp(left: string, right: string): number {
+  const [leftSeconds, leftMicros] = left.split(".") as [string, string];
+  const [rightSeconds, rightMicros] = right.split(".") as [string, string];
+  const leftValue = BigInt(leftSeconds) * 1_000_000n + BigInt(leftMicros);
+  const rightValue = BigInt(rightSeconds) * 1_000_000n + BigInt(rightMicros);
+  return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+}
+
+function slackTimestampFromCanonicalUtc(value: string, offsetMs: number): string {
+  const milliseconds = new Date(value).getTime();
+  if (!Number.isSafeInteger(milliseconds)) {
+    throw new Error("clean approval post intent has an invalid timestamp");
+  }
+  const boundedMilliseconds = Math.max(0, milliseconds + offsetMs);
+  const seconds = Math.floor(boundedMilliseconds / 1_000);
+  const micros = (boundedMilliseconds % 1_000) * 1_000;
+  return `${seconds}.${String(micros).padStart(6, "0")}`;
+}
+
+function reconciliationWindowClosed(input: {
+  readonly post_started_at: string;
+  readonly reconciliation_started_at: string;
+}): boolean {
+  const postStartedAt = new Date(input.post_started_at).getTime();
+  const reconciliationStartedAt = new Date(
+    input.reconciliation_started_at,
+  ).getTime();
+  if (
+    !Number.isSafeInteger(postStartedAt) ||
+    !Number.isSafeInteger(reconciliationStartedAt)
+  ) {
+    throw new Error("clean approval reconciliation has an invalid timestamp");
+  }
+  return (
+    reconciliationStartedAt >= postStartedAt + POST_RECONCILIATION_LOOKAHEAD_MS
+  );
+}
+
+function slackMessageIsAbsent(error: unknown): boolean {
+  return (
+    error instanceof SlackApiError &&
+    error.providerError === "message_not_found"
+  );
 }
 
 /** A small concrete `chat.postMessage` adapter with no legacy policy surface. */
 export class SlackWebApiCleanApprovalCardPosterV1 implements CleanSlackApprovalCardPosterV1 {
   private readonly client: SlackWebApiClient;
+  private auth_identity:
+    | Awaited<ReturnType<SlackWebApiClient["authIdentity"]>>
+    | undefined;
 
   constructor(
     token: string,
@@ -47,19 +188,179 @@ export class SlackWebApiCleanApprovalCardPosterV1 implements CleanSlackApprovalC
   }
 
   async post(
-    input: { readonly approval_id: string; readonly text: string },
+    input: { readonly approval_id: string },
     signal?: AbortSignal,
-  ): Promise<{ readonly provider_message_ts: string }> {
-    const posted = await this.client.postMessage(
-      {
-        channel: this.channel_id,
-        text: `${input.text}\n\n[approval:${input.approval_id}]`,
-        unfurlLinks: false,
-        unfurlMedia: false,
-      },
-      signal,
-    );
-    return { provider_message_ts: posted.ts };
+  ): Promise<CleanSlackApprovalPostOutcomeV1> {
+    try {
+      const posted = await this.client.postMessage(
+        {
+          channel: this.channel_id,
+          text: inertPostText(input.approval_id),
+          unfurlLinks: false,
+          unfurlMedia: false,
+        },
+        signal,
+      );
+      return { kind: "posted", provider_message_ts: posted.ts };
+    } catch (error) {
+      if (signal?.aborted === true) throw error;
+      if (error instanceof SlackApiError) {
+        return DEFINITIVE_POST_FAILURE_CODES.has(error.code)
+          ? { kind: "retry_allowed" }
+          : { kind: "uncertain" };
+      }
+      throw error;
+    }
+  }
+
+  async reconcile(
+    input: {
+      readonly approval_id: string;
+      readonly post_started_at: string;
+      readonly reconciliation_started_at: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<CleanSlackApprovalPostOutcomeV1> {
+    try {
+      return await this.reconcileOnce(input, signal);
+    } catch (error) {
+      if (signal?.aborted === true) throw error;
+      if (error instanceof SlackApiError) return { kind: "uncertain" };
+      throw error;
+    }
+  }
+
+  private async reconcileOnce(
+    input: {
+      readonly approval_id: string;
+      readonly post_started_at: string;
+      readonly reconciliation_started_at: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<CleanSlackApprovalPostOutcomeV1> {
+    if (this.auth_identity === undefined) {
+      // Do not cache a pending promise: cancellation or an auth failure for
+      // one reconciliation attempt must not poison every later recovery.
+      this.auth_identity = await this.client.authIdentity(signal);
+    }
+    const identity = this.auth_identity;
+    const approvalMarker = `[approval:${input.approval_id}]`;
+    // Freeze both bounds around the durable local intent. The lookback covers
+    // host/provider skew; the lookahead covers that skew plus the bounded post
+    // request. Later channel traffic can never push this recovery window away.
+    const matches = (
+      await this.client.channelHistory(
+        {
+          channel: this.channel_id,
+          oldest: slackTimestampFromCanonicalUtc(
+            input.post_started_at,
+            -POST_RECONCILIATION_LOOKBACK_MS,
+          ),
+          latest: slackTimestampFromCanonicalUtc(
+            input.post_started_at,
+            POST_RECONCILIATION_LOOKAHEAD_MS,
+          ),
+        },
+        signal,
+      )
+    )
+      .filter(
+        (message) =>
+          message.text.endsWith(approvalMarker) &&
+          message.bot_id === identity.bot_id,
+      )
+      .sort((left, right) => compareSlackTimestamp(left.ts, right.ts));
+    if (matches.length === 0) {
+      return reconciliationWindowClosed(input)
+        ? { kind: "retry_allowed" }
+        : { kind: "uncertain" };
+    }
+    const [canonical, ...duplicates] = matches;
+    if (canonical === undefined) {
+      throw new Error("clean Slack approval recovery lost its canonical match");
+    }
+    for (const duplicate of duplicates) {
+      try {
+        await this.client.updateMessage(
+          {
+            channel: this.channel_id,
+            ts: duplicate.ts,
+            text: duplicateTombstoneText({
+              approval_id: input.approval_id,
+              canonical_provider_message_ts: canonical.ts,
+            }),
+            blocks: [],
+            unfurlLinks: false,
+            unfurlMedia: false,
+          },
+          signal,
+        );
+      } catch (error) {
+        // A duplicate removed between history and update is already inert.
+        if (!slackMessageIsAbsent(error)) throw error;
+      }
+    }
+    return { kind: "posted", provider_message_ts: canonical.ts };
+  }
+
+  async publish(
+    input: {
+      readonly approval_id: string;
+      readonly text: string;
+      readonly provider_message_ts: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<CleanSlackApprovalUpdateOutcomeV1> {
+    try {
+      await this.client.updateMessage(
+        {
+          channel: this.channel_id,
+          ts: input.provider_message_ts,
+          text: renderedPostText(input),
+          blocks: [],
+          unfurlLinks: false,
+          unfurlMedia: false,
+        },
+        signal,
+      );
+      return { kind: "done" };
+    } catch (error) {
+      if (signal?.aborted === true) throw error;
+      if (error instanceof SlackApiError) return { kind: "uncertain" };
+      throw error;
+    }
+  }
+
+  async tombstone(
+    input: {
+      readonly approval_id: string;
+      readonly successor_id: string;
+      readonly provider_message_ts: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<CleanSlackApprovalUpdateOutcomeV1> {
+    try {
+      await this.client.updateMessage(
+        {
+          channel: this.channel_id,
+          ts: input.provider_message_ts,
+          text: tombstoneText({
+            approval_id: input.approval_id,
+            successor_id: input.successor_id,
+          }),
+          blocks: [],
+          unfurlLinks: false,
+          unfurlMedia: false,
+        },
+        signal,
+      );
+      return { kind: "done" };
+    } catch (error) {
+      if (signal?.aborted === true) throw error;
+      if (slackMessageIsAbsent(error)) return { kind: "done" };
+      if (error instanceof SlackApiError) return { kind: "uncertain" };
+      throw error;
+    }
   }
 }
 
@@ -77,10 +378,142 @@ export class CleanSlackApprovalStagerV1 implements CleanApprovalStagerV1 {
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
+  /**
+   * Make every prior Slack presentation visibly non-actionable. If a post
+   * response was lost before supersession, recover its provider timestamp
+   * from the frozen intent before tombstoning it.
+   */
+  async reconcileSuperseded(
+    context?: { readonly signal: AbortSignal },
+  ): Promise<void> {
+    await this.reconcileSupersededCards(context);
+  }
+
+  /**
+   * Drain every current delivery independently of the source cursor. Provider
+   * ambiguity is represented by the durable outbox state and is not an error
+   * which may hold unrelated source work behind it.
+   */
+  async reconcilePendingDeliveries(
+    context?: { readonly signal: AbortSignal },
+  ): Promise<void> {
+    const presentationBarriers = await this.reconcileSupersededCards(context);
+    for (const frozen of this.authority.listPendingApprovalDeliveries()) {
+      await this.stageCurrent(
+        {
+          admission: frozen.admission,
+          candidate: frozen,
+          meeting: frozen.meeting,
+          decisions: frozen.decisions,
+        },
+        presentationBarriers,
+        context,
+      );
+    }
+  }
+
+  private async reconcileSupersededCards(
+    context?: { readonly signal: AbortSignal },
+  ): Promise<ReadonlySet<string>> {
+    const presentationBarriers = new Set<string>();
+    for (const obsolete of this.authority.listPendingSupersededApprovalCards()) {
+      let providerMessageTs = obsolete.provider_message_ts;
+      if (providerMessageTs === null) {
+        const frozen = this.authority.readFrozenCandidateForApproval(
+          obsolete.approval_id,
+        );
+        if (
+          frozen === undefined ||
+          frozen.state !== "superseded" ||
+          frozen.superseded_by_candidate_id !==
+            obsolete.superseded_by_candidate_id ||
+          frozen.post_started_at !== obsolete.post_started_at
+        ) {
+          throw new Error(
+            "clean superseded approval post intent state drifted",
+          );
+        }
+        const stage: CleanApprovalStageInputV1 = {
+          admission: frozen.admission,
+          candidate: frozen,
+          meeting: frozen.meeting,
+          decisions: frozen.decisions,
+        };
+        const card = this.card_factory.build(stage);
+        const prepared = this.authority.prepareApprovalPost({
+          candidate_id: frozen.candidate_id,
+          frozen_card_sha256: card.frozen_card_sha256,
+          approved_snapshot: card.approved_snapshot,
+        });
+        if (prepared.outbox.post_started_at === null) {
+          throw new Error(
+            "clean approval posting state has no durable start time",
+          );
+        }
+        const outcome = await this.poster.reconcile(
+          {
+            approval_id: obsolete.approval_id,
+            post_started_at: prepared.outbox.post_started_at,
+            reconciliation_started_at: this.now(),
+          },
+          context?.signal,
+        );
+        const durable = this.recordPostOutcome(prepared.outbox, card, outcome);
+        if (durable === undefined) continue;
+        providerMessageTs = durable.provider_message_ts;
+        if (providerMessageTs === null) {
+          throw new Error(
+            "clean superseded approval recovery recorded no provider timestamp",
+          );
+        }
+      }
+      const tombstoned = await this.poster.tombstone(
+        {
+          approval_id: obsolete.approval_id,
+          successor_id: obsolete.superseded_by_candidate_id,
+          provider_message_ts: providerMessageTs,
+        },
+        context?.signal,
+      );
+      if (tombstoned.kind === "uncertain") {
+        // A known Slack message may already contain the full approval card.
+        // Hold only its lineage until that presentation is proven inert;
+        // unrelated meetings and unresolved inert markers remain independent.
+        presentationBarriers.add(obsolete.review_lineage_id);
+        continue;
+      }
+      this.authority.recordSupersededApprovalCardTombstoned({
+        approval_id: obsolete.approval_id,
+        provider_message_ts: providerMessageTs,
+      });
+    }
+    return presentationBarriers;
+  }
+
   async stage(
     input: CleanApprovalStageInputV1,
     context?: { readonly signal: AbortSignal },
-  ): Promise<{ readonly kind: "staged"; readonly stage_id: string }> {
+  ): Promise<
+    | { readonly kind: "staged"; readonly stage_id: string }
+    | { readonly kind: "delivery_pending" }
+    | { readonly kind: "state_drift" }
+  > {
+    const presentationBarriers = await this.reconcileSupersededCards(context);
+    return this.stageCurrent(input, presentationBarriers, context);
+  }
+
+  private async stageCurrent(
+    input: CleanApprovalStageInputV1,
+    presentationBarriers: ReadonlySet<string>,
+    context?: { readonly signal: AbortSignal },
+  ): Promise<
+    | { readonly kind: "staged"; readonly stage_id: string }
+    | { readonly kind: "delivery_pending" }
+    | { readonly kind: "state_drift" }
+  > {
+    if (presentationBarriers.has(input.candidate.review_lineage_id)) {
+      return { kind: "delivery_pending" };
+    }
     let outbox = this.authority.readCandidateByApprovalId(
       input.candidate.approval_id,
     );
@@ -92,18 +525,86 @@ export class CleanSlackApprovalStagerV1 implements CleanApprovalStagerV1 {
         "clean Slack approval stage has no durable Authority candidate",
       );
     }
-    if (outbox.state === "queued") {
+    if (await this.tombstoneIfSuperseded(outbox, context)) {
+      return { kind: "state_drift" };
+    }
+    if (
+      outbox.state === "queued" ||
+      outbox.state === "posting" ||
+      outbox.state === "posted"
+    ) {
       const card = this.card_factory.build(input);
-      const posted = await this.poster.post(
-        { approval_id: outbox.approval_id, text: card.text },
-        context?.signal,
-      );
-      outbox = this.authority.recordPostedApprovalCard({
+      const prepared = this.authority.prepareApprovalPost({
         candidate_id: outbox.candidate_id,
-        provider_message_ts: posted.provider_message_ts,
         frozen_card_sha256: card.frozen_card_sha256,
         approved_snapshot: card.approved_snapshot,
       });
+      outbox = prepared.outbox;
+      if (await this.tombstoneIfSuperseded(outbox, context)) {
+        return { kind: "state_drift" };
+      }
+      if (outbox.state === "posting") {
+        let outcome: CleanSlackApprovalPostOutcomeV1;
+        if (prepared.created) {
+          // The intent transaction above is the only point which permits an
+          // immediate first network attempt. An unknown result leaves `posting`
+          // durable so a later runner can reconcile without guessing.
+          outcome = await this.poster.post(
+            { approval_id: outbox.approval_id },
+            context?.signal,
+          );
+        } else {
+          if (outbox.post_started_at === null) {
+            throw new Error(
+              "clean approval posting state has no durable start time",
+            );
+          }
+          outcome = await this.poster.reconcile(
+            {
+              approval_id: outbox.approval_id,
+              post_started_at: outbox.post_started_at,
+              reconciliation_started_at: this.now(),
+            },
+            context?.signal,
+          );
+        }
+        const resolved = this.recordPostOutcome(outbox, card, outcome);
+        if (resolved === undefined) return { kind: "delivery_pending" };
+        outbox = resolved;
+      }
+      // Every external wait is a supersession boundary. Refresh before
+      // publishing the human-facing card and again before D2 staging.
+      outbox =
+        this.authority.readCandidateByApprovalId(
+          input.candidate.approval_id,
+        ) ?? outbox;
+      if (await this.tombstoneIfSuperseded(outbox, context)) {
+        return { kind: "state_drift" };
+      }
+      if (outbox.state === "posted") {
+        if (outbox.provider_message_ts === null) {
+          throw new Error(
+            "clean posted approval has no provider message identity",
+          );
+        }
+        const published = await this.poster.publish(
+          {
+            approval_id: outbox.approval_id,
+            text: card.text,
+            provider_message_ts: outbox.provider_message_ts,
+          },
+          context?.signal,
+        );
+        if (published.kind === "uncertain") {
+          return { kind: "delivery_pending" };
+        }
+      }
+    }
+    outbox =
+      this.authority.readCandidateByApprovalId(input.candidate.approval_id) ??
+      outbox;
+    if (await this.tombstoneIfSuperseded(outbox, context)) {
+      return { kind: "state_drift" };
     }
     const staged = stagePersonSlackPendingApprovalV1({
       database: this.control_database,
@@ -117,6 +618,46 @@ export class CleanSlackApprovalStagerV1 implements CleanApprovalStagerV1 {
       candidate_id: outbox.candidate_id,
       control_approval_sha256: staged.approval_sha256,
     });
+    if (await this.tombstoneIfSuperseded(durable, context)) {
+      return { kind: "state_drift" };
+    }
     return { kind: "staged", stage_id: durable.approval_id };
+  }
+
+  private async tombstoneIfSuperseded(
+    outbox: CleanLiveApprovalOutboxV1,
+    context?: { readonly signal: AbortSignal },
+  ): Promise<boolean> {
+    if (outbox.state !== "superseded") return false;
+    if (outbox.superseded_by_candidate_id === null) {
+      throw new Error("clean superseded approval has no successor candidate");
+    }
+    await this.reconcileSuperseded(context);
+    return true;
+  }
+
+  private recordPostOutcome(
+    outbox: CleanLiveApprovalOutboxV1,
+    card: CleanSlackApprovalCardV1,
+    outcome: CleanSlackApprovalPostOutcomeV1,
+  ): CleanLiveApprovalOutboxV1 | undefined {
+    if (outcome.kind === "uncertain") return undefined;
+    if (outbox.post_started_at === null) {
+      throw new Error("clean approval posting state has no durable start time");
+    }
+    if (outcome.kind === "retry_allowed") {
+      this.authority.releaseApprovalPostAttempt({
+        candidate_id: outbox.candidate_id,
+        post_started_at: outbox.post_started_at,
+      });
+      return undefined;
+    }
+    return this.authority.recordPostedApprovalCard({
+      candidate_id: outbox.candidate_id,
+      post_started_at: outbox.post_started_at,
+      provider_message_ts: outcome.provider_message_ts,
+      frozen_card_sha256: card.frozen_card_sha256,
+      approved_snapshot: card.approved_snapshot,
+    });
   }
 }
