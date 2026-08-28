@@ -8,7 +8,8 @@
   "package_json": "src/product/person-client/package.json",
   "entry_points": [
     "src/product/person-client/index.ts",
-    "src/product/person-client/main.ts"
+    "src/product/person-client/main.ts",
+    "src/product/person-client/raycast-cli-main.ts"
   ],
   "owned_source_paths": ["src/product/person-client/**"],
   "allowed_internal_paths": ["src/product/person-client/**"],
@@ -118,6 +119,22 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["fs", "url"]
+    },
+    {
+      "name": "person-raycast-entrypoint-calls-only-cli-wrapper",
+      "from": "src/product/person-client/raycast-cli-main.ts",
+      "allowed_imports": ["src/product/person-client/raycast-cli-wrapper.ts"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["path", "process"]
+    },
+    {
+      "name": "person-raycast-wrapper-invokes-only-installed-cli",
+      "from": "src/product/person-client/raycast-cli-wrapper.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer", "child_process", "path"]
     }
   ]
 }

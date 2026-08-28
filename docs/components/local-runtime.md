@@ -34,6 +34,13 @@ dispatch, Authority HTTP requests, and the private rotating session store. It
 has no daemon, local processing core, provider adapter, product database,
 installation key, access lease, or internal update runner.
 
+The scrappy hotkey overlay is a Raycast Script Command in this machine product.
+It strictly invokes the installed `echo-brain` CLI and does not directly access
+the Authority API, the Person session, or a provider. The onboarding kit places
+the command below `~/Library/Application Support/ECHO`; the user adds that
+directory to Raycast and assigns its global hotkey. It creates no LaunchAgent,
+query history, or background updater.
+
 ## Data authority
 
 The Mac owns only its private Person session and the Authority descriptor

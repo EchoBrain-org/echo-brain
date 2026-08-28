@@ -26,6 +26,16 @@ require_private_owned_directory() {
     fail 'an ECHO application directory is not private'
 }
 
+require_safe_owned_regular_file_or_absent() {
+  local path="$1"
+  [[ ! -L "$path" ]] || fail 'an ECHO application file is a symbolic link'
+  if [[ -e "$path" ]]; then
+    [[ -f "$path" ]] || fail 'an ECHO application file is not a regular file'
+    [[ "$(stat -f '%u' "$path")" == "$(id -u)" ]] || \
+      fail 'an ECHO application file is owned by another user'
+  fi
+}
+
 [[ $# -le 1 ]] || fail 'open Start ECHO.command or pass one invitation file path'
 [[ -n "${HOME:-}" && "$HOME" = /* ]] || fail 'a normal macOS user HOME is required'
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || \
@@ -51,15 +61,18 @@ expected_version="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" cli
 application_root="$HOME/Library/Application Support/ECHO"
 releases_root="$application_root/releases"
 bin_root="$application_root/bin"
+raycast_root="$application_root/raycast"
 release_root="$releases_root/$release_id"
 require_safe_owned_directory_or_absent "$application_root"
 require_safe_owned_directory_or_absent "$releases_root"
 require_safe_owned_directory_or_absent "$bin_root"
-install -d -m 0700 "$application_root" "$releases_root" "$bin_root"
-chmod 0700 "$application_root" "$releases_root" "$bin_root"
+require_safe_owned_directory_or_absent "$raycast_root"
+install -d -m 0700 "$application_root" "$releases_root" "$bin_root" "$raycast_root"
+chmod 0700 "$application_root" "$releases_root" "$bin_root" "$raycast_root"
 require_private_owned_directory "$application_root"
 require_private_owned_directory "$releases_root"
 require_private_owned_directory "$bin_root"
+require_private_owned_directory "$raycast_root"
 
 if [[ ! -e "$release_root" ]]; then
   staging="$(mktemp -d "$releases_root/.${release_id}.XXXXXXXX")"
@@ -75,6 +88,8 @@ if [[ ! -e "$release_root" ]]; then
   tar -xzf "$staging/person-client.tgz" -C "$staging"
   [[ -f "$staging/package/dist/main.js" && ! -L "$staging/package/dist/main.js" ]] || \
     fail 'the Person-client entrypoint is missing from the kit'
+  [[ -f "$staging/package/dist/raycast-cli-main.js" && ! -L "$staging/package/dist/raycast-cli-main.js" ]] || \
+    fail 'the Raycast helper is missing from the kit'
   "$staging/node" "$staging/verify-person-onboarding-kit.mjs" "$staging" >/dev/null
   [[ "$("$staging/node" "$staging/package/dist/main.js" --version)" == "$expected_version" ]] || \
     fail 'the Person-client version does not match the release'
@@ -85,6 +100,8 @@ else
   "$release_root/node" "$release_root/verify-person-onboarding-kit.mjs" "$release_root" >/dev/null
   [[ "$("$release_root/node" "$release_root/package/dist/main.js" --version)" == "$expected_version" ]] || \
     fail 'the installed Person-client version does not match the release'
+  [[ -f "$release_root/package/dist/raycast-cli-main.js" && ! -L "$release_root/package/dist/raycast-cli-main.js" ]] || \
+    fail 'the installed Raycast helper is unavailable'
 fi
 
 wrapper_pending="$(mktemp "$bin_root/.echo-brain.XXXXXXXX")"
@@ -103,4 +120,25 @@ install -m 0600 "$invitation" "$invitation_root/invitation.json"
 "$release_root/node" "$release_root/package/dist/main.js" person start \
   --invitation "$invitation_root/invitation.json"
 
+raycast_command="$raycast_root/ask-echo.sh"
+require_safe_owned_regular_file_or_absent "$raycast_command"
+raycast_command_pending="$(mktemp "$raycast_root/.ask-echo.XXXXXXXX")"
+chmod 0700 "$raycast_command_pending"
+printf '%s\n' \
+  '#!/bin/bash' \
+  '# Required parameters:' \
+  '# @raycast.schemaVersion 1' \
+  '# @raycast.title Ask ECHO' \
+  '# @raycast.mode fullOutput' \
+  '# @raycast.argument1 { "type": "text", "placeholder": "Ask ECHO a question" }' \
+  '' > "$raycast_command_pending"
+printf '[[ $# -eq 1 && -n "$1" ]] || exit 64\nexec %q %q %q "$1"\n' \
+  "$release_root/node" \
+  "$release_root/package/dist/raycast-cli-main.js" \
+  "$bin_root/echo-brain" >> "$raycast_command_pending"
+chmod 0700 "$raycast_command_pending"
+mv -f "$raycast_command_pending" "$raycast_command"
+
 printf 'ECHO is ready. Your command is: %s\n' "$bin_root/echo-brain"
+printf 'Raycast: add this Script Commands directory: %s\n' "$raycast_root"
+printf 'Then assign a hotkey to "Ask ECHO" in Raycast Settings > Extensions.\n'

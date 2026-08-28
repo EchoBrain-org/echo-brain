@@ -123,6 +123,14 @@ function verifyArtifactIdentity(artifact, release) {
   if (!entries.includes('package/dist/build-identity.v1.json')) {
     fail('client artifact lacks its packaged build identity');
   }
+  for (const requiredEntry of [
+    'package/dist/raycast-cli-main.js',
+    'package/dist/raycast-cli-wrapper.js',
+  ]) {
+    if (!entries.includes(requiredEntry)) {
+      fail(`client artifact lacks its hotkey wrapper: ${requiredEntry}`);
+    }
+  }
   let identity;
   try {
     identity = JSON.parse(

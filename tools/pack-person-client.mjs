@@ -157,6 +157,20 @@ function main() {
         'Person-client artifact did not contain its bundled dependencies',
       );
     }
+    const packedFiles = new Set(
+      (packed.files ?? []).map((file) => file.path),
+    );
+    for (const requiredFile of [
+      'dist/raycast-cli-main.js',
+      'dist/raycast-cli-wrapper.js',
+    ]) {
+      if (!packedFiles.has(requiredFile)) {
+        rmSync(join(destination, packed.filename), { force: true });
+        throw new Error(
+          `Person-client artifact is missing the hotkey wrapper: ${requiredFile}`,
+        );
+      }
+    }
     const packedArtifactPath = join(destination, basename(packed.filename));
     process.stdout.write(
       `${JSON.stringify({

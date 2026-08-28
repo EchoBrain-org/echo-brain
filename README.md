@@ -21,10 +21,16 @@ It can:
 - manage the signed-in member's meeting exclusions; and
 - bind the signed-in identity to Slack.
 
+The scrappy hotkey surface is a Raycast Script Command in the Person machine
+product. It is a strict wrapper around the installed `echo-brain` CLI: it has
+no direct Authority API, session, or provider access. The onboarding kit
+installs it below `~/Library/Application Support/ECHO`; the user adds that
+directory to Raycast and assigns the global hotkey.
+
 It does not run meeting processing, hold Granola or Slack service
 credentials, manage a LaunchAgent, keep a local product database, write a
 JSONL outbox, use installation signing keys or leases, or receive fleet update
-directives.
+directives. It has no LaunchAgent, query history, or background updater.
 
 Person session state is stored below
 `~/.local/share/echo-brain/person/` with a `0700` directory and `0600` files.

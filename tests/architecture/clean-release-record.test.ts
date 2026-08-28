@@ -769,6 +769,14 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       }),
     );
     writeFileSync(join(packageRoot, "main.js"), "process.stdout.write('fixture\\n');\n");
+    writeFileSync(
+      join(packageRoot, "raycast-cli-main.js"),
+      "process.stdout.write('fixture\\n');\n",
+    );
+    writeFileSync(
+      join(packageRoot, "raycast-cli-wrapper.js"),
+      "export const fixture = true;\n",
+    );
     expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
     const artifactSha = createHash("sha256")
       .update(readFileSync(artifact))
@@ -831,6 +839,13 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     ]).stdout;
     expect(start).toContain("person start");
     expect(start).toContain("Choose your ECHO invitation file");
+    expect(start).toContain('package/dist/raycast-cli-main.js');
+    expect(start).toContain('@raycast.title Ask ECHO');
+    expect(start).toContain('@raycast.mode fullOutput');
+    expect(start).toContain('@raycast.argument1 { "type": "text"');
+    expect(start).toContain('[[ $# -eq 1 && -n "$1" ]]');
+    expect(start).toContain('"$bin_root/echo-brain"');
+    expect(start).toContain('"$raycast_root/ask-echo.sh"');
     expect(start).not.toContain("npm ");
     expect(start).not.toContain("export PATH");
     expect(members.join("\n")).not.toMatch(
@@ -856,6 +871,8 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
         source_kind: "materialized-commit",
       }),
     );
+    writeFileSync(join(packageRoot, "raycast-cli-main.js"), "process.exit(0);\n");
+    writeFileSync(join(packageRoot, "raycast-cli-wrapper.js"), "export const fixture = true;\n");
     expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
     const artifactSha = createHash("sha256")
       .update(readFileSync(artifact))

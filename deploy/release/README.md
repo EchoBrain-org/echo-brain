@@ -225,6 +225,13 @@ client for the current person, or log out before onboarding another person.
 The invitation remains separate because it is employee-bound, short-lived, and
 may need reissue without rebuilding the release kit.
 
+The kit also installs the scrappy hotkey overlay below
+`~/Library/Application Support/ECHO`. It is a Raycast Script Command and a
+strict wrapper of the installed `echo-brain` CLI only: it has no direct
+Authority API, Person-session, or provider access. The employee adds that
+directory to Raycast and assigns the global hotkey. It installs no LaunchAgent,
+query history, or background updater.
+
 The first cohort supports macOS arm64 only. A signed and notarized graphical
 installer is a later distribution improvement; it is not required for the
 founder-assisted cohort.
