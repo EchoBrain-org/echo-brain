@@ -63,6 +63,7 @@ export interface FrozenCleanD2ToD3CandidateV1 {
  */
 export interface CleanD2ToD3AuthorityStateV1 {
   listStagedApprovalIds(): Promise<readonly string[]>;
+  listV4RecoveryApprovalIds(): Promise<readonly string[]>;
   readFrozenCandidateForApproval(
     approvalId: string,
   ): Promise<FrozenCleanD2ToD3CandidateV1 | undefined>;
@@ -85,13 +86,17 @@ export class SqliteCleanD2ToD3AuthorityStateV1 implements CleanD2ToD3AuthoritySt
     return this.state.listStagedApprovalIds();
   }
 
+  async listV4RecoveryApprovalIds(): Promise<readonly string[]> {
+    return this.state.listV4RecoveryApprovalIds();
+  }
+
   async readFrozenCandidateForApproval(
     approvalId: string,
   ): Promise<FrozenCleanD2ToD3CandidateV1 | undefined> {
     const candidate = this.state.readFrozenCandidateForApproval(approvalId);
     if (candidate === undefined) return undefined;
     if (
-      candidate.state !== "staged" ||
+      (candidate.state !== "staged" && candidate.state !== "superseded") ||
       candidate.frozen_card_sha256 === null ||
       candidate.approved_snapshot === null ||
       candidate.approved_snapshot_sha256 === null ||
@@ -419,7 +424,7 @@ export class CleanD2ToD3ProcessingCoordinatorV1 {
   ) {}
 
   async recoverV4Appends(signal: AbortSignal): Promise<void> {
-    for (const approvalId of await this.options.authority.listStagedApprovalIds()) {
+    for (const approvalId of await this.options.authority.listV4RecoveryApprovalIds()) {
       signal.throwIfAborted();
       await this.appendIfFinalized(approvalId);
     }
@@ -441,7 +446,7 @@ export class CleanD2ToD3ProcessingCoordinatorV1 {
   }
 
   async appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void> {
-    for (const approvalId of await this.options.authority.listStagedApprovalIds()) {
+    for (const approvalId of await this.options.authority.listV4RecoveryApprovalIds()) {
       signal.throwIfAborted();
       await this.appendIfFinalized(approvalId);
     }

@@ -73,6 +73,7 @@ import {
   type OpenCleanLiveRuntimeConfig,
 } from "../src/composition/open-clean-live-runtime.js";
 import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
+import type { CleanSlackApprovalCardPosterV1 } from "../src/processing/clean-v1/clean-slack-approval-stager.js";
 import type {
   AdapterHealth,
   DecisionProcessorAdapter,
@@ -598,6 +599,7 @@ async function activeFixture(
     readonly folder_membership?: readonly { readonly name: string }[];
   }[],
   answerModel?: Layer4StructuredOutputPort,
+  approvalPoster?: CleanSlackApprovalCardPosterV1,
 ) {
   const parent = root();
   const initialized = initializeCleanResetState({
@@ -697,7 +699,12 @@ async function activeFixture(
       provenance: {
         ...meeting.provenance,
         external_id: variant.external_id,
-        canonical_revision: canonicalSha256({ note: variant.external_id }),
+        canonical_revision: canonicalSha256({
+          note: variant.external_id,
+          title: variant.title,
+          text: variant.text,
+          folder_membership: variant.folder_membership ?? [],
+        }),
       },
       content: [{ id: variant.external_id, kind: "note", text: variant.text }],
       ...(variant.folder_membership === undefined
@@ -716,6 +723,7 @@ async function activeFixture(
   );
   const reaction = fakeReaction(action);
   const posted: string[] = [];
+  const tombstoned: string[] = [];
   const errors: Error[] = [];
   const config: OpenCleanLiveRuntimeConfig = {
     state_directory: initialized.state_directory,
@@ -746,12 +754,23 @@ async function activeFixture(
     live_adapters: {
       source,
       processor: fakeProcessor(processorIdentity),
-      approval_card_poster: {
-        async post(input) {
-          posted.push(input.text);
+      approval_card_poster: approvalPoster ?? {
+        async post() {
           return {
+            kind: "posted",
             provider_message_ts: `1724112000.${String(posted.length).padStart(6, "0")}`,
           };
+        },
+        async reconcile() {
+          return { kind: "uncertain" };
+        },
+        async tombstone(input) {
+          tombstoned.push(input.approval_id);
+          return { kind: "done" };
+        },
+        async publish(input) {
+          posted.push(input.text);
+          return { kind: "done" };
         },
       },
       approval_observer: reaction,
@@ -764,6 +783,7 @@ async function activeFixture(
     processorIdentity,
     reaction,
     posted,
+    tombstoned,
     errors,
     runtime,
   };
@@ -1135,6 +1155,15 @@ describe("open clean live runtime", () => {
           async post() {
             throw new Error("restart must not post a duplicate approval card");
           },
+          async reconcile() {
+            return { kind: "uncertain" };
+          },
+          async tombstone() {
+            return { kind: "done" };
+          },
+          async publish() {
+            throw new Error("restart must not republish an approval card");
+          },
         },
         approval_observer: fixture.reaction,
       },
@@ -1233,6 +1262,185 @@ describe("open clean live runtime", () => {
     } finally {
       rereadRecord.close();
       rereadAuthority.close();
+    }
+  });
+
+  it("keeps intake moving while an earlier Slack post is reconciled without reposting", async () => {
+    const operations: string[] = [];
+    const postCalls: string[] = [];
+    let ambiguousApprovalId: string | undefined;
+    let reconciliationAttempts = 0;
+    const poster: CleanSlackApprovalCardPosterV1 = {
+      async post(input) {
+        postCalls.push(input.approval_id);
+        if (ambiguousApprovalId === undefined) {
+          ambiguousApprovalId = input.approval_id;
+          operations.push("post-ambiguous");
+          return { kind: "uncertain" };
+        }
+        operations.push("post-unrelated");
+        return {
+          kind: "posted",
+          provider_message_ts: "1724112000.000002",
+        };
+      },
+      async reconcile(input) {
+        expect(input.approval_id).toBe(ambiguousApprovalId);
+        reconciliationAttempts += 1;
+        operations.push(
+          reconciliationAttempts === 1
+            ? "reconcile-absent"
+            : "reconcile-found",
+        );
+        return reconciliationAttempts === 1
+          ? { kind: "uncertain" }
+          : {
+              kind: "posted",
+              provider_message_ts: "1724112000.000001",
+            };
+      },
+      async tombstone() {
+        return { kind: "done" };
+      },
+      async publish() {
+        return { kind: "done" };
+      },
+    };
+    const fixture = await activeFixture(
+      "approve",
+      undefined,
+      [
+        {
+          title: "Ambiguous delivery",
+          external_id: "ambiguous-delivery",
+          text: "Preserve this first decision.",
+        },
+        {
+          title: "Unrelated delivery",
+          external_id: "unrelated-delivery",
+          text: "Continue with this unrelated decision.",
+        },
+      ],
+      undefined,
+      poster,
+    );
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 ||
+          (
+            record
+              .prepare("SELECT count(*) AS count FROM organization_record_log")
+              .get() as { count: number }
+          ).count === 2,
+        "both decoupled approval deliveries",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+
+      expect(postCalls).toHaveLength(2);
+      expect(new Set(postCalls).size).toBe(2);
+      expect(reconciliationAttempts).toBeGreaterThanOrEqual(2);
+      expect(operations.slice(0, 4)).toEqual([
+        "post-ambiguous",
+        "reconcile-absent",
+        "post-unrelated",
+        "reconcile-found",
+      ]);
+      expect(
+        authority
+          .prepare(
+            `SELECT state, provider_message_ts
+               FROM authority_clean_live_approval_outbox_v1
+              ORDER BY provider_message_ts`,
+          )
+          .all(),
+      ).toEqual([
+        { state: "staged", provider_message_ts: "1724112000.000001" },
+        { state: "staged", provider_message_ts: "1724112000.000002" },
+      ]);
+    } finally {
+      record.close();
+      authority.close();
+      await fixture.runtime.close();
+    }
+  });
+
+  it("keeps one approval card while preserving a folder-only provider revision", async () => {
+    const fixture = await activeFixture("approve", undefined, [
+      {
+        title: "Folder move review",
+        external_id: "folder-move-note",
+        text: "Keep this review singular.",
+      },
+      {
+        title: "Folder move review",
+        external_id: "folder-move-note",
+        text: "Keep this review singular.",
+        folder_membership: [{ name: "notes" }],
+      },
+    ]);
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 ||
+          (
+            authority
+              .prepare(
+                "SELECT count(*) AS count FROM authority_clean_live_candidates_v1",
+              )
+              .get() as { count: number }
+          ).count === 2,
+        "both folder-only source revisions",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(
+        authority
+          .prepare(
+            `SELECT disposition, count(*) AS count
+               FROM authority_clean_live_candidates_v1
+              GROUP BY disposition
+              ORDER BY disposition`,
+          )
+          .all(),
+      ).toEqual([
+        { disposition: "actionable", count: 1 },
+        { disposition: "coalesced", count: 1 },
+      ]);
+      expect(
+        authority
+          .prepare(
+            "SELECT count(*) AS count FROM authority_clean_live_approval_outbox_v1",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(
+        record
+          .prepare("SELECT count(*) AS count FROM organization_record_log")
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(fixture.posted).toHaveLength(1);
+      expect(fixture.tombstoned).toEqual([]);
+      expect(fixture.reaction.calls()).toBe(1);
+    } finally {
+      record.close();
+      authority.close();
+      await fixture.runtime.close();
     }
   });
 

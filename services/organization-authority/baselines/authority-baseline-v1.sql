@@ -1227,6 +1227,17 @@ CREATE TABLE authority_clean_live_candidates_v1 (
   ),
   admission_semantic_input_sha256 TEXT NOT NULL
     REFERENCES authority_clean_granola_source_admission_v1(semantic_input_sha256),
+  -- A provider revision is an immutable audit fact.  Review lineage is a
+  -- separate, stable human-work identity: one source meeting can have many
+  -- revisions but only one current actionable round.
+  review_lineage_id TEXT NOT NULL CHECK (review_lineage_id GLOB 'rli_*'),
+  review_input_sha256 TEXT NOT NULL CHECK (review_input_sha256 LIKE 'sha256:%'),
+  review_semantic_sha256 TEXT NOT NULL CHECK (review_semantic_sha256 LIKE 'sha256:%'),
+  review_policy_id TEXT NOT NULL CHECK (length(review_policy_id) BETWEEN 1 AND 256),
+  review_policy_contract_sha256 TEXT NOT NULL CHECK (review_policy_contract_sha256 LIKE 'sha256:%'),
+  review_policy_consequence_text TEXT NOT NULL CHECK (length(review_policy_consequence_text) BETWEEN 1 AND 8192),
+  review_policy_consequence_sha256 TEXT NOT NULL CHECK (review_policy_consequence_sha256 LIKE 'sha256:%'),
+  disposition TEXT NOT NULL CHECK (disposition IN ('actionable', 'coalesced', 'no_signals')),
   source_cursor TEXT NOT NULL CHECK (
     length(source_cursor) BETWEEN 1 AND 65536 AND
     substr(source_cursor, 1, 11) = 'granola:v1:'
@@ -1241,6 +1252,48 @@ CREATE TABLE authority_clean_live_candidates_v1 (
   ),
   created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL)
 ) STRICT;
+
+CREATE INDEX authority_clean_live_candidates_v1_review_input
+ON authority_clean_live_candidates_v1(review_lineage_id, review_input_sha256, created_at);
+
+-- The mutable pointer is deliberately small.  Candidate and outbox payloads
+-- remain append-only; this records only which revision is currently relevant
+-- to a person deciding what to do next.
+CREATE TABLE authority_clean_live_review_lineage_heads_v1 (
+  review_lineage_id TEXT PRIMARY KEY CHECK (review_lineage_id GLOB 'rli_*'),
+  candidate_id TEXT NOT NULL UNIQUE
+    REFERENCES authority_clean_live_candidates_v1(candidate_id),
+  updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL)
+) STRICT;
+
+CREATE TRIGGER authority_clean_live_review_lineage_heads_v1_candidate_matches_lineage_insert
+BEFORE INSERT ON authority_clean_live_review_lineage_heads_v1
+WHEN NOT EXISTS (
+  SELECT 1 FROM authority_clean_live_candidates_v1
+   WHERE candidate_id = NEW.candidate_id
+     AND review_lineage_id = NEW.review_lineage_id
+)
+BEGIN SELECT RAISE(ABORT, 'clean live review lineage head candidate must match its lineage'); END;
+
+CREATE TRIGGER authority_clean_live_review_lineage_heads_v1_candidate_matches_lineage_update
+BEFORE UPDATE ON authority_clean_live_review_lineage_heads_v1
+WHEN NOT EXISTS (
+  SELECT 1 FROM authority_clean_live_candidates_v1
+   WHERE candidate_id = NEW.candidate_id
+     AND review_lineage_id = NEW.review_lineage_id
+)
+BEGIN SELECT RAISE(ABORT, 'clean live review lineage head candidate must match its lineage'); END;
+
+CREATE TRIGGER authority_clean_live_review_lineage_heads_v1_delete_denied
+BEFORE DELETE ON authority_clean_live_review_lineage_heads_v1
+BEGIN SELECT RAISE(ABORT, 'clean live review lineage head deletion is denied'); END;
+
+CREATE TRIGGER authority_clean_live_review_lineage_heads_v1_ordered_update
+BEFORE UPDATE ON authority_clean_live_review_lineage_heads_v1
+WHEN NEW.review_lineage_id != OLD.review_lineage_id
+  OR NEW.candidate_id = OLD.candidate_id
+  OR unixepoch(NEW.updated_at) < unixepoch(OLD.updated_at)
+BEGIN SELECT RAISE(ABORT, 'clean live review lineage head only permits ordered successor advances'); END;
 
 CREATE TRIGGER authority_clean_live_candidates_v1_immutable_update
 BEFORE UPDATE ON authority_clean_live_candidates_v1
@@ -1259,7 +1312,7 @@ CREATE TABLE authority_clean_live_approval_outbox_v1 (
     REFERENCES authority_clean_live_candidates_v1(candidate_id),
   approval_id TEXT NOT NULL UNIQUE CHECK (approval_id GLOB 'apr_*'),
   stage_command_id TEXT NOT NULL UNIQUE CHECK (stage_command_id GLOB 'pas_*'),
-  state TEXT NOT NULL CHECK (state IN ('queued', 'posted', 'staged')),
+  state TEXT NOT NULL CHECK (state IN ('queued', 'posting', 'posted', 'staged', 'superseded')),
   provider_message_ts TEXT UNIQUE,
   frozen_card_sha256 TEXT CHECK (frozen_card_sha256 LIKE 'sha256:%'),
   approved_snapshot_json TEXT CHECK (
@@ -1267,21 +1320,51 @@ CREATE TABLE authority_clean_live_approval_outbox_v1 (
     (json_valid(approved_snapshot_json) AND json_type(approved_snapshot_json) = 'object')
   ),
   approved_snapshot_sha256 TEXT CHECK (approved_snapshot_sha256 LIKE 'sha256:%'),
+  -- `post_started_at` is the durable intent boundary. It never changes after
+  -- a card payload is frozen.
+  post_started_at TEXT CHECK (post_started_at IS NULL OR unixepoch(post_started_at) IS NOT NULL),
   control_approval_sha256 TEXT UNIQUE CHECK (control_approval_sha256 LIKE 'sha256:%'),
+  superseded_by_candidate_id TEXT
+    REFERENCES authority_clean_live_candidates_v1(candidate_id),
+  superseded_at TEXT CHECK (superseded_at IS NULL OR unixepoch(superseded_at) IS NOT NULL),
+  tombstoned_at TEXT CHECK (tombstoned_at IS NULL OR unixepoch(tombstoned_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   CHECK (
     (state = 'queued' AND provider_message_ts IS NULL AND
       frozen_card_sha256 IS NULL AND approved_snapshot_json IS NULL AND
-      approved_snapshot_sha256 IS NULL AND
-      control_approval_sha256 IS NULL) OR
+      approved_snapshot_sha256 IS NULL AND post_started_at IS NULL AND
+      control_approval_sha256 IS NULL AND superseded_by_candidate_id IS NULL AND
+      superseded_at IS NULL AND tombstoned_at IS NULL) OR
+    (state = 'posting' AND provider_message_ts IS NULL AND
+      frozen_card_sha256 IS NOT NULL AND approved_snapshot_json IS NOT NULL AND
+      approved_snapshot_sha256 IS NOT NULL AND
+      post_started_at IS NOT NULL AND
+      control_approval_sha256 IS NULL AND superseded_by_candidate_id IS NULL AND
+      superseded_at IS NULL AND tombstoned_at IS NULL) OR
     (state = 'posted' AND provider_message_ts IS NOT NULL AND
       frozen_card_sha256 IS NOT NULL AND approved_snapshot_json IS NOT NULL AND
       approved_snapshot_sha256 IS NOT NULL AND
-      control_approval_sha256 IS NULL) OR
+      post_started_at IS NOT NULL AND
+      control_approval_sha256 IS NULL AND superseded_by_candidate_id IS NULL AND
+      superseded_at IS NULL AND tombstoned_at IS NULL) OR
     (state = 'staged' AND provider_message_ts IS NOT NULL AND
       frozen_card_sha256 IS NOT NULL AND approved_snapshot_json IS NOT NULL AND
       approved_snapshot_sha256 IS NOT NULL AND
-      control_approval_sha256 IS NOT NULL)
+      post_started_at IS NOT NULL AND
+      control_approval_sha256 IS NOT NULL AND superseded_by_candidate_id IS NULL AND
+      superseded_at IS NULL AND tombstoned_at IS NULL) OR
+    -- A queued item can be superseded before Slack sees it. A posting item
+    -- retains its frozen intent, whether Slack later reports a ts or not.
+    (state = 'superseded' AND (
+      (provider_message_ts IS NULL AND frozen_card_sha256 IS NULL AND
+       approved_snapshot_json IS NULL AND approved_snapshot_sha256 IS NULL AND
+       post_started_at IS NULL AND
+       control_approval_sha256 IS NULL) OR
+      (frozen_card_sha256 IS NOT NULL AND
+       approved_snapshot_json IS NOT NULL AND approved_snapshot_sha256 IS NOT NULL AND
+       post_started_at IS NOT NULL)
+    ) AND superseded_by_candidate_id IS NOT NULL AND superseded_at IS NOT NULL AND
+      (tombstoned_at IS NULL OR provider_message_ts IS NOT NULL))
   )
 ) STRICT;
 
@@ -1290,10 +1373,111 @@ BEFORE UPDATE ON authority_clean_live_approval_outbox_v1
 WHEN NEW.candidate_id != OLD.candidate_id
   OR NEW.approval_id != OLD.approval_id
   OR NEW.stage_command_id != OLD.stage_command_id
-  OR (OLD.state = 'queued' AND NEW.state NOT IN ('posted'))
-  OR (OLD.state = 'posted' AND NEW.state NOT IN ('staged'))
-  OR OLD.state = 'staged'
-BEGIN SELECT RAISE(ABORT, 'clean live approval outbox only permits queued-posted-staged'); END;
+  OR (OLD.state = 'queued' AND NEW.state NOT IN ('posting', 'superseded'))
+  OR (OLD.state = 'posting' AND NEW.state NOT IN ('queued', 'posted', 'superseded'))
+  OR (OLD.state = 'posted' AND NEW.state NOT IN ('staged', 'superseded'))
+  OR (OLD.state = 'staged' AND NEW.state NOT IN ('superseded'))
+  -- Slack or D2 can commit just before another runner supersedes the outbox.
+  -- Permit either missing external witness to be filled exactly once while
+  -- the row remains terminal; every already-known value stays immutable.
+  OR (OLD.state = 'superseded' AND NOT (
+      NEW.state = 'superseded'
+      AND NEW.superseded_by_candidate_id IS OLD.superseded_by_candidate_id
+      AND NEW.superseded_at IS OLD.superseded_at
+      AND (NEW.post_started_at IS OLD.post_started_at OR
+           (OLD.provider_message_ts IS NULL AND
+            OLD.post_started_at IS NOT NULL AND NEW.post_started_at IS NULL))
+      AND (
+        (NEW.provider_message_ts IS OLD.provider_message_ts
+         AND NEW.frozen_card_sha256 IS OLD.frozen_card_sha256
+         AND NEW.approved_snapshot_json IS OLD.approved_snapshot_json
+         AND NEW.approved_snapshot_sha256 IS OLD.approved_snapshot_sha256
+         AND NEW.control_approval_sha256 IS OLD.control_approval_sha256
+         AND NEW.tombstoned_at IS OLD.tombstoned_at)
+        OR
+        (OLD.provider_message_ts IS NULL
+         AND NEW.provider_message_ts IS NOT NULL
+         AND NEW.frozen_card_sha256 IS OLD.frozen_card_sha256
+         AND NEW.approved_snapshot_json IS OLD.approved_snapshot_json
+         AND NEW.approved_snapshot_sha256 IS OLD.approved_snapshot_sha256
+         AND NEW.control_approval_sha256 IS OLD.control_approval_sha256
+         AND NEW.tombstoned_at IS OLD.tombstoned_at)
+        OR
+        (OLD.control_approval_sha256 IS NULL
+         AND NEW.control_approval_sha256 IS NOT NULL
+         AND NEW.provider_message_ts IS OLD.provider_message_ts
+         AND NEW.frozen_card_sha256 IS OLD.frozen_card_sha256
+         AND NEW.approved_snapshot_json IS OLD.approved_snapshot_json
+         AND NEW.approved_snapshot_sha256 IS OLD.approved_snapshot_sha256
+         AND NEW.tombstoned_at IS OLD.tombstoned_at)
+        OR
+        (OLD.tombstoned_at IS NULL
+         AND NEW.tombstoned_at IS NOT NULL
+         AND OLD.provider_message_ts IS NOT NULL
+         AND OLD.frozen_card_sha256 IS NOT NULL
+         AND OLD.approved_snapshot_json IS NOT NULL
+         AND OLD.approved_snapshot_sha256 IS NOT NULL
+         AND NEW.provider_message_ts IS OLD.provider_message_ts
+         AND NEW.frozen_card_sha256 IS OLD.frozen_card_sha256
+         AND NEW.approved_snapshot_json IS OLD.approved_snapshot_json
+         AND NEW.approved_snapshot_sha256 IS OLD.approved_snapshot_sha256
+         AND NEW.control_approval_sha256 IS OLD.control_approval_sha256
+         AND NEW.updated_at = NEW.tombstoned_at)
+        OR
+        (OLD.provider_message_ts IS NULL
+         AND OLD.frozen_card_sha256 IS NOT NULL
+         AND OLD.approved_snapshot_json IS NOT NULL
+         AND OLD.approved_snapshot_sha256 IS NOT NULL
+         AND OLD.post_started_at IS NOT NULL
+         AND OLD.control_approval_sha256 IS NULL
+         AND NEW.provider_message_ts IS NULL
+         AND NEW.frozen_card_sha256 IS NULL
+         AND NEW.approved_snapshot_json IS NULL
+         AND NEW.approved_snapshot_sha256 IS NULL
+         AND NEW.post_started_at IS NULL
+         AND NEW.control_approval_sha256 IS NULL
+         AND NEW.tombstoned_at IS NULL)
+      )
+    ))
+  OR (OLD.provider_message_ts IS NOT NULL AND NEW.provider_message_ts IS NOT OLD.provider_message_ts)
+  OR (OLD.frozen_card_sha256 IS NOT NULL AND NEW.frozen_card_sha256 IS NOT OLD.frozen_card_sha256
+      AND NOT (OLD.state = 'posting' AND NEW.state = 'queued')
+      AND NOT (OLD.state = 'superseded' AND NEW.state = 'superseded'
+               AND OLD.provider_message_ts IS NULL AND NEW.post_started_at IS NULL))
+  OR (OLD.approved_snapshot_json IS NOT NULL AND NEW.approved_snapshot_json IS NOT OLD.approved_snapshot_json
+      AND NOT (OLD.state = 'posting' AND NEW.state = 'queued')
+      AND NOT (OLD.state = 'superseded' AND NEW.state = 'superseded'
+               AND OLD.provider_message_ts IS NULL AND NEW.post_started_at IS NULL))
+  OR (OLD.approved_snapshot_sha256 IS NOT NULL AND NEW.approved_snapshot_sha256 IS NOT OLD.approved_snapshot_sha256
+      AND NOT (OLD.state = 'posting' AND NEW.state = 'queued')
+      AND NOT (OLD.state = 'superseded' AND NEW.state = 'superseded'
+               AND OLD.provider_message_ts IS NULL AND NEW.post_started_at IS NULL))
+  OR (OLD.post_started_at IS NOT NULL AND NEW.post_started_at IS NOT OLD.post_started_at
+      AND NOT (OLD.state = 'posting' AND NEW.state = 'queued')
+      AND NOT (OLD.state = 'superseded' AND NEW.state = 'superseded'
+               AND OLD.provider_message_ts IS NULL AND NEW.post_started_at IS NULL))
+  OR (OLD.control_approval_sha256 IS NOT NULL AND NEW.control_approval_sha256 IS NOT OLD.control_approval_sha256)
+  OR (OLD.state = 'queued' AND NEW.state = 'superseded' AND (
+      NEW.provider_message_ts IS NOT NULL OR NEW.frozen_card_sha256 IS NOT NULL OR
+      NEW.approved_snapshot_json IS NOT NULL OR NEW.approved_snapshot_sha256 IS NOT NULL OR
+      NEW.post_started_at IS NOT NULL OR
+      NEW.control_approval_sha256 IS NOT NULL
+  ))
+  OR (OLD.state = 'posting' AND NEW.state = 'superseded' AND
+      (NEW.provider_message_ts IS NOT OLD.provider_message_ts OR
+       NEW.frozen_card_sha256 IS NOT OLD.frozen_card_sha256 OR
+       NEW.approved_snapshot_json IS NOT OLD.approved_snapshot_json OR
+       NEW.approved_snapshot_sha256 IS NOT OLD.approved_snapshot_sha256 OR
+       NEW.post_started_at IS NOT OLD.post_started_at OR
+       NEW.control_approval_sha256 IS NOT NULL))
+  OR (OLD.state = 'posted' AND NEW.state = 'superseded' AND NEW.control_approval_sha256 IS NOT NULL)
+  OR (OLD.state != 'superseded' AND NEW.tombstoned_at IS NOT NULL)
+  OR (OLD.tombstoned_at IS NOT NULL AND NEW.tombstoned_at IS NOT OLD.tombstoned_at)
+  OR (NEW.state = 'superseded' AND
+      (NEW.superseded_by_candidate_id IS NULL OR NEW.superseded_at IS NULL))
+  OR (NEW.state != 'superseded' AND
+      (NEW.superseded_by_candidate_id IS NOT NULL OR NEW.superseded_at IS NOT NULL))
+BEGIN SELECT RAISE(ABORT, 'clean live approval outbox only permits queued-posting-posted-staged-superseded'); END;
 
 CREATE TRIGGER authority_clean_live_approval_outbox_v1_delete_denied
 BEFORE DELETE ON authority_clean_live_approval_outbox_v1
