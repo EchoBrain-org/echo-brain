@@ -53,17 +53,21 @@ and integration-link request rechecks the current session, membership, and
 revocation state on the Authority.
 
 Organization-tool onboarding remains an Authority administrator operation. An
-owner supplies the organization Slack bot credential and public channel; the
-Authority verifies the workspace, app, bot, scopes, and channel before storing
-the secret in its private credential store. SQLite receives only an opaque
-secret handle and verified public identity.
+owner supplies the organization Slack bot credential and a temporary public
+founder identity-link channel. The Authority verifies the workspace, app, bot,
+scopes, and channel before storing the secret in its private credential store.
+SQLite receives only an opaque secret handle and verified public identity. The
+legacy field name `slack_approval_channel_id` is transitional naming debt: that
+channel is never an approval destination or readiness gate.
 
 After that organization tool is active, a signed-in Person can run the
 `echo-brain person slack-link-begin` and `slack-link-complete` challenge. The
 Authority posts the challenge, observes the exact Slack human replying in the
 exact thread, and creates or reuses that membership's external identity link.
-The Person flow creates no adapter binding or approve/reject grant. Those
-Person-bound approval capabilities require a later additive server path.
+The Person flow creates no shared-channel/reaction adapter binding or
+approve/reject grant. Private meeting-owner approvals are instead delivered as
+signed Block Kit DMs and bind their visibility policy only when the owner
+clicks Approve; Reject creates no V4 record.
 
 ## Retained V1 compatibility
 

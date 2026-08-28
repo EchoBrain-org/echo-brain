@@ -26,6 +26,7 @@ const INPUT_FILES = [
   "oidc-config.json",
   "oidc-client-secret",
   "slack-bot-token",
+  "slack-signing-secret",
   "granola-credential",
   "llm-credential",
 ];
@@ -271,6 +272,19 @@ describe("Authority staging onboarding transfer", () => {
     ).toThrow("input_file_not_private_regular");
   });
 
+  it("requires the Slack signing secret in the private input shape", () => {
+    const source = inputDirectory();
+    const output = privateDirectory("echo-authority-onboarding-archive-");
+    rmSync(join(source, "slack-signing-secret"));
+
+    expect(() =>
+      createOnboardingInputArchive({
+        sourceDir: source,
+        output: join(output, "onboarding.tar.gz"),
+      }),
+    ).toThrow("input_directory_shape_invalid");
+  });
+
   it("uses a bounded SSM command that retries IAM propagation, extracts no links, and suppresses onboarding output", () => {
     const commands = onboardingTransferSsmCommands({
       region: "us-west-2",
@@ -291,6 +305,9 @@ describe("Authority staging onboarding transfer", () => {
     expect(joined).toContain("--expected-bucket-owner '123456789012'");
     expect(joined).toContain("member.issym() or member.islnk()");
     expect(joined).toContain("maximum_total_bytes");
+    expect(joined).toContain('"slack-signing-secret"');
+    expect(joined).toContain("slack-bot-token slack-signing-secret granola-credential");
+    expect(joined).toContain('tr -d " ")" = 9');
     expect(joined).toContain("doctor --input-dir \"$input\" >/dev/null 2>&1");
     expect(joined).toContain("prepare --input-dir \"$input\" >/dev/null 2>&1");
     expect(joined).toContain("authority-staging-onboarding-input-transferred");

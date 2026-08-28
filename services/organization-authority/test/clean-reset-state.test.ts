@@ -7,10 +7,41 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  applyOrganizationControlBaselineV2,
+  openOrganizationControlDatabase,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+  organizationControlBaselineSha256V2,
+} from "@echo-brain/organization-control-plane/new-lineage-genesis-v1";
+import {
+  applyOrganizationRecordDerivedBaselineV1,
+  applyOrganizationRecordLogBaselineV1,
+  openOrganizationRecordDatabase,
+  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
+  organizationRecordDerivedBaselineSha256V1,
+  organizationRecordLogBaselineSha256V1,
+} from "@echo-brain/organization-record/new-lineage-v1";
+import {
+  READABLE_SEARCH_CONTENT_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+  readableSearchPlaneBaselineSha256V1,
+} from "@echo-brain/organization-retrieval/new-lineage-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  applyAuthorityBaselineV2,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V2,
+  authorityBaselineSha256V2,
+} from "../src/adapters/persistence/sqlite/baseline.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { runCleanResetCli } from "../src/composition/clean-reset-cli.js";
 import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+import { verifyCleanStateLineage } from "../src/composition/verify-clean-state-lineage.js";
+import { initializeNewStateLineageV1 } from "../src/state-lineage/new-lineage-genesis-v1.js";
+import { StateLineagePreopenRefusal } from "../src/state-lineage/state-lineage-preopen-guard.js";
 
 const roots: string[] = [];
 const CREATED_AT = "2026-08-22T00:00:00.000Z";
@@ -40,6 +71,72 @@ function rows(
   } finally {
     database.close();
   }
+}
+
+function initializeRecordLogV1State(stateDirectory: string): void {
+  initializeNewStateLineageV1({
+    state_directory: stateDirectory,
+    binding: {
+      authority_id: "oau_00000000-0000-4000-8000-000000000001",
+      organization_id: "org_00000000-0000-4000-8000-000000000001",
+      state_lineage_id: "lineage-00000000-0000-4000-8000-000000000001",
+    },
+    created_at: CREATED_AT,
+    creating_artifact_revision: "legacy-v1-fixture",
+    schemas: {
+      authority: {
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: authorityBaselineSha256V2(),
+      },
+      "control-plane": {
+        database_schema_version:
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: organizationControlBaselineSha256V2(),
+      },
+      "record-log": {
+        database_schema_version:
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: organizationRecordLogBaselineSha256V1(),
+      },
+      "record-derived": {
+        database_schema_version:
+          ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: organizationRecordDerivedBaselineSha256V1(),
+      },
+      "retrieval-facts": {
+        database_schema_version:
+          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: readableSearchPlaneBaselineSha256V1(
+          READABLE_SEARCH_FACTS_BASELINE_V1,
+        ),
+      },
+      "retrieval-lexical": {
+        database_schema_version:
+          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: readableSearchPlaneBaselineSha256V1(
+          READABLE_SEARCH_LEXICAL_BASELINE_V1,
+        ),
+      },
+      "retrieval-content": {
+        database_schema_version:
+          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: readableSearchPlaneBaselineSha256V1(
+          READABLE_SEARCH_CONTENT_BASELINE_V1,
+        ),
+      },
+    },
+    top_level_appliers: {
+      authority: { apply: applyAuthorityBaselineV2 },
+      "control-plane": { apply: applyOrganizationControlBaselineV2 },
+      "record-log": { apply: applyOrganizationRecordLogBaselineV1 },
+      "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },
+    },
+    open_writable_database: (path, role) => {
+      if (role === "authority") return openAuthorityDatabase(path);
+      if (role === "control-plane") return openOrganizationControlDatabase(path);
+      return openOrganizationRecordDatabase(path);
+    },
+  });
 }
 
 describe("clean reset state initialization", () => {
@@ -80,6 +177,24 @@ describe("clean reset state initialization", () => {
       "record-derived",
       "record-log",
     ]);
+    expect(
+      rows(
+        join(stateDirectory, "authority.sqlite"),
+        "PRAGMA user_version",
+      ),
+    ).toEqual([{ user_version: 2 }]);
+    expect(
+      rows(
+        join(stateDirectory, "integrations.sqlite"),
+        "PRAGMA user_version",
+      ),
+    ).toEqual([{ user_version: 2 }]);
+    expect(
+      rows(
+        join(stateDirectory, "record-log.sqlite"),
+        "PRAGMA user_version",
+      ),
+    ).toEqual([{ user_version: 2 }]);
 
     expect(
       rows(
@@ -226,5 +341,30 @@ describe("clean reset state initialization", () => {
       }),
     ).toThrow("invalid federation identifier");
     expect(existsSync(stateDirectory)).toBe(false);
+  });
+
+  it("refuses a V1 record-log lineage rather than upgrading it in place", () => {
+    const root = fixtureRoot();
+    const stateDirectory = join(root, "legacy-v1-state");
+    initializeRecordLogV1State(stateDirectory);
+
+    expect(() => verifyCleanStateLineage(stateDirectory)).toThrow(
+      StateLineagePreopenRefusal,
+    );
+    try {
+      verifyCleanStateLineage(stateDirectory);
+      throw new Error("expected V1 lineage to be refused");
+    } catch (error) {
+      expect(error).toMatchObject({ family: "schema_version_mismatch" });
+    }
+    expect(() =>
+      initializeCleanResetState({
+        state_directory: stateDirectory,
+        organization_display_name: "Example Organization",
+        owner_display_name: "Ada Owner",
+        created_at: CREATED_AT,
+        creating_artifact_revision: "must-not-upgrade-v1",
+      }),
+    ).toThrow("state directory must not already exist");
   });
 });

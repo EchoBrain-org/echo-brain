@@ -197,7 +197,24 @@ const SLACK_CONVERSATION_ID_RE = /^[CGD][A-Z0-9]{2,}$/;
 const SLACK_MESSAGE_TS_RE = /^[0-9]{1,16}\.[0-9]{6}$/;
 const SLACK_SCOPE_RE = /^[a-z][a-z0-9:_-]{0,127}$/;
 const SLACK_IDENTITY_REQUIRED_SCOPE = "users:read";
-const SLACK_HISTORY_REQUIRED_SCOPE = "channels:history";
+const SLACK_DIRECT_MESSAGE_OPEN_REQUIRED_SCOPE = "im:write";
+
+function requiredSlackHistoryScope(channel: string): string {
+  switch (channel[0]) {
+    case "C":
+      return "channels:history";
+    case "D":
+      return "im:history";
+    case "G":
+      return "groups:history";
+    default:
+      throw new SlackApiError(
+        "invalid",
+        "Slack conversations.history requires a supported conversation kind",
+        false,
+      );
+  }
+}
 
 function requiredSlackId(
   body: Record<string, unknown>,
@@ -410,7 +427,7 @@ export class SlackWebApiClient {
     const body = await this.call(
       "conversations.open",
       { users: userId, return_im: true },
-      { signal },
+      { signal, requiredScope: SLACK_DIRECT_MESSAGE_OPEN_REQUIRED_SCOPE },
     );
     const channel = body["channel"];
     if (!isPlainObject(channel)) {
@@ -663,8 +680,7 @@ export class SlackWebApiClient {
         {
           signal,
           method: "GET",
-          // Clean v1 admits only a verified public approval channel.
-          requiredScope: SLACK_HISTORY_REQUIRED_SCOPE,
+          requiredScope: requiredSlackHistoryScope(input.channel),
         },
       );
       const pageMessages = body["messages"];

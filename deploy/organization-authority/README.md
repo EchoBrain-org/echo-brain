@@ -51,6 +51,7 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 | `oidc-config.json`         | OIDC configuration, including the exact callback above.                                                                             |
 | `oidc-client-secret`       | OIDC client secret.                                                                                                                 |
 | `slack-bot-token`          | Slack bot token.                                                                                                                    |
+| `slack-signing-secret`     | Slack app signing secret used only to verify inbound interactive approval requests.                                                 |
 | `granola-credential`       | Organization Granola credential.                                                                                                    |
 | `llm-credential`           | Retained LLM provider credential.                                                                                                   |
 
@@ -58,11 +59,44 @@ The secrets are never placed in command arguments or normal wrapper output.
 `prepare` installs byte-exact fixed server copies with mode `0600` under its
 mode-`0700` private data directory.
 
+### Slack re-onboarding for private approval V1
+
+Before `doctor` and `prepare`, update the same Slack app's scopes and reinstall
+it in the staging workspace. Do not enable or save an Interactivity Request URL
+at this stage. Its bot token must be from that reinstalled app and have
+`channels:history`, `channels:read`, `chat:write`, `im:history`, `im:write`,
+`reactions:read`, and `users:read`. `im:write` and `im:history` enable the
+private meeting-owner DM lane. Stage the signing secret for this exact same
+Slack app as `slack-signing-secret`: one no-newline value in a current-user
+`0600` regular non-symlink file. Do not put any secret in this README command
+or a shell argument.
+
+`slack_approval_channel_id` in the onboarding JSON is a transitional legacy
+field. It names only the public founder identity-link channel used during
+onboarding. It never receives approval cards and no shared approval binding is
+created from it. Run the re-onboarding only with a wholly fresh private-
+approval V2 staging lineage; do not reuse an older shared-channel rehearsal
+state directory, database, or approval binding.
+
+Complete the bootstrap, founder identity link, credential installation, and
+finalization, then start the active runtime. Only once that runtime is healthy,
+enable **Interactivity & Shortcuts** and save this Request URL before creating
+the first post-cutoff canary meeting:
+
+```text
+https://<staging-authority-host>/v2/integrations/slack/interactions
+```
+
+The endpoint intentionally returns `503` before finalization. Do not attempt to
+validate it against a pre-finalize runtime. Event Subscriptions, Socket Mode,
+and a Slack OAuth redirect are not required for this V1.
+
 ```sh
 cd deploy/organization-authority
 install -d -m 0700 /absolute/private/echo-onboarding
 cp onboarding.clean-v1.example.json /absolute/private/echo-onboarding/onboarding.clean-v1.json
-# Add the canonical release and its runtime profile, plus the provider files listed above.
+# Add the canonical release and runtime profile, plus the provider files listed
+# above, including slack-signing-secret. Do not place any secret in this command.
 chmod 600 /absolute/private/echo-onboarding/*
 chmod 700 /absolute/private/echo-onboarding
 ./onboard-clean-v1.sh doctor --input-dir /absolute/private/echo-onboarding

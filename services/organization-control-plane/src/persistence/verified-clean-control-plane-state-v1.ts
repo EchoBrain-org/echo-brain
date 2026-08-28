@@ -1,8 +1,8 @@
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import {
   ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-  organizationControlBaselineSha256V1,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+  organizationControlBaselineSha256V2,
 } from "./baseline.js";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
@@ -193,7 +193,7 @@ function verifyControlDatabase(path: string, binding: CleanRootBinding): void {
       database.pragma("application_id", { simple: true }) !==
         ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID ||
       database.pragma("user_version", { simple: true }) !==
-        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1
+        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2
     ) {
       throw new Error(
         "clean integrations database has the wrong baseline identity",
@@ -259,11 +259,11 @@ function verifyControlDatabase(path: string, binding: CleanRootBinding): void {
       record.organization_id !== binding.organization_id ||
       record.state_lineage_id !== binding.state_lineage_id ||
       record.database_schema_version !==
-        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1 ||
-      record.schema_sha256 !== organizationControlBaselineSha256V1()
+        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2 ||
+      record.schema_sha256 !== organizationControlBaselineSha256V2()
     ) {
       throw new Error(
-        "clean integrations lineage manifest does not match baseline v1",
+        "clean integrations lineage manifest does not match private-approval baseline v2",
       );
     }
   } finally {

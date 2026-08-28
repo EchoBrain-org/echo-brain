@@ -43,7 +43,8 @@
     "util"
   ],
   "runtime_assets": [
-    "services/organization-authority/baselines/authority-baseline-v1.sql"
+    "services/organization-authority/baselines/authority-baseline-v1.sql",
+    "services/organization-authority/baselines/authority-private-approval-v2.sql"
   ],
   "layer_rules": [
     {

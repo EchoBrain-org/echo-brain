@@ -273,6 +273,38 @@ describe("clean stopped-state Slack connection v1", () => {
     expect(secrets.listReferences()).toEqual([]);
   });
 
+  it.each(["im:history", "im:write"] as const)(
+    "refuses an otherwise complete token missing private-DM scope %s",
+    async (missingScope) => {
+      const state = setup();
+      const secrets = new FileOrganizationSecretStore(
+        join(state.directory, "secrets"),
+      );
+      const missingPrivateDmScope = verifier({
+        connection: {
+          team_id: "T01",
+          enterprise_id: null,
+          bot_user_id: "U_BOT",
+          bot_id: "B01",
+          app_id: "A01",
+          granted_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES.filter(
+            (scope) => scope !== missingScope,
+          ),
+          verification_evidence_sha256: canonicalSha256({
+            connection: `missing-private-dm-${missingScope}`,
+          }),
+        },
+      });
+
+      await expect(
+        connectCleanSlackV1(
+          request(state.database, secrets, missingPrivateDmScope),
+        ),
+      ).rejects.toThrow(`missing required scope ${missingScope}`);
+      expect(secrets.listReferences()).toEqual([]);
+    },
+  );
+
   it("removes a newly written secret when the SQLite transaction cannot persist it", async () => {
     const state = setup();
     const created: OrganizationSecretReference[] = [];

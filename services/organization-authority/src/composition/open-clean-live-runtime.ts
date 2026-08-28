@@ -1,17 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
-  canonicalJson,
-  canonicalSha256,
-  type Sha256Digest,
-} from "@echo-brain/federation-protocol";
-import {
-  CleanSlackReactionObserverV1,
   FileOrganizationSecretStore,
   SqliteCleanSlackApprovalTokenReaderV1,
-  SqlitePersonSlackApprovalFinalizationCoordinatorV2,
+  SqlitePrivateApprovalPersistenceV1,
   openOrganizationControlDatabase,
-  validatePersonSlackApprovalBindingContractV2,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import {
   OrganizationRecordV4AppendApplication,
@@ -23,6 +16,7 @@ import {
   readPrivateAuthorityGranolaOrganizationCredential,
   readPrivateAuthorityGranolaOwnerEmail,
   readPrivateAuthorityPersonSessionPkceKey,
+  readPrivateAuthoritySlackSigningSecret,
 } from "../adapters/security/private-file-credentials.js";
 import { DevelopmentFileOrganizationAuthoritySigner } from "../adapters/security/development-file-authority-signer.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
@@ -32,23 +26,12 @@ import {
   llmProcessingVersion,
 } from "../processing/adapters/decision-processors/llm/llm-decision-processor.js";
 import { createGranolaMeetingSourceAdapter } from "../processing/adapters/meeting-sources/granola/index.js";
-import { compileDecisionBrief } from "../processing/core/processing/brief.js";
 import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
-import type { DecisionBrief } from "../processing/core/contracts/delivery.js";
-import {
-  CleanSlackApprovalStagerV1,
-  SlackWebApiCleanApprovalCardPosterV1,
-  type CleanSlackApprovalCardFactoryV1,
-  type CleanSlackApprovalCardPosterV1,
-} from "../processing/clean-v1/clean-slack-approval-stager.js";
 import { CleanLiveOnlySourceCycleV1 } from "../processing/clean-v1/live-only-source-cycle.js";
 import { SqliteCleanLiveOnlySourceStateV1 } from "../processing/clean-v1/sqlite-live-only-source-state.js";
-import {
-  CleanD2ToD3ProcessingCoordinatorV1,
-  SqliteCleanD2ToD3AuthorityStateV1,
-} from "../processing/clean-v1-d2-d3/clean-d2-d3-processing-coordinator.js";
 import { selectGranolaPersonContentPolicyV1 } from "../processing/clean-v1/granola-person-content-policy.js";
-import { createCleanV4RecordWriterV1 } from "../processing/clean-v1-record/clean-v4-record-writer.js";
+import { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
+import { createPrivateSlackBlockV4RecordWriterV1 } from "../processing/clean-v1-record/private-slack-block-v4-record-writer-v1.js";
 import {
   CLEAN_LLM_PROCESSOR_MAX_OUTPUT_TOKENS_V1,
   CLEAN_LLM_PROCESSOR_MODEL_V1,
@@ -60,16 +43,21 @@ import {
   type CleanLiveProcessingCycleV1,
   type RunningCleanLiveRuntime,
 } from "./clean-live-runtime.js";
-import {
-  createCleanReadableSearchGenerationReconcilerV1,
-} from "./clean-readable-search-runtime.js";
+import { createCleanReadableSearchGenerationReconcilerV1 } from "./clean-readable-search-runtime.js";
 import type { CleanPersonRuntimeConfig } from "./clean-person-runtime.js";
 import type { CleanPersonRuntimeDependencies } from "./clean-person-runtime.js";
-import type { PersonSlackApprovalObserverV2 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import { createOpenRouterStructuredOutput } from "../answer-composition/openrouter-structured-output.js";
 import type { CleanLayer4FailureEventV1 } from "./clean-person-answer-route.js";
 import type { CleanLiveWorkerPhaseRunnerV1 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
+import { resolveCurrentPrivateSlackConnectionV1 } from "./resolve-current-private-slack-connection-v1.js";
+import { SqlitePrivateApprovalAssignmentStateV1 } from "./sqlite-private-approval-assignment-state-v1.js";
+import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "./sqlite-stable-private-approval-authority-fence-v1.js";
+import { PrivateOwnerDmApprovalStagerV1 } from "./private-owner-dm-approval-stager-v1.js";
+import { PrivateApprovalProcessingCoordinatorV1 } from "./private-approval-processing-coordinator-v1.js";
+import { SqlitePrivateApprovalProcessingAuthorityV1 } from "./sqlite-private-approval-processing-authority-v1.js";
+import { createPrivateApprovalSlackResolutionIntentQueueV1 } from "./private-approval-slack-resolution-queue-v1.js";
+import { createPrivateApprovalSlackInteractionsApplicationV1 } from "./private-approval-slack-interactions-application-v1.js";
 
 export interface OpenCleanLiveRuntimeConfig {
   readonly state_directory: string;
@@ -79,6 +67,11 @@ export interface OpenCleanLiveRuntimeConfig {
   readonly oidc: PersonSessionOidcConfiguration;
   readonly client_authentication: CleanPersonRuntimeConfig["client_authentication"];
   readonly pkce_key_file: string;
+  /** Path only. The signing secret is not read until private ingress is wired. */
+  readonly slack_signing_secret_file: string;
+  /** Exact founder-manifest connection; approval delivery never selects an arbitrary active tool. */
+  readonly slack_connection_id: string;
+  /** Retained only for the current Person-to-Slack identity-link challenge. */
   readonly slack_approval_channel_id: string;
   readonly granola_credential_file: string;
   readonly granola_owner_email_file: string;
@@ -104,6 +97,15 @@ type CleanLiveSourceAdapter = ConstructorParameters<
 type CleanLiveProcessorAdapter = ConstructorParameters<
   typeof CleanLiveOnlySourceCycleV1
 >[0]["processor"];
+type PrivateApprovalCardPoster = Pick<
+  PrivateSlackApprovalCardPosterV1,
+  | "openDirectMessage"
+  | "postMarker"
+  | "reconcileMarker"
+  | "publish"
+  | "tombstone"
+  | "renderTerminal"
+>;
 
 /**
  * Narrow composition seams for deterministic local rehearsals. Production
@@ -121,8 +123,8 @@ export interface OpenCleanLiveRuntimeDependencies {
   readonly live_adapters?: {
     readonly source?: CleanLiveSourceAdapter;
     readonly processor?: CleanLiveProcessorAdapter;
-    readonly approval_card_poster?: CleanSlackApprovalCardPosterV1;
-    readonly approval_observer?: PersonSlackApprovalObserverV2;
+    /** Full private-DM presentation seam for local rehearsals. */
+    readonly private_approval_card_poster?: PrivateApprovalCardPoster;
   };
 }
 
@@ -174,230 +176,6 @@ function assertAdapter(
   }
 }
 
-function currentSlackApproval(
-  database: Database.Database,
-  channelId: string,
-): {
-  readonly connection_id: string;
-  readonly connection_contract_sha256: Sha256Digest;
-  readonly connection_state_sha256: Sha256Digest;
-  readonly approval_binding_id: string;
-  readonly approval_binding_contract_sha256: Sha256Digest;
-  readonly approval_channel_id: string;
-} {
-  const connection = database
-    .prepare(
-      `SELECT current_state.connection_id, current_state.connection_contract_sha256,
-              current_state.state_sha256
-         FROM organization_tool_connection_current_state AS current_state
-        WHERE current_state.current_status = 'active'`,
-    )
-    .get() as
-    | {
-        connection_id: string;
-        connection_contract_sha256: Sha256Digest;
-        state_sha256: Sha256Digest;
-      }
-    | undefined;
-  if (connection === undefined)
-    throw new Error("clean live runtime has no active Slack connection");
-  const binding = database
-    .prepare(
-      `SELECT contract.approval_binding_id, contract.contract_json, contract.contract_sha256
-         FROM organization_approval_binding_contracts AS contract
-         JOIN organization_approval_binding_current AS current
-           ON current.approval_binding_id = contract.approval_binding_id
-          AND current.contract_sha256 = contract.contract_sha256
-        WHERE current.current_status = 'active' AND contract.connection_id = ?`,
-    )
-    .get(connection.connection_id) as
-    | {
-        approval_binding_id: string;
-        contract_json: string;
-        contract_sha256: Sha256Digest;
-      }
-    | undefined;
-  if (
-    binding === undefined ||
-    canonicalJson(JSON.parse(binding.contract_json) as never) !==
-      binding.contract_json
-  ) {
-    throw new Error(
-      "clean live runtime has no canonical active Slack approval binding",
-    );
-  }
-  const contract = validatePersonSlackApprovalBindingContractV2(
-    JSON.parse(binding.contract_json) as unknown,
-  );
-  if (
-    canonicalSha256(contract) !== binding.contract_sha256 ||
-    contract.approval_binding_id !== binding.approval_binding_id ||
-    contract.connection_id !== connection.connection_id ||
-    contract.approval_adapter_id !== "slack-reactions" ||
-    contract.approval_channel_id !== channelId
-  ) {
-    throw new Error(
-      "clean live runtime Slack approval binding differs from the founder manifest",
-    );
-  }
-  return Object.freeze({
-    connection_id: connection.connection_id,
-    connection_contract_sha256: connection.connection_contract_sha256,
-    connection_state_sha256: connection.state_sha256,
-    approval_binding_id: binding.approval_binding_id,
-    approval_binding_contract_sha256: binding.contract_sha256,
-    approval_channel_id: contract.approval_channel_id,
-  });
-}
-
-const CLEAN_SLACK_APPROVAL_CARD_TEXT_LIMIT_V1 = 3_500;
-const CLEAN_SLACK_APPROVAL_CARD_TRUNCATION_V1 =
-  "\n\n[Card truncated for Slack. The full approved snapshot remains frozen.]";
-
-/**
- * Keeps a founder's approval decision legible without introducing a second
- * presentation model. The complete brief is still the frozen approved
- * snapshot; this is the bounded Slack rendering of those same signals.
- */
-export function renderCleanSlackApprovalCardTextV1(
-  brief: DecisionBrief,
-  policyConsequenceText: string,
-): string {
-  const lines = [
-    `Review ${brief.meeting.title ?? "meeting decisions"}`,
-    `${brief.decisions.length} decisions, ${brief.actions.length} actions, ${brief.rationales.length} rationales`,
-  ];
-  const sections: ReadonlyArray<
-    readonly [string, readonly { text: string }[]]
-  > = [
-    ["Decisions", brief.decisions],
-    ["Actions", brief.actions],
-    ["Rationales", brief.rationales],
-  ];
-  for (const [heading, signals] of sections) {
-    if (signals.length === 0) continue;
-    lines.push(
-      "",
-      `${heading}:`,
-      ...signals.map((signal) => `• ${signal.text}`),
-    );
-  }
-  const footer = [
-    "",
-    policyConsequenceText,
-    "",
-    "React with :white_check_mark: to approve or :x: to reject.",
-  ].join("\n");
-  const rendered = `${lines.join("\n")}${footer}`;
-  if (rendered.length <= CLEAN_SLACK_APPROVAL_CARD_TEXT_LIMIT_V1) {
-    return rendered;
-  }
-  const bodyLimit =
-    CLEAN_SLACK_APPROVAL_CARD_TEXT_LIMIT_V1 -
-    CLEAN_SLACK_APPROVAL_CARD_TRUNCATION_V1.length -
-    footer.length;
-  if (bodyLimit < 0) {
-    throw new Error("clean Slack approval policy consequence exceeds card limit");
-  }
-  return (
-    lines.join("\n").slice(0, bodyLimit) +
-    CLEAN_SLACK_APPROVAL_CARD_TRUNCATION_V1 +
-    footer
-  );
-}
-
-class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
-  constructor(
-    private readonly coordinates: {
-      readonly authority_id: string;
-      readonly organization_id: string;
-      readonly state_lineage_id: string;
-    },
-    private readonly slack: ReturnType<typeof currentSlackApproval>,
-  ) {}
-
-  build(input: Parameters<CleanSlackApprovalCardFactoryV1["build"]>[0]) {
-    const brief = compileDecisionBrief(
-      `brf_${input.candidate.candidate_semantic_sha256.slice("sha256:".length)}`,
-      input.meeting,
-      input.decisions,
-    );
-    const payload = {
-      brief,
-      source: {
-        adapter_id: input.admission.source.adapter_id,
-        instance_id: input.admission.source.instance_id,
-        external_id: input.meeting.provenance.external_id,
-      },
-      alternatives: [],
-      links: null,
-      reviewed_at: input.decisions.generated_at,
-      surface: "slack",
-    };
-    const approvedSnapshot = Object.freeze({
-      schema_version: 2 as const,
-      kind: "echo-approved-decision-snapshot-v2" as const,
-      approval_id: input.candidate.approval_id,
-      staged_content_sha256: canonicalSha256({
-        meeting: input.meeting,
-        decisions: input.decisions,
-      }),
-      final_content_sha256: canonicalSha256(payload),
-      payload_contract_id: "organization-record-approval-payload-v1" as const,
-      approved_payload: payload,
-    });
-    const text = renderCleanSlackApprovalCardTextV1(
-      brief,
-      input.candidate.review_policy_consequence_text,
-    );
-    return Object.freeze({
-      text,
-      frozen_card_sha256: canonicalSha256({
-        schema_version: 1,
-        kind: "echo-clean-slack-approval-card-v1",
-        approval_id: input.candidate.approval_id,
-        text,
-        approved_snapshot_sha256: canonicalSha256(approvedSnapshot),
-      }),
-      approved_snapshot: approvedSnapshot,
-    });
-  }
-
-  pendingApproval(
-    input: Parameters<CleanSlackApprovalCardFactoryV1["pendingApproval"]>[0],
-  ) {
-    const { stage, outbox } = input;
-    if (
-      outbox.provider_message_ts === null ||
-      outbox.frozen_card_sha256 === null ||
-      outbox.approved_snapshot_sha256 === null
-    ) {
-      throw new Error("clean live Slack card is not durably posted");
-    }
-    return Object.freeze({
-      authority_id: this.coordinates.authority_id,
-      organization_id: this.coordinates.organization_id,
-      state_lineage_id: this.coordinates.state_lineage_id,
-      approval_id: stage.candidate.approval_id,
-      status: "pending" as const,
-      connection_id: this.slack.connection_id,
-      connection_contract_sha256: this.slack.connection_contract_sha256,
-      approval_binding_id: this.slack.approval_binding_id,
-      approval_binding_contract_sha256:
-        this.slack.approval_binding_contract_sha256,
-      approval_channel_id: this.slack.approval_channel_id,
-      provider_message_ts: outbox.provider_message_ts,
-      policy_id: stage.candidate.review_policy_id,
-      policy_contract_sha256:
-        stage.candidate.review_policy_contract_sha256,
-      policy_consequence_sha256:
-        stage.candidate.review_policy_consequence_sha256,
-      frozen_card_sha256: outbox.frozen_card_sha256 as Sha256Digest,
-      approved_snapshot_sha256: outbox.approved_snapshot_sha256 as Sha256Digest,
-    });
-  }
-}
-
 class IdleCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
   async recoverV4Appends(): Promise<void> {}
   async pollAndStageLiveOnlySource(): Promise<void> {}
@@ -410,11 +188,18 @@ interface CleanReadableSearchReconcilerV1 {
   reconcile(signal: AbortSignal): Promise<unknown>;
 }
 
-class CombinedCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
+class CombinedCleanLiveProcessing<
+  TApprovalProcessing extends Pick<
+    CleanLiveProcessingCycleV1,
+    | "recoverV4Appends"
+    | "observeAndFinalizePendingApprovals"
+    | "appendFinalizedApprovalsToV4"
+  >,
+> implements CleanLiveProcessingCycleV1 {
   readonly hasFineGrainedSourceLifecycle = true;
   constructor(
     private readonly source: CleanLiveOnlySourceCycleV1,
-    private readonly d2d3: CleanD2ToD3ProcessingCoordinatorV1,
+    private readonly approvals: TApprovalProcessing,
     private readonly readableSearch: CleanReadableSearchReconcilerV1,
   ) {}
 
@@ -423,7 +208,7 @@ class CombinedCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
   }
 
   recoverV4Appends(signal: AbortSignal): Promise<void> {
-    return this.d2d3.recoverV4Appends(signal);
+    return this.approvals.recoverV4Appends(signal);
   }
 
   async pollAndStageLiveOnlySource(signal: AbortSignal): Promise<void> {
@@ -431,61 +216,16 @@ class CombinedCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
   }
 
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void> {
-    return this.d2d3.observeAndFinalizePendingApprovals(signal);
+    return this.approvals.observeAndFinalizePendingApprovals(signal);
   }
 
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void> {
-    return this.d2d3.appendFinalizedApprovalsToV4(signal);
+    return this.approvals.appendFinalizedApprovalsToV4(signal);
   }
 
   async reconcileReadableSearchGeneration(signal: AbortSignal): Promise<void> {
     await this.readableSearch.reconcile(signal);
   }
-}
-
-function authorityMembershipFence(
-  database: Database.Database,
-  approvalIsCurrent: (approvalId: string) => boolean,
-) {
-  return {
-    async withStablePersonSlackApprovalFence<T>(
-      commit: (fence: {
-        approvalIsCurrent(approvalId: string): boolean;
-        currentMembership(input: {
-          readonly principal_id: string;
-          readonly membership_id: string;
-        }):
-          | {
-              readonly principal_id: string;
-              readonly membership_id: string;
-              readonly membership_type: "owner" | "employee";
-            }
-          | undefined;
-      }) => T,
-    ): Promise<T> {
-      return database.transaction(() =>
-        commit({
-          approvalIsCurrent,
-          currentMembership: (input) => {
-            const membership = database
-              .prepare(
-                `SELECT principal_id, membership_id, membership_type
-                   FROM authority_memberships
-                  WHERE principal_id = ? AND membership_id = ? AND status = 'active'`,
-              )
-              .get(input.principal_id, input.membership_id) as
-              | {
-                  principal_id: string;
-                  membership_id: string;
-                  membership_type: "owner" | "employee";
-                }
-              | undefined;
-            return membership;
-          },
-        }),
-      )();
-    },
-  };
 }
 
 function sourceIsAdmitted(database: Database.Database): boolean {
@@ -502,8 +242,8 @@ function sourceIsAdmitted(database: Database.Database): boolean {
  * The concrete server composition. Before stopped-state finalize, it exposes
  * the Person routes and does no work. After a restart from the exact same
  * manifest-driven command, it constructs only Granola, fixed OpenRouter,
- * clean Slack, D2, and V4 components. Constructors read private files but do
- * not call any provider.
+ * the private owner-DM Slack lane, and V4 components. Constructors read
+ * private files but do not call any provider.
  */
 export async function openCleanLiveRuntime(
   config: OpenCleanLiveRuntimeConfig,
@@ -570,36 +310,40 @@ export async function openCleanLiveRuntime(
       dependencies.person?.answer_model === undefined
         ? readPrivateAuthorityCredential(llmReference)
         : undefined;
-    const source = dependencies.live_adapters?.source ?? (() => {
-      const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
-        `file:${config.granola_owner_email_file}`,
-      );
-      const granolaCredential =
-        readPrivateAuthorityGranolaOrganizationCredential(granolaReference);
-      const granolaConfig = fixedGranolaConfig(
-        admission.source.instance_id,
-        ownerEmail,
-        granolaReference,
-      );
-      const created = createGranolaMeetingSourceAdapter(granolaConfig, {
-        credentialResolver: (reference) =>
-          reference === granolaReference ? granolaCredential : undefined,
-      });
-      assertAdapter("Granola", created, granolaConfig);
-      return created;
-    })();
-    const processor = dependencies.live_adapters?.processor ?? (() => {
-      const processorConfig = fixedOpenRouterConfig(
-        admission.processor.instance_id,
-        llmReference,
-      );
-      const created = createLlmDecisionProcessor(processorConfig, {
-        credentialResolver: (reference) =>
-          reference === llmReference ? llmCredential : undefined,
-      });
-      assertAdapter("OpenRouter", created, processorConfig);
-      return created;
-    })();
+    const source =
+      dependencies.live_adapters?.source ??
+      (() => {
+        const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
+          `file:${config.granola_owner_email_file}`,
+        );
+        const granolaCredential =
+          readPrivateAuthorityGranolaOrganizationCredential(granolaReference);
+        const granolaConfig = fixedGranolaConfig(
+          admission.source.instance_id,
+          ownerEmail,
+          granolaReference,
+        );
+        const created = createGranolaMeetingSourceAdapter(granolaConfig, {
+          credentialResolver: (reference) =>
+            reference === granolaReference ? granolaCredential : undefined,
+        });
+        assertAdapter("Granola", created, granolaConfig);
+        return created;
+      })();
+    const processor =
+      dependencies.live_adapters?.processor ??
+      (() => {
+        const processorConfig = fixedOpenRouterConfig(
+          admission.processor.instance_id,
+          llmReference,
+        );
+        const created = createLlmDecisionProcessor(processorConfig, {
+          credentialResolver: (reference) =>
+            reference === llmReference ? llmCredential : undefined,
+        });
+        assertAdapter("OpenRouter", created, processorConfig);
+        return created;
+      })();
     if (
       source.identity.version !== admission.source.version ||
       processor.identity.version !== admission.processor.version ||
@@ -612,41 +356,51 @@ export async function openCleanLiveRuntime(
         "clean live adapters differ from the admitted fixed source configuration",
       );
     }
-    const slack = currentSlackApproval(
+    const coordinates = Object.freeze({
+      authority_id: lineage.root.authority_id,
+      organization_id: lineage.root.organization_id,
+      state_lineage_id: lineage.root.state_lineage_id,
+    });
+    const slack = resolveCurrentPrivateSlackConnectionV1(
       control,
-      config.slack_approval_channel_id,
+      config.slack_connection_id,
+      coordinates,
     );
-    const needsTokenReader =
-      dependencies.live_adapters?.approval_card_poster === undefined ||
-      dependencies.live_adapters?.approval_observer === undefined;
-    const tokenReader = needsTokenReader
-      ? new SqliteCleanSlackApprovalTokenReaderV1(
-          control,
-          new FileOrganizationSecretStore(join(config.state_directory, "secrets")),
-        )
-      : undefined;
-    const approvalCardPoster =
-      dependencies.live_adapters?.approval_card_poster ??
-      new SlackWebApiCleanApprovalCardPosterV1(
+    const tokenReader =
+      dependencies.live_adapters?.private_approval_card_poster === undefined
+        ? new SqliteCleanSlackApprovalTokenReaderV1(
+            control,
+            new FileOrganizationSecretStore(
+              join(config.state_directory, "secrets"),
+            ),
+          )
+        : undefined;
+    const privateApprovalCardPoster =
+      dependencies.live_adapters?.private_approval_card_poster ??
+      new PrivateSlackApprovalCardPosterV1(
         tokenReader!.readApprovalToken({
           connection_id: slack.connection_id,
           connection_state_sha256: slack.connection_state_sha256,
         }),
-        config.slack_approval_channel_id,
       );
-    const stager = new CleanSlackApprovalStagerV1(
-      sourceState,
-      control,
-      new CleanSlackCardFactoryV1(
-        {
-          authority_id: lineage.root.authority_id,
-          organization_id: lineage.root.organization_id,
-          state_lineage_id: lineage.root.state_lineage_id,
-        },
-        slack,
+    const assignments = new SqlitePrivateApprovalAssignmentStateV1(authority);
+    const controlPlane = new SqlitePrivateApprovalPersistenceV1({
+      database: control,
+      authority_fence: new SqliteStablePrivateApprovalAuthorityFenceV1(
+        authority,
       ),
-      approvalCardPoster,
-    );
+      now: () => new Date().toISOString(),
+    });
+    const stager = new PrivateOwnerDmApprovalStagerV1({
+      authority: sourceState,
+      authority_database: authority,
+      control_plane_database: control,
+      coordinates,
+      connection_id: slack.connection_id,
+      assignments,
+      control_plane: controlPlane,
+      poster: privateApprovalCardPoster,
+    });
     const sourceCycle = new CleanLiveOnlySourceCycleV1({
       source,
       processor,
@@ -660,41 +414,33 @@ export async function openCleanLiveRuntime(
       authority_id: lineage.root.authority_id,
       organization_id: lineage.root.organization_id,
     });
-    const recordWriter = await createCleanV4RecordWriterV1({
+    const recordWriter = await createPrivateSlackBlockV4RecordWriterV1({
       append: new OrganizationRecordV4AppendApplication(record, {
-        authority_id: lineage.root.authority_id,
-        organization_id: lineage.root.organization_id,
-        state_lineage_id: lineage.root.state_lineage_id,
+        ...coordinates,
       }),
       signer,
       state_lineage_id: lineage.root.state_lineage_id,
       next_envelope_id: () => `env_${randomUUID()}`,
     });
-    const d2d3 = new CleanD2ToD3ProcessingCoordinatorV1({
-      authority: new SqliteCleanD2ToD3AuthorityStateV1(sourceState),
-      finalization: {
-        coordinator: new SqlitePersonSlackApprovalFinalizationCoordinatorV2({
-          database: control,
-          authority_fence: authorityMembershipFence(
-            authority,
-            (approvalId) => sourceState.approvalIsCurrent(approvalId),
-          ),
-        }),
-        observer:
-          dependencies.live_adapters?.approval_observer ??
-          new CleanSlackReactionObserverV1({
-            token_reader: tokenReader!,
-            now: () => new Date().toISOString(),
-          }),
-        codec: { sha256: canonicalSha256 },
-        ids: {
-          next: (kind) =>
-            `${kind === "audit_event" ? "aud" : "cor"}_${randomUUID()}`,
-        },
-        now: () => new Date().toISOString(),
-      },
+    const approvals = new PrivateApprovalProcessingCoordinatorV1({
+      control_plane: controlPlane,
+      authority: new SqlitePrivateApprovalProcessingAuthorityV1({
+        source: sourceState,
+        assignments,
+        coordinates,
+      }),
       record_writer: recordWriter,
+      poster: privateApprovalCardPoster,
     });
+    const privateSlackInteractions =
+      createPrivateApprovalSlackInteractionsApplicationV1({
+        signing_secret: readPrivateAuthoritySlackSigningSecret(
+          `file:${config.slack_signing_secret_file}`,
+        ),
+        queue: createPrivateApprovalSlackResolutionIntentQueueV1({
+          persistence: controlPlane,
+        }),
+      });
     const readableSearch = createCleanReadableSearchGenerationReconcilerV1({
       state_directory: config.state_directory,
       root: lineage.root,
@@ -707,7 +453,7 @@ export async function openCleanLiveRuntime(
       {
         processing: new CombinedCleanLiveProcessing(
           sourceCycle,
-          d2d3,
+          approvals,
           readableSearch,
         ),
         person: {
@@ -724,6 +470,7 @@ export async function openCleanLiveRuntime(
             : config.on_layer4_failure === undefined
               ? {}
               : { answer_failure: config.on_layer4_failure }),
+          private_slack_approval_interactions: privateSlackInteractions,
         },
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,

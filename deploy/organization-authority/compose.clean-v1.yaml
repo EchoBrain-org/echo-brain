@@ -21,6 +21,8 @@ services:
       - "39479"
       - --client-secret-file
       - /echo-clean/private/oidc-client-secret
+      - --slack-signing-secret-file
+      - /echo-clean/private/slack-signing-secret
     user: "${ECHO_CLEAN_AUTHORITY_UID:-1000}:${ECHO_CLEAN_AUTHORITY_GID:-1000}"
     labels:
       io.echo-brain.release-id: "${ECHO_CLEAN_RELEASE_ID:?set ECHO_CLEAN_RELEASE_ID to the accepted release ID}"

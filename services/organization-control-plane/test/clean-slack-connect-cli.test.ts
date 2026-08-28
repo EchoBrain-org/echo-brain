@@ -20,8 +20,11 @@ import {
 import { runCleanSlackConnectCli } from "../src/composition/clean-slack-connect-cli.js";
 import {
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
   applyOrganizationControlBaselineV1,
+  applyOrganizationControlBaselineV2,
   organizationControlBaselineSha256V1,
+  organizationControlBaselineSha256V2,
 } from "../src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../src/persistence/open-unmigrated-database.js";
 import type { CleanSlackConnectionVerifierV1 } from "../src/persistence/sqlite-clean-slack-connection-v1.js";
@@ -102,7 +105,7 @@ function rootManifest() {
   };
 }
 
-function setupCleanState(): string {
+function setupCleanState(baseline: "v1" | "v2" = "v2"): string {
   const directory = stateDirectory();
   writeFileSync(
     join(directory, "state-lineage-root.v1.json"),
@@ -113,7 +116,8 @@ function setupCleanState(): string {
     join(directory, "integrations.sqlite"),
   );
   try {
-    applyOrganizationControlBaselineV1(database);
+    if (baseline === "v2") applyOrganizationControlBaselineV2(database);
+    else applyOrganizationControlBaselineV1(database);
     database
       .prepare(
         `INSERT INTO organization_control_plane_metadata
@@ -133,8 +137,14 @@ function setupCleanState(): string {
       kind: "echo-state-lineage-database-manifest-v1",
       role: "control-plane",
       ...COORDINATES,
-      database_schema_version: ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-      schema_sha256: organizationControlBaselineSha256V1(),
+      database_schema_version:
+        baseline === "v2"
+          ? ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2
+          : ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
+      schema_sha256:
+        baseline === "v2"
+          ? organizationControlBaselineSha256V2()
+          : organizationControlBaselineSha256V1(),
       created_at: "2026-08-22T00:00:00.000Z",
       creating_artifact_revision: "test",
     };
@@ -191,6 +201,12 @@ afterEach(() => {
 });
 
 describe("clean Slack connect founder command", () => {
+  it("refuses a V1 control-plane lineage before a stopped-state command can open it", () => {
+    expect(() => verifyCleanControlPlaneStateV1(setupCleanState("v1"))).toThrow(
+      "wrong baseline identity",
+    );
+  });
+
   it("derives clean coordinates, reads one injected stdin token, and prints only public fields", async () => {
     const directory = setupCleanState();
     const slack = verifier();

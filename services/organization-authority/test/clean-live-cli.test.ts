@@ -12,6 +12,8 @@ const runtimeState = vi.hoisted(() => ({
   worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
   layer4_failure: undefined as Layer4FailureObserver | undefined,
   startup_error: undefined as Error | undefined,
+  slack_signing_secret_file: undefined as string | undefined,
+  slack_connection_id: undefined as string | undefined,
 }));
 
 vi.mock("../src/composition/clean-founder-cli.js", () => ({
@@ -19,6 +21,7 @@ vi.mock("../src/composition/clean-founder-cli.js", () => ({
     authority_url: "https://authority.example",
     oidc_config_path: "/private/oidc.json",
     pkce_key_file: "/private/pkce.key",
+    slack_connection_id: "con_manifest",
     slack_approval_channel_id: "C_APPROVAL",
     granola_credential_file: "/private/granola.credential",
     granola_owner_email_file: "/private/granola-owner-email",
@@ -38,11 +41,15 @@ vi.mock("../src/composition/open-clean-live-runtime.js", () => ({
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly on_layer4_failure?: Layer4FailureObserver;
+    readonly slack_signing_secret_file: string;
+    readonly slack_connection_id: string;
   }) => {
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
     runtimeState.worker_error = config.on_worker_error;
     runtimeState.worker_telemetry = config.on_worker_telemetry;
     runtimeState.layer4_failure = config.on_layer4_failure;
+    runtimeState.slack_signing_secret_file = config.slack_signing_secret_file;
+    runtimeState.slack_connection_id = config.slack_connection_id;
     return {
       address: { address: "127.0.0.1", port: 43179 },
       processing: "active",
@@ -60,6 +67,8 @@ afterEach(() => {
   runtimeState.worker_telemetry = undefined;
   runtimeState.layer4_failure = undefined;
   runtimeState.startup_error = undefined;
+  runtimeState.slack_signing_secret_file = undefined;
+  runtimeState.slack_connection_id = undefined;
 });
 
 function start(io: { readonly stderr: (value: string) => void }) {
@@ -72,12 +81,28 @@ function start(io: { readonly stderr: (value: string) => void }) {
       "127.0.0.1",
       "--port",
       "43179",
+      "--slack-signing-secret-file",
+      "/private/slack-signing-secret",
     ],
     { stdout: () => undefined, ...io },
   );
 }
 
 describe("clean live CLI runtime events", () => {
+  it("requires and forwards only the Slack signing-secret file path", async () => {
+    const stderr: string[] = [];
+    const running = start({ stderr: (value) => stderr.push(value) });
+    await vi.waitFor(() =>
+      expect(runtimeState.slack_signing_secret_file).toBe(
+        "/private/slack-signing-secret",
+      ),
+    );
+    process.emit("SIGTERM");
+    await expect(running).resolves.toBe(0);
+    expect(stderr.join("")).not.toContain("slack-signing-secret");
+    expect(runtimeState.slack_connection_id).toBe("con_manifest");
+  });
+
   it("writes the closed worker lifecycle event without mutation", async () => {
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) });

@@ -22,9 +22,9 @@ import {
 } from "../src/canonical/canonical-json.js";
 import { runCleanPersonSlackApprovalActivateCli } from "../src/composition/clean-person-slack-approval-activate-cli.js";
 import {
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-  applyOrganizationControlBaselineV1,
-  organizationControlBaselineSha256V1,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+  applyOrganizationControlBaselineV2,
+  organizationControlBaselineSha256V2,
 } from "../src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../src/persistence/open-unmigrated-database.js";
 
@@ -212,7 +212,7 @@ function setupState(includeLink = true): string {
     join(directory, "integrations.sqlite"),
   );
   try {
-    applyOrganizationControlBaselineV1(database);
+    applyOrganizationControlBaselineV2(database);
     database
       .prepare(
         `INSERT INTO organization_control_plane_metadata
@@ -232,8 +232,8 @@ function setupState(includeLink = true): string {
       kind: "echo-state-lineage-database-manifest-v1",
       role: "control-plane",
       ...COORDINATES,
-      database_schema_version: ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-      schema_sha256: organizationControlBaselineSha256V1(),
+      database_schema_version: ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+      schema_sha256: organizationControlBaselineSha256V2(),
       created_at: "2026-08-22T00:00:00.000Z",
       creating_artifact_revision: "test",
     };

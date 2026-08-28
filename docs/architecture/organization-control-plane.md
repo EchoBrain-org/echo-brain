@@ -56,7 +56,7 @@ no active organization Slack connection
 Slack is inactive and unavailable for employee connection
         |
         v
-current Authority owner submits bot token + public C-channel ID
+current Authority owner submits bot token + temporary public identity-link C-channel ID
         |
         v
 Authority verifies bot, workspace, required scopes, and channel access
@@ -69,7 +69,12 @@ organization Slack connection is active
 ```
 
 The required Slack scopes are `channels:history`, `channels:read`,
-`chat:write`, `reactions:read`, and `users:read`. Provider verification first
+`chat:write`, `im:history`, `im:write`, `reactions:read`, and `users:read`.
+The public-channel scopes remain for the current Person identity-link contract;
+`im:write` opens the verified meeting owner's private DM and `im:history`
+reconciles a retry without duplicating that DM card. The public channel is
+identity-link-only: it receives no approval card and creates no approval
+binding. Provider verification first
 uses Slack `auth.test` for the token-bound workspace, bot user, bot ID, and
 granted scopes. It then uses `bots.info` for that exact bot ID and requires the
 returned bot ID and user ID to agree, the bot not to be deleted, and a canonical
@@ -96,6 +101,10 @@ client keeps a one-time code, the Authority posts a code-free challenge through
 the organization bot, and Slack identifies the one human who replies with that
 code in the exact thread. Completion creates or reuses that membership's
 external identity link. It creates no adapter binding or permission grant.
+
+Private approval V1 needs the same app's Interactivity Request URL at
+`/v2/integrations/slack/interactions` and signing secret. It does not currently
+need Event Subscriptions, Socket Mode, or a Slack OAuth redirect flow.
 
 The retained V1 installation-signed challenge still expects an installation's
 configured reviewer and can create an installation adapter binding. No shipped

@@ -173,6 +173,7 @@ function preparedStatusFixture() {
     "oidc-config.json": "fixture",
     "oidc-client-secret": "fixture",
     "slack-bot-token": "fixture",
+    "slack-signing-secret": "fixture",
     "granola-credential-source": `grn_${"a".repeat(40)}`,
     "granola-owner-email": "founder@example.com",
     "llm-credential-source": "b".repeat(43),
@@ -326,6 +327,13 @@ describe("clean founder deployment profile", () => {
     expect(source).toContain("service_uses_accepted_runtime_profile authority");
     expect(source).toContain("service_uses_accepted_runtime_profile proxy");
     expect(source).toContain("< \"$PRIVATE_DIR/slack-bot-token\"");
+    expect(source).toContain("slack-signing-secret");
+    expect(deploymentFile("compose.clean-v1.yaml")).toContain(
+      "--slack-signing-secret-file",
+    );
+    expect(deploymentFile("compose.clean-v1.yaml")).toContain(
+      "/echo-clean/private/slack-signing-secret",
+    );
     expect(source).toContain("docker image inspect");
     expect(source).toContain("compose_clean pull authority");
     expect(source).toContain('"$FOUNDER_MAIN" resume --state-dir /echo-clean/state');
@@ -818,6 +826,7 @@ describe("clean founder deployment profile", () => {
       for (const name of [
         "oidc-client-secret",
         "slack-bot-token",
+        "slack-signing-secret",
         "granola-credential",
         "llm-credential",
       ]) {
@@ -874,6 +883,21 @@ describe("clean founder deployment profile", () => {
         code: "ready",
         next_action: "Run prepare with the same input directory.",
       });
+      const signingSecret = join(inputDir, "slack-signing-secret");
+      rmSync(signingSecret);
+      const missingSigningSecretDoctor = execFileSync(
+        "bash",
+        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
+        commandEnvironment,
+      ).toString();
+      expect(JSON.parse(missingSigningSecretDoctor)).toEqual({
+        ok: false,
+        code: "input_files_invalid",
+        next_action:
+          "Use exactly the documented current-executor-owned regular files with mode 0600.",
+      });
+      writeFileSync(signingSecret, "slack-signing-secret-value", { mode: 0o600 });
+      chmodSync(signingSecret, 0o600);
       const manifest = join(inputDir, "onboarding.clean-v1.json");
       writeFileSync(
         manifest,
@@ -991,6 +1015,7 @@ describe("clean founder deployment profile", () => {
         "oidc-config.json",
         "oidc-client-secret",
         "slack-bot-token",
+        "slack-signing-secret",
         "granola-credential-source",
         "granola-owner-email",
         "llm-credential-source",

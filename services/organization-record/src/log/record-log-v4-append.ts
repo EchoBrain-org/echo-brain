@@ -14,9 +14,100 @@ import {
   type PersonPolicyEventV4View,
   type StructurallyVerifiedPersonPolicyRecordV4View,
 } from "../application/person-policy-facts-v2.js";
+import {
+  projectPrivateSlackBlockApprovalPolicyFactsV1,
+  type PrivateSlackBlockApprovalPolicyFactsInputV1,
+} from "../application/private-slack-block-approval-policy-facts-v1.js";
 
 type Action = "approve" | "reject";
 type EventKind = "approved" | "rejected";
+
+interface PrivateSlackBlockApprovalResolutionRefV1View {
+  readonly schema_version: 1;
+  readonly kind: "echo-private-slack-block-approval-resolution-ref-v1";
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly state_lineage_id: string;
+  readonly command_id: string;
+  readonly approval_id: string;
+  readonly candidate_sha256: Sha256Digest;
+  readonly frozen_card_sha256: Sha256Digest;
+  readonly approved_snapshot_sha256: Sha256Digest;
+  readonly assignment_version: number;
+  readonly assignment_capability_sha256: Sha256Digest;
+  readonly final_approver: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+  };
+  readonly current_slack_identity_link: {
+    readonly provider: "slack";
+    readonly external_identity_link_id: string;
+    readonly external_identity_link_contract_sha256: Sha256Digest;
+    readonly provider_subject_id: string;
+  };
+  readonly action: Action;
+  readonly selected_policy_id:
+    | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
+    | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+    | null;
+  readonly policy_contract_sha256: Sha256Digest | null;
+  readonly policy_consequence_sha256: Sha256Digest | null;
+  readonly comment: string | null;
+  readonly audit_event_id: string;
+  readonly audit_sequence: number;
+  readonly audit_entry_sha256: Sha256Digest;
+  readonly provider_action_kind: "echo-signed-slack-block-action-v1";
+  readonly provider_action_schema_version: 1;
+  readonly provider_action_sha256: Sha256Digest;
+  readonly authorization_proof_sha256: Sha256Digest;
+}
+
+interface PrivateSlackBlockApprovalEventV1View {
+  readonly kind: "approved" | "rejected";
+  readonly approved_snapshot?: unknown;
+}
+
+/** D2 reproof shape for the signed private Slack Block Kit action. */
+export interface ReprovedPrivateSlackBlockApprovalD2WitnessV1 {
+  readonly authorization_allow: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly approval_id: string;
+    readonly action: Action;
+    readonly assignment_version: number;
+    readonly final_approver: {
+      readonly principal_id: string;
+      readonly membership_id: string;
+    };
+    readonly selected_policy_id:
+      | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
+      | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+      | null;
+    readonly policy_contract_sha256: Sha256Digest | null;
+    readonly provider_action_sha256: Sha256Digest;
+    readonly decision: "allow";
+  };
+  readonly authorization_proof_sha256: Sha256Digest;
+  readonly provider_action_kind: "echo-signed-slack-block-action-v1";
+  readonly provider_action_schema_version: 1;
+  readonly audit_entry: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly audit_event_id: string;
+    readonly audit_sequence: number;
+    readonly actor_class: "provider_human";
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly action: Action;
+    readonly subject_kind: "approval";
+    readonly subject_id: string;
+    readonly detail_digest: Sha256Digest;
+    readonly provider_action_sha256: Sha256Digest;
+  };
+  readonly audit_entry_sha256: Sha256Digest;
+}
 
 export interface V4RecordEnvelopeView {
   readonly body: {
@@ -27,9 +118,11 @@ export interface V4RecordEnvelopeView {
     readonly semantic_idempotency_key: Sha256Digest;
     readonly predecessor_position: number | null;
     readonly predecessor_record_sha256: Sha256Digest | null;
-    /** Full V4 values may carry more fields; only this structural D3 view is read. */
-    readonly human_act_resolution_ref: PersonHumanActResolutionRefV1View;
-    readonly event: PersonPolicyEventV4View;
+    /** Full V4 values may carry more fields; only the selected D3 view is read. */
+    readonly human_act_resolution_ref:
+      | PersonHumanActResolutionRefV1View
+      | PrivateSlackBlockApprovalResolutionRefV1View;
+    readonly event: PersonPolicyEventV4View | PrivateSlackBlockApprovalEventV1View;
   };
   readonly record_sha256: Sha256Digest;
 }
@@ -77,7 +170,9 @@ export interface AppendV4RecordInput {
   readonly action: Action;
   readonly semantic_idempotency_key: Sha256Digest;
   readonly receipt_issued_at: string;
-  readonly d2_witness: ReprovedPersonPolicyD2WitnessV2;
+  readonly d2_witness:
+    | ReprovedPersonPolicyD2WitnessV2
+    | ReprovedPrivateSlackBlockApprovalD2WitnessV1;
   readonly envelope_factory: V4RecordEnvelopeFactory;
   readonly receipt_factory: V4ReceiptFactory;
 }
@@ -237,11 +332,7 @@ export class OrganizationRecordV4AppendApplication {
       );
       const canonical_envelope = canonicalJson(envelope);
       const envelope_sha256 = sha256Digest(canonical_envelope);
-      const projected = projectPersonPolicyFactsV2({
-        envelope: this.personPolicyView(envelope),
-        record_position: position,
-        witness: input.d2_witness,
-      });
+      const projected = this.projectPolicyFacts(envelope, position, input.d2_witness);
       const receipt_seed = input.receipt_factory.createSeed({
         envelope,
         position,
@@ -356,6 +447,11 @@ export class OrganizationRecordV4AppendApplication {
     envelope: V4RecordEnvelopeView,
   ): StructurallyVerifiedPersonPolicyRecordV4View {
     const reference = envelope.body.human_act_resolution_ref;
+    if (this.isPrivateSlackBlockApproval(reference)) {
+      throw new Error(
+        "private Slack Block Kit envelope cannot use the legacy reaction projector",
+      );
+    }
     const human_act_resolution_ref: PersonHumanActResolutionRefV1View = {
       authority_id: reference.authority_id,
       organization_id: reference.organization_id,
@@ -372,7 +468,7 @@ export class OrganizationRecordV4AppendApplication {
       provider_action_sha256: reference.provider_action_sha256,
       authorization_proof_sha256: reference.authorization_proof_sha256,
     };
-    const event = envelope.body.event;
+    const event = envelope.body.event as PersonPolicyEventV4View;
     const projectedEvent: PersonPolicyEventV4View =
       event.kind === "rejected"
         ? { kind: "rejected" }
@@ -406,6 +502,119 @@ export class OrganizationRecordV4AppendApplication {
         human_act_resolution_ref,
         event: projectedEvent,
       },
+    };
+  }
+
+  private isPrivateSlackBlockApproval(
+    reference: V4RecordEnvelopeView["body"]["human_act_resolution_ref"],
+  ): reference is PrivateSlackBlockApprovalResolutionRefV1View {
+    return (
+      "kind" in reference &&
+      reference.kind === "echo-private-slack-block-approval-resolution-ref-v1"
+    );
+  }
+
+  private projectPolicyFacts(
+    envelope: V4RecordEnvelopeView,
+    record_position: number,
+    witness:
+      | ReprovedPersonPolicyD2WitnessV2
+      | ReprovedPrivateSlackBlockApprovalD2WitnessV1,
+  ) {
+    const reference = envelope.body.human_act_resolution_ref;
+    if (this.isPrivateSlackBlockApproval(reference)) {
+      if (
+        witness.provider_action_kind !== "echo-signed-slack-block-action-v1" ||
+        witness.provider_action_schema_version !== 1
+      ) {
+        throw new Error(
+          "private Slack Block Kit envelope requires its private D2 witness",
+        );
+      }
+      const input: PrivateSlackBlockApprovalPolicyFactsInputV1 = {
+        envelope: {
+          record_sha256: envelope.record_sha256,
+          body: {
+            authority_id: envelope.body.authority_id,
+            organization_id: envelope.body.organization_id,
+            state_lineage_id: envelope.body.state_lineage_id,
+            human_act_resolution_ref: reference,
+            event: this.privateSlackBlockPolicyEventView(envelope.body.event),
+          },
+        },
+        record_position,
+        witness,
+      };
+      return projectPrivateSlackBlockApprovalPolicyFactsV1(input);
+    }
+    if (
+      witness.provider_action_kind !== "echo-provider-human-action-v2" ||
+      witness.provider_action_schema_version !== 2
+    ) {
+      throw new Error("legacy reaction envelope requires its legacy D2 witness");
+    }
+    return projectPersonPolicyFactsV2({
+      envelope: this.personPolicyView(envelope),
+      record_position,
+      witness,
+    });
+  }
+
+  private privateSlackBlockPolicyEventView(
+    event: PrivateSlackBlockApprovalEventV1View,
+  ): unknown {
+    if (event.kind === "rejected") return { kind: "rejected" };
+    const approved = event as {
+      readonly kind: "approved";
+      readonly approved_snapshot: {
+        readonly approved_payload: unknown;
+      };
+      readonly approved_snapshot_sha256: Sha256Digest;
+      readonly policy_id:
+        | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
+        | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID;
+      readonly policy_contract_sha256: Sha256Digest;
+      readonly policy_consequence_text: string;
+      readonly policy_consequence_sha256: Sha256Digest;
+    };
+    return {
+      kind: "approved",
+      approved_snapshot: {
+        approved_payload: {
+          brief: this.privateSlackBlockPolicyBriefView(
+            approved.approved_snapshot.approved_payload,
+          ),
+        },
+      },
+      approved_snapshot_sha256: approved.approved_snapshot_sha256,
+      policy_id: approved.policy_id,
+      policy_contract_sha256: approved.policy_contract_sha256,
+      policy_consequence_text: approved.policy_consequence_text,
+      policy_consequence_sha256: approved.policy_consequence_sha256,
+    };
+  }
+
+  private privateSlackBlockPolicyBriefView(value: unknown): unknown {
+    const brief = (value as {
+      readonly brief: {
+        readonly decisions: readonly { readonly id: string; readonly kind: "decision" }[];
+        readonly actions: readonly { readonly id: string; readonly kind: "action" }[];
+        readonly rationales: readonly { readonly id: string; readonly kind: "rationale" }[];
+      };
+    }).brief;
+    return {
+      decisions: brief.decisions.map((signal) => ({
+        id: signal.id,
+        kind: signal.kind,
+      })),
+      actions: brief.actions.map((signal) => ({
+        id: signal.id,
+        kind: signal.kind,
+      })),
+      rationales: brief.rationales.map((signal) => ({
+        id: signal.id,
+        kind: signal.kind,
+      })),
     };
   }
 

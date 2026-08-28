@@ -30,7 +30,8 @@
     "path"
   ],
   "runtime_assets": [
-    "services/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql"
+    "services/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql",
+    "services/organization-control-plane/baselines/organization-control-plane-private-approval-v2.sql"
   ],
   "layer_rules": [
     {

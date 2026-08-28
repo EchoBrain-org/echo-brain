@@ -36,6 +36,10 @@ import {
   CLEAN_PERSON_ANSWER_PATH_V1,
   type CleanPersonAnswerHttpApplicationV1,
 } from "./clean-person-answer-http-application.js";
+import {
+  PRIVATE_APPROVAL_SLACK_INTERACTIONS_PATH_V1,
+  type PrivateApprovalSlackInteractionsHttpApplicationV1,
+} from "./private-approval-slack-interactions-http-application-v1.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 export interface CleanPersonOidcProvider {
@@ -59,6 +63,9 @@ export interface CleanPersonHttpServerOptions {
   readonly person_employees?: CleanPersonEmployeeHttpApplication;
   /** Optional until the active clean runtime has a configured answer model. */
   readonly person_answer?: CleanPersonAnswerHttpApplicationV1;
+  /** Optional until the private Slack approval lane is fully composed. */
+  readonly private_slack_approval_interactions?:
+    PrivateApprovalSlackInteractionsHttpApplicationV1;
 }
 
 interface PendingLoopbackHandoff {
@@ -79,6 +86,14 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 
 function noContent(response: ServerResponse): void {
   response.writeHead(204, { "cache-control": "no-store" });
+  response.end();
+}
+
+function ok(response: ServerResponse): void {
+  response.writeHead(200, {
+    "content-length": "0",
+    "cache-control": "no-store",
+  });
   response.end();
 }
 
@@ -138,7 +153,7 @@ function fail(response: ServerResponse, status: number, code: string): void {
   json(response, status, { error: { code, message: "request failed" } });
 }
 
-async function body(request: IncomingMessage): Promise<unknown> {
+async function rawBody(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -151,8 +166,12 @@ async function body(request: IncomingMessage): Promise<unknown> {
       );
     chunks.push(bytes);
   }
+  return Buffer.concat(chunks, size);
+}
+
+async function body(request: IncomingMessage): Promise<unknown> {
   try {
-    return JSON.parse(Buffer.concat(chunks, size).toString("utf8")) as unknown;
+    return JSON.parse((await rawBody(request)).toString("utf8")) as unknown;
   } catch {
     throw new AuthorityOperationError(
       "invalid_request",
@@ -274,6 +293,31 @@ export function createCleanPersonHttpServer(
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
       const method = request.method ?? "GET";
+      if (
+        method === "POST" &&
+        url.pathname === PRIVATE_APPROVAL_SLACK_INTERACTIONS_PATH_V1 &&
+        url.search === ""
+      ) {
+        if (options.private_slack_approval_interactions === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        const timestamp = request.headers["x-slack-request-timestamp"];
+        const signature = request.headers["x-slack-signature"];
+        await options.private_slack_approval_interactions.accept({
+          raw_body: await rawBody(request),
+          content_type:
+            typeof request.headers["content-type"] === "string"
+              ? request.headers["content-type"]
+              : undefined,
+          slack_request_timestamp:
+            typeof timestamp === "string" ? timestamp : undefined,
+          slack_signature:
+            typeof signature === "string" ? signature : undefined,
+        });
+        ok(response);
+        return;
+      }
       if (
         method === "GET" &&
         url.pathname === ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH &&

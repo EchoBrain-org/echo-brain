@@ -25,6 +25,18 @@ import type {
   HumanActRecordInputV1,
   HumanActResolutionRefV1,
 } from "./human-act-record-input-v1.js";
+import {
+  buildPrivateSlackBlockApprovalRecordInputV1,
+  validatePrivateSlackBlockApprovalEventV1,
+  validatePrivateSlackBlockApprovalRecordInputV1,
+  validatePrivateSlackBlockApprovalResolutionRefV1,
+  PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
+} from "./private-slack-block-approval-record-input-v1.js";
+import type {
+  PrivateSlackBlockApprovalEventV1,
+  PrivateSlackBlockApprovalRecordInputV1,
+  PrivateSlackBlockApprovalResolutionRefV1,
+} from "./private-slack-block-approval-record-input-v1.js";
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
 import {
   assertDigest,
@@ -167,12 +179,14 @@ export interface OrganizationRecordEnvelopeBodyV4 {
   readonly issued_at: string;
   readonly predecessor_position: number | null;
   readonly predecessor_record_sha256: Sha256Digest | null;
-  readonly human_act_resolution_ref: HumanActResolutionRefV1;
+  readonly human_act_resolution_ref:
+    | HumanActResolutionRefV1
+    | PrivateSlackBlockApprovalResolutionRefV1;
   readonly source_provenance: MeetingSourceProvenanceV1;
   readonly source_provenance_sha256: Sha256Digest;
   readonly processor_provenance: DecisionProcessorProvenanceV1;
   readonly processor_provenance_sha256: Sha256Digest;
-  readonly event: HumanActEventV1;
+  readonly event: HumanActEventV1 | PrivateSlackBlockApprovalEventV1;
 }
 
 export interface OrganizationRecordSignatureInputV4 {
@@ -197,7 +211,9 @@ export interface CreateOrganizationRecordEnvelopeV4Input {
   readonly issued_at: string;
   readonly predecessor_position: number | null;
   readonly predecessor_record_sha256: Sha256Digest | null;
-  readonly human_act_record_input: HumanActRecordInputV1;
+  readonly human_act_record_input:
+    | HumanActRecordInputV1
+    | PrivateSlackBlockApprovalRecordInputV1;
   readonly source_provenance: MeetingSourceProvenanceV1;
   readonly processor_provenance: DecisionProcessorProvenanceV1;
 }
@@ -478,8 +494,77 @@ function assertSourceLocatorJoin(
   }
 }
 
+type HumanActResolutionRefV4 =
+  | HumanActResolutionRefV1
+  | PrivateSlackBlockApprovalResolutionRefV1;
+type HumanActEventV4 = HumanActEventV1 | PrivateSlackBlockApprovalEventV1;
+
+interface ValidatedHumanActRecordInputV4 {
+  readonly human_act_resolution_ref: HumanActResolutionRefV4;
+  readonly event: HumanActEventV4;
+  readonly semantic_idempotency_key: Sha256Digest;
+}
+
+function isPrivateSlackBlockResolutionRef(
+  value: HumanActResolutionRefV4,
+): value is PrivateSlackBlockApprovalResolutionRefV1 {
+  return value.kind === PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND;
+}
+
+function validateHumanActRecordInputV4(
+  value: unknown,
+): ValidatedHumanActRecordInputV4 {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.hasOwn(value, "private_slack_block_approval_resolution_ref")
+  ) {
+    const privateInput = validatePrivateSlackBlockApprovalRecordInputV1(value);
+    return {
+      human_act_resolution_ref:
+        privateInput.private_slack_block_approval_resolution_ref,
+      event: privateInput.event,
+      semantic_idempotency_key: privateInput.semantic_idempotency_key,
+    };
+  }
+  const legacy = validateHumanActRecordInputV1(value);
+  return {
+    human_act_resolution_ref: legacy.human_act_resolution_ref,
+    event: legacy.event,
+    semantic_idempotency_key: legacy.semantic_idempotency_key,
+  };
+}
+
+function buildHumanActRecordInputV4(
+  reference: HumanActResolutionRefV4,
+  event: HumanActEventV4,
+): ValidatedHumanActRecordInputV4 {
+  if (isPrivateSlackBlockResolutionRef(reference)) {
+    const privateInput = buildPrivateSlackBlockApprovalRecordInputV1({
+      private_slack_block_approval_resolution_ref: reference,
+      event: validatePrivateSlackBlockApprovalEventV1(event),
+    });
+    return {
+      human_act_resolution_ref:
+        privateInput.private_slack_block_approval_resolution_ref,
+      event: privateInput.event,
+      semantic_idempotency_key: privateInput.semantic_idempotency_key,
+    };
+  }
+  const legacy = buildHumanActRecordInputV1({
+    human_act_resolution_ref: reference,
+    event: validateHumanActEventV1(event),
+  });
+  return {
+    human_act_resolution_ref: legacy.human_act_resolution_ref,
+    event: legacy.event,
+    semantic_idempotency_key: legacy.semantic_idempotency_key,
+  };
+}
+
 function assertEventProvenanceJoins(
-  event: HumanActEventV1,
+  event: HumanActEventV4,
   source: MeetingSourceProvenanceV1,
   processor: DecisionProcessorProvenanceV1,
 ): void {
@@ -500,11 +585,13 @@ function assertEventProvenanceJoins(
     }
     return;
   }
-  assertSourceLocatorJoin(
-    event.rejection_payload.source,
-    source,
-    "Rejected record source",
-  );
+  if ("rejection_payload" in event) {
+    assertSourceLocatorJoin(
+      event.rejection_payload.source,
+      source,
+      "Rejected record source",
+    );
+  }
 }
 
 export function validateOrganizationRecordEnvelopeBodyV4(
@@ -532,10 +619,19 @@ export function validateOrganizationRecordEnvelopeBodyV4(
   assertTimestamp(body.issued_at, "Record envelope body v4 issued_at");
   assertPredecessor(body.predecessor_position, body.predecessor_record_sha256);
 
-  const reference = validateHumanActResolutionRefV1(
-    body.human_act_resolution_ref,
-  );
-  const event = validateHumanActEventV1(body.event);
+  const reference =
+    body.human_act_resolution_ref !== null &&
+    typeof body.human_act_resolution_ref === "object" &&
+    !Array.isArray(body.human_act_resolution_ref) &&
+    (body.human_act_resolution_ref as Record<string, unknown>).kind ===
+      PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND
+      ? validatePrivateSlackBlockApprovalResolutionRefV1(
+          body.human_act_resolution_ref,
+        )
+      : validateHumanActResolutionRefV1(body.human_act_resolution_ref);
+  const event = isPrivateSlackBlockResolutionRef(reference)
+    ? validatePrivateSlackBlockApprovalEventV1(body.event)
+    : validateHumanActEventV1(body.event);
   const source = validateMeetingSourceProvenanceV1(body.source_provenance);
   const processor = validateDecisionProcessorProvenanceV1(
     body.processor_provenance,
@@ -567,10 +663,7 @@ export function validateOrganizationRecordEnvelopeBodyV4(
   assertCoordinates(source, coordinates, "Source provenance");
   assertCoordinates(processor, coordinates, "Processor provenance");
 
-  const aggregate = buildHumanActRecordInputV1({
-    human_act_resolution_ref: reference,
-    event,
-  });
+  const aggregate = buildHumanActRecordInputV4(reference, event);
   if (body.semantic_idempotency_key !== aggregate.semantic_idempotency_key) {
     fail("Record envelope body v4 semantic idempotency key does not match the human act");
   }
@@ -758,7 +851,7 @@ export async function createOrganizationRecordEnvelopeV4(
   assertText(input.envelope_id, "Create record envelope v4 envelope_id");
   assertTimestamp(input.issued_at, "Create record envelope v4 issued_at");
   assertPredecessor(input.predecessor_position, input.predecessor_record_sha256);
-  const aggregate = validateHumanActRecordInputV1(input.human_act_record_input);
+  const aggregate = validateHumanActRecordInputV4(input.human_act_record_input);
   const source = validateMeetingSourceProvenanceV1(input.source_provenance);
   const processor = validateDecisionProcessorProvenanceV1(input.processor_provenance);
   const authority = resolvePinnedOrganizationAuthority(pinnedAuthority);

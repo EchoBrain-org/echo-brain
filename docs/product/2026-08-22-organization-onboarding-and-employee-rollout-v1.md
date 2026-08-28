@@ -114,7 +114,7 @@ or OIDC client.
 The resumable setup has a non-secret status view over these existing stages:
 
 1. Authority origin, OIDC configuration, and clean-state readiness.
-2. Slack bot credential plus a human-selected approval channel.
+2. Slack bot credential plus a temporary public founder identity-link channel.
 3. Founder invitation, browser OIDC login, and founder Slack link.
 4. Organization-held Granola credential, canonical founder work email, and the
    retained LLM credential.
@@ -130,7 +130,8 @@ The operator supplies only ordinary human inputs:
 - organization and founder names;
 - founder work email;
 - public Authority origin and OIDC client configuration;
-- Slack bot token and selected approval channel;
+- Slack bot token and selected temporary public identity-link channel (the
+  transitional `slack_approval_channel_id` field);
 - organization-held Granola API key and the same founder work email; and
 - the retained LLM provider key.
 
@@ -156,7 +157,8 @@ below. Existing notes remain outside the cutoff.
 
 The one-note canary proves source progress, an approved record, and that the
 owner can list and search the exact current Layer 2 generation after the
-record is appended and published. Terminal status exposes only boolean or enum
+record is appended and published. The card is a private meeting-owner Block Kit
+DM, not a public-channel reaction. Terminal status exposes only boolean or enum
 evidence; wrapper completion also requires a healthy Authority on the exact
 accepted image. Duplicate or presentation anomalies are reported as product
 warnings and can be fixed by an image update; they are not a reason to rebuild
@@ -164,17 +166,13 @@ the onboarding architecture.
 
 ### Granola record visibility marker
 
-By default, a post-cutoff Granola note produces an
-`organization-member-readable-person-v2` candidate: every current active owner
-or employee may read it after approval. To make a candidate reviewer-only, put
-the note in a Granola folder named exactly `echo-restricted`. The frozen source
-snapshot then selects the existing `restricted-reviewer-person-v2` policy: only
-the exact approving owner and that owner's current membership tenure may read
-it. The rule accepts any folder membership with that exact case-sensitive name;
-titles never select policy. The Slack approval card shows the selected policy's
-full consequence immediately before its approve or reject instruction, so
-approval is informed. A later folder move may create a new source revision but
-does not reinterpret an already posted card or approved record.
+A post-cutoff Granola note creates a pending candidate with no canonical
+visibility policy. The private meeting-owner card presents **Only me** as a
+default and offers **Only me** or **Team**; the selected policy binds only when
+the owner clicks Approve. Source folders and titles do not select policy. The
+current `echo-restricted` folder convention is not an alternate publication
+route. Rejecting a card creates no V4 record or readable policy fact, and a
+later source revision does not reinterpret an already approved record.
 
 ### 3. Employee lifecycle
 
@@ -309,7 +307,7 @@ against one candidate.
 
 1. One real organization rehearsal uses a separately prepared EC2/Compose
    host, public origin, and registered OIDC redirect URI; it completes the
-   one-note post-cutoff Granola-to-Slack canary, approves one record, reads it
+   one-note post-cutoff Granola-to-private-Slack-DM canary, approves one record, reads it
    through Layer 3 listing and Layer 3 search, and reruns `resume`/`status` to
    a terminal green result.
 2. A clean macOS arm64 employee machine receives the release-matched kit and
