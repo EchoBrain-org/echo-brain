@@ -85,6 +85,7 @@ function candidateSemanticDigest(input: {
 
 export interface CleanPostedApprovalCardV1 {
   readonly candidate_id: string;
+  readonly post_started_at: string;
   readonly provider_message_ts: string;
   readonly frozen_card_sha256: string;
   readonly approved_snapshot: Readonly<Record<string, unknown>>;
@@ -886,12 +887,19 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     })();
   }
 
-  /** Record a provider rejection which proves that no Slack message was made. */
-  recordDefinitiveApprovalPostFailure(
-    candidateId: string,
-  ): CleanLiveApprovalOutboxV1 {
+  /**
+   * Release a durable delivery attempt only after its adapter explicitly
+   * permits a retry. The frozen attempt timestamp is the compare-and-swap
+   * token, so an old runner cannot release a newer attempt for the same
+   * candidate.
+   */
+  releaseApprovalPostAttempt(input: {
+    readonly candidate_id: string;
+    readonly post_started_at: string;
+  }): CleanLiveApprovalOutboxV1 {
     return this.database.transaction(() => {
-      const current = this.outbox(candidateId);
+      assertCanonicalUtcMillis(input.post_started_at);
+      const current = this.outbox(input.candidate_id);
       if (current.state === "queued") return current;
       if (
         current.state === "superseded" &&
@@ -900,10 +908,16 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       ) {
         return current;
       }
+      if (current.provider_message_ts !== null) {
+        throw new Error(
+          "clean live approval post attempt is externally visible",
+        );
+      }
+      if (current.post_started_at !== input.post_started_at) {
+        throw new Error("clean live approval post attempt is stale");
+      }
       if (
         current.state === "superseded" &&
-        current.provider_message_ts === null &&
-        current.post_started_at !== null &&
         current.control_approval_sha256 === null
       ) {
         const now = this.now();
@@ -917,18 +931,20 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                     post_started_at = NULL, updated_at = ?
               WHERE candidate_id = ? AND state = 'superseded'
                 AND provider_message_ts IS NULL
-                AND post_started_at IS NOT NULL
+                AND post_started_at = ?
                 AND control_approval_sha256 IS NULL`,
           )
-          .run(now, candidateId);
+          .run(now, input.candidate_id, input.post_started_at);
         if (updated.changes !== 1) {
-          throw new Error("clean superseded post failure state drifted");
+          throw new Error(
+            "clean superseded approval post attempt state drifted",
+          );
         }
-        return this.outbox(candidateId);
+        return this.outbox(input.candidate_id);
       }
       if (current.state !== "posting") {
         throw new Error(
-          "clean live approval post failure lacks an active post attempt",
+          "clean live approval post attempt lacks a releasable unresolved delivery",
         );
       }
       const now = this.now();
@@ -940,13 +956,15 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                   approved_snapshot_json = NULL,
                   approved_snapshot_sha256 = NULL,
                   post_started_at = NULL, updated_at = ?
-            WHERE candidate_id = ? AND state = 'posting'`,
+            WHERE candidate_id = ? AND state = 'posting'
+              AND provider_message_ts IS NULL
+              AND post_started_at = ?`,
         )
-        .run(now, candidateId);
+        .run(now, input.candidate_id, input.post_started_at);
       if (updated.changes !== 1) {
-        throw new Error("clean live approval post failure state drifted");
+        throw new Error("clean live approval post attempt state drifted");
       }
-      return this.outbox(candidateId);
+      return this.outbox(input.candidate_id);
     })();
   }
 
@@ -954,12 +972,14 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     input: CleanPostedApprovalCardV1,
   ): CleanLiveApprovalOutboxV1 {
     return this.database.transaction(() => {
+      assertCanonicalUtcMillis(input.post_started_at);
       const current = this.outbox(input.candidate_id);
       const snapshotJson = canonicalJson(input.approved_snapshot);
       const snapshotSha256 = canonicalSha256(input.approved_snapshot);
       if (current.state !== "posting") {
         if (
           current.provider_message_ts === input.provider_message_ts &&
+          current.post_started_at === input.post_started_at &&
           current.frozen_card_sha256 === input.frozen_card_sha256 &&
           current.approved_snapshot_json === snapshotJson &&
           current.approved_snapshot_sha256 === snapshotSha256
@@ -972,7 +992,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           current.frozen_card_sha256 === input.frozen_card_sha256 &&
           current.approved_snapshot_json === snapshotJson &&
           current.approved_snapshot_sha256 === snapshotSha256 &&
-          current.post_started_at !== null
+          current.post_started_at === input.post_started_at
         ) {
           const now = this.now();
           assertCanonicalUtcMillis(now);
@@ -982,12 +1002,14 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                   SET provider_message_ts = ?,
                       updated_at = ?
                 WHERE candidate_id = ? AND state = 'superseded'
-                  AND provider_message_ts IS NULL`,
+                  AND provider_message_ts IS NULL
+                  AND post_started_at = ?`,
             )
             .run(
               input.provider_message_ts,
               now,
               input.candidate_id,
+              input.post_started_at,
             );
           return this.outbox(input.candidate_id);
         }
@@ -997,18 +1019,23 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       const now = this.now();
       assertCanonicalUtcMillis(now);
-      this.database
+      const updated = this.database
         .prepare(
           `UPDATE authority_clean_live_approval_outbox_v1
               SET state = 'posted', provider_message_ts = ?,
                   updated_at = ?
-            WHERE candidate_id = ? AND state = 'posting'`,
+            WHERE candidate_id = ? AND state = 'posting'
+              AND post_started_at = ?`,
         )
         .run(
           input.provider_message_ts,
           now,
           input.candidate_id,
+          input.post_started_at,
         );
+      if (updated.changes !== 1) {
+        throw new Error("clean live approval post result is stale");
+      }
       return this.outbox(input.candidate_id);
     })();
   }

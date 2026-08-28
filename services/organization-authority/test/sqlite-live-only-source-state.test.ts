@@ -170,27 +170,40 @@ describe("SQLite clean live-only source state", () => {
       created: true,
       outbox: { state: "posting", post_started_at: ADVANCED_AT },
     });
-    expect(state.prepareApprovalPost({
-      candidate_id: candidate.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { candidate_id: candidate.candidate_id },
-    })).toMatchObject({
+    expect(
+      state.prepareApprovalPost({
+        candidate_id: candidate.candidate_id,
+        frozen_card_sha256: `sha256:${"c".repeat(64)}`,
+        approved_snapshot: { candidate_id: candidate.candidate_id },
+      }),
+    ).toMatchObject({
       created: false,
       outbox: { state: "posting", post_started_at: ADVANCED_AT },
     });
     expect(
-      state.recordDefinitiveApprovalPostFailure(candidate.candidate_id),
+      state.releaseApprovalPostAttempt({
+        candidate_id: candidate.candidate_id,
+        post_started_at: ADVANCED_AT,
+      }),
     ).toMatchObject({
       state: "queued",
       frozen_card_sha256: null,
       approved_snapshot_json: null,
       post_started_at: null,
     });
-    expect(state.prepareApprovalPost({
-      candidate_id: candidate.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { candidate_id: candidate.candidate_id },
-    })).toMatchObject({
+    expect(
+      state.releaseApprovalPostAttempt({
+        candidate_id: candidate.candidate_id,
+        post_started_at: ADVANCED_AT,
+      }),
+    ).toMatchObject({ state: "queued" });
+    expect(
+      state.prepareApprovalPost({
+        candidate_id: candidate.candidate_id,
+        frozen_card_sha256: `sha256:${"c".repeat(64)}`,
+        approved_snapshot: { candidate_id: candidate.candidate_id },
+      }),
+    ).toMatchObject({
       created: true,
       outbox: { state: "posting", post_started_at: ADVANCED_AT },
     });
@@ -255,13 +268,14 @@ describe("SQLite clean live-only source state", () => {
     ) => {
       const frozen_card_sha256 = `sha256:${token.repeat(64)}`;
       const approved_snapshot = { candidate_id: candidate.candidate_id };
-      state.prepareApprovalPost({
+      const prepared = state.prepareApprovalPost({
         candidate_id: candidate.candidate_id,
         frozen_card_sha256,
         approved_snapshot,
       });
       state.recordPostedApprovalCard({
         candidate_id: candidate.candidate_id,
+        post_started_at: prepared.outbox.post_started_at!,
         provider_message_ts: `1724292304.00${providerMessage++}000`,
         frozen_card_sha256,
         approved_snapshot,
@@ -282,13 +296,14 @@ describe("SQLite clean live-only source state", () => {
     const posted = await stage("posted");
     const postedDigest = `sha256:${"d".repeat(64)}`;
     const postedSnapshot = { candidate_id: posted.candidate_id };
-    state.prepareApprovalPost({
+    const postedPrepared = state.prepareApprovalPost({
       candidate_id: posted.candidate_id,
       frozen_card_sha256: postedDigest,
       approved_snapshot: postedSnapshot,
     });
     state.recordPostedApprovalCard({
       candidate_id: posted.candidate_id,
+      post_started_at: postedPrepared.outbox.post_started_at!,
       provider_message_ts: "1724292304.004000",
       frozen_card_sha256: postedDigest,
       approved_snapshot: postedSnapshot,
@@ -343,11 +358,11 @@ describe("SQLite clean live-only source state", () => {
       review_policy: REVIEW_POLICY,
     });
 
-    expect(state.listPendingApprovalDeliveries().map(({ approval_id }) => approval_id)).toEqual([
-      queued.approval_id,
-      posting.approval_id,
-      posted.approval_id,
-    ]);
+    expect(
+      state
+        .listPendingApprovalDeliveries()
+        .map(({ approval_id }) => approval_id),
+    ).toEqual([queued.approval_id, posting.approval_id, posted.approval_id]);
     expect(state.listPendingApprovalDeliveries()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -492,17 +507,19 @@ describe("SQLite clean live-only source state", () => {
       stage_command_id: expect.stringMatching(/^pas_/),
       state: "queued",
       review_policy_id: REVIEW_POLICY.policy_id,
-      review_policy_contract_sha256:
-        REVIEW_POLICY.policy_contract_sha256,
-      review_policy_consequence_text:
-        REVIEW_POLICY.policy_consequence_text,
-      review_policy_consequence_sha256:
-        REVIEW_POLICY.policy_consequence_sha256,
+      review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
+      review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
+      review_policy_consequence_sha256: REVIEW_POLICY.policy_consequence_sha256,
     });
     await expect(
-      state.stageCandidate({ admission: current, meeting, decisions, review_policy: REVIEW_POLICY }),
+      state.stageCandidate({
+        admission: current,
+        meeting,
+        decisions,
+        review_policy: REVIEW_POLICY,
+      }),
     ).resolves.toEqual(candidate);
-    state.prepareApprovalPost({
+    const prepared = state.prepareApprovalPost({
       candidate_id: candidate.candidate_id,
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: {
@@ -512,6 +529,7 @@ describe("SQLite clean live-only source state", () => {
     });
     const posted = state.recordPostedApprovalCard({
       candidate_id: candidate.candidate_id,
+      post_started_at: prepared.outbox.post_started_at!,
       provider_message_ts: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: {
@@ -555,7 +573,10 @@ describe("SQLite clean live-only source state", () => {
 
   it("rejects display text that differs from the canonical D2 policy commitment", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
 
     await expect(
@@ -662,7 +683,9 @@ describe("SQLite clean live-only source state", () => {
         )
         .get(),
     ).toEqual({ count: 1 });
-    expect(state.readFrozenCandidateForApproval(original.approval_id)).toMatchObject({
+    expect(
+      state.readFrozenCandidateForApproval(original.approval_id),
+    ).toMatchObject({
       admission: { source: { cursor: sourceCursor } },
       meeting,
       decisions,
@@ -705,19 +728,35 @@ describe("SQLite clean live-only source state", () => {
 
   it("records a folder-only provider revision without creating another review round", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
-    const first = await state.stageCandidate({ admission: current, meeting, decisions, review_policy: REVIEW_POLICY });
+    const first = await state.stageCandidate({
+      admission: current,
+      meeting,
+      decisions,
+      review_policy: REVIEW_POLICY,
+    });
     assertActionable(first);
     const folderOnly: MeetingDocument = {
       ...meeting,
-      provenance: { ...meeting.provenance, canonical_revision: "sha256:note-folder" },
-      extensions: { granola: { folder_membership: [{ id: "folder-1", name: "notes" }] } },
+      provenance: {
+        ...meeting.provenance,
+        canonical_revision: "sha256:note-folder",
+      },
+      extensions: {
+        granola: { folder_membership: [{ id: "folder-1", name: "notes" }] },
+      },
     };
     const duplicate = await state.stageCandidate({
       admission: current,
       meeting: folderOnly,
-      decisions: { ...decisions, meeting_revision: folderOnly.provenance.canonical_revision },
+      decisions: {
+        ...decisions,
+        meeting_revision: folderOnly.provenance.canonical_revision,
+      },
       review_policy: REVIEW_POLICY,
     });
     state.prepareApprovalPost({
@@ -727,6 +766,7 @@ describe("SQLite clean live-only source state", () => {
     });
     const posted = state.recordPostedApprovalCard({
       candidate_id: first.candidate_id,
+      post_started_at: ADVANCED_AT,
       provider_message_ts: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
@@ -746,7 +786,10 @@ describe("SQLite clean live-only source state", () => {
 
   it("coalesces a meeting-time-only revision into the existing review round", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
     const first = await state.stageCandidate({
       admission: current,
@@ -790,13 +833,24 @@ describe("SQLite clean live-only source state", () => {
 
   it("opens a new immutable review round for a semantic or policy-boundary change", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
-    const first = await state.stageCandidate({ admission: current, meeting, decisions, review_policy: REVIEW_POLICY });
+    const first = await state.stageCandidate({
+      admission: current,
+      meeting,
+      decisions,
+      review_policy: REVIEW_POLICY,
+    });
     assertActionable(first);
     const edited: MeetingDocument = {
       ...meeting,
-      provenance: { ...meeting.provenance, canonical_revision: "sha256:note-edit" },
+      provenance: {
+        ...meeting.provenance,
+        canonical_revision: "sha256:note-edit",
+      },
     };
     const second = await state.stageCandidate({
       admission: current,
@@ -804,19 +858,32 @@ describe("SQLite clean live-only source state", () => {
       decisions: {
         ...decisions,
         meeting_revision: edited.provenance.canonical_revision,
-        signals: [{
-          id: "decision-edit", kind: "decision", status: "decided", text: "Changed decision.",
-          subject: null, confidence: 1,
-          evidence: [{ meeting_id: "meeting-1", block_id: "block-1" }],
-        }],
+        signals: [
+          {
+            id: "decision-edit",
+            kind: "decision",
+            status: "decided",
+            text: "Changed decision.",
+            subject: null,
+            confidence: 1,
+            evidence: [{ meeting_id: "meeting-1", block_id: "block-1" }],
+          },
+        ],
       },
       review_policy: REVIEW_POLICY,
     });
     assertActionable(second);
     const restricted: MeetingDocument = {
       ...edited,
-      provenance: { ...edited.provenance, canonical_revision: "sha256:note-policy" },
-      extensions: { granola: { folder_membership: [{ id: "folder-r", name: "echo-restricted" }] } },
+      provenance: {
+        ...edited.provenance,
+        canonical_revision: "sha256:note-policy",
+      },
+      extensions: {
+        granola: {
+          folder_membership: [{ id: "folder-r", name: "echo-restricted" }],
+        },
+      },
     };
     const third = await state.stageCandidate({
       admission: current,
@@ -841,7 +908,10 @@ describe("SQLite clean live-only source state", () => {
 
   it("records no-signals revisions, supersedes unresolved work, and reproves the exact revision", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
     const first = await state.stageCandidate({
       admission: current,
@@ -890,7 +960,10 @@ describe("SQLite clean live-only source state", () => {
 
   it("retains a Slack post that returns after its queued candidate was superseded", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
     const first = await state.stageCandidate({
       admission: current,
@@ -936,6 +1009,7 @@ describe("SQLite clean live-only source state", () => {
     );
     const latePost = {
       candidate_id: first.candidate_id,
+      post_started_at: ADVANCED_AT,
       provider_message_ts: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
@@ -949,10 +1023,12 @@ describe("SQLite clean live-only source state", () => {
       state: "superseded",
       provider_message_ts: latePost.provider_message_ts,
     });
-    expect(state.listPendingSupersededApprovalCards()).toContainEqual(expect.objectContaining({
-      approval_id: first.approval_id,
-      provider_message_ts: latePost.provider_message_ts,
-    }));
+    expect(state.listPendingSupersededApprovalCards()).toContainEqual(
+      expect.objectContaining({
+        approval_id: first.approval_id,
+        provider_message_ts: latePost.provider_message_ts,
+      }),
+    );
     expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
       approved_snapshot_json: expect.any(String),
       approved_snapshot_sha256: expect.stringMatching(/^sha256:/),
@@ -965,7 +1041,7 @@ describe("SQLite clean live-only source state", () => {
     ).toThrow("conflicts with its durable outbox");
   });
 
-  it("releases a superseded post intent after a definitive provider rejection", async () => {
+  it("releases a superseded post attempt after a definitive provider rejection", async () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       database(),
       () => ADVANCED_AT,
@@ -996,17 +1072,22 @@ describe("SQLite clean live-only source state", () => {
       decisions: {
         ...decisions,
         meeting_revision: revisedMeeting.provenance.canonical_revision,
-        signals: [{
-          ...decisions.signals[0]!,
-          id: "decision-after-definitive-failure",
-          text: "Retry only the provider-rejected post.",
-        }],
+        signals: [
+          {
+            ...decisions.signals[0]!,
+            id: "decision-after-definitive-failure",
+            text: "Retry only the provider-rejected post.",
+          },
+        ],
       },
       review_policy: REVIEW_POLICY,
     });
 
     expect(
-      state.recordDefinitiveApprovalPostFailure(first.candidate_id),
+      state.releaseApprovalPostAttempt({
+        candidate_id: first.candidate_id,
+        post_started_at: ADVANCED_AT,
+      }),
     ).toMatchObject({
       state: "superseded",
       provider_message_ts: null,
@@ -1017,14 +1098,127 @@ describe("SQLite clean live-only source state", () => {
     expect(state.listPendingSupersededApprovalCards()).not.toContainEqual(
       expect.objectContaining({ approval_id: first.approval_id }),
     );
+    expect(
+      state.releaseApprovalPostAttempt({
+        candidate_id: first.candidate_id,
+        post_started_at: ADVANCED_AT,
+      }),
+    ).toMatchObject({
+      state: "superseded",
+      post_started_at: null,
+    });
+  });
+
+  it("releases only the exact unresolved delivery attempt", async () => {
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      database(),
+      () => ADVANCED_AT,
+    );
+    const current = await state.readAdmission();
+    const candidate = await state.stageCandidate({
+      admission: current,
+      meeting,
+      decisions,
+      review_policy: REVIEW_POLICY,
+    });
+    assertActionable(candidate);
+    state.prepareApprovalPost({
+      candidate_id: candidate.candidate_id,
+      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
+      approved_snapshot: { candidate_id: candidate.candidate_id },
+    });
+
+    expect(() =>
+      state.releaseApprovalPostAttempt({
+        candidate_id: candidate.candidate_id,
+        post_started_at: "2026-08-22T02:05:03.000Z",
+      }),
+    ).toThrow("is stale");
+    expect(
+      state.readCandidateByApprovalId(candidate.approval_id),
+    ).toMatchObject({
+      state: "posting",
+      post_started_at: ADVANCED_AT,
+    });
+
+    state.recordPostedApprovalCard({
+      candidate_id: candidate.candidate_id,
+      post_started_at: ADVANCED_AT,
+      provider_message_ts: "1724292304.005000",
+      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
+      approved_snapshot: { candidate_id: candidate.candidate_id },
+    });
+    expect(() =>
+      state.releaseApprovalPostAttempt({
+        candidate_id: candidate.candidate_id,
+        post_started_at: ADVANCED_AT,
+      }),
+    ).toThrow("is externally visible");
+  });
+
+  it("rejects a late post result after the same approval starts a new attempt", async () => {
+    let now = ADVANCED_AT;
+    const state = new SqliteCleanLiveOnlySourceStateV1(database(), () => now);
+    const current = await state.readAdmission();
+    const candidate = await state.stageCandidate({
+      admission: current,
+      meeting,
+      decisions,
+      review_policy: REVIEW_POLICY,
+    });
+    assertActionable(candidate);
+    const frozen_card_sha256 = `sha256:${"c".repeat(64)}`;
+    const approved_snapshot = { candidate_id: candidate.candidate_id };
+    const firstAttempt = state.prepareApprovalPost({
+      candidate_id: candidate.candidate_id,
+      frozen_card_sha256,
+      approved_snapshot,
+    });
+    const firstStartedAt = firstAttempt.outbox.post_started_at!;
+
+    state.releaseApprovalPostAttempt({
+      candidate_id: candidate.candidate_id,
+      post_started_at: firstStartedAt,
+    });
+    now = NEXT_CUTOFF;
+    const secondAttempt = state.prepareApprovalPost({
+      candidate_id: candidate.candidate_id,
+      frozen_card_sha256,
+      approved_snapshot,
+    });
+    const secondStartedAt = secondAttempt.outbox.post_started_at!;
+    expect(secondStartedAt).not.toBe(firstStartedAt);
+
+    expect(() =>
+      state.recordPostedApprovalCard({
+        candidate_id: candidate.candidate_id,
+        post_started_at: firstStartedAt,
+        provider_message_ts: "1724292304.005000",
+        frozen_card_sha256,
+        approved_snapshot,
+      }),
+    ).toThrow("post result is stale");
+    expect(
+      state.readCandidateByApprovalId(candidate.approval_id),
+    ).toMatchObject({
+      state: "posting",
+      post_started_at: secondStartedAt,
+      provider_message_ts: null,
+    });
   });
 
   it("retains every stale posted card through an A-to-B-to-C no-signals lineage", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
     const first = await state.stageCandidate({
-      admission: current, meeting, decisions, review_policy: REVIEW_POLICY,
+      admission: current,
+      meeting,
+      decisions,
+      review_policy: REVIEW_POLICY,
     });
     assertActionable(first);
     state.prepareApprovalPost({
@@ -1034,13 +1228,17 @@ describe("SQLite clean live-only source state", () => {
     });
     state.recordPostedApprovalCard({
       candidate_id: first.candidate_id,
+      post_started_at: ADVANCED_AT,
       provider_message_ts: "1724292304.005000",
       frozen_card_sha256: `sha256:${"a".repeat(64)}`,
       approved_snapshot: { candidate_id: first.candidate_id },
     });
     const revisedMeeting: MeetingDocument = {
       ...meeting,
-      provenance: { ...meeting.provenance, canonical_revision: "sha256:note-b" },
+      provenance: {
+        ...meeting.provenance,
+        canonical_revision: "sha256:note-b",
+      },
     };
     const second = await state.stageCandidate({
       admission: current,
@@ -1060,13 +1258,17 @@ describe("SQLite clean live-only source state", () => {
     });
     state.recordPostedApprovalCard({
       candidate_id: second.candidate_id,
+      post_started_at: ADVANCED_AT,
       provider_message_ts: "1724292304.006000",
       frozen_card_sha256: `sha256:${"b".repeat(64)}`,
       approved_snapshot: { candidate_id: second.candidate_id },
     });
     const noSignalsMeeting: MeetingDocument = {
       ...revisedMeeting,
-      provenance: { ...revisedMeeting.provenance, canonical_revision: "sha256:note-c" },
+      provenance: {
+        ...revisedMeeting.provenance,
+        canonical_revision: "sha256:note-c",
+      },
     };
     const third = await state.stageCandidate({
       admission: current,
@@ -1081,10 +1283,18 @@ describe("SQLite clean live-only source state", () => {
     expect(third.disposition).toBe("no_signals");
 
     const stale = state.listPendingSupersededApprovalCards();
-    expect(stale).toEqual(expect.arrayContaining([
-      expect.objectContaining({ approval_id: first.approval_id, superseded_by_candidate_id: second.candidate_id }),
-      expect.objectContaining({ approval_id: second.approval_id, superseded_by_candidate_id: third.candidate_id }),
-    ]));
+    expect(stale).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          approval_id: first.approval_id,
+          superseded_by_candidate_id: second.candidate_id,
+        }),
+        expect.objectContaining({
+          approval_id: second.approval_id,
+          superseded_by_candidate_id: third.candidate_id,
+        }),
+      ]),
+    );
     for (const card of stale) {
       if (card.provider_message_ts === null) {
         throw new Error("posted stale fixture has no provider timestamp");
@@ -1098,19 +1308,27 @@ describe("SQLite clean live-only source state", () => {
     }
     expect(state.listPendingSupersededApprovalCards()).toEqual([]);
     expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
-      state: "superseded", tombstoned_at: ADVANCED_AT,
+      state: "superseded",
+      tombstoned_at: ADVANCED_AT,
     });
     expect(state.readCandidateByApprovalId(second.approval_id)).toMatchObject({
-      state: "superseded", tombstoned_at: ADVANCED_AT,
+      state: "superseded",
+      tombstoned_at: ADVANCED_AT,
     });
   });
 
   it("rejects impossible supersession evidence transitions", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
     const first = await state.stageCandidate({
-      admission: current, meeting, decisions, review_policy: REVIEW_POLICY,
+      admission: current,
+      meeting,
+      decisions,
+      review_policy: REVIEW_POLICY,
     });
     assertActionable(first);
     const otherMeeting: MeetingDocument = {
@@ -1129,32 +1347,39 @@ describe("SQLite clean live-only source state", () => {
         ...decisions,
         meeting_id: otherMeeting.id,
         meeting_revision: otherMeeting.provenance.canonical_revision,
-        signals: [{
-          ...decisions.signals[0]!,
-          evidence: [{ meeting_id: otherMeeting.id, block_id: "block-1" }],
-        }],
+        signals: [
+          {
+            ...decisions.signals[0]!,
+            evidence: [{ meeting_id: otherMeeting.id, block_id: "block-1" }],
+          },
+        ],
       },
       review_policy: REVIEW_POLICY,
     });
     assertActionable(queued);
-    expect(() => value.prepare(
-      `UPDATE authority_clean_live_approval_outbox_v1
+    expect(() =>
+      value
+        .prepare(
+          `UPDATE authority_clean_live_approval_outbox_v1
           SET state = 'superseded', provider_message_ts = '1724292304.005000',
               frozen_card_sha256 = ?, approved_snapshot_json = '{}',
               approved_snapshot_sha256 = ?, superseded_by_candidate_id = ?,
               superseded_at = ?, updated_at = ?
         WHERE candidate_id = ?`,
-    ).run(
-      `sha256:${"a".repeat(64)}`,
-      `sha256:${"b".repeat(64)}`,
-      first.candidate_id,
-      ADVANCED_AT,
-      ADVANCED_AT,
-      queued.candidate_id,
-    )).toThrow("only permits queued-posting-posted-staged-superseded");
+        )
+        .run(
+          `sha256:${"a".repeat(64)}`,
+          `sha256:${"b".repeat(64)}`,
+          first.candidate_id,
+          ADVANCED_AT,
+          ADVANCED_AT,
+          queued.candidate_id,
+        ),
+    ).toThrow("only permits queued-posting-posted-staged-superseded");
 
     const directQueuedPost = {
       candidate_id: queued.candidate_id,
+      post_started_at: ADVANCED_AT,
       provider_message_ts: "1724292304.005001",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { candidate_id: queued.candidate_id },
@@ -1168,23 +1393,30 @@ describe("SQLite clean live-only source state", () => {
       approved_snapshot: directQueuedPost.approved_snapshot,
     });
     state.recordPostedApprovalCard(directQueuedPost);
-    expect(() => value.prepare(
-      `UPDATE authority_clean_live_approval_outbox_v1
+    expect(() =>
+      value
+        .prepare(
+          `UPDATE authority_clean_live_approval_outbox_v1
           SET state = 'superseded', control_approval_sha256 = ?,
               superseded_by_candidate_id = ?, superseded_at = ?, updated_at = ?
         WHERE candidate_id = ?`,
-    ).run(
-      `sha256:${"d".repeat(64)}`,
-      first.candidate_id,
-      ADVANCED_AT,
-      ADVANCED_AT,
-      queued.candidate_id,
-    )).toThrow("only permits queued-posting-posted-staged-superseded");
+        )
+        .run(
+          `sha256:${"d".repeat(64)}`,
+          first.candidate_id,
+          ADVANCED_AT,
+          ADVANCED_AT,
+          queued.candidate_id,
+        ),
+    ).toThrow("only permits queued-posting-posted-staged-superseded");
   });
 
   it("preserves a resolved approval while opening independent work for a semantic revision", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
     const first = await state.stageCandidate({
       admission: current,
@@ -1200,6 +1432,7 @@ describe("SQLite clean live-only source state", () => {
     });
     state.recordPostedApprovalCard({
       candidate_id: first.candidate_id,
+      post_started_at: ADVANCED_AT,
       provider_message_ts: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
@@ -1215,7 +1448,10 @@ describe("SQLite clean live-only source state", () => {
     });
     const revisedMeeting: MeetingDocument = {
       ...meeting,
-      provenance: { ...meeting.provenance, canonical_revision: "sha256:note-after-receipt" },
+      provenance: {
+        ...meeting.provenance,
+        canonical_revision: "sha256:note-after-receipt",
+      },
     };
     const revised = await state.stageCandidate({
       admission: current,
@@ -1223,12 +1459,17 @@ describe("SQLite clean live-only source state", () => {
       decisions: {
         ...decisions,
         meeting_revision: revisedMeeting.provenance.canonical_revision,
-        signals: [{
-          id: "decision-after-receipt", kind: "decision", status: "decided",
-          text: "A new decision after the first approval.", subject: null,
-          confidence: 1,
-          evidence: [{ meeting_id: "meeting-1", block_id: "block-1" }],
-        }],
+        signals: [
+          {
+            id: "decision-after-receipt",
+            kind: "decision",
+            status: "decided",
+            text: "A new decision after the first approval.",
+            subject: null,
+            confidence: 1,
+            evidence: [{ meeting_id: "meeting-1", block_id: "block-1" }],
+          },
+        ],
       },
       review_policy: REVIEW_POLICY,
     });
@@ -1243,7 +1484,10 @@ describe("SQLite clean live-only source state", () => {
 
   it("records and recovers D2 work that commits across supersession", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
     const first = await state.stageCandidate({
       admission: current,
@@ -1259,6 +1503,7 @@ describe("SQLite clean live-only source state", () => {
     });
     state.recordPostedApprovalCard({
       candidate_id: first.candidate_id,
+      post_started_at: ADVANCED_AT,
       provider_message_ts: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
@@ -1298,7 +1543,9 @@ describe("SQLite clean live-only source state", () => {
     });
     expect(state.listStagedApprovalIds()).toEqual([]);
     expect(state.listV4RecoveryApprovalIds()).toEqual([first.approval_id]);
-    expect(state.readFrozenCandidateForApproval(first.approval_id)).toMatchObject({
+    expect(
+      state.readFrozenCandidateForApproval(first.approval_id),
+    ).toMatchObject({
       state: "superseded",
       candidate_id: first.candidate_id,
     });
@@ -1314,7 +1561,10 @@ describe("SQLite clean live-only source state", () => {
 
   it("keeps separate source meetings on independent review lineages", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, () => ADVANCED_AT);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
     const current = await state.readAdmission();
     const first = await state.stageCandidate({
       admission: current,
@@ -1339,10 +1589,12 @@ describe("SQLite clean live-only source state", () => {
         ...decisions,
         meeting_id: otherMeeting.id,
         meeting_revision: otherMeeting.provenance.canonical_revision,
-        signals: [{
-          ...decisions.signals[0]!,
-          evidence: [{ meeting_id: otherMeeting.id, block_id: "block-1" }],
-        }],
+        signals: [
+          {
+            ...decisions.signals[0]!,
+            evidence: [{ meeting_id: otherMeeting.id, block_id: "block-1" }],
+          },
+        ],
       },
       review_policy: REVIEW_POLICY,
     });

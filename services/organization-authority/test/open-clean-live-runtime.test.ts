@@ -73,7 +73,6 @@ import {
   type OpenCleanLiveRuntimeConfig,
 } from "../src/composition/open-clean-live-runtime.js";
 import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
-import { SlackApiError } from "../src/processing/adapters/shared/slack/slack-web-api-client.js";
 import type { CleanSlackApprovalCardPosterV1 } from "../src/processing/clean-v1/clean-slack-approval-stager.js";
 import type {
   AdapterHealth,
@@ -756,17 +755,22 @@ async function activeFixture(
       source,
       processor: fakeProcessor(processorIdentity),
       approval_card_poster: approvalPoster ?? {
-        async post(input) {
-          posted.push(input.text);
+        async post() {
           return {
+            kind: "posted",
             provider_message_ts: `1724112000.${String(posted.length).padStart(6, "0")}`,
           };
         },
         async reconcile() {
-          return undefined;
+          return { kind: "uncertain" };
         },
         async tombstone(input) {
           tombstoned.push(input.approval_id);
+          return { kind: "done" };
+        },
+        async publish(input) {
+          posted.push(input.text);
+          return { kind: "done" };
         },
       },
       approval_observer: reaction,
@@ -1152,9 +1156,14 @@ describe("open clean live runtime", () => {
             throw new Error("restart must not post a duplicate approval card");
           },
           async reconcile() {
-            return undefined;
+            return { kind: "uncertain" };
           },
-          async tombstone() {},
+          async tombstone() {
+            return { kind: "done" };
+          },
+          async publish() {
+            throw new Error("restart must not republish an approval card");
+          },
         },
         approval_observer: fixture.reaction,
       },
@@ -1267,14 +1276,13 @@ describe("open clean live runtime", () => {
         if (ambiguousApprovalId === undefined) {
           ambiguousApprovalId = input.approval_id;
           operations.push("post-ambiguous");
-          throw new SlackApiError(
-            "unknown_outcome",
-            "Slack accepted the post but its response was lost",
-            true,
-          );
+          return { kind: "uncertain" };
         }
         operations.push("post-unrelated");
-        return { provider_message_ts: "1724112000.000002" };
+        return {
+          kind: "posted",
+          provider_message_ts: "1724112000.000002",
+        };
       },
       async reconcile(input) {
         expect(input.approval_id).toBe(ambiguousApprovalId);
@@ -1285,10 +1293,18 @@ describe("open clean live runtime", () => {
             : "reconcile-found",
         );
         return reconciliationAttempts === 1
-          ? undefined
-          : { provider_message_ts: "1724112000.000001" };
+          ? { kind: "uncertain" }
+          : {
+              kind: "posted",
+              provider_message_ts: "1724112000.000001",
+            };
       },
-      async tombstone() {},
+      async tombstone() {
+        return { kind: "done" };
+      },
+      async publish() {
+        return { kind: "done" };
+      },
     };
     const fixture = await activeFixture(
       "approve",
