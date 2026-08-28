@@ -68,3 +68,21 @@ export function selectGranolaPersonContentPolicyV1(
     ? RESTRICTED_REVIEWER_POLICY
     : MEMBER_READABLE_POLICY;
 }
+
+/** Rejects selector drift before a Granola review policy is persisted or shown. */
+export function assertGranolaPersonContentPolicySnapshotV1(
+  extensions: unknown,
+  actual: CleanGranolaPersonContentPolicyV1,
+): void {
+  const expected = selectGranolaPersonContentPolicyV1(extensions);
+  if (
+    actual.policy_id !== expected.policy_id ||
+    actual.policy_contract_sha256 !== expected.policy_contract_sha256 ||
+    actual.policy_consequence_text !== expected.policy_consequence_text ||
+    actual.policy_consequence_sha256 !== expected.policy_consequence_sha256
+  ) {
+    throw new Error(
+      "clean Granola review policy must match its canonical content policy",
+    );
+  }
+}

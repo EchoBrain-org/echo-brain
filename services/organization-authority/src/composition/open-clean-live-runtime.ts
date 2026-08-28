@@ -317,7 +317,6 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
   ) {}
 
   build(input: Parameters<CleanSlackApprovalCardFactoryV1["build"]>[0]) {
-    const policy = selectGranolaPersonContentPolicyV1(input.meeting.extensions);
     const brief = compileDecisionBrief(
       `brf_${input.candidate.candidate_semantic_sha256.slice("sha256:".length)}`,
       input.meeting,
@@ -349,7 +348,7 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
     });
     const text = renderCleanSlackApprovalCardTextV1(
       brief,
-      policy.policy_consequence_text,
+      input.candidate.review_policy_consequence_text,
     );
     return Object.freeze({
       text,
@@ -368,7 +367,6 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
     input: Parameters<CleanSlackApprovalCardFactoryV1["pendingApproval"]>[0],
   ) {
     const { stage, outbox } = input;
-    const policy = selectGranolaPersonContentPolicyV1(stage.meeting.extensions);
     if (
       outbox.provider_message_ts === null ||
       outbox.frozen_card_sha256 === null ||
@@ -389,9 +387,11 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
         this.slack.approval_binding_contract_sha256,
       approval_channel_id: this.slack.approval_channel_id,
       provider_message_ts: outbox.provider_message_ts,
-      policy_id: policy.policy_id,
-      policy_contract_sha256: policy.policy_contract_sha256,
-      policy_consequence_sha256: policy.policy_consequence_sha256,
+      policy_id: stage.candidate.review_policy_id,
+      policy_contract_sha256:
+        stage.candidate.review_policy_contract_sha256,
+      policy_consequence_sha256:
+        stage.candidate.review_policy_consequence_sha256,
       frozen_card_sha256: outbox.frozen_card_sha256 as Sha256Digest,
       approved_snapshot_sha256: outbox.approved_snapshot_sha256 as Sha256Digest,
     });
@@ -443,10 +443,14 @@ class CombinedCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
   }
 }
 
-function authorityMembershipFence(database: Database.Database) {
+function authorityMembershipFence(
+  database: Database.Database,
+  approvalIsCurrent: (approvalId: string) => boolean,
+) {
   return {
     async withStablePersonSlackApprovalFence<T>(
       commit: (fence: {
+        approvalIsCurrent(approvalId: string): boolean;
         currentMembership(input: {
           readonly principal_id: string;
           readonly membership_id: string;
@@ -461,6 +465,7 @@ function authorityMembershipFence(database: Database.Database) {
     ): Promise<T> {
       return database.transaction(() =>
         commit({
+          approvalIsCurrent,
           currentMembership: (input) => {
             const membership = database
               .prepare(
@@ -647,6 +652,8 @@ export async function openCleanLiveRuntime(
       processor,
       state: sourceState,
       stager,
+      review_policy: (meeting) =>
+        selectGranolaPersonContentPolicyV1(meeting.extensions),
     });
     const signer = DevelopmentFileOrganizationAuthoritySigner.openExisting({
       directory: join(config.state_directory, "keys"),
@@ -668,7 +675,10 @@ export async function openCleanLiveRuntime(
       finalization: {
         coordinator: new SqlitePersonSlackApprovalFinalizationCoordinatorV2({
           database: control,
-          authority_fence: authorityMembershipFence(authority),
+          authority_fence: authorityMembershipFence(
+            authority,
+            (approvalId) => sourceState.approvalIsCurrent(approvalId),
+          ),
         }),
         observer:
           dependencies.live_adapters?.approval_observer ??

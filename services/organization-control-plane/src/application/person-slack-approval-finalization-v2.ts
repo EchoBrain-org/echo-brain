@@ -200,6 +200,11 @@ export interface PersonSlackApprovalFinalizationFenceV2 {
   reprovedFrozenApprovalById(
     approvalId: string,
   ): ReprovedFrozenPersonSlackApprovalV2 | undefined;
+  /**
+   * Authority-owned lineage fence. A pending approval is actionable only
+   * while it remains the current review round for its source lineage.
+   */
+  approvalIsCurrent(approvalId: string): boolean;
   currentMembership(input: {
     readonly principal_id: string;
     readonly membership_id: string;
@@ -921,9 +926,13 @@ export async function finalizePersonSlackApprovalV2(input: {
         ),
       };
     }
+    if (!fence.approvalIsCurrent(approvalId)) {
+      return { kind: "not_resolved" as const, reason: "superseded" as const };
+    }
     return { kind: "prepared" as const, value: prepare(fence, approvalId, input.codec) };
   });
   if (first.kind === "recovered") return { kind: "resolved", value: first.result };
+  if (first.kind === "not_resolved") return first;
   const providerResult = await input.provider.observeApprovalReaction(
     first.value.expectation,
     first.value.expectation_sha256,
@@ -966,6 +975,9 @@ export async function finalizePersonSlackApprovalV2(input: {
         prior.observed_at !== observed.observed_at
       ) throw new PersonSlackApprovalFinalizationConflictError();
       return { kind: "resolved", value: recovered.result } as const;
+    }
+    if (!fence.approvalIsCurrent(approvalId)) {
+      return { kind: "not_resolved", reason: "superseded" } as const;
     }
     const current = prepare(fence, approvalId, input.codec);
     samePrepared(current, first.value);

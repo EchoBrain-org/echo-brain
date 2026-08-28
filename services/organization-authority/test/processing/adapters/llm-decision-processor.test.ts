@@ -167,6 +167,26 @@ adapterConformance({
 });
 
 describe('llm decision processor extraction', () => {
+  it('renders participants in stable semantic order', async () => {
+    const client = new FakeLlmClient(validModelOutput);
+    const instance = processor(client);
+
+    await instance.extract(
+      {
+        ...meeting,
+        participants: [
+          { id: 'participant-z', display_name: 'Zed' },
+          { id: 'participant-a', display_name: 'Ada' },
+        ],
+      },
+      extractionContext(instance),
+    );
+
+    expect(client.requests[0]!.userPrompt).toContain(
+      '"participants":["Ada","Zed"]',
+    );
+  });
+
   it('accepts paraphrased signals grounded to source aliases', async () => {
     const client = new FakeLlmClient(validModelOutput);
     const instance = processor(client);

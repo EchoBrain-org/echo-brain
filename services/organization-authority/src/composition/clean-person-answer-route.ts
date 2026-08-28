@@ -47,6 +47,21 @@ function unavailable(): never {
   );
 }
 
+class Layer3RouteFailure extends Error {
+  constructor(readonly original: unknown) {
+    super("Layer 3 route operation failed");
+    this.name = "Layer3RouteFailure";
+  }
+}
+
+function callLayer3<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    throw new Layer3RouteFailure(error);
+  }
+}
+
 function policy(value: string): CleanPersonAnswerPolicyV1 {
   if (
     value !== "organization-member-readable-person-v2" &&
@@ -116,11 +131,13 @@ export function createCleanPersonAnswerRouteV1(
             unavailable();
           }
           request.signal?.throwIfAborted();
-          const batch = options.search.searchBatch({
-            access_token: input.access_token,
-            queries: request.queries,
-            limit: 10,
-          });
+          const batch = callLayer3(() =>
+            options.search.searchBatch({
+              access_token: input.access_token,
+              queries: request.queries,
+              limit: 10,
+            }),
+          );
           internalRelease = batch.release;
           const authorization = batch.release.current_authorization;
           layer4Release = Object.freeze({
@@ -164,10 +181,13 @@ export function createCleanPersonAnswerRouteV1(
           ) {
             unavailable();
           }
-          const authorization = options.search.revalidateBatchRelease({
-            access_token: input.access_token,
-            release: internalRelease,
-          });
+          const frozenRelease = internalRelease;
+          const authorization = callLayer3(() =>
+            options.search.revalidateBatchRelease({
+              access_token: input.access_token,
+              release: frozenRelease,
+            }),
+          );
           return Object.freeze({ checked_at: authorization.checked_at });
         },
       });
@@ -198,7 +218,12 @@ export function createCleanPersonAnswerRouteV1(
           await composition.answer({ question: input.question }),
         );
       } catch (error) {
-        if (error instanceof AuthorityOperationError) throw error;
+        if (
+          error instanceof Layer3RouteFailure &&
+          error.original instanceof AuthorityOperationError
+        ) {
+          throw error.original;
+        }
         unavailable();
       }
     },

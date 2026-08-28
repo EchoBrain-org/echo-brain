@@ -43,7 +43,8 @@ directly can see every restricted-reviewer record in the organization. This is
 the confused-deputy failure that a latency shortcut would create. The rule
 prevents provenance, execution identity, provider custody, or service
 possession from being mistaken for human permission. It covers clean V1 Layer 1
-listing and Layer 2 search. It does not authorize Layer 4 execution.
+listing, Layer 2 search, and the single composed Layer 4 `ask` path. It does not
+authorize any additional Layer 4 execution path.
 
 ## Enforcement and failure behavior
 
@@ -54,16 +55,18 @@ digest, and only then returns the audited bytes. Missing, stale, mismatched, or
 non-Person authority MUST release no content. Search construction MUST NOT be
 triggered by a query. Layer 4 is limited to one plan, one Layer 3 batch, and at
 most one answer call; it receives no lower-layer handles and may pass citations
-only after checking that they are a subset of the batch release.
+only after checking that they are a subset of the batch release. Planner or
+answer-model failure, malformed model output, or an invalid citation MUST stop
+the request without releasing an answer.
 
 ## Verification and change procedure
 
 Focused Authority, retrieval, Person-client, architecture, and clean-runtime
 integration tests verify the two policy branches, exact-caller scope, final
-fence, audit digest, metadata, rejection non-disclosure, and model-free Layer
-1 through Layer 3 read closures. The source boundary reserves a narrow Layer 4
-root and rejects its direct lower-layer imports. Enforcement remains partial:
-the Layer 4 runtime must still prove the bounded call count, single snapshot,
-request-local citation subset, and answer-audit row before this invariant can
-be considered implemented across that path. Any new release path requires an
-accepted ADR, explicit enforcement expansion, and negative disclosure tests.
+fence, audit digest, metadata, rejection non-disclosure, model-free Layer 1
+through Layer 3 read closures, bounded Layer 4 calls, one request snapshot,
+request-local citation subsets, and answer-audit rows. The source boundary
+keeps the Layer 4 root narrow and rejects direct lower-layer imports.
+Enforcement remains partial until an exact deployed artifact completes the
+two-Person live rehearsal. Any new release path requires an accepted ADR,
+explicit enforcement expansion, and negative disclosure tests.

@@ -220,15 +220,31 @@ describe("clean Person Layer 4 answer route", () => {
 
   it.each([
     {
-      name: "the provider fails during planning and answering",
+      name: "the provider fails during planning",
       model: { generate: vi.fn(async () => { throw new Error("provider timeout"); }) },
-      searchCalls: 1,
+      modelCalls: 1,
+      searchCalls: 0,
       revalidationCalls: 0,
     },
     {
-      name: "the planner and answerer both return malformed output",
+      name: "the planner throws an authority-shaped error",
+      model: {
+        generate: vi.fn(async () => {
+          throw new AuthorityOperationError(
+            "unauthorized",
+            "model error must not escape",
+          );
+        }),
+      },
+      modelCalls: 1,
+      searchCalls: 0,
+      revalidationCalls: 0,
+    },
+    {
+      name: "the planner returns malformed output",
       model: { generate: vi.fn(async () => ({ queries: ["   "] })) },
-      searchCalls: 1,
+      modelCalls: 1,
+      searchCalls: 0,
       revalidationCalls: 0,
     },
     {
@@ -243,6 +259,7 @@ describe("clean Person Layer 4 answer route", () => {
             citations: ["a99"],
           }),
       },
+      modelCalls: 2,
       searchCalls: 1,
       revalidationCalls: 0,
     },
@@ -254,10 +271,11 @@ describe("clean Person Layer 4 answer route", () => {
           .mockResolvedValueOnce({ queries: [] })
           .mockRejectedValueOnce(new Error("provider timeout")),
       },
+      modelCalls: 2,
       searchCalls: 1,
       revalidationCalls: 0,
     },
-  ])("returns no answer or audit when $name", async ({ model, searchCalls, revalidationCalls }) => {
+  ])("returns no answer or audit when $name", async ({ model, modelCalls, searchCalls, revalidationCalls }) => {
     const value = setup({ model });
     try {
       await expect(
@@ -266,6 +284,7 @@ describe("clean Person Layer 4 answer route", () => {
           question: "When is the launch?",
         }),
       ).rejects.toMatchObject({ code: "unavailable" });
+      expect(model.generate).toHaveBeenCalledTimes(modelCalls);
       expect(value.search.searchBatch).toHaveBeenCalledTimes(searchCalls);
       expect(value.search.revalidateBatchRelease).toHaveBeenCalledTimes(
         revalidationCalls,

@@ -3,6 +3,8 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const REPLIES_PAGE_LIMIT = 200;
 const MAX_REPLY_PAGES = 25;
+const HISTORY_PAGE_LIMIT = 200;
+const MAX_HISTORY_PAGES = 25;
 
 export type SlackApiErrorCode =
   "auth" | "rate_limited" | "transient" | "unknown_outcome" | "invalid";
@@ -13,6 +15,8 @@ export class SlackApiError extends Error {
     message: string,
     public readonly retryable: boolean,
     public readonly retryAfterSeconds?: number,
+    /** Exact documented Slack error when the provider returned `ok: false`. */
+    public readonly providerError?: string,
   ) {
     super(message);
     this.name = "SlackApiError";
@@ -35,6 +39,20 @@ export interface SlackPostMessageInput {
   mrkdwn?: boolean;
 }
 
+/** Input for changing the presentation of an existing bot-authored message. */
+export interface SlackUpdateMessageInput {
+  channel: string;
+  ts: string;
+  text: string;
+  blocks?: readonly unknown[];
+  /** Disable link previews for meeting-derived content by default. */
+  unfurlLinks?: boolean;
+  /** Disable media previews for meeting-derived content by default. */
+  unfurlMedia?: boolean;
+  /** See {@link SlackPostMessageInput.mrkdwn}. */
+  mrkdwn?: boolean;
+}
+
 export interface SlackPostedMessage {
   channel: string;
   ts: string;
@@ -45,6 +63,13 @@ export interface SlackReadMessage {
   ts: string;
   text: string;
   blocks: readonly unknown[];
+}
+
+/** Provider evidence for one channel message during durable post recovery. */
+export interface SlackChannelMessage {
+  ts: string;
+  text: string;
+  bot_id: string | null;
 }
 
 /** Stable provider identifiers proved across Slack's auth and bot APIs. */
@@ -172,6 +197,7 @@ const SLACK_CONVERSATION_ID_RE = /^[CGD][A-Z0-9]{2,}$/;
 const SLACK_MESSAGE_TS_RE = /^[0-9]{1,16}\.[0-9]{6}$/;
 const SLACK_SCOPE_RE = /^[a-z][a-z0-9:_-]{0,127}$/;
 const SLACK_IDENTITY_REQUIRED_SCOPE = "users:read";
+const SLACK_HISTORY_REQUIRED_SCOPE = "channels:history";
 
 function requiredSlackId(
   body: Record<string, unknown>,
@@ -476,6 +502,67 @@ export class SlackWebApiClient {
   }
 
   /**
+   * Replace an identified message authored by this app. As with posting, a
+   * transport failure is an unknown outcome: Slack may have committed the
+   * update before the client lost its response. Callers therefore supply one
+   * deterministic replacement payload on every retry.
+   */
+  async updateMessage(
+    input: SlackUpdateMessageInput,
+    signal?: AbortSignal,
+  ): Promise<SlackPostedMessage> {
+    if (!SLACK_CONVERSATION_ID_RE.test(input.channel)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack chat.update requires a canonical conversation ID",
+        false,
+      );
+    }
+    if (!SLACK_MESSAGE_TS_RE.test(input.ts)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack chat.update requires a canonical message timestamp",
+        false,
+      );
+    }
+    const body = await this.call(
+      "chat.update",
+      {
+        channel: input.channel,
+        ts: input.ts,
+        text: input.text,
+        unfurl_links: input.unfurlLinks ?? false,
+        unfurl_media: input.unfurlMedia ?? false,
+        ...(input.mrkdwn === undefined ? {} : { mrkdwn: input.mrkdwn }),
+        ...(input.blocks === undefined ? {} : { blocks: input.blocks }),
+      },
+      { signal, unknownOutcomeOnTransportFailure: true },
+    );
+    const channel = body["channel"];
+    const ts = body["ts"];
+    if (!isNonEmptyString(channel) || !isNonEmptyString(ts)) {
+      throw new SlackApiError(
+        "unknown_outcome",
+        "Slack accepted the update but returned no channel/ts identity",
+        true,
+      );
+    }
+    if (
+      channel !== input.channel ||
+      ts !== input.ts ||
+      !SLACK_CONVERSATION_ID_RE.test(channel) ||
+      !SLACK_MESSAGE_TS_RE.test(ts)
+    ) {
+      throw new SlackApiError(
+        "unknown_outcome",
+        "Slack did not return the exact updated message identity",
+        true,
+      );
+    }
+    return { channel, ts };
+  }
+
+  /**
    * Read back the exact stored card for an identified post. This intentionally
    * uses `reactions.get`: it returns the message alongside reaction evidence
    * and lets approval polling use the same provider-bound reference.
@@ -519,6 +606,135 @@ export class SlackWebApiClient {
       text: message["text"],
       blocks: message["blocks"],
     };
+  }
+
+  /**
+   * Read a complete bounded window of channel history. This deliberately
+   * fails closed: a malformed page, looping cursor, or exhausted page budget
+   * is not evidence that a previously accepted post is absent.
+   */
+  async channelHistory(
+    input: {
+      readonly channel: string;
+      readonly oldest: string;
+      readonly latest: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<readonly SlackChannelMessage[]> {
+    if (
+      !SLACK_CONVERSATION_ID_RE.test(input.channel) ||
+      !SLACK_MESSAGE_TS_RE.test(input.oldest) ||
+      !SLACK_MESSAGE_TS_RE.test(input.latest)
+    ) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack conversations.history requires canonical channel history bounds",
+        false,
+      );
+    }
+    const timestampMicros = (value: string): bigint => {
+      const [seconds, micros] = value.split(".") as [string, string];
+      return BigInt(seconds) * 1_000_000n + BigInt(micros);
+    };
+    if (timestampMicros(input.oldest) > timestampMicros(input.latest)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack conversations.history bounds are reversed",
+        false,
+      );
+    }
+    const oldestMicros = timestampMicros(input.oldest);
+    const latestMicros = timestampMicros(input.latest);
+    const messages: SlackChannelMessage[] = [];
+    const seenCursors = new Set<string>();
+    const seenTimestamps = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
+      const body = await this.call(
+        "conversations.history",
+        {
+          channel: input.channel,
+          oldest: input.oldest,
+          latest: input.latest,
+          inclusive: true,
+          limit: HISTORY_PAGE_LIMIT,
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+        {
+          signal,
+          method: "GET",
+          // Clean v1 admits only a verified public approval channel.
+          requiredScope: SLACK_HISTORY_REQUIRED_SCOPE,
+        },
+      );
+      const pageMessages = body["messages"];
+      const hasMore = body["has_more"];
+      const metadata = body["response_metadata"];
+      if (
+        !Array.isArray(pageMessages) ||
+        typeof hasMore !== "boolean" ||
+        !isPlainObject(metadata)
+      ) {
+        throw new SlackApiError(
+          "invalid",
+          "Slack conversations.history returned incomplete recovery evidence",
+          false,
+        );
+      }
+      const nextCursor = metadata["next_cursor"];
+      if (nextCursor !== undefined && typeof nextCursor !== "string") {
+        throw new SlackApiError(
+          "invalid",
+          "Slack conversations.history returned malformed pagination evidence",
+          false,
+        );
+      }
+      for (const message of pageMessages) {
+        if (!isPlainObject(message)) {
+          throw new SlackApiError(
+            "invalid",
+            "Slack conversations.history returned malformed message evidence",
+            false,
+          );
+        }
+        const ts = message["ts"];
+        const text = message["text"];
+        const botId = message["bot_id"];
+        if (
+          !isNonEmptyString(ts) ||
+          !SLACK_MESSAGE_TS_RE.test(ts) ||
+          timestampMicros(ts) < oldestMicros ||
+          timestampMicros(ts) > latestMicros ||
+          typeof text !== "string" ||
+          (botId !== undefined && (!isNonEmptyString(botId) || !SLACK_BOT_ID_RE.test(botId))) ||
+          seenTimestamps.has(ts)
+        ) {
+          throw new SlackApiError(
+            "invalid",
+            "Slack conversations.history returned malformed message evidence",
+            false,
+          );
+        }
+        seenTimestamps.add(ts);
+        messages.push({ ts, text, bot_id: botId ?? null });
+      }
+      const normalizedCursor = isNonEmptyString(nextCursor) ? nextCursor : undefined;
+      if (!hasMore && normalizedCursor === undefined) return messages;
+      if (normalizedCursor === undefined || seenCursors.has(normalizedCursor)) {
+        throw new SlackApiError(
+          "invalid",
+          "Slack conversations.history pagination is incomplete",
+          false,
+        );
+      }
+      seenCursors.add(normalizedCursor);
+      cursor = normalizedCursor;
+    }
+    throw new SlackApiError(
+      "invalid",
+      "Slack conversations.history exceeded the supported page budget",
+      false,
+    );
   }
 
   async reactionsGet(
@@ -873,6 +1089,8 @@ export class SlackWebApiClient {
             "auth",
             `Slack ${method} failed: ${error}`,
             false,
+            undefined,
+            error,
           );
         }
         if (RATE_LIMIT_ERRORS.has(error)) {
@@ -880,6 +1098,8 @@ export class SlackWebApiClient {
             "rate_limited",
             `Slack ${method} failed: ${error}`,
             true,
+            undefined,
+            error,
           );
         }
         if (TRANSIENT_ERRORS.has(error)) {
@@ -887,12 +1107,16 @@ export class SlackWebApiClient {
             transportFailureCode,
             `Slack ${method} failed: ${error}`,
             true,
+            undefined,
+            error,
           );
         }
         throw new SlackApiError(
           "invalid",
           `Slack ${method} failed: ${error}`,
           false,
+          undefined,
+          error,
         );
       }
       if (options.requiredScope !== undefined) {

@@ -152,6 +152,7 @@ export class CleanLiveWorkerLifecycleV1
     signal?: AbortSignal,
     retryableOnFailure = true,
   ): Promise<T> {
+    signal?.throwIfAborted();
     const startedAt = this.now();
     this.report({
       schema_version: 1,

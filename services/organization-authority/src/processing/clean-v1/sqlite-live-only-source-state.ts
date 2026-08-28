@@ -10,8 +10,19 @@ import {
   type DecisionSet,
   type MeetingDocument,
 } from "../core/index.js";
+import {
+  assertGranolaPersonContentPolicySnapshotV1,
+} from "./granola-person-content-policy.js";
+import {
+  cleanReviewInputSha256V1,
+  cleanReviewLineageIdV1,
+  cleanReviewSemanticSha256V1,
+  type CleanReviewPolicySnapshotV1,
+} from "./review-lineage-semantics.js";
 import type {
   CleanGranolaSourceAdmissionV1,
+  CleanActionableLiveCandidateV1,
+  CleanFrozenCandidateSnapshotV1,
   CleanLiveCandidateSnapshotInputV1,
   CleanLiveCandidateV1,
   CleanLiveOnlySourceStateV1,
@@ -34,7 +45,27 @@ interface ProgressRow {
   readonly cursor: string;
 }
 
-type CandidateRow = CleanLiveCandidateV1;
+interface CandidateRow {
+  readonly candidate_id: string;
+  readonly candidate_semantic_sha256: string;
+  readonly review_lineage_id: string;
+  readonly review_input_sha256: string;
+  readonly review_semantic_sha256: string;
+  readonly review_policy_id: CleanReviewPolicySnapshotV1["policy_id"];
+  readonly review_policy_contract_sha256: CleanReviewPolicySnapshotV1["policy_contract_sha256"];
+  readonly review_policy_consequence_text: string;
+  readonly review_policy_consequence_sha256: CleanReviewPolicySnapshotV1["policy_consequence_sha256"];
+  readonly disposition: "actionable" | "coalesced" | "no_signals";
+  readonly approval_id: string | null;
+  readonly stage_command_id: string | null;
+  readonly state: "queued" | "posting" | "posted" | "staged" | "superseded" | "coalesced" | "no_signals";
+}
+
+interface LineageHeadRow {
+  readonly review_lineage_id: string;
+  readonly candidate_id: string;
+  readonly review_semantic_sha256: string;
+}
 
 function candidateSemanticDigest(input: {
   readonly admission_semantic_input_sha256: string;
@@ -54,25 +85,44 @@ function candidateSemanticDigest(input: {
 
 export interface CleanPostedApprovalCardV1 {
   readonly candidate_id: string;
+  readonly post_started_at: string;
   readonly provider_message_ts: string;
   readonly frozen_card_sha256: string;
   readonly approved_snapshot: Readonly<Record<string, unknown>>;
 }
 
-export interface CleanLiveApprovalOutboxV1 extends CleanLiveCandidateV1 {
+export interface CleanPreparedApprovalPostV1 {
+  readonly outbox: CleanLiveApprovalOutboxV1;
+  /** True only for the transaction that froze the durable post intent. */
+  readonly created: boolean;
+}
+
+export type CleanLiveApprovalOutboxV1 = CleanActionableLiveCandidateV1 & {
   readonly provider_message_ts: string | null;
   readonly frozen_card_sha256: string | null;
   readonly approved_snapshot_json: string | null;
   readonly approved_snapshot_sha256: string | null;
+  readonly post_started_at: string | null;
   readonly control_approval_sha256: string | null;
+  readonly superseded_by_candidate_id: string | null;
+  readonly superseded_at: string | null;
+  readonly tombstoned_at: string | null;
+};
+
+export interface CleanSupersededApprovalCardV1 {
+  readonly approval_id: string;
+  readonly review_lineage_id: string;
+  readonly superseded_by_candidate_id: string;
+  readonly provider_message_ts: string | null;
+  readonly post_started_at: string;
 }
 
-export interface CleanFrozenCandidateForApprovalV1 extends CleanLiveApprovalOutboxV1 {
+export type CleanFrozenCandidateForApprovalV1 = CleanLiveApprovalOutboxV1 & {
   readonly admission: CleanGranolaSourceAdmissionV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
   readonly approved_snapshot: Readonly<Record<string, unknown>> | null;
-}
+};
 
 export interface CleanV4ReceiptV1 {
   readonly approval_id: string;
@@ -214,10 +264,53 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         canonical_revision: input.meeting.provenance.canonical_revision,
       });
       const candidateId = `cnd_${candidateSemanticSha256.slice("sha256:".length)}`;
-      const approvalId = `apr_${candidateSemanticSha256.slice("sha256:".length)}`;
-      const stageCommandId = `pas_${candidateSemanticSha256.slice("sha256:".length)}`;
       const existing = this.candidate(candidateSemanticSha256);
-      if (existing !== undefined) return existing;
+      if (existing !== undefined) return existing as CleanLiveCandidateV1;
+
+      assertGranolaPersonContentPolicySnapshotV1(
+        input.meeting.extensions,
+        input.review_policy,
+      );
+
+      const reviewLineageId = cleanReviewLineageIdV1({
+        adapter_id: input.meeting.provenance.source.adapter_id,
+        instance_id: input.meeting.provenance.source.instance_id,
+        external_id: input.meeting.provenance.external_id,
+      });
+      const reviewProcessor = {
+        adapter_id: current.processor.adapter_id,
+        instance_id: current.processor.instance_id,
+        version: current.processor.version,
+        configuration_sha256: current.processor.configuration_sha256,
+      };
+      const reviewInputSha256 = cleanReviewInputSha256V1({
+        meeting: input.meeting,
+        processor: reviewProcessor,
+      });
+      const reviewSemanticSha256 = cleanReviewSemanticSha256V1({
+        meeting: input.meeting,
+        decisions: input.decisions,
+        review_policy: input.review_policy,
+        processor: reviewProcessor,
+      });
+      const previous = this.lineageHead(reviewLineageId);
+      const semanticChanged =
+        previous === undefined ||
+        previous.review_semantic_sha256 !== reviewSemanticSha256;
+      const disposition =
+        !semanticChanged
+          ? "coalesced"
+          : input.decisions.signals.length === 0
+            ? "no_signals"
+            : "actionable";
+      const approvalId =
+        disposition === "actionable"
+          ? `apr_${candidateSemanticSha256.slice("sha256:".length)}`
+          : null;
+      const stageCommandId =
+        disposition === "actionable"
+          ? `pas_${candidateSemanticSha256.slice("sha256:".length)}`
+          : null;
 
       const now = this.now();
       assertCanonicalUtcMillis(now);
@@ -225,15 +318,27 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         .prepare(
           `INSERT INTO authority_clean_live_candidates_v1 (
              candidate_id, candidate_semantic_sha256,
-             admission_semantic_input_sha256, source_cursor,
+             admission_semantic_input_sha256, review_lineage_id,
+             review_input_sha256, review_semantic_sha256,
+             review_policy_id, review_policy_contract_sha256,
+             review_policy_consequence_text,
+             review_policy_consequence_sha256, disposition, source_cursor,
              meeting_sha256, meeting_json, decisions_sha256, decisions_json,
              created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           candidateId,
           candidateSemanticSha256,
           admission.semantic_input_sha256,
+          reviewLineageId,
+          reviewInputSha256,
+          reviewSemanticSha256,
+          input.review_policy.policy_id,
+          input.review_policy.policy_contract_sha256,
+          input.review_policy.policy_consequence_text,
+          input.review_policy.policy_consequence_sha256,
+          disposition,
           current.source.cursor,
           canonicalSha256(input.meeting),
           meetingJson,
@@ -241,27 +346,46 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           decisionsJson,
           now,
         );
-      this.database
-        .prepare(
-          `INSERT INTO authority_clean_live_approval_outbox_v1 (
-             candidate_id, approval_id, stage_command_id, state, updated_at
-           ) VALUES (?, ?, ?, 'queued', ?)`,
-        )
-        .run(candidateId, approvalId, stageCommandId, now);
-      return {
-        candidate_id: candidateId,
-        candidate_semantic_sha256: candidateSemanticSha256,
-        approval_id: approvalId,
-        stage_command_id: stageCommandId,
-        state: "queued" as const,
-      };
+      if (semanticChanged && previous !== undefined) {
+        this.supersedeUnresolvedLineageApprovals(
+          reviewLineageId,
+          candidateId,
+          now,
+        );
+      }
+      if (disposition === "actionable") {
+        this.database
+          .prepare(
+            `INSERT INTO authority_clean_live_approval_outbox_v1 (
+               candidate_id, approval_id, stage_command_id, state, updated_at
+             ) VALUES (?, ?, ?, 'queued', ?)`,
+          )
+          .run(candidateId, approvalId, stageCommandId, now);
+      }
+      if (semanticChanged) {
+        this.database
+          .prepare(
+          `INSERT INTO authority_clean_live_review_lineage_heads_v1 (
+             review_lineage_id, candidate_id, updated_at
+           ) VALUES (?, ?, ?)
+             ON CONFLICT (review_lineage_id) DO UPDATE SET
+             candidate_id = excluded.candidate_id,
+             updated_at = excluded.updated_at`,
+          )
+          .run(
+            reviewLineageId,
+            candidateId,
+            now,
+          );
+      }
+      return this.candidate(candidateSemanticSha256) as CleanLiveCandidateV1;
     })();
   }
 
   async readFrozenCandidateForSourceRevision(input: {
     readonly external_id: string;
     readonly canonical_revision: string;
-  }): Promise<CleanFrozenCandidateForApprovalV1 | undefined> {
+  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
     return this.database.transaction(() => {
       const admission = this.admission();
       if (admission.membership_status !== "active") {
@@ -276,7 +400,141 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       );
       return candidate === undefined
         ? undefined
-        : this.readFrozenCandidateForApproval(candidate.approval_id);
+        : this.readFrozenCandidateById(candidate.candidate_id);
+    })();
+  }
+
+  async readFrozenCandidateForReviewInput(input: {
+    readonly review_lineage_id: string;
+    readonly review_input_sha256: string;
+  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
+    return this.database.transaction(() => {
+      const admission = this.admission();
+      if (admission.membership_status !== "active") {
+        throw new CleanLiveOnlySourceRevokedError();
+      }
+      const row = this.database
+        .prepare(
+          `SELECT candidate.candidate_id
+             FROM authority_clean_live_candidates_v1 AS candidate
+            WHERE candidate.review_lineage_id = ?
+              AND candidate.review_input_sha256 = ?
+            ORDER BY candidate.created_at ASC
+            `,
+        )
+        .get(input.review_lineage_id, input.review_input_sha256) as
+        | { candidate_id: string }
+        | undefined;
+      if (row === undefined) return undefined;
+      return this.readFrozenCandidateById(row.candidate_id);
+    })();
+  }
+
+  approvalIsCurrent(approvalId: string): boolean {
+    const row = this.database
+      .prepare(
+        `SELECT 1
+           FROM authority_clean_live_approval_outbox_v1 AS outbox
+           JOIN authority_clean_live_candidates_v1 AS candidate
+             ON candidate.candidate_id = outbox.candidate_id
+           JOIN authority_clean_live_review_lineage_heads_v1 AS head
+             ON head.review_lineage_id = candidate.review_lineage_id
+          WHERE outbox.approval_id = ?
+            AND outbox.state != 'superseded'
+            AND head.candidate_id = candidate.candidate_id`,
+      )
+      .get(approvalId) as { readonly 1: number } | undefined;
+    return row !== undefined;
+  }
+
+  /**
+   * Reproves every current, actionable approval that still needs Slack/D2
+   * delivery. The query deliberately selects the lineage head first; the
+   * frozen reader then verifies the immutable meeting, decisions, and any
+   * frozen card snapshot before exposing it to a delivery worker.
+   */
+  listPendingApprovalDeliveries(): readonly CleanFrozenCandidateForApprovalV1[] {
+    const approvals = this.database
+      .prepare(
+        `SELECT outbox.approval_id
+           FROM authority_clean_live_approval_outbox_v1 AS outbox
+           JOIN authority_clean_live_candidates_v1 AS candidate
+             ON candidate.candidate_id = outbox.candidate_id
+           JOIN authority_clean_live_review_lineage_heads_v1 AS head
+             ON head.review_lineage_id = candidate.review_lineage_id
+          WHERE candidate.disposition = 'actionable'
+            AND head.candidate_id = candidate.candidate_id
+            AND outbox.state IN ('queued', 'posting', 'posted')
+          ORDER BY candidate.created_at ASC, candidate.candidate_id ASC`,
+      )
+      .all() as readonly { readonly approval_id: string }[];
+    return approvals.map(({ approval_id }) => {
+      const candidate = this.readFrozenCandidateForApproval(approval_id);
+      if (candidate === undefined) {
+        throw new Error("clean pending approval delivery is absent");
+      }
+      return candidate;
+    });
+  }
+
+  listPendingSupersededApprovalCards(): readonly CleanSupersededApprovalCardV1[] {
+    return this.database
+      .prepare(
+        `SELECT outbox.approval_id, candidate.review_lineage_id,
+                outbox.superseded_by_candidate_id,
+                outbox.provider_message_ts, outbox.post_started_at
+           FROM authority_clean_live_approval_outbox_v1 AS outbox
+           JOIN authority_clean_live_candidates_v1 AS candidate
+             ON candidate.candidate_id = outbox.candidate_id
+          WHERE outbox.state = 'superseded'
+            AND outbox.post_started_at IS NOT NULL
+            AND outbox.tombstoned_at IS NULL
+          ORDER BY outbox.approval_id`,
+      )
+      .all() as CleanSupersededApprovalCardV1[];
+  }
+
+  recordSupersededApprovalCardTombstoned(input: {
+    readonly approval_id: string;
+    readonly provider_message_ts: string;
+  }): void {
+    this.database.transaction(() => {
+      const current = this.database
+        .prepare(
+          `SELECT state, provider_message_ts, tombstoned_at
+             FROM authority_clean_live_approval_outbox_v1
+            WHERE approval_id = ?`,
+        )
+        .get(input.approval_id) as
+        | {
+            readonly state: string;
+            readonly provider_message_ts: string | null;
+            readonly tombstoned_at: string | null;
+          }
+        | undefined;
+      if (
+        current === undefined ||
+        current.state !== "superseded" ||
+        current.provider_message_ts !== input.provider_message_ts
+      ) {
+        throw new Error(
+          "clean superseded Slack tombstone lacks its durable card identity",
+        );
+      }
+      if (current.tombstoned_at !== null) return;
+      const now = this.now();
+      assertCanonicalUtcMillis(now);
+      const update = this.database
+        .prepare(
+          `UPDATE authority_clean_live_approval_outbox_v1
+              SET tombstoned_at = ?, updated_at = ?
+            WHERE approval_id = ? AND state = 'superseded'
+              AND provider_message_ts = ? AND tombstoned_at IS NULL`,
+        )
+        .run(now, now, input.approval_id, input.provider_message_ts);
+      if (update.changes !== 1) {
+        throw new Error("clean superseded Slack tombstone state drifted");
+      }
     })();
   }
 
@@ -328,11 +586,21 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   ): CleanLiveApprovalOutboxV1 | undefined {
     return this.database
       .prepare(
-        `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
+          `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
+                candidate.review_lineage_id, candidate.review_input_sha256,
+                candidate.review_semantic_sha256,
+                candidate.review_policy_id,
+                candidate.review_policy_contract_sha256,
+                candidate.review_policy_consequence_text,
+                candidate.review_policy_consequence_sha256,
+                candidate.disposition,
                 outbox.approval_id, outbox.stage_command_id, outbox.state,
                 outbox.provider_message_ts, outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
-                outbox.control_approval_sha256
+                outbox.post_started_at,
+                outbox.control_approval_sha256,
+                outbox.superseded_by_candidate_id, outbox.superseded_at,
+                outbox.tombstoned_at
            FROM authority_clean_live_candidates_v1 AS candidate
            JOIN authority_clean_live_approval_outbox_v1 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
@@ -341,33 +609,27 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       .get(approvalId) as CleanLiveApprovalOutboxV1 | undefined;
   }
 
-  /** Reproves the exact Authority snapshot which a D2 approval resolved. */
-  readFrozenCandidateForApproval(
-    approvalId: string,
-  ): CleanFrozenCandidateForApprovalV1 | undefined {
+  private readFrozenCandidateById(
+    candidateId: string,
+  ): CleanFrozenCandidateSnapshotV1 | undefined {
     const row = this.database
       .prepare(
-        `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
+        `SELECT candidate.candidate_semantic_sha256,
                 candidate.source_cursor, candidate.meeting_sha256,
                 candidate.meeting_json, candidate.decisions_sha256,
                 candidate.decisions_json,
                 admission.source_instance_id, admission.source_adapter_version,
                 admission.cutoff_at, admission.processor_instance_id,
                 admission.processor_adapter_version,
-                admission.processor_configuration_sha256,
-                outbox.approval_id, outbox.stage_command_id, outbox.state,
-                outbox.provider_message_ts, outbox.frozen_card_sha256,
-                outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
-                outbox.control_approval_sha256
+                admission.processor_configuration_sha256
            FROM authority_clean_live_candidates_v1 AS candidate
            JOIN authority_clean_granola_source_admission_v1 AS admission
              ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
-           JOIN authority_clean_live_approval_outbox_v1 AS outbox
-             ON outbox.candidate_id = candidate.candidate_id
-          WHERE outbox.approval_id = ?`,
+          WHERE candidate.candidate_id = ?`,
       )
-      .get(approvalId) as
-      | (CleanLiveApprovalOutboxV1 & {
+      .get(candidateId) as
+      | {
+          readonly candidate_semantic_sha256: string;
           readonly source_cursor: string;
           readonly meeting_sha256: string;
           readonly meeting_json: string;
@@ -379,17 +641,15 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           readonly processor_instance_id: string;
           readonly processor_adapter_version: string;
           readonly processor_configuration_sha256: string;
-        })
+        }
       | undefined;
     if (row === undefined) return undefined;
+    const candidate = this.candidate(row.candidate_semantic_sha256);
+    if (candidate === undefined) {
+      throw new Error("clean frozen candidate is absent");
+    }
     const meeting = JSON.parse(row.meeting_json) as MeetingDocument;
     const decisions = JSON.parse(row.decisions_json) as DecisionSet;
-    const approvedSnapshot =
-      row.approved_snapshot_json === null
-        ? null
-        : (JSON.parse(row.approved_snapshot_json) as Readonly<
-            Record<string, unknown>
-          >);
     if (
       canonicalJson(meeting) !== row.meeting_json ||
       canonicalSha256(meeting) !== row.meeting_sha256 ||
@@ -397,13 +657,6 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       canonicalSha256(decisions) !== row.decisions_sha256
     ) {
       throw new Error("clean frozen candidate snapshot digest is invalid");
-    }
-    if (
-      (approvedSnapshot === null) !== (row.approved_snapshot_sha256 === null) ||
-      (approvedSnapshot !== null &&
-        canonicalSha256(approvedSnapshot) !== row.approved_snapshot_sha256)
-    ) {
-      throw new Error("clean frozen approved snapshot digest is invalid");
     }
     const admission: CleanGranolaSourceAdmissionV1 = {
       source: {
@@ -433,13 +686,42 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       instance_id: admission.processor.instance_id,
       version: admission.processor.version,
     });
-    return {
-      ...row,
-      admission,
-      meeting,
-      decisions,
-      approved_snapshot: approvedSnapshot,
-    };
+    return { ...candidate, admission, meeting, decisions } as CleanFrozenCandidateSnapshotV1;
+  }
+
+  /** Reproves the exact Authority snapshot which a D2 approval resolved. */
+  readFrozenCandidateForApproval(
+    approvalId: string,
+  ): CleanFrozenCandidateForApprovalV1 | undefined {
+    return this.database.transaction(() => {
+      const outbox = this.readCandidateByApprovalId(approvalId);
+      if (outbox === undefined) return undefined;
+      const frozen = this.readFrozenCandidateById(outbox.candidate_id);
+      if (frozen === undefined || frozen.disposition !== "actionable") {
+        throw new Error("clean D2 approval has no frozen actionable candidate");
+      }
+      const approvedSnapshot =
+        outbox.approved_snapshot_json === null
+          ? null
+          : (JSON.parse(outbox.approved_snapshot_json) as Readonly<
+              Record<string, unknown>
+            >);
+      if (
+        (approvedSnapshot === null) !==
+          (outbox.approved_snapshot_sha256 === null) ||
+        (approvedSnapshot !== null &&
+          (canonicalJson(approvedSnapshot) !== outbox.approved_snapshot_json ||
+            canonicalSha256(approvedSnapshot) !==
+              outbox.approved_snapshot_sha256))
+      ) {
+        throw new Error("clean frozen approved snapshot digest is invalid");
+      }
+      return {
+        ...frozen,
+        ...outbox,
+        approved_snapshot: approvedSnapshot,
+      };
+    })();
   }
 
   listStagedApprovalIds(): readonly string[] {
@@ -448,7 +730,35 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         .prepare(
           `SELECT approval_id
              FROM authority_clean_live_approval_outbox_v1
+             JOIN authority_clean_live_candidates_v1 AS candidate
+               ON candidate.candidate_id = authority_clean_live_approval_outbox_v1.candidate_id
+             JOIN authority_clean_live_review_lineage_heads_v1 AS head
+               ON head.review_lineage_id = candidate.review_lineage_id
             WHERE state = 'staged'
+              AND head.candidate_id = candidate.candidate_id
+              AND NOT EXISTS (
+                SELECT 1 FROM authority_clean_live_v4_receipts_v1 AS receipt
+                 WHERE receipt.approval_id = authority_clean_live_approval_outbox_v1.approval_id
+              )
+            ORDER BY approval_id`,
+        )
+        .all() as Array<{ approval_id: string }>
+    ).map(({ approval_id }) => approval_id);
+  }
+
+  /**
+   * Includes superseded frozen rows because their D2 human action may already
+   * have committed before Authority recorded the supersession. They are never
+   * observed again, but a durable action must still complete its V4 append.
+   */
+  listV4RecoveryApprovalIds(): readonly string[] {
+    return (
+      this.database
+        .prepare(
+          `SELECT approval_id
+             FROM authority_clean_live_approval_outbox_v1
+            WHERE (state = 'staged' OR
+                   (state = 'superseded' AND control_approval_sha256 IS NOT NULL))
               AND NOT EXISTS (
                 SELECT 1 FROM authority_clean_live_v4_receipts_v1 AS receipt
                  WHERE receipt.approval_id = authority_clean_live_approval_outbox_v1.approval_id
@@ -470,7 +780,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       const outbox = this.readCandidateByApprovalId(input.approval_id);
       if (
         outbox === undefined ||
-        outbox.state !== "staged" ||
+        (outbox.state !== "staged" && outbox.state !== "superseded") ||
         outbox.control_approval_sha256 !== input.control_approval_sha256
       ) {
         throw new Error(
@@ -529,21 +839,179 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     })();
   }
 
-  recordPostedApprovalCard(
-    input: CleanPostedApprovalCardV1,
-  ): CleanLiveApprovalOutboxV1 {
+  /**
+   * Persist the exact card payload before any Slack side effect. Recovery must
+   * prove the same frozen payload; it can never silently construct a new one.
+   */
+  prepareApprovalPost(input: {
+    readonly candidate_id: string;
+    readonly frozen_card_sha256: string;
+    readonly approved_snapshot: Readonly<Record<string, unknown>>;
+  }): CleanPreparedApprovalPostV1 {
     return this.database.transaction(() => {
       const current = this.outbox(input.candidate_id);
       const snapshotJson = canonicalJson(input.approved_snapshot);
       const snapshotSha256 = canonicalSha256(input.approved_snapshot);
-      if (current.state !== "queued") {
+      if (current.state === "queued") {
+        const now = this.now();
+        assertCanonicalUtcMillis(now);
+        const updated = this.database
+          .prepare(
+            `UPDATE authority_clean_live_approval_outbox_v1
+                SET state = 'posting', frozen_card_sha256 = ?,
+                    approved_snapshot_json = ?, approved_snapshot_sha256 = ?,
+                    post_started_at = ?, updated_at = ?
+              WHERE candidate_id = ? AND state = 'queued'`,
+          )
+          .run(
+            input.frozen_card_sha256,
+            snapshotJson,
+            snapshotSha256,
+            now,
+            now,
+            input.candidate_id,
+          );
+        if (updated.changes !== 1) {
+          throw new Error("clean live approval post intent state drifted");
+        }
+        return { outbox: this.outbox(input.candidate_id), created: true };
+      }
+      if (
+        current.frozen_card_sha256 !== input.frozen_card_sha256 ||
+        current.approved_snapshot_json !== snapshotJson ||
+        current.approved_snapshot_sha256 !== snapshotSha256
+      ) {
+        throw new Error("clean live approval post intent conflicts with its durable outbox");
+      }
+      return { outbox: current, created: false };
+    })();
+  }
+
+  /**
+   * Release a durable delivery attempt only after its adapter explicitly
+   * permits a retry. The frozen attempt timestamp is the compare-and-swap
+   * token, so an old runner cannot release a newer attempt for the same
+   * candidate.
+   */
+  releaseApprovalPostAttempt(input: {
+    readonly candidate_id: string;
+    readonly post_started_at: string;
+  }): CleanLiveApprovalOutboxV1 {
+    return this.database.transaction(() => {
+      assertCanonicalUtcMillis(input.post_started_at);
+      const current = this.outbox(input.candidate_id);
+      if (current.state === "queued") return current;
+      if (
+        current.state === "superseded" &&
+        current.provider_message_ts === null &&
+        current.post_started_at === null
+      ) {
+        return current;
+      }
+      if (current.provider_message_ts !== null) {
+        throw new Error(
+          "clean live approval post attempt is externally visible",
+        );
+      }
+      if (current.post_started_at !== input.post_started_at) {
+        throw new Error("clean live approval post attempt is stale");
+      }
+      if (
+        current.state === "superseded" &&
+        current.control_approval_sha256 === null
+      ) {
+        const now = this.now();
+        assertCanonicalUtcMillis(now);
+        const updated = this.database
+          .prepare(
+            `UPDATE authority_clean_live_approval_outbox_v1
+                SET frozen_card_sha256 = NULL,
+                    approved_snapshot_json = NULL,
+                    approved_snapshot_sha256 = NULL,
+                    post_started_at = NULL, updated_at = ?
+              WHERE candidate_id = ? AND state = 'superseded'
+                AND provider_message_ts IS NULL
+                AND post_started_at = ?
+                AND control_approval_sha256 IS NULL`,
+          )
+          .run(now, input.candidate_id, input.post_started_at);
+        if (updated.changes !== 1) {
+          throw new Error(
+            "clean superseded approval post attempt state drifted",
+          );
+        }
+        return this.outbox(input.candidate_id);
+      }
+      if (current.state !== "posting") {
+        throw new Error(
+          "clean live approval post attempt lacks a releasable unresolved delivery",
+        );
+      }
+      const now = this.now();
+      assertCanonicalUtcMillis(now);
+      const updated = this.database
+        .prepare(
+          `UPDATE authority_clean_live_approval_outbox_v1
+              SET state = 'queued', frozen_card_sha256 = NULL,
+                  approved_snapshot_json = NULL,
+                  approved_snapshot_sha256 = NULL,
+                  post_started_at = NULL, updated_at = ?
+            WHERE candidate_id = ? AND state = 'posting'
+              AND provider_message_ts IS NULL
+              AND post_started_at = ?`,
+        )
+        .run(now, input.candidate_id, input.post_started_at);
+      if (updated.changes !== 1) {
+        throw new Error("clean live approval post attempt state drifted");
+      }
+      return this.outbox(input.candidate_id);
+    })();
+  }
+
+  recordPostedApprovalCard(
+    input: CleanPostedApprovalCardV1,
+  ): CleanLiveApprovalOutboxV1 {
+    return this.database.transaction(() => {
+      assertCanonicalUtcMillis(input.post_started_at);
+      const current = this.outbox(input.candidate_id);
+      const snapshotJson = canonicalJson(input.approved_snapshot);
+      const snapshotSha256 = canonicalSha256(input.approved_snapshot);
+      if (current.state !== "posting") {
         if (
           current.provider_message_ts === input.provider_message_ts &&
+          current.post_started_at === input.post_started_at &&
           current.frozen_card_sha256 === input.frozen_card_sha256 &&
           current.approved_snapshot_json === snapshotJson &&
           current.approved_snapshot_sha256 === snapshotSha256
         ) {
           return current;
+        }
+        if (
+          current.state === "superseded" &&
+          current.provider_message_ts === null &&
+          current.frozen_card_sha256 === input.frozen_card_sha256 &&
+          current.approved_snapshot_json === snapshotJson &&
+          current.approved_snapshot_sha256 === snapshotSha256 &&
+          current.post_started_at === input.post_started_at
+        ) {
+          const now = this.now();
+          assertCanonicalUtcMillis(now);
+          this.database
+            .prepare(
+              `UPDATE authority_clean_live_approval_outbox_v1
+                  SET provider_message_ts = ?,
+                      updated_at = ?
+                WHERE candidate_id = ? AND state = 'superseded'
+                  AND provider_message_ts IS NULL
+                  AND post_started_at = ?`,
+            )
+            .run(
+              input.provider_message_ts,
+              now,
+              input.candidate_id,
+              input.post_started_at,
+            );
+          return this.outbox(input.candidate_id);
         }
         throw new Error(
           "clean live approval card conflicts with its durable outbox",
@@ -551,23 +1019,23 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       const now = this.now();
       assertCanonicalUtcMillis(now);
-      this.database
+      const updated = this.database
         .prepare(
           `UPDATE authority_clean_live_approval_outbox_v1
               SET state = 'posted', provider_message_ts = ?,
-                  frozen_card_sha256 = ?, approved_snapshot_json = ?,
-                  approved_snapshot_sha256 = ?,
                   updated_at = ?
-            WHERE candidate_id = ? AND state = 'queued'`,
+            WHERE candidate_id = ? AND state = 'posting'
+              AND post_started_at = ?`,
         )
         .run(
           input.provider_message_ts,
-          input.frozen_card_sha256,
-          snapshotJson,
-          snapshotSha256,
           now,
           input.candidate_id,
+          input.post_started_at,
         );
+      if (updated.changes !== 1) {
+        throw new Error("clean live approval post result is stale");
+      }
       return this.outbox(input.candidate_id);
     })();
   }
@@ -578,13 +1046,38 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   }): CleanLiveApprovalOutboxV1 {
     return this.database.transaction(() => {
       const current = this.outbox(input.candidate_id);
-      if (current.state === "staged") {
+      if (
+        (current.state === "staged" || current.state === "superseded") &&
+        current.control_approval_sha256 !== null
+      ) {
         if (current.control_approval_sha256 === input.control_approval_sha256) {
           return current;
         }
         throw new Error(
           "clean live control approval conflicts with its durable outbox",
         );
+      }
+      if (current.state === "superseded") {
+        if (
+          current.provider_message_ts === null ||
+          current.frozen_card_sha256 === null ||
+          current.approved_snapshot_sha256 === null
+        ) {
+          throw new Error(
+            "clean superseded D2 approval has no frozen posted card",
+          );
+        }
+        const now = this.now();
+        assertCanonicalUtcMillis(now);
+        this.database
+          .prepare(
+            `UPDATE authority_clean_live_approval_outbox_v1
+                SET control_approval_sha256 = ?, updated_at = ?
+              WHERE candidate_id = ? AND state = 'superseded'
+                AND control_approval_sha256 IS NULL`,
+          )
+          .run(input.control_approval_sha256, now, input.candidate_id);
+        return this.outbox(input.candidate_id);
       }
       if (current.state !== "posted") {
         throw new Error(
@@ -646,24 +1139,79 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   private candidate(semanticSha256: string): CandidateRow | undefined {
     return this.database
       .prepare(
-        `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
-                outbox.approval_id, outbox.stage_command_id, outbox.state
+          `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
+                candidate.review_lineage_id, candidate.review_input_sha256,
+                candidate.review_semantic_sha256,
+                candidate.review_policy_id,
+                candidate.review_policy_contract_sha256,
+                candidate.review_policy_consequence_text,
+                candidate.review_policy_consequence_sha256,
+                candidate.disposition, outbox.approval_id,
+                outbox.stage_command_id,
+                COALESCE(outbox.state, candidate.disposition) AS state
            FROM authority_clean_live_candidates_v1 AS candidate
-           JOIN authority_clean_live_approval_outbox_v1 AS outbox
+           LEFT JOIN authority_clean_live_approval_outbox_v1 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
           WHERE candidate.candidate_semantic_sha256 = ?`,
       )
       .get(semanticSha256) as CandidateRow | undefined;
   }
 
+  private lineageHead(reviewLineageId: string): LineageHeadRow | undefined {
+    return this.database
+      .prepare(
+        `SELECT head.review_lineage_id, head.candidate_id,
+                candidate.review_semantic_sha256
+           FROM authority_clean_live_review_lineage_heads_v1 AS head
+           JOIN authority_clean_live_candidates_v1 AS candidate
+             ON candidate.candidate_id = head.candidate_id
+          WHERE head.review_lineage_id = ?`,
+      )
+      .get(reviewLineageId) as LineageHeadRow | undefined;
+  }
+
+  private supersedeUnresolvedLineageApprovals(
+    reviewLineageId: string,
+    successorCandidateId: string,
+    supersededAt: string,
+  ): void {
+    this.database
+      .prepare(
+        `UPDATE authority_clean_live_approval_outbox_v1
+            SET state = 'superseded', superseded_by_candidate_id = ?,
+                superseded_at = ?, updated_at = ?
+          WHERE candidate_id IN (
+            SELECT candidate_id
+              FROM authority_clean_live_candidates_v1
+             WHERE review_lineage_id = ?
+          )
+            AND state != 'superseded'
+            AND NOT EXISTS (
+              SELECT 1 FROM authority_clean_live_v4_receipts_v1 AS receipt
+               WHERE receipt.approval_id = authority_clean_live_approval_outbox_v1.approval_id
+            )`,
+      )
+      .run(successorCandidateId, supersededAt, supersededAt, reviewLineageId);
+  }
+
   private outbox(candidateId: string): CleanLiveApprovalOutboxV1 {
     const outbox = this.database
       .prepare(
-        `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
+          `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
+                candidate.review_lineage_id, candidate.review_input_sha256,
+                candidate.review_semantic_sha256,
+                candidate.review_policy_id,
+                candidate.review_policy_contract_sha256,
+                candidate.review_policy_consequence_text,
+                candidate.review_policy_consequence_sha256,
+                candidate.disposition,
                 outbox.approval_id, outbox.stage_command_id, outbox.state,
                 outbox.provider_message_ts, outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
-                outbox.control_approval_sha256
+                outbox.post_started_at,
+                outbox.control_approval_sha256,
+                outbox.superseded_by_candidate_id, outbox.superseded_at,
+                outbox.tombstoned_at
            FROM authority_clean_live_candidates_v1 AS candidate
            JOIN authority_clean_live_approval_outbox_v1 AS outbox
              ON outbox.candidate_id = candidate.candidate_id

@@ -190,6 +190,7 @@ host-derived name:
 
 ```sh
 authority_log_group=$(aws cloudformation describe-stacks \
+  --profile echo-prod \
   --region "$observability_region" \
   --stack-name "$observability_stack" \
   --query "Stacks[0].Outputs[?OutputKey=='DockerRuntimeLogGroupName'].OutputValue | [0]" \
