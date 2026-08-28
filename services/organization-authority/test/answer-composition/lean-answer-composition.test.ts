@@ -130,16 +130,35 @@ describe("lean Layer 4 answer composition", () => {
     expect(JSON.stringify(auditEntries[0])).not.toContain("Tuesday, owned");
   });
 
-  it("rejects duplicate or unreleased citations before final revalidation", async () => {
+  it.each([
+    {
+      name: "duplicate citations",
+      response: {
+        status: "answered",
+        answer: "Unsupported",
+        citations: ["a1", "a1"],
+      },
+    },
+    {
+      name: "an undeclared property",
+      response: {
+        status: "answered",
+        answer: "Tuesday.",
+        citations: ["a1"],
+        unexpected: true,
+      },
+    },
+  ])("rejects an answer with $name before final revalidation", async ({ response }) => {
     const layer3 = {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
+    const audit = { append: vi.fn() };
     const answer = createLeanAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
-      answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "Unsupported", citations: ["a1", "a1"] })) },
+      answerer: { generate: vi.fn(async () => response) },
       layer3,
-      audit: { append: vi.fn() },
+      audit,
       provider: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
@@ -149,6 +168,7 @@ describe("lean Layer 4 answer composition", () => {
       LeanAnswerCompositionError,
     );
     expect(layer3.revalidate).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
   });
 
   it("does not call the answer model when Layer 3 releases no usable atoms, but revalidates and audits", async () => {
@@ -177,53 +197,78 @@ describe("lean Layer 4 answer composition", () => {
     expect(audit.append).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the original query when planner output violates the Layer 2 grammar", async () => {
+  it.each([
+    {
+      name: "contains an invalid Layer 2 query",
+      response: { queries: ["   "] },
+    },
+    {
+      name: "contains an undeclared property",
+      response: { queries: [], unexpected: true },
+    },
+  ])("fails closed before retrieval when planner output $name", async ({ response }) => {
     const layer3 = {
       retrieve: vi.fn(async () => release(false)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
+    const answerer = { generate: vi.fn() };
+    const audit = { append: vi.fn() };
     const answer = createLeanAnswerComposition({
-      planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
-      answerer: { generate: vi.fn() },
+      planner: { generate: vi.fn(async () => response) },
+      answerer,
       layer3,
-      audit: { append: vi.fn() },
+      audit,
       provider: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
-    await expect(answer.answer({ question: "What is the launch date?" })).resolves.toMatchObject({
-      answer: "Insufficient accessible evidence to answer this question.",
-    });
-    expect(layer3.retrieve).toHaveBeenCalledWith({
-      queries: ["What is the launch date?"],
-    });
+    await expect(
+      answer.answer({ question: "What is the launch date?" }),
+    ).rejects.toBeInstanceOf(LeanAnswerCompositionError);
+    expect(layer3.retrieve).not.toHaveBeenCalled();
+    expect(layer3.revalidate).not.toHaveBeenCalled();
+    expect(answerer.generate).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
   });
 
-  it("falls back once when the optional planner is unavailable", async () => {
+  it("fails closed before retrieval when the planner is unavailable", async () => {
+    const plannerFailure = new Error("provider unavailable");
     const layer3 = {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
+    const answerer = {
+      generate: vi.fn(async () => ({
+        status: "answered",
+        answer: "Tuesday.",
+        citations: ["a1"],
+      })),
+    };
+    const audit = { append: vi.fn() };
     const answer = createLeanAnswerComposition({
-      planner: { generate: vi.fn(async () => { throw new Error("provider unavailable"); }) },
-      answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "Tuesday.", citations: ["a1"] })) },
+      planner: {
+        generate: vi.fn(async () => {
+          throw plannerFailure;
+        }),
+      },
+      answerer,
       layer3,
-      audit: { append: vi.fn() },
+      audit,
       provider: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
 
-    await expect(answer.answer({ question: "What is the launch date?" })).resolves.toMatchObject({
-      answer: "Tuesday.",
-    });
-    expect(layer3.retrieve).toHaveBeenCalledOnce();
-    expect(layer3.retrieve).toHaveBeenCalledWith({
-      queries: ["What is the launch date?"],
-    });
+    await expect(
+      answer.answer({ question: "What is the launch date?" }),
+    ).rejects.toBe(plannerFailure);
+    expect(layer3.retrieve).not.toHaveBeenCalled();
+    expect(layer3.revalidate).not.toHaveBeenCalled();
+    expect(answerer.generate).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
   });
 
-  it("reports a redacted planner validation failure while retaining the original-query fallback", async () => {
+  it("reports a redacted planner validation failure while releasing nothing", async () => {
     const diagnostics: Layer4FailureDiagnosticV1[] = [];
     const question = "Question that must not appear in the diagnostic";
     const layer3 = {
@@ -245,11 +290,12 @@ describe("lean Layer 4 answer composition", () => {
       now_ms: vi.fn(() => 100),
     });
 
-    await expect(answer.answer({ question })).resolves.toMatchObject({
-      answer: "Insufficient accessible evidence to answer this question.",
-    });
+    await expect(answer.answer({ question })).rejects.toBeInstanceOf(
+      LeanAnswerCompositionError,
+    );
 
-    expect(layer3.retrieve).toHaveBeenCalledWith({ queries: [question] });
+    expect(layer3.retrieve).not.toHaveBeenCalled();
+    expect(layer3.revalidate).not.toHaveBeenCalled();
     expect(diagnostics).toEqual([
       expect.objectContaining({
         schema_version: 1,
@@ -365,7 +411,7 @@ describe("lean Layer 4 answer composition", () => {
     expect(serialized).not.toContain(released.released_atoms[0]?.text ?? "");
   });
 
-  it("does not let a diagnostics observer failure change answer behavior", async () => {
+  it("does not let a diagnostics observer failure mask planner rejection", async () => {
     const layer3 = {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
@@ -383,13 +429,14 @@ describe("lean Layer 4 answer composition", () => {
       },
     });
 
-    await expect(answer.answer({ question: "What is the launch date?" })).resolves.toMatchObject({
-      answer: "Tuesday.",
-    });
-    expect(layer3.retrieve).toHaveBeenCalledWith({ queries: ["What is the launch date?"] });
+    await expect(
+      answer.answer({ question: "What is the launch date?" }),
+    ).rejects.toBeInstanceOf(LeanAnswerCompositionError);
+    expect(layer3.retrieve).not.toHaveBeenCalled();
+    expect(layer3.revalidate).not.toHaveBeenCalled();
   });
 
-  it("does not turn caller cancellation into planner fallback", async () => {
+  it("does not invoke the planner after caller cancellation", async () => {
     const controller = new AbortController();
     controller.abort(new Error("caller cancelled"));
     const planner = { generate: vi.fn() };

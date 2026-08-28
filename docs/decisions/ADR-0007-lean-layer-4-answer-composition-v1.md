@@ -40,12 +40,14 @@ Lean V1 authorizes exactly one request-shaped path:
 1. One authenticated Person asks one question.
 2. One planner model call proposes no more than three focused queries; the
    application places the original question first.
-3. Layer 3 executes that one batch under the authenticated Person's derived
+3. Planner failure or malformed planner output terminates the request before
+   retrieval, answer composition, or audit; there is no literal-query fallback.
+4. Layer 3 executes that one batch under the authenticated Person's derived
    scope, with one exact Layer 2 generation and one Layer 1 record head.
-4. If the batch contains usable atoms, one answer model call receives only
+5. If the batch contains usable atoms, one answer model call receives only
    those released atoms. An empty batch returns a fixed insufficient-evidence
    answer without a pointless model call.
-5. Each returned citation is an atom reference from that exact released set.
+6. Each returned citation is an atom reference from that exact released set.
 
 The planner's queries are untrusted search intent. They do not carry, choose,
 or widen the caller identity, membership, policy, segment, generation, record

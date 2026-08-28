@@ -112,13 +112,16 @@ tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 The current server composition selects Granola as the meeting source,
 OpenRouter with the pinned DeepSeek processing version as the decision
 processor, Slack as separate approval and delivery capabilities, and Authority
-SQLite state. The other LLM transports are compiled alternatives, not active
-runtime dependencies.
+SQLite state. It separately composes the bounded Person `ask` path above Layer
+3 with one pinned OpenRouter planner/answer model. The other LLM transports are
+compiled alternatives, not active runtime dependencies.
 
-This source-processing model is not the future permission-aware read/model
-layer. It receives one admitted source revision through the processor port and
-has no Person session, retrieval-generation handle, broad corpus access, or
-authorization-widening fallback. Layer 4 remains uncomposed.
+The source-processing model remains separate from the permission-aware
+read/model path. It receives one admitted source revision through the processor
+port and has no Person session, retrieval-generation handle, broad corpus
+access, or authorization-widening fallback. Layer 4 receives only the atoms
+Layer 3 released for one authenticated Person request and cannot read lower
+layers directly.
 
 The persisted approval contracts include both restricted-reviewer and
 organization-member modes, but current live composition accepts only the
