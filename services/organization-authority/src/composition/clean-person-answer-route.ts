@@ -21,7 +21,7 @@ import type {
 } from "../presentation/clean-person-answer-http-application.js";
 
 export const CLEAN_LAYER4_PROVIDER_V1 = "openrouter" as const;
-export const CLEAN_LAYER4_MODEL_V1 = "deepseek/deepseek-r1" as const;
+export const CLEAN_LAYER4_MODEL_V1 = "deepseek/deepseek-v3.2" as const;
 export const CLEAN_LAYER4_TIMEOUT_MS_V1 = 60_000;
 
 export interface CleanLayer4FailureEventV1
