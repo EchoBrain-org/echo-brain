@@ -24,6 +24,10 @@ const CLEAN_LIVE_WORKER_FAILURE_EVENT_V1 = canonicalJson({
   kind: "echo-clean-live-worker-failed-v1",
 } as never);
 
+// Retained solely for the existing CloudWatch metric/alarm compatibility.
+// New operational diagnostics query the ordered lifecycle events instead:
+// phase failed, then cycle failed, then this legacy marker.
+
 const CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1 = canonicalJson({
   schema_version: 1,
   kind: "echo-clean-live-startup-failed-v1",
@@ -128,6 +132,10 @@ export async function runCleanLiveCli(
       llm_credential_file: manifest.llm_credential_file,
       on_worker_error: () => {
         io.stderr(`${CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
+      },
+      on_worker_telemetry: (event) => {
+        // The lifecycle reporter constructs this closed, content-free schema.
+        io.stderr(`${canonicalJson(event as never)}\n`);
       },
       on_layer4_failure: (event) => {
         io.stderr(

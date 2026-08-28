@@ -18,6 +18,10 @@ import {
   type CleanLiveOnlySourceStateV1,
 } from "../../../src/processing/clean-v1/live-only-source-cycle.js";
 import {
+  CleanLiveWorkerLifecycleV1,
+  type CleanLiveWorkerTelemetryEventV1,
+} from "../../../src/processing/clean-v1/clean-live-worker-lifecycle.js";
+import {
   cleanReviewInputSha256V1,
   cleanReviewLineageIdV1,
 } from "../../../src/processing/clean-v1/review-lineage-semantics.js";
@@ -239,6 +243,18 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
   }
 }
 
+class FailingFrozenReadState extends FakeState {
+  override async readFrozenCandidateForSourceRevision(): Promise<never> {
+    throw new Error("frozen source revision read failed");
+  }
+}
+
+class FailingCursorAdvanceState extends FakeState {
+  override async advanceCursor(): Promise<never> {
+    throw new Error("source cursor advance failed");
+  }
+}
+
 function source(batch: MeetingBatch): MeetingSourceAdapter {
   return {
     identity: SOURCE,
@@ -295,6 +311,158 @@ function liveCycle(
 }
 
 describe("clean live-only source cycle", () => {
+  it("reports source intake, extraction, and approval staging without meeting data", async () => {
+    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    const observedMeeting = meeting();
+    const cycle = liveCycle({
+      source: source({ meetings: [observedMeeting], next_cursor: undefined }),
+      processor: processor(),
+      state: new FakeState(admission()),
+      stager: stager({ kind: "staged", stage_id: "stage-1" }),
+    });
+    cycle.setWorkerLifecycle(
+      new CleanLiveWorkerLifecycleV1((event) => events.push(event)),
+    );
+
+    await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "staged" });
+
+    expect(
+      events
+        .filter((event) => event.kind === "echo-clean-live-worker-phase-v1")
+        .map((event) => event.cycle_phase),
+    ).toEqual([
+      "source_intake",
+      "source_intake",
+      "extraction",
+      "extraction",
+      "approval_staging",
+      "approval_staging",
+    ]);
+    const encoded = JSON.stringify(events);
+    for (const forbidden of [
+      observedMeeting.id,
+      observedMeeting.provenance.external_id,
+      observedMeeting.content[0]!.text,
+      "stage-1",
+    ]) {
+      expect(encoded).not.toContain(forbidden);
+    }
+  });
+
+  it("keeps source-state failures inside the source intake phase", async () => {
+    for (const scenario of [
+      {
+        source: source({ meetings: [meeting()] }),
+        state: new FailingFrozenReadState(admission()),
+        failure: "frozen source revision read failed",
+      },
+      {
+        source: source({
+          meetings: [],
+          next_cursor: "granola:v1:next",
+        }),
+        state: new FailingCursorAdvanceState(admission()),
+        failure: "source cursor advance failed",
+      },
+    ]) {
+      const events: CleanLiveWorkerTelemetryEventV1[] = [];
+      const cycle = liveCycle({
+        source: scenario.source,
+        processor: processor(),
+        state: scenario.state,
+        stager: stager({ kind: "staged", stage_id: "never" }),
+      });
+      cycle.setWorkerLifecycle(
+        new CleanLiveWorkerLifecycleV1((event) => events.push(event)),
+      );
+
+      await expect(cycle.runOnce()).rejects.toThrow(scenario.failure);
+      expect(events).toMatchObject([
+        {
+          kind: "echo-clean-live-worker-phase-v1",
+          event: "started",
+          cycle_phase: "source_intake",
+        },
+        {
+          kind: "echo-clean-live-worker-phase-v1",
+          event: "failed",
+          cycle_phase: "source_intake",
+        },
+      ]);
+    }
+  });
+
+  it("reports canonical decision validation failures as extraction failures", async () => {
+    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()] }),
+      processor: processor((value) => ({
+        ...decisions(value),
+        meeting_id: "wrong-meeting",
+      })),
+      state: new FakeState(admission()),
+      stager: stager({ kind: "staged", stage_id: "never" }),
+    });
+    cycle.setWorkerLifecycle(
+      new CleanLiveWorkerLifecycleV1((event) => events.push(event)),
+    );
+
+    await expect(cycle.runOnce()).rejects.toThrow();
+    expect(
+      events.map((event) =>
+        event.kind === "echo-clean-live-worker-phase-v1"
+          ? `${event.cycle_phase}:${event.event}`
+          : event.event,
+      ),
+    ).toEqual([
+      "source_intake:started",
+      "source_intake:succeeded",
+      "extraction:started",
+      "extraction:failed",
+    ]);
+  });
+
+  it("does not start the next phase after shutdown is requested", async () => {
+    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    const controller = new AbortController();
+    const state = new FakeState(admission());
+    let extracts = 0;
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()] }),
+      processor: processor((value) => {
+        extracts += 1;
+        return decisions(value);
+      }),
+      state,
+      stager: stager({ kind: "staged", stage_id: "never" }),
+    });
+    cycle.setWorkerLifecycle(
+      new CleanLiveWorkerLifecycleV1((event) => {
+        events.push(event);
+        if (
+          event.kind === "echo-clean-live-worker-phase-v1" &&
+          event.cycle_phase === "source_intake" &&
+          event.event === "succeeded"
+        ) {
+          controller.abort(new Error("worker shutdown"));
+        }
+      }),
+    );
+
+    await expect(cycle.runOnce(controller.signal)).rejects.toThrow(
+      "worker shutdown",
+    );
+    expect(extracts).toBe(0);
+    expect(state.candidates).toEqual([]);
+    expect(
+      events.map((event) =>
+        event.kind === "echo-clean-live-worker-phase-v1"
+          ? `${event.cycle_phase}:${event.event}`
+          : event.event,
+      ),
+    ).toEqual(["source_intake:started", "source_intake:succeeded"]);
+  });
+
   it("polls one admitted live-only Granola cursor, stages durably, then advances", async () => {
     const current = admission();
     const state = new FakeState(current);

@@ -42,7 +42,7 @@ describe("Authority minimal observability stack", () => {
   it("reattaches the shared-network proxy after the controlled Authority stop", () => {
     const runbook = readFileSync(RUNBOOK, "utf8");
     const rehearsal = runbook.slice(
-      runbook.indexOf("### 6. Rehearse the real public failure path"),
+      runbook.indexOf("### 7. Rehearse the real public failure path"),
       runbook.indexOf("## Rollback, containment, evidence, and follow-up"),
     );
 

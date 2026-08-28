@@ -4,6 +4,11 @@ import {
   type SerializedAuthorityMeetingWorkerOptions,
 } from "../processing/live/serialized-authority-meeting-worker.js";
 import {
+  CleanLiveWorkerLifecycleV1,
+  type CleanLiveWorkerPhaseRunnerV1,
+  type CleanLiveWorkerTelemetryEventV1,
+} from "../processing/clean-v1/clean-live-worker-lifecycle.js";
+import {
   startCleanPersonRuntime,
   type CleanPersonRuntimeConfig,
   type CleanPersonRuntimeDependencies,
@@ -33,6 +38,10 @@ export interface CleanLiveProcessingCycleV1 {
    * while the live process is waiting for its activation prerequisites.
    */
   reconcileReadableSearchGeneration(signal: AbortSignal): Promise<void>;
+  /** Optional composition seam for source/extraction/staging phase telemetry. */
+  setWorkerLifecycle?(lifecycle: CleanLiveWorkerPhaseRunnerV1): void;
+  /** True only when the processing implementation emits its inner phases. */
+  readonly hasFineGrainedSourceLifecycle?: boolean;
 }
 
 export interface CleanLiveRuntimeConfig {
@@ -48,6 +57,10 @@ export interface CleanLiveRuntimeDependencies {
     dependencies: CleanPersonRuntimeDependencies,
   ) => Promise<RunningCleanPersonRuntime>;
   readonly on_worker_error?: SerializedAuthorityMeetingWorkerOptions["onError"];
+  /** Content-free lifecycle events; observer failures never affect the worker. */
+  readonly on_worker_telemetry?: (event: CleanLiveWorkerTelemetryEventV1) => void;
+  /** Deterministic test seam for elapsed lifecycle telemetry. */
+  readonly worker_telemetry_now?: () => number;
   /** Test seam; production always clears the sole lean-V1 process handle. */
   readonly clear_readable_search_handle?: () => void;
 }
@@ -67,16 +80,31 @@ export interface RunningCleanLiveRuntime {
 export async function runCleanLiveProcessingCycleV1(
   processing: CleanLiveProcessingCycleV1,
   signal: AbortSignal,
+  lifecycle?: CleanLiveWorkerPhaseRunnerV1,
 ): Promise<void> {
-  await processing.recoverV4Appends(signal);
+  const phase = <T>(
+    name: Parameters<CleanLiveWorkerPhaseRunnerV1["runPhase"]>[0],
+    operation: () => Promise<T>,
+  ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
+  await phase("recovery", () => processing.recoverV4Appends(signal));
   signal.throwIfAborted();
-  await processing.pollAndStageLiveOnlySource(signal);
+  if (processing.hasFineGrainedSourceLifecycle === true) {
+    await processing.pollAndStageLiveOnlySource(signal);
+  } else {
+    await phase("source_intake", () =>
+      processing.pollAndStageLiveOnlySource(signal),
+    );
+  }
   signal.throwIfAborted();
-  await processing.observeAndFinalizePendingApprovals(signal);
+  await phase("approval_observation", () =>
+    processing.observeAndFinalizePendingApprovals(signal),
+  );
   signal.throwIfAborted();
-  await processing.appendFinalizedApprovalsToV4(signal);
+  await phase("record_append", () => processing.appendFinalizedApprovalsToV4(signal));
   signal.throwIfAborted();
-  await processing.reconcileReadableSearchGeneration(signal);
+  await phase("search_reconciliation", () =>
+    processing.reconcileReadableSearchGeneration(signal),
+  );
 }
 
 /**
@@ -96,25 +124,50 @@ export async function startCleanLiveRuntime(
     dependencies.clear_readable_search_handle ??
     clearCleanReadableSearchActiveGenerationV1;
   const startup = new AbortController();
+  const lifecycle = new CleanLiveWorkerLifecycleV1(
+    dependencies.on_worker_telemetry ?? (() => undefined),
+    dependencies.worker_telemetry_now,
+  );
+  dependencies.processing.setWorkerLifecycle?.(lifecycle);
   let person: RunningCleanPersonRuntime | undefined;
   try {
     // Recovery can append a finalized approval and advance the V4 head. Finish
     // it before validating the generation that will be served at startup.
-    await dependencies.processing.recoverV4Appends(startup.signal);
+    await lifecycle.runPhase(
+      "recovery",
+      () => dependencies.processing.recoverV4Appends(startup.signal),
+      startup.signal,
+      false,
+    );
     startup.signal.throwIfAborted();
     // A persisted pointer is not ready until its immutable generation has been
     // validated into the sole process-local handle. Never bind the Person
     // listener before that startup boundary succeeds.
-    await dependencies.processing.reconcileReadableSearchGeneration(
+    await lifecycle.runPhase(
+      "search_reconciliation",
+      () => dependencies.processing.reconcileReadableSearchGeneration(startup.signal),
       startup.signal,
+      false,
     );
     startup.signal.throwIfAborted();
     person = await startPerson(config.person, dependencies.person ?? {});
     const startedPerson = person;
     const worker = new SerializedAuthorityMeetingWorker({
       intervalMs: config.worker_interval_ms,
-      runCycle: (signal) =>
-        runCleanLiveProcessingCycleV1(dependencies.processing, signal),
+      runCycle: async (signal) => {
+        lifecycle.startCycle();
+        try {
+          await runCleanLiveProcessingCycleV1(
+            dependencies.processing,
+            signal,
+            lifecycle,
+          );
+          lifecycle.succeedCycle();
+        } catch (error) {
+          lifecycle.failCycle(error, signal.aborted);
+          throw error;
+        }
+      },
       onError: dependencies.on_worker_error,
     });
     return {

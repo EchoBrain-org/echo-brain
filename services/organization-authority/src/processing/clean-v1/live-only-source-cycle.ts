@@ -8,6 +8,10 @@ import {
   type MeetingSourceAdapter,
 } from "../core/index.js";
 import { granolaCursorPhase } from "../adapters/meeting-sources/granola/index.js";
+import type {
+  CleanLiveWorkerPhaseRunnerV1,
+  CleanLiveWorkerPhaseV1,
+} from "./clean-live-worker-lifecycle.js";
 import {
   cleanReviewInputSha256V1,
   cleanReviewLineageIdV1,
@@ -333,8 +337,13 @@ function rebindDecisionsToRevision(
  */
 export class CleanLiveOnlySourceCycleV1 {
   private running: Promise<CleanLiveOnlySourceCycleResultV1> | undefined;
+  private workerLifecycle: CleanLiveWorkerPhaseRunnerV1 | undefined;
 
   constructor(private readonly options: CleanLiveOnlySourceCycleV1Options) {}
+
+  setWorkerLifecycle(lifecycle: CleanLiveWorkerPhaseRunnerV1): void {
+    this.workerLifecycle = lifecycle;
+  }
 
   runOnce(signal?: AbortSignal): Promise<CleanLiveOnlySourceCycleResultV1> {
     if (this.running !== undefined) return this.running;
@@ -359,107 +368,133 @@ export class CleanLiveOnlySourceCycleV1 {
         ? signal.reason
         : new Error("clean live-only source cycle was cancelled");
     }
-    const admission = await this.options.state.readAdmission();
-    assertAdmissionMatchesAdapters(
-      admission,
-      this.options.source,
-      this.options.processor,
-    );
-    // Approval delivery is a durable outbox, not the source checkpoint. Drain
-    // prior work first, but never let one provider-ambiguous card prevent the
-    // source adapter from admitting an unrelated meeting.
-    await this.options.stager.reconcilePendingDeliveries(
-      signal === undefined ? undefined : { signal },
-    );
-    const batch = await this.options.source.pull(
-      { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
-      signal === undefined ? undefined : { signal },
-    );
-    assertCanonicalMeetingBatch(batch);
-    if (batch.meetings.length > MAXIMUM_PULL_LIMIT) {
-      throw new Error(
-        "clean live-only source cycle accepts at most one meeting per poll",
-      );
-    }
-    const meeting = batch.meetings[0];
-    if (meeting === undefined) {
-      if (
-        batch.next_cursor === undefined ||
-        batch.next_cursor === admission.source.cursor
-      ) {
-        return { kind: "empty", cursor_advanced: false };
-      }
-      const advanced = await this.options.state.advanceCursor({
-        expected_cursor: admission.source.cursor,
-        next_cursor: batch.next_cursor,
-      });
-      if (advanced === "advanced") {
-        return { kind: "empty_cursor_advanced", cursor_advanced: true };
-      }
-      return {
-        kind: "empty_cursor_not_advanced",
-        reason: advanced,
-        cursor_advanced: false,
-      };
-    }
-
-    assertCanonicalMeetingDocument(meeting, this.options.source.identity);
-    const reviewPolicy = this.options.review_policy(meeting);
-    const frozen = await this.options.state.readFrozenCandidateForSourceRevision(
-      {
-        external_id: meeting.provenance.external_id,
-        canonical_revision: meeting.provenance.canonical_revision,
-      },
-    );
-    if (frozen !== undefined) {
-      if (
-        frozen.disposition === "actionable" &&
-        (frozen.state === "queued" ||
-          frozen.state === "posting" ||
-          frozen.state === "posted")
-      ) {
-        return this.stageAndAdvance(
-          frozen,
-          frozen.admission,
-          frozen.meeting,
-          frozen.decisions,
-          batch.next_cursor,
-          signal,
-        );
-      }
-      if (frozen.disposition === "no_signals") {
-        await this.options.stager.reconcileSuperseded(
-          signal === undefined ? undefined : { signal },
-        );
-      }
-      return this.finishWithoutStage(
-        "already_processed",
+    const intake = await this.phase("source_intake", async () => {
+      const admission = await this.options.state.readAdmission();
+      assertAdmissionMatchesAdapters(
         admission,
-        batch.next_cursor,
+        this.options.source,
+        this.options.processor,
+      );
+      // Approval delivery is a durable outbox, not the source checkpoint.
+      // Drain prior work first, but never let one provider-ambiguous card
+      // prevent the source adapter from admitting an unrelated meeting.
+      await this.options.stager.reconcilePendingDeliveries(
+        signal === undefined ? undefined : { signal },
+      );
+      const batch = await this.options.source.pull(
+        { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
+        signal === undefined ? undefined : { signal },
+      );
+      assertCanonicalMeetingBatch(batch);
+      if (batch.meetings.length > MAXIMUM_PULL_LIMIT) {
+        throw new Error(
+          "clean live-only source cycle accepts at most one meeting per poll",
+        );
+      }
+      const meeting = batch.meetings[0];
+      if (meeting === undefined) {
+        if (
+          batch.next_cursor === undefined ||
+          batch.next_cursor === admission.source.cursor
+        ) {
+          return {
+            kind: "complete" as const,
+            result: { kind: "empty" as const, cursor_advanced: false as const },
+          };
+        }
+        const advanced = await this.options.state.advanceCursor({
+          expected_cursor: admission.source.cursor,
+          next_cursor: batch.next_cursor,
+        });
+        return advanced === "advanced"
+          ? {
+              kind: "complete" as const,
+              result: {
+                kind: "empty_cursor_advanced" as const,
+                cursor_advanced: true as const,
+              },
+            }
+          : {
+              kind: "complete" as const,
+              result: {
+                kind: "empty_cursor_not_advanced" as const,
+                reason: advanced,
+                cursor_advanced: false as const,
+              },
+            };
+      }
+      assertCanonicalMeetingDocument(meeting, this.options.source.identity);
+      const reviewPolicy = this.options.review_policy(meeting);
+      const frozen =
+        await this.options.state.readFrozenCandidateForSourceRevision({
+          external_id: meeting.provenance.external_id,
+          canonical_revision: meeting.provenance.canonical_revision,
+        });
+      return {
+        kind: "meeting" as const,
+        admission,
+        batch,
+        meeting,
+        reviewPolicy,
+        frozen,
+      };
+    }, signal);
+    if (intake.kind === "complete") return intake.result;
+    const { admission, batch, meeting, reviewPolicy, frozen } = intake;
+    if (frozen !== undefined) {
+      return this.phase(
+        "approval_staging",
+        async () => {
+          if (
+            frozen.disposition === "actionable" &&
+            (frozen.state === "queued" ||
+              frozen.state === "posting" ||
+              frozen.state === "posted")
+          ) {
+            return this.stageAndAdvance(
+              frozen,
+              frozen.admission,
+              frozen.meeting,
+              frozen.decisions,
+              batch.next_cursor,
+              signal,
+            );
+          }
+          if (frozen.disposition === "no_signals") {
+            await this.options.stager.reconcileSuperseded(
+              signal === undefined ? undefined : { signal },
+            );
+          }
+          return this.finishWithoutStage(
+            "already_processed",
+            admission,
+            batch.next_cursor,
+          );
+        },
+        signal,
       );
     }
-
-    const reviewInputSha256 = cleanReviewInputSha256V1({
-      meeting,
-      processor: {
-        adapter_id: admission.processor.adapter_id,
-        instance_id: admission.processor.instance_id,
-        version: admission.processor.version,
-        configuration_sha256: admission.processor.configuration_sha256,
-      },
-    });
-    const reviewLineageId = cleanReviewLineageIdV1({
-      adapter_id: meeting.provenance.source.adapter_id,
-      instance_id: meeting.provenance.source.instance_id,
-      external_id: meeting.provenance.external_id,
-    });
-    const reusable =
-      await this.options.state.readFrozenCandidateForReviewInput({
-        review_lineage_id: reviewLineageId,
-        review_input_sha256: reviewInputSha256,
+    const decisions = await this.phase("extraction", async () => {
+      const reviewInputSha256 = cleanReviewInputSha256V1({
+        meeting,
+        processor: {
+          adapter_id: admission.processor.adapter_id,
+          instance_id: admission.processor.instance_id,
+          version: admission.processor.version,
+          configuration_sha256: admission.processor.configuration_sha256,
+        },
       });
-    const decisions =
-      reusable === undefined
+      const reviewLineageId = cleanReviewLineageIdV1({
+        adapter_id: meeting.provenance.source.adapter_id,
+        instance_id: meeting.provenance.source.instance_id,
+        external_id: meeting.provenance.external_id,
+      });
+      const reusable =
+        await this.options.state.readFrozenCandidateForReviewInput({
+          review_lineage_id: reviewLineageId,
+          review_input_sha256: reviewInputSha256,
+        });
+      const extracted = reusable === undefined
         ? await this.options.processor.extract(
             meeting,
             {
@@ -476,35 +511,47 @@ export class CleanLiveOnlySourceCycleV1 {
             reusable.meeting,
             meeting,
           );
-    assertCanonicalDecisionSet(
-      decisions,
-      meeting,
-      this.options.processor.identity,
-    );
-    const candidate = await this.options.state.stageCandidate({
-      admission,
-      meeting,
-      decisions,
-      review_policy: reviewPolicy,
-    });
-    if (candidate.disposition !== "actionable") {
-      await this.options.stager.reconcileSuperseded(
-        signal === undefined ? undefined : { signal },
+      assertCanonicalDecisionSet(
+        extracted,
+        meeting,
+        this.options.processor.identity,
       );
-      return candidate.disposition === "no_signals"
-        ? this.finishWithoutStage("no_signals", admission, batch.next_cursor)
-        : this.finishWithoutStage(
-            "already_processed",
-            admission,
-            batch.next_cursor,
+      return extracted;
+    }, signal);
+    return this.phase(
+      "approval_staging",
+      async () => {
+        const candidate = await this.options.state.stageCandidate({
+          admission,
+          meeting,
+          decisions,
+          review_policy: reviewPolicy,
+        });
+        if (candidate.disposition !== "actionable") {
+          await this.options.stager.reconcileSuperseded(
+            signal === undefined ? undefined : { signal },
           );
-    }
-    return this.stageAndAdvance(
-      candidate,
-      admission,
-      meeting,
-      decisions,
-      batch.next_cursor,
+          return candidate.disposition === "no_signals"
+            ? this.finishWithoutStage(
+                "no_signals",
+                admission,
+                batch.next_cursor,
+              )
+            : this.finishWithoutStage(
+                "already_processed",
+                admission,
+                batch.next_cursor,
+              );
+        }
+        return this.stageAndAdvance(
+          candidate,
+          admission,
+          meeting,
+          decisions,
+          batch.next_cursor,
+          signal,
+        );
+      },
       signal,
     );
   }
@@ -604,5 +651,13 @@ export class CleanLiveOnlySourceCycleV1 {
           reason: advanced,
           cursor_advanced: false,
         };
+  }
+
+  private phase<T>(
+    phase: CleanLiveWorkerPhaseV1,
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.workerLifecycle?.runPhase(phase, operation, signal) ?? operation();
   }
 }
