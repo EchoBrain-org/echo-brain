@@ -128,7 +128,8 @@ interface RenderedMeeting {
 function renderMeeting(meeting: MeetingDocument): RenderedMeeting {
   const participants = meeting.participants
     .map((participant) => participant.display_name ?? participant.id)
-    .filter(isNonEmptyString);
+    .filter(isNonEmptyString)
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   const evidenceById = new Map<string, MeetingContentBlock>();
   const content: { evidence_id: string; kind: string; text: string }[] = [];
   for (const block of meeting.content) {

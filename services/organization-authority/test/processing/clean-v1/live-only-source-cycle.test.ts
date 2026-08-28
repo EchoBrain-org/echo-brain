@@ -17,7 +17,10 @@ import {
   type CleanGranolaSourceAdmissionV1,
   type CleanLiveOnlySourceStateV1,
 } from "../../../src/processing/clean-v1/live-only-source-cycle.js";
-import { cleanReviewInputSha256V1 } from "../../../src/processing/clean-v1/review-lineage-semantics.js";
+import {
+  cleanReviewInputSha256V1,
+  cleanReviewLineageIdV1,
+} from "../../../src/processing/clean-v1/review-lineage-semantics.js";
 
 const CUT_OFF = "2026-08-22T02:03:04.005Z";
 const SOURCE = {
@@ -136,12 +139,12 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
   }
 
   async readFrozenCandidateForReviewInput(input: {
-    readonly external_id: string;
+    readonly review_lineage_id: string;
     readonly review_input_sha256: string;
   }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
     return [...this.sourceRevisions.values()].find(
       (candidate) =>
-        candidate.meeting.provenance.external_id === input.external_id &&
+        candidate.review_lineage_id === input.review_lineage_id &&
         candidate.review_input_sha256 === input.review_input_sha256,
     );
   }
@@ -152,7 +155,6 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
     this.candidates.push(input);
     const reviewInputSha256 = cleanReviewInputSha256V1({
       meeting: input.meeting,
-      review_policy: input.review_policy,
       processor: input.admission.processor,
     });
     const reusable = [...this.sourceRevisions.values()].find(
@@ -162,6 +164,11 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
         candidate.review_input_sha256 === reviewInputSha256,
     );
     const actionable = input.decisions.signals.length > 0;
+    const reviewLineageId = cleanReviewLineageIdV1({
+      adapter_id: input.meeting.provenance.source.adapter_id,
+      instance_id: input.meeting.provenance.source.instance_id,
+      external_id: input.meeting.provenance.external_id,
+    });
     const reviewPolicyFields = {
       review_policy_id: input.review_policy.policy_id,
       review_policy_contract_sha256:
@@ -179,41 +186,35 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
           review_lineage_id: reusable.review_lineage_id,
           review_input_sha256: reviewInputSha256,
           review_semantic_sha256: reusable.review_semantic_sha256,
-          review_round: reusable.review_round,
           disposition: "coalesced",
           approval_id: null,
           stage_command_id: null,
           state: "coalesced",
-          superseded_approval_id: null,
         }
       : actionable
       ? {
           ...reviewPolicyFields,
           candidate_id: "cnd_test",
           candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-          review_lineage_id: "rli_test",
+          review_lineage_id: reviewLineageId,
           review_input_sha256: reviewInputSha256,
           review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-          review_round: 1,
           disposition: "actionable",
           approval_id: "apr_test",
           stage_command_id: "pas_test",
           state: "queued",
-          superseded_approval_id: null,
         }
       : {
           ...reviewPolicyFields,
           candidate_id: "cnd_test",
           candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
-          review_lineage_id: "rli_test",
+          review_lineage_id: reviewLineageId,
           review_input_sha256: reviewInputSha256,
           review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-          review_round: 0,
           disposition: "no_signals",
           approval_id: null,
           stage_command_id: null,
           state: "no_signals",
-          superseded_approval_id: null,
         };
     this.sourceRevisions.set(
       `${input.meeting.provenance.external_id}:${input.meeting.provenance.canonical_revision}`,
@@ -270,7 +271,8 @@ function stager(
       calls += 1;
       return result;
     },
-    tombstoneSuperseded: async () => {},
+    reconcilePendingDeliveries: async () => {},
+    reconcileSuperseded: async () => {},
   };
 }
 
@@ -341,6 +343,46 @@ describe("clean live-only source cycle", () => {
       });
       expect(state.advances).toEqual([]);
     }
+  });
+
+  it("advances after a durable approval delivery becomes provider-ambiguous", async () => {
+    const current = admission();
+    const state = new FakeState(current);
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      processor: processor(),
+      state,
+      stager: stager({ kind: "delivery_pending" }),
+    });
+
+    await expect(cycle.runOnce()).resolves.toEqual({
+      kind: "delivery_pending",
+      cursor_advanced: true,
+    });
+    expect(state.candidates).toHaveLength(1);
+    expect(state.advances).toEqual([
+      {
+        expected_cursor: current.source.cursor,
+        next_cursor: "granola:v1:next",
+      },
+    ]);
+  });
+
+  it("keeps a pending delivery durable when its source cursor fence drifts", async () => {
+    const state = new FakeState(admission(), "state_drift");
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      processor: processor(),
+      state,
+      stager: stager({ kind: "delivery_pending" }),
+    });
+
+    await expect(cycle.runOnce()).resolves.toEqual({
+      kind: "delivery_pending_cursor_not_advanced",
+      reason: "state_drift",
+      cursor_advanced: false,
+    });
+    expect(state.advances).toHaveLength(1);
   });
 
   it("keeps a durable staged item visible when the Authority cursor fence drifts", async () => {
@@ -481,6 +523,7 @@ describe("clean live-only source cycle", () => {
       content: [
         {
           ...original.content[0]!,
+          id: "block-renumbered",
           started_at: "2026-08-22T02:04:11.000Z",
           ended_at: "2026-08-22T02:04:13.000Z",
         },
@@ -507,7 +550,7 @@ describe("clean live-only source cycle", () => {
             evidence: [
               {
                 meeting_id: folderOnly.id,
-                block_id: "block-1",
+                block_id: "block-renumbered",
                 started_at: "2026-08-22T02:04:11.000Z",
                 ended_at: "2026-08-22T02:04:13.000Z",
               },
@@ -518,8 +561,8 @@ describe("clean live-only source cycle", () => {
     });
   });
 
-  it("retries queued and posted revisions with only their frozen snapshots", async () => {
-    for (const stateName of ["queued", "posted"] as const) {
+  it("retries queued, posting, and posted revisions with only their frozen snapshots", async () => {
+    for (const stateName of ["queued", "posting", "posted"] as const) {
       const current = admission();
       const state = new FakeState(current);
       const originalMeeting = meeting();
@@ -530,7 +573,6 @@ describe("clean live-only source cycle", () => {
         review_lineage_id: "rli_test",
         review_input_sha256: `sha256:${"c".repeat(64)}`,
         review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-        review_round: 1,
         review_policy_id: REVIEW_POLICY.policy_id,
         review_policy_contract_sha256:
           REVIEW_POLICY.policy_contract_sha256,
@@ -542,7 +584,6 @@ describe("clean live-only source cycle", () => {
         approval_id: `apr_${stateName}`,
         stage_command_id: `pas_${stateName}`,
         state: stateName,
-        superseded_approval_id: null,
         admission: current,
         meeting: originalMeeting,
         decisions: originalDecisions,
@@ -554,7 +595,8 @@ describe("clean live-only source cycle", () => {
           retried = input;
           return { kind: "staged", stage_id: "stage-1" };
         },
-        tombstoneSuperseded: async () => {},
+        reconcilePendingDeliveries: async () => {},
+        reconcileSuperseded: async () => {},
       };
       const changedObservation: MeetingDocument = {
         ...originalMeeting,
@@ -613,7 +655,6 @@ describe("clean live-only source cycle", () => {
       review_lineage_id: "rli_test",
       review_input_sha256: `sha256:${"c".repeat(64)}`,
       review_semantic_sha256: `sha256:${"d".repeat(64)}`,
-      review_round: 1,
       review_policy_id: REVIEW_POLICY.policy_id,
       review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
       review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
@@ -623,7 +664,6 @@ describe("clean live-only source cycle", () => {
       approval_id: "apr_staged",
       stage_command_id: "pas_staged",
       state: "staged",
-      superseded_approval_id: null,
       admission: current,
       meeting: originalMeeting,
       decisions: decisions(originalMeeting),
@@ -639,7 +679,8 @@ describe("clean live-only source cycle", () => {
         stages += 1;
         return { kind: "staged", stage_id: "stage-1" };
       },
-      tombstoneSuperseded: async () => {},
+      reconcilePendingDeliveries: async () => {},
+      reconcileSuperseded: async () => {},
     };
 
     const repeated = liveCycle({

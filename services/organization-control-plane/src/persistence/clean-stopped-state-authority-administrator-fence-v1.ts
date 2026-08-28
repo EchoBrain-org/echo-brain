@@ -11,7 +11,7 @@ import Database from "better-sqlite3";
 const AUTHORITY_APPLICATION_ID_V1 = 0x45434155;
 const AUTHORITY_SCHEMA_VERSION_V1 = 1;
 const AUTHORITY_BASELINE_SHA256_V1 =
-  "sha256:5cd7a6b4e69c6147f0963fdfb0daf843dd325cafa6356777af2acbe4c7844e47";
+  "sha256:007a1498dd1db87d03ba2876086c5ec6b6c655f77e5c25691abafd18451465d6";
 
 export interface CleanStoppedStateAuthorityCoordinatesV1 {
   readonly authority_id: string;

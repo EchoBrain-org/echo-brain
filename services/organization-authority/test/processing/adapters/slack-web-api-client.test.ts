@@ -1,6 +1,63 @@
 import { describe, expect, it } from "vitest";
 import { SlackWebApiClient } from "../../../src/processing/adapters/shared/slack/slack-web-api-client.js";
 
+describe("SlackWebApiClient conversations.history recovery", () => {
+  it("reads every cursor page and preserves exact bot-authored evidence", async () => {
+    const urls: string[] = [];
+    const client = new SlackWebApiClient("test-token", {
+      baseUrl: "https://slack.example.test/api",
+      fetchImpl: async (url) => {
+        urls.push(String(url));
+        const cursor = new URL(String(url)).searchParams.get("cursor");
+        return new Response(
+          JSON.stringify(
+            cursor === null
+              ? {
+                  ok: true,
+                  has_more: true,
+                  messages: [{ ts: "1724292304.005000", text: "first", bot_id: "B123" }],
+                  response_metadata: { next_cursor: "next" },
+                }
+              : {
+                  ok: true,
+                  has_more: false,
+                  messages: [{ ts: "1724292305.005000", text: "second", bot_id: "B123" }],
+                  response_metadata: { next_cursor: "" },
+                },
+          ),
+          { headers: { "x-oauth-scopes": "channels:history" } },
+        );
+      },
+    });
+
+    await expect(
+      client.channelHistory({ channel: "C123", oldest: "1724292304.000000" }),
+    ).resolves.toEqual([
+      { ts: "1724292304.005000", text: "first", bot_id: "B123" },
+      { ts: "1724292305.005000", text: "second", bot_id: "B123" },
+    ]);
+    expect(urls).toHaveLength(2);
+  });
+
+  it("never treats incomplete pagination as proof that no post exists", async () => {
+    const client = new SlackWebApiClient("test-token", {
+      fetchImpl: async () => new Response(
+        JSON.stringify({
+          ok: true,
+          has_more: true,
+          messages: [],
+          response_metadata: { next_cursor: "" },
+        }),
+        { headers: { "x-oauth-scopes": "channels:history" } },
+      ),
+    });
+
+    await expect(
+      client.channelHistory({ channel: "C123", oldest: "1724292304.000000" }),
+    ).rejects.toMatchObject({ code: "invalid", retryable: false });
+  });
+});
+
 describe("SlackWebApiClient chat.update", () => {
   it("updates one identified message with the same safe presentation defaults", async () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> =

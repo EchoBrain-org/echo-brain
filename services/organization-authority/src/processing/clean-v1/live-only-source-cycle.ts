@@ -10,6 +10,7 @@ import {
 import { granolaCursorPhase } from "../adapters/meeting-sources/granola/index.js";
 import {
   cleanReviewInputSha256V1,
+  cleanReviewLineageIdV1,
   type CleanReviewPolicySnapshotV1,
 } from "./review-lineage-semantics.js";
 
@@ -47,7 +48,7 @@ export interface CleanLiveOnlySourceStateV1 {
   }): Promise<CleanFrozenCandidateSnapshotV1 | undefined>;
   /** Finds a prior frozen extraction whose bounded review input is identical. */
   readFrozenCandidateForReviewInput(input: {
-    readonly external_id: string;
+    readonly review_lineage_id: string;
     readonly review_input_sha256: string;
   }): Promise<CleanFrozenCandidateSnapshotV1 | undefined>;
   stageCandidate(
@@ -72,13 +73,10 @@ interface CleanLiveCandidateBaseV1 {
   readonly review_lineage_id: string;
   readonly review_input_sha256: string;
   readonly review_semantic_sha256: string;
-  readonly review_round: number;
   readonly review_policy_id: CleanReviewPolicySnapshotV1["policy_id"];
   readonly review_policy_contract_sha256: CleanReviewPolicySnapshotV1["policy_contract_sha256"];
   readonly review_policy_consequence_text: string;
   readonly review_policy_consequence_sha256: CleanReviewPolicySnapshotV1["policy_consequence_sha256"];
-  /** The prior unresolved approval made non-actionable by this revision. */
-  readonly superseded_approval_id: string | null;
 }
 
 /** A durable Authority candidate with a deterministic D2 handoff. */
@@ -87,7 +85,7 @@ export interface CleanActionableLiveCandidateV1
   readonly disposition: "actionable";
   readonly approval_id: string;
   readonly stage_command_id: string;
-  readonly state: "queued" | "posted" | "staged" | "superseded";
+  readonly state: "queued" | "posting" | "posted" | "staged" | "superseded";
 }
 
 /** An immutable source revision that intentionally creates no approval card. */
@@ -128,15 +126,19 @@ export interface CleanApprovalStagerV1 {
     context?: { readonly signal: AbortSignal },
   ): Promise<
     | { readonly kind: "staged"; readonly stage_id: string }
+    | { readonly kind: "delivery_pending" }
     | { readonly kind: "revoked" }
     | { readonly kind: "state_drift" }
   >;
-  /** Makes an older provider presentation visibly non-actionable. */
-  tombstoneSuperseded(
-    input: {
-      readonly superseded_approval_id: string;
-      readonly successor_id: string;
-    },
+  /**
+   * Reconciles durable approval delivery work independently of source intake.
+   * A provider-ambiguous post remains frozen and is never blindly repeated.
+   */
+  reconcilePendingDeliveries(
+    context?: { readonly signal: AbortSignal },
+  ): Promise<void>;
+  /** Reconciles every durable obsolete provider presentation. */
+  reconcileSuperseded(
     context?: { readonly signal: AbortSignal },
   ): Promise<void>;
 }
@@ -172,6 +174,15 @@ export type CleanLiveOnlySourceCycleResultV1 =
       readonly kind: "staged";
       readonly stage_id: string;
       readonly cursor_advanced: boolean;
+    }
+  | {
+      readonly kind: "delivery_pending";
+      readonly cursor_advanced: boolean;
+    }
+  | {
+      readonly kind: "delivery_pending_cursor_not_advanced";
+      readonly reason: "revoked" | "state_drift";
+      readonly cursor_advanced: false;
     }
   | {
       readonly kind: "not_staged";
@@ -256,9 +267,31 @@ function inputFingerprint(
 
 function rebindDecisionsToRevision(
   frozen: DecisionSet,
+  frozenMeeting: MeetingDocument,
   meeting: MeetingDocument,
 ): DecisionSet {
-  const contentById = new Map(meeting.content.map((block) => [block.id, block]));
+  const frozenPromptBlocks = frozenMeeting.content.filter(
+    (block) => block.text.trim().length > 0,
+  );
+  const currentPromptBlocks = meeting.content.filter(
+    (block) => block.text.trim().length > 0,
+  );
+  if (frozenPromptBlocks.length !== currentPromptBlocks.length) {
+    throw new Error("reused decision input no longer matches the meeting");
+  }
+  const contentByFrozenId = new Map(
+    frozenPromptBlocks.map((block, index) => {
+      const current = currentPromptBlocks[index];
+      if (
+        current === undefined ||
+        current.kind !== block.kind ||
+        current.text !== block.text
+      ) {
+        throw new Error("reused decision input no longer matches the meeting");
+      }
+      return [block.id, current] as const;
+    }),
+  );
   return {
     ...frozen,
     meeting_id: meeting.id,
@@ -269,7 +302,7 @@ function rebindDecisionsToRevision(
       // the provider revision to which that extraction was safely rebound.
       ...signal,
       evidence: signal.evidence.map((evidence) => {
-        const block = contentById.get(evidence.block_id);
+        const block = contentByFrozenId.get(evidence.block_id);
         if (block === undefined) {
           throw new Error("reused decision evidence does not resolve to the meeting");
         }
@@ -281,6 +314,7 @@ function rebindDecisionsToRevision(
         return {
           ...stableEvidence,
           meeting_id: meeting.id,
+          block_id: block.id,
           ...(block.started_at === undefined
             ? {}
             : { started_at: block.started_at }),
@@ -331,6 +365,12 @@ export class CleanLiveOnlySourceCycleV1 {
       this.options.source,
       this.options.processor,
     );
+    // Approval delivery is a durable outbox, not the source checkpoint. Drain
+    // prior work first, but never let one provider-ambiguous card prevent the
+    // source adapter from admitting an unrelated meeting.
+    await this.options.stager.reconcilePendingDeliveries(
+      signal === undefined ? undefined : { signal },
+    );
     const batch = await this.options.source.pull(
       { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
       signal === undefined ? undefined : { signal },
@@ -374,7 +414,9 @@ export class CleanLiveOnlySourceCycleV1 {
     if (frozen !== undefined) {
       if (
         frozen.disposition === "actionable" &&
-        (frozen.state === "queued" || frozen.state === "posted")
+        (frozen.state === "queued" ||
+          frozen.state === "posting" ||
+          frozen.state === "posted")
       ) {
         return this.stageAndAdvance(
           frozen,
@@ -385,15 +427,8 @@ export class CleanLiveOnlySourceCycleV1 {
           signal,
         );
       }
-      if (
-        frozen.disposition === "no_signals" &&
-        frozen.superseded_approval_id !== null
-      ) {
-        await this.options.stager.tombstoneSuperseded(
-          {
-            superseded_approval_id: frozen.superseded_approval_id,
-            successor_id: frozen.candidate_id,
-          },
+      if (frozen.disposition === "no_signals") {
+        await this.options.stager.reconcileSuperseded(
           signal === undefined ? undefined : { signal },
         );
       }
@@ -406,7 +441,6 @@ export class CleanLiveOnlySourceCycleV1 {
 
     const reviewInputSha256 = cleanReviewInputSha256V1({
       meeting,
-      review_policy: reviewPolicy,
       processor: {
         adapter_id: admission.processor.adapter_id,
         instance_id: admission.processor.instance_id,
@@ -414,9 +448,14 @@ export class CleanLiveOnlySourceCycleV1 {
         configuration_sha256: admission.processor.configuration_sha256,
       },
     });
+    const reviewLineageId = cleanReviewLineageIdV1({
+      adapter_id: meeting.provenance.source.adapter_id,
+      instance_id: meeting.provenance.source.instance_id,
+      external_id: meeting.provenance.external_id,
+    });
     const reusable =
       await this.options.state.readFrozenCandidateForReviewInput({
-        external_id: meeting.provenance.external_id,
+        review_lineage_id: reviewLineageId,
         review_input_sha256: reviewInputSha256,
       });
     const decisions =
@@ -432,7 +471,11 @@ export class CleanLiveOnlySourceCycleV1 {
             },
             signal === undefined ? undefined : { signal },
           )
-        : rebindDecisionsToRevision(reusable.decisions, meeting);
+        : rebindDecisionsToRevision(
+            reusable.decisions,
+            reusable.meeting,
+            meeting,
+          );
     assertCanonicalDecisionSet(
       decisions,
       meeting,
@@ -445,18 +488,9 @@ export class CleanLiveOnlySourceCycleV1 {
       review_policy: reviewPolicy,
     });
     if (candidate.disposition !== "actionable") {
-      if (
-        candidate.disposition === "no_signals" &&
-        candidate.superseded_approval_id !== null
-      ) {
-        await this.options.stager.tombstoneSuperseded(
-          {
-            superseded_approval_id: candidate.superseded_approval_id,
-            successor_id: candidate.candidate_id,
-          },
-          signal === undefined ? undefined : { signal },
-        );
-      }
+      await this.options.stager.reconcileSuperseded(
+        signal === undefined ? undefined : { signal },
+      );
       return candidate.disposition === "no_signals"
         ? this.finishWithoutStage("no_signals", admission, batch.next_cursor)
         : this.finishWithoutStage(
@@ -487,6 +521,9 @@ export class CleanLiveOnlySourceCycleV1 {
       { admission, candidate, meeting, decisions },
       signal === undefined ? undefined : { signal },
     );
+    if (staged.kind === "delivery_pending") {
+      return this.advanceAfterPendingDelivery(admission, nextCursor);
+    }
     if (staged.kind !== "staged") {
       return {
         kind: "not_staged",
@@ -517,6 +554,26 @@ export class CleanLiveOnlySourceCycleV1 {
       };
     }
     return { kind: "staged", stage_id: staged.stage_id, cursor_advanced: true };
+  }
+
+  private async advanceAfterPendingDelivery(
+    admission: CleanGranolaSourceAdmissionV1,
+    nextCursor: string | undefined,
+  ): Promise<CleanLiveOnlySourceCycleResultV1> {
+    if (nextCursor === undefined || nextCursor === admission.source.cursor) {
+      return { kind: "delivery_pending", cursor_advanced: false };
+    }
+    const advanced = await this.options.state.advanceCursor({
+      expected_cursor: admission.source.cursor,
+      next_cursor: nextCursor,
+    });
+    return advanced === "advanced"
+      ? { kind: "delivery_pending", cursor_advanced: true }
+      : {
+          kind: "delivery_pending_cursor_not_advanced",
+          reason: advanced,
+          cursor_advanced: false,
+        };
   }
 
   private async finishWithoutStage(

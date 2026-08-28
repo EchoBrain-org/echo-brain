@@ -73,6 +73,8 @@ import {
   type OpenCleanLiveRuntimeConfig,
 } from "../src/composition/open-clean-live-runtime.js";
 import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
+import { SlackApiError } from "../src/processing/adapters/shared/slack/slack-web-api-client.js";
+import type { CleanSlackApprovalCardPosterV1 } from "../src/processing/clean-v1/clean-slack-approval-stager.js";
 import type {
   AdapterHealth,
   DecisionProcessorAdapter,
@@ -598,6 +600,7 @@ async function activeFixture(
     readonly folder_membership?: readonly { readonly name: string }[];
   }[],
   answerModel?: Layer4StructuredOutputPort,
+  approvalPoster?: CleanSlackApprovalCardPosterV1,
 ) {
   const parent = root();
   const initialized = initializeCleanResetState({
@@ -752,12 +755,15 @@ async function activeFixture(
     live_adapters: {
       source,
       processor: fakeProcessor(processorIdentity),
-      approval_card_poster: {
+      approval_card_poster: approvalPoster ?? {
         async post(input) {
           posted.push(input.text);
           return {
             provider_message_ts: `1724112000.${String(posted.length).padStart(6, "0")}`,
           };
+        },
+        async reconcile() {
+          return undefined;
         },
         async tombstone(input) {
           tombstoned.push(input.approval_id);
@@ -1145,6 +1151,9 @@ describe("open clean live runtime", () => {
           async post() {
             throw new Error("restart must not post a duplicate approval card");
           },
+          async reconcile() {
+            return undefined;
+          },
           async tombstone() {},
         },
         approval_observer: fixture.reaction,
@@ -1244,6 +1253,107 @@ describe("open clean live runtime", () => {
     } finally {
       rereadRecord.close();
       rereadAuthority.close();
+    }
+  });
+
+  it("keeps intake moving while an earlier Slack post is reconciled without reposting", async () => {
+    const operations: string[] = [];
+    const postCalls: string[] = [];
+    let ambiguousApprovalId: string | undefined;
+    let reconciliationAttempts = 0;
+    const poster: CleanSlackApprovalCardPosterV1 = {
+      async post(input) {
+        postCalls.push(input.approval_id);
+        if (ambiguousApprovalId === undefined) {
+          ambiguousApprovalId = input.approval_id;
+          operations.push("post-ambiguous");
+          throw new SlackApiError(
+            "unknown_outcome",
+            "Slack accepted the post but its response was lost",
+            true,
+          );
+        }
+        operations.push("post-unrelated");
+        return { provider_message_ts: "1724112000.000002" };
+      },
+      async reconcile(input) {
+        expect(input.approval_id).toBe(ambiguousApprovalId);
+        reconciliationAttempts += 1;
+        operations.push(
+          reconciliationAttempts === 1
+            ? "reconcile-absent"
+            : "reconcile-found",
+        );
+        return reconciliationAttempts === 1
+          ? undefined
+          : { provider_message_ts: "1724112000.000001" };
+      },
+      async tombstone() {},
+    };
+    const fixture = await activeFixture(
+      "approve",
+      undefined,
+      [
+        {
+          title: "Ambiguous delivery",
+          external_id: "ambiguous-delivery",
+          text: "Preserve this first decision.",
+        },
+        {
+          title: "Unrelated delivery",
+          external_id: "unrelated-delivery",
+          text: "Continue with this unrelated decision.",
+        },
+      ],
+      undefined,
+      poster,
+    );
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 ||
+          (
+            record
+              .prepare("SELECT count(*) AS count FROM organization_record_log")
+              .get() as { count: number }
+          ).count === 2,
+        "both decoupled approval deliveries",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+
+      expect(postCalls).toHaveLength(2);
+      expect(new Set(postCalls).size).toBe(2);
+      expect(reconciliationAttempts).toBeGreaterThanOrEqual(2);
+      expect(operations.slice(0, 4)).toEqual([
+        "post-ambiguous",
+        "reconcile-absent",
+        "post-unrelated",
+        "reconcile-found",
+      ]);
+      expect(
+        authority
+          .prepare(
+            `SELECT state, provider_message_ts
+               FROM authority_clean_live_approval_outbox_v1
+              ORDER BY provider_message_ts`,
+          )
+          .all(),
+      ).toEqual([
+        { state: "staged", provider_message_ts: "1724112000.000001" },
+        { state: "staged", provider_message_ts: "1724112000.000002" },
+      ]);
+    } finally {
+      record.close();
+      authority.close();
+      await fixture.runtime.close();
     }
   });
 

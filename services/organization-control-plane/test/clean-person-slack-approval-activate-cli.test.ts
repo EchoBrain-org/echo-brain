@@ -146,7 +146,7 @@ function setupState(includeLink = true): string {
       ...COORDINATES,
       database_schema_version: 1,
       schema_sha256:
-        "sha256:5cd7a6b4e69c6147f0963fdfb0daf843dd325cafa6356777af2acbe4c7844e47",
+        "sha256:007a1498dd1db87d03ba2876086c5ec6b6c655f77e5c25691abafd18451465d6",
       created_at: "2026-08-22T00:00:00.000Z",
       creating_artifact_revision: "test",
     };

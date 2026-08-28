@@ -1,4 +1,7 @@
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import {
+  canonicalJson,
+  canonicalSha256,
+} from "@echo-brain/federation-protocol";
 import type {
   ApprovalContractSha256,
   PersonApprovalPolicyId,
@@ -45,26 +48,17 @@ export function cleanReviewLineageIdV1(input: {
 /** Mirrors the bounded material actually supplied to extraction. */
 export function cleanReviewInputSha256V1(input: {
   readonly meeting: MeetingDocument;
-  readonly review_policy: CleanReviewPolicySnapshotV1;
   readonly processor: CleanReviewProcessorCommitmentV1;
 }): string {
   return canonicalSha256({
     schema_version: 1,
     kind: "echo-clean-live-review-input-v1",
-    source: {
-      adapter_id: input.meeting.provenance.source.adapter_id,
-      instance_id: input.meeting.provenance.source.instance_id,
-      external_id: input.meeting.provenance.external_id,
-    },
     processor: input.processor,
-    review_policy: input.review_policy,
-    title: input.meeting.title ?? null,
-    participants: input.meeting.participants.map((participant) =>
-      participant.display_name ?? participant.id,
-    ),
+    title: semanticTitle(input.meeting.title),
+    participants: semanticParticipantNames(input.meeting),
     content: input.meeting.content
       .filter((block) => block.text.trim().length > 0)
-      .map((block) => ({ id: block.id, kind: block.kind, text: block.text })),
+      .map((block) => ({ kind: block.kind, text: block.text })),
   });
 }
 
@@ -78,22 +72,57 @@ export function cleanReviewSemanticSha256V1(input: {
   readonly review_policy: CleanReviewPolicySnapshotV1;
   readonly processor: CleanReviewProcessorCommitmentV1;
 }): string {
+  const signalsById = new Map(
+    input.decisions.signals.map((signal) => [signal.id, signal]),
+  );
   return canonicalSha256({
     schema_version: 1,
     kind: "echo-clean-live-review-semantic-v1",
     processor: input.processor,
     review_policy: input.review_policy,
     meeting: {
-      title: input.meeting.title ?? null,
-      participants: input.meeting.participants.map((participant) =>
-        participant.display_name ?? participant.id,
-      ),
+      title: semanticTitle(input.meeting.title),
+      participants: semanticParticipantNames(input.meeting),
     },
-    signals: input.decisions.signals.map(semanticSignal),
+    signals: input.decisions.signals
+      .map((signal) => {
+        const value = semanticSignal(signal, signalsById);
+        return {
+          value,
+          // This key is intentionally canonical and stable across source order.
+          key: canonicalJson(value as never),
+        };
+      })
+      .sort((left, right) => lexicalCompare(left.key, right.key))
+      .map(({ value }) => value),
   });
 }
 
-function semanticSignal(signal: ExtractedSignal): Readonly<Record<string, unknown>> {
+function semanticSignal(
+  signal: ExtractedSignal,
+  signalsById: ReadonlyMap<string, ExtractedSignal>,
+): Readonly<Record<string, unknown>> {
+  const base = semanticSignalBase(signal);
+  if (signal.kind !== "rationale") return base;
+  return {
+    ...base,
+    supports: signal.supports_signal_ids
+      .map((supportedId) => {
+        const supported = signalsById.get(supportedId);
+        if (supported === undefined) {
+          throw new Error(`rationale references unknown signal ${supportedId}`);
+        }
+        return semanticSignalBase(supported);
+      })
+      .map((value) => ({ value, key: canonicalJson(value as never) }))
+      .sort((left, right) => lexicalCompare(left.key, right.key))
+      .map(({ value }) => value),
+  };
+}
+
+function semanticSignalBase(
+  signal: ExtractedSignal,
+): Readonly<Record<string, unknown>> {
   const base = {
     kind: signal.kind,
     text: signal.text,
@@ -108,4 +137,19 @@ function semanticSignal(signal: ExtractedSignal): Readonly<Record<string, unknow
     case "rationale":
       return base;
   }
+}
+
+function semanticParticipantNames(meeting: MeetingDocument): readonly string[] {
+  return meeting.participants
+    .map((participant) => participant.display_name ?? participant.id)
+    .filter((name) => name.trim().length > 0)
+    .sort(lexicalCompare);
+}
+
+function semanticTitle(title: string | undefined): string | null {
+  return title !== undefined && title.trim().length > 0 ? title : null;
+}
+
+function lexicalCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
