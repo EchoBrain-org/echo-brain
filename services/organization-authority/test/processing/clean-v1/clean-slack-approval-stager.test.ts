@@ -21,6 +21,7 @@ describe("clean Slack approval supersession", () => {
   it("keeps the earliest recovered post and tombstones every exact duplicate", async () => {
     const updates: unknown[] = [];
     let historyOldest: string | null = null;
+    let historyLatest: string | null = null;
     const poster = new SlackWebApiCleanApprovalCardPosterV1("test-token", "C123", {
       baseUrl: "https://slack.example.test/api",
       fetchImpl: async (url, init) => {
@@ -36,6 +37,7 @@ describe("clean Slack approval supersession", () => {
         }
         if (method === "conversations.history") {
           historyOldest = new URL(String(url)).searchParams.get("oldest");
+          historyLatest = new URL(String(url)).searchParams.get("latest");
           return new Response(
             JSON.stringify({
               ok: true,
@@ -67,6 +69,7 @@ describe("clean Slack approval supersession", () => {
       }),
     ]);
     expect(historyOldest).toBe("1724292004.000000");
+    expect(historyLatest).toBe("1724292904.000000");
   });
 
   it("retries the exact same static tombstone presentation", async () => {
@@ -197,6 +200,43 @@ describe("clean Slack approval supersession", () => {
       undefined,
     );
     expect(recorded).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases a lineage when its obsolete Slack message was deleted", async () => {
+    const recorded = vi.fn();
+    const authority = {
+      listPendingSupersededApprovalCards: () => [{
+        approval_id: "apr_deleted",
+        review_lineage_id: "rli_meeting",
+        superseded_by_candidate_id: "cnd_current",
+        provider_message_ts: "123.000001",
+      }],
+      recordSupersededApprovalCardTombstoned: recorded,
+    };
+    const stager = new CleanSlackApprovalStagerV1(
+      authority as unknown as SqliteCleanLiveOnlySourceStateV1,
+      {} as Database.Database,
+      {} as CleanSlackApprovalCardFactoryV1,
+      {
+        post: vi.fn(),
+        reconcile: vi.fn(),
+        tombstone: async () => {
+          throw new SlackApiError(
+            "invalid",
+            "Slack chat.update failed: message_not_found",
+            false,
+            undefined,
+            "message_not_found",
+          );
+        },
+      },
+    );
+
+    await expect(stager.reconcileSuperseded()).resolves.toBeUndefined();
+    expect(recorded).toHaveBeenCalledWith({
+      approval_id: "apr_deleted",
+      provider_message_ts: "123.000001",
+    });
   });
 
   it("tombstones the obsolete card before attempting the replacement post", async () => {

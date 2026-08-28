@@ -31,12 +31,24 @@ describe("SlackWebApiClient conversations.history recovery", () => {
     });
 
     await expect(
-      client.channelHistory({ channel: "C123", oldest: "1724292304.000000" }),
+      client.channelHistory({
+        channel: "C123",
+        oldest: "1724292304.000000",
+        latest: "1724292904.000000",
+      }),
     ).resolves.toEqual([
       { ts: "1724292304.005000", text: "first", bot_id: "B123" },
       { ts: "1724292305.005000", text: "second", bot_id: "B123" },
     ]);
     expect(urls).toHaveLength(2);
+    for (const url of urls) {
+      expect(new URL(url).searchParams.get("oldest")).toBe(
+        "1724292304.000000",
+      );
+      expect(new URL(url).searchParams.get("latest")).toBe(
+        "1724292904.000000",
+      );
+    }
   });
 
   it("never treats incomplete pagination as proof that no post exists", async () => {
@@ -53,12 +65,35 @@ describe("SlackWebApiClient conversations.history recovery", () => {
     });
 
     await expect(
-      client.channelHistory({ channel: "C123", oldest: "1724292304.000000" }),
+      client.channelHistory({
+        channel: "C123",
+        oldest: "1724292304.000000",
+        latest: "1724292904.000000",
+      }),
     ).rejects.toMatchObject({ code: "invalid", retryable: false });
   });
 });
 
 describe("SlackWebApiClient chat.update", () => {
+  it("preserves Slack message_not_found as definitive provider evidence", async () => {
+    const client = new SlackWebApiClient("test-token", {
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ ok: false, error: "message_not_found" })),
+    });
+
+    await expect(
+      client.updateMessage({
+        channel: "C123",
+        ts: "123.000001",
+        text: "Superseded",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid",
+      providerError: "message_not_found",
+      retryable: false,
+    });
+  });
+
   it("updates one identified message with the same safe presentation defaults", async () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> =
       [];

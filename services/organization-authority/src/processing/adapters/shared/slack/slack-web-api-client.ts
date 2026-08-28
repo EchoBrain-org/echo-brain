@@ -15,6 +15,8 @@ export class SlackApiError extends Error {
     message: string,
     public readonly retryable: boolean,
     public readonly retryAfterSeconds?: number,
+    /** Exact documented Slack error when the provider returned `ok: false`. */
+    public readonly providerError?: string,
   ) {
     super(message);
     this.name = "SlackApiError";
@@ -607,24 +609,42 @@ export class SlackWebApiClient {
   }
 
   /**
-   * Read a complete bounded suffix of channel history. This deliberately
+   * Read a complete bounded window of channel history. This deliberately
    * fails closed: a malformed page, looping cursor, or exhausted page budget
    * is not evidence that a previously accepted post is absent.
    */
   async channelHistory(
-    input: { readonly channel: string; readonly oldest: string },
+    input: {
+      readonly channel: string;
+      readonly oldest: string;
+      readonly latest: string;
+    },
     signal?: AbortSignal,
   ): Promise<readonly SlackChannelMessage[]> {
     if (
       !SLACK_CONVERSATION_ID_RE.test(input.channel) ||
-      !SLACK_MESSAGE_TS_RE.test(input.oldest)
+      !SLACK_MESSAGE_TS_RE.test(input.oldest) ||
+      !SLACK_MESSAGE_TS_RE.test(input.latest)
     ) {
       throw new SlackApiError(
         "invalid",
-        "Slack conversations.history requires canonical channel and oldest timestamp",
+        "Slack conversations.history requires canonical channel history bounds",
         false,
       );
     }
+    const timestampMicros = (value: string): bigint => {
+      const [seconds, micros] = value.split(".") as [string, string];
+      return BigInt(seconds) * 1_000_000n + BigInt(micros);
+    };
+    if (timestampMicros(input.oldest) > timestampMicros(input.latest)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack conversations.history bounds are reversed",
+        false,
+      );
+    }
+    const oldestMicros = timestampMicros(input.oldest);
+    const latestMicros = timestampMicros(input.latest);
     const messages: SlackChannelMessage[] = [];
     const seenCursors = new Set<string>();
     const seenTimestamps = new Set<string>();
@@ -635,6 +655,7 @@ export class SlackWebApiClient {
         {
           channel: input.channel,
           oldest: input.oldest,
+          latest: input.latest,
           inclusive: true,
           limit: HISTORY_PAGE_LIMIT,
           ...(cursor === undefined ? {} : { cursor }),
@@ -682,6 +703,8 @@ export class SlackWebApiClient {
         if (
           !isNonEmptyString(ts) ||
           !SLACK_MESSAGE_TS_RE.test(ts) ||
+          timestampMicros(ts) < oldestMicros ||
+          timestampMicros(ts) > latestMicros ||
           typeof text !== "string" ||
           (botId !== undefined && (!isNonEmptyString(botId) || !SLACK_BOT_ID_RE.test(botId))) ||
           seenTimestamps.has(ts)
@@ -1066,6 +1089,8 @@ export class SlackWebApiClient {
             "auth",
             `Slack ${method} failed: ${error}`,
             false,
+            undefined,
+            error,
           );
         }
         if (RATE_LIMIT_ERRORS.has(error)) {
@@ -1073,6 +1098,8 @@ export class SlackWebApiClient {
             "rate_limited",
             `Slack ${method} failed: ${error}`,
             true,
+            undefined,
+            error,
           );
         }
         if (TRANSIENT_ERRORS.has(error)) {
@@ -1080,12 +1107,16 @@ export class SlackWebApiClient {
             transportFailureCode,
             `Slack ${method} failed: ${error}`,
             true,
+            undefined,
+            error,
           );
         }
         throw new SlackApiError(
           "invalid",
           `Slack ${method} failed: ${error}`,
           false,
+          undefined,
+          error,
         );
       }
       if (options.requiredScope !== undefined) {

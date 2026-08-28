@@ -17,6 +17,7 @@ import {
 } from "./sqlite-live-only-source-state.js";
 
 const POST_RECONCILIATION_LOOKBACK_MS = 5 * 60 * 1_000;
+const POST_RECONCILIATION_LOOKAHEAD_MS = 10 * 60 * 1_000;
 const DEFINITIVE_POST_FAILURE_CODES = new Set([
   "auth",
   "rate_limited",
@@ -102,21 +103,22 @@ function compareSlackTimestamp(left: string, right: string): number {
   return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
 }
 
-function slackOldestFromCanonicalUtc(value: string): string {
+function slackTimestampFromCanonicalUtc(value: string, offsetMs: number): string {
   const milliseconds = new Date(value).getTime();
   if (!Number.isSafeInteger(milliseconds)) {
     throw new Error("clean approval post intent has an invalid timestamp");
   }
-  // Slack timestamps use the provider clock. Search before the local intent
-  // boundary so normal host/provider skew cannot turn an accepted post into
-  // false absence. The exact approval marker makes an older match conclusive.
-  const oldestMilliseconds = Math.max(
-    0,
-    milliseconds - POST_RECONCILIATION_LOOKBACK_MS,
-  );
-  const seconds = Math.floor(oldestMilliseconds / 1_000);
-  const micros = (oldestMilliseconds % 1_000) * 1_000;
+  const boundedMilliseconds = Math.max(0, milliseconds + offsetMs);
+  const seconds = Math.floor(boundedMilliseconds / 1_000);
+  const micros = (boundedMilliseconds % 1_000) * 1_000;
   return `${seconds}.${String(micros).padStart(6, "0")}`;
+}
+
+function slackMessageIsAbsent(error: unknown): boolean {
+  return (
+    error instanceof SlackApiError &&
+    error.providerError === "message_not_found"
+  );
 }
 
 /** A small concrete `chat.postMessage` adapter with no legacy policy surface. */
@@ -164,10 +166,20 @@ export class SlackWebApiCleanApprovalCardPosterV1 implements CleanSlackApprovalC
     }
     const identity = this.auth_identity;
     const approvalMarker = `[approval:${input.approval_id}]`;
+    // Freeze both bounds around the durable local intent. The lookback covers
+    // host/provider skew; the lookahead covers that skew plus the bounded post
+    // request. Later channel traffic can never push this recovery window away.
     const matches = (await this.client.channelHistory(
       {
         channel: this.channel_id,
-        oldest: slackOldestFromCanonicalUtc(input.post_started_at),
+        oldest: slackTimestampFromCanonicalUtc(
+          input.post_started_at,
+          -POST_RECONCILIATION_LOOKBACK_MS,
+        ),
+        latest: slackTimestampFromCanonicalUtc(
+          input.post_started_at,
+          POST_RECONCILIATION_LOOKAHEAD_MS,
+        ),
       },
       signal,
     ))
@@ -181,20 +193,25 @@ export class SlackWebApiCleanApprovalCardPosterV1 implements CleanSlackApprovalC
     const [canonical, ...duplicates] = matches;
     if (canonical === undefined) return undefined;
     for (const duplicate of duplicates) {
-      await this.client.updateMessage(
-        {
-          channel: this.channel_id,
-          ts: duplicate.ts,
-          text: duplicateTombstoneText({
-            approval_id: input.approval_id,
-            canonical_provider_message_ts: canonical.ts,
-          }),
-          blocks: [],
-          unfurlLinks: false,
-          unfurlMedia: false,
-        },
-        signal,
-      );
+      try {
+        await this.client.updateMessage(
+          {
+            channel: this.channel_id,
+            ts: duplicate.ts,
+            text: duplicateTombstoneText({
+              approval_id: input.approval_id,
+              canonical_provider_message_ts: canonical.ts,
+            }),
+            blocks: [],
+            unfurlLinks: false,
+            unfurlMedia: false,
+          },
+          signal,
+        );
+      } catch (error) {
+        // A duplicate removed between history and update is already inert.
+        if (!slackMessageIsAbsent(error)) throw error;
+      }
     }
     return { provider_message_ts: canonical.ts };
   }
@@ -331,14 +348,20 @@ export class CleanSlackApprovalStagerV1 implements CleanApprovalStagerV1 {
             );
           }
         }
-        await this.poster.tombstone(
-          {
-            approval_id: obsolete.approval_id,
-            successor_id: obsolete.superseded_by_candidate_id,
-            provider_message_ts: providerMessageTs,
-          },
-          context?.signal,
-        );
+        try {
+          await this.poster.tombstone(
+            {
+              approval_id: obsolete.approval_id,
+              successor_id: obsolete.superseded_by_candidate_id,
+              provider_message_ts: providerMessageTs,
+            },
+            context?.signal,
+          );
+        } catch (error) {
+          // A deleted provider message is definitively non-actionable. Record
+          // the same terminal delivery fact as a successful static tombstone.
+          if (!slackMessageIsAbsent(error)) throw error;
+        }
         this.authority.recordSupersededApprovalCardTombstoned({
           approval_id: obsolete.approval_id,
           provider_message_ts: providerMessageTs,
