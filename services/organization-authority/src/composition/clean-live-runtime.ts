@@ -26,7 +26,7 @@ import { clearCleanReadableSearchActiveGenerationV1 } from "@echo-brain/organiza
 export interface CleanLiveProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
   recoverV4Appends(signal: AbortSignal): Promise<void>;
-  /** Polls the admitted live-only Granola cursor and durably stages one card. */
+  /** Polls the admitted live-only source cursor and durably stages one card. */
   pollAndStageLiveOnlySource(signal: AbortSignal): Promise<void>;
   /** Observes one staged Slack card and commits its approve or reject result. */
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;

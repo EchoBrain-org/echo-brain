@@ -36,8 +36,8 @@ vi.mock("../src/composition/clean-person-cli.js", () => ({
   }),
 }));
 
-vi.mock("../src/composition/open-clean-live-runtime.js", () => ({
-  openCleanLiveRuntime: async (config: {
+vi.mock("../src/composition/open-clean-granola-live-runtime.js", () => ({
+  openCleanGranolaLiveRuntime: async (config: {
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly on_layer4_failure?: Layer4FailureObserver;

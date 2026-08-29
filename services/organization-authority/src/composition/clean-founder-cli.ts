@@ -1220,13 +1220,15 @@ function founderCanaryEvidence(
     const sourceProgressObserved = authority
       .prepare(
         `SELECT 1
-           FROM authority_clean_granola_source_progress_v1 AS progress
-           JOIN authority_clean_granola_source_admission_v1 AS admission
+           FROM authority_live_source_progress_v2 AS progress
+           JOIN authority_live_source_admission_v2 AS admission
              ON admission.singleton = 1
             AND admission.semantic_input_sha256 =
                 progress.admission_semantic_input_sha256
           WHERE progress.singleton = 1
             AND progress.cursor_version > 0
+            AND admission.source_adapter_id = 'granola'
+            AND admission.processor_adapter_id = 'llm'
           LIMIT 1`,
       )
       .get() !== undefined;
@@ -1325,11 +1327,14 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
         manifest.owner_membership_id,
       ) !== undefined;
       const admission = authority.prepare(
-        `SELECT owner_observation_assurance, owner_observed_at
-           FROM authority_clean_granola_source_admission_v1
+        `SELECT source_custodian_assurance, source_custodian_observed_at
+           FROM authority_live_source_admission_v2
           WHERE singleton = 1 AND organization_id = ? AND principal_id = ?
             AND membership_id = ? AND membership_type = 'owner'
-            AND source_instance_id = ? AND processor_instance_id = ?
+            AND source_adapter_id = 'granola'
+            AND source_adapter_instance_id = ?
+            AND processor_adapter_id = 'llm'
+            AND processor_instance_id = ?
           LIMIT 1`,
       ).get(
         manifest.organization_id,
@@ -1339,18 +1344,18 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
         PROCESSOR_INSTANCE_ID,
       ) as
         | {
-            readonly owner_observation_assurance: unknown;
-            readonly owner_observed_at: unknown;
+            readonly source_custodian_assurance: unknown;
+            readonly source_custodian_observed_at: unknown;
           }
         | undefined;
       if (
-        admission?.owner_observation_assurance ===
+        admission?.source_custodian_assurance ===
           "provider_record_owner_observed" &&
-        typeof admission.owner_observed_at === "string"
+        typeof admission.source_custodian_observed_at === "string"
       ) {
         granolaAdmissionProof = Object.freeze({
           owner_observation_assurance: "provider_record_owner_observed",
-          owner_observed_at: admission.owner_observed_at,
+          owner_observed_at: admission.source_custodian_observed_at,
         });
       }
     } finally {

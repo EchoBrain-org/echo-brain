@@ -254,6 +254,7 @@ describe("private owner-DM approval stager V1", () => {
       assignments: { readForPresentation: () => recovery } as never,
       control_plane: {} as never,
       poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone },
+      resolve_target: () => undefined,
     });
     await stager.reconcilePendingDeliveries();
     expect(tombstone).toHaveBeenCalledWith({
@@ -277,6 +278,7 @@ describe("private owner-DM approval stager V1", () => {
       assignments: { readForPresentation: () => undefined } as never,
       control_plane: {} as never,
       poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone },
+      resolve_target: () => undefined,
     });
     await expect(stager.reconcileSuperseded()).resolves.toBeUndefined();
     expect(tombstone).not.toHaveBeenCalled();

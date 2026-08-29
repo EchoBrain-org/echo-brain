@@ -10,11 +10,8 @@ import {
   OrganizationRecordV4AppendApplication,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/new-lineage-v1";
-import type Database from "better-sqlite3";
 import {
   readPrivateAuthorityCredential,
-  readPrivateAuthorityGranolaOrganizationCredential,
-  readPrivateAuthorityGranolaOwnerEmail,
   readPrivateAuthorityPersonSessionPkceKey,
   readPrivateAuthoritySlackSigningSecret,
 } from "../adapters/security/private-file-credentials.js";
@@ -25,19 +22,21 @@ import {
   createLlmDecisionProcessor,
   llmProcessingVersion,
 } from "../processing/adapters/decision-processors/llm/llm-decision-processor.js";
-import { createGranolaMeetingSourceAdapter } from "../processing/adapters/meeting-sources/granola/index.js";
 import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
 import { CleanLiveOnlySourceCycleV1 } from "../processing/clean-v1/live-only-source-cycle.js";
+import type { CleanLiveSourceAdmissionV1 } from "../processing/clean-v1/live-only-source-cycle.js";
+import type { CleanLiveSourceBoundaryV1 } from "../processing/clean-v1/live-source-boundary.js";
+import {
+  readCleanLiveSourceRuntimeCommitmentsV1,
+  type CleanLiveSourceRuntimeCommitmentsV1,
+} from "../processing/clean-v1/live-source-runtime-commitments.js";
 import { SqliteCleanLiveOnlySourceStateV1 } from "../processing/clean-v1/sqlite-live-only-source-state.js";
-import { selectGranolaPersonContentPolicyV1 } from "../processing/clean-v1/granola-person-content-policy.js";
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
 import { createPrivateSlackBlockV4RecordWriterV1 } from "../processing/clean-v1-record/private-slack-block-v4-record-writer-v1.js";
 import {
-  CLEAN_LLM_PROCESSOR_MAX_OUTPUT_TOKENS_V1,
-  CLEAN_LLM_PROCESSOR_MODEL_V1,
-  CLEAN_LLM_PROCESSOR_PROVIDER_V1,
-  CLEAN_LLM_PROCESSOR_TIMEOUT_MS_V1,
-} from "./clean-granola-source-admission.js";
+  assertCleanLlmProcessorRuntimeCommitmentsV1,
+  fixedCleanLlmProcessorConfigV1,
+} from "./clean-live-llm-processor-config.js";
 import {
   startCleanLiveRuntime,
   type CleanLiveProcessingCycleV1,
@@ -58,6 +57,7 @@ import { PrivateApprovalProcessingCoordinatorV1 } from "./private-approval-proce
 import { SqlitePrivateApprovalProcessingAuthorityV1 } from "./sqlite-private-approval-processing-authority-v1.js";
 import { createPrivateApprovalSlackInteractionsApplicationV1 } from "./private-approval-slack-interactions-application-v1.js";
 import type { PrivateApprovalSlackInteractionRejectionStageV1 } from "./private-approval-slack-interaction-v1.js";
+import { resolveCanonicalMeetingOwnerPrivateApprovalTargetV1 } from "./resolve-canonical-meeting-owner-private-approval-target-v1.js";
 
 export interface OpenCleanLiveRuntimeConfig {
   readonly state_directory: string;
@@ -73,8 +73,8 @@ export interface OpenCleanLiveRuntimeConfig {
   readonly slack_connection_id: string;
   /** Retained only for the current Person-to-Slack identity-link challenge. */
   readonly slack_approval_channel_id: string;
-  readonly granola_credential_file: string;
-  readonly granola_owner_email_file: string;
+  /** Explicit provider/source bundle. This generic root does not select one. */
+  readonly source_runtime: CleanLiveSourceRuntimeBundleV1;
   readonly llm_credential_file: string;
   readonly worker_interval_ms?: number;
   /** Observational only: a failed cycle is retried by the serialized worker. */
@@ -112,6 +112,24 @@ type PrivateApprovalCardPoster = Pick<
 >;
 
 /**
+ * All provider-specific live-source facts are constructed outside this
+ * runtime. The stable core only knows the admitted source contract.
+ */
+export interface CleanLiveSourceRuntimeBundleV1 {
+  /** Creates the one source adapter for the admitted source identity. */
+  create_source(admission: CleanLiveSourceAdmissionV1): CleanLiveSourceAdapter;
+  /**
+   * Proves this provider's current local source configuration still matches
+   * its immutable admission before the provider credential is read.
+   */
+  assert_runtime_commitments(
+    commitments: CleanLiveSourceRuntimeCommitmentsV1,
+  ): void;
+  /** Owns provider cursor and metadata validation. */
+  readonly source_boundary: CleanLiveSourceBoundaryV1;
+}
+
+/**
  * Narrow composition seams for deterministic local rehearsals. Production
  * callers leave this absent and retain the concrete provider adapters.
  */
@@ -129,36 +147,6 @@ export interface OpenCleanLiveRuntimeDependencies {
     readonly processor?: CleanLiveProcessorAdapter;
     /** Full private-DM presentation seam for local rehearsals. */
     readonly private_approval_card_poster?: PrivateApprovalCardPoster;
-  };
-}
-
-function fixedGranolaConfig(
-  instanceId: string,
-  ownerEmail: string,
-  credentialReference: string,
-): AdapterConfig {
-  return {
-    adapter_id: "granola",
-    instance_id: instanceId,
-    credential_ref: credentialReference,
-    settings: { page_size: 1, owner_email: ownerEmail },
-  };
-}
-
-function fixedOpenRouterConfig(
-  instanceId: string,
-  credentialReference: string,
-): AdapterConfig {
-  return {
-    adapter_id: "llm",
-    instance_id: instanceId,
-    credential_ref: credentialReference,
-    settings: {
-      provider: CLEAN_LLM_PROCESSOR_PROVIDER_V1,
-      model: CLEAN_LLM_PROCESSOR_MODEL_V1,
-      max_output_tokens: CLEAN_LLM_PROCESSOR_MAX_OUTPUT_TOKENS_V1,
-      request_timeout_ms: CLEAN_LLM_PROCESSOR_TIMEOUT_MS_V1,
-    },
   };
 }
 
@@ -232,22 +220,11 @@ class CombinedCleanLiveProcessing<
   }
 }
 
-function sourceIsAdmitted(database: Database.Database): boolean {
-  return (
-    database
-      .prepare(
-        "SELECT 1 FROM authority_clean_granola_source_admission_v1 WHERE singleton = 1",
-      )
-      .get() !== undefined
-  );
-}
-
 /**
- * The concrete server composition. Before stopped-state finalize, it exposes
- * the Person routes and does no work. After a restart from the exact same
- * manifest-driven command, it constructs only Granola, fixed OpenRouter,
- * the private owner-DM Slack lane, and V4 components. Constructors read
- * private files but do not call any provider.
+ * The provider-neutral server composition. Before stopped-state finalize, it
+ * exposes Person routes and does no work. An explicit source bundle supplies
+ * the admitted source only after finalization; all remaining construction is
+ * shared by every meeting provider.
  */
 export async function openCleanLiveRuntime(
   config: OpenCleanLiveRuntimeConfig,
@@ -270,7 +247,15 @@ export async function openCleanLiveRuntime(
     join(config.state_directory, "authority.sqlite"),
     { fileMustExist: true },
   );
-  if (!sourceIsAdmitted(authority)) {
+  const sourceIsAdmitted =
+    authority
+      .prepare(
+        `SELECT 1
+           FROM authority_live_source_admission_v2
+          WHERE singleton = 1`,
+      )
+      .get() !== undefined;
+  if (!sourceIsAdmitted) {
     authority.close();
     const runtime = await startCleanLiveRuntime(
       { person, worker_interval_ms: config.worker_interval_ms },
@@ -305,10 +290,20 @@ export async function openCleanLiveRuntime(
     { fileMustExist: true },
   );
   try {
-    const sourceState = new SqliteCleanLiveOnlySourceStateV1(authority);
-    const admission = await sourceState.readAdmission();
-    const granolaReference = `file:${config.granola_credential_file}`;
+    const sourceState = new SqliteCleanLiveOnlySourceStateV1(
+      authority,
+      config.source_runtime.source_boundary,
+    );
+    const commitments = readCleanLiveSourceRuntimeCommitmentsV1(authority);
+    config.source_runtime.assert_runtime_commitments(commitments);
     const llmReference = `file:${config.llm_credential_file}`;
+    assertCleanLlmProcessorRuntimeCommitmentsV1({
+      configuration_sha256: commitments.processor.configuration_sha256,
+      credential_reference_sha256:
+        commitments.processor.credential_reference_sha256,
+      credential_reference: llmReference,
+    });
+    const admission = await sourceState.readAdmission();
     const llmCredential =
       dependencies.live_adapters?.processor === undefined ||
       dependencies.person?.answer_model === undefined
@@ -316,28 +311,11 @@ export async function openCleanLiveRuntime(
         : undefined;
     const source =
       dependencies.live_adapters?.source ??
-      (() => {
-        const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
-          `file:${config.granola_owner_email_file}`,
-        );
-        const granolaCredential =
-          readPrivateAuthorityGranolaOrganizationCredential(granolaReference);
-        const granolaConfig = fixedGranolaConfig(
-          admission.source.instance_id,
-          ownerEmail,
-          granolaReference,
-        );
-        const created = createGranolaMeetingSourceAdapter(granolaConfig, {
-          credentialResolver: (reference) =>
-            reference === granolaReference ? granolaCredential : undefined,
-        });
-        assertAdapter("Granola", created, granolaConfig);
-        return created;
-      })();
+      config.source_runtime.create_source(admission);
     const processor =
       dependencies.live_adapters?.processor ??
       (() => {
-        const processorConfig = fixedOpenRouterConfig(
+        const processorConfig = fixedCleanLlmProcessorConfigV1(
           admission.processor.instance_id,
           llmReference,
         );
@@ -349,11 +327,18 @@ export async function openCleanLiveRuntime(
         return created;
       })();
     if (
+      source.identity.adapter_id !== admission.source.adapter_id ||
+      source.identity.instance_id !== admission.source.instance_id ||
       source.identity.version !== admission.source.version ||
+      processor.identity.adapter_id !== admission.processor.adapter_id ||
+      processor.identity.instance_id !== admission.processor.instance_id ||
       processor.identity.version !== admission.processor.version ||
       (dependencies.live_adapters?.processor === undefined &&
         llmProcessingVersion(
-          fixedOpenRouterConfig(admission.processor.instance_id, llmReference),
+          fixedCleanLlmProcessorConfigV1(
+            admission.processor.instance_id,
+            llmReference,
+          ),
         ) !== admission.processor.version)
     ) {
       throw new Error(
@@ -404,14 +389,14 @@ export async function openCleanLiveRuntime(
       assignments,
       control_plane: controlPlane,
       poster: privateApprovalCardPoster,
+      resolve_target: resolveCanonicalMeetingOwnerPrivateApprovalTargetV1,
     });
     const sourceCycle = new CleanLiveOnlySourceCycleV1({
       source,
       processor,
       state: sourceState,
       stager,
-      review_policy: (meeting) =>
-        selectGranolaPersonContentPolicyV1(meeting.extensions),
+      source_boundary: config.source_runtime.source_boundary,
     });
     const signer = DevelopmentFileOrganizationAuthoritySigner.openExisting({
       directory: join(config.state_directory, "keys"),

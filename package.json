@@ -39,6 +39,8 @@
     "lint": "eslint . --max-warnings 0",
     "test": "npm run build && vitest run --config vitest.config.ts",
     "test:core": "npm run build:workspaces && vitest run --config vitest.config.ts services/organization-authority/test/processing/core",
+    "test:quality": "npm run build:workspaces && vitest run --config vitest.config.ts services/organization-authority/test/quality",
+    "eval:synthetic": "npm run build:workspaces && node services/organization-authority/dist/synthetic-meeting-quality-main.js",
     "test:architecture": "npm run build:workspaces && vitest run --config vitest.config.ts tests/architecture",
     "test:protocols": "npm run build:workspaces && npm test --workspace @echo-brain/federation-protocol && npm test --workspace @echo-brain/organization-protocol && npm test --workspace @echo-brain/organization-api",
     "test:authority": "npm run build:workspaces && npm test --workspace @echo-brain/organization-authority",

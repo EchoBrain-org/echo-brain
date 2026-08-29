@@ -544,7 +544,7 @@ function participantIdentityKeys(participant: MeetingParticipant): string[] {
 function mergeParticipant(
   existing: MeetingParticipant,
   incoming: MeetingParticipant,
-  role: NonNullable<MeetingParticipant["roles"]>[number],
+  role?: NonNullable<MeetingParticipant["roles"]>[number],
 ): MeetingParticipant {
   const identities = [...(existing.identities ?? [])];
   const identityKeys = new Set(
@@ -561,21 +561,31 @@ function mergeParticipant(
       ? { display_name: incoming.display_name }
       : {}),
     ...(identities.length === 0 ? {} : { identities }),
-    roles: [
-      ...new Set([...(existing.roles ?? []), ...(incoming.roles ?? []), role]),
-    ],
+    ...(
+      role === undefined && existing.roles === undefined && incoming.roles === undefined
+        ? {}
+        : {
+            roles: [
+              ...new Set([
+                ...(existing.roles ?? []),
+                ...(incoming.roles ?? []),
+                ...(role === undefined ? [] : [role]),
+              ]),
+            ],
+          }
+    ),
   };
 }
 
 function noteParticipants(note: GranolaNoteDetail): MeetingParticipant[] {
   const candidates: Array<{
     participant: MeetingParticipant;
-    role: NonNullable<MeetingParticipant["roles"]>[number];
+    role?: NonNullable<MeetingParticipant["roles"]>[number];
   }> = [];
 
   const addCandidate = (
     value: unknown,
-    role: NonNullable<MeetingParticipant["roles"]>[number],
+    role?: NonNullable<MeetingParticipant["roles"]>[number],
   ): void => {
     const participant = participantFrom(value);
     if (participant !== null) candidates.push({ participant, role });
@@ -595,6 +605,11 @@ function noteParticipants(note: GranolaNoteDetail): MeetingParticipant[] {
       note.calendar_event["organizer"] ?? note.calendar_event["organiser"],
       "organizer",
     );
+  } else if (note.calendar_event === undefined || note.calendar_event === null) {
+    // Only calendar-less notes may use the note owner. A present malformed
+    // calendar organizer is weaker evidence than an explicit absence, so it
+    // must not be silently replaced with the raw note owner.
+    addCandidate(note.owner);
   }
   for (const item of note.transcript ?? []) {
     if (!isNonEmptyString(item.text)) continue;
@@ -622,7 +637,10 @@ function noteParticipants(note: GranolaNoteDetail): MeetingParticipant[] {
       );
       continue;
     }
-    participants.push({ ...participant, roles: [candidate.role] });
+    participants.push({
+      ...participant,
+      ...(candidate.role === undefined ? {} : { roles: [candidate.role] }),
+    });
   }
   return participants;
 }
@@ -648,6 +666,19 @@ function canonicalParticipant(
     ) ??
     candidate
   );
+}
+
+function participantWithCanonicalEmail(
+  candidate: MeetingParticipant | null,
+  participants: readonly MeetingParticipant[],
+): MeetingParticipant | null {
+  const participant = canonicalParticipant(candidate, participants);
+  if (participant === null) return null;
+  const canonicalEmails = (participant.identities ?? []).filter(
+    (identity) =>
+      identity.kind === "email" && isCanonicalGranolaOwnerEmail(identity.value),
+  );
+  return canonicalEmails.length === 1 ? participant : null;
 }
 
 function transcriptTimestamp(value: unknown): string | undefined {
@@ -829,6 +860,12 @@ function meetingContext(
     participantFrom(organizerValue),
     participants,
   );
+  const calendarAbsent =
+    note.calendar_event === undefined || note.calendar_event === null;
+  const owner = participantWithCanonicalEmail(
+    calendarAbsent ? participantFrom(note.owner) : participantFrom(organizerValue),
+    participants,
+  );
   const locationName = stringAt(note.calendar_event, [
     ["location"],
     ["location", "name"],
@@ -850,6 +887,7 @@ function meetingContext(
     ...(joinReference === undefined ? {} : { join_reference: joinReference }),
   };
   const context = {
+    ...(owner === null ? {} : { owner_participant_id: owner.id }),
     ...(Object.keys(calendar).length === 0 ? {} : { calendar }),
     ...(Object.keys(location).length === 0 ? {} : { location }),
   };

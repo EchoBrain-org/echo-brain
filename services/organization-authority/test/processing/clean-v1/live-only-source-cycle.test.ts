@@ -7,14 +7,17 @@ import {
   type MeetingDocument,
   type MeetingSourceAdapter,
 } from "../../../src/processing/core/index.js";
-import { createGranolaLiveOnlyCursor } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
+import {
+  createGranolaLiveOnlyCursor,
+  granolaCursorPhase,
+} from "../../../src/processing/adapters/meeting-sources/granola/index.js";
 import {
   CleanLiveOnlySourceCycleV1,
   type CleanApprovalStagerV1,
   type CleanLiveCandidateSnapshotInputV1,
   type CleanLiveCandidateV1,
   type CleanFrozenCandidateSnapshotV1,
-  type CleanGranolaSourceAdmissionV1,
+  type CleanLiveSourceAdmissionV1,
   type CleanLiveOnlySourceStateV1,
 } from "../../../src/processing/clean-v1/live-only-source-cycle.js";
 import {
@@ -24,6 +27,7 @@ import {
 import {
   cleanReviewInputSha256V1,
   cleanReviewLineageIdV1,
+  legacyRestrictedReviewerReviewPolicySnapshotV1,
 } from "../../../src/processing/clean-v1/review-lineage-semantics.js";
 
 const CUT_OFF = "2026-08-22T02:03:04.005Z";
@@ -39,15 +43,19 @@ const PROCESSOR = {
   instance_id: "founder-llm",
   version: "1.3.0",
 };
-const REVIEW_POLICY = Object.freeze({
-  policy_id: "organization-member-readable-person-v2",
-  policy_contract_sha256: `sha256:${"c".repeat(64)}`,
-  policy_consequence_text: "Approving makes this review member-readable.",
-  policy_consequence_sha256: `sha256:${"d".repeat(64)}`,
-});
-const reviewPolicy = () => REVIEW_POLICY;
+const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
+const granolaLiveSourceBoundaryV1 = {
+  source_adapter_id: "granola",
+  assert_live_cursor(cursor: string): void {
+    if (!cursor.startsWith("granola:v1:") || granolaCursorPhase(cursor) !== "live") {
+      throw new Error(
+        "clean live-only source cursor must be a Granola v1 live cursor",
+      );
+    }
+  },
+};
 
-const admission = (): CleanGranolaSourceAdmissionV1 => ({
+const admission = (): CleanLiveSourceAdmissionV1 => ({
   source: {
     adapter_id: "granola",
     instance_id: SOURCE.instance_id,
@@ -124,12 +132,12 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
   >();
 
   constructor(
-    private readonly value: CleanGranolaSourceAdmissionV1,
+    private readonly value: CleanLiveSourceAdmissionV1,
     private readonly advanceResult:
       "advanced" | "state_drift" | "revoked" = "advanced",
   ) {}
 
-  async readAdmission(): Promise<CleanGranolaSourceAdmissionV1> {
+  async readAdmission(): Promise<CleanLiveSourceAdmissionV1> {
     return this.value;
   }
 
@@ -295,18 +303,14 @@ function stager(
 function liveCycle(
   options: Omit<
     ConstructorParameters<typeof CleanLiveOnlySourceCycleV1>[0],
-    "review_policy"
+    "source_boundary"
   > &
-    Partial<
-      Pick<
-        ConstructorParameters<typeof CleanLiveOnlySourceCycleV1>[0],
-        "review_policy"
-      >
-    >,
+    Partial<Pick<ConstructorParameters<typeof CleanLiveOnlySourceCycleV1>[0], "source_boundary">>,
 ): CleanLiveOnlySourceCycleV1 {
   return new CleanLiveOnlySourceCycleV1({
     ...options,
-    review_policy: options.review_policy ?? reviewPolicy,
+    source_boundary:
+      options.source_boundary ?? granolaLiveSourceBoundaryV1,
   });
 }
 
@@ -784,11 +788,6 @@ describe("clean live-only source cycle", () => {
         }),
         state,
         stager: downstream,
-        review_policy: () => ({
-          ...REVIEW_POLICY,
-          policy_contract_sha256: `sha256:${"f".repeat(64)}`,
-          policy_consequence_text: "A changed runtime policy.",
-        }),
       });
 
       await expect(cycle.runOnce()).resolves.toEqual({
@@ -940,7 +939,7 @@ describe("clean live-only source cycle", () => {
     expect(emptyState.advances).toEqual([]);
 
     const admitted = admission();
-    const historical: CleanGranolaSourceAdmissionV1 = {
+    const historical: CleanLiveSourceAdmissionV1 = {
       ...admitted,
       source: { ...admitted.source, cursor: "2020-01-01T00:00:00.000Z" },
     };
@@ -951,7 +950,7 @@ describe("clean live-only source cycle", () => {
       stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(historyCycle.runOnce()).rejects.toThrow(
-      "live-only Granola state",
+      "Granola v1 live cursor",
     );
 
     const pageCycle = liveCycle({
@@ -963,6 +962,51 @@ describe("clean live-only source cycle", () => {
       stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(pageCycle.runOnce()).rejects.toThrow("at most one meeting");
+  });
+
+  it("accepts a non-Granola source through its injected boundary", async () => {
+    const fixtureSource = {
+      ...SOURCE,
+      adapter_id: "synthetic-fixture",
+      instance_id: "quality-fixtures",
+    };
+    const fixtureAdmission = {
+      ...admission(),
+      source: {
+        ...admission().source,
+        adapter_id: fixtureSource.adapter_id,
+        instance_id: fixtureSource.instance_id,
+        cursor: "fixture:v1:live:1",
+      },
+    };
+    const fixtureMeeting = {
+      ...meeting(),
+      provenance: { ...meeting().provenance, source: fixtureSource },
+    };
+    const fixtureBoundary = {
+      source_adapter_id: fixtureSource.adapter_id,
+      assert_live_cursor(cursor: string): void {
+        if (!cursor.startsWith("fixture:v1:live:")) {
+          throw new Error("fixture cursor is not live");
+        }
+      },
+    };
+    const fixtureAdapter: MeetingSourceAdapter = {
+      ...source({ meetings: [fixtureMeeting] }),
+      identity: fixtureSource,
+    };
+    const cycle = liveCycle({
+      source: fixtureAdapter,
+      processor: processor(),
+      state: new FakeState(fixtureAdmission),
+      stager: stager({ kind: "staged", stage_id: "fixture-stage" }),
+      source_boundary: fixtureBoundary,
+    });
+
+    await expect(cycle.runOnce()).resolves.toMatchObject({
+      kind: "staged",
+      stage_id: "fixture-stage",
+    });
   });
 
   it("coalesces concurrent requests into the same serialized cycle", async () => {

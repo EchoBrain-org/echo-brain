@@ -363,6 +363,7 @@ describe("workspace source boundaries", () => {
     const expectedByRoot: Record<string, string[]> = {
       "services/organization-authority": [
         "authority-baseline-v1.sql",
+        "authority-live-source-v3.sql",
         "authority-private-approval-v2.sql",
       ],
       "services/organization-control-plane": [
@@ -929,6 +930,99 @@ describe("workspace source boundaries", () => {
     expect(result.stdout + result.stderr).toContain(
       "adapter id 'granola' leaked into tool-agnostic core module: services/organization-authority/src/processing/core/adapter-id-leak-probe.ts",
     );
+  });
+
+  it("keeps provider names out of provider-neutral clean runtime modules", () => {
+    const fixture = fixtureRepository();
+    const neutralPaths = [
+      "services/organization-authority/src/processing/core/**",
+      "services/organization-authority/src/processing/clean-v1/**",
+      "services/organization-authority/src/processing/clean-v1-d2-d3/**",
+      "services/organization-authority/src/processing/clean-v1-record/**",
+      "services/organization-authority/src/processing/live/**",
+      "services/organization-authority/src/composition/clean-live-runtime.ts",
+      "services/organization-authority/src/composition/open-clean-live-runtime.ts",
+    ];
+    const sourceFiles = spawnSync(
+      "git",
+      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      { cwd: fixture, encoding: "buffer" },
+    );
+    expect(sourceFiles.status, sourceFiles.stderr?.toString("utf8")).toBe(0);
+
+    const assertNoGranolaLeak = (): void => {
+      const leaks = sourceFiles.stdout
+        .toString("utf8")
+        .split("\0")
+        .filter(
+          (path) =>
+            path !== "" &&
+            /\.(?:[cm]?[jt]sx?)$/.test(path) &&
+            neutralPaths.some((pattern) => matchesGlob(path, pattern)) &&
+            existsSync(join(fixture, path)) &&
+            /\bgranola\b/i.test(readFileSync(join(fixture, path), "utf8")),
+        )
+        .sort();
+      expect(leaks).toEqual([]);
+    };
+
+    const manifest = readFixtureJson<BoundaryManifest>(
+      fixture,
+      "services/organization-authority/source-boundary.v1.json",
+    );
+    const cleanRuntimeRule = manifest.layer_rules.find(
+      (rule) => rule.name === "clean-live-only-source-cycle-is-provider-neutral",
+    );
+    expect(cleanRuntimeRule).toBeDefined();
+    expect(cleanRuntimeRule?.allowed_imports).not.toContain(
+      "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
+    );
+    const compositionRule = manifest.layer_rules.find(
+      (rule) => rule.name === "authority-composition-may-wire-pre-processing-layers",
+    );
+    expect(compositionRule?.allowed_imports).toContain(
+      "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
+    );
+    for (const providerLeaf of [
+      "services/organization-authority/src/composition/granola-live-source-boundary-v1.ts",
+      "services/organization-authority/src/composition/open-clean-granola-live-runtime.ts",
+    ]) {
+      expect(existsSync(join(fixture, providerLeaf))).toBe(true);
+    }
+
+    assertNoGranolaLeak();
+
+    const probe = join(
+      fixture,
+      "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts",
+    );
+    const original = readFileSync(probe, "utf8");
+    try {
+      writeFileSync(probe, `${original}\n// Granola compatibility leak.\n`);
+      expect(() => assertNoGranolaLeak()).toThrow();
+    } finally {
+      writeFileSync(probe, original);
+    }
+
+    // The generic SQLite state remains inside the provider-neutral layer, so
+    // the boundary must stop it importing a Granola implementation module.
+    const sourceStatePath =
+      "services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts";
+    const sourceState = join(fixture, sourceStatePath);
+    const originalSource = readFileSync(sourceState, "utf8");
+    try {
+      writeFileSync(
+        sourceState,
+        `${originalSource}\nimport '../adapters/meeting-sources/granola/index.js';\n`,
+      );
+      const result = runBoundary(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        "layer rule 'clean-live-only-source-cycle-is-provider-neutral' rejects edge: services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts -> services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
+      );
+    } finally {
+      writeFileSync(sourceState, originalSource);
+    }
   });
 
   it("rejects Authority composition imports into processing core", () => {

@@ -18,9 +18,10 @@ import {
 import type Database from "better-sqlite3";
 import { buildPrivateApprovalBlockKitCardV1 } from "./private-approval-block-kit-card-v1.js";
 import {
-  resolveGranolaMeetingOwnerPrivateApprovalTargetV1,
-  type GranolaMeetingOwnerPrivateApprovalTargetV1,
-} from "./resolve-granola-meeting-owner-private-approval-target-v1.js";
+  type PrivateApprovalTargetResolverInputV1,
+  type PrivateApprovalTargetResolverV1,
+  type PrivateApprovalTargetV1,
+} from "./resolve-private-approval-target-v1.js";
 import {
   SqlitePrivateApprovalAssignmentStateV1,
   type PrivateApprovalAssignmentStateV1,
@@ -54,10 +55,8 @@ export interface PrivateOwnerDmApprovalStagerV1Options {
   >;
   /** Kept injected so deterministic tests need no global clock. */
   readonly now?: () => string;
-  /** Injected only for focused proof; production uses the bounded resolver. */
-  readonly resolve_target?: (
-    input: Parameters<typeof resolveGranolaMeetingOwnerPrivateApprovalTargetV1>[0],
-  ) => GranolaMeetingOwnerPrivateApprovalTargetV1 | undefined;
+  /** Provider-specific owner observation plus generic current-identity proof. */
+  readonly resolve_target: PrivateApprovalTargetResolverV1;
   /** This is a protocol boundary, not a card-specific hash implementation. */
   readonly canonical_sha256?: (value: unknown) => Digest;
 }
@@ -154,7 +153,7 @@ function candidateCommitment(
 
 function assignmentMatchesCurrentTarget(
   assignment: PrivateApprovalAssignmentStateV1,
-  target: GranolaMeetingOwnerPrivateApprovalTargetV1,
+  target: PrivateApprovalTargetV1,
 ): boolean {
   const link = target.slack_target.current_slack_identity_link;
   return (
@@ -181,15 +180,12 @@ function assignmentMatchesCurrentTarget(
 export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
   private readonly now: () => string;
   private readonly sha256: (value: unknown) => Digest;
-  private readonly resolveTarget: NonNullable<
-    PrivateOwnerDmApprovalStagerV1Options["resolve_target"]
-  >;
+  private readonly resolveTarget: PrivateApprovalTargetResolverV1;
 
   constructor(private readonly options: PrivateOwnerDmApprovalStagerV1Options) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.sha256 = options.canonical_sha256 ?? (canonicalSha256 as (value: unknown) => Digest);
-    this.resolveTarget =
-      options.resolve_target ?? resolveGranolaMeetingOwnerPrivateApprovalTargetV1;
+    this.resolveTarget = options.resolve_target;
   }
 
   async reconcilePendingDeliveries(
@@ -264,7 +260,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     // This read-only proof has no external side effect. Resolve it before
     // freezing a post attempt so a missing/deactivated owner cannot leave an
     // avoidable `posting` recovery delay in the Authority outbox.
-    const targetInput = {
+    const targetInput: PrivateApprovalTargetResolverInputV1 = {
       meeting: input.meeting,
       authority_database: this.options.authority_database,
       control_plane_database: this.options.control_plane_database,

@@ -7,22 +7,23 @@ import {
   type MeetingDocument,
   type MeetingSourceAdapter,
 } from "../core/index.js";
-import { granolaCursorPhase } from "../adapters/meeting-sources/granola/index.js";
 import type {
   CleanLiveWorkerPhaseRunnerV1,
   CleanLiveWorkerPhaseV1,
 } from "./clean-live-worker-lifecycle.js";
+import type { CleanLiveSourceBoundaryV1 } from "./live-source-boundary.js";
 import {
   cleanReviewInputSha256V1,
   cleanReviewLineageIdV1,
+  legacyRestrictedReviewerReviewPolicySnapshotV1,
   type CleanReviewPolicySnapshotV1,
 } from "./review-lineage-semantics.js";
 
 const MAXIMUM_PULL_LIMIT = 1;
 
-export interface CleanGranolaSourceAdmissionV1 {
+export interface CleanLiveSourceAdmissionV1 {
   readonly source: {
-    readonly adapter_id: "granola";
+    readonly adapter_id: string;
     readonly instance_id: string;
     readonly version: string;
     /** The current cursor, initially the admitted live-only cutoff cursor. */
@@ -31,7 +32,7 @@ export interface CleanGranolaSourceAdmissionV1 {
     readonly cutoff_at: string;
   };
   readonly processor: {
-    readonly adapter_id: "llm";
+    readonly adapter_id: string;
     readonly instance_id: string;
     readonly version: string;
     readonly configuration_sha256: string;
@@ -44,7 +45,7 @@ export interface CleanGranolaSourceAdmissionV1 {
  * overwrite a newer checkpoint.
  */
 export interface CleanLiveOnlySourceStateV1 {
-  readAdmission(): Promise<CleanGranolaSourceAdmissionV1>;
+  readAdmission(): Promise<CleanLiveSourceAdmissionV1>;
   /** Returns the original frozen snapshot for an admitted source revision. */
   readFrozenCandidateForSourceRevision(input: {
     readonly external_id: string;
@@ -65,7 +66,7 @@ export interface CleanLiveOnlySourceStateV1 {
 }
 
 export interface CleanLiveCandidateSnapshotInputV1 {
-  readonly admission: CleanGranolaSourceAdmissionV1;
+  readonly admission: CleanLiveSourceAdmissionV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
   readonly review_policy: CleanReviewPolicySnapshotV1;
@@ -107,13 +108,13 @@ export type CleanLiveCandidateV1 =
 
 /** The immutable Authority snapshot associated with a durable candidate. */
 export type CleanFrozenCandidateSnapshotV1 = CleanLiveCandidateV1 & {
-  readonly admission: CleanGranolaSourceAdmissionV1;
+  readonly admission: CleanLiveSourceAdmissionV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
 };
 
 export interface CleanApprovalStageInputV1 {
-  readonly admission: CleanGranolaSourceAdmissionV1;
+  readonly admission: CleanLiveSourceAdmissionV1;
   readonly candidate: CleanActionableLiveCandidateV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
@@ -214,16 +215,15 @@ export interface CleanLiveOnlySourceCycleV1Options {
   readonly processor: DecisionProcessorAdapter;
   readonly state: CleanLiveOnlySourceStateV1;
   readonly stager: CleanApprovalStagerV1;
-  /** Reduces adapter-specific metadata to the policy a reviewer authorizes. */
-  readonly review_policy: (
-    meeting: MeetingDocument,
-  ) => CleanReviewPolicySnapshotV1;
+  /** Provider-owned cursor and source-metadata validation. */
+  readonly source_boundary: CleanLiveSourceBoundaryV1;
 }
 
 function assertAdmissionMatchesAdapters(
-  admission: CleanGranolaSourceAdmissionV1,
+  admission: CleanLiveSourceAdmissionV1,
   source: MeetingSourceAdapter,
   processor: DecisionProcessorAdapter,
+  sourceBoundary: CleanLiveSourceBoundaryV1,
 ): void {
   if (
     source.identity.adapter_id !== admission.source.adapter_id ||
@@ -231,7 +231,7 @@ function assertAdmissionMatchesAdapters(
     source.identity.version !== admission.source.version
   ) {
     throw new Error(
-      "clean source adapter differs from the admitted Granola source",
+      "clean source adapter differs from the admitted source",
     );
   }
   if (
@@ -244,13 +244,12 @@ function assertAdmissionMatchesAdapters(
     );
   }
   if (
-    !admission.source.cursor.startsWith("granola:v1:") ||
-    granolaCursorPhase(admission.source.cursor) !== "live" ||
     new Date(admission.source.cutoff_at).toISOString() !==
       admission.source.cutoff_at
   ) {
-    throw new Error("clean source admission is not a live-only Granola state");
+    throw new Error("clean source admission has an invalid live-only cutoff");
   }
+  sourceBoundary.assert_live_cursor(admission.source.cursor);
 }
 
 function inputFingerprint(
@@ -331,7 +330,7 @@ function rebindDecisionsToRevision(
 
 /**
  * Performs exactly one serialized source poll. It never imports history: its
- * only cursor comes from a previously admitted live-only Granola source, and
+ * only cursor comes from a previously admitted live-only source, and
  * it advances that cursor only after either a verified empty provider page or
  * the downstream staging port reports a durable acknowledgement.
  */
@@ -374,6 +373,7 @@ export class CleanLiveOnlySourceCycleV1 {
         admission,
         this.options.source,
         this.options.processor,
+        this.options.source_boundary,
       );
       // Approval delivery is a durable outbox, not the source checkpoint.
       // Drain prior work first, but never let one provider-ambiguous card
@@ -424,7 +424,7 @@ export class CleanLiveOnlySourceCycleV1 {
             };
       }
       assertCanonicalMeetingDocument(meeting, this.options.source.identity);
-      const reviewPolicy = this.options.review_policy(meeting);
+      const reviewPolicy = legacyRestrictedReviewerReviewPolicySnapshotV1;
       const frozen =
         await this.options.state.readFrozenCandidateForSourceRevision({
           external_id: meeting.provenance.external_id,
@@ -558,7 +558,7 @@ export class CleanLiveOnlySourceCycleV1 {
 
   private async stageAndAdvance(
     candidate: CleanActionableLiveCandidateV1,
-    admission: CleanGranolaSourceAdmissionV1,
+    admission: CleanLiveSourceAdmissionV1,
     meeting: MeetingDocument,
     decisions: DecisionSet,
     nextCursor: string | undefined,
@@ -604,7 +604,7 @@ export class CleanLiveOnlySourceCycleV1 {
   }
 
   private async advanceAfterPendingDelivery(
-    admission: CleanGranolaSourceAdmissionV1,
+    admission: CleanLiveSourceAdmissionV1,
     nextCursor: string | undefined,
   ): Promise<CleanLiveOnlySourceCycleResultV1> {
     if (nextCursor === undefined || nextCursor === admission.source.cursor) {
@@ -625,7 +625,7 @@ export class CleanLiveOnlySourceCycleV1 {
 
   private async finishWithoutStage(
     kind: "no_signals" | "already_processed",
-    admission: CleanGranolaSourceAdmissionV1,
+    admission: CleanLiveSourceAdmissionV1,
     nextCursor: string | undefined,
   ): Promise<CleanLiveOnlySourceCycleResultV1> {
     if (nextCursor === undefined || nextCursor === admission.source.cursor) {

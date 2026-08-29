@@ -45,9 +45,9 @@ import {
   issueCleanPersonInvitation,
 } from "../src/composition/clean-person-onboarding.js";
 import {
-  openCleanLiveRuntime,
-  type OpenCleanLiveRuntimeConfig,
-} from "../src/composition/open-clean-live-runtime.js";
+  openCleanGranolaLiveRuntime,
+  type OpenCleanGranolaLiveRuntimeConfig,
+} from "../src/composition/open-clean-granola-live-runtime.js";
 import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
 import { createCleanPersonAnswerRouteV1 } from "../src/composition/clean-person-answer-route.js";
 import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
@@ -346,7 +346,13 @@ function fakeSource(
       normalizer_version: identity.version,
     },
     capture: { state: "complete", components: [] },
-    participants: [],
+    participants: [
+      {
+        id: "founder",
+        display_name: "Founder",
+        identities: [{ kind: "email", value: "founder@example.com" }],
+      },
+    ],
     content: [
       {
         id: "note-live-test",
@@ -355,6 +361,7 @@ function fakeSource(
       },
     ],
     artifacts: [],
+    context: { owner_participant_id: "founder" },
     extensions: {
       granola: {
         calendar_event: null,
@@ -557,7 +564,7 @@ async function activeFixture() {
   });
   const poster = new FakePrivateApprovalPoster();
   const errors: Error[] = [];
-  const config: OpenCleanLiveRuntimeConfig = {
+  const config: OpenCleanGranolaLiveRuntimeConfig = {
     state_directory: initialized.state_directory,
     host: "127.0.0.1",
     port: await availablePort(),
@@ -581,7 +588,7 @@ async function activeFixture() {
     instance_id: admitted.processor.instance_id,
     version: admitted.processor.version,
   };
-  const runtime = await openCleanLiveRuntime(config, {
+  const runtime = await openCleanGranolaLiveRuntime(config, {
     live_adapters: {
       source,
       processor: fakeProcessor(processorIdentity),
@@ -912,7 +919,7 @@ describe("open clean live runtime private approval lane", () => {
     const credentials = initializeCleanPersonCredentials({
       state_directory: initialized.state_directory,
     });
-    const runtime = await openCleanLiveRuntime({
+    const runtime = await openCleanGranolaLiveRuntime({
       state_directory: initialized.state_directory,
       host: "127.0.0.1",
       port: await availablePort(),
@@ -941,6 +948,49 @@ describe("open clean live runtime private approval lane", () => {
     } finally {
       await runtime.close();
     }
+  });
+
+  it("rejects a changed Granola credential reference before it can open that credential", async () => {
+    const fixture = await activeFixture();
+    await fixture.runtime.close();
+    await expect(
+      openCleanGranolaLiveRuntime({
+        ...fixture.config,
+        granola_credential_file: join(
+          fixture.initialized.state_directory,
+          "replacement-granola-credential-not-read",
+        ),
+      }),
+    ).rejects.toThrow(
+      /source credential reference differs from the admitted commitment/,
+    );
+  });
+
+  it("rejects a changed Granola owner before it can construct the source", async () => {
+    const fixture = await activeFixture();
+    await fixture.runtime.close();
+    writeFileSync(
+      fixture.config.granola_owner_email_file,
+      "replacement-owner@example.com",
+    );
+    chmodSync(fixture.config.granola_owner_email_file, 0o600);
+    await expect(openCleanGranolaLiveRuntime(fixture.config)).rejects.toThrow(
+      /owner differs from the admitted custodian commitment/,
+    );
+  });
+
+  it("rejects a changed LLM credential reference before it can open that credential", async () => {
+    const fixture = await activeFixture();
+    await fixture.runtime.close();
+    await expect(
+      openCleanGranolaLiveRuntime({
+        ...fixture.config,
+        llm_credential_file: join(
+          fixture.initialized.state_directory,
+          "replacement-llm-credential-not-read",
+        ),
+      }),
+    ).rejects.toThrow(/LLM configuration differs from the admitted processor commitment/);
   });
 
   it("stages a null-policy private card, then a signed Team approve binds policy, appends one V4 record, and is replay-safe", async () => {
@@ -1174,7 +1224,7 @@ describe("open clean live runtime private approval lane", () => {
       });
       await fixture.runtime.close();
       const restartedPoster = new FakePrivateApprovalPoster();
-      const restarted = await openCleanLiveRuntime(fixture.config, {
+      const restarted = await openCleanGranolaLiveRuntime(fixture.config, {
         live_adapters: {
           source: fixture.source,
           processor: fakeProcessor(fixture.processorIdentity),
