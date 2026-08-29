@@ -162,6 +162,15 @@ export async function runCleanLiveCli(
           } as never)}\n`,
         );
       },
+      on_private_approval_slack_rejection: (event) => {
+        io.stderr(
+          `${canonicalJson({
+            schema_version: 1,
+            kind: "echo-private-approval-slack-interaction-rejection-v1",
+            stage: event.stage,
+          } as never)}\n`,
+        );
+      },
       ...(parsed["--worker-interval-ms"] === undefined
         ? {}
         : {

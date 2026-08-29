@@ -7,6 +7,7 @@ import type { PrivateApprovalSlackInteractionsHttpApplicationV1 } from "../prese
 import {
   PrivateApprovalSlackInteractionError,
   parseVerifiedPrivateApprovalSlackInteractionV1,
+  type PrivateApprovalSlackInteractionRejectionStageV1,
   verifyPrivateApprovalSlackRequestV1,
 } from "./private-approval-slack-interaction-v1.js";
 
@@ -31,6 +32,24 @@ export interface PrivateApprovalSlackInteractionsApplicationInputV1 {
   /** Clock for request freshness and durable receipt timestamps. */
   readonly now_unix_seconds?: () => number;
   readonly now?: () => string;
+  /**
+   * Observational only. Receives no provider data and is invoked only after a
+   * successfully HMAC-verified request fails the parser boundary.
+   */
+  readonly on_rejection?: (event: {
+    readonly stage: PrivateApprovalSlackInteractionRejectionStageV1;
+  }) => void;
+}
+
+function reportRejection(
+  input: PrivateApprovalSlackInteractionsApplicationInputV1,
+  stage: PrivateApprovalSlackInteractionRejectionStageV1,
+): void {
+  try {
+    input.on_rejection?.(Object.freeze({ stage }));
+  } catch {
+    // Diagnostics must never change the provider acknowledgement path.
+  }
 }
 
 function canonicalNow(now: () => string): string {
@@ -103,6 +122,7 @@ export function createPrivateApprovalSlackInteractionsApplicationV1(
         interaction = parseVerifiedPrivateApprovalSlackInteractionV1(verified);
       } catch (error) {
         if (error instanceof PrivateApprovalSlackInteractionError) {
+          reportRejection(input, error.rejection_stage);
           throw new AuthorityOperationError(
             "invalid_request",
             "Slack interaction payload is invalid",

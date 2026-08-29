@@ -57,6 +57,7 @@ import { PrivateOwnerDmApprovalStagerV1 } from "./private-owner-dm-approval-stag
 import { PrivateApprovalProcessingCoordinatorV1 } from "./private-approval-processing-coordinator-v1.js";
 import { SqlitePrivateApprovalProcessingAuthorityV1 } from "./sqlite-private-approval-processing-authority-v1.js";
 import { createPrivateApprovalSlackInteractionsApplicationV1 } from "./private-approval-slack-interactions-application-v1.js";
+import type { PrivateApprovalSlackInteractionRejectionStageV1 } from "./private-approval-slack-interaction-v1.js";
 
 export interface OpenCleanLiveRuntimeConfig {
   readonly state_directory: string;
@@ -84,6 +85,10 @@ export interface OpenCleanLiveRuntimeConfig {
   ) => void;
   /** Observational only: redacted Layer 4 model-stage failures. */
   readonly on_layer4_failure?: (event: CleanLayer4FailureEventV1) => void;
+  /** Observational only: parser stage after an HMAC-verified Slack rejection. */
+  readonly on_private_approval_slack_rejection?: (event: {
+    readonly stage: PrivateApprovalSlackInteractionRejectionStageV1;
+  }) => void;
 }
 
 export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
@@ -437,6 +442,7 @@ export async function openCleanLiveRuntime(
           `file:${config.slack_signing_secret_file}`,
         ),
         persistence: controlPlane,
+        on_rejection: config.on_private_approval_slack_rejection,
       });
     const readableSearch = createCleanReadableSearchGenerationReconcilerV1({
       state_directory: config.state_directory,

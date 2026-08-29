@@ -33,6 +33,7 @@ function raw(input?: {
   readonly selected_option?: unknown;
   readonly comment?: string;
   readonly hash?: string;
+  readonly state?: unknown;
 }): Uint8Array {
   const actionId = input?.action_id ?? APPROVE_ID;
   const payload = {
@@ -60,26 +61,28 @@ function raw(input?: {
       blocks: [],
     },
     state: {
-      values: {
-        policy: {
-          [POLICY_ID]: {
-            type: "radio_buttons",
-            selected_option:
-              input !== undefined && Object.hasOwn(input, "selected_option")
-                ? input.selected_option
-                : {
-                    text: { type: "plain_text", text: "Team", emoji: false },
-                    value: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-                  },
+      values:
+        input?.state ??
+        {
+          policy: {
+            [POLICY_ID]: {
+              type: "radio_buttons",
+              selected_option:
+                input !== undefined && Object.hasOwn(input, "selected_option")
+                  ? input.selected_option
+                  : {
+                      text: { type: "plain_text", text: "Team", emoji: false },
+                      value: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+                    },
+            },
+          },
+          comment: {
+            [COMMENT_ID]: {
+              type: "plain_text_input",
+              value: input?.comment ?? "Ship it.",
+            },
           },
         },
-        comment: {
-          [COMMENT_ID]: {
-            type: "plain_text_input",
-            value: input?.comment ?? "Ship it.",
-          },
-        },
-      },
     },
     actions: [
       {
@@ -227,6 +230,29 @@ describe("private Slack interactions application V1", () => {
     await expect(application.accept(request(raw(), "wrong-secret"))).rejects.toMatchObject({
       code: "unauthorized",
     });
+  });
+
+  it("reports only verified parser rejection stages without changing failures", async () => {
+    const onRejection = vi.fn(() => {
+      throw new Error("diagnostic sink failed");
+    });
+    const application = createPrivateApprovalSlackInteractionsApplicationV1({
+      signing_secret: SECRET,
+      persistence: { enqueue: vi.fn() },
+      now_unix_seconds: () => NOW,
+      on_rejection: onRejection,
+    });
+
+    await expect(
+      application.accept(request(raw({ state: {} }))),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    expect(onRejection).toHaveBeenCalledExactlyOnceWith({ stage: "state" });
+    expect(JSON.stringify(onRejection.mock.calls)).toBe('[[{"stage":"state"}]]');
+
+    await expect(
+      application.accept(request(raw(), "wrong-secret")),
+    ).rejects.toMatchObject({ code: "unauthorized" });
+    expect(onRejection).toHaveBeenCalledTimes(1);
   });
 
   it("does not persist when its durable receipt clock is non-canonical", async () => {

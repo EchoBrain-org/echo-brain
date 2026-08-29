@@ -14,6 +14,19 @@ import {
 export const PRIVATE_APPROVAL_SLACK_INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 export const PRIVATE_APPROVAL_SLACK_INTERACTION_MAX_AGE_SECONDS = 5 * 60;
 
+/**
+ * Closed, content-free parser stages for operational diagnosis. They are only
+ * emitted after HMAC verification has succeeded.
+ */
+export type PrivateApprovalSlackInteractionRejectionStageV1 =
+  | "unclassified"
+  | "form"
+  | "envelope"
+  | "lookup"
+  | "action"
+  | "card"
+  | "state";
+
 const PRIVATE_APPROVAL_SLACK_INTERACTION_KIND =
   "echo-private-approval-slack-interaction-v1" as const;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
@@ -122,7 +135,10 @@ export type PrivateApprovalSlackInteractionV1 =
 
 /** Deliberately generic so errors never reflect a secret or raw Slack body. */
 export class PrivateApprovalSlackInteractionError extends Error {
-  constructor() {
+  constructor(
+    readonly rejection_stage: PrivateApprovalSlackInteractionRejectionStageV1 =
+      "unclassified",
+  ) {
     super("private approval Slack interaction is invalid");
     this.name = "PrivateApprovalSlackInteractionError";
   }
@@ -507,104 +523,134 @@ function providerActionKey(input: {
 export function parseVerifiedPrivateApprovalSlackInteractionV1(
   verified: VerifiedPrivateApprovalSlackRequestV1,
 ): PrivateApprovalSlackInteractionV1 {
-  const verifiedRequest = verifiedRequests.get(verified);
-  if (verifiedRequest === undefined) return invalid();
-  const payload = exactRecord(
-    decodePayloadForm(verifiedRequest.body),
-    [
-      "type",
-      "user",
-      "api_app_id",
-      "container",
-      "trigger_id",
-      "team",
-      "channel",
-      "message",
-      "state",
-      "actions",
-    ],
-    [
-      "type",
-      "user",
-      "api_app_id",
-      "container",
-      "trigger_id",
-      "team",
-      "enterprise",
-      "is_enterprise_install",
-      "channel",
-      "message",
-      "state",
-      "hash",
-      "response_url",
-      "token",
-      "actions",
-    ],
-  );
-  if (payload.hash !== undefined) text(payload.hash, IDENTIFIER);
-  if (
-    payload.type !== "block_actions" ||
-    (payload.is_enterprise_install !== undefined &&
-      typeof payload.is_enterprise_install !== "boolean") ||
-    payload.is_enterprise_install === true
-  ) {
-    return invalid();
-  }
-  const lookup = lookupHints(payload);
-  const request = requestEvidence(verifiedRequest);
-  const triggerId = text(payload.trigger_id, SLACK_TRIGGER_ID, 512);
-  const selected = action(payload);
-  const actionId = text(selected.action_id, IDENTIFIER);
+  let rejectionStage: PrivateApprovalSlackInteractionRejectionStageV1 =
+    "unclassified";
+  try {
+    const verifiedRequest = verifiedRequests.get(verified);
+    if (verifiedRequest === undefined) return invalid();
+    rejectionStage = "form";
+    const decoded = decodePayloadForm(verifiedRequest.body);
+    rejectionStage = "envelope";
+    const payload = exactRecord(
+      decoded,
+      [
+        "type",
+        "user",
+        "api_app_id",
+        "container",
+        "trigger_id",
+        "team",
+        "channel",
+        "message",
+        "state",
+        "actions",
+      ],
+      [
+        "type",
+        "user",
+        "api_app_id",
+        "container",
+        "trigger_id",
+        "team",
+        "enterprise",
+        "is_enterprise_install",
+        "channel",
+        "message",
+        "state",
+        "hash",
+        "response_url",
+        "token",
+        "actions",
+      ],
+    );
+    if (payload.hash !== undefined) text(payload.hash, IDENTIFIER);
+    if (
+      payload.type !== "block_actions" ||
+      (payload.is_enterprise_install !== undefined &&
+        typeof payload.is_enterprise_install !== "boolean") ||
+      payload.is_enterprise_install === true
+    ) {
+      return invalid();
+    }
+    const triggerId = text(payload.trigger_id, SLACK_TRIGGER_ID, 512);
+    rejectionStage = "lookup";
+    const lookup = lookupHints(payload);
+    const request = requestEvidence(verifiedRequest);
+    rejectionStage = "action";
+    const selected = action(payload);
+    const actionId = text(selected.action_id, IDENTIFIER);
 
-  const inputAction = SLACK_CARD_INPUT_ACTION.exec(actionId)?.[1];
-  if (inputAction === "policy" || inputAction === "comment") {
-    const expectedType = inputAction === "policy" ? "radio_buttons" : "plain_text_input";
-    if (selected.type !== expectedType) return invalid();
+    const inputAction = SLACK_CARD_INPUT_ACTION.exec(actionId)?.[1];
+    if (inputAction === "policy" || inputAction === "comment") {
+      const expectedType =
+        inputAction === "policy" ? "radio_buttons" : "plain_text_input";
+      if (selected.type !== expectedType) return invalid();
+      return Object.freeze({
+        schema_version: 1,
+        kind: PRIVATE_APPROVAL_SLACK_INTERACTION_KIND,
+        disposition: "presentation_change",
+        action: inputAction,
+        request,
+        lookup,
+      });
+    }
+
+    if (selected.type !== "button" || typeof selected.value !== "string") {
+      return invalid();
+    }
+    const actionTs = text(selected.action_ts, SLACK_MESSAGE_TIMESTAMP, 32);
+    rejectionStage = "card";
+    const card = actionValue(selected.value);
+    const approveId = privateApprovalBlockKitActionIdV1(
+      card,
+      PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
+    );
+    const rejectId = privateApprovalBlockKitActionIdV1(
+      card,
+      PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject,
+    );
+    const resolutionAction =
+      actionId === approveId
+        ? "approve"
+        : actionId === rejectId
+          ? "reject"
+          : undefined;
+    if (resolutionAction === undefined) {
+      rejectionStage = "action";
+      return invalid();
+    }
+    rejectionStage = "state";
+    const state = completeState({ ...card, state: payload.state });
     return Object.freeze({
       schema_version: 1,
       kind: PRIVATE_APPROVAL_SLACK_INTERACTION_KIND,
-      disposition: "presentation_change",
-      action: inputAction,
+      disposition: "resolution",
+      action: resolutionAction,
+      action_id: actionId,
+      approval_id: card.approval_id,
+      selected_policy_id:
+        resolutionAction === "approve" ? state.selected_policy_id : null,
+      comment: state.comment,
+      provider_action_key_sha256: providerActionKey({
+        api_app_id: lookup.api_app_id,
+        workspace_id: lookup.workspace_id,
+        slack_user_id: lookup.slack_user_id,
+        channel_id: lookup.channel_id,
+        message_ts: lookup.message_ts,
+        trigger_id: triggerId,
+        action_ts: actionTs,
+        action_id: actionId,
+      }),
       request,
       lookup,
     });
+  } catch (error) {
+    if (
+      error instanceof PrivateApprovalSlackInteractionError &&
+      error.rejection_stage === "unclassified"
+    ) {
+      throw new PrivateApprovalSlackInteractionError(rejectionStage);
+    }
+    throw error;
   }
-
-  if (selected.type !== "button" || typeof selected.value !== "string") return invalid();
-  const actionTs = text(selected.action_ts, SLACK_MESSAGE_TIMESTAMP, 32);
-  const card = actionValue(selected.value);
-  const approveId = privateApprovalBlockKitActionIdV1(
-    card,
-    PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
-  );
-  const rejectId = privateApprovalBlockKitActionIdV1(
-    card,
-    PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject,
-  );
-  const resolutionAction = actionId === approveId ? "approve" : actionId === rejectId ? "reject" : undefined;
-  if (resolutionAction === undefined) return invalid();
-  const state = completeState({ ...card, state: payload.state });
-  return Object.freeze({
-    schema_version: 1,
-    kind: PRIVATE_APPROVAL_SLACK_INTERACTION_KIND,
-    disposition: "resolution",
-    action: resolutionAction,
-    action_id: actionId,
-    approval_id: card.approval_id,
-    selected_policy_id:
-      resolutionAction === "approve" ? state.selected_policy_id : null,
-    comment: state.comment,
-    provider_action_key_sha256: providerActionKey({
-      api_app_id: lookup.api_app_id,
-      workspace_id: lookup.workspace_id,
-      slack_user_id: lookup.slack_user_id,
-      channel_id: lookup.channel_id,
-      message_ts: lookup.message_ts,
-      trigger_id: triggerId,
-      action_ts: actionTs,
-      action_id: actionId,
-    }),
-    request,
-    lookup,
-  });
 }

@@ -146,6 +146,16 @@ function parse(value: unknown) {
   return parseVerifiedPrivateApprovalSlackInteractionV1(verify(form(value)));
 }
 
+function rejectionStage(value: unknown) {
+  try {
+    parse(value);
+  } catch (error) {
+    expect(error).toBeInstanceOf(PrivateApprovalSlackInteractionError);
+    return (error as PrivateApprovalSlackInteractionError).rejection_stage;
+  }
+  throw new Error("expected the verified interaction to be rejected");
+}
+
 describe("private approval Slack interaction v1", () => {
   it("verifies the original bytes and returns a bounded resolution intent without provider authority", () => {
     const value = payload({ comment: "  Capture this as the owner decision.  " });
@@ -228,7 +238,7 @@ describe("private approval Slack interaction v1", () => {
         },
       },
     });
-    expect(() => parse(incomplete)).toThrow(PrivateApprovalSlackInteractionError);
+    expect(rejectionStage(incomplete)).toBe("state");
   });
 
   it("accepts Slack's null untouched comment and omitted workspace-only hints", () => {
@@ -276,7 +286,7 @@ describe("private approval Slack interaction v1", () => {
     });
     const missingBot = payload();
     delete (missingBot.message as Record<string, unknown>).bot_id;
-    expect(() => parse(missingBot)).toThrow(PrivateApprovalSlackInteractionError);
+    expect(rejectionStage(missingBot)).toBe("lookup");
   });
 
   it("rejects tampering, missing/old/future signatures, and does not expose request bytes", () => {
