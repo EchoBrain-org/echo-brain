@@ -319,6 +319,10 @@ function actionValue(value: unknown): {
 }
 
 function selectedPolicy(value: unknown): PersonApprovalPolicyId {
+  // Slack can report an untouched initial radio option as null. The V1 card's
+  // immutable server-owned default is the narrowest policy, so this fallback
+  // can never broaden visibility.
+  if (value === null) return RESTRICTED_REVIEWER_PERSON_POLICY_ID;
   const option = exactRecord(value, ["text", "value"]);
   if (typeof option.text !== "object" || option.text === null) return invalid();
   if (
@@ -531,11 +535,13 @@ export function parseVerifiedPrivateApprovalSlackInteractionV1(
       "channel",
       "message",
       "state",
+      "hash",
       "response_url",
       "token",
       "actions",
     ],
   );
+  if (payload.hash !== undefined) text(payload.hash, IDENTIFIER);
   if (
     payload.type !== "block_actions" ||
     (payload.is_enterprise_install !== undefined &&

@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import {
   PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1,
@@ -27,7 +28,13 @@ const APPROVE_ID = privateApprovalBlockKitActionIdV1(
   PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
 );
 
-function raw(actionId = APPROVE_ID): Uint8Array {
+function raw(input?: {
+  readonly action_id?: string;
+  readonly selected_option?: unknown;
+  readonly comment?: string;
+  readonly hash?: string;
+}): Uint8Array {
+  const actionId = input?.action_id ?? APPROVE_ID;
   const payload = {
     type: "block_actions",
     user: { id: "U012ABCDEF", team_id: "T012ABCDEF" },
@@ -42,6 +49,7 @@ function raw(actionId = APPROVE_ID): Uint8Array {
     team: { id: "T012ABCDEF", domain: "echo" },
     enterprise: null,
     is_enterprise_install: false,
+    ...(input?.hash === undefined ? {} : { hash: input.hash }),
     channel: { id: "D012ABCDEF", name: "directmessage" },
     message: {
       type: "message",
@@ -56,14 +64,20 @@ function raw(actionId = APPROVE_ID): Uint8Array {
         policy: {
           [POLICY_ID]: {
             type: "radio_buttons",
-            selected_option: {
-              text: { type: "plain_text", text: "Team", emoji: false },
-              value: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-            },
+            selected_option:
+              input !== undefined && Object.hasOwn(input, "selected_option")
+                ? input.selected_option
+                : {
+                    text: { type: "plain_text", text: "Team", emoji: false },
+                    value: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+                  },
           },
         },
         comment: {
-          [COMMENT_ID]: { type: "plain_text_input", value: "Ship it." },
+          [COMMENT_ID]: {
+            type: "plain_text_input",
+            value: input?.comment ?? "Ship it.",
+          },
         },
       },
     },
@@ -138,10 +152,47 @@ describe("private Slack interactions application V1", () => {
       now_unix_seconds: () => NOW,
     });
 
-    await expect(application.accept(request(raw(POLICY_ID)))).resolves.toBe(
+    await expect(
+      application.accept(request(raw({ action_id: POLICY_ID }))),
+    ).resolves.toBe(
       "accepted",
     );
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("uses the narrow card default for untouched radio state and accepts media-type parameters", async () => {
+    const enqueue = vi.fn(() => ({
+      disposition: "resolution" as const,
+      receipt: {} as never,
+      receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+      idempotent: false,
+    }));
+    const application = createPrivateApprovalSlackInteractionsApplicationV1({
+      signing_secret: SECRET,
+      persistence: { enqueue },
+      now_unix_seconds: () => NOW,
+      now: () => "2026-08-28T22:00:00.000Z",
+    });
+    const body = raw({
+      selected_option: null,
+      comment: "testing",
+      hash: "1787980217.abcdef0123456789",
+    });
+
+    await expect(
+      application.accept({
+        ...request(body),
+        content_type: "Application/X-Www-Form-Urlencoded; charset=utf-8",
+      }),
+    ).resolves.toBe("accepted");
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        receipt: expect.objectContaining({
+          selected_policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+          comment: "testing",
+        }),
+      }),
+    );
   });
 
   it("separates authentication failures, malformed media, and durable queue failure", async () => {

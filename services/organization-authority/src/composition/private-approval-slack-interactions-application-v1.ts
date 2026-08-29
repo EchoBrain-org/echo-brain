@@ -47,6 +47,13 @@ function canonicalNow(now: () => string): string {
   return value;
 }
 
+function isSlackFormContentType(value: string | undefined): boolean {
+  return (
+    value?.split(";", 1)[0]?.trim().toLowerCase() ===
+    "application/x-www-form-urlencoded"
+  );
+}
+
 /**
  * Verifies and normalizes one Slack interaction before any durable call.
  * Signed policy/comment change events are acknowledged as presentation-only
@@ -63,7 +70,7 @@ export function createPrivateApprovalSlackInteractionsApplicationV1(
         PrivateApprovalSlackInteractionsHttpApplicationV1["accept"]
       >[0],
     ): Promise<"accepted"> {
-      if (request.content_type !== "application/x-www-form-urlencoded") {
+      if (!isSlackFormContentType(request.content_type)) {
         throw new AuthorityOperationError(
           "invalid_request",
           "Slack interaction content type is invalid",
