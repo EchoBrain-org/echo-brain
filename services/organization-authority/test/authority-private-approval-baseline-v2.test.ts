@@ -8,7 +8,7 @@ import {
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 
 const AUTHORITY_BASELINE_SHA256_V2 =
-  "sha256:0790f8d17300ee8cd500e58bacb9e216a9b8fb838f1da021ba6808705227c77c";
+  "sha256:bf25468ffda58677b49a51314efa2bcb8e976fb44f339211324021045e4bdee2";
 
 function openedV2Database() {
   const database = openAuthorityDatabase(":memory:");
@@ -37,14 +37,12 @@ describe("Authority private-approval baseline v2", () => {
       expect(columns(database, "authority_private_approval_assignments_v2")).toEqual([
         "approval_id",
         "candidate_id",
-        "assignment_version",
-        "assignment_json",
-        "assignment_sha256",
+        "candidate_sha256",
+        "frozen_card_sha256",
+        "approved_snapshot_sha256",
         "connection_id",
         "connection_contract_sha256",
         "connection_state_sha256",
-        "approval_binding_id",
-        "approval_binding_contract_sha256",
         "external_identity_link_id",
         "external_identity_link_contract_sha256",
         "assignee_principal_id",

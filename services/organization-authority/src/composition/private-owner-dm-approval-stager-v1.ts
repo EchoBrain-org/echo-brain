@@ -8,7 +8,6 @@
  */
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
-  buildPrivateApprovalSurfaceBindingV1,
   type ApprovalContractSha256,
   type PendingPrivateApprovalV1,
   type PrivateApprovalSlackCardBindingV1,
@@ -66,7 +65,6 @@ export interface PrivateOwnerDmApprovalStagerV1Options {
 interface PrivateCardAndSnapshotV1 {
   readonly card: PrivateSlackApprovalCardPresentationV1 & {
     readonly approval_id: string;
-    readonly assignment_version: number;
   };
   readonly frozen_card_sha256: Digest;
   readonly approved_snapshot: Readonly<Record<string, unknown>>;
@@ -123,7 +121,6 @@ function buildCardAndSnapshot(
   const card = buildPrivateApprovalBlockKitCardV1({
     schema_version: 1,
     approval_id: input.candidate.approval_id,
-    assignment_version: 1,
     meeting_title: displayText(input.meeting.title, "Meeting approval", MAX_TITLE),
     approval_context,
   });
@@ -158,7 +155,6 @@ function candidateCommitment(
 function assignmentMatchesCurrentTarget(
   assignment: PrivateApprovalAssignmentStateV1,
   target: GranolaMeetingOwnerPrivateApprovalTargetV1,
-  surface: ReturnType<typeof buildPrivateApprovalSurfaceBindingV1>,
 ): boolean {
   const link = target.slack_target.current_slack_identity_link;
   return (
@@ -166,13 +162,11 @@ function assignmentMatchesCurrentTarget(
     assignment.connection_id === target.slack_target.connection.body.connection_id &&
     assignment.connection_contract_sha256 === target.slack_target.connection.sha256 &&
     assignment.connection_state_sha256 === target.slack_target.connection_state.sha256 &&
-    assignment.approval_binding.approval_binding_id === surface.body.approval_surface_binding_id &&
-    assignment.approval_binding.approval_binding_contract_sha256 === surface.sha256 &&
-    assignment.assignment.current_assignee.principal_id === target.assignee.principal_id &&
-    assignment.assignment.current_assignee.membership_id === target.assignee.membership_id &&
-    assignment.assignment.current_slack_identity_link.external_identity_link_id === link.external_identity_link_id &&
-    assignment.assignment.current_slack_identity_link.external_identity_link_contract_sha256 === link.external_identity_link_contract_sha256 &&
-    assignment.assignment.current_slack_identity_link.provider_subject_id === link.provider_subject_id &&
+    assignment.assigned_owner.principal_id === target.assignee.principal_id &&
+    assignment.assigned_owner.membership_id === target.assignee.membership_id &&
+    assignment.assigned_owner_slack_identity_link.external_identity_link_id === link.external_identity_link_id &&
+    assignment.assigned_owner_slack_identity_link.external_identity_link_contract_sha256 === link.external_identity_link_contract_sha256 &&
+    assignment.assigned_owner_slack_identity_link.provider_subject_id === link.provider_subject_id &&
     assignment.dm_channel.workspace_id === target.slack_target.connection.body.provider_tenant_id &&
     assignment.dm_channel.enterprise_id === target.slack_target.connection.body.provider_enterprise_id
   );
@@ -201,6 +195,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
   async reconcilePendingDeliveries(
     context?: { readonly signal: AbortSignal },
   ): Promise<void> {
+    await this.reconcileSuperseded(context);
     for (const frozen of this.options.authority.listPendingApprovalDeliveries()) {
       await this.stage(
         { admission: frozen.admission, candidate: frozen, meeting: frozen.meeting, decisions: frozen.decisions },
@@ -269,13 +264,14 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     // This read-only proof has no external side effect. Resolve it before
     // freezing a post attempt so a missing/deactivated owner cannot leave an
     // avoidable `posting` recovery delay in the Authority outbox.
-    const target = this.resolveTarget({
+    const targetInput = {
       meeting: input.meeting,
       authority_database: this.options.authority_database,
       control_plane_database: this.options.control_plane_database,
       coordinates: this.options.coordinates,
       connection_id: this.options.connection_id,
-    });
+    } as const;
+    const target = this.resolveTarget(targetInput);
     if (target === undefined) return { kind: "state_drift" };
     const frozen = buildCardAndSnapshot(input, this.sha256);
     const prepared = this.options.authority.prepareApprovalPost({
@@ -286,31 +282,6 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     outbox = prepared.outbox;
     if (outbox.state === "superseded") return { kind: "state_drift" };
 
-    const surface = buildPrivateApprovalSurfaceBindingV1(
-      {
-        authority_id: this.options.coordinates.authority_id,
-        organization_id: this.options.coordinates.organization_id,
-        state_lineage_id: this.options.coordinates.state_lineage_id,
-        connection_id: target.slack_target.connection.body.connection_id,
-        connection_contract_sha256: target.slack_target.connection.sha256,
-        connection_state_sha256: target.slack_target.connection_state.sha256,
-        provider_app_id: target.slack_target.connection.body.provider_app_id,
-        provider_bot_id: target.slack_target.connection.body.provider_bot_id,
-        provider_bot_user_id: target.slack_target.connection.body.provider_bot_user_id,
-        slack_workspace_id: target.slack_target.connection.body.provider_tenant_id,
-        slack_enterprise_id: target.slack_target.connection.body.provider_enterprise_id,
-        adapter_id: "slack-block-actions",
-        adapter_version: "v1",
-        interaction_path: "/v2/integrations/slack/interactions",
-        card_schema_version: 1,
-        action_namespace: "echo-private-approval-v1",
-        supported_policy_ids: [
-          "restricted-reviewer-person-v2",
-          "organization-member-readable-person-v2",
-        ],
-      },
-      { sha256: this.sha256 },
-    );
     const commitment = candidateCommitment(outbox, frozen);
     let assignment = this.options.assignments.readCurrent(commitment);
     if (assignment === undefined) {
@@ -318,6 +289,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
         target.slack_target.current_slack_identity_link.provider_subject_id,
         context?.signal,
       );
+      if (dm.kind === "retry_allowed") return { kind: "delivery_pending" };
       // Slack's response is a proof only when it names exactly the verified
       // subject. Anything else is a hard delivery refusal.
       if (dm.user_id !== target.slack_target.current_slack_identity_link.provider_subject_id) {
@@ -326,10 +298,6 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       const staged = this.options.assignments.stage({
         candidate: commitment,
         owner_target: target,
-        approval_binding: {
-          approval_binding_id: surface.body.approval_surface_binding_id,
-          approval_binding_contract_sha256: surface.sha256,
-        },
         dm_channel: {
           workspace_id: target.slack_target.connection.body.provider_tenant_id,
           enterprise_id: target.slack_target.connection.body.provider_enterprise_id,
@@ -338,7 +306,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       });
       assignment = staged.assignment;
     }
-    if (!assignmentMatchesCurrentTarget(assignment, target, surface)) {
+    if (!assignmentMatchesCurrentTarget(assignment, target)) {
       return { kind: "state_drift" };
     }
 
@@ -390,22 +358,21 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       candidate_sha256: commitment.candidate_sha256,
       frozen_card_sha256: outbox.frozen_card_sha256 as Digest,
       approved_snapshot_sha256: outbox.approved_snapshot_sha256 as Digest,
-      canonical_record_policy_id: null,
-      assignment: assignment.assignment,
+      assigned_owner: assignment.assigned_owner,
+      assigned_owner_slack_identity_link:
+        assignment.assigned_owner_slack_identity_link,
     });
     const cardBinding: PrivateApprovalSlackCardBindingV1 = Object.freeze({
       schema_version: 1,
       kind: "echo-private-approval-slack-card-binding-v1",
       approval_id: outbox.approval_id,
-      assignment_version: assignment.assignment.assignment_version,
       connection_id: assignment.connection_id,
       connection_contract_sha256: assignment.connection_contract_sha256,
       connection_state_sha256: assignment.connection_state_sha256,
-      approval_surface_binding_id: assignment.approval_binding.approval_binding_id,
-      approval_surface_binding_contract_sha256: assignment.approval_binding.approval_binding_contract_sha256,
       slack_workspace_id: assignment.dm_channel.workspace_id,
       slack_enterprise_id: assignment.dm_channel.enterprise_id,
-      slack_subject_id: assignment.assignment.current_slack_identity_link.provider_subject_id,
+      slack_subject_id:
+        assignment.assigned_owner_slack_identity_link.provider_subject_id,
       dm_channel_id: assignment.dm_channel.channel_id,
       provider_message_ts: outbox.provider_message_ts,
       card_sha256: outbox.frozen_card_sha256 as Digest,
@@ -414,7 +381,6 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       stage_command_id: outbox.stage_command_id,
       authority_id: this.options.coordinates.authority_id,
       candidate_id: outbox.candidate_id,
-      approval_surface_binding: surface,
       pending,
       card_binding: cardBinding,
     });
@@ -423,6 +389,13 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     if (refreshed === undefined || refreshed.candidate_id !== outbox.candidate_id) return { kind: "state_drift" };
     if (refreshed.state === "superseded") {
       await this.tombstoneKnown(refreshed, assignment, context);
+      return { kind: "state_drift" };
+    }
+    const currentTarget = this.resolveTarget(targetInput);
+    if (
+      currentTarget === undefined ||
+      !assignmentMatchesCurrentTarget(assignment, currentTarget)
+    ) {
       return { kind: "state_drift" };
     }
     const published = await this.options.poster.publish(

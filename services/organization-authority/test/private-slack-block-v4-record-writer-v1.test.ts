@@ -56,14 +56,9 @@ function terminal(input: FrozenPrivateSlackApprovalCandidateV1, outcome: "approv
     resolution: {
       schema_version: 1, kind: "echo-private-approval-resolution-v1", command_id: "command-1", approval_id: input.approval_id, organization_id: input.organization_id,
       candidate_sha256: input.candidate_sha256, frozen_card_sha256: input.frozen_card_sha256, approved_snapshot_sha256: input.approved_snapshot_sha256,
-      assignment_version: 1, final_approver: approver, current_slack_identity_link: link, assignment_capability_sha256: digest("capability"), authorization_proof_sha256: proof,
+      final_approver: approver, current_slack_identity_link: link, authorization_proof_sha256: proof,
       action: approved ? "approve" : "reject", comment: approved ? "looks good" : null,
       canonical_record_policy: approved ? { policy_id: policy, policy_contract_sha256: policyContract, policy_consequence_sha256: policyConsequence, restricted_reader: approver } : null,
-    },
-    authorization_allow: {
-      schema_version: 1, kind: "echo-private-approval-authorization-allow-v1", approval_id: input.approval_id, organization_id: input.organization_id,
-      candidate_sha256: input.candidate_sha256, frozen_card_sha256: input.frozen_card_sha256, approved_snapshot_sha256: input.approved_snapshot_sha256,
-      assignment_version: 1, authorized_assignee: approver, current_slack_identity_link: link, assignment_capability_sha256: digest("capability"), authorization_proof_sha256: proof,
     },
     audit: { schema_version: 1, kind: "echo-private-approval-terminal-audit-v1", audit_event_id: "audit-1", audit_sequence: 1, approval_id: input.approval_id, resolution_sha256: digest("resolution"), outcome, predecessor_entry_sha256: null, occurred_at: "2026-08-20T12:02:00.000Z" },
   } as DurablePrivateApprovalTerminalV1;

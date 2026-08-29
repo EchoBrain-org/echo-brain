@@ -21,7 +21,6 @@ function receipt(): PrivateApprovalSignedTerminalActionV1 {
     provider_action_key_sha256: digest("a"),
     request: { request_timestamp: "1800000000", signature_version: "v0", signature_sha256: digest("b"), raw_body_sha256: digest("c") },
     approval_id: "apr_00000000-0000-4000-8000-000000000001",
-    assignment_version: 1,
     action_id: "echo-private-approval-v1-action",
     action: "approve",
     selected_policy_id: "restricted-reviewer-person-v2",
@@ -33,7 +32,7 @@ function receipt(): PrivateApprovalSignedTerminalActionV1 {
 
 function schema(database: Database.Database) {
   database.exec(`
-    CREATE TABLE organization_private_approval_signed_action_receipts_v2 (provider_receipt_id TEXT PRIMARY KEY, provider_action_key TEXT UNIQUE, raw_payload_sha256 TEXT UNIQUE, normalized_receipt_json TEXT, normalized_receipt_sha256 TEXT UNIQUE, approval_id TEXT, assignment_version INTEGER, action_id TEXT, action_kind TEXT, received_at TEXT, verified_at TEXT);
+    CREATE TABLE organization_private_approval_signed_action_receipts_v2 (provider_receipt_id TEXT PRIMARY KEY, provider_action_key TEXT UNIQUE, raw_payload_sha256 TEXT UNIQUE, normalized_receipt_json TEXT, normalized_receipt_sha256 TEXT UNIQUE, approval_id TEXT, action_id TEXT, action_kind TEXT, received_at TEXT, verified_at TEXT);
     CREATE TABLE organization_private_approval_terminal_evidence_v2 (approval_id TEXT PRIMARY KEY, signed_action_receipt_sha256 TEXT UNIQUE);
     CREATE TABLE organization_private_approval_denied_action_receipts_v2 (provider_action_key TEXT PRIMARY KEY, signed_action_receipt_sha256 TEXT UNIQUE, reason_code TEXT, denied_at TEXT);
   `);
@@ -42,8 +41,8 @@ function schema(database: Database.Database) {
 function seed(database: Database.Database) {
   const value = receipt();
   const { received_at: _receivedAt, verified_at: _verifiedAt, ...semantic } = value;
-  database.prepare(`INSERT INTO organization_private_approval_signed_action_receipts_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    "sar_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", value.provider_action_key_sha256, value.request.raw_body_sha256, canonicalJson(value), canonicalSha256(semantic), value.approval_id, value.assignment_version, value.action_id, value.action, value.received_at, value.verified_at,
+  database.prepare(`INSERT INTO organization_private_approval_signed_action_receipts_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    "sar_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", value.provider_action_key_sha256, value.request.raw_body_sha256, canonicalJson(value), canonicalSha256(semantic), value.approval_id, value.action_id, value.action, value.received_at, value.verified_at,
   );
   return value;
 }

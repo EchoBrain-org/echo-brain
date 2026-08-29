@@ -56,7 +56,6 @@ import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "./sqlite-stable-pri
 import { PrivateOwnerDmApprovalStagerV1 } from "./private-owner-dm-approval-stager-v1.js";
 import { PrivateApprovalProcessingCoordinatorV1 } from "./private-approval-processing-coordinator-v1.js";
 import { SqlitePrivateApprovalProcessingAuthorityV1 } from "./sqlite-private-approval-processing-authority-v1.js";
-import { createPrivateApprovalSlackResolutionIntentQueueV1 } from "./private-approval-slack-resolution-queue-v1.js";
 import { createPrivateApprovalSlackInteractionsApplicationV1 } from "./private-approval-slack-interactions-application-v1.js";
 
 export interface OpenCleanLiveRuntimeConfig {
@@ -437,9 +436,7 @@ export async function openCleanLiveRuntime(
         signing_secret: readPrivateAuthoritySlackSigningSecret(
           `file:${config.slack_signing_secret_file}`,
         ),
-        queue: createPrivateApprovalSlackResolutionIntentQueueV1({
-          persistence: controlPlane,
-        }),
+        persistence: controlPlane,
       });
     const readableSearch = createCleanReadableSearchGenerationReconcilerV1({
       state_directory: config.state_directory,

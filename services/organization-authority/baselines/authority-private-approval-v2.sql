@@ -8,20 +8,12 @@ CREATE TABLE authority_private_approval_assignments_v2 (
   approval_id TEXT NOT NULL UNIQUE CHECK (approval_id GLOB 'apr_*'),
   candidate_id TEXT NOT NULL UNIQUE
     REFERENCES authority_clean_live_candidates_v1(candidate_id),
-  assignment_version INTEGER NOT NULL CHECK (assignment_version = 1),
-  assignment_json TEXT NOT NULL UNIQUE CHECK (
-    json_valid(assignment_json) AND json_type(assignment_json) = 'object'
-  ),
-  assignment_sha256 TEXT NOT NULL UNIQUE CHECK (
-    length(assignment_sha256) = 71 AND
-    substr(assignment_sha256, 1, 7) = 'sha256:' AND
-    substr(assignment_sha256, 8) NOT GLOB '*[^0-9a-f]*'
-  ),
+  candidate_sha256 TEXT NOT NULL CHECK (candidate_sha256 LIKE 'sha256:%'),
+  frozen_card_sha256 TEXT NOT NULL CHECK (frozen_card_sha256 LIKE 'sha256:%'),
+  approved_snapshot_sha256 TEXT NOT NULL CHECK (approved_snapshot_sha256 LIKE 'sha256:%'),
   connection_id TEXT NOT NULL CHECK (connection_id GLOB 'con_*'),
   connection_contract_sha256 TEXT NOT NULL CHECK (connection_contract_sha256 LIKE 'sha256:%'),
   connection_state_sha256 TEXT NOT NULL CHECK (connection_state_sha256 LIKE 'sha256:%'),
-  approval_binding_id TEXT NOT NULL CHECK (approval_binding_id GLOB 'bnd_*'),
-  approval_binding_contract_sha256 TEXT NOT NULL CHECK (approval_binding_contract_sha256 LIKE 'sha256:%'),
   external_identity_link_id TEXT NOT NULL CHECK (external_identity_link_id GLOB 'clm_*'),
   external_identity_link_contract_sha256 TEXT NOT NULL CHECK (external_identity_link_contract_sha256 LIKE 'sha256:%'),
   assignee_principal_id TEXT NOT NULL CHECK (assignee_principal_id GLOB 'prn_*'),

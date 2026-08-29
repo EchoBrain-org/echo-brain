@@ -11,8 +11,8 @@ import {
  *
  * This module intentionally does not open a Slack DM, persist an assignment,
  * or interpret an interaction payload. Its button values identify the card
- * and assignment version only. The inbound boundary must reprove the current
- * Slack identity, assignee, and assignment capability before it creates a
+ * only. The inbound boundary must reprove the current
+ * Slack identity and assignee before it creates a
  * policy-resolution command.
  */
 export const PRIVATE_APPROVAL_BLOCK_KIT_CARD_KIND =
@@ -23,8 +23,6 @@ export const PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1 = Object.freeze({
   comment: "comment",
   approve: "approve",
   reject: "reject",
-  /** Reserved for a later assignment-changing delegation flow. */
-  delegate: "delegate",
 } as const);
 
 export type PrivateApprovalBlockKitActionV1 =
@@ -33,114 +31,31 @@ export type PrivateApprovalBlockKitActionV1 =
 export interface PrivateApprovalBlockKitCardInputV1 {
   readonly schema_version: 1;
   readonly approval_id: string;
-  readonly assignment_version: number;
   /** Bounded, human-readable meeting title. */
   readonly meeting_title: string;
   /** Bounded, human-readable summary of the approval being requested. */
   readonly approval_context: string;
 }
 
-export interface PrivateApprovalBlockKitPlainTextV1 {
+interface PrivateApprovalBlockKitPlainTextV1 {
   readonly type: "plain_text";
   readonly text: string;
   readonly emoji: false;
 }
 
-export interface PrivateApprovalBlockKitOptionV1 {
+interface PrivateApprovalBlockKitOptionV1 {
   readonly text: PrivateApprovalBlockKitPlainTextV1;
   readonly value: PersonApprovalPolicyId;
 }
-
-export interface PrivateApprovalBlockKitHeaderBlockV1 {
-  readonly type: "header";
-  readonly block_id: string;
-  readonly text: PrivateApprovalBlockKitPlainTextV1;
-}
-
-export interface PrivateApprovalBlockKitSectionBlockV1 {
-  readonly type: "section";
-  readonly block_id: string;
-  readonly text: PrivateApprovalBlockKitPlainTextV1;
-}
-
-export interface PrivateApprovalBlockKitDividerBlockV1 {
-  readonly type: "divider";
-  readonly block_id: string;
-}
-
-export interface PrivateApprovalBlockKitPolicyInputBlockV1 {
-  readonly type: "input";
-  readonly block_id: string;
-  readonly optional: false;
-  readonly label: PrivateApprovalBlockKitPlainTextV1;
-  readonly element: {
-    readonly type: "radio_buttons";
-    readonly action_id: string;
-    readonly options: readonly [
-      PrivateApprovalBlockKitOptionV1,
-      PrivateApprovalBlockKitOptionV1,
-    ];
-    readonly initial_option: PrivateApprovalBlockKitOptionV1;
-  };
-}
-
-export interface PrivateApprovalBlockKitCommentInputBlockV1 {
-  readonly type: "input";
-  readonly block_id: string;
-  readonly optional: true;
-  readonly label: PrivateApprovalBlockKitPlainTextV1;
-  readonly element: {
-    readonly type: "plain_text_input";
-    readonly action_id: string;
-    readonly multiline: true;
-    readonly max_length: typeof PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS;
-  };
-}
-
-export interface PrivateApprovalBlockKitActionsBlockV1 {
-  readonly type: "actions";
-  readonly block_id: string;
-  readonly elements: readonly [
-    {
-      readonly type: "button";
-      readonly action_id: string;
-      readonly style: "primary";
-      readonly text: PrivateApprovalBlockKitPlainTextV1;
-      readonly value: string;
-    },
-    {
-      readonly type: "button";
-      readonly action_id: string;
-      readonly style: "danger";
-      readonly text: PrivateApprovalBlockKitPlainTextV1;
-      readonly value: string;
-    },
-  ];
-}
-
-export type PrivateApprovalBlockKitBlockV1 =
-  | PrivateApprovalBlockKitHeaderBlockV1
-  | PrivateApprovalBlockKitSectionBlockV1
-  | PrivateApprovalBlockKitDividerBlockV1
-  | PrivateApprovalBlockKitPolicyInputBlockV1
-  | PrivateApprovalBlockKitCommentInputBlockV1
-  | PrivateApprovalBlockKitActionsBlockV1;
 
 export interface PrivateApprovalBlockKitCardV1 {
   readonly schema_version: 1;
   readonly kind: typeof PRIVATE_APPROVAL_BLOCK_KIT_CARD_KIND;
   readonly approval_id: string;
-  readonly assignment_version: number;
   /** Complete plain-text alternative for notifications and assistive tools. */
   readonly text: string;
-  readonly blocks: readonly [
-    PrivateApprovalBlockKitHeaderBlockV1,
-    PrivateApprovalBlockKitSectionBlockV1,
-    PrivateApprovalBlockKitDividerBlockV1,
-    PrivateApprovalBlockKitPolicyInputBlockV1,
-    PrivateApprovalBlockKitCommentInputBlockV1,
-    PrivateApprovalBlockKitActionsBlockV1,
-  ];
+  /** Slack owns the Block Kit schema; ECHO commits these emitted values. */
+  readonly blocks: readonly Readonly<Record<string, unknown>>[];
   readonly transport: {
     readonly mrkdwn: false;
     readonly unfurl_links: false;
@@ -226,12 +141,6 @@ function approvalId(value: unknown): asserts value is string {
   }
 }
 
-function assignmentVersion(value: unknown): asserts value is number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    invalid("assignment_version must be a positive safe integer");
-  }
-}
-
 function validateInput(
   value: PrivateApprovalBlockKitCardInputV1,
 ): PrivateApprovalBlockKitCardInputV1 {
@@ -240,7 +149,6 @@ function validateInput(
     [
       "schema_version",
       "approval_id",
-      "assignment_version",
       "meeting_title",
       "approval_context",
     ],
@@ -248,7 +156,6 @@ function validateInput(
   );
   if (input.schema_version !== 1) invalid("schema_version must equal 1");
   approvalId(input.approval_id);
-  assignmentVersion(input.assignment_version);
   boundedText(
     input.meeting_title,
     MAX_SLACK_HEADER_TEXT_CHARACTERS,
@@ -264,12 +171,9 @@ function validateInput(
   return input as unknown as PrivateApprovalBlockKitCardInputV1;
 }
 
-function cardKey(input: {
-  readonly approval_id: string;
-  readonly assignment_version: number;
-}): string {
+function cardKey(input: { readonly approval_id: string }): string {
   return createHash("sha256")
-    .update(`echo-private-approval-v1\u0000${input.approval_id}\u0000${input.assignment_version}`)
+    .update(`echo-private-approval-v1\u0000${input.approval_id}`)
     .digest("hex")
     .slice(0, 32);
 }
@@ -278,19 +182,18 @@ function cardKey(input: {
 export function privateApprovalBlockKitActionIdV1(
   input: Pick<
     PrivateApprovalBlockKitCardInputV1,
-    "approval_id" | "assignment_version"
+    "approval_id"
   >,
   action: PrivateApprovalBlockKitActionV1,
 ): string {
   approvalId(input.approval_id);
-  assignmentVersion(input.assignment_version);
   return `echo-private-approval-v1-${cardKey(input)}-${action}-v1`;
 }
 
 function blockId(
   input: Pick<
     PrivateApprovalBlockKitCardInputV1,
-    "approval_id" | "assignment_version"
+    "approval_id"
   >,
   name: "title" | "context" | "divider" | "policy" | "comment" | "actions",
 ): string {
@@ -301,16 +204,12 @@ function blockId(
   return value;
 }
 
-function actionValue(input: {
-  readonly approval_id: string;
-  readonly assignment_version: number;
-}): string {
+function actionValue(input: { readonly approval_id: string }): string {
   // Deliberately contains no ECHO principal, membership, policy, or authority
   // claim. The selected radio option is read from Slack's interaction state.
   return JSON.stringify({
     schema_version: 1,
     approval_id: input.approval_id,
-    assignment_version: input.assignment_version,
   });
 }
 
@@ -359,7 +258,6 @@ export function buildPrivateApprovalBlockKitCardV1(
     schema_version: 1,
     kind: PRIVATE_APPROVAL_BLOCK_KIT_CARD_KIND,
     approval_id: input.approval_id,
-    assignment_version: input.assignment_version,
     text: fallback,
     blocks: [
       {

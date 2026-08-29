@@ -34,7 +34,7 @@ const BOUND_AT = "2026-08-28T00:01:00.000Z";
 const EXPIRES_AT = "2026-08-28T00:15:00.000Z";
 const databases: Database.Database[] = [];
 
-function meeting(organizer: JsonValue | undefined): MeetingDocument {
+function meetingWithExtensions(extensions: unknown): MeetingDocument {
   return {
     schema_version: 1,
     id: "meeting-1",
@@ -54,11 +54,16 @@ function meeting(organizer: JsonValue | undefined): MeetingDocument {
     participants: [],
     content: [],
     artifacts: [],
-    extensions:
-      organizer === undefined
-        ? {}
-        : { granola: { calendar_event: { organizer } } },
+    extensions: extensions as MeetingDocument["extensions"],
   };
+}
+
+function meeting(organizer: JsonValue | undefined): MeetingDocument {
+  return meetingWithExtensions(
+    organizer === undefined
+      ? {}
+      : { granola: { calendar_event: { organizer } } },
+  );
 }
 
 function openAuthority(withMember: boolean): Database.Database {
@@ -299,6 +304,47 @@ describe("Granola meeting-owner private approval target v1", () => {
           meeting: meeting(undefined),
         }),
       ).toBeUndefined();
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("uses only canonical provider organizer evidence and never falls back to attendees", () => {
+    const authority = openAuthority(true);
+    try {
+      const control = openControlPlane(true);
+      for (const candidate of [
+        meetingWithExtensions({
+          granola: { calendar_event: { organizer: " OWNER@EXAMPLE.COM " } },
+        }),
+        meetingWithExtensions({
+          granola: { calendar_event: { organiser: { email: OWNER_EMAIL } } },
+        }),
+      ]) {
+        expect(
+          resolve({ authority_database: authority, control_plane_database: control, meeting: candidate }),
+        ).toMatchObject({ assignee: OWNER });
+      }
+
+      const inheritedOrganizer = Object.create({ organizer: OWNER_EMAIL });
+      for (const candidate of [
+        meetingWithExtensions({
+          granola: {
+            calendar_event: {
+              organizer: { name: "Meeting owner" },
+              organiser: OWNER_EMAIL,
+            },
+            attendees: [{ email: OWNER_EMAIL }],
+          },
+        }),
+        meetingWithExtensions({
+          granola: { calendar_event: inheritedOrganizer },
+        }),
+      ]) {
+        expect(
+          resolve({ authority_database: authority, control_plane_database: control, meeting: candidate }),
+        ).toBeUndefined();
+      }
     } finally {
       authority.close();
     }

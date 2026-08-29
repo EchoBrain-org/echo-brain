@@ -26,7 +26,6 @@ const SNAPSHOT_SHA256 = canonicalSha256(SNAPSHOT);
 const CONNECTION_CONTRACT_SHA256 = canonicalSha256({ connection: "contract" });
 const CONNECTION_STATE_SHA256 = canonicalSha256({ connection: "state" });
 const LINK_CONTRACT_SHA256 = canonicalSha256({ link: "contract" });
-const BINDING_SHA256 = canonicalSha256({ binding: "contract" });
 const MESSAGE_TS = "1724803200.000001";
 
 function candidate(): PrivateApprovalCandidateCommitmentV1 {
@@ -138,10 +137,6 @@ function fixture(): {
         },
       },
     } as unknown as GranolaMeetingOwnerPrivateApprovalTargetV1,
-    approval_binding: {
-      approval_binding_id: "bnd_private",
-      approval_binding_contract_sha256: BINDING_SHA256,
-    },
     dm_channel: {
       workspace_id: "TPRIVATE",
       enterprise_id: null,
@@ -172,19 +167,17 @@ function fixture(): {
     candidate_sha256: CANDIDATE_SHA256,
     frozen_card_sha256: FROZEN_CARD_SHA256,
     approved_snapshot_sha256: SNAPSHOT_SHA256,
-    canonical_record_policy_id: null,
-    assignment: staged.assignment.assignment,
+    assigned_owner: staged.assignment.assigned_owner,
+    assigned_owner_slack_identity_link:
+      staged.assignment.assigned_owner_slack_identity_link,
   };
   const card: PrivateApprovalSlackCardBindingV1 = {
     schema_version: 1,
     kind: "echo-private-approval-slack-card-binding-v1",
     approval_id: APPROVAL_ID,
-    assignment_version: 1,
     connection_id: "con_private",
     connection_contract_sha256: CONNECTION_CONTRACT_SHA256,
     connection_state_sha256: CONNECTION_STATE_SHA256,
-    approval_surface_binding_id: "bnd_private",
-    approval_surface_binding_contract_sha256: BINDING_SHA256,
     slack_workspace_id: "TPRIVATE",
     slack_enterprise_id: null,
     slack_subject_id: "UOWNER",
@@ -239,8 +232,7 @@ describe("SQLite stable private approval Authority fence v1", () => {
         approval_id: APPROVAL_ID,
         organization_id: ORGANIZATION_ID,
         authorized_assignee: { principal_id: "prn_owner", membership_id: "mem_owner" },
-        current_slack_identity_link: pending.assignment.current_slack_identity_link,
-        assignment_capability_sha256: pending.assignment.assignment_capability_sha256,
+        current_slack_identity_link: pending.assigned_owner_slack_identity_link,
       });
       const second = await fence.withStablePrivateApprovalFence((stable) =>
         stable.reprovePrivateApprovalAuthorization({

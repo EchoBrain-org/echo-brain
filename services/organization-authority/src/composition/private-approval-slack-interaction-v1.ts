@@ -106,7 +106,6 @@ export interface PrivateApprovalSlackResolutionIntentV1 {
   /** Exact verified terminal button identifier for the durable receipt. */
   readonly action_id: string;
   readonly approval_id: string;
-  readonly assignment_version: number;
   /** Null for reject even though its complete UI state includes a radio value. */
   readonly selected_policy_id: PersonApprovalPolicyId | null;
   /** A canonical bounded string, or null for an empty optional input. */
@@ -178,11 +177,6 @@ function text(
     return invalid();
   }
   return value;
-}
-
-function positive(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) return invalid();
-  return value as number;
 }
 
 function parseUnixSeconds(value: unknown): number {
@@ -291,6 +285,8 @@ function decodePayloadForm(body: Uint8Array): unknown {
 }
 
 function canonicalComment(value: unknown): string | null {
+  // Slack represents an untouched optional plain-text input as null.
+  if (value === null) return null;
   if (typeof value !== "string") return invalid();
   if (
     value.length > PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS ||
@@ -304,7 +300,6 @@ function canonicalComment(value: unknown): string | null {
 
 function actionValue(value: unknown): {
   readonly approval_id: string;
-  readonly assignment_version: number;
 } {
   if (typeof value !== "string" || value.length > 1_024) return invalid();
   let parsed: unknown;
@@ -316,12 +311,10 @@ function actionValue(value: unknown): {
   const record = exactRecord(parsed, [
     "schema_version",
     "approval_id",
-    "assignment_version",
   ]);
   if (record.schema_version !== 1) return invalid();
   return Object.freeze({
     approval_id: text(record.approval_id, IDENTIFIER),
-    assignment_version: positive(record.assignment_version),
   });
 }
 
@@ -340,7 +333,6 @@ function selectedPolicy(value: unknown): PersonApprovalPolicyId {
 function completeState(input: {
   readonly state: unknown;
   readonly approval_id: string;
-  readonly assignment_version: number;
 }): { readonly selected_policy_id: PersonApprovalPolicyId; readonly comment: string | null } {
   const state = exactRecord(input.state, ["values"]);
   const values = plainRecord(state.values);
@@ -387,7 +379,7 @@ function lookupHints(payload: UnknownRecord): PrivateApprovalSlackLookupHintsV1 
   const team = exactRecord(payload.team, ["id"], ["id", "domain"]);
   const enterprise = payload.enterprise;
   const enterpriseId =
-    enterprise === null
+    enterprise === undefined || enterprise === null
       ? null
       : text(exactRecord(enterprise, ["id"], ["id", "name"]).id, SLACK_ENTERPRISE_ID);
   const channel = exactRecord(payload.channel, ["id"], ["id", "name"]);
@@ -522,8 +514,6 @@ export function parseVerifiedPrivateApprovalSlackInteractionV1(
       "container",
       "trigger_id",
       "team",
-      "enterprise",
-      "is_enterprise_install",
       "channel",
       "message",
       "state",
@@ -546,7 +536,12 @@ export function parseVerifiedPrivateApprovalSlackInteractionV1(
       "actions",
     ],
   );
-  if (payload.type !== "block_actions" || typeof payload.is_enterprise_install !== "boolean") {
+  if (
+    payload.type !== "block_actions" ||
+    (payload.is_enterprise_install !== undefined &&
+      typeof payload.is_enterprise_install !== "boolean") ||
+    payload.is_enterprise_install === true
+  ) {
     return invalid();
   }
   const lookup = lookupHints(payload);
@@ -590,7 +585,6 @@ export function parseVerifiedPrivateApprovalSlackInteractionV1(
     action: resolutionAction,
     action_id: actionId,
     approval_id: card.approval_id,
-    assignment_version: card.assignment_version,
     selected_policy_id:
       resolutionAction === "approve" ? state.selected_policy_id : null,
     comment: state.comment,

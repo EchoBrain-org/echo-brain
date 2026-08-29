@@ -144,13 +144,9 @@ export type {
 } from "./human-act-record-input-v1.js";
 export {
   PRIVATE_SLACK_BLOCK_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
-  PRIVATE_SLACK_BLOCK_APPROVAL_EVENT_COMMITMENT_V1_KIND,
-  PRIVATE_SLACK_BLOCK_APPROVAL_IDEMPOTENCY_V1_KIND,
   PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
   SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
   buildPrivateSlackBlockApprovalRecordInputV1,
-  privateSlackBlockApprovalEventV1Sha256,
-  privateSlackBlockApprovalIdempotencyV1Sha256,
   privateSlackBlockApprovalResolutionRefV1Sha256,
   validatePrivateSlackBlockApprovalEventV1,
   validatePrivateSlackBlockApprovalRecordInputV1,
@@ -160,7 +156,6 @@ export type {
   PrivateSlackBlockApprovalActionV1,
   PrivateSlackBlockApprovalAssigneeV1,
   PrivateSlackBlockApprovalEventV1,
-  PrivateSlackBlockApprovalIdempotencyV1,
   PrivateSlackBlockApprovalRecordInputV1,
   PrivateSlackBlockApprovalResolutionRefV1,
   PrivateSlackBlockApprovalSlackIdentityLinkV1,

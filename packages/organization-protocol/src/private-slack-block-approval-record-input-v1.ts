@@ -29,10 +29,6 @@ import { organizationProtocolValidationFailure } from "./validation-error.js";
 /** A provider action proven from Slack's signed `block_actions` request. */
 export const PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND =
   "echo-private-slack-block-approval-resolution-ref-v1" as const;
-export const PRIVATE_SLACK_BLOCK_APPROVAL_EVENT_COMMITMENT_V1_KIND =
-  "echo-private-slack-block-approval-event-commitment-v1" as const;
-export const PRIVATE_SLACK_BLOCK_APPROVAL_IDEMPOTENCY_V1_KIND =
-  "echo-private-slack-block-approval-idempotency-v1" as const;
 export const SIGNED_SLACK_BLOCK_ACTION_V1_KIND =
   "echo-signed-slack-block-action-v1" as const;
 export const PRIVATE_SLACK_BLOCK_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS = 1000;
@@ -40,7 +36,7 @@ export const PRIVATE_SLACK_BLOCK_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS = 1000;
 const REF_KEYS = [
   "schema_version", "kind", "authority_id", "organization_id", "state_lineage_id",
   "command_id", "approval_id", "candidate_sha256", "frozen_card_sha256",
-  "approved_snapshot_sha256", "assignment_version", "assignment_capability_sha256",
+  "approved_snapshot_sha256",
   "final_approver", "current_slack_identity_link", "action", "selected_policy_id",
   "policy_contract_sha256", "policy_consequence_sha256", "comment", "audit_event_id",
   "audit_sequence", "audit_entry_sha256", "provider_action_kind",
@@ -56,13 +52,7 @@ const APPROVED_EVENT_KEYS = [
   "policy_contract_sha256", "policy_consequence_text", "policy_consequence_sha256",
 ] as const;
 const REJECTED_EVENT_KEYS = ["kind"] as const;
-const IDEMPOTENCY_KEYS = [
-  "schema_version", "kind", "authority_id", "organization_id", "state_lineage_id",
-  "command_id", "approval_id", "assignment_version", "action",
-  "private_slack_block_approval_resolution_ref_sha256",
-  "private_slack_block_approval_event_sha256",
-] as const;
-const INPUT_KEYS = ["private_slack_block_approval_resolution_ref", "event", "idempotency"] as const;
+const INPUT_KEYS = ["private_slack_block_approval_resolution_ref", "event"] as const;
 const BUILD_INPUT_KEYS = ["private_slack_block_approval_resolution_ref", "event"] as const;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const EXTERNAL_IDENTITY_LINK_ID = /^clm_[A-Za-z0-9][A-Za-z0-9._:-]{0,251}$/;
@@ -98,8 +88,6 @@ export interface PrivateSlackBlockApprovalResolutionRefV1 {
   readonly candidate_sha256: Sha256Digest;
   readonly frozen_card_sha256: Sha256Digest;
   readonly approved_snapshot_sha256: Sha256Digest;
-  readonly assignment_version: number;
-  readonly assignment_capability_sha256: Sha256Digest;
   readonly final_approver: PrivateSlackBlockApprovalAssigneeV1;
   readonly current_slack_identity_link: PrivateSlackBlockApprovalSlackIdentityLinkV1;
   readonly action: PrivateSlackBlockApprovalActionV1;
@@ -136,37 +124,20 @@ export type PrivateSlackBlockApprovalEventV1 =
   | PrivateSlackBlockApprovedEventV1
   | PrivateSlackBlockRejectedEventV1;
 
-export interface PrivateSlackBlockApprovalEventCommitmentV1 {
-  readonly schema_version: 1;
-  readonly kind: typeof PRIVATE_SLACK_BLOCK_APPROVAL_EVENT_COMMITMENT_V1_KIND;
-  readonly event: PrivateSlackBlockApprovalEventV1;
-}
-
-export interface PrivateSlackBlockApprovalIdempotencyV1 {
-  readonly schema_version: 1;
-  readonly kind: typeof PRIVATE_SLACK_BLOCK_APPROVAL_IDEMPOTENCY_V1_KIND;
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
-  readonly command_id: string;
-  readonly approval_id: string;
-  readonly assignment_version: number;
-  readonly action: PrivateSlackBlockApprovalActionV1;
-  readonly private_slack_block_approval_resolution_ref_sha256: Sha256Digest;
-  readonly private_slack_block_approval_event_sha256: Sha256Digest;
-}
-
 export interface PrivateSlackBlockApprovalRecordInputV1 {
   readonly private_slack_block_approval_resolution_ref: PrivateSlackBlockApprovalResolutionRefV1;
   readonly event: PrivateSlackBlockApprovalEventV1;
-  readonly idempotency: PrivateSlackBlockApprovalIdempotencyV1;
 }
 
 /** The validated record input is the versioned private human-action witness. */
 export interface ValidatedPrivateSlackBlockApprovalRecordInputV1
   extends PrivateSlackBlockApprovalRecordInputV1 {
-  readonly private_slack_block_approval_resolution_ref_sha256: Sha256Digest;
-  readonly private_slack_block_approval_event_sha256: Sha256Digest;
+  /**
+   * The resolution ref already commits the approval, action, selected policy,
+   * frozen snapshot digest, assignment, and signed provider action. The event
+   * is checked against that ref below, so this is the sole durable semantic
+   * idempotency commitment rather than a second transient wire document.
+   */
   readonly semantic_idempotency_key: Sha256Digest;
 }
 
@@ -260,8 +231,7 @@ export function validatePrivateSlackBlockApprovalResolutionRefV1(value: unknown)
   const ref = exactObject(value, REF_KEYS, "Private Slack block approval resolution ref v1");
   if (ref.schema_version !== 1 || ref.kind !== PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND) fail("Private Slack block approval resolution ref v1 has an unsupported envelope");
   for (const key of ["authority_id", "organization_id", "state_lineage_id", "command_id", "approval_id", "audit_event_id"] as const) identifier(ref[key], `Private Slack block approval resolution ref v1 ${key}`);
-  for (const key of ["candidate_sha256", "frozen_card_sha256", "approved_snapshot_sha256", "assignment_capability_sha256", "audit_entry_sha256", "provider_action_sha256", "authorization_proof_sha256"] as const) assertDigest(ref[key], `Private Slack block approval resolution ref v1 ${key}`);
-  assertPositiveSafeInteger(ref.assignment_version, "Private Slack block approval resolution ref v1 assignment_version");
+  for (const key of ["candidate_sha256", "frozen_card_sha256", "approved_snapshot_sha256", "audit_entry_sha256", "provider_action_sha256", "authorization_proof_sha256"] as const) assertDigest(ref[key], `Private Slack block approval resolution ref v1 ${key}`);
   assertPositiveSafeInteger(ref.audit_sequence, "Private Slack block approval resolution ref v1 audit_sequence");
   action(ref.action, "Private Slack block approval resolution ref v1 action");
   if (ref.provider_action_kind !== SIGNED_SLACK_BLOCK_ACTION_V1_KIND || ref.provider_action_schema_version !== 1) fail("Private Slack block approval resolution ref v1 must name a signed Slack block action");
@@ -277,7 +247,6 @@ export function validatePrivateSlackBlockApprovalResolutionRefV1(value: unknown)
     authority_id: ref.authority_id as string, organization_id: ref.organization_id as string, state_lineage_id: ref.state_lineage_id as string,
     command_id: ref.command_id as string, approval_id: ref.approval_id as string,
     candidate_sha256: ref.candidate_sha256 as Sha256Digest, frozen_card_sha256: ref.frozen_card_sha256 as Sha256Digest, approved_snapshot_sha256: ref.approved_snapshot_sha256 as Sha256Digest,
-    assignment_version: ref.assignment_version, assignment_capability_sha256: ref.assignment_capability_sha256 as Sha256Digest,
     final_approver: finalApprover, current_slack_identity_link: link,
     action: ref.action as PrivateSlackBlockApprovalActionV1, selected_policy_id: ref.selected_policy_id as PersonContentPolicyIdV2 | null,
     policy_contract_sha256: ref.policy_contract_sha256 as Sha256Digest | null, policy_consequence_sha256: ref.policy_consequence_sha256 as Sha256Digest | null,
@@ -310,55 +279,31 @@ export function validatePrivateSlackBlockApprovalEventV1(value: unknown): Privat
   return Object.freeze({ kind: "approved", approved_snapshot: snapshot, approved_snapshot_sha256: event.approved_snapshot_sha256 as Sha256Digest, policy_id: event.policy_id as PersonContentPolicyIdV2, policy_contract_sha256: event.policy_contract_sha256 as Sha256Digest, policy_consequence_text: expectedText, policy_consequence_sha256: event.policy_consequence_sha256 as Sha256Digest });
 }
 
-export function privateSlackBlockApprovalEventV1Sha256(value: PrivateSlackBlockApprovalEventV1): Sha256Digest {
-  return canonicalSha256({ schema_version: 1, kind: PRIVATE_SLACK_BLOCK_APPROVAL_EVENT_COMMITMENT_V1_KIND, event: validatePrivateSlackBlockApprovalEventV1(value) });
-}
-
-function validateIdempotency(value: unknown): PrivateSlackBlockApprovalIdempotencyV1 {
-  const item = exactObject(value, IDEMPOTENCY_KEYS, "Private Slack block approval idempotency v1");
-  if (item.schema_version !== 1 || item.kind !== PRIVATE_SLACK_BLOCK_APPROVAL_IDEMPOTENCY_V1_KIND) fail("Private Slack block approval idempotency v1 has an unsupported envelope");
-  for (const key of ["authority_id", "organization_id", "state_lineage_id", "command_id", "approval_id"] as const) identifier(item[key], `Private Slack block approval idempotency v1 ${key}`);
-  assertPositiveSafeInteger(item.assignment_version, "Private Slack block approval idempotency v1 assignment_version");
-  action(item.action, "Private Slack block approval idempotency v1 action");
-  assertDigest(item.private_slack_block_approval_resolution_ref_sha256, "Private Slack block approval idempotency v1 resolution digest");
-  assertDigest(item.private_slack_block_approval_event_sha256, "Private Slack block approval idempotency v1 event digest");
-  return item as unknown as PrivateSlackBlockApprovalIdempotencyV1;
-}
-
-export function privateSlackBlockApprovalIdempotencyV1Sha256(value: PrivateSlackBlockApprovalIdempotencyV1): Sha256Digest {
-  return canonicalSha256(validateIdempotency(value));
-}
-
 export function validatePrivateSlackBlockApprovalRecordInputV1(value: unknown): ValidatedPrivateSlackBlockApprovalRecordInputV1 {
   const input = exactObject(value, INPUT_KEYS, "Private Slack block approval record input v1");
   const ref = validatePrivateSlackBlockApprovalResolutionRefV1(input.private_slack_block_approval_resolution_ref);
   const event = validatePrivateSlackBlockApprovalEventV1(input.event);
-  const idempotency = validateIdempotency(input.idempotency);
-  const refSha256 = privateSlackBlockApprovalResolutionRefV1Sha256(ref);
-  const eventSha256 = privateSlackBlockApprovalEventV1Sha256(event);
-  if (idempotency.private_slack_block_approval_resolution_ref_sha256 !== refSha256 || idempotency.private_slack_block_approval_event_sha256 !== eventSha256) fail("Private Slack block approval idempotency digests do not match its bodies");
-  for (const key of ["authority_id", "organization_id", "state_lineage_id", "command_id", "approval_id", "assignment_version", "action"] as const) if (idempotency[key] !== ref[key]) fail(`Private Slack block approval idempotency ${key} does not match resolution`);
   if (event.kind === "approved") {
     if (ref.action !== "approve" || ref.selected_policy_id !== event.policy_id || ref.policy_contract_sha256 !== event.policy_contract_sha256 || ref.policy_consequence_sha256 !== event.policy_consequence_sha256 || ref.approved_snapshot_sha256 !== event.approved_snapshot_sha256 || event.approved_snapshot.approval_id !== ref.approval_id) fail("Private Slack block approved event does not match resolution");
   } else if (ref.action !== "reject") {
     fail("Private Slack block rejected event does not match resolution action");
   }
-  return Object.freeze({ private_slack_block_approval_resolution_ref: ref, event, idempotency, private_slack_block_approval_resolution_ref_sha256: refSha256, private_slack_block_approval_event_sha256: eventSha256, semantic_idempotency_key: privateSlackBlockApprovalIdempotencyV1Sha256(idempotency) });
+  return Object.freeze({
+    private_slack_block_approval_resolution_ref: ref,
+    event,
+    semantic_idempotency_key: privateSlackBlockApprovalResolutionRefV1Sha256(ref),
+  });
 }
 
 export function buildPrivateSlackBlockApprovalRecordInputV1(value: BuildPrivateSlackBlockApprovalRecordInputV1): ValidatedPrivateSlackBlockApprovalRecordInputV1 {
-  const input = exactObject(value, BUILD_INPUT_KEYS, "Private Slack block approval record input v1 build input");
-  const ref = validatePrivateSlackBlockApprovalResolutionRefV1(input.private_slack_block_approval_resolution_ref);
-  const event = validatePrivateSlackBlockApprovalEventV1(input.event);
+  const input = exactObject(
+    value,
+    BUILD_INPUT_KEYS,
+    "Private Slack block approval record input v1 build input",
+  );
   return validatePrivateSlackBlockApprovalRecordInputV1({
-    private_slack_block_approval_resolution_ref: ref,
-    event,
-    idempotency: {
-      schema_version: 1, kind: PRIVATE_SLACK_BLOCK_APPROVAL_IDEMPOTENCY_V1_KIND,
-      authority_id: ref.authority_id, organization_id: ref.organization_id, state_lineage_id: ref.state_lineage_id,
-      command_id: ref.command_id, approval_id: ref.approval_id, assignment_version: ref.assignment_version, action: ref.action,
-      private_slack_block_approval_resolution_ref_sha256: privateSlackBlockApprovalResolutionRefV1Sha256(ref),
-      private_slack_block_approval_event_sha256: privateSlackBlockApprovalEventV1Sha256(event),
-    },
+    private_slack_block_approval_resolution_ref:
+      input.private_slack_block_approval_resolution_ref,
+    event: input.event,
   });
 }

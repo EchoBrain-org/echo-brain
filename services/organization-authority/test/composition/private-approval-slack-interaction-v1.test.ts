@@ -19,7 +19,6 @@ const SECRET = "not-a-real-signing-secret";
 const NOW = 1_800_000_000;
 const CARD = Object.freeze({
   approval_id: "apr_00000000-0000-4000-8000-000000000001",
-  assignment_version: 3,
 });
 const POLICY_ACTION_ID = privateApprovalBlockKitActionIdV1(
   CARD,
@@ -49,7 +48,7 @@ function payload(input?: {
   readonly action_type?: string;
   readonly action_value?: string;
   readonly selected_policy_id?: string;
-  readonly comment?: string;
+  readonly comment?: string | null;
   readonly state?: unknown;
 }): Record<string, unknown> {
   const actionId = input?.action_id ?? APPROVE_ACTION_ID;
@@ -70,7 +69,10 @@ function payload(input?: {
       "comment-block": {
         [COMMENT_ACTION_ID]: {
           type: "plain_text_input",
-          value: input?.comment ?? "A clear decision rationale.",
+          value:
+            input !== undefined && Object.hasOwn(input, "comment")
+              ? input.comment
+              : "A clear decision rationale.",
         },
       },
     };
@@ -161,7 +163,6 @@ describe("private approval Slack interaction v1", () => {
       action: "approve",
       action_id: APPROVE_ACTION_ID,
       approval_id: CARD.approval_id,
-      assignment_version: CARD.assignment_version,
       selected_policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
       comment: "Capture this as the owner decision.",
       provider_action_key_sha256: sha256(
@@ -228,6 +229,20 @@ describe("private approval Slack interaction v1", () => {
       },
     });
     expect(() => parse(incomplete)).toThrow(PrivateApprovalSlackInteractionError);
+  });
+
+  it("accepts Slack's null untouched comment and omitted workspace-only hints", () => {
+    const value = payload({ comment: null });
+    delete value.enterprise;
+    delete value.is_enterprise_install;
+
+    expect(parse(value)).toMatchObject({
+      disposition: "resolution",
+      action: "approve",
+      selected_policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+      comment: null,
+      lookup: { enterprise_id: null },
+    });
   });
 
   it("accepts signed input events as presentation-only no-ops", () => {
@@ -319,10 +334,7 @@ describe("private approval Slack interaction v1", () => {
     expect(() =>
       parse(
         payload({
-          action_id: privateApprovalBlockKitActionIdV1(
-            CARD,
-            PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.delegate,
-          ),
+          action_id: "echo-private-approval-v1-0123456789abcdef0123456789abcdef-delegate-v1",
         }),
       ),
     ).toThrow(PrivateApprovalSlackInteractionError);
@@ -336,6 +348,9 @@ describe("private approval Slack interaction v1", () => {
     expect(() => parse(payload({ comment: "bad\rcomment" }))).toThrow(
       PrivateApprovalSlackInteractionError,
     );
+    const enterpriseInstall = payload();
+    enterpriseInstall.is_enterprise_install = true;
+    expect(() => parse(enterpriseInstall)).toThrow(PrivateApprovalSlackInteractionError);
     const expanded = payload();
     (expanded as Record<string, unknown>).unexpected = true;
     expect(() => parse(expanded)).toThrow(PrivateApprovalSlackInteractionError);

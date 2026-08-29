@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
+import { applyAuthorityBaselineV2 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1 } from "../src/composition/clean-granola-source-admission.js";
 import type {
   DecisionSet,
@@ -88,7 +88,7 @@ const decisions: DecisionSet = {
 
 function database(): Database.Database {
   const value = new Database(":memory:");
-  applyAuthorityBaselineV1(value);
+  applyAuthorityBaselineV2(value);
   value
     .prepare(
       `INSERT INTO authority_metadata
@@ -147,6 +147,91 @@ afterEach(() => {
 });
 
 describe("SQLite clean live-only source state", () => {
+  it.each(["approved", "rejected"] as const)(
+    "keeps a completed %s private approval terminal when a later revision arrives",
+    async (outcome) => {
+      const value = database();
+      const state = new SqliteCleanLiveOnlySourceStateV1(
+        value,
+        () => ADVANCED_AT,
+      );
+      const current = await state.readAdmission();
+      const first = await state.stageCandidate({
+        admission: current,
+        meeting,
+        decisions,
+        review_policy: REVIEW_POLICY,
+      });
+      assertActionable(first);
+
+      // This source-state boundary does not need a full private-assignment
+      // fixture; constrain the FK exception to the terminal receipt insert.
+      value.pragma("foreign_keys = OFF");
+      try {
+        value
+          .prepare(
+            `INSERT INTO authority_private_approval_terminal_receipts_v2 (
+               approval_id, candidate_id, outcome, resolution_json,
+               resolution_sha256, v4_receipt_json, v4_receipt_sha256,
+               card_render_state, card_rendered_at, recorded_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, 'unrendered', NULL, ?)`,
+          )
+          .run(
+            first.approval_id,
+            first.candidate_id,
+            outcome,
+            JSON.stringify({ approval_id: first.approval_id, outcome }),
+            `sha256:${outcome === "approved" ? "a".repeat(64) : "b".repeat(64)}`,
+            outcome === "approved" ? "{}" : null,
+            outcome === "approved" ? `sha256:${"c".repeat(64)}` : null,
+            ADVANCED_AT,
+          );
+      } finally {
+        value.pragma("foreign_keys = ON");
+      }
+
+      const revised: MeetingDocument = {
+        ...meeting,
+        provenance: {
+          ...meeting.provenance,
+          canonical_revision: `sha256:note-terminal-${outcome}`,
+        },
+        content: [
+          {
+            id: "block-terminal",
+            kind: "note",
+            text: `A ${outcome} terminal must remain final.`,
+          },
+        ],
+      };
+      const successor = await state.stageCandidate({
+        admission: current,
+        meeting: revised,
+        decisions: {
+          ...decisions,
+          meeting_revision: revised.provenance.canonical_revision,
+          signals: [
+            {
+              ...decisions.signals[0]!,
+              text: revised.content[0]!.text,
+              evidence: [{ meeting_id: revised.id, block_id: "block-terminal" }],
+            },
+          ],
+        },
+        review_policy: REVIEW_POLICY,
+      });
+      assertActionable(successor);
+
+      expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
+        state: "queued",
+        superseded_by_candidate_id: null,
+      });
+      expect(state.readCandidateByApprovalId(successor.approval_id)).toMatchObject({
+        state: "queued",
+      });
+    },
+  );
+
   it("freezes exactly one durable post intent", async () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
@@ -549,7 +634,6 @@ describe("SQLite clean live-only source state", () => {
     expect(state.readCandidateByApprovalId(candidate.approval_id)).toEqual(
       staged,
     );
-    expect(state.listStagedApprovalIds()).toEqual([candidate.approval_id]);
     expect(
       state.readFrozenCandidateForApproval(candidate.approval_id),
     ).toMatchObject({
@@ -561,14 +645,6 @@ describe("SQLite clean live-only source state", () => {
         candidate_id: candidate.candidate_id,
       },
     });
-    expect(
-      state.recordV4Receipt({
-        approval_id: candidate.approval_id,
-        control_approval_sha256: `sha256:${"e".repeat(64)}`,
-        receipt: { kind: "v4-receipt", position: 1 },
-      }),
-    ).toMatchObject({ approval_id: candidate.approval_id });
-    expect(state.listStagedApprovalIds()).toEqual([]);
   });
 
   it("rejects display text that differs from the canonical D2 policy commitment", async () => {
@@ -781,7 +857,6 @@ describe("SQLite clean live-only source state", () => {
       review_lineage_id: first.review_lineage_id,
     });
     expect(state.approvalIsCurrent(staged.approval_id)).toBe(true);
-    expect(state.listStagedApprovalIds()).toEqual([staged.approval_id]);
   });
 
   it("coalesces a meeting-time-only revision into the existing review round", async () => {
@@ -1409,154 +1484,6 @@ describe("SQLite clean live-only source state", () => {
           queued.candidate_id,
         ),
     ).toThrow("only permits queued-posting-posted-staged-superseded");
-  });
-
-  it("preserves a resolved approval while opening independent work for a semantic revision", async () => {
-    const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
-      value,
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
-    state.prepareApprovalPost({
-      candidate_id: first.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
-    });
-    state.recordPostedApprovalCard({
-      candidate_id: first.candidate_id,
-      post_started_at: ADVANCED_AT,
-      provider_message_ts: "1724292304.005000",
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
-    });
-    const staged = state.markControlPlaneStaged({
-      candidate_id: first.candidate_id,
-      control_approval_sha256: `sha256:${"e".repeat(64)}`,
-    });
-    state.recordV4Receipt({
-      approval_id: first.approval_id,
-      control_approval_sha256: staged.control_approval_sha256!,
-      receipt: { kind: "v4-receipt", position: 1 },
-    });
-    const revisedMeeting: MeetingDocument = {
-      ...meeting,
-      provenance: {
-        ...meeting.provenance,
-        canonical_revision: "sha256:note-after-receipt",
-      },
-    };
-    const revised = await state.stageCandidate({
-      admission: current,
-      meeting: revisedMeeting,
-      decisions: {
-        ...decisions,
-        meeting_revision: revisedMeeting.provenance.canonical_revision,
-        signals: [
-          {
-            id: "decision-after-receipt",
-            kind: "decision",
-            status: "decided",
-            text: "A new decision after the first approval.",
-            subject: null,
-            confidence: 1,
-            evidence: [{ meeting_id: "meeting-1", block_id: "block-1" }],
-          },
-        ],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(revised);
-    expect(revised).toMatchObject({ disposition: "actionable" });
-    expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
-      state: "staged",
-      superseded_by_candidate_id: null,
-    });
-    expect(state.approvalIsCurrent(first.approval_id)).toBe(false);
-  });
-
-  it("records and recovers D2 work that commits across supersession", async () => {
-    const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
-      value,
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
-    state.prepareApprovalPost({
-      candidate_id: first.candidate_id,
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
-    });
-    state.recordPostedApprovalCard({
-      candidate_id: first.candidate_id,
-      post_started_at: ADVANCED_AT,
-      provider_message_ts: "1724292304.005000",
-      frozen_card_sha256: `sha256:${"c".repeat(64)}`,
-      approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
-    });
-    const controlApprovalSha256 = `sha256:${"e".repeat(64)}`;
-    const revisedMeeting: MeetingDocument = {
-      ...meeting,
-      provenance: {
-        ...meeting.provenance,
-        canonical_revision: "sha256:note-before-receipt",
-      },
-    };
-    await state.stageCandidate({
-      admission: current,
-      meeting: revisedMeeting,
-      decisions: {
-        ...decisions,
-        meeting_revision: revisedMeeting.provenance.canonical_revision,
-        signals: [
-          {
-            ...decisions.signals[0]!,
-            id: "decision-before-receipt",
-            text: "A newer decision before the first V4 receipt.",
-          },
-        ],
-      },
-      review_policy: REVIEW_POLICY,
-    });
-    const staged = state.markControlPlaneStaged({
-      candidate_id: first.candidate_id,
-      control_approval_sha256: controlApprovalSha256,
-    });
-
-    expect(staged).toMatchObject({
-      state: "superseded",
-      control_approval_sha256: controlApprovalSha256,
-    });
-    expect(state.listStagedApprovalIds()).toEqual([]);
-    expect(state.listV4RecoveryApprovalIds()).toEqual([first.approval_id]);
-    expect(
-      state.readFrozenCandidateForApproval(first.approval_id),
-    ).toMatchObject({
-      state: "superseded",
-      candidate_id: first.candidate_id,
-    });
-    expect(
-      state.recordV4Receipt({
-        approval_id: first.approval_id,
-        control_approval_sha256: staged.control_approval_sha256!,
-        receipt: { kind: "v4-receipt", position: 1 },
-      }),
-    ).toMatchObject({ approval_id: first.approval_id });
-    expect(state.listV4RecoveryApprovalIds()).toEqual([]);
   });
 
   it("keeps separate source meetings on independent review lineages", async () => {

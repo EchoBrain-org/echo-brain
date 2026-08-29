@@ -59,7 +59,6 @@ export interface PrivateSlackBlockApprovalTerminalV1 {
     readonly candidate_sha256: Sha256Digest;
     readonly frozen_card_sha256: Sha256Digest;
     readonly approved_snapshot_sha256: Sha256Digest;
-    readonly assignment_version: number;
     readonly final_approver: { readonly principal_id: string; readonly membership_id: string };
     readonly current_slack_identity_link: {
       readonly provider: "slack";
@@ -67,7 +66,6 @@ export interface PrivateSlackBlockApprovalTerminalV1 {
       readonly external_identity_link_contract_sha256: Sha256Digest;
       readonly provider_subject_id: string;
     };
-    readonly assignment_capability_sha256: Sha256Digest;
     readonly authorization_proof_sha256: Sha256Digest;
     readonly action: "approve" | "reject";
     readonly comment: string | null;
@@ -79,23 +77,6 @@ export interface PrivateSlackBlockApprovalTerminalV1 {
       readonly policy_consequence_sha256: Sha256Digest;
       readonly restricted_reader: { readonly principal_id: string; readonly membership_id: string } | null;
     } | null;
-  };
-  readonly authorization_allow: {
-    readonly approval_id: string;
-    readonly organization_id: string;
-    readonly candidate_sha256: Sha256Digest;
-    readonly frozen_card_sha256: Sha256Digest;
-    readonly approved_snapshot_sha256: Sha256Digest;
-    readonly assignment_version: number;
-    readonly authorized_assignee: { readonly principal_id: string; readonly membership_id: string };
-    readonly current_slack_identity_link: {
-      readonly provider: "slack";
-      readonly external_identity_link_id: string;
-      readonly external_identity_link_contract_sha256: Sha256Digest;
-      readonly provider_subject_id: string;
-    };
-    readonly assignment_capability_sha256: Sha256Digest;
-    readonly authorization_proof_sha256: Sha256Digest;
   };
   readonly audit: {
     readonly audit_event_id: string;
@@ -160,27 +141,6 @@ function resolutionAndCandidateMatch(
   ) {
     throw new Error("private terminal does not match the frozen Authority candidate");
   }
-  const allow = terminal.authorization_allow;
-  if (
-    allow.approval_id !== resolution.approval_id ||
-    allow.organization_id !== resolution.organization_id ||
-    allow.candidate_sha256 !== resolution.candidate_sha256 ||
-    allow.frozen_card_sha256 !== resolution.frozen_card_sha256 ||
-    allow.approved_snapshot_sha256 !== resolution.approved_snapshot_sha256 ||
-    allow.assignment_version !== resolution.assignment_version ||
-    allow.assignment_capability_sha256 !== resolution.assignment_capability_sha256 ||
-    allow.authorization_proof_sha256 !== resolution.authorization_proof_sha256 ||
-    allow.authorized_assignee.principal_id !== resolution.final_approver.principal_id ||
-    allow.authorized_assignee.membership_id !== resolution.final_approver.membership_id ||
-    allow.current_slack_identity_link.external_identity_link_id !==
-      resolution.current_slack_identity_link.external_identity_link_id ||
-    allow.current_slack_identity_link.external_identity_link_contract_sha256 !==
-      resolution.current_slack_identity_link.external_identity_link_contract_sha256 ||
-    allow.current_slack_identity_link.provider_subject_id !==
-      resolution.current_slack_identity_link.provider_subject_id
-  ) {
-    throw new Error("private terminal authorization does not bind its resolution");
-  }
 }
 
 /**
@@ -222,8 +182,6 @@ export class PrivateSlackBlockV4RecordWriterV1 {
         candidate_sha256: resolution.candidate_sha256,
         frozen_card_sha256: resolution.frozen_card_sha256,
         approved_snapshot_sha256: resolution.approved_snapshot_sha256,
-        assignment_version: resolution.assignment_version,
-        assignment_capability_sha256: resolution.assignment_capability_sha256,
         final_approver: resolution.final_approver,
         current_slack_identity_link: resolution.current_slack_identity_link,
         action: "approve",
@@ -256,7 +214,6 @@ export class PrivateSlackBlockV4RecordWriterV1 {
         state_lineage_id: candidate.state_lineage_id,
         approval_id: resolution.approval_id,
         action: "approve",
-        assignment_version: resolution.assignment_version,
         final_approver: resolution.final_approver,
         selected_policy_id: policy.policy_id,
         policy_contract_sha256: policy.policy_contract_sha256,
@@ -296,7 +253,6 @@ export class PrivateSlackBlockV4RecordWriterV1 {
           private_slack_block_approval_resolution_ref:
             human.private_slack_block_approval_resolution_ref,
           event: human.event,
-          idempotency: human.idempotency,
         },
         source_provenance: source,
         processor_provenance: processor,

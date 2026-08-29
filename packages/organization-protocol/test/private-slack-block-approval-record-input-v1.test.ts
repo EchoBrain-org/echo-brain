@@ -10,6 +10,7 @@ import {
   restrictedReviewerPersonPolicyContractSha256,
   SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
   buildPrivateSlackBlockApprovalRecordInputV1,
+  privateSlackBlockApprovalResolutionRefV1Sha256,
   validatePrivateSlackBlockApprovalRecordInputV1,
   validatePrivateSlackBlockApprovalResolutionRefV1,
 } from "../src/index.js";
@@ -56,7 +57,6 @@ function reference(action: "approve" | "reject" = "approve"): Record<string, unk
     command_id: "command-1", approval_id: "approval-1",
     candidate_sha256: digest("c"), frozen_card_sha256: digest("d"),
     approved_snapshot_sha256: approvedDecisionSnapshotV2Sha256(snapshot() as never),
-    assignment_version: 1, assignment_capability_sha256: digest("e"),
     final_approver: { principal_id: "principal-1", membership_id: "membership-1" },
     current_slack_identity_link: { provider: "slack", external_identity_link_id: "clm_link-1", external_identity_link_contract_sha256: digest("f"), provider_subject_id: "U123" },
     action,
@@ -83,7 +83,7 @@ function event(policy = RESTRICTED_REVIEWER_PERSON_POLICY_ID): Record<string, un
 }
 
 describe("private Slack Block Kit approval D3 witness v1", () => {
-  it("closes a signed block-action approval with the frozen assignment and selected policy", () => {
+  it("closes a signed block-action approval with the frozen owner and selected policy", () => {
     const built = buildPrivateSlackBlockApprovalRecordInputV1({
       private_slack_block_approval_resolution_ref: reference() as never,
       event: event() as never,
@@ -91,10 +91,14 @@ describe("private Slack Block Kit approval D3 witness v1", () => {
     expect(built.private_slack_block_approval_resolution_ref.provider_action_kind).toBe(SIGNED_SLACK_BLOCK_ACTION_V1_KIND);
     expect(built.private_slack_block_approval_resolution_ref.final_approver).toEqual({ principal_id: "principal-1", membership_id: "membership-1" });
     expect(built.private_slack_block_approval_resolution_ref.comment).toBe("Ship after legal review.");
+    expect(built.semantic_idempotency_key).toBe(
+      privateSlackBlockApprovalResolutionRefV1Sha256(
+        built.private_slack_block_approval_resolution_ref,
+      ),
+    );
     expect(validatePrivateSlackBlockApprovalRecordInputV1({
       private_slack_block_approval_resolution_ref: built.private_slack_block_approval_resolution_ref,
       event: built.event,
-      idempotency: built.idempotency,
     }).semantic_idempotency_key).toBe(built.semantic_idempotency_key);
   });
 
@@ -108,13 +112,10 @@ describe("private Slack Block Kit approval D3 witness v1", () => {
     expect(rejected.event).toEqual({ kind: "rejected" });
   });
 
-  it("rejects reactions, a changed assignment or actor, wrong snapshots, and mismatched action digests", () => {
+  it("rejects reactions, a changed actor, wrong snapshots, and mismatched action digests", () => {
     expect(() => validatePrivateSlackBlockApprovalResolutionRefV1({ ...reference(), provider_action_kind: "echo-provider-human-action-v2" })).toThrow();
-    expect(() => validatePrivateSlackBlockApprovalResolutionRefV1({ ...reference(), assignment_version: 0 })).toThrow();
     expect(() => validatePrivateSlackBlockApprovalResolutionRefV1({ ...reference(), final_approver: { principal_id: "other", membership_id: "membership-1" }, policy_consequence_sha256: digest("8") })).toThrow();
     expect(() => buildPrivateSlackBlockApprovalRecordInputV1({ private_slack_block_approval_resolution_ref: reference() as never, event: { ...event(), approved_snapshot_sha256: digest("7") } as never })).toThrow();
-    const built = buildPrivateSlackBlockApprovalRecordInputV1({ private_slack_block_approval_resolution_ref: reference() as never, event: event() as never });
-    expect(() => validatePrivateSlackBlockApprovalRecordInputV1({ ...built, idempotency: { ...built.idempotency, private_slack_block_approval_event_sha256: digest("6") } })).toThrow();
   });
 
   it("admits the new witness as a V4 envelope body without changing the legacy path", () => {

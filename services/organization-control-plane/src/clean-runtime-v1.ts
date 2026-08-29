@@ -57,7 +57,6 @@ export {
   type PendingPrivateApprovalV1,
   type PrivateApprovalActionV1,
   type PrivateApprovalAssigneeV1,
-  type PrivateApprovalAssignmentV1,
   type PrivateApprovalAuthorizationAllowV1,
   type PrivateApprovalPolicyBindingV1,
   type PrivateApprovalResolutionCommandV1,
@@ -65,15 +64,6 @@ export {
   type PrivateApprovalSlackIdentityLinkV1,
   type ResolvePrivateApprovalPolicyInputV1,
 } from "./application/private-approval-policy-resolution-v1.js";
-export {
-  PRIVATE_APPROVAL_BLOCK_ACTION_NAMESPACE_V1,
-  PRIVATE_APPROVAL_SLACK_INTERACTION_PATH_V1,
-  buildPrivateApprovalSurfaceBindingV1,
-  validatePrivateApprovalSurfaceBindingV1,
-  type BuildPrivateApprovalSurfaceBindingV1Input,
-  type PrivateApprovalSurfaceBindingCodecV1,
-  type PrivateApprovalSurfaceBindingV1,
-} from "./application/private-approval-surface-binding-v1.js";
 export {
   PRIVATE_APPROVAL_SLACK_DM_REQUIRED_SCOPES,
   resolveCurrentPrivateApprovalSlackTargetV1,

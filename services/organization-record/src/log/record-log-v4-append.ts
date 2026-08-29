@@ -33,8 +33,6 @@ interface PrivateSlackBlockApprovalResolutionRefV1View {
   readonly candidate_sha256: Sha256Digest;
   readonly frozen_card_sha256: Sha256Digest;
   readonly approved_snapshot_sha256: Sha256Digest;
-  readonly assignment_version: number;
-  readonly assignment_capability_sha256: Sha256Digest;
   readonly final_approver: {
     readonly principal_id: string;
     readonly membership_id: string;
@@ -75,7 +73,6 @@ export interface ReprovedPrivateSlackBlockApprovalD2WitnessV1 {
     readonly state_lineage_id: string;
     readonly approval_id: string;
     readonly action: Action;
-    readonly assignment_version: number;
     readonly final_approver: {
       readonly principal_id: string;
       readonly membership_id: string;

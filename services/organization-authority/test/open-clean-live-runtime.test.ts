@@ -27,9 +27,14 @@ import {
 } from "../../organization-control-plane/src/application/person-slack-approval-contracts-v2.js";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/new-lineage-v1";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
+import type {
+  BegunPersonOidcLogin,
+  PersonAccessAuthorization,
+} from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
+import { SqliteCleanPersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.js";
 import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
+import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
@@ -43,6 +48,10 @@ import {
   openCleanLiveRuntime,
   type OpenCleanLiveRuntimeConfig,
 } from "../src/composition/open-clean-live-runtime.js";
+import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
+import { createCleanPersonAnswerRouteV1 } from "../src/composition/clean-person-answer-route.js";
+import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
+import type { Layer4StructuredOutputPort } from "../src/answer-composition/lean-answer-composition.js";
 import {
   PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateApprovalBlockKitActionIdV1,
@@ -65,6 +74,7 @@ import type {
 } from "../src/processing/clean-v1/private-slack-approval-card-poster-v1.js";
 
 const roots: string[] = [];
+let testAuthorizationCheck = 0;
 const NOW = "2026-08-22T12:00:00.000Z";
 const SLACK_WORKSPACE = "T012LIVETEST";
 const SLACK_APP = "A012LIVETEST";
@@ -426,7 +436,11 @@ class FakePrivateApprovalPoster {
   readonly tombstones: string[] = [];
   async openDirectMessage(providerSubjectId: string) {
     expect(providerSubjectId).toBe(SLACK_OWNER);
-    return { channel_id: SLACK_DM_CHANNEL, user_id: SLACK_OWNER };
+    return {
+      kind: "opened" as const,
+      channel_id: SLACK_DM_CHANNEL,
+      user_id: SLACK_OWNER,
+    };
   }
   async postMarker(input: {
     readonly approval_id: string;
@@ -602,7 +616,6 @@ function cardParts(card: PublishedCard["card"]) {
   const elements = actions.elements as ReadonlyArray<Record<string, unknown>>;
   const identity = JSON.parse(String(elements[0]?.value)) as {
     readonly approval_id: string;
-    readonly assignment_version: number;
   };
   const approve = elements.find(
     (element) =>
@@ -692,7 +705,9 @@ async function clickCard(input: {
         [parts.comment.block_id as string]: {
           [parts.commentElement.action_id as string]: {
             type: "plain_text_input",
-            value: input.comment ?? "",
+            // Slack sends null, rather than an empty string, when an optional
+            // plain-text input is untouched.
+            value: input.comment ?? null,
           },
         },
       },
@@ -728,6 +743,154 @@ async function clickCard(input: {
       body,
     },
   );
+}
+
+function readerAuthorization(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly principal_id: string;
+  readonly membership_id: string;
+  readonly membership_type: "owner" | "employee";
+}): PersonAccessAuthorization {
+  return {
+    organization_id: input.fixture.initialized.organization_id,
+    principal_id: input.principal_id,
+    membership_id: input.membership_id,
+    membership_type: input.membership_type,
+    identity_binding_id: `identity-${input.principal_id}`,
+    session_family_id: `session-${input.membership_id}`,
+    access_credential_sha256: canonicalSha256({
+      kind: "test-access",
+      membership_id: input.membership_id,
+    }),
+    access_expires_at: "2026-08-22T13:00:00.000Z",
+    hard_reauthentication_at: "2026-08-22T14:00:00.000Z",
+    person_state_sha256: canonicalSha256({
+      kind: "test-person",
+      membership_id: input.membership_id,
+    }),
+    session_state_sha256: canonicalSha256({
+      kind: "test-session",
+      membership_id: input.membership_id,
+    }),
+    checked_at: NOW,
+  };
+}
+
+/**
+ * Exercise the composed Person retrieval route against the generation the
+ * live runtime actually published. The tokens are only a test seam: the
+ * reader tuples are still derived by the route's sessions port, never passed
+ * into the retrieval API itself.
+ */
+function createOwnerAndMemberSearchRoute(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly authority: ReturnType<typeof openAuthorityDatabase>;
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+}) {
+  const owner = readerAuthorization({
+    fixture: input.fixture,
+    principal_id: input.fixture.initialized.owner_principal_id,
+    membership_id: input.fixture.initialized.owner_membership_id,
+    membership_type: "owner",
+  });
+  const member = readerAuthorization({
+    fixture: input.fixture,
+    principal_id: "principal_active_member",
+    membership_id: "membership_active_member",
+    membership_type: "employee",
+  });
+  const byToken = new Map([
+    ["owner", owner],
+    ["member", member],
+  ]);
+  const route = createCleanPersonRecordSearchRouteV1({
+    state_directory: input.fixture.initialized.state_directory,
+    authority_id: input.fixture.initialized.authority_id,
+    organization_id: input.fixture.initialized.organization_id,
+    state_lineage_id: input.fixture.initialized.state_lineage_id,
+    retrieval_contract_sha256:
+      cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
+    sessions: {
+      authenticateAccess: ({ access_token }) => {
+        const authorization = byToken.get(access_token);
+        if (authorization === undefined) throw new Error("unknown test bearer");
+        // The compact audit intentionally deduplicates identical observations.
+        // A real session verifier supplies a fresh check time for each request.
+        testAuthorizationCheck += 1;
+        return {
+          ...authorization,
+          checked_at: `2026-08-22T12:00:00.${String(testAuthorizationCheck).padStart(3, "0")}Z`,
+        };
+      },
+    },
+    authority: input.authority,
+    record: input.record,
+    audit: new SqliteCleanPersonRecordReadAuditV1(input.authority),
+  });
+  return route;
+}
+
+function answerModel(): Layer4StructuredOutputPort {
+  return {
+    async generate(input) {
+      const properties = input.schema.properties as
+        | Record<string, unknown>
+        | undefined;
+      if (properties !== undefined && Object.hasOwn(properties, "queries")) {
+        return { queries: [] };
+      }
+      return {
+        status: "answered",
+        answer: "Ship the clean live migration.",
+        citations: ["a1"],
+      };
+    },
+  };
+}
+
+function createAnswerRoute(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly authority: ReturnType<typeof openAuthorityDatabase>;
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+}) {
+  return createCleanPersonAnswerRouteV1({
+    authority_id: input.fixture.initialized.authority_id,
+    organization_id: input.fixture.initialized.organization_id,
+    state_lineage_id: input.fixture.initialized.state_lineage_id,
+    search: createOwnerAndMemberSearchRoute(input),
+    model: answerModel(),
+    audit: new SqliteCleanPersonAnswerCompositionAuditV1(input.authority),
+  });
+}
+
+async function answerAsOwnerAndMember(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly authority: ReturnType<typeof openAuthorityDatabase>;
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+}) {
+  const answers = createAnswerRoute(input);
+  return {
+    owner: await answers.ask({
+      access_token: "owner",
+      question: "What decision was made about the migration?",
+    }),
+    member: await answers.ask({
+      access_token: "member",
+      question: "What decision was made about the migration?",
+    }),
+  };
+}
+
+async function answerAsOwner(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly authority: ReturnType<typeof openAuthorityDatabase>;
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+}) {
+  const answers = createAnswerRoute(input);
+  return answers.ask({
+    access_token: "owner",
+    question: "What decision was made about the migration?",
+  });
 }
 
 afterEach(() => {
@@ -789,6 +952,10 @@ describe("open clean live runtime private approval lane", () => {
       join(fixture.initialized.state_directory, "record-log.sqlite"),
       { fileMustExist: true },
     );
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
     try {
       await waitFor(
         () =>
@@ -812,13 +979,6 @@ describe("open clean live runtime private approval lane", () => {
       expect((parts.comment.element as { multiline: boolean }).multiline).toBe(
         true,
       );
-      expect(
-        control
-          .prepare(
-            "SELECT canonical_record_policy_id FROM organization_private_approval_pending_contracts_v2 WHERE approval_id = ?",
-          )
-          .get(card.approval_id),
-      ).toEqual({ canonical_record_policy_id: null });
       const replayTimestamp = String(Math.floor(Date.now() / 1_000));
       expect(
         (
@@ -889,23 +1049,40 @@ describe("open clean live runtime private approval lane", () => {
         },
       });
       expect(
-        control
-          .prepare(
-            "SELECT canonical_record_policy_id FROM organization_private_approval_pending_contracts_v2 WHERE approval_id = ?",
-          )
-          .get(card.approval_id),
-      ).toEqual({
-        // The immutable *pending* contract remains policy-free. The terminal
-        // resolution above is the approval-time canonical policy binding.
-        canonical_record_policy_id: null,
-      });
-      expect(
         record
           .prepare(
             "SELECT policy_id FROM organization_record_member_readable_person_fact",
           )
           .all(),
       ).toEqual([{ policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID }]);
+      await waitFor(
+        () =>
+          (
+            authority
+              .prepare(
+                "SELECT record_head_position FROM authority_readable_search_active_generation WHERE singleton = 1",
+              )
+              .get() as { record_head_position: number } | undefined
+          )?.record_head_position === 1,
+        "Team readable-search generation",
+      );
+      const teamAnswers = await answerAsOwnerAndMember({
+        fixture,
+        authority,
+        record,
+      });
+      expect(teamAnswers.owner).toMatchObject({
+        answer: "Ship the clean live migration.",
+        citations: [
+          { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
+        ],
+      });
+      expect(teamAnswers.member).toMatchObject({
+        answer: "Ship the clean live migration.",
+        citations: [
+          { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
+        ],
+      });
       await waitFor(
         () => fixture.poster.terminal.length === 1,
         "approved terminal card",
@@ -918,6 +1095,7 @@ describe("open clean live runtime private approval lane", () => {
       });
     } finally {
       record.close();
+      authority.close();
       control.close();
       await fixture.runtime.close();
     }
@@ -927,6 +1105,10 @@ describe("open clean live runtime private approval lane", () => {
     const fixture = await activeFixture();
     const record = openOrganizationRecordDatabase(
       join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
       { fileMustExist: true },
     );
     try {
@@ -965,6 +1147,30 @@ describe("open clean live runtime private approval lane", () => {
           )
           .all(),
       ).toEqual([{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }]);
+      await waitFor(
+        () =>
+          (
+            authority
+              .prepare(
+                "SELECT record_head_position FROM authority_readable_search_active_generation WHERE singleton = 1",
+              )
+              .get() as { record_head_position: number } | undefined
+          )?.record_head_position === 1,
+        "Only-me readable-search generation",
+      );
+      const onlyMeAnswers = await answerAsOwnerAndMember({
+        fixture,
+        authority,
+        record,
+      });
+      expect(onlyMeAnswers.owner).toMatchObject({
+        answer: "Ship the clean live migration.",
+        citations: [{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }],
+      });
+      expect(onlyMeAnswers.member).toMatchObject({
+        answer: "Insufficient accessible evidence to answer this question.",
+        citations: [],
+      });
       await fixture.runtime.close();
       const restartedPoster = new FakePrivateApprovalPoster();
       const restarted = await openCleanLiveRuntime(fixture.config, {
@@ -978,11 +1184,23 @@ describe("open clean live runtime private approval lane", () => {
         await waitFor(() => fixture.source.pulls() >= 2, "restart source poll");
         expect(restartedPoster.markers).toEqual([]);
         expect(restartedPoster.published).toEqual([]);
+        // The restart must warm the already-published exact-head generation,
+        // not merely avoid reposting the Slack card.
+        const recoveredOnlyMeAnswer = await answerAsOwner({
+          fixture,
+          authority,
+          record,
+        });
+        expect(recoveredOnlyMeAnswer).toMatchObject({
+          answer: "Ship the clean live migration.",
+          citations: [{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }],
+        });
       } finally {
         await restarted.close();
       }
     } finally {
       record.close();
+      authority.close();
     }
   });
 
@@ -1025,13 +1243,6 @@ describe("open clean live runtime private approval lane", () => {
           .prepare("SELECT count(*) AS count FROM organization_record_log")
           .get(),
       ).toEqual({ count: 0 });
-      expect(
-        control
-          .prepare(
-            "SELECT canonical_record_policy_id FROM organization_private_approval_pending_contracts_v2 WHERE approval_id = ?",
-          )
-          .get(card.approval_id),
-      ).toEqual({ canonical_record_policy_id: null });
       expect(fixture.poster.terminal[0]).toMatchObject({
         approval_id: card.approval_id,
         outcome: "rejected",

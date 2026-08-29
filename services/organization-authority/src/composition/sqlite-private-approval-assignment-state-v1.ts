@@ -9,7 +9,7 @@ import {
 import {
   validatePrivateApprovalResolutionV1,
   type ApprovalContractSha256,
-  type PrivateApprovalAssignmentV1,
+  type PrivateApprovalAssigneeV1,
   type PrivateApprovalResolutionV1,
   type PrivateApprovalSlackIdentityLinkV1,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
@@ -21,9 +21,6 @@ import type { GranolaMeetingOwnerPrivateApprovalTargetV1 } from "./resolve-grano
  * meeting-owner path. It has no Slack ingress or Control Plane write path:
  * callers must first obtain the read-only owner target and open the DM.
  */
-export const PRIVATE_APPROVAL_ASSIGNMENT_CAPABILITY_KIND_V1 =
-  "echo-private-approval-assignment-capability-v1" as const;
-
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const SLACK_WORKSPACE_ID = /^T[A-Z0-9]{2,255}$/;
@@ -56,12 +53,6 @@ export interface PrivateApprovalCandidateCommitmentV1 {
   readonly approved_snapshot_sha256: Digest;
 }
 
-/** A current Slack approval binding is an input commitment, never inferred. */
-export interface PrivateApprovalSlackApprovalBindingV1 {
-  readonly approval_binding_id: string;
-  readonly approval_binding_contract_sha256: Digest;
-}
-
 /** The direct-message proof returned by `conversations.open`. */
 export interface PrivateApprovalSlackDmChannelV1 {
   readonly workspace_id: string;
@@ -72,18 +63,17 @@ export interface PrivateApprovalSlackDmChannelV1 {
 export interface StagePrivateApprovalAssignmentInputV1 {
   readonly candidate: PrivateApprovalCandidateCommitmentV1;
   readonly owner_target: GranolaMeetingOwnerPrivateApprovalTargetV1;
-  readonly approval_binding: PrivateApprovalSlackApprovalBindingV1;
   readonly dm_channel: PrivateApprovalSlackDmChannelV1;
 }
 
 export interface PrivateApprovalAssignmentStateV1 {
   readonly organization_id: string;
   readonly candidate: PrivateApprovalCandidateCommitmentV1;
-  readonly assignment: PrivateApprovalAssignmentV1;
+  readonly assigned_owner: PrivateApprovalAssigneeV1;
+  readonly assigned_owner_slack_identity_link: PrivateApprovalSlackIdentityLinkV1;
   readonly connection_id: string;
   readonly connection_contract_sha256: Digest;
   readonly connection_state_sha256: Digest;
-  readonly approval_binding: PrivateApprovalSlackApprovalBindingV1;
   readonly dm_channel: PrivateApprovalSlackDmChannelV1;
   readonly created_at: string;
 }
@@ -129,14 +119,12 @@ export interface PrivateApprovalTerminalReceiptV1 {
 interface AssignmentRow {
   readonly approval_id: string;
   readonly candidate_id: string;
-  readonly assignment_version: number;
-  readonly assignment_json: string;
-  readonly assignment_sha256: string;
+  readonly candidate_sha256: string;
+  readonly frozen_card_sha256: string;
+  readonly approved_snapshot_sha256: string;
   readonly connection_id: string;
   readonly connection_contract_sha256: string;
   readonly connection_state_sha256: string;
-  readonly approval_binding_id: string;
-  readonly approval_binding_contract_sha256: string;
   readonly external_identity_link_id: string;
   readonly external_identity_link_contract_sha256: string;
   readonly assignee_principal_id: string;
@@ -191,12 +179,6 @@ function assertIdentifier(value: unknown, label: string): asserts value is strin
 function assertDigest(value: unknown, label: string): asserts value is Digest {
   if (typeof value !== "string" || !SHA256.test(value)) {
     fail(`${label} must be a lowercase SHA-256 digest`);
-  }
-}
-
-function assertPositive(value: unknown, label: string): asserts value is number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    fail(`${label} must be a positive safe integer`);
   }
 }
 
@@ -295,46 +277,6 @@ function slackLink(
   });
 }
 
-function assignment(
-  value: unknown,
-  label: string,
-): PrivateApprovalAssignmentV1 {
-  const record = exactRecord(
-    value,
-    [
-      "schema_version",
-      "assignment_version",
-      "current_assignee",
-      "current_slack_identity_link",
-      "assignment_capability_sha256",
-    ],
-    label,
-  );
-  if (record.schema_version !== 1) fail(`${label} schema version is invalid`);
-  assertPositive(record.assignment_version, `${label} version`);
-  const assignee = exactRecord(
-    record.current_assignee,
-    ["principal_id", "membership_id"],
-    `${label} assignee`,
-  );
-  assertIdentifier(assignee.principal_id, `${label} assignee principal`);
-  assertIdentifier(assignee.membership_id, `${label} assignee membership`);
-  assertDigest(record.assignment_capability_sha256, `${label} capability`);
-  return Object.freeze({
-    schema_version: 1,
-    assignment_version: record.assignment_version,
-    current_assignee: Object.freeze({
-      principal_id: assignee.principal_id,
-      membership_id: assignee.membership_id,
-    }),
-    current_slack_identity_link: slackLink(
-      record.current_slack_identity_link,
-      `${label} Slack identity link`,
-    ),
-    assignment_capability_sha256: record.assignment_capability_sha256,
-  });
-}
-
 function candidate(
   value: unknown,
   label: string,
@@ -361,23 +303,6 @@ function candidate(
     candidate_sha256: record.candidate_sha256,
     frozen_card_sha256: record.frozen_card_sha256,
     approved_snapshot_sha256: record.approved_snapshot_sha256,
-  });
-}
-
-function approvalBinding(
-  value: unknown,
-  label: string,
-): PrivateApprovalSlackApprovalBindingV1 {
-  const record = exactRecord(
-    value,
-    ["approval_binding_id", "approval_binding_contract_sha256"],
-    label,
-  );
-  assertIdentifier(record.approval_binding_id, `${label} id`);
-  assertDigest(record.approval_binding_contract_sha256, `${label} contract`);
-  return Object.freeze({
-    approval_binding_id: record.approval_binding_id,
-    approval_binding_contract_sha256: record.approval_binding_contract_sha256,
   });
 }
 
@@ -445,50 +370,6 @@ function v4Receipt(
   });
 }
 
-/**
- * Deterministically binds an assignment to the exact private approval
- * candidate, pending card and snapshot. The DM is deliberately excluded: it
- * is a presentation binding reproved separately at interaction time.
- */
-export function privateApprovalAssignmentCapabilitySha256V1(input: {
-  readonly organization_id: string;
-  readonly candidate: PrivateApprovalCandidateCommitmentV1;
-  readonly assignment_version: number;
-  readonly current_assignee: PrivateApprovalAssignmentV1["current_assignee"];
-  readonly current_slack_identity_link: PrivateApprovalSlackIdentityLinkV1;
-}): Digest {
-  const organizationId = input.organization_id;
-  assertIdentifier(organizationId, "capability organization id");
-  const commitment = candidate(input.candidate, "capability candidate");
-  assertPositive(input.assignment_version, "capability assignment version");
-  const assignee = exactRecord(
-    input.current_assignee,
-    ["principal_id", "membership_id"],
-    "capability assignee",
-  );
-  assertIdentifier(assignee.principal_id, "capability assignee principal");
-  assertIdentifier(assignee.membership_id, "capability assignee membership");
-  const link = slackLink(
-    input.current_slack_identity_link,
-    "capability Slack identity link",
-  );
-  return canonicalSha256({
-    schema_version: 1,
-    kind: PRIVATE_APPROVAL_ASSIGNMENT_CAPABILITY_KIND_V1,
-    approval_id: commitment.approval_id,
-    organization_id: organizationId,
-    candidate_sha256: commitment.candidate_sha256,
-    frozen_card_sha256: commitment.frozen_card_sha256,
-    approved_snapshot_sha256: commitment.approved_snapshot_sha256,
-    assignment_version: input.assignment_version,
-    current_assignee: {
-      principal_id: assignee.principal_id,
-      membership_id: assignee.membership_id,
-    },
-    current_slack_identity_link: link,
-  }) as Digest;
-}
-
 function currentCandidate(
   database: Database.Database,
   candidateCommitment: PrivateApprovalCandidateCommitmentV1,
@@ -532,24 +413,11 @@ function assignmentFromRow(
   PrivateApprovalAssignmentStateV1,
   "organization_id" | "candidate"
 > {
-  const parsed = assignment(parseCanonical(row.assignment_json, "stored assignment"), "stored assignment");
-  assertDigest(row.assignment_sha256, "stored assignment digest");
-  if (canonicalSha256(parsed) !== row.assignment_sha256) {
-    fail("stored assignment digest is invalid");
-  }
-  if (parsed.assignment_version !== row.assignment_version) {
-    fail("stored assignment version disagrees with its projection");
-  }
+  assertIdentifier(row.assignee_principal_id, "stored assignee principal id");
+  assertIdentifier(row.assignee_membership_id, "stored assignee membership id");
   assertIdentifier(row.connection_id, "stored connection id");
   assertDigest(row.connection_contract_sha256, "stored connection contract");
   assertDigest(row.connection_state_sha256, "stored connection state");
-  const binding = approvalBinding(
-    {
-      approval_binding_id: row.approval_binding_id,
-      approval_binding_contract_sha256: row.approval_binding_contract_sha256,
-    },
-    "stored approval binding",
-  );
   const link = slackLink(
     {
       provider: "slack",
@@ -560,17 +428,6 @@ function assignmentFromRow(
     },
     "stored Slack identity link",
   );
-  if (
-    parsed.current_assignee.principal_id !== row.assignee_principal_id ||
-    parsed.current_assignee.membership_id !== row.assignee_membership_id ||
-    parsed.current_slack_identity_link.external_identity_link_id !==
-      link.external_identity_link_id ||
-    parsed.current_slack_identity_link.external_identity_link_contract_sha256 !==
-      link.external_identity_link_contract_sha256 ||
-    parsed.current_slack_identity_link.provider_subject_id !== link.provider_subject_id
-  ) {
-    fail("stored assignment identity projection disagrees with its body");
-  }
   const dm = dmChannel(
     {
       workspace_id: row.slack_workspace_id,
@@ -581,11 +438,14 @@ function assignmentFromRow(
   );
   assertCanonicalUtcMillis(row.created_at, "stored assignment creation time");
   return Object.freeze({
-    assignment: parsed,
+    assigned_owner: Object.freeze({
+      principal_id: row.assignee_principal_id,
+      membership_id: row.assignee_membership_id,
+    }),
+    assigned_owner_slack_identity_link: link,
     connection_id: row.connection_id,
     connection_contract_sha256: row.connection_contract_sha256,
     connection_state_sha256: row.connection_state_sha256,
-    approval_binding: binding,
     dm_channel: dm,
     created_at: row.created_at,
   });
@@ -616,7 +476,6 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       const organizationId = metadataOrganizationId(this.database);
       const commitment = candidate(input.candidate, "stage candidate");
       const dm = dmChannel(input.dm_channel, "stage Slack DM");
-      const binding = approvalBinding(input.approval_binding, "stage approval binding");
       const owner = input.owner_target;
       if (owner.slack_target.connection.body.organization_id !== organizationId) {
         fail("stage owner target does not match Authority metadata");
@@ -644,32 +503,14 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
         membership_id: owner.assignee.membership_id,
       });
       const currentLink = owner.slack_target.current_slack_identity_link;
-      const assignmentVersion = 1;
-      const capability = privateApprovalAssignmentCapabilitySha256V1({
-        organization_id: organizationId,
-        candidate: commitment,
-        assignment_version: assignmentVersion,
-        current_assignee: currentAssignee,
-        current_slack_identity_link: currentLink,
-      });
-      const assignmentBody: PrivateApprovalAssignmentV1 = assignment(
-        {
-          schema_version: 1,
-          assignment_version: assignmentVersion,
-          current_assignee: currentAssignee,
-          current_slack_identity_link: currentLink,
-          assignment_capability_sha256: capability,
-        },
-        "stage assignment",
-      );
       const expected: PrivateApprovalAssignmentStateV1 = Object.freeze({
         organization_id: organizationId,
         candidate: commitment,
-        assignment: assignmentBody,
+        assigned_owner: currentAssignee,
+        assigned_owner_slack_identity_link: currentLink,
         connection_id: owner.slack_target.connection.body.connection_id,
         connection_contract_sha256: owner.slack_target.connection.sha256,
         connection_state_sha256: owner.slack_target.connection_state.sha256,
-        approval_binding: binding,
         dm_channel: dm,
         created_at: "",
       });
@@ -687,26 +528,23 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       this.database
         .prepare(
           `INSERT INTO authority_private_approval_assignments_v2 (
-             approval_id, candidate_id, assignment_version, assignment_json,
-             assignment_sha256, connection_id, connection_contract_sha256,
-             connection_state_sha256, approval_binding_id,
-             approval_binding_contract_sha256, external_identity_link_id,
+             approval_id, candidate_id, candidate_sha256, frozen_card_sha256,
+             approved_snapshot_sha256, connection_id, connection_contract_sha256,
+             connection_state_sha256, external_identity_link_id,
              external_identity_link_contract_sha256, assignee_principal_id,
              assignee_membership_id, slack_workspace_id, slack_enterprise_id,
              slack_subject_id, slack_dm_channel_id, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           commitment.approval_id,
           commitment.candidate_id,
-          assignmentVersion,
-          canonicalJson(assignmentBody),
-          canonicalSha256(assignmentBody),
+          commitment.candidate_sha256,
+          commitment.frozen_card_sha256,
+          commitment.approved_snapshot_sha256,
           owner.slack_target.connection.body.connection_id,
           owner.slack_target.connection.sha256,
           owner.slack_target.connection_state.sha256,
-          binding.approval_binding_id,
-          binding.approval_binding_contract_sha256,
           currentLink.external_identity_link_id,
           currentLink.external_identity_link_contract_sha256,
           currentAssignee.principal_id,
@@ -733,13 +571,11 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
    */
   readCurrent(
     candidateCommitment: PrivateApprovalCandidateCommitmentV1,
-    assignmentVersion = 1,
   ): PrivateApprovalAssignmentStateV1 | undefined {
     const commitment = candidate(candidateCommitment, "read candidate");
-    assertPositive(assignmentVersion, "read assignment version");
     return this.database.transaction(() => {
       const row = this.rowByApprovalId(commitment.approval_id);
-      if (row === undefined || row.assignment_version !== assignmentVersion) {
+      if (row === undefined) {
         return undefined;
       }
       if (currentCandidate(this.database, commitment) === undefined) return undefined;
@@ -817,7 +653,6 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       const organizationId = metadataOrganizationId(this.database);
       const candidateCommitment = this.commitmentFromResolution(
         assignmentRow,
-        organizationId,
         resolution,
       );
       const staged = this.reproveRow(
@@ -826,15 +661,12 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
         organizationId,
       );
       if (
-        resolution.assignment_version !== staged.assignment.assignment_version ||
-        resolution.assignment_capability_sha256 !==
-          staged.assignment.assignment_capability_sha256 ||
         resolution.final_approver.principal_id !==
-          staged.assignment.current_assignee.principal_id ||
+          staged.assigned_owner.principal_id ||
         resolution.final_approver.membership_id !==
-          staged.assignment.current_assignee.membership_id ||
+          staged.assigned_owner.membership_id ||
         canonicalJson(resolution.current_slack_identity_link) !==
-          canonicalJson(staged.assignment.current_slack_identity_link)
+          canonicalJson(staged.assigned_owner_slack_identity_link)
       ) {
         fail("terminal resolution does not match its assignment");
       }
@@ -943,10 +775,9 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
   private rowByApprovalId(approvalId: string): AssignmentRow | undefined {
     return this.database
       .prepare(
-        `SELECT approval_id, candidate_id, assignment_version, assignment_json,
-                assignment_sha256, connection_id, connection_contract_sha256,
-                connection_state_sha256, approval_binding_id,
-                approval_binding_contract_sha256, external_identity_link_id,
+        `SELECT approval_id, candidate_id, candidate_sha256, frozen_card_sha256,
+                approved_snapshot_sha256, connection_id, connection_contract_sha256,
+                connection_state_sha256, external_identity_link_id,
                 external_identity_link_contract_sha256, assignee_principal_id,
                 assignee_membership_id, slack_workspace_id, slack_enterprise_id,
                 slack_subject_id, slack_dm_channel_id, created_at
@@ -996,7 +827,6 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
 
   private commitmentFromResolution(
     row: AssignmentRow,
-    organizationId: string,
     resolution: PrivateApprovalResolutionV1,
   ): PrivateApprovalCandidateCommitmentV1 {
     const commitment: PrivateApprovalCandidateCommitmentV1 = Object.freeze({
@@ -1006,17 +836,6 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       frozen_card_sha256: resolution.frozen_card_sha256,
       approved_snapshot_sha256: resolution.approved_snapshot_sha256,
     });
-    const parsed = assignment(parseCanonical(row.assignment_json, "stored assignment"), "stored assignment");
-    const expectedCapability = privateApprovalAssignmentCapabilitySha256V1({
-      organization_id: organizationId,
-      candidate: commitment,
-      assignment_version: parsed.assignment_version,
-      current_assignee: parsed.current_assignee,
-      current_slack_identity_link: parsed.current_slack_identity_link,
-    });
-    if (expectedCapability !== parsed.assignment_capability_sha256) {
-      fail("terminal resolution does not reproduce the assignment capability");
-    }
     return commitment;
   }
 
@@ -1027,21 +846,14 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
   ): PrivateApprovalAssignmentStateV1 {
     if (
       row.approval_id !== commitment.approval_id ||
-      row.candidate_id !== commitment.candidate_id
+      row.candidate_id !== commitment.candidate_id ||
+      row.candidate_sha256 !== commitment.candidate_sha256 ||
+      row.frozen_card_sha256 !== commitment.frozen_card_sha256 ||
+      row.approved_snapshot_sha256 !== commitment.approved_snapshot_sha256
     ) {
       fail("stored assignment differs from its candidate commitment");
     }
     const stored = assignmentFromRow(row);
-    const expectedCapability = privateApprovalAssignmentCapabilitySha256V1({
-      organization_id: organizationId,
-      candidate: commitment,
-      assignment_version: stored.assignment.assignment_version,
-      current_assignee: stored.assignment.current_assignee,
-      current_slack_identity_link: stored.assignment.current_slack_identity_link,
-    });
-    if (stored.assignment.assignment_capability_sha256 !== expectedCapability) {
-      fail("stored assignment capability is invalid");
-    }
     return Object.freeze({
       organization_id: organizationId,
       candidate: commitment,

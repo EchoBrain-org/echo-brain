@@ -4,7 +4,7 @@
  * This module owns neither delivery nor persistence. Its authorization input
  * is a transaction-produced D2 allow result, never a network-deserialized
  * payload. The persistence boundary must fence a new resolution by command_id
- * and assignment_version in the same transaction that reproves that allow.
+ * in the same transaction that reproves that allow.
  */
 
 import {
@@ -46,19 +46,6 @@ export interface PrivateApprovalSlackIdentityLinkV1 {
   readonly provider_subject_id: string;
 }
 
-/**
- * Independently versioned so future delegation can invalidate an old card
- * before assigning a new current assignee. The capability is assignment-scoped:
- * a Slack identity link alone is never approval authority.
- */
-export interface PrivateApprovalAssignmentV1 {
-  readonly schema_version: 1;
-  readonly assignment_version: number;
-  readonly current_assignee: PrivateApprovalAssigneeV1;
-  readonly current_slack_identity_link: PrivateApprovalSlackIdentityLinkV1;
-  readonly assignment_capability_sha256: ApprovalContractSha256;
-}
-
 export interface PendingPrivateApprovalV1 {
   readonly schema_version: 1;
   readonly kind: typeof PRIVATE_APPROVAL_PENDING_KIND;
@@ -67,9 +54,9 @@ export interface PendingPrivateApprovalV1 {
   readonly candidate_sha256: ApprovalContractSha256;
   readonly frozen_card_sha256: ApprovalContractSha256;
   readonly approved_snapshot_sha256: ApprovalContractSha256;
-  /** A canonical-record policy must not exist while the approval is pending. */
-  readonly canonical_record_policy_id: null;
-  readonly assignment: PrivateApprovalAssignmentV1;
+  /** Frozen owner of this private DM card. V1 has no delegation. */
+  readonly assigned_owner: PrivateApprovalAssigneeV1;
+  readonly assigned_owner_slack_identity_link: PrivateApprovalSlackIdentityLinkV1;
 }
 
 /**
@@ -80,7 +67,6 @@ export interface PrivateApprovalResolutionCommandV1 {
   readonly schema_version: 1;
   readonly command_id: string;
   readonly approval_id: string;
-  readonly assignment_version: number;
   readonly action: PrivateApprovalActionV1;
   readonly selected_policy_id: PersonApprovalPolicyId | null;
   /** Optional human rationale, normalized at the interaction boundary. */
@@ -99,10 +85,8 @@ export interface PrivateApprovalAuthorizationAllowV1 {
   readonly candidate_sha256: ApprovalContractSha256;
   readonly frozen_card_sha256: ApprovalContractSha256;
   readonly approved_snapshot_sha256: ApprovalContractSha256;
-  readonly assignment_version: number;
   readonly authorized_assignee: PrivateApprovalAssigneeV1;
   readonly current_slack_identity_link: PrivateApprovalSlackIdentityLinkV1;
-  readonly assignment_capability_sha256: ApprovalContractSha256;
   readonly authorization_proof_sha256: ApprovalContractSha256;
 }
 
@@ -122,11 +106,9 @@ export interface PrivateApprovalResolutionV1 {
   readonly candidate_sha256: ApprovalContractSha256;
   readonly frozen_card_sha256: ApprovalContractSha256;
   readonly approved_snapshot_sha256: ApprovalContractSha256;
-  readonly assignment_version: number;
   /** Derived exclusively from authorization_allow. */
   readonly final_approver: PrivateApprovalAssigneeV1;
   readonly current_slack_identity_link: PrivateApprovalSlackIdentityLinkV1;
-  readonly assignment_capability_sha256: ApprovalContractSha256;
   readonly authorization_proof_sha256: ApprovalContractSha256;
   readonly action: PrivateApprovalActionV1;
   /** Exact human rationale supplied with the durable command. */
@@ -217,12 +199,6 @@ function digest(
 ): asserts value is ApprovalContractSha256 {
   if (typeof value !== "string" || !SHA256.test(value)) {
     invalid(`${label} must be a lowercase SHA-256 digest`);
-  }
-}
-
-function positive(value: unknown, label: string): asserts value is number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    invalid(`${label} must be a positive safe integer`);
   }
 }
 
@@ -336,8 +312,8 @@ function pending(value: unknown): PendingPrivateApprovalV1 {
       "candidate_sha256",
       "frozen_card_sha256",
       "approved_snapshot_sha256",
-      "canonical_record_policy_id",
-      "assignment",
+      "assigned_owner",
+      "assigned_owner_slack_identity_link",
     ],
     "pending approval",
   );
@@ -350,31 +326,6 @@ function pending(value: unknown): PendingPrivateApprovalV1 {
   digest(record.candidate_sha256, "pending approval candidate_sha256");
   digest(record.frozen_card_sha256, "pending approval frozen_card_sha256");
   digest(record.approved_snapshot_sha256, "pending approval approved_snapshot_sha256");
-  if (record.canonical_record_policy_id !== null) {
-    invalid("pending approval canonical_record_policy_id must be null");
-  }
-  const assignmentRecord = exactRecord(
-    record.assignment,
-    [
-      "schema_version",
-      "assignment_version",
-      "current_assignee",
-      "current_slack_identity_link",
-      "assignment_capability_sha256",
-    ],
-    "pending approval assignment",
-  );
-  if (assignmentRecord.schema_version !== 1) {
-    invalid("pending approval assignment schema_version must be 1");
-  }
-  positive(
-    assignmentRecord.assignment_version,
-    "pending approval assignment assignment_version",
-  );
-  digest(
-    assignmentRecord.assignment_capability_sha256,
-    "pending approval assignment assignment_capability_sha256",
-  );
   return Object.freeze({
     schema_version: 1,
     kind: PRIVATE_APPROVAL_PENDING_KIND,
@@ -383,20 +334,11 @@ function pending(value: unknown): PendingPrivateApprovalV1 {
     candidate_sha256: record.candidate_sha256,
     frozen_card_sha256: record.frozen_card_sha256,
     approved_snapshot_sha256: record.approved_snapshot_sha256,
-    canonical_record_policy_id: null,
-    assignment: Object.freeze({
-      schema_version: 1,
-      assignment_version: assignmentRecord.assignment_version,
-      current_assignee: assignee(
-        assignmentRecord.current_assignee,
-        "pending approval assignment current_assignee",
-      ),
-      current_slack_identity_link: slackLink(
-        assignmentRecord.current_slack_identity_link,
-        "pending approval assignment current_slack_identity_link",
-      ),
-      assignment_capability_sha256: assignmentRecord.assignment_capability_sha256,
-    }),
+    assigned_owner: assignee(record.assigned_owner, "pending approval assigned_owner"),
+    assigned_owner_slack_identity_link: slackLink(
+      record.assigned_owner_slack_identity_link,
+      "pending approval assigned_owner_slack_identity_link",
+    ),
   });
 }
 
@@ -407,7 +349,6 @@ function command(value: unknown): PrivateApprovalResolutionCommandV1 {
       "schema_version",
       "command_id",
       "approval_id",
-      "assignment_version",
       "action",
       "selected_policy_id",
       "comment",
@@ -417,7 +358,6 @@ function command(value: unknown): PrivateApprovalResolutionCommandV1 {
   if (record.schema_version !== 1) invalid("approval command schema_version must be 1");
   identifier(record.command_id, "approval command command_id");
   identifier(record.approval_id, "approval command approval_id");
-  positive(record.assignment_version, "approval command assignment_version");
   if (record.action !== "approve" && record.action !== "reject") {
     invalid("approval command action must be approve or reject");
   }
@@ -438,7 +378,6 @@ function command(value: unknown): PrivateApprovalResolutionCommandV1 {
     schema_version: 1,
     command_id: record.command_id,
     approval_id: record.approval_id,
-    assignment_version: record.assignment_version,
     action: record.action,
     selected_policy_id: record.selected_policy_id,
     comment: comment(record.comment, "approval command comment"),
@@ -456,10 +395,8 @@ function authorization(value: unknown): PrivateApprovalAuthorizationAllowV1 {
       "candidate_sha256",
       "frozen_card_sha256",
       "approved_snapshot_sha256",
-      "assignment_version",
       "authorized_assignee",
       "current_slack_identity_link",
-      "assignment_capability_sha256",
       "authorization_proof_sha256",
     ],
     "authorization allow",
@@ -473,11 +410,6 @@ function authorization(value: unknown): PrivateApprovalAuthorizationAllowV1 {
   digest(record.candidate_sha256, "authorization allow candidate_sha256");
   digest(record.frozen_card_sha256, "authorization allow frozen_card_sha256");
   digest(record.approved_snapshot_sha256, "authorization allow approved_snapshot_sha256");
-  positive(record.assignment_version, "authorization allow assignment_version");
-  digest(
-    record.assignment_capability_sha256,
-    "authorization allow assignment_capability_sha256",
-  );
   digest(record.authorization_proof_sha256, "authorization allow authorization_proof_sha256");
   return Object.freeze({
     schema_version: 1,
@@ -487,7 +419,6 @@ function authorization(value: unknown): PrivateApprovalAuthorizationAllowV1 {
     candidate_sha256: record.candidate_sha256,
     frozen_card_sha256: record.frozen_card_sha256,
     approved_snapshot_sha256: record.approved_snapshot_sha256,
-    assignment_version: record.assignment_version,
     authorized_assignee: assignee(
       record.authorized_assignee,
       "authorization allow authorized_assignee",
@@ -496,7 +427,6 @@ function authorization(value: unknown): PrivateApprovalAuthorizationAllowV1 {
       record.current_slack_identity_link,
       "authorization allow current_slack_identity_link",
     ),
-    assignment_capability_sha256: record.assignment_capability_sha256,
     authorization_proof_sha256: record.authorization_proof_sha256,
   });
 }
@@ -511,14 +441,11 @@ function authorizationMatches(
     allow.candidate_sha256 === current.candidate_sha256 &&
     allow.frozen_card_sha256 === current.frozen_card_sha256 &&
     allow.approved_snapshot_sha256 === current.approved_snapshot_sha256 &&
-    allow.assignment_version === current.assignment.assignment_version &&
-    sameAssignee(allow.authorized_assignee, current.assignment.current_assignee) &&
+    sameAssignee(allow.authorized_assignee, current.assigned_owner) &&
     sameSlackLink(
       allow.current_slack_identity_link,
-      current.assignment.current_slack_identity_link,
-    ) &&
-    allow.assignment_capability_sha256 ===
-      current.assignment.assignment_capability_sha256
+      current.assigned_owner_slack_identity_link,
+    )
   );
 }
 
@@ -559,12 +486,10 @@ function build(
     candidate_sha256: current.candidate_sha256,
     frozen_card_sha256: current.frozen_card_sha256,
     approved_snapshot_sha256: current.approved_snapshot_sha256,
-    assignment_version: current.assignment.assignment_version,
     final_approver: finalApprover,
     current_slack_identity_link: Object.freeze({
       ...allow.current_slack_identity_link,
     }),
-    assignment_capability_sha256: allow.assignment_capability_sha256,
     authorization_proof_sha256: allow.authorization_proof_sha256,
     action: request.action,
     comment: request.comment,
@@ -656,10 +581,8 @@ function prior(value: unknown): PrivateApprovalResolutionV1 {
       "candidate_sha256",
       "frozen_card_sha256",
       "approved_snapshot_sha256",
-      "assignment_version",
       "final_approver",
       "current_slack_identity_link",
-      "assignment_capability_sha256",
       "authorization_proof_sha256",
       "action",
       "comment",
@@ -676,8 +599,6 @@ function prior(value: unknown): PrivateApprovalResolutionV1 {
   digest(record.candidate_sha256, "prior resolution candidate_sha256");
   digest(record.frozen_card_sha256, "prior resolution frozen_card_sha256");
   digest(record.approved_snapshot_sha256, "prior resolution approved_snapshot_sha256");
-  positive(record.assignment_version, "prior resolution assignment_version");
-  digest(record.assignment_capability_sha256, "prior resolution assignment_capability_sha256");
   digest(record.authorization_proof_sha256, "prior resolution authorization_proof_sha256");
   if (record.action !== "approve" && record.action !== "reject") {
     invalid("prior resolution action is unsupported");
@@ -699,13 +620,11 @@ function prior(value: unknown): PrivateApprovalResolutionV1 {
     candidate_sha256: record.candidate_sha256,
     frozen_card_sha256: record.frozen_card_sha256,
     approved_snapshot_sha256: record.approved_snapshot_sha256,
-    assignment_version: record.assignment_version,
     final_approver: finalApprover,
     current_slack_identity_link: slackLink(
       record.current_slack_identity_link,
       "prior resolution current_slack_identity_link",
     ),
-    assignment_capability_sha256: record.assignment_capability_sha256,
     authorization_proof_sha256: record.authorization_proof_sha256,
     action: record.action,
     comment: comment(record.comment, "prior resolution comment"),
@@ -720,7 +639,6 @@ function priorMatchesCommand(
   return (
     durable.command_id === request.command_id &&
     durable.approval_id === request.approval_id &&
-    durable.assignment_version === request.assignment_version &&
     durable.action === request.action &&
     durable.comment === request.comment &&
     ((request.action === "reject" &&
@@ -767,7 +685,7 @@ export function validatePrivateApprovalAuthorizationAllowV1(
 /**
  * Resolve one explicit approval or rejection. Exact durable retries are
  * returned before consulting current state; otherwise the current pending
- * assignment and server-reproved authorization allow must match exactly.
+ * owner and server-reproved authorization allow must match exactly.
  */
 export function resolvePrivateApprovalPolicyV1(
   input: ResolvePrivateApprovalPolicyInputV1,
@@ -785,11 +703,8 @@ export function resolvePrivateApprovalPolicyV1(
   if (request.approval_id !== current.approval_id) {
     invalid("approval command approval_id does not match the pending approval");
   }
-  if (request.assignment_version !== current.assignment.assignment_version) {
-    invalid("approval command assignment_version is stale");
-  }
   if (!authorizationMatches(allow, current)) {
-    invalid("authorization allow does not match the pending assignment");
+    invalid("authorization allow does not match the pending owner");
   }
   return build(current, request, allow);
 }

@@ -191,21 +191,4 @@ describe("sqlite private approval processing Authority V1", () => {
     );
   });
 
-  it("delegates terminal and presentation persistence to the immutable assignment state", async () => {
-    const { adapter, assignments } = harness();
-    const terminal = { approval_id: APPROVAL_ID };
-    const presentationValue = presentation(sourceCandidate());
-    assignments.readTerminal.mockReturnValue(terminal);
-    assignments.readForPresentation.mockReturnValue(presentationValue);
-    assignments.recordTerminal.mockReturnValue(terminal);
-    assignments.markTerminalCardRendered.mockReturnValue(terminal);
-    const input = { candidate_id: CANDIDATE_ID, resolution: {} };
-
-    await expect(adapter.readTerminal(APPROVAL_ID)).resolves.toBe(terminal);
-    await expect(adapter.readForPresentation(APPROVAL_ID)).resolves.toBe(presentationValue);
-    await expect(adapter.recordTerminal(input as never)).resolves.toBe(terminal);
-    await expect(adapter.markTerminalCardRendered(APPROVAL_ID)).resolves.toBe(terminal);
-    expect(assignments.recordTerminal).toHaveBeenCalledWith(input);
-    expect(assignments.markTerminalCardRendered).toHaveBeenCalledWith(APPROVAL_ID);
-  });
 });

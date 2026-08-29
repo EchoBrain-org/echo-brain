@@ -18,7 +18,7 @@ function input(
   const ref = {
     schema_version: 1, kind: "echo-private-slack-block-approval-resolution-ref-v1",
     authority_id: "authority-1", organization_id: "organization-1", state_lineage_id: "lineage-1", command_id: "command-1", approval_id: "approval-1",
-    candidate_sha256: digest("b"), frozen_card_sha256: digest("c"), approved_snapshot_sha256: digest("d"), assignment_version: 1, assignment_capability_sha256: digest("e"),
+    candidate_sha256: digest("b"), frozen_card_sha256: digest("c"), approved_snapshot_sha256: digest("d"),
     final_approver: { principal_id: "principal-1", membership_id: "membership-1" },
     current_slack_identity_link: { provider: "slack", external_identity_link_id: "clm_link-1", external_identity_link_contract_sha256: digest("f"), provider_subject_id: "U123" },
     action, selected_policy_id: selected, policy_contract_sha256: contract, policy_consequence_sha256: action === "approve" ? digest("0") : null, comment: "Looks good.",
@@ -35,7 +35,7 @@ function input(
     },
     record_position: 1,
     witness: {
-      authorization_allow: { authority_id: "authority-1", organization_id: "organization-1", state_lineage_id: "lineage-1", approval_id: "approval-1", action, assignment_version: 1, final_approver: { principal_id: "principal-1", membership_id: "membership-1" }, selected_policy_id: selected, policy_contract_sha256: contract, provider_action_sha256: digest("2"), decision: "allow" },
+      authorization_allow: { authority_id: "authority-1", organization_id: "organization-1", state_lineage_id: "lineage-1", approval_id: "approval-1", action, final_approver: { principal_id: "principal-1", membership_id: "membership-1" }, selected_policy_id: selected, policy_contract_sha256: contract, provider_action_sha256: digest("2"), decision: "allow" },
       authorization_proof_sha256: digest("3"), provider_action_kind: SIGNED_SLACK_BLOCK_ACTION_V1_KIND, provider_action_schema_version: 1,
       audit_entry: { authority_id: "authority-1", organization_id: "organization-1", state_lineage_id: "lineage-1", audit_event_id: "audit-1", audit_sequence: 1, actor_class: "provider_human", principal_id: "principal-1", membership_id: "membership-1", action, subject_kind: "approval", subject_id: "approval-1", detail_digest: digest("3"), provider_action_sha256: digest("2") },
       audit_entry_sha256: digest("1"),

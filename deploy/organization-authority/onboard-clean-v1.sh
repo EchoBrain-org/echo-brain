@@ -1187,6 +1187,15 @@ finalize() {
     "$FOUNDER_MAIN" finalize --state-dir /echo-clean/state
 }
 
+slack_interactivity_request_url() {
+  printf '%s/v2/integrations/slack/interactions\n' "$(setup_value authority_url)"
+}
+
+print_slack_interactivity_action() {
+  printf 'ACTION: In Slack App settings, enable Interactivity & Shortcuts, set Request URL to %s, and save it. Then create the bounded canary and rerun onboard-clean-v1.sh resume.\n' \
+    "$(slack_interactivity_request_url)"
+}
+
 resume() {
   acquire_operation_lock
   trap 'release_operation_lock' EXIT
@@ -1235,6 +1244,9 @@ resume() {
         compose_clean down
         finalize
         start_runtime
+        print_slack_interactivity_action
+        print_status "$(founder_status)"
+        return
         ;;
       ready_to_start)
         start_runtime

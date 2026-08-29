@@ -328,6 +328,7 @@ describe("clean founder deployment profile", () => {
     expect(source).toContain("service_uses_accepted_runtime_profile proxy");
     expect(source).toContain("< \"$PRIVATE_DIR/slack-bot-token\"");
     expect(source).toContain("slack-signing-secret");
+    expect(source).toContain("Interactivity & Shortcuts");
     expect(deploymentFile("compose.clean-v1.yaml")).toContain(
       "--slack-signing-secret-file",
     );
@@ -832,6 +833,7 @@ describe("clean founder deployment profile", () => {
       ]) {
         writeFileSync(join(inputDir, name), `${name}-value`);
       }
+      writeFileSync(join(inputDir, "slack-signing-secret"), "s".repeat(32));
       for (const name of readdirSync(inputDir)) chmodSync(join(inputDir, name), 0o600);
       const prepareArguments = [
         join(deploy, "onboard-clean-v1.sh"),
@@ -896,7 +898,7 @@ describe("clean founder deployment profile", () => {
         next_action:
           "Use exactly the documented current-executor-owned regular files with mode 0600.",
       });
-      writeFileSync(signingSecret, "slack-signing-secret-value", { mode: 0o600 });
+      writeFileSync(signingSecret, "s".repeat(32), { mode: 0o600 });
       chmodSync(signingSecret, 0o600);
       const manifest = join(inputDir, "onboarding.clean-v1.json");
       writeFileSync(

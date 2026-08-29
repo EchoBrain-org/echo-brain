@@ -372,8 +372,6 @@ function privateSlackBlockHumanAct(
     candidate_sha256: sha256Digest(`candidate-${approval_id}`),
     frozen_card_sha256: sha256Digest(`card-${approval_id}`),
     approved_snapshot_sha256: approvedDecisionSnapshotV2Sha256(snapshot),
-    assignment_version: 1,
-    assignment_capability_sha256: sha256Digest(`assignment-${approval_id}`),
     final_approver: { principal_id: "principal-1", membership_id: "membership-1" },
     current_slack_identity_link: {
       provider: "slack" as const,
@@ -423,7 +421,6 @@ function privateSlackBlockD2Witness(
       state_lineage_id: ref.state_lineage_id,
       approval_id: ref.approval_id,
       action: ref.action,
-      assignment_version: ref.assignment_version,
       final_approver: ref.final_approver,
       selected_policy_id: ref.selected_policy_id,
       policy_contract_sha256: ref.policy_contract_sha256,
@@ -536,7 +533,6 @@ function privateSlackBlockEnvelopeFactory(
             private_slack_block_approval_resolution_ref:
               human.private_slack_block_approval_resolution_ref,
             event: human.event,
-            idempotency: human.idempotency,
           },
           source_provenance: sourceProvenance(),
           processor_provenance: processorProvenance(),

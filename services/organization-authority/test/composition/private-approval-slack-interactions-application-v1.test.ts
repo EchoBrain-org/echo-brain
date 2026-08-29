@@ -13,7 +13,6 @@ const SECRET = "not-a-real-signing-secret";
 const NOW = 1_800_000_000;
 const CARD = {
   approval_id: "apr_00000000-0000-4000-8000-000000000001",
-  assignment_version: 1,
 };
 const POLICY_ID = privateApprovalBlockKitActionIdV1(
   CARD,
@@ -97,12 +96,18 @@ function request(body: Uint8Array, secret = SECRET) {
 }
 
 describe("private Slack interactions application V1", () => {
-  it("durably queues a verified terminal intent before accepting it", async () => {
-    const enqueue = vi.fn(async () => ({ kind: "queued" as const }));
+  it("durably writes a digest-only verified terminal receipt before accepting it", async () => {
+    const enqueue = vi.fn(() => ({
+      disposition: "resolution" as const,
+      receipt: {} as never,
+      receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+      idempotent: false,
+    }));
     const application = createPrivateApprovalSlackInteractionsApplicationV1({
       signing_secret: SECRET,
-      queue: { enqueue },
+      persistence: { enqueue },
       now_unix_seconds: () => NOW,
+      now: () => "2026-08-28T22:00:00.000Z",
     });
 
     await expect(application.accept(request(raw()))).resolves.toBe("accepted");
@@ -110,20 +115,26 @@ describe("private Slack interactions application V1", () => {
     expect(enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
         disposition: "resolution",
-        action: "approve",
-        action_id: APPROVE_ID,
-        approval_id: CARD.approval_id,
-        selected_policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-        comment: "Ship it.",
+        receipt: expect.objectContaining({
+          action: "approve",
+          action_id: APPROVE_ID,
+          approval_id: CARD.approval_id,
+          selected_policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          comment: "Ship it.",
+          received_at: "2026-08-28T22:00:00.000Z",
+          verified_at: "2026-08-28T22:00:00.000Z",
+        }),
       }),
     );
+    expect(JSON.stringify(enqueue.mock.calls)).not.toContain("response_url");
+    expect(JSON.stringify(enqueue.mock.calls)).not.toContain("trigger_id");
   });
 
   it("acknowledges a verified selector event without persisting it", async () => {
     const enqueue = vi.fn();
     const application = createPrivateApprovalSlackInteractionsApplicationV1({
       signing_secret: SECRET,
-      queue: { enqueue },
+      persistence: { enqueue },
       now_unix_seconds: () => NOW,
     });
 
@@ -136,7 +147,7 @@ describe("private Slack interactions application V1", () => {
   it("separates authentication failures, malformed media, and durable queue failure", async () => {
     const queueFailure = createPrivateApprovalSlackInteractionsApplicationV1({
       signing_secret: SECRET,
-      queue: {
+      persistence: {
         enqueue: async () => {
           throw new Error("database busy");
         },
@@ -149,7 +160,14 @@ describe("private Slack interactions application V1", () => {
 
     const application = createPrivateApprovalSlackInteractionsApplicationV1({
       signing_secret: SECRET,
-      queue: { enqueue: async () => ({ kind: "queued" }) },
+      persistence: {
+        enqueue: () => ({
+          disposition: "resolution" as const,
+          receipt: {} as never,
+          receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+          idempotent: false,
+        }),
+      },
       now_unix_seconds: () => NOW,
     });
     await expect(
@@ -158,5 +176,20 @@ describe("private Slack interactions application V1", () => {
     await expect(application.accept(request(raw(), "wrong-secret"))).rejects.toMatchObject({
       code: "unauthorized",
     });
+  });
+
+  it("does not persist when its durable receipt clock is non-canonical", async () => {
+    const enqueue = vi.fn();
+    const application = createPrivateApprovalSlackInteractionsApplicationV1({
+      signing_secret: SECRET,
+      persistence: { enqueue },
+      now_unix_seconds: () => NOW,
+      now: () => "not-a-time",
+    });
+
+    await expect(application.accept(request(raw()))).rejects.toMatchObject({
+      code: "unavailable",
+    });
+    expect(enqueue).not.toHaveBeenCalled();
   });
 });

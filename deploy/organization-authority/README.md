@@ -79,12 +79,17 @@ approval V2 staging lineage; do not reuse an older shared-channel rehearsal
 state directory, database, or approval binding.
 
 Complete the bootstrap, founder identity link, credential installation, and
-finalization, then start the active runtime. Only once that runtime is healthy,
-enable **Interactivity & Shortcuts** and save this Request URL before creating
-the first post-cutoff canary meeting:
+finalization, then start the active runtime. `resume` stops at this point and
+prints the exact URL. Only once that runtime is healthy, enable
+**Interactivity & Shortcuts**, save this Request URL, create the first
+post-cutoff canary meeting, and rerun `resume`:
 
 ```text
 https://<staging-authority-host>/v2/integrations/slack/interactions
+```
+
+```sh
+./onboard-clean-v1.sh resume
 ```
 
 The endpoint intentionally returns `503` before finalization. Do not attempt to

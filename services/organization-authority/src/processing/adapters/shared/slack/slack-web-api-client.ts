@@ -1,8 +1,6 @@
 const DEFAULT_BASE_URL = "https://slack.com/api";
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
-const REPLIES_PAGE_LIMIT = 200;
-const MAX_REPLY_PAGES = 25;
 const HISTORY_PAGE_LIMIT = 200;
 const MAX_HISTORY_PAGES = 25;
 
@@ -58,13 +56,6 @@ export interface SlackPostedMessage {
   ts: string;
 }
 
-/** Exact immutable-card evidence fetched after an identified post. */
-export interface SlackReadMessage {
-  ts: string;
-  text: string;
-  blocks: readonly unknown[];
-}
-
 /** Provider evidence for one channel message during durable post recovery. */
 export interface SlackChannelMessage {
   ts: string;
@@ -84,23 +75,6 @@ export interface SlackAuthIdentity {
 export interface SlackDirectMessage {
   channel_id: string;
   user_id: string;
-}
-
-export interface SlackReaction {
-  name: string;
-  users: readonly string[];
-  count: number;
-}
-
-export interface SlackReply {
-  user: string;
-  text: string;
-  ts: string;
-}
-
-export interface SlackEvidenceReadOptions {
-  /** Reject malformed provider evidence instead of omitting it. */
-  strict?: boolean;
 }
 
 export interface SlackWebApiClientOptions {
@@ -304,12 +278,6 @@ export class SlackWebApiClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  async authTest(signal?: AbortSignal): Promise<{ user_id: string | null }> {
-    const body = await this.call("auth.test", {}, { signal });
-    const userId = body["user_id"];
-    return { user_id: isNonEmptyString(userId) ? userId : null };
-  }
-
   /**
    * Capture the strongest stable tenant and installation-subject identifiers.
    * `auth.test` does not reliably expose `app_id`, so the signed-request path
@@ -503,7 +471,6 @@ export class SlackWebApiClient {
     }
     // `message` is an acknowledgement echo, not durable message evidence.
     // It can be absent, stale, or differ in shape from Slack's stored card.
-    // Identified-card callers must re-read via `readMessage()` below.
     if (
       channel !== input.channel ||
       !SLACK_CONVERSATION_ID_RE.test(channel) ||
@@ -577,52 +544,6 @@ export class SlackWebApiClient {
       );
     }
     return { channel, ts };
-  }
-
-  /**
-   * Read back the exact stored card for an identified post. This intentionally
-   * uses `reactions.get`: it returns the message alongside reaction evidence
-   * and lets approval polling use the same provider-bound reference.
-   */
-  async readMessage(
-    channel: string,
-    timestamp: string,
-    signal?: AbortSignal,
-  ): Promise<SlackReadMessage> {
-    if (
-      !SLACK_CONVERSATION_ID_RE.test(channel) ||
-      !SLACK_MESSAGE_TS_RE.test(timestamp)
-    ) {
-      throw new SlackApiError(
-        "invalid",
-        "Slack reactions.get requires a canonical message identity",
-        false,
-      );
-    }
-    const body = await this.call(
-      "reactions.get",
-      { channel, timestamp, full: true },
-      { signal, method: "GET" },
-    );
-    const message = body["message"];
-    if (
-      !isPlainObject(message) ||
-      message["ts"] !== timestamp ||
-      typeof message["text"] !== "string" ||
-      !Array.isArray(message["blocks"]) ||
-      Object.hasOwn(message, "edited")
-    ) {
-      throw new SlackApiError(
-        "invalid",
-        "Slack reactions.get returned edited or malformed message evidence",
-        false,
-      );
-    }
-    return {
-      ts: timestamp,
-      text: message["text"],
-      blocks: message["blocks"],
-    };
   }
 
   /**
@@ -749,245 +670,6 @@ export class SlackWebApiClient {
     throw new SlackApiError(
       "invalid",
       "Slack conversations.history exceeded the supported page budget",
-      false,
-    );
-  }
-
-  async reactionsGet(
-    channel: string,
-    timestamp: string,
-    signal?: AbortSignal,
-    options: SlackEvidenceReadOptions = {},
-  ): Promise<readonly SlackReaction[]> {
-    const body = await this.call(
-      "reactions.get",
-      { channel, timestamp, full: true },
-      { signal, method: "GET" },
-    );
-    const message = body["message"];
-    if (!isPlainObject(message)) {
-      if (options.strict === true) {
-        throw new SlackApiError(
-          "invalid",
-          "Slack reactions.get returned no message evidence",
-          false,
-        );
-      }
-      return [];
-    }
-    if (
-      options.strict === true &&
-      (message["ts"] !== timestamp || !SLACK_MESSAGE_TS_RE.test(timestamp))
-    ) {
-      throw new SlackApiError(
-        "invalid",
-        "Slack reactions.get returned mismatched message evidence",
-        false,
-      );
-    }
-    const reactions = message["reactions"];
-    if (reactions === undefined) return [];
-    if (!Array.isArray(reactions)) {
-      if (options.strict === true) {
-        throw new SlackApiError(
-          "invalid",
-          "Slack reactions.get returned malformed reaction evidence",
-          false,
-        );
-      }
-      return [];
-    }
-    const parsed: SlackReaction[] = [];
-    for (const entry of reactions) {
-      if (!isPlainObject(entry)) {
-        if (options.strict === true) {
-          throw new SlackApiError(
-            "invalid",
-            "Slack reactions.get returned malformed reaction evidence",
-            false,
-          );
-        }
-        continue;
-      }
-      const name = entry["name"];
-      const users = entry["users"];
-      const count = entry["count"];
-      const legacyInvalid =
-        !isNonEmptyString(name) ||
-        !Array.isArray(users) ||
-        !users.every(isNonEmptyString) ||
-        typeof count !== "number";
-      const strictInvalid =
-        options.strict === true &&
-        !legacyInvalid &&
-        (!(users as string[]).every((user) => SLACK_USER_ID_RE.test(user)) ||
-          new Set(users as string[]).size !== users.length ||
-          !Number.isSafeInteger(count) ||
-          Number(count) < new Set(users as string[]).size);
-      if (legacyInvalid || strictInvalid) {
-        if (options.strict === true) {
-          throw new SlackApiError(
-            "invalid",
-            "Slack reactions.get returned malformed reaction evidence",
-            false,
-          );
-        }
-        continue;
-      }
-      parsed.push({ name, users, count });
-    }
-    if (
-      options.strict === true &&
-      new Set(parsed.map((reaction) => reaction.name)).size !== parsed.length
-    ) {
-      throw new SlackApiError(
-        "invalid",
-        "Slack reactions.get returned duplicate reaction evidence",
-        false,
-      );
-    }
-    return parsed;
-  }
-
-  async conversationsReplies(
-    channel: string,
-    parentTs: string,
-    signal?: AbortSignal,
-    options: SlackEvidenceReadOptions = {},
-  ): Promise<readonly SlackReply[]> {
-    if (options.strict === true && !SLACK_MESSAGE_TS_RE.test(parentTs)) {
-      throw new SlackApiError(
-        "invalid",
-        "Slack conversations.replies requires a canonical parent timestamp",
-        false,
-      );
-    }
-    const replies: SlackReply[] = [];
-    const seenMessageTimestamps = new Set<string>();
-    let sawParent = false;
-    let cursor: string | undefined;
-    for (let page = 0; page < MAX_REPLY_PAGES; page += 1) {
-      const body = await this.call(
-        "conversations.replies",
-        {
-          channel,
-          ts: parentTs,
-          limit: REPLIES_PAGE_LIMIT,
-          ...(cursor === undefined ? {} : { cursor }),
-        },
-        { signal, method: "GET" },
-      );
-      const messages = body["messages"];
-      if (!Array.isArray(messages)) {
-        if (options.strict === true) {
-          throw new SlackApiError(
-            "invalid",
-            "Slack conversations.replies returned malformed reply evidence",
-            false,
-          );
-        }
-      } else {
-        for (const [messageIndex, message] of messages.entries()) {
-          if (!isPlainObject(message)) {
-            if (options.strict === true) {
-              throw new SlackApiError(
-                "invalid",
-                "Slack conversations.replies returned malformed reply evidence",
-                false,
-              );
-            }
-            continue;
-          }
-          const ts = message["ts"];
-          const user = message["user"];
-          const text = message["text"];
-          // The response includes the parent message itself; only true
-          // thread replies with an attributable author count as reasons.
-          if (ts === parentTs) {
-            if (
-              options.strict === true &&
-              (page !== 0 || messageIndex !== 0 || sawParent)
-            ) {
-              throw new SlackApiError(
-                "invalid",
-                "Slack conversations.replies returned a misplaced parent message",
-                false,
-              );
-            }
-            sawParent = true;
-            seenMessageTimestamps.add(parentTs);
-            continue;
-          }
-          if (
-            !isNonEmptyString(ts) ||
-            !isNonEmptyString(user) ||
-            typeof text !== "string"
-          ) {
-            if (options.strict === true) {
-              throw new SlackApiError(
-                "invalid",
-                "Slack conversations.replies returned malformed reply evidence",
-                false,
-              );
-            }
-            continue;
-          }
-          if (
-            options.strict === true &&
-            (!SLACK_MESSAGE_TS_RE.test(ts) ||
-              !SLACK_USER_ID_RE.test(user) ||
-              message["thread_ts"] !== parentTs ||
-              seenMessageTimestamps.has(ts))
-          ) {
-            throw new SlackApiError(
-              "invalid",
-              "Slack conversations.replies returned cross-thread or duplicate evidence",
-              false,
-            );
-          }
-          seenMessageTimestamps.add(ts);
-          replies.push({ user, text, ts });
-        }
-      }
-      if (options.strict === true && page === 0 && !sawParent) {
-        throw new SlackApiError(
-          "invalid",
-          "Slack conversations.replies did not return the requested thread parent",
-          false,
-        );
-      }
-      const metadata = body["response_metadata"];
-      if (
-        options.strict === true &&
-        metadata !== undefined &&
-        !isPlainObject(metadata)
-      ) {
-        throw new SlackApiError(
-          "invalid",
-          "Slack conversations.replies returned malformed pagination evidence",
-          false,
-        );
-      }
-      const nextCursor = isPlainObject(metadata)
-        ? metadata["next_cursor"]
-        : undefined;
-      if (
-        options.strict === true &&
-        nextCursor !== undefined &&
-        typeof nextCursor !== "string"
-      ) {
-        throw new SlackApiError(
-          "invalid",
-          "Slack conversations.replies returned malformed pagination evidence",
-          false,
-        );
-      }
-      if (!isNonEmptyString(nextCursor)) return replies;
-      cursor = nextCursor;
-    }
-    throw new SlackApiError(
-      "invalid",
-      "Slack thread pagination exceeded the supported page budget",
       false,
     );
   }

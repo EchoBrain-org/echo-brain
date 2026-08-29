@@ -46,6 +46,7 @@ describe("private Slack approval card poster V1", () => {
     });
 
     await expect(poster.openDirectMessage("U123")).resolves.toEqual({
+      kind: "opened",
       channel_id: "D123",
       user_id: "U123",
     });
@@ -210,6 +211,23 @@ describe("private Slack approval card poster V1", () => {
       mrkdwn: false,
     });
     await expect(
+      poster.tombstone({
+        approval_id: "apr_123",
+        successor_id: "cnd_456",
+        dm_channel_id: "D123",
+        provider_message_ts: "123.000001",
+      }),
+    ).resolves.toEqual({ kind: "done" });
+    expect(bodies[1]).toEqual({
+      channel: "D123",
+      ts: "123.000001",
+      text: "Superseded\nA newer meeting revision replaced this private review. This card can no longer be used.\n\n[private-approval:apr_123]\n[superseded-by:cnd_456]",
+      blocks: [],
+      unfurl_links: false,
+      unfurl_media: false,
+      mrkdwn: false,
+    });
+    await expect(
       poster.renderTerminal({
         approval_id: "apr_123",
         dm_channel_id: "D123",
@@ -226,12 +244,19 @@ describe("private Slack approval card poster V1", () => {
         throw new Error("connection closed");
       },
     });
+    let now = 10_000;
+    let postRequests = 0;
     const rejected = new PrivateSlackApprovalCardPosterV1("test-token", {
+      now: () => now,
       fetchImpl: async () =>
-        new Response("", {
-          status: 429,
-          headers: { "retry-after": "1" },
-        }),
+        (postRequests += 1) === 1
+          ? new Response("", {
+              status: 429,
+              headers: { "retry-after": "2" },
+            })
+          : new Response(
+              JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }),
+            ),
     });
     const input = { approval_id: "apr_123", dm_channel_id: "D123" };
 
@@ -241,5 +266,51 @@ describe("private Slack approval card poster V1", () => {
     await expect(rejected.postMarker(input)).resolves.toEqual({
       kind: "retry_allowed",
     });
+    await expect(rejected.postMarker(input)).resolves.toEqual({
+      kind: "retry_allowed",
+    });
+    expect(postRequests).toBe(1);
+    now += 2_000;
+    await expect(rejected.postMarker(input)).resolves.toEqual({
+      kind: "posted",
+      provider_message_ts: "123.000001",
+    });
+    expect(postRequests).toBe(2);
+  });
+
+  it("honors Retry-After before retrying a direct-message open", async () => {
+    let now = 10_000;
+    let requests = 0;
+    const poster = new PrivateSlackApprovalCardPosterV1("test-token", {
+      now: () => now,
+      fetchImpl: async () =>
+        (requests += 1) === 1
+          ? new Response("", {
+              status: 429,
+              headers: { "retry-after": "2" },
+            })
+          : new Response(
+              JSON.stringify({
+                ok: true,
+                channel: { id: "D123", is_im: true, user: "U123" },
+              }),
+              { headers: { "x-oauth-scopes": "im:write" } },
+            ),
+    });
+
+    await expect(poster.openDirectMessage("U123")).resolves.toEqual({
+      kind: "retry_allowed",
+    });
+    await expect(poster.openDirectMessage("U123")).resolves.toEqual({
+      kind: "retry_allowed",
+    });
+    expect(requests).toBe(1);
+    now += 2_000;
+    await expect(poster.openDirectMessage("U123")).resolves.toEqual({
+      kind: "opened",
+      channel_id: "D123",
+      user_id: "U123",
+    });
+    expect(requests).toBe(2);
   });
 });

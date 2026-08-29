@@ -250,54 +250,27 @@ describe("resolveCurrentPrivateApprovalSlackTargetV1", () => {
     },
   );
 
-  it("returns no target for absent, revoked, foreign-workspace, foreign-enterprise, or wrong-member links", () => {
-    expect(resolve(seed({ include_link: false }))).toBeUndefined();
-    expect(resolve(seed({ link: { current_status: "revoked" } }))).toBeUndefined();
-    expect(
-      resolve(seed({ link: { provider_tenant_id: "T02" } })),
-    ).toBeUndefined();
-    expect(
-      resolve(
-        seed({
-          connection_enterprise_id: "E01",
-          link: { provider_enterprise_id: "E02" },
-        }),
-      ),
-    ).toBeUndefined();
-    expect(
-      resolve(
-        seed({
-          link: {
-            membership_id: "mem_00000000-0000-4000-8000-000000000099",
-          },
-        }),
-      ),
-    ).toBeUndefined();
-  });
-
-  it("returns no target when the canonical link membership type or Slack subject differs", () => {
-    expect(
-      resolve(seed({ link: { membership_type: "employee" } })),
-    ).toBeUndefined();
-    expect(
-      resolve(seed({ link: { provider_subject_id: "X012ABC" } })),
-    ).toBeUndefined();
-  });
-
-  it("returns no target when the connection is inactive or belongs to another lineage", () => {
-    expect(
-      resolve(seed({ connection_state_status: "revoked" })),
-    ).toBeUndefined();
-    expect(
-      resolve(
-        seed({
-          connection_coordinates: {
-            ...COORDINATES,
-            state_lineage_id: "lineage-foreign",
-          },
-        }),
-      ),
-    ).toBeUndefined();
+  it.each<readonly [string, Parameters<typeof seed>[0]]>([
+    ["the link is absent", { include_link: false }],
+    ["the link is revoked", { link: { current_status: "revoked" } }],
+    ["the link belongs to another workspace", { link: { provider_tenant_id: "T02" } }],
+    [
+      "the link belongs to another enterprise",
+      { connection_enterprise_id: "E01", link: { provider_enterprise_id: "E02" } },
+    ],
+    [
+      "the link belongs to another membership",
+      { link: { membership_id: "mem_00000000-0000-4000-8000-000000000099" } },
+    ],
+    ["the linked membership is not an owner", { link: { membership_type: "employee" } }],
+    ["the linked subject is not a Slack human", { link: { provider_subject_id: "X012ABC" } }],
+    ["the connection is inactive", { connection_state_status: "revoked" }],
+    [
+      "the connection belongs to another lineage",
+      { connection_coordinates: { ...COORDINATES, state_lineage_id: "lineage-foreign" } },
+    ],
+  ])("returns no target when %s", (_label, input) => {
+    expect(resolve(seed(input))).toBeUndefined();
   });
 
   it("returns no target for an ambiguous current member link set", () => {

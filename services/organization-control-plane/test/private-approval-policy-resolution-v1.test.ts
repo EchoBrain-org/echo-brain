@@ -45,14 +45,8 @@ function pending(
     candidate_sha256: digest("a"),
     frozen_card_sha256: digest("b"),
     approved_snapshot_sha256: digest("c"),
-    canonical_record_policy_id: null,
-    assignment: {
-      schema_version: 1,
-      assignment_version: 1,
-      current_assignee: ASSIGNEE,
-      current_slack_identity_link: SLACK_LINK,
-      assignment_capability_sha256: digest("d"),
-    },
+    assigned_owner: ASSIGNEE,
+    assigned_owner_slack_identity_link: SLACK_LINK,
     ...overrides,
   };
 }
@@ -64,7 +58,6 @@ function command(
     schema_version: 1,
     command_id: "cmd_88888888-8888-4888-8888-888888888888",
     approval_id: pending().approval_id,
-    assignment_version: 1,
     action: "approve",
     selected_policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
     comment: null,
@@ -84,10 +77,8 @@ function authorization(
     candidate_sha256: source.candidate_sha256,
     frozen_card_sha256: source.frozen_card_sha256,
     approved_snapshot_sha256: source.approved_snapshot_sha256,
-    assignment_version: source.assignment.assignment_version,
-    authorized_assignee: source.assignment.current_assignee,
-    current_slack_identity_link: source.assignment.current_slack_identity_link,
-    assignment_capability_sha256: source.assignment.assignment_capability_sha256,
+    authorized_assignee: source.assigned_owner,
+    current_slack_identity_link: source.assigned_owner_slack_identity_link,
     authorization_proof_sha256: digest("e"),
     ...overrides,
   };
@@ -111,7 +102,6 @@ describe("resolvePrivateApprovalPolicyV1", () => {
       kind: PRIVATE_APPROVAL_RESOLUTION_KIND,
       final_approver: ASSIGNEE,
       current_slack_identity_link: SLACK_LINK,
-      assignment_capability_sha256: digest("d"),
       authorization_proof_sha256: digest("e"),
       comment: null,
       canonical_record_policy: {
@@ -203,20 +193,7 @@ describe("resolvePrivateApprovalPolicyV1", () => {
     ).toBeNull();
   });
 
-  it("fails closed for stale assignment, prebound policy, and unsupported policy", () => {
-    expect(() =>
-      resolvePrivateApprovalPolicyV1(input({ assignment_version: 2 })),
-    ).toThrow("assignment_version is stale");
-    const prebound = pending({
-      canonical_record_policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID as never,
-    });
-    expect(() =>
-      resolvePrivateApprovalPolicyV1({
-        pending: prebound,
-        command: command(),
-        authorization_allow: authorization(prebound),
-      }),
-    ).toThrow("canonical_record_policy_id must be null");
+  it("fails closed for an unsupported policy", () => {
     expect(() =>
       resolvePrivateApprovalPolicyV1(
         input({ selected_policy_id: "not-a-policy" as never }),
@@ -232,7 +209,6 @@ describe("resolvePrivateApprovalPolicyV1", () => {
       authorization(current, { candidate_sha256: digest("0") }),
       authorization(current, { frozen_card_sha256: digest("1") }),
       authorization(current, { approved_snapshot_sha256: digest("2") }),
-      authorization(current, { assignment_version: 2 }),
       authorization(current, { authorized_assignee: OTHER_ASSIGNEE }),
       authorization(current, {
         current_slack_identity_link: {
@@ -246,7 +222,6 @@ describe("resolvePrivateApprovalPolicyV1", () => {
           external_identity_link_contract_sha256: digest("3"),
         },
       }),
-      authorization(current, { assignment_capability_sha256: digest("f") }),
     ]) {
       expect(() =>
         resolvePrivateApprovalPolicyV1({
@@ -254,7 +229,7 @@ describe("resolvePrivateApprovalPolicyV1", () => {
           command: command(),
           authorization_allow: allow,
         }),
-      ).toThrow("authorization allow does not match the pending assignment");
+      ).toThrow("authorization allow does not match the pending owner");
     }
   });
 
@@ -286,17 +261,11 @@ describe("resolvePrivateApprovalPolicyV1", () => {
     ).toThrow("provider_subject_id must be a canonical Slack U or W subject");
   });
 
-  it("returns an exact durable replay before consulting a later assignment", () => {
+  it("returns an exact durable replay before consulting a later owner", () => {
     const firstInput = input();
     const first = resolvePrivateApprovalPolicyV1(firstInput);
-    const changed = pending({
-      assignment: {
-        ...firstInput.pending.assignment,
-        assignment_version: 2,
-        current_assignee: OTHER_ASSIGNEE,
-      },
-    });
-    expect(changed.assignment.assignment_version).toBe(2);
+    const changed = pending({ assigned_owner: OTHER_ASSIGNEE });
+    expect(changed.assigned_owner).toEqual(OTHER_ASSIGNEE);
     expect(
       resolvePrivateApprovalPolicyV1({
         command: firstInput.command,

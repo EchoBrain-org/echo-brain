@@ -6,7 +6,7 @@
  * fence proves only the server-owned Authority commitments in one SQLite
  * transaction before policy resolution is allowed.
  */
-import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND,
   validatePendingPrivateApprovalV1,
@@ -19,15 +19,10 @@ import {
   type StablePrivateApprovalAuthorityFenceV1,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import type Database from "better-sqlite3";
-import {
-  privateApprovalAssignmentCapabilitySha256V1,
-  type PrivateApprovalCandidateCommitmentV1,
-} from "./sqlite-private-approval-assignment-state-v1.js";
 
 const AUTHORIZATION_PROOF_KIND =
   "echo-private-approval-authority-fence-proof-v1" as const;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
-
 interface CandidateRow {
   readonly candidate_id: string;
   readonly candidate_semantic_sha256: string;
@@ -40,14 +35,12 @@ interface CandidateRow {
 interface AssignmentRow {
   readonly approval_id: string;
   readonly candidate_id: string;
-  readonly assignment_version: number;
-  readonly assignment_json: string;
-  readonly assignment_sha256: string;
+  readonly candidate_sha256: string;
+  readonly frozen_card_sha256: string;
+  readonly approved_snapshot_sha256: string;
   readonly connection_id: string;
   readonly connection_contract_sha256: string;
   readonly connection_state_sha256: string;
-  readonly approval_binding_id: string;
-  readonly approval_binding_contract_sha256: string;
   readonly external_identity_link_id: string;
   readonly external_identity_link_contract_sha256: string;
   readonly assignee_principal_id: string;
@@ -63,21 +56,8 @@ interface MetadataRow {
   readonly organization_id: string;
 }
 
-function parsedCanonical(value: string): unknown | undefined {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return canonicalJson(parsed) === value ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function digest(value: unknown): value is ApprovalContractSha256 {
   return typeof value === "string" && SHA256.test(value);
-}
-
-function same(left: unknown, right: unknown): boolean {
-  return canonicalJson(left) === canonicalJson(right);
 }
 
 /**
@@ -185,10 +165,9 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
     }
     if (
       card.approval_id !== pending.approval_id ||
-      card.assignment_version !== pending.assignment.assignment_version ||
       card.card_sha256 !== pending.frozen_card_sha256 ||
       card.slack_subject_id !==
-        pending.assignment.current_slack_identity_link.provider_subject_id
+        pending.assigned_owner_slack_identity_link.provider_subject_id
     ) {
       return undefined;
     }
@@ -217,32 +196,9 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
     if (assignment === undefined || !this.assignmentMatches(assignment, pending, card)) {
       return undefined;
     }
-    const active = this.currentMembership(pending.assignment.current_assignee);
+    const active = this.currentMembership(pending.assigned_owner);
     if (active === undefined) return undefined;
 
-    const candidateCommitment: PrivateApprovalCandidateCommitmentV1 = Object.freeze({
-      approval_id: pending.approval_id,
-      candidate_id: candidate.candidate_id,
-      candidate_sha256: pending.candidate_sha256,
-      frozen_card_sha256: pending.frozen_card_sha256,
-      approved_snapshot_sha256: pending.approved_snapshot_sha256,
-    });
-    let expectedCapability: ApprovalContractSha256;
-    try {
-      expectedCapability = privateApprovalAssignmentCapabilitySha256V1({
-        organization_id: metadata.organization_id,
-        candidate: candidateCommitment,
-        assignment_version: pending.assignment.assignment_version,
-        current_assignee: pending.assignment.current_assignee,
-        current_slack_identity_link:
-          pending.assignment.current_slack_identity_link,
-      });
-    } catch {
-      return undefined;
-    }
-    if (expectedCapability !== pending.assignment.assignment_capability_sha256) {
-      return undefined;
-    }
     const proof = canonicalSha256({
       schema_version: 1,
       kind: AUTHORIZATION_PROOF_KIND,
@@ -256,17 +212,15 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
         outbox_state: candidate.outbox_state,
         provider_message_ts: candidate.provider_message_ts,
       }),
-      assignment: Object.freeze({
+      assigned_owner: Object.freeze({
         approval_id: assignment.approval_id,
         candidate_id: assignment.candidate_id,
-        assignment_json: assignment.assignment_json,
-        assignment_sha256: assignment.assignment_sha256,
+        candidate_sha256: assignment.candidate_sha256,
+        frozen_card_sha256: assignment.frozen_card_sha256,
+        approved_snapshot_sha256: assignment.approved_snapshot_sha256,
         connection_id: assignment.connection_id,
         connection_contract_sha256: assignment.connection_contract_sha256,
         connection_state_sha256: assignment.connection_state_sha256,
-        approval_binding_id: assignment.approval_binding_id,
-        approval_binding_contract_sha256:
-          assignment.approval_binding_contract_sha256,
         external_identity_link_id: assignment.external_identity_link_id,
         external_identity_link_contract_sha256:
           assignment.external_identity_link_contract_sha256,
@@ -289,10 +243,8 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
       candidate_sha256: pending.candidate_sha256,
       frozen_card_sha256: pending.frozen_card_sha256,
       approved_snapshot_sha256: pending.approved_snapshot_sha256,
-      assignment_version: pending.assignment.assignment_version,
       authorized_assignee: active,
-      current_slack_identity_link: pending.assignment.current_slack_identity_link,
-      assignment_capability_sha256: expectedCapability,
+      current_slack_identity_link: pending.assigned_owner_slack_identity_link,
       authorization_proof_sha256: proof,
     });
   }
@@ -323,10 +275,9 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
   private assignment(approvalId: string): AssignmentRow | undefined {
     return this.database
       .prepare(
-        `SELECT approval_id, candidate_id, assignment_version, assignment_json,
-                assignment_sha256, connection_id, connection_contract_sha256,
-                connection_state_sha256, approval_binding_id,
-                approval_binding_contract_sha256, external_identity_link_id,
+        `SELECT approval_id, candidate_id, candidate_sha256, frozen_card_sha256,
+                approved_snapshot_sha256, connection_id, connection_contract_sha256,
+                connection_state_sha256, external_identity_link_id,
                 external_identity_link_contract_sha256, assignee_principal_id,
                 assignee_membership_id, slack_workspace_id, slack_enterprise_id,
                 slack_subject_id, slack_dm_channel_id
@@ -341,29 +292,23 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
     pending: PendingPrivateApprovalV1,
     card: PrivateApprovalSlackCardBindingV1,
   ): boolean {
-    const stored = parsedCanonical(assignment.assignment_json);
     return (
-      stored !== undefined &&
-      digest(assignment.assignment_sha256) &&
-      canonicalSha256(stored) === assignment.assignment_sha256 &&
-      same(stored, pending.assignment) &&
       assignment.candidate_id === this.currentCandidate(pending.approval_id, pending.candidate_sha256)?.candidate_id &&
-      assignment.assignment_version === pending.assignment.assignment_version &&
+      assignment.candidate_sha256 === pending.candidate_sha256 &&
+      assignment.frozen_card_sha256 === pending.frozen_card_sha256 &&
+      assignment.approved_snapshot_sha256 === pending.approved_snapshot_sha256 &&
       assignment.connection_id === card.connection_id &&
       assignment.connection_contract_sha256 === card.connection_contract_sha256 &&
       assignment.connection_state_sha256 === card.connection_state_sha256 &&
-      assignment.approval_binding_id === card.approval_surface_binding_id &&
-      assignment.approval_binding_contract_sha256 ===
-        card.approval_surface_binding_contract_sha256 &&
       assignment.external_identity_link_id ===
-        pending.assignment.current_slack_identity_link.external_identity_link_id &&
+        pending.assigned_owner_slack_identity_link.external_identity_link_id &&
       assignment.external_identity_link_contract_sha256 ===
-        pending.assignment.current_slack_identity_link
+        pending.assigned_owner_slack_identity_link
           .external_identity_link_contract_sha256 &&
       assignment.assignee_principal_id ===
-        pending.assignment.current_assignee.principal_id &&
+        pending.assigned_owner.principal_id &&
       assignment.assignee_membership_id ===
-        pending.assignment.current_assignee.membership_id &&
+        pending.assigned_owner.membership_id &&
       assignment.slack_workspace_id === card.slack_workspace_id &&
       assignment.slack_enterprise_id === card.slack_enterprise_id &&
       assignment.slack_subject_id === card.slack_subject_id &&

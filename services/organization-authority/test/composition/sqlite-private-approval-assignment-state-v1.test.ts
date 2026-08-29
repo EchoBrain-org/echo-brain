@@ -13,7 +13,6 @@ import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/ope
 import type { GranolaMeetingOwnerPrivateApprovalTargetV1 } from "../../src/composition/resolve-granola-meeting-owner-private-approval-target-v1.js";
 import {
   SqlitePrivateApprovalAssignmentStateV1,
-  privateApprovalAssignmentCapabilitySha256V1,
   type PrivateApprovalCandidateCommitmentV1,
   type CanonicalPrivateApprovalV4ReceiptV1,
   type StagePrivateApprovalAssignmentInputV1,
@@ -29,7 +28,6 @@ const SNAPSHOT_SHA256 = canonicalSha256({});
 const CONNECTION_CONTRACT_SHA256 = canonicalSha256({ connection: "contract" });
 const CONNECTION_STATE_SHA256 = canonicalSha256({ connection: "state" });
 const LINK_CONTRACT_SHA256 = canonicalSha256({ link: "contract" });
-const BINDING_SHA256 = canonicalSha256({ binding: "contract" });
 
 function fixture() {
   const database = openAuthorityDatabase(":memory:");
@@ -168,10 +166,6 @@ function input(
         },
       },
     } as unknown as GranolaMeetingOwnerPrivateApprovalTargetV1,
-    approval_binding: {
-      approval_binding_id: "bnd_private",
-      approval_binding_contract_sha256: BINDING_SHA256,
-    },
     dm_channel: {
       workspace_id: "TPRIVATE",
       enterprise_id: null,
@@ -181,9 +175,7 @@ function input(
   };
 }
 
-function rejection(
-  capability: string,
-): PrivateApprovalResolutionV1 {
+function rejection(): PrivateApprovalResolutionV1 {
   return {
     schema_version: 1,
     kind: "echo-private-approval-resolution-v1",
@@ -193,7 +185,6 @@ function rejection(
     candidate_sha256: CANDIDATE_SHA256,
     frozen_card_sha256: FROZEN_CARD_SHA256,
     approved_snapshot_sha256: SNAPSHOT_SHA256,
-    assignment_version: 1,
     final_approver: { principal_id: "prn_owner", membership_id: "mem_owner" },
     current_slack_identity_link: {
       provider: "slack",
@@ -201,7 +192,6 @@ function rejection(
       external_identity_link_contract_sha256: LINK_CONTRACT_SHA256,
       provider_subject_id: "UOWNER",
     },
-    assignment_capability_sha256: capability as `sha256:${string}`,
     authorization_proof_sha256: canonicalSha256({ authorization: "reject" }),
     action: "reject",
     comment: "Not ready",
@@ -209,9 +199,9 @@ function rejection(
   };
 }
 
-function approval(capability: string): PrivateApprovalResolutionV1 {
+function approval(): PrivateApprovalResolutionV1 {
   return {
-    ...rejection(capability),
+    ...rejection(),
     command_id: "cmd_approve",
     action: "approve",
     canonical_record_policy: {
@@ -263,20 +253,10 @@ describe("SQLite private approval assignment state v1", () => {
       const state = new SqlitePrivateApprovalAssignmentStateV1(database, () => NOW);
       const first = state.stage(input());
       expect(first.created).toBe(true);
-      expect(first.assignment.assignment.assignment_version).toBe(1);
-      expect(first.assignment.assignment.assignment_capability_sha256).toBe(
-        privateApprovalAssignmentCapabilitySha256V1({
-          organization_id: ORGANIZATION_ID,
-          candidate: candidate(),
-          assignment_version: 1,
-          current_assignee: {
-            principal_id: "prn_owner",
-            membership_id: "mem_owner",
-          },
-          current_slack_identity_link:
-            first.assignment.assignment.current_slack_identity_link,
-        }),
-      );
+      expect(first.assignment.assigned_owner).toEqual({
+        principal_id: "prn_owner",
+        membership_id: "mem_owner",
+      });
       expect(state.stage(input())).toEqual({
         assignment: first.assignment,
         created: false,
@@ -322,6 +302,29 @@ describe("SQLite private approval assignment state v1", () => {
     }
   });
 
+  it("fails closed when a stored direct owner identifier is corrupted", () => {
+    const database = fixture();
+    try {
+      const state = new SqlitePrivateApprovalAssignmentStateV1(database, () => NOW);
+      state.stage(input());
+      database.exec(
+        "DROP TRIGGER authority_private_approval_assignments_v2_immutable_update",
+      );
+      database
+        .prepare(
+          `UPDATE authority_private_approval_assignments_v2
+              SET assignee_principal_id = 'prn_💥'
+            WHERE approval_id = ?`,
+        )
+        .run(APPROVAL_ID);
+      expect(() => state.readCurrent(candidate())).toThrow(
+        /stored assignee principal id must be a bounded canonical identifier/,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
   it("reconstructs a superseded card only for presentation, and refuses corrupted frozen evidence", () => {
     const database = fixture();
     try {
@@ -345,7 +348,7 @@ describe("SQLite private approval assignment state v1", () => {
         )
         .run(canonicalSha256({ card: "corrupt" }), APPROVAL_ID);
       expect(() => state.readForPresentation(APPROVAL_ID)).toThrow(
-        /assignment capability is invalid/,
+        /stored assignment differs from its candidate commitment/,
       );
     } finally {
       database.close();
@@ -356,10 +359,10 @@ describe("SQLite private approval assignment state v1", () => {
     const database = fixture();
     try {
       const state = new SqlitePrivateApprovalAssignmentStateV1(database, () => NOW);
-      const staged = state.stage(input()).assignment;
+      state.stage(input());
       const durable = state.recordTerminal({
         candidate_id: CANDIDATE_ID,
-        resolution: rejection(staged.assignment.assignment_capability_sha256),
+        resolution: rejection(),
       });
       expect(durable).toMatchObject({
         outcome: "rejected",
@@ -369,7 +372,7 @@ describe("SQLite private approval assignment state v1", () => {
       expect(
         state.recordTerminal({
           candidate_id: CANDIDATE_ID,
-          resolution: rejection(staged.assignment.assignment_capability_sha256),
+          resolution: rejection(),
         }),
       ).toEqual(durable);
       expect(state.markTerminalCardRendered(APPROVAL_ID)).toMatchObject({
@@ -389,14 +392,14 @@ describe("SQLite private approval assignment state v1", () => {
     const database = fixture();
     try {
       const state = new SqlitePrivateApprovalAssignmentStateV1(database, () => NOW);
-      const staged = state.stage(input()).assignment;
+      state.stage(input());
       // Finalization is fenced while this candidate is current. A later
       // source revision must not strand its already durable terminal.
       supersede(database);
       expect(
         state.recordTerminal({
           candidate_id: CANDIDATE_ID,
-          resolution: rejection(staged.assignment.assignment_capability_sha256),
+          resolution: rejection(),
         }),
       ).toMatchObject({
         outcome: "rejected",
@@ -411,12 +414,12 @@ describe("SQLite private approval assignment state v1", () => {
     const database = fixture();
     try {
       const state = new SqlitePrivateApprovalAssignmentStateV1(database, () => NOW);
-      const staged = state.stage(input()).assignment;
+      state.stage(input());
       supersede(database);
       expect(
         state.recordTerminal({
           candidate_id: CANDIDATE_ID,
-          resolution: approval(staged.assignment.assignment_capability_sha256),
+          resolution: approval(),
           v4_receipt: approvedReceipt(),
         }),
       ).toMatchObject({
@@ -432,8 +435,8 @@ describe("SQLite private approval assignment state v1", () => {
     const database = fixture();
     try {
       const state = new SqlitePrivateApprovalAssignmentStateV1(database, () => NOW);
-      const staged = state.stage(input()).assignment;
-      const resolution = approval(staged.assignment.assignment_capability_sha256);
+      state.stage(input());
+      const resolution = approval();
       expect(() =>
         state.recordTerminal({ candidate_id: CANDIDATE_ID, resolution }),
       ).toThrow(/V4 receipt/);

@@ -124,13 +124,6 @@ export type CleanFrozenCandidateForApprovalV1 = CleanLiveApprovalOutboxV1 & {
   readonly approved_snapshot: Readonly<Record<string, unknown>> | null;
 };
 
-export interface CleanV4ReceiptV1 {
-  readonly approval_id: string;
-  readonly control_approval_sha256: string;
-  readonly receipt: Readonly<Record<string, unknown>>;
-  readonly receipt_sha256: string;
-}
-
 export class CleanLiveOnlySourceRevokedError extends Error {
   constructor() {
     super("clean live-only Granola source owner membership is revoked");
@@ -724,121 +717,6 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     })();
   }
 
-  listStagedApprovalIds(): readonly string[] {
-    return (
-      this.database
-        .prepare(
-          `SELECT approval_id
-             FROM authority_clean_live_approval_outbox_v1
-             JOIN authority_clean_live_candidates_v1 AS candidate
-               ON candidate.candidate_id = authority_clean_live_approval_outbox_v1.candidate_id
-             JOIN authority_clean_live_review_lineage_heads_v1 AS head
-               ON head.review_lineage_id = candidate.review_lineage_id
-            WHERE state = 'staged'
-              AND head.candidate_id = candidate.candidate_id
-              AND NOT EXISTS (
-                SELECT 1 FROM authority_clean_live_v4_receipts_v1 AS receipt
-                 WHERE receipt.approval_id = authority_clean_live_approval_outbox_v1.approval_id
-              )
-            ORDER BY approval_id`,
-        )
-        .all() as Array<{ approval_id: string }>
-    ).map(({ approval_id }) => approval_id);
-  }
-
-  /**
-   * Includes superseded frozen rows because their D2 human action may already
-   * have committed before Authority recorded the supersession. They are never
-   * observed again, but a durable action must still complete its V4 append.
-   */
-  listV4RecoveryApprovalIds(): readonly string[] {
-    return (
-      this.database
-        .prepare(
-          `SELECT approval_id
-             FROM authority_clean_live_approval_outbox_v1
-            WHERE (state = 'staged' OR
-                   (state = 'superseded' AND control_approval_sha256 IS NOT NULL))
-              AND NOT EXISTS (
-                SELECT 1 FROM authority_clean_live_v4_receipts_v1 AS receipt
-                 WHERE receipt.approval_id = authority_clean_live_approval_outbox_v1.approval_id
-              )
-            ORDER BY approval_id`,
-        )
-        .all() as Array<{ approval_id: string }>
-    ).map(({ approval_id }) => approval_id);
-  }
-
-  recordV4Receipt(input: {
-    readonly approval_id: string;
-    readonly control_approval_sha256: string;
-    readonly receipt: Readonly<Record<string, unknown>>;
-  }): CleanV4ReceiptV1 {
-    const receiptJson = canonicalJson(input.receipt);
-    const receiptSha256 = canonicalSha256(input.receipt);
-    return this.database.transaction(() => {
-      const outbox = this.readCandidateByApprovalId(input.approval_id);
-      if (
-        outbox === undefined ||
-        (outbox.state !== "staged" && outbox.state !== "superseded") ||
-        outbox.control_approval_sha256 !== input.control_approval_sha256
-      ) {
-        throw new Error(
-          "clean live V4 receipt lacks its staged control approval witness",
-        );
-      }
-      const existing = this.database
-        .prepare(
-          `SELECT control_approval_sha256, receipt_json, receipt_sha256
-             FROM authority_clean_live_v4_receipts_v1 WHERE approval_id = ?`,
-        )
-        .get(input.approval_id) as
-        | {
-            control_approval_sha256: string;
-            receipt_json: string;
-            receipt_sha256: string;
-          }
-        | undefined;
-      if (existing !== undefined) {
-        if (
-          existing.control_approval_sha256 !== input.control_approval_sha256 ||
-          existing.receipt_json !== receiptJson ||
-          existing.receipt_sha256 !== receiptSha256
-        ) {
-          throw new Error("clean live V4 receipt conflicts with its approval");
-        }
-        return {
-          approval_id: input.approval_id,
-          control_approval_sha256: existing.control_approval_sha256,
-          receipt: input.receipt,
-          receipt_sha256: existing.receipt_sha256,
-        };
-      }
-      const now = this.now();
-      assertCanonicalUtcMillis(now);
-      this.database
-        .prepare(
-          `INSERT INTO authority_clean_live_v4_receipts_v1 (
-             approval_id, control_approval_sha256, receipt_sha256, receipt_json,
-             recorded_at
-           ) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.approval_id,
-          input.control_approval_sha256,
-          receiptSha256,
-          receiptJson,
-          now,
-        );
-      return {
-        approval_id: input.approval_id,
-        control_approval_sha256: input.control_approval_sha256,
-        receipt: input.receipt,
-        receipt_sha256: receiptSha256,
-      };
-    })();
-  }
-
   /**
    * Persist the exact card payload before any Slack side effect. Recovery must
    * prove the same frozen payload; it can never silently construct a new one.
@@ -1187,8 +1065,9 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           )
             AND state != 'superseded'
             AND NOT EXISTS (
-              SELECT 1 FROM authority_clean_live_v4_receipts_v1 AS receipt
-               WHERE receipt.approval_id = authority_clean_live_approval_outbox_v1.approval_id
+              SELECT 1
+                FROM authority_private_approval_terminal_receipts_v2 AS terminal
+               WHERE terminal.approval_id = authority_clean_live_approval_outbox_v1.approval_id
             )`,
       )
       .run(successorCandidateId, supersededAt, supersededAt, reviewLineageId);

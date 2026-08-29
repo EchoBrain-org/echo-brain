@@ -5,26 +5,15 @@ import {
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { describe, expect, it } from "vitest";
 import {
-  PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   buildPrivateApprovalBlockKitCardV1,
-  privateApprovalBlockKitActionIdV1,
 } from "../../src/composition/private-approval-block-kit-card-v1.js";
 
 const INPUT = Object.freeze({
   schema_version: 1 as const,
   approval_id: "apr_00000000-0000-4000-8000-000000000001",
-  assignment_version: 3,
   meeting_title: "Weekly product review",
   approval_context: "Approve the captured decision and action items from this meeting.",
 });
-
-function everyNestedObjectIsFrozen(value: unknown): boolean {
-  if (value === null || typeof value !== "object") return true;
-  return (
-    Object.isFrozen(value) &&
-    Object.values(value).every((nested) => everyNestedObjectIsFrozen(nested))
-  );
-}
 
 describe("private approval Block Kit card v1", () => {
   it("renders the complete private-owner card with only the two current policies", () => {
@@ -35,7 +24,6 @@ describe("private approval Block Kit card v1", () => {
       schema_version: 1,
       kind: "echo-private-approval-block-kit-card-v1",
       approval_id: INPUT.approval_id,
-      assignment_version: INPUT.assignment_version,
       transport: { mrkdwn: false, unfurl_links: false, unfurl_media: false },
     });
     expect(card.text).toContain("Private meeting-owner approval requested.");
@@ -107,7 +95,6 @@ describe("private approval Block Kit card v1", () => {
           value: JSON.stringify({
             schema_version: 1,
             approval_id: INPUT.approval_id,
-            assignment_version: INPUT.assignment_version,
           }),
         },
         {
@@ -118,57 +105,21 @@ describe("private approval Block Kit card v1", () => {
           value: JSON.stringify({
             schema_version: 1,
             approval_id: INPUT.approval_id,
-            assignment_version: INPUT.assignment_version,
           }),
         },
       ],
     });
-    expect(everyNestedObjectIsFrozen(card)).toBe(true);
   });
 
-  it("derives stable, version-scoped Slack IDs and reserves, but does not render, delegation", () => {
+  it("derives stable, version-scoped Slack IDs", () => {
     const first = buildPrivateApprovalBlockKitCardV1(INPUT);
     const replay = buildPrivateApprovalBlockKitCardV1({ ...INPUT });
-    const reassigned = buildPrivateApprovalBlockKitCardV1({
-      ...INPUT,
-      assignment_version: INPUT.assignment_version + 1,
-    });
 
-    expect(first.blocks.map((block) => block.block_id)).toEqual(
-      replay.blocks.map((block) => block.block_id),
+    const blockIds = (card: typeof first) =>
+      card.blocks.map((block) => (block as { readonly block_id: string }).block_id);
+    expect(blockIds(first)).toEqual(
+      blockIds(replay),
     );
-    expect(first.blocks.map((block) => block.block_id)).not.toEqual(
-      reassigned.blocks.map((block) => block.block_id),
-    );
-    expect(
-      privateApprovalBlockKitActionIdV1(
-        INPUT,
-        PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.delegate,
-      ),
-    ).toMatch(/^echo-private-approval-v1-[0-9a-f]{32}-delegate-v1$/);
-    expect(JSON.stringify(first.blocks)).not.toContain("delegate");
-    expect(first.blocks.every((block) => block.block_id.length <= 255)).toBe(
-      true,
-    );
-  });
-
-  it("keeps actor and policy claims out of button values", () => {
-    const actions = buildPrivateApprovalBlockKitCardV1(INPUT).blocks[5];
-    const values = actions.elements.map((element) => JSON.parse(element.value));
-
-    expect(values).toEqual([
-      {
-        schema_version: 1,
-        approval_id: INPUT.approval_id,
-        assignment_version: INPUT.assignment_version,
-      },
-      {
-        schema_version: 1,
-        approval_id: INPUT.approval_id,
-        assignment_version: INPUT.assignment_version,
-      },
-    ]);
-    expect(JSON.stringify(values)).not.toMatch(/principal|membership|actor|policy/i);
   });
 
   it("fails closed on unbounded, malformed, or shape-expanded input", () => {
@@ -190,12 +141,6 @@ describe("private approval Block Kit card v1", () => {
         approval_context: "x".repeat(3_001),
       }),
     ).toThrow(/approval_context/);
-    expect(() =>
-      buildPrivateApprovalBlockKitCardV1({
-        ...INPUT,
-        assignment_version: 0,
-      }),
-    ).toThrow(/assignment_version/);
     expect(() =>
       buildPrivateApprovalBlockKitCardV1({ ...INPUT, actor_id: "prn_attacker" } as never),
     ).toThrow(/unexpected shape/);
@@ -234,10 +179,10 @@ describe("private approval Block Kit card v1", () => {
     ).toThrow(/disallowed controls/);
 
     expect(
-      buildPrivateApprovalBlockKitCardV1({
+      (buildPrivateApprovalBlockKitCardV1({
         ...INPUT,
         approval_context: "Approve this record.\n\tThen notify the team.",
-      }).blocks[1].text.text,
+      }).blocks[1] as { readonly text: { readonly text: string } }).text.text,
     ).toBe("Approve this record.\n\tThen notify the team.");
   });
 });

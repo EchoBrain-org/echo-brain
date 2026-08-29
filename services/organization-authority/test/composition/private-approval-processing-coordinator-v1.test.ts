@@ -35,7 +35,6 @@ function terminal(
       candidate_sha256: digest("candidate"),
       frozen_card_sha256: digest("card"),
       approved_snapshot_sha256: digest("snapshot"),
-      assignment_version: 1,
       final_approver: approver,
       current_slack_identity_link: {
         provider: "slack",
@@ -43,7 +42,6 @@ function terminal(
         external_identity_link_contract_sha256: digest("link"),
         provider_subject_id: "UOWNER",
       },
-      assignment_capability_sha256: digest("capability"),
       authorization_proof_sha256: digest("proof"),
       action: approved ? "approve" : "reject",
       comment: null,
@@ -57,25 +55,6 @@ function terminal(
             restricted_reader: approver,
           }
         : null,
-    },
-    authorization_allow: {
-      schema_version: 1,
-      kind: "echo-private-approval-authorization-allow-v1",
-      approval_id: APPROVAL_ID,
-      organization_id: "organization_private",
-      candidate_sha256: digest("candidate"),
-      frozen_card_sha256: digest("card"),
-      approved_snapshot_sha256: digest("snapshot"),
-      assignment_version: 1,
-      authorized_assignee: approver,
-      current_slack_identity_link: {
-        provider: "slack",
-        external_identity_link_id: "link_private",
-        external_identity_link_contract_sha256: digest("link"),
-        provider_subject_id: "UOWNER",
-      },
-      assignment_capability_sha256: digest("capability"),
-      authorization_proof_sha256: digest("proof"),
     },
     audit: {
       schema_version: 1,
