@@ -116,6 +116,25 @@ function optionalNonEmptyString(value: unknown, label: string): void {
   if (value !== undefined) nonEmptyString(value, label);
 }
 
+function isCanonicalEmailIdentity(value: unknown): value is string {
+  if (
+    typeof value !== 'string' ||
+    value.length < 3 ||
+    value.length > 254 ||
+    value !== value.trim() ||
+    value !== value.toLowerCase() ||
+    !/^[!-~]+$/.test(value)
+  ) {
+    return false;
+  }
+  const separator = value.indexOf('@');
+  return (
+    separator > 0 &&
+    separator === value.lastIndexOf('@') &&
+    separator < value.length - 1
+  );
+}
+
 function oneOf(value: unknown, allowed: readonly string[], label: string): asserts value is string {
   if (typeof value !== 'string' || !allowed.includes(value)) {
     throw new Error(`${label} is invalid`);
@@ -339,10 +358,12 @@ export function assertCanonicalMeetingDocument(
 
   const participants = array(meeting['participants'], 'meeting.participants', 10_000);
   const participantIds = new Set<string>();
+  const participantsById = new Map<string, MeetingParticipant>();
   for (const [index, value] of participants.entries()) {
     participant(value, `meeting.participants[${index}]`);
     if (participantIds.has(value.id)) throw new Error('meeting participant ids must be unique');
     participantIds.add(value.id);
+    participantsById.set(value.id, value);
   }
 
   const artifacts = array(meeting['artifacts'], 'meeting.artifacts', 10_000);
@@ -575,9 +596,34 @@ export function assertCanonicalMeetingDocument(
     const context = object(meeting['context'], 'meeting.context');
     onlyKeys(
       context,
-      ['calendar', 'location', 'scopes', 'labels', 'language', 'meeting_type', 'metadata'],
+      [
+        'owner_participant_id',
+        'calendar',
+        'location',
+        'scopes',
+        'labels',
+        'language',
+        'meeting_type',
+        'metadata',
+      ],
       'meeting.context',
     );
+    if (context['owner_participant_id'] !== undefined) {
+      nonEmptyString(context['owner_participant_id'], 'meeting.context.owner_participant_id');
+      const owner = participantsById.get(context['owner_participant_id']);
+      if (owner === undefined) {
+        throw new Error('meeting.context.owner_participant_id does not resolve');
+      }
+      const ownerEmails = (owner.identities ?? []).filter(
+        (identity) =>
+          identity.kind === 'email' && isCanonicalEmailIdentity(identity.value),
+      );
+      if (ownerEmails.length !== 1) {
+        throw new Error(
+          'meeting.context.owner_participant_id must resolve to one canonical email identity',
+        );
+      }
+    }
     if (context['calendar'] !== undefined) {
       const calendar = object(context['calendar'], 'meeting.context.calendar');
       onlyKeys(

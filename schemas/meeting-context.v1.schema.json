@@ -319,6 +319,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "owner_participant_id": { "$ref": "#/definitions/nonEmptyString" },
         "calendar": { "$ref": "#/definitions/calendarContext" },
         "location": { "$ref": "#/definitions/locationContext" },
         "scopes": {

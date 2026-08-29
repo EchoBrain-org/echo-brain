@@ -25,7 +25,7 @@ import {
   issueCleanPersonInvitation,
 } from "../../services/organization-authority/src/composition/clean-person-onboarding.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
-import { openCleanLiveRuntime } from "../../services/organization-authority/src/composition/open-clean-live-runtime.js";
+import { openCleanGranolaLiveRuntime } from "../../services/organization-authority/src/composition/open-clean-granola-live-runtime.js";
 import { initializeCleanResetState } from "../../services/organization-authority/src/composition/clean-reset-state.js";
 import type { CleanLiveProcessingCycleV1 } from "../../services/organization-authority/src/composition/clean-live-runtime.js";
 import { runPersonClientCli } from "../../src/product/person-client/commands.js";
@@ -412,7 +412,7 @@ describe("clean founder command rehearsal", () => {
     ).resolves.toBe(0);
     const bootstrapped = oneJson<{ invitation_path: string }>(bootstrap);
 
-    const idle = await openCleanLiveRuntime(
+    const idle = await openCleanGranolaLiveRuntime(
       {
         state_directory: stateDirectory,
         host: "127.0.0.1",
@@ -529,7 +529,7 @@ describe("clean founder command rehearsal", () => {
     expect(finalizeStatus, finalized.values.join("")).toBe(0);
     expect(oneJson<{ ok: boolean }>(finalized).ok).toBe(true);
 
-    const active = await openCleanLiveRuntime(
+    const active = await openCleanGranolaLiveRuntime(
       {
         state_directory: stateDirectory,
         host: "127.0.0.1",

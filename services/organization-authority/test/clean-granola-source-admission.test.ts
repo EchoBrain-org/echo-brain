@@ -19,9 +19,11 @@ import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-se
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import {
   admitCleanGranolaSource,
+} from "../src/composition/clean-granola-source-admission.js";
+import {
   CLEAN_LLM_PROCESSOR_MODEL_V1,
   CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-} from "../src/composition/clean-granola-source-admission.js";
+} from "../src/composition/clean-live-llm-processor-config.js";
 import { runCleanGranolaSourceCli } from "../src/composition/clean-granola-source-cli.js";
 import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
 import {
@@ -250,19 +252,22 @@ describe("clean Granola source admission", () => {
       expect(
         database
           .prepare(
-          `SELECT source_adapter_version, normalizer_version, cutoff_at,
-                  owner_observation_assurance, owner_observed_at,
+          `SELECT source_adapter_id, source_adapter_version, normalizer_version, cutoff_at,
+                  source_custodian_assurance, source_custodian_observed_at,
+                  processor_adapter_id,
                   processor_configuration_sha256, source_credential_reference_sha256,
                     processor_credential_reference_sha256
-               FROM authority_clean_granola_source_admission_v1`,
+               FROM authority_live_source_admission_v2`,
           )
           .get(),
       ).toMatchObject({
+        source_adapter_id: "granola",
         source_adapter_version: "2.2.0",
         normalizer_version: "2.2.0",
         cutoff_at: ADMITTED_AT,
-        owner_observation_assurance: "provider_record_owner_observed",
-        owner_observed_at: ADMITTED_AT,
+        source_custodian_assurance: "provider_record_owner_observed",
+        source_custodian_observed_at: ADMITTED_AT,
+        processor_adapter_id: "llm",
       });
     } finally {
       database.close();
@@ -345,7 +350,7 @@ describe("clean Granola source admission", () => {
         expect(
           database
             .prepare(
-              "SELECT count(*) AS count FROM authority_clean_granola_source_admission_v1",
+              "SELECT count(*) AS count FROM authority_live_source_admission_v2",
             )
             .get(),
         ).toEqual({ count: 0 });

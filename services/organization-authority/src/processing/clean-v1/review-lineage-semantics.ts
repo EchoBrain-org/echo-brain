@@ -6,6 +6,12 @@ import type {
   ApprovalContractSha256,
   PersonApprovalPolicyId,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
+import {
+  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256,
+  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
+  RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+} from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import type {
   DecisionSet,
   ExtractedSignal,
@@ -23,6 +29,37 @@ export interface CleanReviewPolicyCommitmentV1 {
 export interface CleanReviewPolicySnapshotV1
   extends CleanReviewPolicyCommitmentV1 {
   readonly policy_consequence_text: string;
+}
+
+/**
+ * Compatibility material retained by the V1 candidate schema until its
+ * generic successor lands. It is deliberately independent of a meeting
+ * provider: the actual visibility policy is selected and bound by the person
+ * who approves the private card. Until then the safe default is Only me.
+ */
+export const legacyRestrictedReviewerReviewPolicySnapshotV1:
+  CleanReviewPolicySnapshotV1 = Object.freeze({
+  policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  policy_contract_sha256: RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+  policy_consequence_text: RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
+  policy_consequence_sha256: RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256,
+});
+
+/** V1 candidates may only carry their provider-neutral compatibility tuple. */
+export function assertLegacyReviewPolicySnapshotV1(
+  actual: CleanReviewPolicySnapshotV1,
+): void {
+  const expected = legacyRestrictedReviewerReviewPolicySnapshotV1;
+  if (
+    actual.policy_id !== expected.policy_id ||
+    actual.policy_contract_sha256 !== expected.policy_contract_sha256 ||
+    actual.policy_consequence_text !== expected.policy_consequence_text ||
+    actual.policy_consequence_sha256 !== expected.policy_consequence_sha256
+  ) {
+    throw new Error(
+      "clean live V1 review policy must equal the fixed restricted default",
+    );
+  }
 }
 
 export interface CleanReviewProcessorCommitmentV1 {

@@ -258,10 +258,10 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
         `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
                 outbox.frozen_card_sha256, outbox.approved_snapshot_sha256,
                 outbox.state AS outbox_state, outbox.provider_message_ts
-           FROM authority_clean_live_candidates_v1 AS candidate
-           JOIN authority_clean_live_approval_outbox_v1 AS outbox
+           FROM authority_live_source_candidates_v2 AS candidate
+           JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
-           JOIN authority_clean_live_review_lineage_heads_v1 AS head
+           JOIN authority_live_source_review_lineage_heads_v2 AS head
              ON head.review_lineage_id = candidate.review_lineage_id
           WHERE outbox.approval_id = ?
             AND candidate.candidate_semantic_sha256 = ?
@@ -281,7 +281,7 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
                 external_identity_link_contract_sha256, assignee_principal_id,
                 assignee_membership_id, slack_workspace_id, slack_enterprise_id,
                 slack_subject_id, slack_dm_channel_id
-           FROM authority_private_approval_assignments_v2
+           FROM authority_private_approval_assignments_v3
           WHERE approval_id = ?`,
       )
       .get(approvalId) as AssignmentRow | undefined;

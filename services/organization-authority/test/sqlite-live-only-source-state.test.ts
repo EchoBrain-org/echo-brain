@@ -1,13 +1,14 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV2 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1 } from "../src/composition/clean-granola-source-admission.js";
+import { applyAuthorityBaselineV3 } from "../src/adapters/persistence/sqlite/baseline.js";
+import { CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1 } from "../src/composition/clean-live-llm-processor-config.js";
 import type {
   DecisionSet,
   MeetingDocument,
 } from "../src/processing/core/index.js";
 import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
-import { selectGranolaPersonContentPolicyV1 } from "../src/processing/clean-v1/granola-person-content-policy.js";
+import { granolaLiveSourceBoundaryV1 } from "../src/composition/granola-live-source-boundary-v1.js";
+import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../src/processing/clean-v1/review-lineage-semantics.js";
 import type {
   CleanActionableLiveCandidateV1,
   CleanLiveCandidateV1,
@@ -21,12 +22,7 @@ const ADMITTED_AT = "2026-08-22T02:03:04.005Z";
 const ADVANCED_AT = "2026-08-22T02:04:04.005Z";
 const NEXT_CUTOFF = "2026-08-22T02:05:04.005Z";
 const SHA = `sha256:${"a".repeat(64)}`;
-const REVIEW_POLICY = selectGranolaPersonContentPolicyV1(undefined);
-const RESTRICTED_REVIEW_POLICY = selectGranolaPersonContentPolicyV1({
-  granola: {
-    folder_membership: [{ id: "folder-r", name: "echo-restricted" }],
-  },
-});
+const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
 const sourceCursor = createGranolaLiveOnlyCursor(ADMITTED_AT);
 const nextCursor = createGranolaLiveOnlyCursor(NEXT_CUTOFF);
 const databases: Database.Database[] = [];
@@ -88,7 +84,7 @@ const decisions: DecisionSet = {
 
 function database(): Database.Database {
   const value = new Database(":memory:");
-  applyAuthorityBaselineV2(value);
+  applyAuthorityBaselineV3(value);
   value
     .prepare(
       `INSERT INTO authority_metadata
@@ -111,20 +107,20 @@ function database(): Database.Database {
     .run(ADMITTED_AT);
   value
     .prepare(
-      `INSERT INTO authority_clean_granola_source_admission_v1 (
+      `INSERT INTO authority_live_source_admission_v2 (
          singleton, organization_id, principal_id, membership_id,
-         membership_type, source_instance_id, source_adapter_version,
-         normalizer_version, owner_email_sha256,
-         owner_observation_assurance, owner_observed_at,
-         source_credential_reference_sha256, cursor, cutoff_at,
-         processor_instance_id, processor_adapter_version,
+         membership_type, source_adapter_id, source_adapter_version,
+         source_adapter_instance_id, normalizer_version, source_custodian_sha256,
+         source_custodian_assurance, source_custodian_observed_at,
+         source_credential_reference_sha256, initial_cursor, cutoff_at,
+         processor_adapter_id, processor_instance_id, processor_adapter_version,
          processor_configuration_sha256,
          processor_credential_reference_sha256, semantic_input_sha256,
          admitted_at
        ) VALUES (1, 'org_test', 'prn_test', 'mem_test', 'owner',
-                 'founder-granola', '2.2.0', '2.2.0', ?,
+                 'granola', '2.2.0', 'founder-granola', '2.2.0', ?,
                  'provider_record_owner_observed', ?, ?, ?, ?,
-                 'founder-llm', ?, ?, ?, ?, ?)`,
+                 'llm', 'founder-llm', ?, ?, ?, ?, ?)`,
     )
     .run(
       SHA,
@@ -147,12 +143,81 @@ afterEach(() => {
 });
 
 describe("SQLite clean live-only source state", () => {
+  it("rejects an admitted source whose persisted adapter differs from the configured boundary", async () => {
+    const value = database();
+    const state = new SqliteCleanLiveOnlySourceStateV1(value, {
+      source_adapter_id: "synthetic-fixture",
+      assert_live_cursor: granolaLiveSourceBoundaryV1.assert_live_cursor,
+    });
+
+    await expect(state.readAdmission()).rejects.toThrow(
+      "admission adapter differs from its configured boundary",
+    );
+  });
+
+  it("rejects an admitted source whose persisted processor differs from the configured processor", async () => {
+    const value = database();
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      granolaLiveSourceBoundaryV1,
+      "synthetic-processor",
+    );
+
+    await expect(state.readAdmission()).rejects.toThrow(
+      "admission processor differs from its configured processor",
+    );
+  });
+
+  it("rejects foreign admission identity and malformed canonical payloads before persistence", async () => {
+    const value = database();
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      granolaLiveSourceBoundaryV1,
+      () => ADVANCED_AT,
+    );
+    const current = await state.readAdmission();
+
+    await expect(
+      state.stageCandidate({
+        admission: {
+          ...current,
+          source: { ...current.source, adapter_id: "synthetic-source" },
+        },
+        meeting,
+        decisions,
+        review_policy: REVIEW_POLICY,
+      }),
+    ).rejects.toThrow(
+      "clean live candidate differs from the current admitted source state",
+    );
+
+    const malformedMeeting = {
+      ...meeting,
+      content: [meeting.content[0]!, meeting.content[0]!],
+    } as MeetingDocument;
+    await expect(
+      state.stageCandidate({
+        admission: current,
+        meeting: malformedMeeting,
+        decisions,
+        review_policy: REVIEW_POLICY,
+      }),
+    ).rejects.toThrow("meeting content block ids must be unique");
+
+    expect(
+      value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2")
+        .pluck()
+        .get(),
+    ).toBe(0);
+  });
+
   it.each(["approved", "rejected"] as const)(
     "keeps a completed %s private approval terminal when a later revision arrives",
     async (outcome) => {
       const value = database();
       const state = new SqliteCleanLiveOnlySourceStateV1(
         value,
+        granolaLiveSourceBoundaryV1,
         () => ADVANCED_AT,
       );
       const current = await state.readAdmission();
@@ -170,7 +235,7 @@ describe("SQLite clean live-only source state", () => {
       try {
         value
           .prepare(
-            `INSERT INTO authority_private_approval_terminal_receipts_v2 (
+            `INSERT INTO authority_private_approval_terminal_receipts_v3 (
                approval_id, candidate_id, outcome, resolution_json,
                resolution_sha256, v4_receipt_json, v4_receipt_sha256,
                card_render_state, card_rendered_at, recorded_at
@@ -236,6 +301,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -296,8 +362,10 @@ describe("SQLite clean live-only source state", () => {
 
   it("lists only current actionable approvals that still need delivery", async () => {
     let tick = 0;
-    const state = new SqliteCleanLiveOnlySourceStateV1(database(), () =>
-      new Date(Date.parse(ADVANCED_AT) + tick++ * 1_000).toISOString(),
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      database(),
+      granolaLiveSourceBoundaryV1,
+      () => new Date(Date.parse(ADVANCED_AT) + tick++ * 1_000).toISOString(),
     );
     const current = await state.readAdmission();
     const forMeeting = (suffix: string): MeetingDocument => ({
@@ -474,6 +542,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
 
@@ -488,7 +557,7 @@ describe("SQLite clean live-only source state", () => {
       value
         .prepare(
           `SELECT admission_semantic_input_sha256, cursor, cursor_version, updated_at
-             FROM authority_clean_granola_source_progress_v1`,
+             FROM authority_live_source_progress_v2`,
         )
         .get(),
     ).toEqual({
@@ -514,7 +583,7 @@ describe("SQLite clean live-only source state", () => {
       value
         .prepare(
           `SELECT cursor, cursor_version, updated_at
-             FROM authority_clean_granola_source_progress_v1`,
+             FROM authority_live_source_progress_v2`,
         )
         .get(),
     ).toEqual({
@@ -528,6 +597,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     await state.readAdmission();
@@ -554,20 +624,21 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     await state.readAdmission();
     expect(() =>
       value
         .prepare(
-          `UPDATE authority_clean_granola_source_progress_v1
+          `UPDATE authority_live_source_progress_v2
               SET admission_semantic_input_sha256 = ?`,
         )
         .run(`sha256:${"b".repeat(64)}`),
     ).toThrow("only permits ordered cursor advances");
     expect(() =>
       value
-        .prepare(`DELETE FROM authority_clean_granola_source_progress_v1`)
+        .prepare(`DELETE FROM authority_live_source_progress_v2`)
         .run(),
     ).toThrow("progress deletion is denied");
   });
@@ -576,6 +647,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -647,10 +719,11 @@ describe("SQLite clean live-only source state", () => {
     });
   });
 
-  it("rejects display text that differs from the canonical D2 policy commitment", async () => {
+  it("rejects a candidate policy that differs from the provider-neutral default", async () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -662,12 +735,11 @@ describe("SQLite clean live-only source state", () => {
         decisions,
         review_policy: {
           ...REVIEW_POLICY,
-          policy_consequence_text:
-            RESTRICTED_REVIEW_POLICY.policy_consequence_text,
+          policy_consequence_text: "Wrong visibility text.",
         },
       }),
     ).rejects.toThrow(
-      "clean Granola review policy must match its canonical content policy",
+      "clean live V1 review policy must equal the fixed restricted default",
     );
   });
 
@@ -675,6 +747,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const initialAdmission = await state.readAdmission();
@@ -748,14 +821,14 @@ describe("SQLite clean live-only source state", () => {
     expect(
       value
         .prepare(
-          `SELECT COUNT(*) AS count FROM authority_clean_live_candidates_v1`,
+          `SELECT COUNT(*) AS count FROM authority_live_source_candidates_v2`,
         )
         .get(),
     ).toEqual({ count: 1 });
     expect(
       value
         .prepare(
-          `SELECT COUNT(*) AS count FROM authority_clean_live_approval_outbox_v1`,
+          `SELECT COUNT(*) AS count FROM authority_live_approval_outbox_v2`,
         )
         .get(),
     ).toEqual({ count: 1 });
@@ -789,14 +862,14 @@ describe("SQLite clean live-only source state", () => {
     expect(
       value
         .prepare(
-          `SELECT COUNT(*) AS count FROM authority_clean_live_candidates_v1`,
+          `SELECT COUNT(*) AS count FROM authority_live_source_candidates_v2`,
         )
         .get(),
     ).toEqual({ count: 2 });
     expect(
       value
         .prepare(
-          `SELECT COUNT(*) AS count FROM authority_clean_live_approval_outbox_v1`,
+          `SELECT COUNT(*) AS count FROM authority_live_approval_outbox_v2`,
         )
         .get(),
     ).toEqual({ count: 2 });
@@ -806,6 +879,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -863,6 +937,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -900,16 +975,17 @@ describe("SQLite clean live-only source state", () => {
     expect(
       value
         .prepare(
-          `SELECT COUNT(*) AS count FROM authority_clean_live_approval_outbox_v1`,
+          `SELECT COUNT(*) AS count FROM authority_live_approval_outbox_v2`,
         )
         .get(),
     ).toEqual({ count: 1 });
   });
 
-  it("opens a new immutable review round for a semantic or policy-boundary change", async () => {
+  it("opens a new immutable review round for a semantic change", async () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -967,7 +1043,7 @@ describe("SQLite clean live-only source state", () => {
         ...decisions,
         meeting_revision: restricted.provenance.canonical_revision,
       },
-      review_policy: RESTRICTED_REVIEW_POLICY,
+      review_policy: REVIEW_POLICY,
     });
     assertActionable(third);
     expect(second).toMatchObject({
@@ -985,6 +1061,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1037,6 +1114,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1119,6 +1197,7 @@ describe("SQLite clean live-only source state", () => {
   it("releases a superseded post attempt after a definitive provider rejection", async () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       database(),
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1187,6 +1266,7 @@ describe("SQLite clean live-only source state", () => {
   it("releases only the exact unresolved delivery attempt", async () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       database(),
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1233,7 +1313,11 @@ describe("SQLite clean live-only source state", () => {
 
   it("rejects a late post result after the same approval starts a new attempt", async () => {
     let now = ADVANCED_AT;
-    const state = new SqliteCleanLiveOnlySourceStateV1(database(), () => now);
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      database(),
+      granolaLiveSourceBoundaryV1,
+      () => now,
+    );
     const current = await state.readAdmission();
     const candidate = await state.stageCandidate({
       admission: current,
@@ -1286,6 +1370,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1396,6 +1481,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1435,7 +1521,7 @@ describe("SQLite clean live-only source state", () => {
     expect(() =>
       value
         .prepare(
-          `UPDATE authority_clean_live_approval_outbox_v1
+          `UPDATE authority_live_approval_outbox_v2
           SET state = 'superseded', provider_message_ts = '1724292304.005000',
               frozen_card_sha256 = ?, approved_snapshot_json = '{}',
               approved_snapshot_sha256 = ?, superseded_by_candidate_id = ?,
@@ -1471,7 +1557,7 @@ describe("SQLite clean live-only source state", () => {
     expect(() =>
       value
         .prepare(
-          `UPDATE authority_clean_live_approval_outbox_v1
+          `UPDATE authority_live_approval_outbox_v2
           SET state = 'superseded', control_approval_sha256 = ?,
               superseded_by_candidate_id = ?, superseded_at = ?, updated_at = ?
         WHERE candidate_id = ?`,
@@ -1490,6 +1576,7 @@ describe("SQLite clean live-only source state", () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
+      granolaLiveSourceBoundaryV1,
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();

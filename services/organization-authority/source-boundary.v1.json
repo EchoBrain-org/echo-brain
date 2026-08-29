@@ -10,6 +10,7 @@
     "services/organization-authority/src/clean-reset-main.ts",
     "services/organization-authority/src/clean-person-main.ts",
     "services/organization-authority/src/clean-live-main.ts",
+    "services/organization-authority/src/synthetic-meeting-quality-main.ts",
     "services/organization-authority/src/clean-granola-source-main.ts",
     "services/organization-authority/src/clean-founder-main.ts"
   ],
@@ -44,6 +45,7 @@
   ],
   "runtime_assets": [
     "services/organization-authority/baselines/authority-baseline-v1.sql",
+    "services/organization-authority/baselines/authority-live-source-v3.sql",
     "services/organization-authority/baselines/authority-private-approval-v2.sql"
   ],
   "layer_rules": [
@@ -72,6 +74,16 @@
       "from": "services/organization-authority/src/clean-live-main.ts",
       "allowed_imports": [
         "services/organization-authority/src/composition/clean-live-cli.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-synthetic-quality-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/synthetic-meeting-quality-main.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/composition/synthetic-meeting-quality-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -280,12 +292,14 @@
         "services/organization-authority/src/processing/authorization/**",
         "services/organization-authority/src/processing/core/contracts/adapter.ts",
         "services/organization-authority/src/processing/core/contracts/**",
+        "services/organization-authority/src/processing/core/ports/adapters.ts",
         "services/organization-authority/src/processing/core/processing/brief.ts",
         "services/organization-authority/src/processing/core/processing/run-core-cycle.ts",
         "services/organization-authority/src/processing/clean-v1/**",
         "services/organization-authority/src/processing/clean-v1-d2-d3/**",
         "services/organization-authority/src/processing/clean-v1-record/**",
         "services/organization-authority/src/processing/live/**",
+        "services/organization-authority/src/quality/**",
         "services/organization-authority/src/processing/record/**",
         "services/organization-authority/src/processing/storage/**"
       ],
@@ -322,6 +336,22 @@
       "allowed_node_builtins": []
     },
     {
+      "name": "authority-synthetic-quality-harness-uses-only-injected-adapters",
+      "from": "services/organization-authority/src/quality/**",
+      "allowed_imports": [
+        "services/organization-authority/src/answer-composition/**",
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/quality/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "fs/promises"
+      ]
+    },
+    {
       "name": "state-lineage-guard-is-unwired-and-read-only",
       "from": "services/organization-authority/src/state-lineage/**",
       "allowed_imports": [
@@ -339,12 +369,11 @@
       ]
     },
     {
-      "name": "clean-live-only-source-cycle-uses-no-legacy-runtime",
+      "name": "clean-live-only-source-cycle-is-provider-neutral",
       "from": "services/organization-authority/src/processing/clean-v1/**",
       "allowed_imports": [
         "services/organization-authority/src/processing/clean-v1/**",
         "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
         "services/organization-authority/src/processing/adapters/shared/slack/slack-web-api-client.ts"
       ],
       "allowed_workspace_packages": [
