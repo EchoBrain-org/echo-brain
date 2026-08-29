@@ -74,8 +74,8 @@ or a shell argument.
 `slack_approval_channel_id` in the onboarding JSON is a transitional legacy
 field. It names only the public founder identity-link channel used during
 onboarding. It never receives approval cards and no shared approval binding is
-created from it. Run the re-onboarding only with a wholly fresh private-
-approval V2 staging lineage; do not reuse an older shared-channel rehearsal
+created from it. Run the re-onboarding only with a wholly fresh provider-
+neutral V3 staging lineage; do not reuse an older shared-channel rehearsal
 state directory, database, or approval binding.
 
 Complete the bootstrap, founder identity link, credential installation, and
