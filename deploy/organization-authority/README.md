@@ -136,10 +136,12 @@ once through the explicit founder attestation:
 ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
 ```
 
-This stops the Compose profile and moves both `clean-data` and its environment
-file into a mode-`0700` timestamped `retired-rehearsals/` archive. It does not
-delete them. It also accepts a clean rehearsal created before this wrapper, so
-no wrapper-specific setup record is required for the one pre-live replacement.
+This stops the Compose profile, copies and verifies the contents of the retained
+`clean-data` mount in a mode-`0700` timestamped `retired-rehearsals/` archive,
+moves its environment file into that archive, and empties the live mount for
+fresh preparation. It does not delete the archived rehearsal. It also accepts
+a clean rehearsal created before this wrapper, so no wrapper-specific setup
+record is required for the one pre-live replacement.
 Run `prepare` again with the new exact release record. Never use this command
 after the first live-user release; subsequent baseline-preserving updates use
 the release procedure below.
