@@ -349,6 +349,7 @@ describe("clean founder deployment profile", () => {
     expect(source).not.toContain("Reject a second card");
     expect(source).toContain("founder-person-invitation.json");
     expect(source).toContain("replace-rehearsal --confirm-no-live-users");
+    expect(source).not.toContain('mv "$DATA_DIR"');
     expect(source).toContain("doctor --input-dir <absolute-private-input-directory>");
     expect(source).toContain("prepare --input-dir <absolute-private-input-directory>");
     expect(source).toContain("onboarding.clean-v1.json");
@@ -360,7 +361,7 @@ describe("clean founder deployment profile", () => {
     expect(source).toContain('chown "$RUNTIME_UID:$RUNTIME_GID"');
     expect(source).toContain("runtime user must be a non-root");
     expect(source).toContain("require_safe_directory_target");
-    expect(source).toContain("clean data was restored");
+    expect(source).toContain("live data and environment were restored");
     expect(source).not.toContain('uid="$(id -u)"');
     expect(source).not.toContain('gid="$(id -g)"');
     expect(source).not.toContain("compose_clean build");
@@ -782,6 +783,8 @@ describe("clean founder deployment profile", () => {
         "#!/bin/sh\n[ \"${ECHO_FAKE_TUNNEL:-active}\" = active ]\n",
       );
       chmodSync(join(bin, "systemctl"), 0o755);
+      writeFileSync(join(bin, "mountpoint"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(bin, "mountpoint"), 0o755);
       const image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
       const inputDir = join(root, "onboarding-input");
       mkdirSync(inputDir);
@@ -1044,6 +1047,11 @@ describe("clean founder deployment profile", () => {
         slack_approval_channel_id: "C0123456789",
       })}\n`);
       chmodSync(manifest, 0o600);
+      writeFileSync(
+        join(deploy, "clean-data", "rehearsal-sentinel"),
+        "rehearsal-data-must-survive",
+      );
+      const cleanDataInode = statSync(join(deploy, "clean-data")).ino;
       rmSync(join(deploy, "clean-data/private/onboard-clean-v1.conf"));
       const retired = execFileSync(
         "bash",
@@ -1055,7 +1063,9 @@ describe("clean founder deployment profile", () => {
         { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } },
       ).toString();
       expect(retired).toContain("rehearsal_replaced=true");
-      expect(existsSync(join(deploy, "clean-data"))).toBe(false);
+      expect(existsSync(join(deploy, "clean-data"))).toBe(true);
+      expect(statSync(join(deploy, "clean-data")).ino).toBe(cleanDataInode);
+      expect(readdirSync(join(deploy, "clean-data"))).toHaveLength(0);
       expect(existsSync(join(deploy, ".env.clean-v1"))).toBe(false);
       const archives = readdirSync(join(deploy, "retired-rehearsals"));
       expect(archives).toHaveLength(1);
@@ -1067,6 +1077,18 @@ describe("clean founder deployment profile", () => {
           join(deploy, "retired-rehearsals", archives[0]!, ".env.clean-v1"),
         ),
       ).toBe(true);
+      expect(
+        readFileSync(
+          join(
+            deploy,
+            "retired-rehearsals",
+            archives[0]!,
+            "clean-data/rehearsal-sentinel",
+          ),
+          "utf8",
+        ),
+      ).toBe("rehearsal-data-must-survive");
+      rmSync(join(deploy, "clean-data"), { recursive: true });
       symlinkSync(inputDir, join(deploy, "clean-data"), "dir");
       expect(() =>
         execFileSync("bash", prepareArguments, commandEnvironment),
