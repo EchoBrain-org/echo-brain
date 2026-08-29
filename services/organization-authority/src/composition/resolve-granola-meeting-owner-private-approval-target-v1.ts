@@ -68,8 +68,8 @@ function observedEmail(source: unknown): string | undefined {
 }
 
 /**
- * Prefer the raw calendar organizer. An ad-hoc Granola note has no calendar
- * organizer, so only in that absence use the raw provider note owner. A
+ * Prefer the raw calendar organizer. An ad-hoc Granola note has a missing or
+ * null calendar event, so only in that absence use the raw provider note owner. A
  * present but malformed organizer remains a hard failure and cannot be
  * replaced by weaker evidence.
  *
@@ -81,7 +81,7 @@ function observedGranolaOwnerEmail(meeting: MeetingDocument): string | undefined
   const granola = ownDataProperty(meeting.extensions, "granola");
   if (!granola.present || !isPlainObject(granola.value)) return undefined;
   const calendarEvent = ownDataProperty(granola.value, "calendar_event");
-  if (calendarEvent.present) {
+  if (calendarEvent.present && calendarEvent.value !== null) {
     if (!isPlainObject(calendarEvent.value)) return undefined;
     const organizer = ownDataProperty(calendarEvent.value, "organizer");
     if (organizer.present) return observedEmail(organizer.value);

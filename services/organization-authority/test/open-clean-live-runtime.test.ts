@@ -357,6 +357,7 @@ function fakeSource(
     artifacts: [],
     extensions: {
       granola: {
+        calendar_event: null,
         owner: { email: "founder@example.com" },
       },
     },

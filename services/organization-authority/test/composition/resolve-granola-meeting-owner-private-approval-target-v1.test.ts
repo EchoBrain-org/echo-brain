@@ -320,6 +320,9 @@ describe("Granola meeting-owner private approval target v1", () => {
         meetingWithExtensions({
           granola: { calendar_event: {}, owner: OWNER_EMAIL },
         }),
+        meetingWithExtensions({
+          granola: { calendar_event: null, owner: { email: OWNER_EMAIL } },
+        }),
       ]) {
         expect(
           resolve({ authority_database: authority, control_plane_database: control, meeting: candidate }),
@@ -337,7 +340,7 @@ describe("Granola meeting-owner private approval target v1", () => {
       for (const candidate of [
         meetingWithExtensions({
           granola: {
-            calendar_event: null,
+            calendar_event: "invalid",
             owner: { email: OWNER_EMAIL },
           },
         }),
