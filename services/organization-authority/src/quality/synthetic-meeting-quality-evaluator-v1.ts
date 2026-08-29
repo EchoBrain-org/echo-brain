@@ -71,7 +71,7 @@ export interface SyntheticMeetingQualityEvaluatorInputV1 {
   readonly processor: DecisionProcessorAdapter;
   readonly planner: Layer4StructuredOutputPort;
   readonly answerer: Layer4StructuredOutputPort;
-  readonly provider: "openrouter";
+  readonly generation_adapter_id: string;
   readonly planner_model: string;
   readonly answer_model: string;
   readonly corpus?: SyntheticMeetingQualityCorpusV1;
@@ -228,7 +228,7 @@ async function evaluateExtraction(
 
 async function evaluateLayer4(
   input: Required<Pick<SyntheticMeetingQualityEvaluatorInputV1,
-    "planner" | "answerer" | "provider" | "planner_model" | "answer_model">> &
+    "planner" | "answerer" | "generation_adapter_id" | "planner_model" | "answer_model">> &
     Pick<SyntheticMeetingQualityEvaluatorInputV1, "timeout_ms"> & {
       readonly corpus: SyntheticMeetingQualityCorpusV1;
     },
@@ -244,7 +244,7 @@ async function evaluateLayer4(
       answerer: input.answerer,
       layer3,
       audit: { append: () => undefined },
-      provider: input.provider,
+      generation_adapter_id: input.generation_adapter_id,
       planner_model: input.planner_model,
       answer_model: input.answer_model,
       ...(input.timeout_ms === undefined ? {} : { timeout_ms: input.timeout_ms }),
@@ -321,7 +321,7 @@ export async function evaluateSyntheticMeetingQualityV1(
   const layer4 = await evaluateLayer4({
     planner: input.planner,
     answerer: input.answerer,
-    provider: input.provider,
+    generation_adapter_id: input.generation_adapter_id,
     planner_model: input.planner_model,
     answer_model: input.answer_model,
     corpus,

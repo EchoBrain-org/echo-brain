@@ -19,10 +19,7 @@ import type {
   CleanPersonAnswerPolicyV1,
   CleanPersonAnswerResponseV1,
 } from "../presentation/clean-person-answer-http-application.js";
-
-export const CLEAN_LAYER4_PROVIDER_V1 = "openrouter" as const;
-export const CLEAN_LAYER4_MODEL_V1 = "deepseek/deepseek-r1" as const;
-export const CLEAN_LAYER4_TIMEOUT_MS_V1 = 60_000;
+import type { CleanLayer4GenerationProfileV1 } from "./clean-layer4-runtime.js";
 
 export interface CleanLayer4FailureEventV1
   extends Layer4FailureDiagnosticV1 {
@@ -35,6 +32,7 @@ export interface CreateCleanPersonAnswerRouteV1Options {
   readonly state_lineage_id: string;
   readonly search: CleanPersonRecordSearchBatchApplicationV1;
   readonly model: Layer4StructuredOutputPort;
+  readonly generation: CleanLayer4GenerationProfileV1;
   readonly audit: SqliteCleanPersonAnswerCompositionAuditV1;
   /** Metadata-only server observer. It never changes the public response. */
   readonly on_failure?: (event: CleanLayer4FailureEventV1) => void;
@@ -198,10 +196,10 @@ export function createCleanPersonAnswerRouteV1(
           answerer: options.model,
           layer3,
           audit: options.audit,
-          provider: CLEAN_LAYER4_PROVIDER_V1,
-          planner_model: CLEAN_LAYER4_MODEL_V1,
-          answer_model: CLEAN_LAYER4_MODEL_V1,
-          timeout_ms: CLEAN_LAYER4_TIMEOUT_MS_V1,
+          generation_adapter_id: options.generation.generation_adapter_id,
+          planner_model: options.generation.planner_model,
+          answer_model: options.generation.answer_model,
+          timeout_ms: options.generation.timeout_ms,
           ...(options.on_failure === undefined
             ? {}
             : {

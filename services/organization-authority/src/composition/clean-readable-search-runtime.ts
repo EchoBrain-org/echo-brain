@@ -13,6 +13,7 @@ import {
 } from "@echo-brain/organization-protocol";
 import {
   CleanV4Layer1SnapshotPort,
+  type ApprovedRecordPolicyProjectorRegistryV1,
   type CleanV4Layer1Snapshot,
 } from "@echo-brain/organization-record/new-lineage-v1";
 import {
@@ -205,6 +206,8 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
   readonly authority: Database.Database;
   readonly record: Database.Database;
   readonly signer: DevelopmentFileOrganizationAuthoritySigner;
+  /** Chosen with the active approval protocol; this runtime names no provider. */
+  readonly policy_projectors: ApprovedRecordPolicyProjectorRegistryV1;
   readonly now?: () => string;
 }): CleanReadableSearchGenerationReconcilerV1<ReconciliationSnapshotV1> {
   const contract = cleanReadableSearchRuntimeContractV1();
@@ -251,6 +254,7 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
         authority_id: input.root.authority_id,
         organization_id: input.root.organization_id,
         state_lineage_id: input.root.state_lineage_id,
+        policy_projectors: input.policy_projectors,
         verify_envelope: (value) =>
           verifyOrganizationRecordEnvelopeV4(
             value,

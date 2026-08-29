@@ -26,6 +26,12 @@ import type {
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const NOW = "2026-08-23T00:00:00.000Z";
+const GENERATION = Object.freeze({
+  generation_adapter_id: "test-structured-output",
+  planner_model: "test-planner",
+  answer_model: "test-answer",
+  timeout_ms: 60_000,
+});
 
 function authorization(): PersonAccessAuthorization {
   return {
@@ -146,6 +152,7 @@ function setup(input: {
     state_lineage_id: "lineage_clean",
     search,
     model,
+    generation: GENERATION,
     audit,
     ...(input.on_failure === undefined ? {} : { on_failure: input.on_failure }),
   });
@@ -335,9 +342,9 @@ describe("clean Person Layer 4 answer route", () => {
         stage: "answer",
         failure_class: "core_validation",
         http_status: null,
-        provider: null,
+        adapter_id: null,
         finish_reason: null,
-        provider_generation_id: null,
+        adapter_request_id: null,
         retrieval_generation_id: digest("generation"),
       });
       expect(failures[0]?.elapsed_ms).toEqual(expect.any(Number));

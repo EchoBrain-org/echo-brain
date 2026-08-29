@@ -3,10 +3,6 @@ import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
-  validateOrganizationPersonSlackLinkBeginRequest,
-  validateOrganizationPersonSlackLinkCompleteRequest,
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonSessionRefreshRequest,
 } from "@echo-brain/organization-api";
@@ -19,7 +15,7 @@ import {
 } from "./person-identity-session-http-application.js";
 import type { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
-import type { PersonSlackIdentityLinkHttpApplication } from "./person-slack-identity-link-http-application.js";
+import type { PersonExternalIdentityLinkHttpApplicationV1 } from "./person-external-identity-link-http-application.js";
 import {
   CLEAN_PERSON_RECORDS_PATH_V1,
   type CleanPersonRecordReadHttpApplicationV1,
@@ -36,12 +32,33 @@ import {
   CLEAN_PERSON_ANSWER_PATH_V1,
   type CleanPersonAnswerHttpApplicationV1,
 } from "./clean-person-answer-http-application.js";
-import {
-  PRIVATE_APPROVAL_SLACK_INTERACTIONS_PATH_V1,
-  type PrivateApprovalSlackInteractionsHttpApplicationV1,
-} from "./private-approval-slack-interactions-http-application-v1.js";
+import type { PrivateApprovalInteractionHttpApplicationV1 } from "./private-approval-interaction-http-application-v1.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
+
+/**
+ * Provider ingress is selected at composition time, but it must never take
+ * ownership of an Authority route. Keep this list beside the dispatch below:
+ * a new built-in route has to be reserved before an adapter can be mounted.
+ */
+const CORE_PERSON_HTTP_ROUTES = new Set<string>([
+  `GET ${ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH}`,
+  `POST ${PERSON_SESSION_OIDC_BEGIN_PATH}`,
+  `GET ${PERSON_SESSION_OIDC_CALLBACK_PATH}`,
+  `POST ${PERSON_SESSION_REFRESH_PATH}`,
+  `POST ${PERSON_SESSION_REVOCATIONS_PATH}`,
+  `GET ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
+  `POST ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
+  `PUT ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
+  `DELETE ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
+  `GET ${CLEAN_PERSON_RECORDS_PATH_V1}`,
+  `POST ${CLEAN_PERSON_RECORD_SEARCH_PATH_V1}`,
+  `POST ${CLEAN_PERSON_ANSWER_PATH_V1}`,
+]);
+
+function routeKey(method: string, path: string): string {
+  return `${method} ${path}`;
+}
 export interface CleanPersonOidcProvider {
   buildAuthorizationUrl(
     input: ReturnType<PersonIdentitySessionApplication["beginOidcLogin"]>,
@@ -53,8 +70,8 @@ export interface CleanPersonHttpServerOptions {
   readonly sessions: PersonIdentitySessionApplication;
   readonly oidc_provider: CleanPersonOidcProvider;
   readonly expected_issuer: string;
-  /** Optional: no connected Slack bot is required to start founder login. */
-  readonly person_slack_identity_link?: PersonSlackIdentityLinkHttpApplication;
+  /** Optional: no connected external identity provider is required for login. */
+  readonly person_external_identity_link?: PersonExternalIdentityLinkHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Clean live wires it. */
   readonly person_record_read?: CleanPersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Clean live wires it. */
@@ -63,9 +80,36 @@ export interface CleanPersonHttpServerOptions {
   readonly person_employees?: CleanPersonEmployeeHttpApplication;
   /** Optional until the active clean runtime has a configured answer model. */
   readonly person_answer?: CleanPersonAnswerHttpApplicationV1;
-  /** Optional until the private Slack approval lane is fully composed. */
-  readonly private_slack_approval_interactions?:
-    PrivateApprovalSlackInteractionsHttpApplicationV1;
+  /** Optional until an active private-approval surface is fully composed. */
+  readonly private_approval_interaction_ingress?:
+    PrivateApprovalInteractionHttpApplicationV1;
+}
+
+function validateProviderIngressRoutes(
+  options: CleanPersonHttpServerOptions,
+): void {
+  const providerRoutes = [
+    ...(options.private_approval_interaction_ingress === undefined
+      ? []
+      : [
+          {
+            method: options.private_approval_interaction_ingress.method,
+            path: options.private_approval_interaction_ingress.path,
+          },
+        ]),
+    ...(options.person_external_identity_link?.routes ?? []),
+  ];
+  const seen = new Set<string>();
+  for (const route of providerRoutes) {
+    const key = routeKey(route.method, route.path);
+    if (CORE_PERSON_HTTP_ROUTES.has(key)) {
+      throw new Error(`provider ingress route collides with Authority route: ${key}`);
+    }
+    if (seen.has(key)) {
+      throw new Error(`provider ingress route is configured more than once: ${key}`);
+    }
+    seen.add(key);
+  }
 }
 
 interface PendingLoopbackHandoff {
@@ -167,6 +211,16 @@ async function rawBody(request: IncomingMessage): Promise<Buffer> {
     chunks.push(bytes);
   }
   return Buffer.concat(chunks, size);
+}
+
+function singletonHeaders(
+  headers: IncomingMessage["headers"],
+): Readonly<Record<string, string | undefined>> {
+  const result: Record<string, string | undefined> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (typeof value === "string") result[name] = value;
+  }
+  return Object.freeze(result);
 }
 
 async function body(request: IncomingMessage): Promise<unknown> {
@@ -288,34 +342,42 @@ function answerInput(value: unknown): { readonly question: string } {
 export function createCleanPersonHttpServer(
   options: CleanPersonHttpServerOptions,
 ): Server {
+  validateProviderIngressRoutes(options);
   const handoffs = new Map<string, PendingLoopbackHandoff>();
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
       const method = request.method ?? "GET";
+      const approvalIngress = options.private_approval_interaction_ingress;
       if (
-        method === "POST" &&
-        url.pathname === PRIVATE_APPROVAL_SLACK_INTERACTIONS_PATH_V1 &&
+        approvalIngress !== undefined &&
+        method === approvalIngress.method &&
+        url.pathname === approvalIngress.path &&
         url.search === ""
       ) {
-        if (options.private_slack_approval_interactions === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        const timestamp = request.headers["x-slack-request-timestamp"];
-        const signature = request.headers["x-slack-signature"];
-        await options.private_slack_approval_interactions.accept({
+        const headers = singletonHeaders(request.headers);
+        await approvalIngress.accept({
           raw_body: await rawBody(request),
-          content_type:
-            typeof request.headers["content-type"] === "string"
-              ? request.headers["content-type"]
-              : undefined,
-          slack_request_timestamp:
-            typeof timestamp === "string" ? timestamp : undefined,
-          slack_signature:
-            typeof signature === "string" ? signature : undefined,
+          content_type: headers["content-type"],
+          headers,
         });
         ok(response);
+        return;
+      }
+      const externalIdentityRoute =
+        options.person_external_identity_link?.routes.find(
+          (route) =>
+            route.method === method && route.path === url.pathname,
+        );
+      if (externalIdentityRoute !== undefined && url.search === "") {
+        const headers = singletonHeaders(request.headers);
+        const result = await options.person_external_identity_link!.accept({
+          route_id: externalIdentityRoute.route_id,
+          raw_body: await rawBody(request),
+          content_type: headers["content-type"],
+          headers,
+        });
+        json(response, result.status, result.body);
         return;
       }
       if (
@@ -537,48 +599,6 @@ export function createCleanPersonHttpServer(
             access_token: accessToken(request.headers.authorization),
             ...answerInput(await body(request)),
           }),
-        );
-        return;
-      }
-      if (
-        method === "POST" &&
-        url.pathname === ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH &&
-        url.search === ""
-      ) {
-        if (options.person_slack_identity_link === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        json(
-          response,
-          201,
-          await options.person_slack_identity_link.begin(
-            validateOrganizationPersonSlackLinkBeginRequest(
-              await body(request),
-            ),
-            accessToken(request.headers.authorization),
-          ),
-        );
-        return;
-      }
-      if (
-        method === "POST" &&
-        url.pathname === ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH &&
-        url.search === ""
-      ) {
-        if (options.person_slack_identity_link === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        json(
-          response,
-          200,
-          await options.person_slack_identity_link.complete(
-            validateOrganizationPersonSlackLinkCompleteRequest(
-              await body(request),
-            ),
-            accessToken(request.headers.authorization),
-          ),
         );
         return;
       }

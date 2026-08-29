@@ -2,7 +2,6 @@ import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  readPrivateAuthorityCredential,
   readPrivateAuthorityGranolaOrganizationCredential,
   readPrivateAuthorityGranolaOwnerEmail,
 } from "../adapters/security/private-file-credentials.js";
@@ -14,12 +13,11 @@ import {
   observeGranolaRecordOwner,
   type GranolaRecordOwnerObservationClient,
 } from "../processing/adapters/meeting-sources/granola/index.js";
-import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import {
-  CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-  cleanLlmProcessorConfigurationSha256V1,
-  cleanLlmProcessorCredentialReferenceSha256V1,
-} from "./clean-live-llm-processor-config.js";
+  assertCleanProcessorAdmissionCommitmentV1,
+  type CleanProcessorAdmissionCommitmentV1,
+} from "../processing/clean-v1/processor-admission-commitment.js";
+import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 
 export const CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1 = "2.2.0";
 const INSTANCE_ID = /^[a-z][a-z0-9-]{0,127}$/;
@@ -27,13 +25,12 @@ const INSTANCE_ID = /^[a-z][a-z0-9-]{0,127}$/;
 export interface AdmitCleanGranolaSourceInput {
   readonly state_directory: string;
   readonly source_instance_id: string;
-  readonly processor_instance_id: string;
   /** A canonical `file:` reference to a current-user 0600 Granola key. */
   readonly granola_credential_reference: string;
   /** A canonical `file:` reference to a current-user 0600 owner email. */
   readonly granola_owner_email_reference: string;
-  /** A canonical `file:` reference to a current-user 0600 LLM credential. */
-  readonly llm_credential_reference: string;
+  /** Processor facts and local proof are owned by its provider composition. */
+  readonly processor: CleanProcessorAdmissionCommitmentV1;
   /**
    * Metadata-only provider seam. It exposes listNotes only, so admission
    * cannot fetch provider content while proving the configured owner exists.
@@ -63,7 +60,7 @@ export interface CleanGranolaSourceAdmissionResult {
     readonly owner_email_sha256: Sha256Digest;
   };
   readonly processor: {
-    readonly adapter_id: "llm";
+    readonly adapter_id: string;
     readonly instance_id: string;
     readonly version: string;
     readonly configuration_sha256: Sha256Digest;
@@ -85,7 +82,7 @@ interface ExistingAdmission {
   readonly source_credential_reference_sha256: Sha256Digest;
   readonly initial_cursor: string;
   readonly cutoff_at: string;
-  readonly processor_adapter_id: "llm";
+  readonly processor_adapter_id: string;
   readonly processor_instance_id: string;
   readonly processor_adapter_version: string;
   readonly processor_configuration_sha256: Sha256Digest;
@@ -133,7 +130,7 @@ function result(
       owner_email_sha256: admission.source_custodian_sha256,
     },
     processor: {
-      adapter_id: "llm" as const,
+      adapter_id: admission.processor_adapter_id,
       instance_id: admission.processor_instance_id,
       version: admission.processor_adapter_version,
       configuration_sha256: admission.processor_configuration_sha256,
@@ -150,6 +147,8 @@ function result(
 export async function admitCleanGranolaSource(
   input: AdmitCleanGranolaSourceInput,
 ): Promise<CleanGranolaSourceAdmissionResult> {
+  assertCleanProcessorAdmissionCommitmentV1(input.processor);
+  await input.processor.preflight();
   const granolaCredential = readPrivateAuthorityGranolaOrganizationCredential(
     input.granola_credential_reference,
   );
@@ -177,11 +176,10 @@ async function admitCleanGranolaSourceAfterOwnerPreflight(
   ownerPreflightComplete: boolean,
 ): Promise<CleanGranolaSourceAdmissionResult> {
   if (
-    !INSTANCE_ID.test(input.source_instance_id) ||
-    !INSTANCE_ID.test(input.processor_instance_id)
+    !INSTANCE_ID.test(input.source_instance_id)
   ) {
     throw new Error(
-      "clean Granola source and processor instance IDs are invalid",
+      "clean Granola source instance ID is invalid",
     );
   }
 
@@ -190,17 +188,10 @@ async function admitCleanGranolaSourceAfterOwnerPreflight(
   const ownerEmailSha256 = personLoginGrantExpectedEmailSha256(
     ownerEmail,
   );
-  void readPrivateAuthorityCredential(input.llm_credential_reference);
   const sourceCredentialReferenceSha256 = privateReferenceSha256(
     "echo-clean-granola-source-credential-reference-v1",
     input.granola_credential_reference,
   );
-  const processorCredentialReferenceSha256 =
-    cleanLlmProcessorCredentialReferenceSha256V1(
-      input.llm_credential_reference,
-    );
-  const configurationSha256 = cleanLlmProcessorConfigurationSha256V1();
-
   const database = openAuthorityDatabase(
     join(input.state_directory, "authority.sqlite"),
     { fileMustExist: true },
@@ -275,11 +266,12 @@ async function admitCleanGranolaSourceAfterOwnerPreflight(
           credential_reference_sha256: sourceCredentialReferenceSha256,
         },
         processor: {
-          adapter_id: "llm",
-          adapter_version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-          instance_id: input.processor_instance_id,
-          configuration_sha256: configurationSha256,
-          credential_reference_sha256: processorCredentialReferenceSha256,
+          adapter_id: input.processor.adapter_id,
+          adapter_version: input.processor.version,
+          instance_id: input.processor.instance_id,
+          configuration_sha256: input.processor.configuration_sha256,
+          credential_reference_sha256:
+            input.processor.credential_reference_sha256,
         },
       });
       const existing = database
@@ -345,11 +337,12 @@ async function admitCleanGranolaSourceAfterOwnerPreflight(
         source_credential_reference_sha256: sourceCredentialReferenceSha256,
         initial_cursor: cursor,
         cutoff_at: ownerObservedAt,
-        processor_adapter_id: "llm",
-        processor_instance_id: input.processor_instance_id,
-        processor_adapter_version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-        processor_configuration_sha256: configurationSha256,
-        processor_credential_reference_sha256: processorCredentialReferenceSha256,
+        processor_adapter_id: input.processor.adapter_id,
+        processor_instance_id: input.processor.instance_id,
+        processor_adapter_version: input.processor.version,
+        processor_configuration_sha256: input.processor.configuration_sha256,
+        processor_credential_reference_sha256:
+          input.processor.credential_reference_sha256,
         semantic_input_sha256: semanticInputSha256,
         admitted_at: ownerObservedAt,
       };

@@ -29,7 +29,7 @@ interface CandidateRow {
   readonly frozen_card_sha256: string | null;
   readonly approved_snapshot_sha256: string | null;
   readonly outbox_state: string;
-  readonly provider_message_ts: string | null;
+  readonly presentation_external_id: string | null;
 }
 
 interface AssignmentRow {
@@ -188,7 +188,7 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
       candidate === undefined ||
       candidate.frozen_card_sha256 !== pending.frozen_card_sha256 ||
       candidate.approved_snapshot_sha256 !== pending.approved_snapshot_sha256 ||
-      candidate.provider_message_ts !== card.provider_message_ts
+      candidate.presentation_external_id !== card.provider_message_ts
     ) {
       return undefined;
     }
@@ -210,7 +210,7 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
         frozen_card_sha256: candidate.frozen_card_sha256,
         approved_snapshot_sha256: candidate.approved_snapshot_sha256,
         outbox_state: candidate.outbox_state,
-        provider_message_ts: candidate.provider_message_ts,
+        presentation_external_id: candidate.presentation_external_id,
       }),
       assigned_owner: Object.freeze({
         approval_id: assignment.approval_id,
@@ -257,7 +257,8 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
       .prepare(
         `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
                 outbox.frozen_card_sha256, outbox.approved_snapshot_sha256,
-                outbox.state AS outbox_state, outbox.provider_message_ts
+                outbox.state AS outbox_state,
+                outbox.provider_message_ts AS presentation_external_id
            FROM authority_live_source_candidates_v2 AS candidate
            JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id

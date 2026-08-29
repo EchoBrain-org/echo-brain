@@ -4,6 +4,7 @@ import {
   type GranolaRecordOwnerObservationClient,
 } from "../processing/adapters/meeting-sources/granola/index.js";
 import { admitCleanGranolaSource } from "./clean-granola-source-admission.js";
+import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "./openrouter-clean-processor-admission-commitment.js";
 
 const USAGE =
   "usage: echo-organization-authority-admit-clean-granola-source " +
@@ -71,13 +72,16 @@ export async function runCleanGranolaSourceCli(
 ): Promise<number> {
   const flags = parseFlags(arguments_);
   const granolaCredentialReference = `file:${flags["--granola-credential-file"]}`;
+  const llmCredentialReference = `file:${flags["--llm-credential-file"]}`;
   const result = await admitCleanGranolaSource({
     state_directory: flags["--state-dir"],
     source_instance_id: flags["--source-instance"],
-    processor_instance_id: flags["--processor-instance"],
     granola_credential_reference: granolaCredentialReference,
     granola_owner_email_reference: `file:${flags["--granola-owner-email-file"]}`,
-    llm_credential_reference: `file:${flags["--llm-credential-file"]}`,
+    processor: createOpenRouterCleanProcessorAdmissionCommitmentV1({
+      instance_id: flags["--processor-instance"],
+      credential_reference: llmCredentialReference,
+    }),
     create_granola_record_owner_client:
       dependencies.createGranolaRecordOwnerClient,
   });

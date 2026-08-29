@@ -28,7 +28,7 @@ export interface CleanLiveProcessingCycleV1 {
   recoverV4Appends(signal: AbortSignal): Promise<void>;
   /** Polls the admitted live-only source cursor and durably stages one card. */
   pollAndStageLiveOnlySource(signal: AbortSignal): Promise<void>;
-  /** Observes one staged Slack card and commits its approve or reject result. */
+  /** Observes one staged approval and commits its approve or reject result. */
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void>;

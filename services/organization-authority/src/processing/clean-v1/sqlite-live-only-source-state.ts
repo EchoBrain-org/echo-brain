@@ -86,7 +86,8 @@ function candidateSemanticDigest(input: {
 export interface CleanPostedApprovalCardV1 {
   readonly candidate_id: string;
   readonly post_started_at: string;
-  readonly provider_message_ts: string;
+  /** Opaque identifier assigned by the approval presentation provider. */
+  readonly presentation_external_id: string;
   readonly frozen_card_sha256: string;
   readonly approved_snapshot: Readonly<Record<string, unknown>>;
 }
@@ -98,7 +99,7 @@ export interface CleanPreparedApprovalPostV1 {
 }
 
 export type CleanLiveApprovalOutboxV1 = CleanActionableLiveCandidateV1 & {
-  readonly provider_message_ts: string | null;
+  readonly presentation_external_id: string | null;
   readonly frozen_card_sha256: string | null;
   readonly approved_snapshot_json: string | null;
   readonly approved_snapshot_sha256: string | null;
@@ -113,7 +114,7 @@ export interface CleanSupersededApprovalCardV1 {
   readonly approval_id: string;
   readonly review_lineage_id: string;
   readonly superseded_by_candidate_id: string;
-  readonly provider_message_ts: string | null;
+  readonly presentation_external_id: string | null;
   readonly post_started_at: string;
 }
 
@@ -183,20 +184,20 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     private readonly database: Database.Database,
     private readonly sourceBoundary: CleanLiveSourceBoundaryV1,
     /**
-     * The active processor configuration is currently the fixed `llm`
-     * adapter. Keep this explicit so an admitted source cannot be reopened
-     * through a different processor implementation by accident.
+     * The caller must name the processor adapter selected by its runtime
+     * bundle. An admitted source cannot be reopened through a different
+     * decision processor implementation by accident.
      */
-    expectedProcessorAdapterIdOrNow: string | (() => string) = "llm",
+    expectedProcessorAdapterId: string,
     now: () => string = () => new Date().toISOString(),
   ) {
-    if (typeof expectedProcessorAdapterIdOrNow === "function") {
-      this.expectedProcessorAdapterId = "llm";
-      this.now = expectedProcessorAdapterIdOrNow;
-    } else {
-      this.expectedProcessorAdapterId = expectedProcessorAdapterIdOrNow;
-      this.now = now;
+    if (expectedProcessorAdapterId.trim().length === 0) {
+      throw new Error(
+        "clean live-only source expected processor adapter identity is invalid",
+      );
     }
+    this.expectedProcessorAdapterId = expectedProcessorAdapterId;
+    this.now = now;
   }
 
   async readAdmission(): Promise<CleanLiveSourceAdmissionV1> {
@@ -489,7 +490,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   }
 
   /**
-   * Reproves every current, actionable approval that still needs Slack/D2
+   * Reproves every current, actionable approval that still needs presentation
    * delivery. The query deliberately selects the lineage head first; the
    * frozen reader then verifies the immutable meeting, decisions, and any
    * frozen card snapshot before exposing it to a delivery worker.
@@ -523,7 +524,8 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       .prepare(
         `SELECT outbox.approval_id, candidate.review_lineage_id,
                 outbox.superseded_by_candidate_id,
-                outbox.provider_message_ts, outbox.post_started_at
+                outbox.provider_message_ts AS presentation_external_id,
+                outbox.post_started_at
            FROM authority_live_approval_outbox_v2 AS outbox
            JOIN authority_live_source_candidates_v2 AS candidate
              ON candidate.candidate_id = outbox.candidate_id
@@ -537,29 +539,31 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
 
   recordSupersededApprovalCardTombstoned(input: {
     readonly approval_id: string;
-    readonly provider_message_ts: string;
+    readonly presentation_external_id: string;
   }): void {
     this.database.transaction(() => {
       const current = this.database
         .prepare(
-          `SELECT state, provider_message_ts, tombstoned_at
+          `SELECT state,
+                  provider_message_ts AS presentation_external_id,
+                  tombstoned_at
              FROM authority_live_approval_outbox_v2
             WHERE approval_id = ?`,
         )
         .get(input.approval_id) as
         | {
             readonly state: string;
-            readonly provider_message_ts: string | null;
+            readonly presentation_external_id: string | null;
             readonly tombstoned_at: string | null;
           }
         | undefined;
       if (
         current === undefined ||
         current.state !== "superseded" ||
-        current.provider_message_ts !== input.provider_message_ts
+        current.presentation_external_id !== input.presentation_external_id
       ) {
         throw new Error(
-          "clean superseded Slack tombstone lacks its durable card identity",
+          "clean superseded presentation retirement lacks its durable identity",
         );
       }
       if (current.tombstoned_at !== null) return;
@@ -572,9 +576,9 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
             WHERE approval_id = ? AND state = 'superseded'
               AND provider_message_ts = ? AND tombstoned_at IS NULL`,
         )
-        .run(now, now, input.approval_id, input.provider_message_ts);
+        .run(now, now, input.approval_id, input.presentation_external_id);
       if (update.changes !== 1) {
-        throw new Error("clean superseded Slack tombstone state drifted");
+        throw new Error("clean superseded presentation retirement state drifted");
       }
     })();
   }
@@ -645,7 +649,8 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                 candidate.review_policy_consequence_sha256,
                 candidate.disposition,
                 outbox.approval_id, outbox.stage_command_id, outbox.state,
-                outbox.provider_message_ts, outbox.frozen_card_sha256,
+                outbox.provider_message_ts AS presentation_external_id,
+                outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
                 outbox.post_started_at,
                 outbox.control_approval_sha256,
@@ -784,7 +789,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   }
 
   /**
-   * Persist the exact card payload before any Slack side effect. Recovery must
+   * Persist the exact presentation payload before any external side effect. Recovery must
    * prove the same frozen payload; it can never silently construct a new one.
    */
   prepareApprovalPost(input: {
@@ -847,12 +852,12 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       if (current.state === "queued") return current;
       if (
         current.state === "superseded" &&
-        current.provider_message_ts === null &&
+        current.presentation_external_id === null &&
         current.post_started_at === null
       ) {
         return current;
       }
-      if (current.provider_message_ts !== null) {
+      if (current.presentation_external_id !== null) {
         throw new Error(
           "clean live approval post attempt is externally visible",
         );
@@ -922,7 +927,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       const snapshotSha256 = canonicalSha256(input.approved_snapshot);
       if (current.state !== "posting") {
         if (
-          current.provider_message_ts === input.provider_message_ts &&
+          current.presentation_external_id === input.presentation_external_id &&
           current.post_started_at === input.post_started_at &&
           current.frozen_card_sha256 === input.frozen_card_sha256 &&
           current.approved_snapshot_json === snapshotJson &&
@@ -932,7 +937,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         }
         if (
           current.state === "superseded" &&
-          current.provider_message_ts === null &&
+          current.presentation_external_id === null &&
           current.frozen_card_sha256 === input.frozen_card_sha256 &&
           current.approved_snapshot_json === snapshotJson &&
           current.approved_snapshot_sha256 === snapshotSha256 &&
@@ -950,7 +955,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                   AND post_started_at = ?`,
             )
             .run(
-              input.provider_message_ts,
+              input.presentation_external_id,
               now,
               input.candidate_id,
               input.post_started_at,
@@ -972,7 +977,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
               AND post_started_at = ?`,
         )
         .run(
-          input.provider_message_ts,
+          input.presentation_external_id,
           now,
           input.candidate_id,
           input.post_started_at,
@@ -1003,7 +1008,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       if (current.state === "superseded") {
         if (
-          current.provider_message_ts === null ||
+          current.presentation_external_id === null ||
           current.frozen_card_sha256 === null ||
           current.approved_snapshot_sha256 === null
         ) {
@@ -1154,7 +1159,8 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                 candidate.review_policy_consequence_sha256,
                 candidate.disposition,
                 outbox.approval_id, outbox.stage_command_id, outbox.state,
-                outbox.provider_message_ts, outbox.frozen_card_sha256,
+                outbox.provider_message_ts AS presentation_external_id,
+                outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
                 outbox.post_started_at,
                 outbox.control_approval_sha256,

@@ -80,7 +80,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer,
       layer3,
       audit: { append: (entry) => void auditEntries.push(entry) },
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
@@ -121,13 +121,41 @@ describe("lean Layer 4 answer composition", () => {
     };
     expect(auditEntry.prompt_sha256).toBe(
       canonicalSha256({
-        provider: "openrouter",
+        generation_adapter_id: "openrouter",
         planner: withoutSignal(plannerRequest as Layer4StructuredGenerationInput),
         answer: withoutSignal(answerRequest as Layer4StructuredGenerationInput),
       }),
     );
     expect(JSON.stringify(auditEntries[0])).not.toContain("When is the launch");
     expect(JSON.stringify(auditEntries[0])).not.toContain("Tuesday, owned");
+  });
+
+  it("accepts a non-OpenRouter adapter identifier and model form through the same core path", async () => {
+    const audit = { append: vi.fn() };
+    const answer = createLeanAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer: {
+        generate: vi.fn(async () => ({
+          status: "answered",
+          answer: "Tuesday.",
+          citations: ["a1"],
+        })),
+      },
+      layer3: {
+        retrieve: vi.fn(async () => release()),
+        revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+      },
+      audit,
+      generation_adapter_id: "local-structured-output",
+      planner_model: "qwen3:4b",
+      answer_model: "qwen3:4b",
+    });
+
+    await expect(answer.answer({ question: "What is the launch date?" })).resolves.toMatchObject({
+      answer: "Tuesday.",
+      citations: [expect.objectContaining({ atom_id: release().released_atoms[0]?.atom_id })],
+    });
+    expect(audit.append).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -159,7 +187,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer: { generate: vi.fn(async () => response) },
       layer3,
       audit,
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
@@ -183,7 +211,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer,
       layer3,
       audit,
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
@@ -218,7 +246,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer,
       layer3,
       audit,
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
@@ -254,7 +282,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer,
       layer3,
       audit,
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
@@ -283,7 +311,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer: { generate: vi.fn() },
       layer3,
       audit: { append: vi.fn() },
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
       on_failure: (event) => diagnostics.push(event),
@@ -304,9 +332,9 @@ describe("lean Layer 4 answer composition", () => {
         failure_class: "core_validation",
         elapsed_ms: 0,
         http_status: null,
-        provider: null,
+        adapter_id: null,
         finish_reason: null,
-        provider_generation_id: null,
+        adapter_request_id: null,
         retrieval_generation_id: null,
       }),
     ]);
@@ -333,7 +361,7 @@ describe("lean Layer 4 answer composition", () => {
       },
       layer3,
       audit: { append: vi.fn() },
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
       on_failure: (event) => diagnostics.push(event),
@@ -352,9 +380,9 @@ describe("lean Layer 4 answer composition", () => {
         failure_class: "core_validation",
         elapsed_ms: 0,
         http_status: null,
-        provider: null,
+        adapter_id: null,
         finish_reason: null,
-        provider_generation_id: null,
+        adapter_request_id: null,
         retrieval_generation_id: released.generation_id,
       }),
     ]);
@@ -372,9 +400,9 @@ describe("lean Layer 4 answer composition", () => {
       diagnostic: Object.freeze({
         failure_class: "adapter_finish",
         http_status: 200,
-        provider: "novita",
+        adapter_id: "non-openrouter-adapter",
         finish_reason: "length",
-        provider_generation_id: "gen-abcdefgh12345678",
+        adapter_request_id: "request-abcdefgh12345678",
       }),
     });
     const answer = createLeanAnswerComposition({
@@ -385,7 +413,7 @@ describe("lean Layer 4 answer composition", () => {
         revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
       },
       audit: { append: vi.fn() },
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
       on_failure: (event) => diagnostics.push(event),
@@ -399,9 +427,9 @@ describe("lean Layer 4 answer composition", () => {
         stage: "answer",
         failure_class: "adapter_finish",
         http_status: 200,
-        provider: "novita",
+        adapter_id: "non-openrouter-adapter",
         finish_reason: "length",
-        provider_generation_id: "gen-abcdefgh12345678",
+        adapter_request_id: "request-abcdefgh12345678",
         retrieval_generation_id: released.generation_id,
       }),
     ]);
@@ -421,7 +449,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "Tuesday.", citations: ["a1"] })) },
       layer3,
       audit: { append: vi.fn() },
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
       on_failure: () => {
@@ -449,7 +477,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer: { generate: vi.fn() },
       layer3,
       audit: { append: vi.fn() },
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
@@ -476,7 +504,7 @@ describe("lean Layer 4 answer composition", () => {
       answerer: { generate: vi.fn() },
       layer3,
       audit: { append: vi.fn() },
-      provider: "openrouter",
+      generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });

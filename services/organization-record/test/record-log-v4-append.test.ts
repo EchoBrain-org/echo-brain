@@ -60,8 +60,18 @@ import {
   type V4ReceiptFactory,
   type V4RecordEnvelopeFactory,
   type V4RecordEnvelopeView,
-  type ReprovedPrivateSlackBlockApprovalD2WitnessV1,
 } from "../src/log/record-log-v4-append.js";
+import {
+  createApprovedRecordPolicyProjectorRegistryV1,
+  type ApprovedRecordPolicyProjectorV1,
+} from "../src/application/approved-record-policy-projection-v1.js";
+import {
+  createPersonPolicyFactProjectorV2,
+} from "../src/application/person-policy-facts-v2.js";
+import {
+  createPrivateSlackBlockApprovalPolicyProjectorV1,
+  type ReprovedPrivateSlackBlockApprovalD2WitnessV1,
+} from "../src/application/private-slack-block-approval-policy-facts-v1.js";
 import { CleanPersonRecordReaderV1 } from "../src/retrieve/clean-person-record-reader-v1.js";
 import {
   CleanV4Layer1SnapshotPort,
@@ -78,6 +88,21 @@ const COORDINATES = {
   organization_id: "org_00000000-0000-4000-8000-000000000002",
   state_lineage_id: "state-lineage-1",
 } as const;
+
+const PRIVATE_APPROVAL_PROJECTORS = createApprovedRecordPolicyProjectorRegistryV1([
+  createPersonPolicyFactProjectorV2(),
+  createPrivateSlackBlockApprovalPolicyProjectorV1(),
+]);
+
+function privateApprovalAppend(
+  db: ReturnType<typeof database>,
+): OrganizationRecordV4AppendApplication {
+  return new OrganizationRecordV4AppendApplication(
+    db,
+    COORDINATES,
+    PRIVATE_APPROVAL_PROJECTORS,
+  );
+}
 
 interface ProtocolAuthority {
   readonly pinned: ReturnType<typeof verifyOrganizationAuthorityPin>;
@@ -689,11 +714,125 @@ function privateSlackBlockAppendInput(input: {
 }
 
 describe("private V4 new-lineage record-log append", () => {
+  it("uses the same append and Layer 1 core path with a non-Slack policy projector", async () => {
+    const db = database();
+    try {
+      const semantic = sha256Digest("synthetic-projector-semantic-key");
+      const envelope: V4RecordEnvelopeView & JsonObject = {
+        record_sha256: sha256Digest("synthetic-projector-record"),
+        body: {
+          schema_version: 4,
+          kind: "echo-organization-record-envelope-v4",
+          envelope_id: "envelope-synthetic-projector",
+          ...COORDINATES,
+          semantic_idempotency_key: semantic,
+          predecessor_position: null,
+          predecessor_record_sha256: null,
+          human_act_resolution_ref: {
+            kind: "test-local-approval-v1",
+            ...COORDINATES,
+            approval_id: "approval-synthetic-projector",
+            action: "approve",
+            audit_event_id: "audit-synthetic-projector",
+            audit_sequence: 1,
+            audit_entry_sha256: sha256Digest("audit-synthetic-projector"),
+            provider_action_kind: "test-local-action-v1",
+            provider_action_schema_version: 1,
+            provider_action_sha256: sha256Digest("action-synthetic-projector"),
+            authorization_proof_sha256: sha256Digest("proof-synthetic-projector"),
+          },
+          event: {
+            kind: "approved",
+            approved_snapshot: {
+              approved_payload: {
+                brief: { decisions: [], actions: [], rationales: [] },
+              },
+            },
+          },
+        },
+      } as V4RecordEnvelopeView & JsonObject;
+      const fakeProjector: ApprovedRecordPolicyProjectorV1 = {
+        id: "test-local-approval-v1",
+        matches: (candidate) =>
+          (candidate.body.human_act_resolution_ref as { readonly kind?: unknown })
+            .kind ===
+          "test-local-approval-v1",
+        project: () => ({
+          facts: [],
+          policy_fact_outcome: {
+            kind: "appended",
+            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          },
+        }),
+        approvedPolicy: () => ({
+          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          policy_contract_sha256:
+            organizationMemberReadablePersonPolicyContractSha256(),
+        }),
+      };
+      const projectors = createApprovedRecordPolicyProjectorRegistryV1([
+        fakeProjector,
+      ]);
+      const app = new OrganizationRecordV4AppendApplication(
+        db,
+        COORDINATES,
+        projectors,
+      );
+      await app.append({
+        approval_id: "approval-synthetic-projector",
+        action: "approve",
+        semantic_idempotency_key: semantic,
+        receipt_issued_at: "2026-08-21T12:02:00.000Z",
+        d2_witness: { test: true },
+        envelope_factory: {
+          create: async () => envelope,
+          verify: () => envelope,
+        },
+        receipt_factory: {
+          createSeed: ({ envelope: receiptEnvelope, position, issued_at }) => ({
+            schema_version: 2,
+            kind: "echo-organization-record-receipt-v2",
+            authority_id: COORDINATES.authority_id,
+            organization_id: COORDINATES.organization_id,
+            state_lineage_id: COORDINATES.state_lineage_id,
+            envelope_id: receiptEnvelope.body.envelope_id,
+            semantic_idempotency_key:
+              receiptEnvelope.body.semantic_idempotency_key,
+            event_kind: receiptEnvelope.body.event.kind,
+            record_position: position,
+            record_sha256: receiptEnvelope.record_sha256,
+            predecessor_record_sha256:
+              receiptEnvelope.body.predecessor_record_sha256,
+            record_head_position: position,
+            record_head_sha256: receiptEnvelope.record_sha256,
+            issued_at,
+          }),
+          sign: async ({ receipt_seed }) => ({
+            body: receipt_seed as JsonObject,
+          }),
+          verify: ({ receipt }) => receipt as JsonObject,
+        },
+      });
+      const snapshot = new CleanV4Layer1SnapshotPort(db).snapshot({
+        ...COORDINATES,
+        policy_projectors: projectors,
+        verify_envelope: () => envelope as CleanV4Layer1VerifiedEnvelope,
+      });
+      expect(snapshot.rows[0]?.classification).toEqual({
+        kind: "approved",
+        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+        atom_count: 0,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("append-atomically projects a signed private Block Kit approval and retries it without a second envelope", async () => {
     const db = database(2);
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = privateApprovalAppend(db);
       const calls = { value: 0 };
       const input = privateSlackBlockAppendInput({
         authority,
@@ -709,6 +848,7 @@ describe("private V4 new-lineage record-log append", () => {
       ).toEqual({ count: 2 });
       const layer1 = new CleanV4Layer1SnapshotPort(db).snapshot({
         ...COORDINATES,
+        policy_projectors: PRIVATE_APPROVAL_PROJECTORS,
         verify_envelope: (value) =>
           verifyOrganizationRecordEnvelopeV4(
             value,
@@ -733,7 +873,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database(2);
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = privateApprovalAppend(db);
       const result = await app.append(
         privateSlackBlockAppendInput({
           authority,

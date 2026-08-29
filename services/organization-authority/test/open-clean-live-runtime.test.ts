@@ -40,6 +40,7 @@ import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-se
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import { admitCleanGranolaSource } from "../src/composition/clean-granola-source-admission.js";
+import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-clean-processor-admission-commitment.js";
 import {
   initializeCleanPersonCredentials,
   issueCleanPersonInvitation,
@@ -48,6 +49,17 @@ import {
   openCleanGranolaLiveRuntime,
   type OpenCleanGranolaLiveRuntimeConfig,
 } from "../src/composition/open-clean-granola-live-runtime.js";
+import {
+  openCleanLiveRuntime,
+  type CleanLiveSourceRuntimeBundleV1,
+} from "../src/composition/open-clean-live-runtime.js";
+import type { CleanLiveProcessorRuntimeBundleV1 } from "../src/composition/clean-live-processor-runtime.js";
+import type { CleanLayer4RuntimeBundleV1 } from "../src/composition/clean-layer4-runtime.js";
+import type {
+  CleanApprovalRuntimeBundleV1,
+  CleanApprovalRuntimeContextV1,
+} from "../src/composition/approval-runtime-bundle-v1.js";
+import { createApprovedRecordPolicyProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/new-lineage-v1";
 import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
 import { createCleanPersonAnswerRouteV1 } from "../src/composition/clean-person-answer-route.js";
 import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
@@ -494,7 +506,9 @@ async function waitFor(assertion: () => boolean, label: string): Promise<void> {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function activeFixture() {
+async function admittedFixture(input: {
+  readonly seed_private_slack_connection?: boolean;
+} = {}) {
   const parent = root();
   const initialized = initializeCleanResetState({
     state_directory: join(parent, "state"),
@@ -531,10 +545,12 @@ async function activeFixture() {
   const admitted = await admitCleanGranolaSource({
     state_directory: initialized.state_directory,
     source_instance_id: "founder-granola",
-    processor_instance_id: "founder-llm",
     granola_credential_reference: `file:${granola_credential_file}`,
     granola_owner_email_reference: `file:${granola_owner_email_file}`,
-    llm_credential_reference: `file:${llm_credential_file}`,
+    processor: createOpenRouterCleanProcessorAdmissionCommitmentV1({
+      instance_id: "founder-llm",
+      credential_reference: `file:${llm_credential_file}`,
+    }),
     create_granola_record_owner_client: () => ({
       async listNotes() {
         return {
@@ -548,14 +564,16 @@ async function activeFixture() {
     }),
     now: () => NOW,
   });
-  seedPrivateSlackConnection({
-    state_directory: initialized.state_directory,
-    authority_id: initialized.authority_id,
-    organization_id: initialized.organization_id,
-    state_lineage_id: initialized.state_lineage_id,
-    principal_id: initialized.owner_principal_id,
-    membership_id: initialized.owner_membership_id,
-  });
+  if (input.seed_private_slack_connection ?? false) {
+    seedPrivateSlackConnection({
+      state_directory: initialized.state_directory,
+      authority_id: initialized.authority_id,
+      organization_id: initialized.organization_id,
+      state_lineage_id: initialized.state_lineage_id,
+      principal_id: initialized.owner_principal_id,
+      membership_id: initialized.owner_membership_id,
+    });
+  }
   const source = fakeSource({
     kind: "meeting-source",
     adapter_id: "granola",
@@ -588,13 +606,6 @@ async function activeFixture() {
     instance_id: admitted.processor.instance_id,
     version: admitted.processor.version,
   };
-  const runtime = await openCleanGranolaLiveRuntime(config, {
-    live_adapters: {
-      source,
-      processor: fakeProcessor(processorIdentity),
-      private_approval_card_poster: poster,
-    },
-  });
   return {
     initialized,
     config,
@@ -602,6 +613,22 @@ async function activeFixture() {
     processorIdentity,
     poster,
     errors,
+  };
+}
+
+async function activeFixture() {
+  const fixture = await admittedFixture({
+    seed_private_slack_connection: true,
+  });
+  const runtime = await openCleanGranolaLiveRuntime(fixture.config, {
+    live_adapters: {
+      source: fixture.source,
+      processor: fakeProcessor(fixture.processorIdentity),
+      private_approval_card_poster: fixture.poster,
+    },
+  });
+  return {
+    ...fixture,
     runtime,
   };
 }
@@ -867,6 +894,12 @@ function createAnswerRoute(input: {
     state_lineage_id: input.fixture.initialized.state_lineage_id,
     search: createOwnerAndMemberSearchRoute(input),
     model: answerModel(),
+    generation: {
+      generation_adapter_id: "test-structured-output",
+      planner_model: "test-planner",
+      answer_model: "test-answer",
+      timeout_ms: 60_000,
+    },
     audit: new SqliteCleanPersonAnswerCompositionAuditV1(input.authority),
   });
 }
@@ -991,6 +1024,138 @@ describe("open clean live runtime private approval lane", () => {
         ),
       }),
     ).rejects.toThrow(/LLM configuration differs from the admitted processor commitment/);
+  });
+
+  it("composes the generic live runtime with a non-Slack approval surface", async () => {
+    const fixture = await admittedFixture();
+    const staged: string[] = [];
+    let ingressCalls = 0;
+    const ownershipContexts: CleanApprovalRuntimeContextV1[] = [];
+    const openedContexts: CleanApprovalRuntimeContextV1[] = [];
+    const sourceRuntime: CleanLiveSourceRuntimeBundleV1 = {
+      source_boundary: {
+        source_adapter_id: fixture.source.identity.adapter_id,
+        assert_live_cursor(cursor) {
+          expect(cursor.length).toBeGreaterThan(0);
+        },
+      },
+      assert_runtime_commitments(commitments) {
+        expect(commitments.source.adapter_id).toBe(
+          fixture.source.identity.adapter_id,
+        );
+      },
+      create_source(admission) {
+        expect(admission.source.adapter_id).toBe(
+          fixture.source.identity.adapter_id,
+        );
+        return fixture.source;
+      },
+    };
+    const processorRuntime: CleanLiveProcessorRuntimeBundleV1 = {
+      processor_adapter_id: fixture.processorIdentity.adapter_id,
+      assert_runtime_commitments(commitments) {
+        expect(commitments.processor.adapter_id).toBe(
+          fixture.processorIdentity.adapter_id,
+        );
+      },
+      create_processor(admission) {
+        expect(admission.processor.adapter_id).toBe(
+          fixture.processorIdentity.adapter_id,
+        );
+        return fakeProcessor(fixture.processorIdentity);
+      },
+    };
+    const layer4Runtime: CleanLayer4RuntimeBundleV1 = {
+      open() {
+        return {
+          generation: {
+            generation_adapter_id: "test-generation-adapter",
+            planner_model: "test-planner",
+            answer_model: "test-answerer",
+            timeout_ms: 1_000,
+          },
+          structured_output: {
+            async generate() {
+              throw new Error("test answer generation was not expected");
+            },
+          },
+        };
+      },
+    };
+    const approvalRuntime: CleanApprovalRuntimeBundleV1 = {
+      async assert_existing_presentations_owned(context) {
+        ownershipContexts.push(context);
+      },
+      async open(context) {
+        openedContexts.push(context);
+        return {
+          stager: {
+            async stage(input) {
+              staged.push(input.candidate.approval_id);
+              return { kind: "staged", stage_id: "test-stage" };
+            },
+            async reconcilePendingDeliveries() {},
+            async reconcileSuperseded() {},
+          },
+          processing: {
+            async recoverV4Appends() {},
+            async observeAndFinalizePendingApprovals() {},
+            async appendFinalizedApprovalsToV4() {},
+          },
+          interaction_ingress: {
+            method: "POST",
+            path: "/v2/integrations/test-approval/actions",
+            async accept() {
+              ingressCalls += 1;
+              return "accepted";
+            },
+          },
+        };
+      },
+    };
+    const {
+      granola_credential_file: _granolaCredentialFile,
+      granola_owner_email_file: _granolaOwnerEmailFile,
+      llm_credential_file: _llmCredentialFile,
+      slack_signing_secret_file: _slackSigningSecretFile,
+      slack_connection_id: _slackConnectionId,
+      slack_approval_channel_id: _slackApprovalChannelId,
+      ...sharedConfig
+    } = fixture.config;
+    const runtime = await openCleanLiveRuntime(
+      {
+        ...sharedConfig,
+        source_runtime: sourceRuntime,
+        processor_runtime: processorRuntime,
+        approval_runtime: approvalRuntime,
+        layer4_runtime: layer4Runtime,
+        approved_record_policy_projectors:
+          createApprovedRecordPolicyProjectorRegistryV1([
+            createPersonPolicyFactProjectorV2(),
+          ]),
+      },
+      { person: { oidc_provider: new FounderOidcProvider() } },
+    );
+    try {
+      expect(runtime.processing).toBe("active");
+      expect(ownershipContexts).toHaveLength(1);
+      expect(openedContexts).toHaveLength(1);
+      expect(openedContexts[0]).toBe(ownershipContexts[0]);
+      await waitFor(() => staged.length === 1, "fake approval staging");
+      const response = await fetch(
+        `http://127.0.0.1:${String(runtime.address.port)}/v2/integrations/test-approval/actions`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/test" },
+          body: "provider-neutral-action",
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(ingressCalls).toBe(1);
+      expect(fixture.errors).toEqual([]);
+    } finally {
+      await runtime.close();
+    }
   });
 
   it("stages a null-policy private card, then a signed Team approve binds policy, appends one V4 record, and is replay-safe", async () => {
@@ -1252,6 +1417,122 @@ describe("open clean live runtime private approval lane", () => {
     } finally {
       record.close();
       authority.close();
+    }
+  });
+
+  it("fails closed on restart when outstanding Slack delivery lacks its immutable ownership proof", async () => {
+    const fixture = await activeFixture();
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 || fixture.poster.published.length === 1,
+        "private approval card",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      const card = fixture.poster.published[0]!;
+      await fixture.runtime.close();
+
+      // Corruption is intentional: the V3 trigger makes ordinary deletion
+      // impossible. A replacement surface must refuse this ambiguous card,
+      // rather than assuming it owns a provider operation already in flight.
+      authority.exec(
+        "DROP TRIGGER authority_private_approval_assignments_v3_delete_denied",
+      );
+      authority
+        .prepare(
+          "DELETE FROM authority_private_approval_assignments_v3 WHERE approval_id = ?",
+        )
+        .run(card.approval_id);
+
+      await expect(
+        openCleanGranolaLiveRuntime(fixture.config, {
+          live_adapters: {
+            source: fixture.source,
+            processor: fakeProcessor(fixture.processorIdentity),
+            private_approval_card_poster: new FakePrivateApprovalPoster(),
+          },
+        }),
+      ).rejects.toThrow(
+        /cannot prove ownership of outstanding (posting|posted|staged) presentation/,
+      );
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("fails closed before provider I/O when the admitted Slack state changes under the same connection id", async () => {
+    const fixture = await activeFixture();
+    const control = openOrganizationControlDatabase(
+      join(fixture.initialized.state_directory, "integrations.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 || fixture.poster.published.length === 1,
+        "private approval card",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      await fixture.runtime.close();
+
+      const current = control
+        .prepare(
+          `SELECT connection_contract_sha256
+             FROM organization_tool_connection_current_state
+            WHERE connection_id = ?`,
+        )
+        .get("con_live_test") as {
+        readonly connection_contract_sha256: `sha256:${string}`;
+      };
+      const replacementState = buildOrganizationToolConnectionStateV2({
+        connection_id: "con_live_test",
+        connection_contract_sha256: current.connection_contract_sha256,
+        connection_status: "active",
+        credential_reference_sha256: canonicalSha256({ kind: "rotated-test-token" }),
+        observed_granted_scopes: PRIVATE_SLACK_SCOPES,
+        verification_event_id: "verify_live_test_rotated",
+        verification_evidence_sha256: canonicalSha256({ kind: "rotated-verification" }),
+        verification_revision: 2,
+        verified_at: "2026-08-22T12:01:00.000Z",
+      });
+      // The already-staged card intentionally retains the old state digest.
+      // Model the control-plane's new current commitment directly; the
+      // foreign-key suspension is local to this corruption regression.
+      control.exec("PRAGMA foreign_keys = OFF");
+      control
+        .prepare(
+          `UPDATE organization_tool_connection_current_state
+              SET state_json = ?, state_sha256 = ?, updated_at = ?
+            WHERE connection_id = ?`,
+        )
+        .run(
+          canonicalJson(replacementState),
+          canonicalSha256(replacementState),
+          "2026-08-22T12:01:00.000Z",
+          "con_live_test",
+        );
+      control.exec("PRAGMA foreign_keys = ON");
+
+      const replacementPoster = new FakePrivateApprovalPoster();
+      await expect(
+        openCleanGranolaLiveRuntime(fixture.config, {
+          live_adapters: {
+            source: fixture.source,
+            processor: fakeProcessor(fixture.processorIdentity),
+            private_approval_card_poster: replacementPoster,
+          },
+        }),
+      ).rejects.toThrow(
+        /cannot prove ownership of outstanding (posting|posted|staged) presentation/,
+      );
+      expect(replacementPoster.markers).toEqual([]);
+      expect(replacementPoster.published).toEqual([]);
+    } finally {
+      control.close();
     }
   });
 

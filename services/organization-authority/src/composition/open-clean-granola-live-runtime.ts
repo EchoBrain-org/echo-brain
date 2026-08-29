@@ -7,6 +7,11 @@ import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
 import type { CleanLiveSourceAdmissionV1 } from "../processing/clean-v1/live-only-source-cycle.js";
 import type { CleanLiveSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import {
+  createApprovedRecordPolicyProjectorRegistryV1,
+  createPersonPolicyFactProjectorV2,
+  createPrivateSlackBlockApprovalPolicyProjectorV1,
+} from "@echo-brain/organization-record/new-lineage-v1";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import {
   openCleanLiveRuntime,
@@ -16,11 +21,50 @@ import {
   type OpenedCleanLiveRuntime,
 } from "./open-clean-live-runtime.js";
 import { granolaLiveSourceBoundaryV1 } from "./granola-live-source-boundary-v1.js";
+import { createOpenRouterCleanLiveProcessorRuntimeBundleV1 } from "./openrouter-clean-live-processor-runtime.js";
+import { createOpenRouterCleanLayer4RuntimeBundleV1 } from "./openrouter-clean-layer4-runtime.js";
+import { createPrivateSlackApprovalRuntimeBundleV1 } from "./open-private-slack-approval-runtime-v1.js";
+import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-slack-person-external-identity-runtime.js";
+import type { PrivateApprovalSlackInteractionRejectionStageV1 } from "./private-approval-slack-interaction-v1.js";
+import type { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
 
 export interface OpenCleanGranolaLiveRuntimeConfig
-  extends Omit<OpenCleanLiveRuntimeConfig, "source_runtime"> {
+  extends Omit<
+    OpenCleanLiveRuntimeConfig,
+    | "source_runtime"
+    | "processor_runtime"
+    | "approval_runtime"
+    | "layer4_runtime"
+    | "approved_record_policy_projectors"
+  > {
   readonly granola_credential_file: string;
   readonly granola_owner_email_file: string;
+  readonly llm_credential_file: string;
+  readonly slack_signing_secret_file: string;
+  readonly slack_connection_id: string;
+  readonly slack_approval_channel_id: string;
+  readonly on_private_approval_slack_rejection?: (event: {
+    readonly stage: PrivateApprovalSlackInteractionRejectionStageV1;
+  }) => void;
+}
+
+type CleanGranolaLiveAdapters = NonNullable<
+  OpenCleanLiveRuntimeDependencies["live_adapters"]
+> & {
+  readonly private_approval_card_poster?: Pick<
+    PrivateSlackApprovalCardPosterV1,
+    | "openDirectMessage"
+    | "postMarker"
+    | "reconcileMarker"
+    | "publish"
+    | "tombstone"
+    | "renderTerminal"
+  >;
+};
+
+export interface OpenCleanGranolaLiveRuntimeDependencies
+  extends Omit<OpenCleanLiveRuntimeDependencies, "live_adapters"> {
+  readonly live_adapters?: CleanGranolaLiveAdapters;
 }
 
 function fixedGranolaConfig(
@@ -126,13 +170,77 @@ export function createGranolaLiveSourceRuntimeBundleV1(input: {
 /** Maintains the current CLI's Granola-backed public runtime behavior. */
 export function openCleanGranolaLiveRuntime(
   config: OpenCleanGranolaLiveRuntimeConfig,
-  dependencies: OpenCleanLiveRuntimeDependencies = {},
+  dependencies: OpenCleanGranolaLiveRuntimeDependencies = {},
 ): Promise<OpenedCleanLiveRuntime> {
+  const {
+    granola_credential_file,
+    granola_owner_email_file,
+    llm_credential_file,
+    slack_signing_secret_file,
+    slack_connection_id,
+    slack_approval_channel_id,
+    on_private_approval_slack_rejection,
+    ...sharedConfig
+  } = config;
+  const sharedLiveAdapters =
+    dependencies.live_adapters === undefined
+      ? undefined
+      : {
+          ...(dependencies.live_adapters.source === undefined
+            ? {}
+            : { source: dependencies.live_adapters.source }),
+          ...(dependencies.live_adapters.processor === undefined
+            ? {}
+            : { processor: dependencies.live_adapters.processor }),
+        };
+  const personDependencies = {
+    ...dependencies.person,
+    external_identity_runtime:
+      dependencies.person?.external_identity_runtime ??
+      createCleanSlackPersonExternalIdentityRuntimeBundleV1({
+        approval_channel_id: slack_approval_channel_id,
+      }),
+  };
   return openCleanLiveRuntime(
     {
-      ...config,
-      source_runtime: createGranolaLiveSourceRuntimeBundleV1(config),
+      ...sharedConfig,
+      source_runtime: createGranolaLiveSourceRuntimeBundleV1({
+        granola_credential_file,
+        granola_owner_email_file,
+      }),
+      processor_runtime: createOpenRouterCleanLiveProcessorRuntimeBundleV1({
+        credential_file: llm_credential_file,
+      }),
+      approval_runtime: createPrivateSlackApprovalRuntimeBundleV1({
+        state_directory: sharedConfig.state_directory,
+        signing_secret_file: slack_signing_secret_file,
+        connection_id: slack_connection_id,
+        ...(dependencies.live_adapters?.private_approval_card_poster ===
+        undefined
+          ? {}
+          : {
+              poster:
+                dependencies.live_adapters.private_approval_card_poster,
+            }),
+        ...(on_private_approval_slack_rejection === undefined
+          ? {}
+          : { on_rejection: on_private_approval_slack_rejection }),
+      }),
+      layer4_runtime: createOpenRouterCleanLayer4RuntimeBundleV1({
+        credential_file: llm_credential_file,
+      }),
+      approved_record_policy_projectors:
+        createApprovedRecordPolicyProjectorRegistryV1([
+          createPersonPolicyFactProjectorV2(),
+          createPrivateSlackBlockApprovalPolicyProjectorV1(),
+        ]),
     },
-    dependencies,
+    {
+      ...dependencies,
+      person: personDependencies,
+      ...(sharedLiveAdapters === undefined
+        ? {}
+        : { live_adapters: sharedLiveAdapters }),
+    },
   );
 }

@@ -147,9 +147,11 @@ export interface Layer4FailureDiagnosticV1 {
   readonly failure_class: Layer4FailureClassV1;
   readonly elapsed_ms: number;
   readonly http_status: number | null;
-  readonly provider: string | null;
+  /** Trusted adapter identifier, never upstream provider-supplied text. */
+  readonly adapter_id: string | null;
   readonly finish_reason: Layer4FinishReasonV1 | null;
-  readonly provider_generation_id: string | null;
+  /** Bounded opaque adapter request/generation identifier. */
+  readonly adapter_request_id: string | null;
   readonly retrieval_generation_id: Sha256Digest | null;
 }
 
@@ -158,7 +160,8 @@ export interface LeanAnswerCompositionOptions {
   readonly answerer: Layer4StructuredOutputPort;
   readonly layer3: Layer4BatchReadPort;
   readonly audit: Layer4AnswerAuditPort;
-  readonly provider: "openrouter";
+  /** Stable adapter identifier bound into the redacted audit hash. */
+  readonly generation_adapter_id: string;
   readonly planner_model: string;
   readonly answer_model: string;
   readonly timeout_ms?: number;
@@ -256,11 +259,26 @@ export function validateLayer2CompatibleQuery(value: unknown): string {
   return query;
 }
 
+function opaqueIdentifier(
+  value: unknown,
+  maximum = 256,
+): string | null {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maximum &&
+    value.trim() === value &&
+    value === value.normalize("NFC") &&
+    !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)
+    ? value
+    : null;
+}
+
 function configuredModel(value: string, label: string): string {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)) {
-    throw new LeanAnswerCompositionError(`${label} must be an OpenRouter author/model slug`);
+  const model = opaqueIdentifier(value);
+  if (model === null) {
+    throw new LeanAnswerCompositionError(`${label} is invalid`);
   }
-  return value;
+  return model;
 }
 
 function timeout(value: number | undefined): number {
@@ -440,28 +458,13 @@ const FINISH_REASONS = new Set<Layer4FinishReasonV1>([
   "error",
   "other",
 ]);
-const OPENROUTER_GENERATION_ID = /^gen-[A-Za-z0-9]{8,64}$/;
-const OPENROUTER_PROVIDER_NAME = /^[A-Za-z][A-Za-z0-9]{1,31}$/;
-
-function safeGenerationId(value: unknown): string | null {
-  return typeof value === "string" && OPENROUTER_GENERATION_ID.test(value)
-    ? value
-    : null;
-}
-
-function safeProviderName(value: unknown): string | null {
-  return typeof value === "string" && OPENROUTER_PROVIDER_NAME.test(value)
-    ? value
-    : null;
-}
-
 type ModelFailureMetadata = Pick<
   Layer4FailureDiagnosticV1,
   | "failure_class"
   | "http_status"
-  | "provider"
+  | "adapter_id"
   | "finish_reason"
-  | "provider_generation_id"
+  | "adapter_request_id"
 >;
 
 function modelFailureMetadata(error: unknown): ModelFailureMetadata {
@@ -472,8 +475,9 @@ function modelFailureMetadata(error: unknown): ModelFailureMetadata {
   const failureClass = diagnostic?.failure_class;
   const finish = diagnostic?.finish_reason;
   const status = diagnostic?.http_status;
-  const providerGenerationId = safeGenerationId(
-    diagnostic?.provider_generation_id,
+  const adapterId = opaqueIdentifier(diagnostic?.adapter_id, 64);
+  const adapterRequestId = opaqueIdentifier(
+    diagnostic?.adapter_request_id,
   );
   return Object.freeze({
     failure_class: coreValidation
@@ -489,16 +493,13 @@ function modelFailureMetadata(error: unknown): ModelFailureMetadata {
       status <= 599
         ? status
         : null,
-    provider:
-      providerGenerationId === null
-        ? null
-        : safeProviderName(diagnostic?.provider),
+    adapter_id: adapterId,
     finish_reason:
       typeof finish === "string" &&
       FINISH_REASONS.has(finish as Layer4FinishReasonV1)
         ? (finish as Layer4FinishReasonV1)
         : null,
-    provider_generation_id: providerGenerationId,
+    adapter_request_id: adapterRequestId,
   });
 }
 
@@ -532,8 +533,12 @@ function reportModelFailure(
 export function createLeanAnswerComposition(options: LeanAnswerCompositionOptions): {
   answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<LeanAnswerCompositionResult>;
 } {
-  if (options.provider !== "openrouter") {
-    throw new LeanAnswerCompositionError("Layer 4 provider is unsupported");
+  const generationAdapterId = opaqueIdentifier(
+    options.generation_adapter_id,
+    64,
+  );
+  if (generationAdapterId === null) {
+    throw new LeanAnswerCompositionError("generation adapter id is invalid");
   }
   const plannerModel = configuredModel(options.planner_model, "planner model");
   const answerModel = configuredModel(options.answer_model, "answer model");
@@ -590,7 +595,7 @@ export function createLeanAnswerComposition(options: LeanAnswerCompositionOption
               max_output_tokens: LAYER4_ANSWER_MAX_OUTPUT_TOKENS,
               timeout_ms: requestTimeout,
             });
-      // An empty permitted release is not an LLM task.  Returning this fixed
+      // An empty permitted release is not a generation task. Returning this fixed
       // response is both cheaper and clearer than inviting an unsupported answer.
       let parsed: ReturnType<typeof parseAnswer>;
       if (answerRequest === null) {
@@ -661,7 +666,7 @@ export function createLeanAnswerComposition(options: LeanAnswerCompositionOption
           })),
         ),
         prompt_sha256: digest({
-          provider: options.provider,
+          generation_adapter_id: generationAdapterId,
           planner: plannerRequest,
           answer: answerRequest,
         }),

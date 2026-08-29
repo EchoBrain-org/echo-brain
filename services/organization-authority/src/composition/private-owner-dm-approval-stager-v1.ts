@@ -215,8 +215,8 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       if (
         recovery === undefined ||
         recovery.source_outbox_state !== "superseded" ||
-        obsolete.provider_message_ts === null ||
-        recovery.provider_message_ts !== obsolete.provider_message_ts
+        obsolete.presentation_external_id === null ||
+        recovery.provider_message_ts !== obsolete.presentation_external_id
       ) {
         // An unknown post response cannot be reconciled without the stored DM
         // proof. `readForPresentation` deliberately exposes that proof only
@@ -236,7 +236,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       if (rendered.kind === "done") {
         this.options.authority.recordSupersededApprovalCardTombstoned({
           approval_id: obsolete.approval_id,
-          provider_message_ts: recovery.provider_message_ts,
+          presentation_external_id: recovery.provider_message_ts,
         });
       }
     }
@@ -307,7 +307,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     }
 
     if (outbox.post_started_at === null) return { kind: "state_drift" };
-    if (outbox.provider_message_ts === null) {
+    if (outbox.presentation_external_id === null) {
       const outcome = prepared.created
         ? await this.options.poster.postMarker(
             { approval_id: outbox.approval_id, dm_channel_id: assignment.dm_channel.channel_id },
@@ -333,7 +333,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       outbox = this.options.authority.recordPostedApprovalCard({
         candidate_id: outbox.candidate_id,
         post_started_at: outbox.post_started_at,
-        provider_message_ts: outcome.provider_message_ts,
+        presentation_external_id: outcome.provider_message_ts,
         frozen_card_sha256: frozen.frozen_card_sha256,
         approved_snapshot: frozen.approved_snapshot,
       });
@@ -342,7 +342,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       await this.tombstoneKnown(outbox, assignment, context);
       return { kind: "state_drift" };
     }
-    if (outbox.provider_message_ts === null || outbox.frozen_card_sha256 === null || outbox.approved_snapshot_sha256 === null) {
+    if (outbox.presentation_external_id === null || outbox.frozen_card_sha256 === null || outbox.approved_snapshot_sha256 === null) {
       return { kind: "state_drift" };
     }
 
@@ -370,7 +370,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       slack_subject_id:
         assignment.assigned_owner_slack_identity_link.provider_subject_id,
       dm_channel_id: assignment.dm_channel.channel_id,
-      provider_message_ts: outbox.provider_message_ts,
+      provider_message_ts: outbox.presentation_external_id,
       card_sha256: outbox.frozen_card_sha256 as Digest,
     });
     const staged = this.options.control_plane.stage({
@@ -398,7 +398,8 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       {
         approval_id: refreshed.approval_id,
         dm_channel_id: assignment.dm_channel.channel_id,
-        provider_message_ts: refreshed.provider_message_ts ?? outbox.provider_message_ts,
+        provider_message_ts:
+          refreshed.presentation_external_id ?? outbox.presentation_external_id,
         card: frozen.card,
       },
       context?.signal,
@@ -420,20 +421,20 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     assignment: PrivateApprovalAssignmentStateV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<void> {
-    if (outbox.provider_message_ts === null || outbox.superseded_by_candidate_id === null) return;
+    if (outbox.presentation_external_id === null || outbox.superseded_by_candidate_id === null) return;
     const result = await this.options.poster.tombstone(
       {
         approval_id: outbox.approval_id,
         successor_id: outbox.superseded_by_candidate_id,
         dm_channel_id: assignment.dm_channel.channel_id,
-        provider_message_ts: outbox.provider_message_ts,
+        provider_message_ts: outbox.presentation_external_id,
       },
       context?.signal,
     );
     if (result.kind === "done") {
       this.options.authority.recordSupersededApprovalCardTombstoned({
         approval_id: outbox.approval_id,
-        provider_message_ts: outbox.provider_message_ts,
+        presentation_external_id: outbox.presentation_external_id,
       });
     }
   }

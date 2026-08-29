@@ -10,6 +10,7 @@ import {
   initializeCleanPersonCredentials,
   issueCleanPersonInvitation,
 } from "./clean-person-onboarding.js";
+import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-slack-person-external-identity-runtime.js";
 import { startCleanPersonRuntime } from "./clean-person-runtime.js";
 
 const USAGE = `usage:
@@ -185,8 +186,9 @@ export async function runCleanPersonCli(
       );
     const port = Number(required(parsed, "--port"));
     const host = required(parsed, "--host");
+    const stateDirectory = required(parsed, "--state-dir");
     const runtime = await startCleanPersonRuntime({
-      state_directory: required(parsed, "--state-dir"),
+      state_directory: stateDirectory,
       host:
         host === "127.0.0.1" || host === "::1"
           ? host
@@ -208,13 +210,11 @@ export async function runCleanPersonCli(
       pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
         privateReference(required(parsed, "--pkce-key-file")),
       ),
-      ...(parsed["--slack-approval-channel-id"] === undefined
-        ? {}
-        : {
-            slack_link: {
-              approval_channel_id: parsed["--slack-approval-channel-id"],
-            },
-          }),
+    }, {
+      external_identity_runtime:
+        createCleanSlackPersonExternalIdentityRuntimeBundleV1({
+          approval_channel_id: parsed["--slack-approval-channel-id"],
+        }),
     });
     io.stderr(
       `${canonicalJson({ schema_version: 1, kind: "echo-clean-person-runtime-ready-v1", host: runtime.address.address, port: runtime.address.port } as never)}\n`,

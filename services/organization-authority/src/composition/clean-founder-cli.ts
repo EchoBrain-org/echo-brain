@@ -1227,8 +1227,6 @@ function founderCanaryEvidence(
                 progress.admission_semantic_input_sha256
           WHERE progress.singleton = 1
             AND progress.cursor_version > 0
-            AND admission.source_adapter_id = 'granola'
-            AND admission.processor_adapter_id = 'llm'
           LIMIT 1`,
       )
       .get() !== undefined;

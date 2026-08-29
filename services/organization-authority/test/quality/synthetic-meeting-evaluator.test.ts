@@ -92,7 +92,7 @@ describe("synthetic meeting quality support", () => {
       processor,
       planner: { generate: async () => ({ queries: [] }) },
       answerer: fixtureAnswerer,
-      provider: "openrouter",
+      generation_adapter_id: "fixture-model-adapter",
       planner_model: "fixture/eval",
       answer_model: "fixture/eval",
     });
@@ -155,7 +155,7 @@ describe("synthetic meeting quality support", () => {
       },
       layer3,
       audit: { append: () => undefined },
-      provider: "openrouter",
+      generation_adapter_id: "fixture-model-adapter",
       planner_model: "fixture/eval",
       answer_model: "fixture/eval",
     });
@@ -213,7 +213,7 @@ describe("synthetic meeting quality support", () => {
             ? { status: "answered", answer: "Only me.", citations: ["a1"] }
             : { status: "answered", answer: "Organization members can read records.", citations: ["a1"] },
       },
-      provider: "openrouter",
+      generation_adapter_id: "fixture-model-adapter",
       planner_model: "fixture/eval",
       answer_model: "fixture/eval",
     });
@@ -238,7 +238,7 @@ describe("synthetic meeting quality support", () => {
       processor: new ExpectedSignalProcessor(),
       planner: { generate: async () => ({ queries: [] }) },
       answerer: { generate: async () => ({ status: "answered", answer: "fixture", citations: ["a1"] }) },
-      provider: "openrouter" as const,
+      generation_adapter_id: "fixture-model-adapter",
       planner_model: "fixture/eval",
       answer_model: "fixture/eval",
     };
