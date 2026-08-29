@@ -11,6 +11,7 @@ const DEFINITIVE_POST_FAILURE_CODES = new Set([
   "rate_limited",
   "invalid",
 ]);
+const SLACK_DIRECT_MESSAGE_CHANNEL = /^D[A-Z0-9]{2,255}$/;
 
 export interface PrivateSlackApprovalCardPresentationV1 {
   readonly text: string;
@@ -140,6 +141,12 @@ function messageIsAbsent(error: unknown): boolean {
   );
 }
 
+function assertDirectMessageChannel(channelId: string): void {
+  if (!SLACK_DIRECT_MESSAGE_CHANNEL.test(channelId)) {
+    throw new Error("private Slack approval requires a direct-message channel");
+  }
+}
+
 /**
  * Provider-only private approval presentation adapter.
  *
@@ -212,6 +219,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     input: { readonly approval_id: string; readonly dm_channel_id: string },
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalPostOutcomeV1> {
+    assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "retry_allowed" };
     try {
       const posted = await this.client.postMessage(
@@ -247,6 +255,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     },
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalPostOutcomeV1> {
+    assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "retry_allowed" };
     try {
       if (this.auth_identity === undefined) {
@@ -328,6 +337,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     },
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
+    assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "uncertain" };
     try {
       await this.client.updateMessage(
@@ -403,6 +413,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     },
     signal?: AbortSignal,
   ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
+    assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "uncertain" };
     try {
       await this.client.updateMessage(

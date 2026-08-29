@@ -99,6 +99,57 @@ describe("private Slack approval card poster V1", () => {
     ]);
   });
 
+  it("rejects every shared-channel write before calling Slack", async () => {
+    let providerCalls = 0;
+    const poster = new PrivateSlackApprovalCardPosterV1("test-token", {
+      baseUrl: "https://slack.example.test/api",
+      fetchImpl: async () => {
+        providerCalls += 1;
+        return new Response(JSON.stringify({ ok: true }));
+      },
+    });
+    const sharedChannel = "C123";
+    const error = "private Slack approval requires a direct-message channel";
+
+    await expect(
+      poster.postMarker({ approval_id: "apr_123", dm_channel_id: sharedChannel }),
+    ).rejects.toThrow(error);
+    await expect(
+      poster.reconcileMarker({
+        approval_id: "apr_123",
+        dm_channel_id: sharedChannel,
+        post_started_at: "2026-08-28T00:00:00.000Z",
+        reconciliation_started_at: "2026-08-28T00:01:00.000Z",
+      }),
+    ).rejects.toThrow(error);
+    await expect(
+      poster.publish({
+        approval_id: "apr_123",
+        dm_channel_id: sharedChannel,
+        provider_message_ts: "123.000001",
+        card: CARD,
+      }),
+    ).rejects.toThrow(error);
+    await expect(
+      poster.renderTerminal({
+        approval_id: "apr_123",
+        dm_channel_id: sharedChannel,
+        provider_message_ts: "123.000001",
+        outcome: "approved",
+        policy_label: "Only me",
+      }),
+    ).rejects.toThrow(error);
+    await expect(
+      poster.tombstone({
+        approval_id: "apr_123",
+        successor_id: "cnd_456",
+        dm_channel_id: sharedChannel,
+        provider_message_ts: "123.000001",
+      }),
+    ).rejects.toThrow(error);
+    expect(providerCalls).toBe(0);
+  });
+
   it("recovers the earliest exact DM marker and makes duplicates inert", async () => {
     const updates: Record<string, unknown>[] = [];
     const poster = new PrivateSlackApprovalCardPosterV1("test-token", {

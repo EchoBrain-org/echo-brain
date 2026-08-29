@@ -294,7 +294,7 @@ describe("Granola meeting-owner private approval target v1", () => {
     }
   });
 
-  it("fails closed when the raw organizer is absent", () => {
+  it("fails closed when both the raw organizer and note owner are absent", () => {
     const authority = openAuthority(true);
     try {
       expect(
@@ -304,6 +304,60 @@ describe("Granola meeting-owner private approval target v1", () => {
           meeting: meeting(undefined),
         }),
       ).toBeUndefined();
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("falls back to the canonical raw note owner only when the organizer is absent", () => {
+    const authority = openAuthority(true);
+    try {
+      const control = openControlPlane(true);
+      for (const candidate of [
+        meetingWithExtensions({
+          granola: { owner: { email: " OWNER@EXAMPLE.COM " } },
+        }),
+        meetingWithExtensions({
+          granola: { calendar_event: {}, owner: OWNER_EMAIL },
+        }),
+      ]) {
+        expect(
+          resolve({ authority_database: authority, control_plane_database: control, meeting: candidate }),
+        ).toMatchObject({ assignee: OWNER });
+      }
+    } finally {
+      authority.close();
+    }
+  });
+
+  it("never replaces present malformed or mismatched organizer evidence with the note owner", () => {
+    const authority = openAuthority(true);
+    try {
+      const control = openControlPlane(true);
+      for (const candidate of [
+        meetingWithExtensions({
+          granola: {
+            calendar_event: null,
+            owner: { email: OWNER_EMAIL },
+          },
+        }),
+        meetingWithExtensions({
+          granola: {
+            calendar_event: { organizer: { name: "Meeting owner" } },
+            owner: { email: OWNER_EMAIL },
+          },
+        }),
+        meetingWithExtensions({
+          granola: {
+            calendar_event: { organizer: "other@example.com" },
+            owner: { email: OWNER_EMAIL },
+          },
+        }),
+      ]) {
+        expect(
+          resolve({ authority_database: authority, control_plane_database: control, meeting: candidate }),
+        ).toBeUndefined();
+      }
     } finally {
       authority.close();
     }
@@ -327,6 +381,7 @@ describe("Granola meeting-owner private approval target v1", () => {
       }
 
       const inheritedOrganizer = Object.create({ organizer: OWNER_EMAIL });
+      const inheritedOwner = Object.create({ owner: OWNER_EMAIL });
       for (const candidate of [
         meetingWithExtensions({
           granola: {
@@ -340,6 +395,7 @@ describe("Granola meeting-owner private approval target v1", () => {
         meetingWithExtensions({
           granola: { calendar_event: inheritedOrganizer },
         }),
+        meetingWithExtensions({ granola: inheritedOwner }),
       ]) {
         expect(
           resolve({ authority_database: authority, control_plane_database: control, meeting: candidate }),

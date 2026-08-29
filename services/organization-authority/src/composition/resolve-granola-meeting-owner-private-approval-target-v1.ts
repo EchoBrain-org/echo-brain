@@ -60,23 +60,7 @@ function canonicalEmail(value: unknown): string | undefined {
   return isCanonicalPersonEmail(normalized) ? normalized : undefined;
 }
 
-/**
- * The raw provider organizer is the only owner evidence accepted in V1.
- * This stays local to the target resolver: no intermediate observation
- * contract is persisted or exposed for callers to accidentally reuse.
- */
-function observedGranolaOrganizerEmail(meeting: MeetingDocument): string | undefined {
-  if (!isPlainObject(meeting.extensions)) return undefined;
-  const granola = ownDataProperty(meeting.extensions, "granola");
-  if (!granola.present || !isPlainObject(granola.value)) return undefined;
-  const calendarEvent = ownDataProperty(granola.value, "calendar_event");
-  if (!calendarEvent.present || !isPlainObject(calendarEvent.value)) return undefined;
-
-  const organizer = ownDataProperty(calendarEvent.value, "organizer");
-  const source = organizer.present
-    ? organizer.value
-    : ownDataProperty(calendarEvent.value, "organiser").value;
-  if (source === undefined) return undefined;
+function observedEmail(source: unknown): string | undefined {
   if (typeof source === "string") return canonicalEmail(source);
   if (!isPlainObject(source)) return undefined;
   const email = ownDataProperty(source, "email");
@@ -84,10 +68,36 @@ function observedGranolaOrganizerEmail(meeting: MeetingDocument): string | undef
 }
 
 /**
- * Resolves the one current membership that is bound to the observed organizer
+ * Prefer the raw calendar organizer. An ad-hoc Granola note has no calendar
+ * organizer, so only in that absence use the raw provider note owner. A
+ * present but malformed organizer remains a hard failure and cannot be
+ * replaced by weaker evidence.
+ *
+ * This stays local to the target resolver: no intermediate observation
+ * contract is persisted or exposed for callers to accidentally reuse.
+ */
+function observedGranolaOwnerEmail(meeting: MeetingDocument): string | undefined {
+  if (!isPlainObject(meeting.extensions)) return undefined;
+  const granola = ownDataProperty(meeting.extensions, "granola");
+  if (!granola.present || !isPlainObject(granola.value)) return undefined;
+  const calendarEvent = ownDataProperty(granola.value, "calendar_event");
+  if (calendarEvent.present) {
+    if (!isPlainObject(calendarEvent.value)) return undefined;
+    const organizer = ownDataProperty(calendarEvent.value, "organizer");
+    if (organizer.present) return observedEmail(organizer.value);
+    const organiser = ownDataProperty(calendarEvent.value, "organiser");
+    if (organiser.present) return observedEmail(organiser.value);
+  }
+
+  const owner = ownDataProperty(granola.value, "owner");
+  return owner.present ? observedEmail(owner.value) : undefined;
+}
+
+/**
+ * Resolves the one current membership that is bound to the observed owner
  * through a consumed initial OIDC grant. Ambiguity remains a hard no-target.
  */
-function resolveObservedOrganizerAssignee(input: {
+function resolveObservedOwnerAssignee(input: {
   readonly authority_database: Database.Database;
   readonly organization_id: string;
   readonly email: string;
@@ -146,8 +156,8 @@ function resolveObservedOrganizerAssignee(input: {
 
 /**
  * Composes the evidence-only ownership checks required before private
- * approval delivery: raw Granola organizer, current Authority membership,
- * and a current Control Plane Slack identity link.
+ * approval delivery: raw Granola organizer or note owner, current Authority
+ * membership, and a current Control Plane Slack identity link.
  *
  * This is intentionally read-only. It does not persist an assignment, open a
  * DM, post a card, or choose an approval policy. Missing or mismatched proof
@@ -171,9 +181,9 @@ export function resolveGranolaMeetingOwnerPrivateApprovalTargetV1(
     return undefined;
   }
 
-  const email = observedGranolaOrganizerEmail(input.meeting);
+  const email = observedGranolaOwnerEmail(input.meeting);
   if (email === undefined) return undefined;
-  const assignee = resolveObservedOrganizerAssignee({
+  const assignee = resolveObservedOwnerAssignee({
     authority_database: input.authority_database,
     organization_id: input.coordinates.organization_id,
     email,
