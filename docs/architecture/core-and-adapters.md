@@ -21,7 +21,10 @@ provider API -> server adapter -> processing contracts <- processing cycle
 - `processing/storage/` owns Authority processing durability.
 - `processing/live/` composes one bounded server cycle.
 - Authority composition selects concrete adapters, credentials, organization
-  policy, and stores.
+  policy, and stores through explicit bundles for meeting source, decision
+  processor, Layer 4 generation, approval/interaction, and Person external
+  identity. Those bundles are the only place an active external-capability
+  provider is selected.
 
 `npm run check:boundary` enforces these rules for every owned source file, not
 only today's entry-point closure. Processing tests live beside the Authority;
@@ -55,6 +58,12 @@ that state and cannot load provider adapters.
   explicit human outcome.
 - A **delivery surface** publishes an approved destination-neutral envelope
   and returns a provider receipt.
+
+The shared approval path retains an opaque, generic presentation reference,
+not a provider message timestamp or channel grammar. The approved-record path
+receives a policy projector that translates a canonical terminal approval into
+the record facts appropriate for the selected product policy; it does not
+inspect an approval-surface payload.
 
 Approval and delivery remain separate capabilities. They may share a provider
 connection, but a generic Slack delivery channel must differ from the active
@@ -109,12 +118,14 @@ tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
 ## Current composition
 
-The current server composition selects Granola as the meeting source,
-OpenRouter with the pinned DeepSeek processing version as the decision
-processor, Slack as separate approval and delivery capabilities, and Authority
-SQLite state. It separately composes the bounded Person `ask` path above Layer
-3 with one pinned OpenRouter planner/answer model. The other LLM transports are
-compiled alternatives, not active runtime dependencies.
+The current founder and CLI product profile concretely selects Granola as the
+meeting source, OpenRouter with the pinned DeepSeek processing version as the
+decision processor, Slack for approval, interactions, identity, and the
+existing delivery capability, and Authority SQLite state. It separately
+composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
+planner/answer model. The other LLM transports are compiled alternatives, not
+active runtime dependencies. This is an allowed selecting composition profile,
+not evidence that every active provider has completed qualification.
 
 The source-processing model remains separate from the permission-aware
 read/model path. It receives one admitted source revision through the processor
@@ -136,3 +147,25 @@ A new integration begins as a typed capability, not a generic plugin. It keeps
 vendor types behind its adapter boundary, declares identity and failure
 semantics, supplies deterministic fakes, and passes capability-level tests.
 The processing core must still compile and test when that adapter is absent.
+
+Provider semantics terminate at the edge. Adding a provider may add an adapter,
+selecting composition, provider-owned persistence, onboarding, and tests, but
+must not add provider branches to shared processing or canonical state. The
+normative rule and the known failure mode are
+[INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
+and
+[failure pattern](../failure-patterns/FP-ADAPTERS-005-first-provider-becomes-architecture.md).
+
+## Known provider-neutrality caveats
+
+- Founder onboarding and the compatibility CLI select the concrete Granola,
+  OpenRouter, and Slack profile; there is no universal source-onboarding flow.
+- The boundary covers external capabilities, not interchangeable SQLite,
+  file-key, Node-runtime, or authentication-protocol implementations. The
+  meeting-source port is pull-oriented; push sources need an edge buffer or a
+  versioned provider-independent capability.
+- V3 physically stores `provider_message_ts`; shared code treats it as opaque
+  `presentation_external_id` until an explicit schema migration.
+- Bundles are trusted static composition, and name/dependency checks cannot
+  detect every hidden semantic coupling. Each selected profile still needs
+  capability tests and a bounded staging rehearsal.

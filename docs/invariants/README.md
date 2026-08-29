@@ -22,6 +22,7 @@ during migration.
 | [`INV-PERMISSIONS-014`](INV-PERMISSIONS-014-actor-not-source-owner.md) | Approval authority is independent from source custody | Bounded Slack modes | partial | live negative evidence |
 | [`INV-ADAPTERS-003`](INV-ADAPTERS-003-model-execution-controls.md) | Model execution controls are explicit processing identity | Model/provider pairs | partial | linked test and live evidence |
 | [`INV-ADAPTERS-004`](INV-ADAPTERS-004-source-owned-grounding.md) | Models select source-owned evidence references | Shared LLM processor | partial | linked tests and live evidence |
+| [`INV-ADAPTERS-005`](INV-ADAPTERS-005-provider-semantics-at-boundary.md) | Provider semantics terminate at the adapter boundary | Active provider boundaries and canonical durable contracts | partial | boundary gate; full qualification pending |
 | [`INV-IDENTITY-002`](INV-IDENTITY-002-versioned-lease-duration.md) | Access duration changes are versioned compatibility changes | Access protocol | partial | linked tests; live qualification open |
 | [`INV-IDENTITY-003`](INV-IDENTITY-003-revocation-windows.md) | Central and offline revocation windows are separate claims | Access and permissions | partial | bounded tests |
 | [`INV-IDENTITY-004`](INV-IDENTITY-004-provider-identity-migration.md) | Incomplete provider identity is repaired by fresh atomic proof | Provider migrations | partial | linked tests and live promotion |
