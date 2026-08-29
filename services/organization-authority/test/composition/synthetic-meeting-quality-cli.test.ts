@@ -135,7 +135,7 @@ describe("synthetic meeting quality command", () => {
       adapter_id: "llm",
       instance_id: "synthetic-quality-eval",
       credential_ref: "file:/tmp/private-openrouter-token",
-      settings: { provider: "openrouter", model: "deepseek/deepseek-r1" },
+      settings: { provider: "openrouter", model: "deepseek/deepseek-v3.2" },
     });
     expect(output).toHaveLength(1);
     expect(output[0]).not.toContain("Adopt a two-stage release review");

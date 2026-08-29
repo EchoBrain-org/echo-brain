@@ -84,9 +84,9 @@ describe("OpenRouter Layer 4 structured output", () => {
     expect(error.diagnostic).toEqual({
       failure_class: "adapter_provider_error",
       http_status: 429,
-      provider: "openai",
+      adapter_id: "openrouter",
       finish_reason: null,
-      provider_generation_id: "gen-1234567890",
+      adapter_request_id: "gen-1234567890",
     });
     expect(JSON.stringify(error)).not.toContain("secret-not-in-errors");
     expect(JSON.stringify(error)).not.toContain("provider body secret");
@@ -120,9 +120,9 @@ describe("OpenRouter Layer 4 structured output", () => {
     expect(error.diagnostic).toEqual({
       failure_class: "adapter_finish",
       http_status: 200,
-      provider: "openai",
+      adapter_id: "openrouter",
       finish_reason: "length",
-      provider_generation_id: "gen-abcdefgh12345678",
+      adapter_request_id: "gen-abcdefgh12345678",
     });
     expect(JSON.stringify(error)).not.toContain("private generated content");
   });
@@ -144,8 +144,8 @@ describe("OpenRouter Layer 4 structured output", () => {
 
     const error = await caught(adapter);
 
-    expect(error.diagnostic.provider_generation_id).toBeNull();
-    expect(error.diagnostic.provider).toBeNull();
+    expect(error.diagnostic.adapter_request_id).toBeNull();
+    expect(error.diagnostic.adapter_id).toBe("openrouter");
     expect(JSON.stringify(error)).not.toContain("QUESTIONTOKEN79a3067");
     expect(JSON.stringify(error)).not.toContain("SOURCESECRET79a3067");
   });
@@ -165,9 +165,9 @@ describe("OpenRouter Layer 4 structured output", () => {
     expect(error.diagnostic).toEqual({
       failure_class: "adapter_transport",
       http_status: null,
-      provider: null,
+      adapter_id: "openrouter",
       finish_reason: null,
-      provider_generation_id: null,
+      adapter_request_id: null,
     });
     expect(JSON.stringify(error)).not.toContain("transport body secret");
     expect(JSON.stringify(error)).not.toContain("secret-not-in-errors");
@@ -187,9 +187,9 @@ describe("OpenRouter Layer 4 structured output", () => {
     expect(error.diagnostic).toEqual({
       failure_class: "adapter_timeout",
       http_status: null,
-      provider: null,
+      adapter_id: "openrouter",
       finish_reason: null,
-      provider_generation_id: null,
+      adapter_request_id: null,
     });
     expect(JSON.stringify(error)).not.toContain("private timeout detail");
     expect(JSON.stringify(error)).not.toContain("secret-not-in-errors");
@@ -215,9 +215,9 @@ describe("OpenRouter Layer 4 structured output", () => {
     expect(error.diagnostic).toEqual({
       failure_class: "adapter_timeout",
       http_status: 200,
-      provider: null,
+      adapter_id: "openrouter",
       finish_reason: null,
-      provider_generation_id: null,
+      adapter_request_id: null,
     });
     expect(JSON.stringify(error)).not.toContain("private stalled body");
   });

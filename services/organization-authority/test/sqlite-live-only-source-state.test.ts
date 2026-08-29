@@ -148,7 +148,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(value, {
       source_adapter_id: "synthetic-fixture",
       assert_live_cursor: granolaLiveSourceBoundaryV1.assert_live_cursor,
-    });
+    }, "llm");
 
     await expect(state.readAdmission()).rejects.toThrow(
       "admission adapter differs from its configured boundary",
@@ -173,6 +173,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -218,6 +219,7 @@ describe("SQLite clean live-only source state", () => {
       const state = new SqliteCleanLiveOnlySourceStateV1(
         value,
         granolaLiveSourceBoundaryV1,
+        "llm",
         () => ADVANCED_AT,
       );
       const current = await state.readAdmission();
@@ -302,6 +304,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -365,6 +368,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       database(),
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => new Date(Date.parse(ADVANCED_AT) + tick++ * 1_000).toISOString(),
     );
     const current = await state.readAdmission();
@@ -429,7 +433,7 @@ describe("SQLite clean live-only source state", () => {
       state.recordPostedApprovalCard({
         candidate_id: candidate.candidate_id,
         post_started_at: prepared.outbox.post_started_at!,
-        provider_message_ts: `1724292304.00${providerMessage++}000`,
+        presentation_external_id: `1724292304.00${providerMessage++}000`,
         frozen_card_sha256,
         approved_snapshot,
       });
@@ -457,7 +461,7 @@ describe("SQLite clean live-only source state", () => {
     state.recordPostedApprovalCard({
       candidate_id: posted.candidate_id,
       post_started_at: postedPrepared.outbox.post_started_at!,
-      provider_message_ts: "1724292304.004000",
+      presentation_external_id: "1724292304.004000",
       frozen_card_sha256: postedDigest,
       approved_snapshot: postedSnapshot,
     });
@@ -543,6 +547,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
 
@@ -598,6 +603,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     await state.readAdmission();
@@ -625,6 +631,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     await state.readAdmission();
@@ -648,6 +655,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -687,7 +695,7 @@ describe("SQLite clean live-only source state", () => {
     const posted = state.recordPostedApprovalCard({
       candidate_id: candidate.candidate_id,
       post_started_at: prepared.outbox.post_started_at!,
-      provider_message_ts: "1724292304.005000",
+      presentation_external_id: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: {
         kind: "approved",
@@ -724,6 +732,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -748,6 +757,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const initialAdmission = await state.readAdmission();
@@ -880,6 +890,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -917,7 +928,7 @@ describe("SQLite clean live-only source state", () => {
     const posted = state.recordPostedApprovalCard({
       candidate_id: first.candidate_id,
       post_started_at: ADVANCED_AT,
-      provider_message_ts: "1724292304.005000",
+      presentation_external_id: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
     });
@@ -938,6 +949,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -986,6 +998,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1062,6 +1075,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1115,6 +1129,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1156,30 +1171,30 @@ describe("SQLite clean live-only source state", () => {
     expect(state.listPendingSupersededApprovalCards()).toContainEqual(
       expect.objectContaining({
         approval_id: first.approval_id,
-        provider_message_ts: null,
+        presentation_external_id: null,
         post_started_at: ADVANCED_AT,
       }),
     );
     const latePost = {
       candidate_id: first.candidate_id,
       post_started_at: ADVANCED_AT,
-      provider_message_ts: "1724292304.005000",
+      presentation_external_id: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { kind: "approved", candidate_id: first.candidate_id },
     };
 
     expect(state.recordPostedApprovalCard(latePost)).toMatchObject({
       state: "superseded",
-      provider_message_ts: latePost.provider_message_ts,
+      presentation_external_id: latePost.presentation_external_id,
     });
     expect(state.recordPostedApprovalCard(latePost)).toMatchObject({
       state: "superseded",
-      provider_message_ts: latePost.provider_message_ts,
+      presentation_external_id: latePost.presentation_external_id,
     });
     expect(state.listPendingSupersededApprovalCards()).toContainEqual(
       expect.objectContaining({
         approval_id: first.approval_id,
-        provider_message_ts: latePost.provider_message_ts,
+        presentation_external_id: latePost.presentation_external_id,
       }),
     );
     expect(state.readCandidateByApprovalId(first.approval_id)).toMatchObject({
@@ -1189,7 +1204,7 @@ describe("SQLite clean live-only source state", () => {
     expect(() =>
       state.recordPostedApprovalCard({
         ...latePost,
-        provider_message_ts: "1724292304.006000",
+        presentation_external_id: "1724292304.006000",
       }),
     ).toThrow("conflicts with its durable outbox");
   });
@@ -1198,6 +1213,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       database(),
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1244,7 +1260,7 @@ describe("SQLite clean live-only source state", () => {
       }),
     ).toMatchObject({
       state: "superseded",
-      provider_message_ts: null,
+      presentation_external_id: null,
       frozen_card_sha256: null,
       approved_snapshot_json: null,
       post_started_at: null,
@@ -1267,6 +1283,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       database(),
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1299,7 +1316,7 @@ describe("SQLite clean live-only source state", () => {
     state.recordPostedApprovalCard({
       candidate_id: candidate.candidate_id,
       post_started_at: ADVANCED_AT,
-      provider_message_ts: "1724292304.005000",
+      presentation_external_id: "1724292304.005000",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { candidate_id: candidate.candidate_id },
     });
@@ -1316,6 +1333,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       database(),
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => now,
     );
     const current = await state.readAdmission();
@@ -1352,7 +1370,7 @@ describe("SQLite clean live-only source state", () => {
       state.recordPostedApprovalCard({
         candidate_id: candidate.candidate_id,
         post_started_at: firstStartedAt,
-        provider_message_ts: "1724292304.005000",
+        presentation_external_id: "1724292304.005000",
         frozen_card_sha256,
         approved_snapshot,
       }),
@@ -1362,7 +1380,7 @@ describe("SQLite clean live-only source state", () => {
     ).toMatchObject({
       state: "posting",
       post_started_at: secondStartedAt,
-      provider_message_ts: null,
+      presentation_external_id: null,
     });
   });
 
@@ -1371,6 +1389,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1389,7 +1408,7 @@ describe("SQLite clean live-only source state", () => {
     state.recordPostedApprovalCard({
       candidate_id: first.candidate_id,
       post_started_at: ADVANCED_AT,
-      provider_message_ts: "1724292304.005000",
+      presentation_external_id: "1724292304.005000",
       frozen_card_sha256: `sha256:${"a".repeat(64)}`,
       approved_snapshot: { candidate_id: first.candidate_id },
     });
@@ -1419,7 +1438,7 @@ describe("SQLite clean live-only source state", () => {
     state.recordPostedApprovalCard({
       candidate_id: second.candidate_id,
       post_started_at: ADVANCED_AT,
-      provider_message_ts: "1724292304.006000",
+      presentation_external_id: "1724292304.006000",
       frozen_card_sha256: `sha256:${"b".repeat(64)}`,
       approved_snapshot: { candidate_id: second.candidate_id },
     });
@@ -1456,12 +1475,12 @@ describe("SQLite clean live-only source state", () => {
       ]),
     );
     for (const card of stale) {
-      if (card.provider_message_ts === null) {
+      if (card.presentation_external_id === null) {
         throw new Error("posted stale fixture has no provider timestamp");
       }
       const postedCard = {
         approval_id: card.approval_id,
-        provider_message_ts: card.provider_message_ts,
+        presentation_external_id: card.presentation_external_id,
       };
       state.recordSupersededApprovalCardTombstoned(postedCard);
       state.recordSupersededApprovalCardTombstoned(postedCard);
@@ -1482,6 +1501,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();
@@ -1541,7 +1561,7 @@ describe("SQLite clean live-only source state", () => {
     const directQueuedPost = {
       candidate_id: queued.candidate_id,
       post_started_at: ADVANCED_AT,
-      provider_message_ts: "1724292304.005001",
+      presentation_external_id: "1724292304.005001",
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
       approved_snapshot: { candidate_id: queued.candidate_id },
     };
@@ -1577,6 +1597,7 @@ describe("SQLite clean live-only source state", () => {
     const state = new SqliteCleanLiveOnlySourceStateV1(
       value,
       granolaLiveSourceBoundaryV1,
+      "llm",
       () => ADVANCED_AT,
     );
     const current = await state.readAdmission();

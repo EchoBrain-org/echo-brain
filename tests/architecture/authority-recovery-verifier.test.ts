@@ -16,7 +16,11 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/new-lineage-v1";
+import {
+  createApprovedRecordPolicyProjectorRegistryV1,
+  createPersonPolicyFactProjectorV2,
+  openOrganizationRecordDatabase,
+} from "@echo-brain/organization-record/new-lineage-v1";
 import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { DevelopmentFileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/development-file-authority-signer.js";
 import { createCleanReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/clean-readable-search-runtime.js";
@@ -105,6 +109,9 @@ async function writeFixture(): Promise<string> {
         authority_id: initialized.authority_id,
         organization_id: initialized.organization_id,
       }),
+      policy_projectors: createApprovedRecordPolicyProjectorRegistryV1([
+        createPersonPolicyFactProjectorV2(),
+      ]),
       now: () => "2026-08-25T12:01:00.000Z",
     });
     await reconciler.reconcile(new AbortController().signal);

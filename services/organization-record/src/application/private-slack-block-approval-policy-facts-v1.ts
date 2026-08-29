@@ -1,6 +1,10 @@
 import { sha256Digest } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "./contracts.js";
 import { derivedAtomIdentity } from "./atom-identity.js";
+import type {
+  ApprovedRecordPolicyEnvelopeV1,
+  ApprovedRecordPolicyProjectorV1,
+} from "./approved-record-policy-projection-v1.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
@@ -24,6 +28,44 @@ export interface PrivateSlackBlockApprovalPolicyFactsInputV1 {
   readonly envelope: unknown;
   readonly record_position: number;
   readonly witness: unknown;
+}
+
+/** D2 reproof shape for the signed private Slack Block Kit action. */
+export interface ReprovedPrivateSlackBlockApprovalD2WitnessV1 {
+  readonly authorization_allow: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly approval_id: string;
+    readonly action: "approve" | "reject";
+    readonly final_approver: {
+      readonly principal_id: string;
+      readonly membership_id: string;
+    };
+    readonly selected_policy_id: PersonPolicyIdV2 | null;
+    readonly policy_contract_sha256: Sha256Digest | null;
+    readonly provider_action_sha256: Sha256Digest;
+    readonly decision: "allow";
+  };
+  readonly authorization_proof_sha256: Sha256Digest;
+  readonly provider_action_kind: typeof SIGNED_SLACK_BLOCK_ACTION_V1_KIND;
+  readonly provider_action_schema_version: 1;
+  readonly audit_entry: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly audit_event_id: string;
+    readonly audit_sequence: number;
+    readonly actor_class: "provider_human";
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly action: "approve" | "reject";
+    readonly subject_kind: "approval";
+    readonly subject_id: string;
+    readonly detail_digest: Sha256Digest;
+    readonly provider_action_sha256: Sha256Digest;
+  };
+  readonly audit_entry_sha256: Sha256Digest;
 }
 
 export class PrivateSlackBlockApprovalPolicyFactProjectionV1Error extends Error {
@@ -163,4 +205,95 @@ export function projectPrivateSlackBlockApprovalPolicyFactsV1(input: PrivateSlac
     return resolution.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID ? Object.freeze({ ...common, policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID, reviewer_principal_id: resolution.final_approver.principal_id, reviewer_membership_id: resolution.final_approver.membership_id }) : Object.freeze({ ...common, policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID });
   });
   return Object.freeze({ facts: Object.freeze(facts), policy_fact_outcome: Object.freeze({ kind: "appended", policy_id: resolution.policy_id as PersonPolicyIdV2 }) });
+}
+
+function privateSlackPolicyEnvelope(
+  envelope: ApprovedRecordPolicyEnvelopeV1,
+): unknown {
+  const event = envelope.body.event as {
+    readonly kind: "approved" | "rejected";
+    readonly approved_snapshot?: {
+      readonly approved_payload: {
+        readonly brief: {
+          readonly decisions: readonly { readonly id: string; readonly kind: "decision" }[];
+          readonly actions: readonly { readonly id: string; readonly kind: "action" }[];
+          readonly rationales: readonly { readonly id: string; readonly kind: "rationale" }[];
+        };
+      };
+    };
+    readonly approved_snapshot_sha256?: Sha256Digest;
+    readonly policy_id?: PersonPolicyIdV2;
+    readonly policy_contract_sha256?: Sha256Digest;
+    readonly policy_consequence_text?: string;
+    readonly policy_consequence_sha256?: Sha256Digest;
+  };
+  return {
+    record_sha256: envelope.record_sha256,
+    body: {
+      authority_id: envelope.body.authority_id,
+      organization_id: envelope.body.organization_id,
+      state_lineage_id: envelope.body.state_lineage_id,
+      human_act_resolution_ref: envelope.body.human_act_resolution_ref,
+      event:
+        event.kind === "rejected"
+          ? { kind: "rejected" }
+          : {
+              kind: "approved",
+              approved_snapshot: {
+                approved_payload: {
+                  brief: {
+                    decisions: event.approved_snapshot!.approved_payload.brief.decisions.map(
+                      (signal) => ({ id: signal.id, kind: signal.kind }),
+                    ),
+                    actions: event.approved_snapshot!.approved_payload.brief.actions.map(
+                      (signal) => ({ id: signal.id, kind: signal.kind }),
+                    ),
+                    rationales: event.approved_snapshot!.approved_payload.brief.rationales.map(
+                      (signal) => ({ id: signal.id, kind: signal.kind }),
+                    ),
+                  },
+                },
+              },
+              approved_snapshot_sha256: event.approved_snapshot_sha256,
+              policy_id: event.policy_id,
+              policy_contract_sha256: event.policy_contract_sha256,
+              policy_consequence_text: event.policy_consequence_text,
+              policy_consequence_sha256: event.policy_consequence_sha256,
+            },
+    },
+  };
+}
+
+/**
+ * Slack's signed Block Kit contract is selected only here. Append and Layer 1
+ * pass the verified envelope through the generic approved-record seam.
+ */
+export function createPrivateSlackBlockApprovalPolicyProjectorV1(): ApprovedRecordPolicyProjectorV1 {
+  const projector: ApprovedRecordPolicyProjectorV1 = {
+    id: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
+    matches: (envelope: ApprovedRecordPolicyEnvelopeV1) =>
+      (envelope.body.human_act_resolution_ref as { readonly kind?: unknown }).kind ===
+      PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
+    project: ({ envelope, record_position, witness }: {
+      readonly envelope: ApprovedRecordPolicyEnvelopeV1;
+      readonly record_position: number;
+      readonly witness: unknown;
+    }) =>
+      projectPrivateSlackBlockApprovalPolicyFactsV1({
+        envelope: privateSlackPolicyEnvelope(envelope),
+        record_position,
+        witness,
+      }),
+    approvedPolicy: (envelope: ApprovedRecordPolicyEnvelopeV1) => {
+      const resolution = ref(envelope.body.human_act_resolution_ref);
+      if (resolution.action !== "approve" || envelope.body.event.kind !== "approved") {
+        invalid("approved private Slack policy binding is unavailable");
+      }
+      return Object.freeze({
+        policy_id: resolution.policy_id!,
+        policy_contract_sha256: resolution.policy_contract_sha256!,
+      });
+    },
+  };
+  return Object.freeze(projector);
 }

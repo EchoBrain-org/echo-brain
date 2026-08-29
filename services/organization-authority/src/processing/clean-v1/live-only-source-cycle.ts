@@ -240,7 +240,7 @@ function assertAdmissionMatchesAdapters(
     processor.identity.version !== admission.processor.version
   ) {
     throw new Error(
-      "clean processor adapter differs from the admitted fixed LLM processor",
+      "clean processor adapter differs from the admitted decision processor",
     );
   }
   if (

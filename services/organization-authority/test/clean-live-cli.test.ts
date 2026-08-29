@@ -215,9 +215,9 @@ describe("clean live CLI runtime events", () => {
       failure_class: "adapter_response",
       elapsed_ms: 120_000,
       http_status: 504,
-      provider: "private-provider-sentinel",
+      adapter_id: "private-adapter-sentinel",
       finish_reason: "error",
-      provider_generation_id: "private-generation-sentinel",
+      adapter_request_id: "private-request-sentinel",
       retrieval_generation_id: "private-retrieval-sentinel",
     });
     process.emit("SIGTERM");
@@ -230,8 +230,8 @@ describe("clean live CLI runtime events", () => {
       "prompt-sentinel",
       "answer-sentinel",
       "bearer-sentinel",
-      "private-provider-sentinel",
-      "private-generation-sentinel",
+      "private-adapter-sentinel",
+      "private-request-sentinel",
       "private-retrieval-sentinel",
     ]) {
       expect(output).not.toContain(sentinel);

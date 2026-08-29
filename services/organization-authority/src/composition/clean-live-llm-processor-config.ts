@@ -10,7 +10,7 @@ export const CLEAN_LLM_PROCESSOR_PROMPT_VERSION_V1 = "decision-extraction-v3";
 export const CLEAN_LLM_PROCESSOR_SCHEMA_VERSION_V1 =
   "decision-extraction-schema-v4";
 export const CLEAN_LLM_PROCESSOR_PROVIDER_V1 = "openrouter";
-export const CLEAN_LLM_PROCESSOR_MODEL_V1 = "deepseek/deepseek-r1";
+export const CLEAN_LLM_PROCESSOR_MODEL_V1 = "deepseek/deepseek-v3.2";
 export const CLEAN_LLM_PROCESSOR_MAX_OUTPUT_TOKENS_V1 = 8192;
 export const CLEAN_LLM_PROCESSOR_TIMEOUT_MS_V1 = 600_000;
 

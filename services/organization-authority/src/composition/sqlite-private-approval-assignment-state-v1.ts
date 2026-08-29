@@ -806,7 +806,8 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       .prepare(
         `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
                 outbox.approval_id, outbox.frozen_card_sha256,
-                outbox.approved_snapshot_sha256, outbox.provider_message_ts,
+                outbox.approved_snapshot_sha256,
+                outbox.provider_message_ts,
                 outbox.state
            FROM authority_live_source_candidates_v2 AS candidate
            JOIN authority_live_approval_outbox_v2 AS outbox

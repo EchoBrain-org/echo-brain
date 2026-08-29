@@ -23,6 +23,11 @@ import {
   issueCleanPersonInvitation,
 } from "../src/composition/clean-person-onboarding.js";
 import { startCleanPersonRuntime } from "../src/composition/clean-person-runtime.js";
+import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/clean-slack-person-external-identity-runtime.js";
+import type {
+  CleanPersonExternalIdentityRuntimeInputV1,
+  OpenedCleanPersonExternalIdentityRuntimeV1,
+} from "../src/composition/clean-person-external-identity-runtime.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 
 const roots: string[] = [];
@@ -86,6 +91,90 @@ afterEach(() => {
 });
 
 describe("clean Person runtime", () => {
+  it("wires an injected external-identity application without selecting a provider", async () => {
+    const parent = root();
+    const initialized = initializeCleanResetState({
+      state_directory: join(parent, "state"),
+      organization_display_name: "Founder Organization",
+      owner_display_name: "Founder",
+      created_at: new Date(Date.now() - 1_000).toISOString(),
+      creating_artifact_revision: "clean-person-external-identity-runtime-test",
+    });
+    const credentials = initializeCleanPersonCredentials({
+      state_directory: initialized.state_directory,
+    });
+    const opened: CleanPersonExternalIdentityRuntimeInputV1[] = [];
+    let closed = 0;
+    const runtime = await startCleanPersonRuntime(
+      {
+        state_directory: initialized.state_directory,
+        host: "127.0.0.1",
+        port: 19_992,
+        authority_url: "https://authority.example",
+        oidc: {
+          issuer: "https://issuer.example",
+          client_id: "founder-client",
+          redirect_uri: "https://authority.example/v2/session/oidc/callback",
+          tenant: { kind: "issuer" },
+          id_token_algorithms: ["RS256"],
+        },
+        client_authentication: { method: "none" },
+        pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
+          credentials.pkce_sealing_key_reference,
+        ),
+      },
+      {
+        oidc_provider: new MockOidcProvider(),
+        external_identity_runtime: {
+          open(input): OpenedCleanPersonExternalIdentityRuntimeV1 {
+            opened.push(input);
+            return {
+              application: {
+                routes: [
+                  {
+                    route_id: "fake-external-identity",
+                    method: "POST",
+                    path: "/v2/external-identity/fake",
+                  },
+                ],
+                async accept(request) {
+                  return {
+                    status: 201,
+                    body: { route_id: request.route_id, provider: "fake" },
+                  };
+                },
+              },
+              close: () => {
+                closed += 1;
+              },
+            };
+          },
+        },
+      },
+    );
+    try {
+      expect(opened).toHaveLength(1);
+      expect(opened[0]).toMatchObject({
+        state_directory: initialized.state_directory,
+        authority_id: initialized.authority_id,
+        organization_id: initialized.organization_id,
+        state_lineage_id: initialized.state_lineage_id,
+      });
+      const response = await fetch(
+        `http://127.0.0.1:${String(runtime.address.port)}/v2/external-identity/fake`,
+        { method: "POST", body: "{}" },
+      );
+      expect(response.status).toBe(201);
+      await expect(response.json()).resolves.toEqual({
+        route_id: "fake-external-identity",
+        provider: "fake",
+      });
+    } finally {
+      await runtime.close();
+    }
+    expect(closed).toBe(1);
+  });
+
   it("burns a bootstrap invitation when the verified email does not match", async () => {
     const parent = root();
     const initialized = initializeCleanResetState({
@@ -262,7 +351,11 @@ describe("clean Person runtime", () => {
         client_authentication: { method: "none" },
         pkce_sealing_key: pkce,
       },
-      { oidc_provider: new MockOidcProvider() },
+      {
+        oidc_provider: new MockOidcProvider(),
+        external_identity_runtime:
+          createCleanSlackPersonExternalIdentityRuntimeBundleV1({}),
+      },
     );
     try {
       const origin = `http://127.0.0.1:${String(runtime.address.port)}`;

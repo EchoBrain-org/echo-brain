@@ -26,6 +26,7 @@ import {
 } from "../../services/organization-authority/src/composition/clean-person-onboarding.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
 import { openCleanGranolaLiveRuntime } from "../../services/organization-authority/src/composition/open-clean-granola-live-runtime.js";
+import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/clean-slack-person-external-identity-runtime.js";
 import { initializeCleanResetState } from "../../services/organization-authority/src/composition/clean-reset-state.js";
 import type { CleanLiveProcessingCycleV1 } from "../../services/organization-authority/src/composition/clean-live-runtime.js";
 import { runPersonClientCli } from "../../src/product/person-client/commands.js";
@@ -437,7 +438,16 @@ describe("clean founder command rehearsal", () => {
         granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
         llm_credential_file: join(stateDirectory, "credentials", "llm-credential"),
       },
-      { person: { oidc_provider: new MockOidcProvider(), slack_provider: fakeSlack } },
+      {
+        person: {
+          oidc_provider: new MockOidcProvider(),
+          external_identity_runtime:
+            createCleanSlackPersonExternalIdentityRuntimeBundleV1({
+              approval_channel_id: "C12345678",
+              provider: fakeSlack,
+            }),
+        },
+      },
     );
     expect(idle.processing).toBe("idle_until_finalize");
     try {

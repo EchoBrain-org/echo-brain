@@ -907,7 +907,7 @@ describe("workspace source boundaries", () => {
     );
   });
 
-  it("discovers adapter ids across all roots and rejects leaks in processing core", () => {
+  it("discovers adapter ids and rejects them in provider-neutral core", () => {
     const fixture = fixtureRepository();
     let result = runBoundary(fixture);
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -928,44 +928,12 @@ describe("workspace source boundaries", () => {
     result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "adapter id 'granola' leaked into tool-agnostic core module: services/organization-authority/src/processing/core/adapter-id-leak-probe.ts",
+      "provider identifier 'granola' leaked into provider-neutral module: services/organization-authority/src/processing/core/adapter-id-leak-probe.ts",
     );
   });
 
-  it("keeps provider names out of provider-neutral clean runtime modules", () => {
+  it("keeps supplemental provider identifiers and discovered adapters out of neutral modules", () => {
     const fixture = fixtureRepository();
-    const neutralPaths = [
-      "services/organization-authority/src/processing/core/**",
-      "services/organization-authority/src/processing/clean-v1/**",
-      "services/organization-authority/src/processing/clean-v1-d2-d3/**",
-      "services/organization-authority/src/processing/clean-v1-record/**",
-      "services/organization-authority/src/processing/live/**",
-      "services/organization-authority/src/composition/clean-live-runtime.ts",
-      "services/organization-authority/src/composition/open-clean-live-runtime.ts",
-    ];
-    const sourceFiles = spawnSync(
-      "git",
-      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-      { cwd: fixture, encoding: "buffer" },
-    );
-    expect(sourceFiles.status, sourceFiles.stderr?.toString("utf8")).toBe(0);
-
-    const assertNoGranolaLeak = (): void => {
-      const leaks = sourceFiles.stdout
-        .toString("utf8")
-        .split("\0")
-        .filter(
-          (path) =>
-            path !== "" &&
-            /\.(?:[cm]?[jt]sx?)$/.test(path) &&
-            neutralPaths.some((pattern) => matchesGlob(path, pattern)) &&
-            existsSync(join(fixture, path)) &&
-            /\bgranola\b/i.test(readFileSync(join(fixture, path), "utf8")),
-        )
-        .sort();
-      expect(leaks).toEqual([]);
-    };
-
     const manifest = readFixtureJson<BoundaryManifest>(
       fixture,
       "services/organization-authority/source-boundary.v1.json",
@@ -990,38 +958,96 @@ describe("workspace source boundaries", () => {
       expect(existsSync(join(fixture, providerLeaf))).toBe(true);
     }
 
-    assertNoGranolaLeak();
-
-    const probe = join(
-      fixture,
-      "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts",
+    const product = readFixtureJson<{
+      adapter_architecture: {
+        provider_neutral_paths: string[];
+        provider_identifier_registry: Array<{
+          identifier: string;
+          source_evidence_paths: string[];
+        }>;
+        forbid_discovered_adapter_ids_in_provider_neutral_paths: boolean;
+      };
+    }>(fixture, "product/source-boundary.v1.json");
+    expect(product.adapter_architecture.provider_neutral_paths).toContain(
+      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts",
     );
+    expect(
+      product.adapter_architecture.provider_identifier_registry.map(
+        ({ identifier }) => identifier,
+      ),
+    ).toEqual(["openrouter"]);
+    expect(
+      product.adapter_architecture
+        .forbid_discovered_adapter_ids_in_provider_neutral_paths,
+    ).toBe(true);
+
+    const probePath =
+      "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts";
+    const probe = join(fixture, probePath);
     const original = readFileSync(probe, "utf8");
     try {
-      writeFileSync(probe, `${original}\n// Granola compatibility leak.\n`);
-      expect(() => assertNoGranolaLeak()).toThrow();
+      writeFileSync(probe, `${original}\n// openrouter compatibility leak.\n`);
+      const result = runBoundary(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        `provider identifier 'openrouter' leaked into provider-neutral module: ${probePath}`,
+      );
     } finally {
       writeFileSync(probe, original);
     }
 
-    // The generic SQLite state remains inside the provider-neutral layer, so
-    // the boundary must stop it importing a Granola implementation module.
-    const sourceStatePath =
-      "services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts";
-    const sourceState = join(fixture, sourceStatePath);
-    const originalSource = readFileSync(sourceState, "utf8");
+    const registeredProvider =
+      product.adapter_architecture.provider_identifier_registry[0];
+    if (registeredProvider === undefined) {
+      throw new Error("expected a supplemental provider identifier");
+    }
+    const sourceEvidence = registeredProvider.source_evidence_paths;
     try {
-      writeFileSync(
-        sourceState,
-        `${originalSource}\nimport '../adapters/meeting-sources/granola/index.js';\n`,
-      );
+      registeredProvider.source_evidence_paths = [
+        "services/organization-authority/src/composition/missing-openrouter-provider.ts",
+      ];
+      writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
       const result = runBoundary(fixture);
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stdout + result.stderr).toContain(
-        "layer rule 'clean-live-only-source-cycle-is-provider-neutral' rejects edge: services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts -> services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
+        "adapter architecture provider 'openrouter' source evidence path matches no source file",
       );
     } finally {
-      writeFileSync(sourceState, originalSource);
+      registeredProvider.source_evidence_paths = sourceEvidence;
+      writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
+    }
+
+    const authority = readFixtureJson<{
+      layer_rules: Array<Record<string, unknown>>;
+    }>(fixture, "services/organization-authority/source-boundary.v1.json");
+    authority.layer_rules.push({
+      name: "test-fixture-provider-adapter",
+      from: "services/organization-authority/src/processing/adapters/delivery-surfaces/fixture-provider/**",
+      allowed_imports: [],
+      allowed_workspace_packages: [],
+      allowed_external_packages: [],
+      allowed_node_builtins: [],
+    });
+    writeFixtureJson(
+      fixture,
+      "services/organization-authority/source-boundary.v1.json",
+      authority,
+    );
+    const fixtureProvider = join(
+      fixture,
+      "services/organization-authority/src/processing/adapters/delivery-surfaces/fixture-provider/client.ts",
+    );
+    mkdirSync(dirname(fixtureProvider), { recursive: true });
+    writeFileSync(fixtureProvider, "export const fixtureProvider = true;\n");
+    try {
+      writeFileSync(probe, `${original}\n// fixture-provider compatibility leak.\n`);
+      const result = runBoundary(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        `provider identifier 'fixture-provider' leaked into provider-neutral module: ${probePath}`,
+      );
+    } finally {
+      writeFileSync(probe, original);
     }
   });
 

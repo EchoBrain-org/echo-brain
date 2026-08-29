@@ -18,11 +18,45 @@
   "runtime_assets": [],
   "layer_rules": [],
   "adapter_architecture": {
-    "core_root": "services/organization-authority/src/processing/core/**",
     "adapters_roots": [
       "services/organization-authority/src/processing/adapters/"
     ],
-    "forbid_discovered_adapter_ids_in_core": true
+    "provider_neutral_paths": [
+      "services/organization-authority/src/processing/core/**",
+      "services/organization-authority/src/processing/live/**",
+      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts",
+      "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts",
+      "services/organization-authority/src/processing/clean-v1/live-source-runtime-commitments.ts",
+      "services/organization-authority/src/processing/clean-v1/processor-admission-commitment.ts",
+      "services/organization-authority/src/processing/clean-v1/review-lineage-semantics.ts",
+      "services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts",
+      "services/organization-authority/src/answer-composition/lean-answer-composition.ts",
+      "services/organization-authority/src/composition/clean-live-runtime.ts",
+      "services/organization-authority/src/composition/open-clean-live-runtime.ts",
+      "services/organization-authority/src/composition/approval-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/clean-layer4-runtime.ts",
+      "services/organization-authority/src/composition/clean-live-processor-runtime.ts",
+      "services/organization-authority/src/composition/clean-person-answer-route.ts",
+      "services/organization-authority/src/composition/clean-person-external-identity-runtime.ts",
+      "services/organization-authority/src/composition/clean-person-runtime.ts",
+      "services/organization-authority/src/composition/clean-readable-search-runtime.ts",
+      "services/organization-authority/src/presentation/person-external-identity-link-http-application.ts",
+      "services/organization-authority/src/presentation/clean-person-http-server.ts",
+      "services/organization-authority/src/presentation/private-approval-interaction-http-application-v1.ts",
+      "services/organization-record/src/application/approved-record-policy-projection-v1.ts",
+      "services/organization-record/src/application/person-policy-facts-v2.ts",
+      "services/organization-record/src/log/record-log-v4-append.ts",
+      "services/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts"
+    ],
+    "provider_identifier_registry": [
+      {
+        "identifier": "openrouter",
+        "source_evidence_paths": [
+          "services/organization-authority/src/composition/openrouter-clean-layer4-runtime.ts"
+        ]
+      }
+    ],
+    "forbid_discovered_adapter_ids_in_provider_neutral_paths": true
   },
   "child_process_owner": null
 }

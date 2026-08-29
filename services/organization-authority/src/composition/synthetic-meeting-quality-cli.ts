@@ -16,10 +16,10 @@ import {
   SyntheticMeetingSourceAdapterV1,
 } from "../quality/synthetic-meeting-fixture-v1.js";
 import {
-  CLEAN_LAYER4_MODEL_V1,
-  CLEAN_LAYER4_PROVIDER_V1,
-  CLEAN_LAYER4_TIMEOUT_MS_V1,
-} from "./clean-person-answer-route.js";
+  OPENROUTER_CLEAN_LAYER4_ADAPTER_ID_V1,
+  OPENROUTER_CLEAN_LAYER4_MODEL_V1,
+  OPENROUTER_CLEAN_LAYER4_TIMEOUT_MS_V1,
+} from "./openrouter-clean-layer4-runtime.js";
 import { fixedCleanLlmProcessorConfigV1 } from "./clean-live-llm-processor-config.js";
 
 const USAGE =
@@ -159,10 +159,10 @@ export async function runSyntheticMeetingQualityCommandV1(
         extraction_expectations: phaseOneSyntheticExtractionExpectationsV1,
         planner: model,
         answerer: model,
-        provider: CLEAN_LAYER4_PROVIDER_V1,
-        planner_model: CLEAN_LAYER4_MODEL_V1,
-        answer_model: CLEAN_LAYER4_MODEL_V1,
-        timeout_ms: CLEAN_LAYER4_TIMEOUT_MS_V1,
+        generation_adapter_id: OPENROUTER_CLEAN_LAYER4_ADAPTER_ID_V1,
+        planner_model: OPENROUTER_CLEAN_LAYER4_MODEL_V1,
+        answer_model: OPENROUTER_CLEAN_LAYER4_MODEL_V1,
+        timeout_ms: OPENROUTER_CLEAN_LAYER4_TIMEOUT_MS_V1,
       });
     io.stdout(`${JSON.stringify(result)}\n`);
     return result.passed ? 0 : 1;

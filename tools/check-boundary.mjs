@@ -148,6 +148,69 @@ function isStringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+function isRepositoryPathPattern(path) {
+  return typeof path === 'string' && isRepositoryPath(path.replaceAll('*', 'provider'));
+}
+
+function collectRegisteredProviderIdentifiers(tree, adapterArchitecture, errors) {
+  const registry = adapterArchitecture?.provider_identifier_registry;
+  if (!Array.isArray(registry)) {
+    errors.push('adapter architecture provider_identifier_registry must be an array');
+    return new Set();
+  }
+
+  const identifiers = new Set();
+  for (const entry of registry) {
+    if (
+      entry === null ||
+      typeof entry !== 'object' ||
+      typeof entry.identifier !== 'string' ||
+      !/^[a-z][a-z0-9-]*$/.test(entry.identifier) ||
+      !isStringArray(entry.source_evidence_paths) ||
+      entry.source_evidence_paths.length === 0
+    ) {
+      errors.push('adapter architecture provider_identifier_registry contains an invalid entry');
+      continue;
+    }
+    if (identifiers.has(entry.identifier)) {
+      errors.push(`adapter architecture provider_identifier_registry duplicates '${entry.identifier}'`);
+      continue;
+    }
+    identifiers.add(entry.identifier);
+
+    const evidenceFiles = new Set();
+    for (const pattern of entry.source_evidence_paths) {
+      if (!isRepositoryPathPattern(pattern)) {
+        errors.push(
+          `adapter architecture provider '${entry.identifier}' has a non-normalized source evidence path: ${String(pattern)}`,
+        );
+        continue;
+      }
+      const matches = [...tree.keys()].filter(
+        (path) => SOURCE_FILE_RE.test(path) && matchesGlob(path, pattern),
+      );
+      if (matches.length === 0) {
+        errors.push(
+          `adapter architecture provider '${entry.identifier}' source evidence path matches no source file: ${pattern}`,
+        );
+      }
+      for (const path of matches) evidenceFiles.add(path);
+    }
+
+    const escaped = entry.identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (
+      ![...evidenceFiles].some((path) =>
+        new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`, 'i').test(textFile(tree, path)),
+      )
+    ) {
+      errors.push(
+        `adapter architecture provider '${entry.identifier}' has no source evidence containing its identifier`,
+      );
+    }
+  }
+  return identifiers;
+}
+
 function checkWorkspaceBoundaries(tree, errors) {
   const registry = parseJsonFile(tree, WORKSPACE_BOUNDARY_REGISTRY, errors);
   if (registry === null) {
@@ -631,8 +694,14 @@ function main() {
     }
   }
 
+  const registeredProviderIdentifiers = collectRegisteredProviderIdentifiers(
+    tree,
+    adapterArchitecture,
+    errors,
+  );
+
   const discoveredAdapterIds = new Set();
-  if (adapterArchitecture?.forbid_discovered_adapter_ids_in_core === true) {
+  if (adapterArchitecture?.forbid_discovered_adapter_ids_in_provider_neutral_paths === true) {
     for (const adaptersRoot of adapterArchitecture.adapters_roots) {
       for (const [path] of tree) {
         if (!path.startsWith(adaptersRoot)) continue;
@@ -641,19 +710,26 @@ function main() {
         if (parts.length >= 3) discoveredAdapterIds.add(parts[1]);
       }
     }
-    for (const [path] of tree) {
-      if (
-        !matchesGlob(path, adapterArchitecture.core_root) ||
-        !SOURCE_FILE_RE.test(path)
-      ) continue;
-      const source = textFile(tree, path).toLowerCase();
-      for (const adapterId of discoveredAdapterIds) {
-        // Word-boundary match: a bare substring check false-positives on short
-        // ids (e.g. 'llm' inside 'pullMs') while a genuine leak always appears
-        // as a standalone token ('llm', "llm", llm-adapter, ...).
-        const escaped = adapterId.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(source)) {
-          errors.push(`adapter id '${adapterId}' leaked into tool-agnostic core module: ${path}`);
+    const neutralPaths = adapterArchitecture.provider_neutral_paths;
+    if (!isStringArray(neutralPaths)) {
+      errors.push('adapter architecture provider_neutral_paths must be a string array');
+    }
+    if (isStringArray(neutralPaths)) {
+      const forbiddenProviderIdentifiers = new Set([
+        ...registeredProviderIdentifiers,
+        ...discoveredAdapterIds,
+      ]);
+      for (const [path] of tree) {
+        if (
+          !SOURCE_FILE_RE.test(path) ||
+          !neutralPaths.some((pattern) => matchesGlob(path, pattern))
+        ) continue;
+        const source = textFile(tree, path).toLowerCase();
+        for (const providerIdentifier of forbiddenProviderIdentifiers) {
+          const escaped = providerIdentifier.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          if (new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(source)) {
+            errors.push(`provider identifier '${providerIdentifier}' leaked into provider-neutral module: ${path}`);
+          }
         }
       }
     }
