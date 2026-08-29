@@ -47,6 +47,7 @@ function payload(input?: {
   readonly action_id?: string;
   readonly action_type?: string;
   readonly action_value?: string;
+  readonly action_style?: string;
   readonly selected_policy_id?: string;
   readonly comment?: string | null;
   readonly state?: unknown;
@@ -111,6 +112,9 @@ function payload(input?: {
         type: input?.action_type ?? defaultActionType,
         action_id: actionId,
         block_id: "actions-block",
+        ...(input?.action_style === undefined
+          ? {}
+          : { style: input.action_style }),
         value:
           input?.action_value ??
           JSON.stringify({ schema_version: 1, ...CARD }),
@@ -255,6 +259,21 @@ describe("private approval Slack interaction v1", () => {
     });
   });
 
+  it("accepts the style Slack echoes from the rendered approval button", () => {
+    expect(parse(payload({ action_style: "primary" }))).toMatchObject({
+      disposition: "resolution",
+      action: "approve",
+    });
+    expect(
+      parse(
+        payload({
+          action_id: REJECT_ACTION_ID,
+          action_style: "danger",
+        }),
+      ),
+    ).toMatchObject({ disposition: "resolution", action: "reject" });
+  });
+
   it("accepts signed input events as presentation-only no-ops", () => {
     const policyChange = parse(
       payload({
@@ -355,6 +374,9 @@ describe("private approval Slack interaction v1", () => {
         }),
       ),
     ).toThrow(PrivateApprovalSlackInteractionError);
+    expect(() => parse(payload({ action_style: "warning" }))).toThrow(
+      PrivateApprovalSlackInteractionError,
+    );
     expect(() => parse(payload({ comment: "bad\rcomment" }))).toThrow(
       PrivateApprovalSlackInteractionError,
     );

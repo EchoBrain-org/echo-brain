@@ -462,7 +462,7 @@ function lookupHints(payload: UnknownRecord): PrivateApprovalSlackLookupHintsV1 
 function action(payload: UnknownRecord): UnknownRecord {
   const actions = payload.actions;
   if (!Array.isArray(actions) || actions.length !== 1) return invalid();
-  return exactRecord(
+  const selected = exactRecord(
     actions[0],
     ["type", "action_id"],
     [
@@ -472,10 +472,19 @@ function action(payload: UnknownRecord): UnknownRecord {
       "value",
       "action_ts",
       "text",
+      "style",
       "selected_option",
       "selected_options",
     ],
   );
+  if (
+    selected.style !== undefined &&
+    (selected.type !== "button" ||
+      (selected.style !== "primary" && selected.style !== "danger"))
+  ) {
+    return invalid();
+  }
+  return selected;
 }
 
 function requestEvidence(
