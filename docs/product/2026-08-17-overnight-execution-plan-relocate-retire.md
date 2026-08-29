@@ -240,9 +240,9 @@ forbidden widening, stop and log rather than force the import.
   key-derivation code (`meetingProcessingKey → approval_id = sha256(key) →
   envelope idempotency_key`) while moving it; behavioral verification of the
   chain is the operator's morning job, not an overnight obligation.
-- **Core imports no vendor types.** `forbid_discovered_adapter_ids_in_core`
-  stays true; core must still compile and test with any single adapter
-  removed.
+- **Core imports no vendor types.** Core remains in the checked
+  `provider_neutral_paths`; it must still compile and test with any single
+  adapter removed.
 
 **Working method (per unit in the ordered list):**
 

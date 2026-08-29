@@ -46,6 +46,7 @@ private infrastructure identifiers, and meeting content were not copied.
 | [`FP-PERMISSIONS-001`](FP-PERMISSIONS-001-current-config-reinterprets-pending-work.md) | Current configuration reinterprets frozen pending work | mitigating |
 | [`FP-ADAPTERS-003`](FP-ADAPTERS-003-model-execution-channel.md) | Model spends the output budget outside the visible answer channel | mitigating |
 | [`FP-ADAPTERS-004`](FP-ADAPTERS-004-model-authors-evidence.md) | Model is required to reproduce evidence bytes | mitigating |
+| [`FP-ADAPTERS-005`](FP-ADAPTERS-005-first-provider-becomes-architecture.md) | The first provider becomes the architecture | mitigating |
 | [`FP-IDENTITY-002`](FP-IDENTITY-002-unversioned-lease-change.md) | Lease duration changes without protocol negotiation | mitigating |
 | [`FP-IDENTITY-003`](FP-IDENTITY-003-revocation-window-overclaim.md) | Central revocation is described as immediate on an offline Mac | mitigating |
 | [`FP-IDENTITY-004`](FP-IDENTITY-004-blind-identity-backfill.md) | Missing provider identity is repaired by blind backfill | mitigating |
