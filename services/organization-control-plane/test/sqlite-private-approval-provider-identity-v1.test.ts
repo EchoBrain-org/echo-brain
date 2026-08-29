@@ -11,6 +11,7 @@ import {
 } from "../src/application/private-approval-policy-resolution-v1.js";
 import { canonicalJson, canonicalSha256 } from "../src/canonical/canonical-json.js";
 import {
+  PrivateApprovalFinalizationConflictError,
   PrivateApprovalFinalizationDeniedError,
   SqlitePrivateApprovalPersistenceV1,
   type StagePrivateApprovalPendingV1,
@@ -41,6 +42,18 @@ function setup() {
       slack_enterprise_id TEXT, slack_subject_id TEXT, dm_channel_id TEXT,
       provider_message_ts TEXT, card_sha256 TEXT, created_at TEXT
     );
+    CREATE TABLE organization_private_approval_signed_action_receipts_v2 (
+      provider_receipt_id TEXT PRIMARY KEY, provider_action_key TEXT UNIQUE,
+      raw_payload_sha256 TEXT UNIQUE, normalized_receipt_json TEXT,
+      normalized_receipt_sha256 TEXT UNIQUE, approval_id TEXT, action_id TEXT,
+      action_kind TEXT, received_at TEXT, verified_at TEXT
+    );
+    CREATE TABLE organization_private_approval_terminal_evidence_v2 (
+      approval_id TEXT PRIMARY KEY, resolution_json TEXT, resolution_sha256 TEXT,
+      signed_action_receipt_sha256 TEXT UNIQUE, outcome TEXT, audit_event_id TEXT,
+      audit_sequence INTEGER, audit_entry_json TEXT, audit_entry_sha256 TEXT,
+      predecessor_entry_sha256 TEXT, committed_at TEXT
+    );
   `);
   const pending: PendingPrivateApprovalV1 = {
     schema_version: 1, kind: PRIVATE_APPROVAL_PENDING_KIND,
@@ -62,11 +75,36 @@ function setup() {
   database.prepare(`INSERT INTO organization_tool_connection_contracts VALUES (?, ?, ?)`).run(connection.connection_id, connectionSha, canonicalJson(connection));
   database.prepare(`INSERT INTO organization_tool_connection_current_state VALUES (?, ?, ?, ?, 'active')`).run(connection.connection_id, connectionSha, stateSha, canonicalJson(state));
   database.prepare(`INSERT INTO organization_external_human_link_current VALUES (?, ?, 'active', 'https://slack.com', 'workspace', ?, NULL, ?, ?, ?)`).run(pending.assigned_owner_slack_identity_link.external_identity_link_id, pending.assigned_owner_slack_identity_link.external_identity_link_contract_sha256, card.slack_workspace_id, card.slack_subject_id, pending.assigned_owner.principal_id, pending.assigned_owner.membership_id);
-  const receipt = {
+  const receipt: PrivateApprovalSignedTerminalActionV1 = {
+    schema_version: 1,
+    kind: "echo-private-approval-signed-block-action-receipt-v1",
+    provider_action_key_sha256: sha("7"),
+    request: { request_timestamp: "1800000000", signature_version: "v0", signature_sha256: sha("8"), raw_body_sha256: sha("9") },
     approval_id: pending.approval_id,
+    action_id: "echo-private-approval-v1-action",
+    action: "approve",
+    selected_policy_id: "restricted-reviewer-person-v2",
+    comment: null,
     lookup: { api_app_id: "A01234567", workspace_id: card.slack_workspace_id, enterprise_id: null, slack_user_id: card.slack_subject_id, channel_id: card.dm_channel_id, message_ts: card.provider_message_ts, message_user_id: "U09876543", message_app_id: "A01234567", message_bot_id: "B01234567" },
-  } as PrivateApprovalSignedTerminalActionV1;
-  const persistence = new SqlitePrivateApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({ approvalIsCurrent: () => true, currentMembership: () => undefined, reprovePrivateApprovalAuthorization: () => undefined }); } } });
+    received_at: now(),
+    verified_at: now(),
+  };
+  const persistence = new SqlitePrivateApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({
+    approvalIsCurrent: () => true,
+    currentMembership: (input) => input.principal_id === pending.assigned_owner.principal_id && input.membership_id === pending.assigned_owner.membership_id ? pending.assigned_owner : undefined,
+    reprovePrivateApprovalAuthorization: () => ({
+      schema_version: 1,
+      kind: "echo-private-approval-authorization-allow-v1",
+      approval_id: pending.approval_id,
+      organization_id: pending.organization_id,
+      candidate_sha256: pending.candidate_sha256,
+      frozen_card_sha256: pending.frozen_card_sha256,
+      approved_snapshot_sha256: pending.approved_snapshot_sha256,
+      authorized_assignee: pending.assigned_owner,
+      current_slack_identity_link: pending.assigned_owner_slack_identity_link,
+      authorization_proof_sha256: sha("e"),
+    }),
+  }); } } });
   return { database, pending, card, receipt, persistence };
 }
 
@@ -107,5 +145,32 @@ describe("private approval provider identity fence", () => {
         PrivateApprovalFinalizationDeniedError,
       );
     }
+  });
+
+  it("types a distinct second signed click for a terminal approval as a conflict", async () => {
+    const { database, pending, card, receipt, persistence } = setup();
+    persistence.stage({
+      stage_command_id: "pas_00000000-0000-4000-8000-000000000001",
+      authority_id: "oau_00000000-0000-4000-8000-000000000001",
+      candidate_id: "cnd_00000000-0000-4000-8000-000000000001",
+      pending,
+      card_binding: card,
+    });
+    persistence.enqueue({ disposition: "resolution", receipt });
+    await expect(persistence.finalize(receipt.provider_action_key_sha256)).resolves.toMatchObject({
+      signed_action_receipt_sha256: expect.any(String),
+    });
+
+    const laterClick = {
+      ...receipt,
+      provider_action_key_sha256: sha("f"),
+      request: { ...receipt.request, signature_sha256: sha("a"), raw_body_sha256: sha("b") },
+    };
+    persistence.enqueue({ disposition: "resolution", receipt: laterClick });
+
+    await expect(persistence.finalize(laterClick.provider_action_key_sha256)).rejects.toBeInstanceOf(
+      PrivateApprovalFinalizationConflictError,
+    );
+    expect(database.prepare(`SELECT count(*) AS count FROM organization_private_approval_terminal_evidence_v2`).get()).toEqual({ count: 1 });
   });
 });

@@ -537,8 +537,11 @@ export class SqlitePrivateApprovalPersistenceV1 {
         const existingRow = database.prepare(`SELECT * FROM organization_private_approval_terminal_evidence_v2 WHERE approval_id = ?`).get(command.approval_id) as Record<string, string | null> | undefined;
         if (existingRow !== undefined) {
           const durable = terminalFromRow(existingRow);
+          if (durable.signed_action_receipt_sha256 !== queued.receipt_sha256) {
+            throw new PrivateApprovalFinalizationConflictError();
+          }
           const replay = resolvePrivateApprovalPolicyV1({ command, prior_resolution: durable.resolution });
-          if (durable.signed_action_receipt_sha256 !== queued.receipt_sha256 || replay.command_id !== durable.resolution.command_id) throw new PrivateApprovalFinalizationConflictError();
+          if (replay.command_id !== durable.resolution.command_id) throw new PrivateApprovalFinalizationConflictError();
           database.exec("COMMIT");
           return durable;
         }
