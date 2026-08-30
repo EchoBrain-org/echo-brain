@@ -293,7 +293,7 @@ not imported.
 Restart the same `clean-live serve` compatibility command. Optional
 `--worker-interval-ms <positive-integer>` changes the worker interval. At
 startup, the runtime reconciles the search index once, then each cycle recovers pending
-V4 appends, polls the admitted live-only source, finalizes approvals, appends
+V4 appends, polls the admitted meeting source, finalizes approvals, appends
 approved records, and reconciles the search index again.
 
 Create one new post-finalization Granola note with a unique marker, approve its
