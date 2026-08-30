@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
+import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
 import {
   readPrivateAuthorityOidcClientSecret,
   readPrivateAuthorityPersonSessionPkceKey,
@@ -11,7 +11,7 @@ import {
   issuePersonOnboardingInvitation,
 } from "./person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "./organization-authority-api-runtime.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime-bundle-v1.js";
 
 const USAGE = `usage:
   echo-organization-authority-clean-person credentials-init --state-dir <absolute-path>

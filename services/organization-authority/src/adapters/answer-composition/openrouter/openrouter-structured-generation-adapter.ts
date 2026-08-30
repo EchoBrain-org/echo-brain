@@ -2,7 +2,7 @@ import {
   type StructuredGenerationJsonSchema,
   type StructuredGenerationInput,
   type StructuredGenerationPort,
-} from "./retrieval-grounded-answer-composition.js";
+} from "../../../answer-composition/retrieval-grounded-answer-composition.js";
 
 export const OPENROUTER_STRUCTURED_OUTPUT_TIMEOUT_MS = 30_000;
 export const OPENROUTER_STRUCTURED_OUTPUT_MAX_TIMEOUT_MS = 120_000;
@@ -145,7 +145,7 @@ function fail(
 }
 
 /** A small, credential-contained OpenRouter JSON-schema adapter for answer composition. */
-export function createOpenRouterStructuredOutput(
+export function createOpenRouterStructuredGenerationAdapter(
   options: OpenRouterStructuredOutputOptions,
 ): StructuredGenerationPort {
   if (!nonEmpty(options.credential_ref)) {

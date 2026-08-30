@@ -10,7 +10,7 @@ import { connectSlackConnectionV1 } from "../../organization-control-plane/src/p
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { ReadableSearchAuthorizationFence } from "../src/application/readable-search-authorization-fence.js";
 import { createSqliteSlackPersonIdentityLinkWorkflowV1 } from "../src/composition/sqlite-slack-person-identity-link-repository-v1.js";
-import { createSlackExternalIdentityHttpApplicationV1 } from "../src/composition/slack-person-external-identity-runtime.js";
+import { createSlackExternalIdentityHttpApplicationV1 } from "../src/composition/slack-person-external-identity-runtime-bundle-v1.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 
 const NOW = "2026-08-22T00:00:00.000Z";

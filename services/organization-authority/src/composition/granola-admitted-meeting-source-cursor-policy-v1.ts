@@ -1,8 +1,8 @@
 import { granolaCursorPhase } from "../processing/adapters/meeting-sources/granola/index.js";
-import type { AdmittedMeetingSourceBoundaryV1 } from "../processing/admitted-meeting-processing/admitted-meeting-source-boundary-v1.js";
+import type { AdmittedMeetingSourceCursorPolicyV1 } from "../processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.js";
 
 /** Granola's V1 cursor and source-metadata compatibility boundary. */
-export const granolaAdmittedMeetingSourceBoundaryV1: AdmittedMeetingSourceBoundaryV1 =
+export const granolaAdmittedMeetingSourceCursorPolicyV1: AdmittedMeetingSourceCursorPolicyV1 =
   Object.freeze({
     source_adapter_id: "granola",
     assert_live_cursor(cursor: string): void {

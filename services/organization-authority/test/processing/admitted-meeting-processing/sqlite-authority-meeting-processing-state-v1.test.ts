@@ -16,7 +16,7 @@ import type {
   MeetingDocument,
 } from "../../../src/processing/core/index.js";
 import { createGranolaPostCutoffCursor } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
-import { granolaAdmittedMeetingSourceBoundaryV1 } from "../../../src/composition/granola-admitted-meeting-source-boundary-v1.js";
+import { granolaAdmittedMeetingSourceCursorPolicyV1 } from "../../../src/composition/granola-admitted-meeting-source-cursor-policy-v1.js";
 import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../../../src/processing/admitted-meeting-processing/review-lineage-semantics.js";
 import type {
   ActionableMeetingProcessingCandidateV1,
@@ -160,7 +160,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -383,7 +383,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(value, {
       source_adapter_id: "synthetic-fixture",
-      assert_live_cursor: granolaAdmittedMeetingSourceBoundaryV1.assert_live_cursor,
+      assert_live_cursor: granolaAdmittedMeetingSourceCursorPolicyV1.assert_live_cursor,
     }, "llm");
 
     await expect(state.readAdmission()).rejects.toThrow(
@@ -395,7 +395,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "synthetic-processor",
     );
 
@@ -408,7 +408,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -454,7 +454,7 @@ describe("SQLite admitted meeting-processing state", () => {
       const value = database();
       const state = new SqliteAuthorityMeetingProcessingStateV1(
         value,
-        granolaAdmittedMeetingSourceBoundaryV1,
+        granolaAdmittedMeetingSourceCursorPolicyV1,
         "llm",
         () => ADVANCED_AT,
       );
@@ -539,7 +539,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -603,7 +603,7 @@ describe("SQLite admitted meeting-processing state", () => {
     let tick = 0;
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       database(),
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => new Date(Date.parse(ADVANCED_AT) + tick++ * 1_000).toISOString(),
     );
@@ -782,7 +782,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -838,7 +838,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -866,7 +866,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -890,7 +890,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -967,7 +967,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -992,7 +992,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1125,7 +1125,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1184,7 +1184,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1233,7 +1233,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1310,7 +1310,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1364,7 +1364,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1448,7 +1448,7 @@ describe("SQLite admitted meeting-processing state", () => {
   it("releases a superseded post attempt after a definitive provider rejection", async () => {
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       database(),
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1518,7 +1518,7 @@ describe("SQLite admitted meeting-processing state", () => {
   it("releases only the exact unresolved delivery attempt", async () => {
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       database(),
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1568,7 +1568,7 @@ describe("SQLite admitted meeting-processing state", () => {
     let now = ADVANCED_AT;
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       database(),
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => now,
     );
@@ -1624,7 +1624,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1736,7 +1736,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1832,7 +1832,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => ADVANCED_AT,
     );

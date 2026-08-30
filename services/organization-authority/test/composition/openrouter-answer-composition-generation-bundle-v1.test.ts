@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  createOpenRouterAnswerCompositionRuntimeBundleV1,
+  createOpenRouterAnswerCompositionGenerationBundleV1,
   OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
   OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
   OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "../../src/composition/openrouter-answer-composition-runtime-v1.js";
+} from "../../src/composition/openrouter-answer-composition-generation-bundle-v1.js";
 
 const directories: string[] = [];
 
@@ -28,12 +28,12 @@ function credentialFile(): string {
   return path;
 }
 
-describe("OpenRouter answer-composition runtime bundle", () => {
+describe("OpenRouter answer-composition generation bundle", () => {
   it("owns credential resolution, structured-output construction, and the V3.2 generation profile", () => {
-    const bundle = createOpenRouterAnswerCompositionRuntimeBundleV1({
+    const bundle = createOpenRouterAnswerCompositionGenerationBundleV1({
       credential_file: credentialFile(),
     });
-    const runtime = bundle.open();
+    const runtime = bundle.load();
 
     expect(runtime.generation).toEqual({
       generation_adapter_id:
@@ -45,10 +45,10 @@ describe("OpenRouter answer-composition runtime bundle", () => {
     expect(runtime.structured_output.generate).toBeTypeOf("function");
   });
 
-  it("defers credential access until the active runtime opens", () => {
-    const bundle = createOpenRouterAnswerCompositionRuntimeBundleV1({
+  it("defers credential access until the active runtime loads", () => {
+    const bundle = createOpenRouterAnswerCompositionGenerationBundleV1({
       credential_file: "/private/missing-openrouter-credential",
     });
-    expect(() => bundle.open()).toThrow();
+    expect(() => bundle.load()).toThrow();
   });
 });

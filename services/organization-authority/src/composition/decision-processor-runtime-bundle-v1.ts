@@ -1,6 +1,6 @@
 import type { DecisionProcessorAdapter } from "../processing/core/ports/adapters.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/admitted-meeting-processing/admitted-meeting-runtime-commitments.js";
+import type { AdmittedMeetingProcessingCommitmentsV1 } from "../processing/admitted-meeting-processing/admitted-meeting-processing-commitments.js";
 
 /**
  * Provider-neutral construction boundary for the decision processor selected
@@ -15,7 +15,7 @@ export interface DecisionProcessorRuntimeBundleV1 {
    * admission before the bundle reads any private credential.
    */
   assert_runtime_commitments(
-    commitments: AdmittedMeetingSourceRuntimeCommitmentsV1,
+    commitments: AdmittedMeetingProcessingCommitmentsV1,
   ): void;
   /** Creates and validates the admitted decision processor. */
   create_processor(

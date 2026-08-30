@@ -53,7 +53,7 @@ import {
   openOrganizationAuthorityRuntime,
   type MeetingSourceRuntimeBundleV1,
 } from "../src/composition/organization-authority-runtime.js";
-import type { AnswerCompositionRuntimeBundleV1 } from "../src/composition/answer-composition-runtime.js";
+import type { AnswerCompositionGenerationBundleV1 } from "../src/composition/answer-composition-generation-bundle-v1.js";
 import type { DecisionProcessorRuntimeBundleV1 } from "../src/composition/decision-processor-runtime-bundle-v1.js";
 import type {
   ApprovalWorkflowRuntimeBundleV1,
@@ -621,7 +621,7 @@ async function activeFixture() {
     seed_private_slack_connection: true,
   });
   const runtime = await openOrganizationAuthorityService(fixture.config, {
-    live_adapters: {
+    processing_adapter_overrides: {
       source: fixture.source,
       processor: fakeProcessor(fixture.processorIdentity),
       private_approval_card_poster: fixture.poster,
@@ -1035,7 +1035,7 @@ describe("Organization Authority runtime private approval lane", () => {
     const ownershipContexts: ApprovalWorkflowRuntimeContextV1[] = [];
     const openedContexts: ApprovalWorkflowRuntimeContextV1[] = [];
     const sourceRuntime: MeetingSourceRuntimeBundleV1 = {
-      source_boundary: {
+      source_cursor_policy: {
         source_adapter_id: fixture.source.identity.adapter_id,
         assert_live_cursor(cursor) {
           expect(cursor.length).toBeGreaterThan(0);
@@ -1067,8 +1067,8 @@ describe("Organization Authority runtime private approval lane", () => {
         return fakeProcessor(fixture.processorIdentity);
       },
     };
-    const answerCompositionRuntime: AnswerCompositionRuntimeBundleV1 = {
-      open() {
+    const answerCompositionRuntime: AnswerCompositionGenerationBundleV1 = {
+      load() {
         return {
           generation: {
             generation_adapter_id: "test-generation-adapter",
@@ -1127,10 +1127,10 @@ describe("Organization Authority runtime private approval lane", () => {
     const runtime = await openOrganizationAuthorityRuntime(
       {
         ...sharedConfig,
-        source_runtime: sourceRuntime,
-        processor_runtime: processorRuntime,
-        approval_runtime: approvalRuntime,
-        answer_composition_runtime: answerCompositionRuntime,
+        meeting_source_bundle: sourceRuntime,
+        decision_processor_bundle: processorRuntime,
+        approval_workflow_bundle: approvalRuntime,
+        answer_composition_generation_bundle: answerCompositionRuntime,
         record_policy_fact_projectors:
           createRecordPolicyFactProjectorRegistryV1([
             createPersonPolicyFactProjectorV2(),
@@ -1392,7 +1392,7 @@ describe("Organization Authority runtime private approval lane", () => {
       await fixture.runtime.close();
       const restartedPoster = new FakePrivateApprovalPoster();
       const restarted = await openOrganizationAuthorityService(fixture.config, {
-        live_adapters: {
+        processing_adapter_overrides: {
           source: fixture.source,
           processor: fakeProcessor(fixture.processorIdentity),
           private_approval_card_poster: restartedPoster,
@@ -1452,7 +1452,7 @@ describe("Organization Authority runtime private approval lane", () => {
 
       await expect(
         openOrganizationAuthorityService(fixture.config, {
-          live_adapters: {
+          processing_adapter_overrides: {
             source: fixture.source,
             processor: fakeProcessor(fixture.processorIdentity),
             private_approval_card_poster: new FakePrivateApprovalPoster(),
@@ -1522,7 +1522,7 @@ describe("Organization Authority runtime private approval lane", () => {
       const replacementPoster = new FakePrivateApprovalPoster();
       await expect(
         openOrganizationAuthorityService(fixture.config, {
-          live_adapters: {
+          processing_adapter_overrides: {
             source: fixture.source,
             processor: fakeProcessor(fixture.processorIdentity),
             private_approval_card_poster: replacementPoster,

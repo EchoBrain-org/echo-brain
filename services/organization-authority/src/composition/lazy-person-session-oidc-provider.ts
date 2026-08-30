@@ -2,7 +2,7 @@ import type { BegunPersonOidcLogin } from "../application/person-identity-sessio
 import type {
   OidcAuthorizationCodeResult,
   PersonSessionOidcProvider,
-} from "../application/ports/person-session-runtime.js";
+} from "../application/ports/person-session-dependencies.js";
 
 export interface PersonSessionOidcAuthorizationProvider extends PersonSessionOidcProvider {
   buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string;

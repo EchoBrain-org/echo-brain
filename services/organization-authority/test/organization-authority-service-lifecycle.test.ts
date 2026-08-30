@@ -36,7 +36,7 @@ function processing(
     recoverV4Appends: async () => {
       operations.push("recover");
     },
-    pollAndStageLiveOnlySource: async () => {
+    pollAndStageAdmittedMeetings: async () => {
       operations.push("stage");
     },
     observeAndFinalizePendingApprovals: async () => {
@@ -284,7 +284,7 @@ describe("Organization Authority service lifecycle", () => {
       {
         processing: {
           ...processing([]),
-          pollAndStageLiveOnlySource: async (signal) => {
+          pollAndStageAdmittedMeetings: async (signal) => {
             phaseStarted();
             await new Promise<void>((_resolve, reject) => {
               signal.addEventListener(

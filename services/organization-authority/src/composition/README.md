@@ -29,3 +29,8 @@ they are not component names and do not constrain the service to a founder.
 Secret values enter only through explicit private-file adapters. Composition
 may pass credential file locations into a concrete provider bundle, while the
 provider-neutral runtime sees only the bundle contract and admitted digests.
+
+Answer-composition provider bundles bind credentials, models, and a
+structured-generation adapter. The provider-neutral answer-composition
+capability remains under `answer-composition/`; concrete provider adapters
+live under `adapters/answer-composition/`.

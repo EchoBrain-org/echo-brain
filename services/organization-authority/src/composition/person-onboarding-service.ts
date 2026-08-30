@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
+import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
 import { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
 import { createPrivateAuthorityCredential } from "../adapters/security/private-file-credentials.js";

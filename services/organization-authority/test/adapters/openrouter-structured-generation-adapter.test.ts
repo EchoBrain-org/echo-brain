@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  createOpenRouterStructuredOutput,
+  createOpenRouterStructuredGenerationAdapter,
   OpenRouterStructuredOutputError,
-} from "../../src/answer-composition/openrouter-structured-output.js";
+} from "../../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 
 const structuredRequest = {
   model: "openai/gpt-4.1-mini",
@@ -13,7 +13,7 @@ const structuredRequest = {
   timeout_ms: 1_000,
 } as const;
 
-async function caught(adapter: ReturnType<typeof createOpenRouterStructuredOutput>) {
+async function caught(adapter: ReturnType<typeof createOpenRouterStructuredGenerationAdapter>) {
   try {
     await adapter.generate(structuredRequest);
   } catch (error) {
@@ -33,7 +33,7 @@ describe("OpenRouter structured generation", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       );
     };
-    const adapter = createOpenRouterStructuredOutput({
+    const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
       credential_resolver: () => "secret-not-in-errors",
       fetch_impl: fetchImpl,
@@ -56,7 +56,7 @@ describe("OpenRouter structured generation", () => {
   });
 
   it("reports only safe provider metadata for a 429 response", async () => {
-    const adapter = createOpenRouterStructuredOutput({
+    const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
       credential_resolver: () => "secret-not-in-errors",
       fetch_impl: (async () =>
@@ -95,7 +95,7 @@ describe("OpenRouter structured generation", () => {
   });
 
   it("reports a finish_reason:length without retaining generated content", async () => {
-    const adapter = createOpenRouterStructuredOutput({
+    const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
       credential_resolver: () => "secret-not-in-errors",
       fetch_impl: (async () =>
@@ -128,7 +128,7 @@ describe("OpenRouter structured generation", () => {
   });
 
   it("drops token-shaped upstream fields that are not OpenRouter metadata", async () => {
-    const adapter = createOpenRouterStructuredOutput({
+    const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
       credential_resolver: () => "secret-not-in-errors",
       fetch_impl: (async () =>
@@ -151,7 +151,7 @@ describe("OpenRouter structured generation", () => {
   });
 
   it("reports transport failure without retaining the thrown provider error", async () => {
-    const adapter = createOpenRouterStructuredOutput({
+    const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
       credential_resolver: () => "secret-not-in-errors",
       fetch_impl: (async () => {
@@ -174,7 +174,7 @@ describe("OpenRouter structured generation", () => {
   });
 
   it("distinguishes a local timeout from another transport failure", async () => {
-    const adapter = createOpenRouterStructuredOutput({
+    const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
       credential_resolver: () => "secret-not-in-errors",
       fetch_impl: (async () => {
@@ -196,7 +196,7 @@ describe("OpenRouter structured generation", () => {
   });
 
   it("classifies a timeout while reading an HTTP 200 body", async () => {
-    const adapter = createOpenRouterStructuredOutput({
+    const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
       credential_resolver: () => "secret-not-in-errors",
       fetch_impl: (async () =>

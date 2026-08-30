@@ -19,7 +19,7 @@ import type {
   PersonAnswerPolicyV1,
   PersonAnswerResponseV1,
 } from "../presentation/person-answer-http-application.js";
-import type { AnswerCompositionGenerationProfileV1 } from "./answer-composition-runtime.js";
+import type { AnswerCompositionGenerationProfileV1 } from "./answer-composition-generation-bundle-v1.js";
 
 export interface AnswerCompositionFailureEventV1
   extends AnswerCompositionFailureDiagnosticV1 {

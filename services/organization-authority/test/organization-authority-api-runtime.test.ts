@@ -26,7 +26,7 @@ import {
   issuePersonOnboardingInvitation,
 } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/slack-person-external-identity-runtime.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/slack-person-external-identity-runtime-bundle-v1.js";
 import type {
   PersonExternalIdentityRuntimeInputV1,
   OpenedPersonExternalIdentityRuntimeV1,

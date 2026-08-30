@@ -28,7 +28,7 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
   recoverV4Appends(signal: AbortSignal): Promise<void>;
   /** Polls the admitted live-only source cursor and durably stages one card. */
-  pollAndStageLiveOnlySource(signal: AbortSignal): Promise<void>;
+  pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void>;
   /** Observes one staged approval and commits its approve or reject result. */
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
@@ -93,10 +93,10 @@ export async function runOrganizationAuthorityProcessingCycleV1(
   await phase("recovery", () => processing.recoverV4Appends(signal));
   signal.throwIfAborted();
   if (processing.hasFineGrainedSourceLifecycle === true) {
-    await processing.pollAndStageLiveOnlySource(signal);
+    await processing.pollAndStageAdmittedMeetings(signal);
   } else {
     await phase("source_intake", () =>
-      processing.pollAndStageLiveOnlySource(signal),
+      processing.pollAndStageAdmittedMeetings(signal),
     );
   }
   signal.throwIfAborted();

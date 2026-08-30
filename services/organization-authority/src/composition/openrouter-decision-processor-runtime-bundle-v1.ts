@@ -5,7 +5,7 @@ import {
 } from "../processing/adapters/decision-processors/llm/llm-decision-processor.js";
 import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/admitted-meeting-processing/admitted-meeting-runtime-commitments.js";
+import type { AdmittedMeetingProcessingCommitmentsV1 } from "../processing/admitted-meeting-processing/admitted-meeting-processing-commitments.js";
 import {
   assertOpenRouterDecisionProcessorRuntimeCommitmentsV1,
   fixedOpenRouterDecisionProcessorConfigV1,
@@ -42,7 +42,7 @@ export function createOpenRouterDecisionProcessorRuntimeBundleV1(input: {
   return Object.freeze({
     processor_adapter_id: "llm",
     assert_runtime_commitments(
-      commitments: AdmittedMeetingSourceRuntimeCommitmentsV1,
+      commitments: AdmittedMeetingProcessingCommitmentsV1,
     ): void {
       if (commitments.processor.adapter_id !== "llm") {
         throw new Error(

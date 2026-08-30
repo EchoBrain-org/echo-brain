@@ -11,19 +11,19 @@ import {
 } from "./organization-authority-runtime.js";
 import { createGranolaMeetingSourceRuntimeBundleV1 } from "./granola-meeting-source-runtime-v1.js";
 import { createOpenRouterDecisionProcessorRuntimeBundleV1 } from "./openrouter-decision-processor-runtime-bundle-v1.js";
-import { createOpenRouterAnswerCompositionRuntimeBundleV1 } from "./openrouter-answer-composition-runtime-v1.js";
+import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "./openrouter-answer-composition-generation-bundle-v1.js";
 import { createPrivateSlackApprovalRuntimeBundleV1 } from "./private-slack-approval-runtime-v1.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime-bundle-v1.js";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<
     OrganizationAuthorityRuntimeConfig,
-    | "source_runtime"
-    | "processor_runtime"
-    | "approval_runtime"
-    | "answer_composition_runtime"
+    | "meeting_source_bundle"
+    | "decision_processor_bundle"
+    | "approval_workflow_bundle"
+    | "answer_composition_generation_bundle"
     | "record_policy_fact_projectors"
   > {
   readonly granola_credential_file: string;
@@ -38,7 +38,7 @@ export interface OrganizationAuthorityServiceConfig
 }
 
 type OrganizationAuthorityServiceAdapterOverrides = NonNullable<
-  OrganizationAuthorityRuntimeDependencies["live_adapters"]
+  OrganizationAuthorityRuntimeDependencies["processing_adapter_overrides"]
 > & {
   readonly private_approval_card_poster?: Pick<
     PrivateSlackApprovalCardPosterV1,
@@ -52,8 +52,8 @@ type OrganizationAuthorityServiceAdapterOverrides = NonNullable<
 };
 
 export interface OrganizationAuthorityServiceDependencies
-  extends Omit<OrganizationAuthorityRuntimeDependencies, "live_adapters"> {
-  readonly live_adapters?: OrganizationAuthorityServiceAdapterOverrides;
+  extends Omit<OrganizationAuthorityRuntimeDependencies, "processing_adapter_overrides"> {
+  readonly processing_adapter_overrides?: OrganizationAuthorityServiceAdapterOverrides;
 }
 
 /**
@@ -74,16 +74,16 @@ export function openOrganizationAuthorityService(
     on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
-  const sharedLiveAdapters =
-    dependencies.live_adapters === undefined
+  const sharedProcessingAdapterOverrides =
+    dependencies.processing_adapter_overrides === undefined
       ? undefined
       : {
-          ...(dependencies.live_adapters.source === undefined
+          ...(dependencies.processing_adapter_overrides.source === undefined
             ? {}
-            : { source: dependencies.live_adapters.source }),
-          ...(dependencies.live_adapters.processor === undefined
+            : { source: dependencies.processing_adapter_overrides.source }),
+          ...(dependencies.processing_adapter_overrides.processor === undefined
             ? {}
-            : { processor: dependencies.live_adapters.processor }),
+            : { processor: dependencies.processing_adapter_overrides.processor }),
         };
   const apiDependencies = {
     ...dependencies.api,
@@ -96,30 +96,30 @@ export function openOrganizationAuthorityService(
   return openOrganizationAuthorityRuntime(
     {
       ...sharedConfig,
-      source_runtime: createGranolaMeetingSourceRuntimeBundleV1({
+      meeting_source_bundle: createGranolaMeetingSourceRuntimeBundleV1({
         granola_credential_file,
         granola_owner_email_file,
       }),
-      processor_runtime: createOpenRouterDecisionProcessorRuntimeBundleV1({
+      decision_processor_bundle: createOpenRouterDecisionProcessorRuntimeBundleV1({
         credential_file: openrouter_credential_file,
       }),
-      approval_runtime: createPrivateSlackApprovalRuntimeBundleV1({
+      approval_workflow_bundle: createPrivateSlackApprovalRuntimeBundleV1({
         state_directory: sharedConfig.state_directory,
         signing_secret_file: slack_signing_secret_file,
         connection_id: slack_connection_id,
-        ...(dependencies.live_adapters?.private_approval_card_poster ===
+        ...(dependencies.processing_adapter_overrides?.private_approval_card_poster ===
         undefined
           ? {}
           : {
               poster:
-                dependencies.live_adapters.private_approval_card_poster,
+                dependencies.processing_adapter_overrides.private_approval_card_poster,
             }),
         ...(on_private_approval_slack_rejection === undefined
           ? {}
           : { on_rejection: on_private_approval_slack_rejection }),
       }),
-      answer_composition_runtime:
-        createOpenRouterAnswerCompositionRuntimeBundleV1({
+      answer_composition_generation_bundle:
+        createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
         }),
       record_policy_fact_projectors:
@@ -131,9 +131,9 @@ export function openOrganizationAuthorityService(
     {
       ...dependencies,
       api: apiDependencies,
-      ...(sharedLiveAdapters === undefined
+      ...(sharedProcessingAdapterOverrides === undefined
         ? {}
-        : { live_adapters: sharedLiveAdapters }),
+        : { processing_adapter_overrides: sharedProcessingAdapterOverrides }),
     },
   );
 }

@@ -124,7 +124,7 @@ export interface PersonSessionOidcProvider {
   }): Promise<OidcAuthorizationCodeResult>;
 }
 
-export interface PersonSessionRuntime {
+export interface PersonSessionDependencies {
   clock: AuthorityClock;
   random: PersonSessionRandomSource;
   hash: PersonSessionHashPort;

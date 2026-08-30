@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FrozenPersonSessionOidcConfiguration } from '../src/application/ports/person-session-runtime.js';
+import type { FrozenPersonSessionOidcConfiguration } from '../src/application/ports/person-session-dependencies.js';
 import { LazyPersonSessionOidcProvider } from '../src/composition/lazy-person-session-oidc-provider.js';
 
 const CONFIGURATION: FrozenPersonSessionOidcConfiguration = {

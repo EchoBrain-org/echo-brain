@@ -14,7 +14,7 @@ import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-autho
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
 import { OpenIdClientPersonSessionProvider } from "../adapters/oidc/openid-client-person-session-provider.js";
 import { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
+import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
 import { SystemAuthorityClock } from "../adapters/runtime/system-runtime-ports.js";
 import { createOrganizationAuthorityHttpServer } from "../presentation/organization-authority-http-server.js";
 import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
@@ -29,7 +29,7 @@ import {
   createPersonAnswerRouteV1,
   type AnswerCompositionFailureEventV1,
 } from "./person-answer-route.js";
-import type { AnswerCompositionRuntimeV1 } from "./answer-composition-runtime.js";
+import type { AnswerCompositionGenerationBindingV1 } from "./answer-composition-generation-bundle-v1.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
 import type {
   PersonExternalIdentityRuntimeBundleV1,
@@ -57,7 +57,7 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   /** Optional external identity provider, omitted until it is configured. */
   readonly external_identity_runtime?: PersonExternalIdentityRuntimeBundleV1;
   /** Present only after source admission; omitted during organization setup. */
-  readonly answer_composition_runtime?: AnswerCompositionRuntimeV1;
+  readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
   /** Metadata-only answer-composition failure observer for the live server log. */
   readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
   /** Present only when the signed private-approval surface is active. */
@@ -196,7 +196,7 @@ export async function startOrganizationAuthorityApiRuntime(
         audit: readAudit,
       }),
       person_record_search: recordSearch,
-      ...(dependencies.answer_composition_runtime === undefined
+      ...(dependencies.answer_composition_generation === undefined
         ? {}
         : {
             person_answer: createPersonAnswerRouteV1({
@@ -204,8 +204,8 @@ export async function startOrganizationAuthorityApiRuntime(
               organization_id: metadata.organization_id,
               state_lineage_id: lineage.root.state_lineage_id,
               search: recordSearch,
-              model: dependencies.answer_composition_runtime.structured_output,
-              generation: dependencies.answer_composition_runtime.generation,
+              model: dependencies.answer_composition_generation.structured_output,
+              generation: dependencies.answer_composition_generation.generation,
               audit: new SqlitePersonAnswerCompositionAuditV1(database),
               ...(dependencies.answer_failure === undefined
                 ? {}

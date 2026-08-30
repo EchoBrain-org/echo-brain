@@ -9,20 +9,20 @@ import {
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
+import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
 import { AdmittedMeetingProcessingCycleV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { AdmittedMeetingSourceBoundaryV1 } from "../processing/admitted-meeting-processing/admitted-meeting-source-boundary-v1.js";
+import type { AdmittedMeetingSourceCursorPolicyV1 } from "../processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.js";
 import {
-  readAdmittedMeetingSourceRuntimeCommitmentsV1,
-  type AdmittedMeetingSourceRuntimeCommitmentsV1,
-} from "../processing/admitted-meeting-processing/admitted-meeting-runtime-commitments.js";
+  readAdmittedMeetingProcessingCommitmentsV1,
+  type AdmittedMeetingProcessingCommitmentsV1,
+} from "../processing/admitted-meeting-processing/admitted-meeting-processing-commitments.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type {
   ApprovalWorkflowProcessingV1,
   ApprovalWorkflowRuntimeBundleV1,
 } from "./approval-runtime-bundle-v1.js";
-import type { AnswerCompositionRuntimeBundleV1 } from "./answer-composition-runtime.js";
+import type { AnswerCompositionGenerationBundleV1 } from "./answer-composition-generation-bundle-v1.js";
 import type { DecisionProcessorRuntimeBundleV1 } from "./decision-processor-runtime-bundle-v1.js";
 import {
   startOrganizationAuthorityServiceLifecycle,
@@ -50,13 +50,13 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly client_authentication: OrganizationAuthorityApiRuntimeConfig["client_authentication"];
   readonly pkce_key_file: string;
   /** Explicit provider/source bundle. This generic root does not select one. */
-  readonly source_runtime: MeetingSourceRuntimeBundleV1;
+  readonly meeting_source_bundle: MeetingSourceRuntimeBundleV1;
   /** Explicit decision-processor bundle. This generic root does not select one. */
-  readonly processor_runtime: DecisionProcessorRuntimeBundleV1;
+  readonly decision_processor_bundle: DecisionProcessorRuntimeBundleV1;
   /** Explicit approval/delivery bundle. This generic root does not select one. */
-  readonly approval_runtime: ApprovalWorkflowRuntimeBundleV1;
+  readonly approval_workflow_bundle: ApprovalWorkflowRuntimeBundleV1;
   /** Explicit answer-composition bundle. This generic root does not select one. */
-  readonly answer_composition_runtime: AnswerCompositionRuntimeBundleV1;
+  readonly answer_composition_generation_bundle: AnswerCompositionGenerationBundleV1;
   /** Exact durable record-resolution protocols admitted into append and retrieval. */
   readonly record_policy_fact_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly worker_interval_ms?: number;
@@ -104,10 +104,10 @@ export interface MeetingSourceRuntimeBundleV1 {
    * its immutable admission before the provider credential is read.
    */
   assert_runtime_commitments(
-    commitments: AdmittedMeetingSourceRuntimeCommitmentsV1,
+    commitments: AdmittedMeetingProcessingCommitmentsV1,
   ): void;
   /** Owns provider cursor and metadata validation. */
-  readonly source_boundary: AdmittedMeetingSourceBoundaryV1;
+  readonly source_cursor_policy: AdmittedMeetingSourceCursorPolicyV1;
 }
 
 /**
@@ -123,7 +123,7 @@ export interface OrganizationAuthorityRuntimeDependencies {
    */
   readonly active_processing?: OrganizationAuthorityProcessingCycleV1;
   /** Optional provider-free substitutes for the concrete active adapters. */
-  readonly live_adapters?: {
+  readonly processing_adapter_overrides?: {
     readonly source?: MeetingSourceAdapter;
     readonly processor?: DecisionProcessorAdapter;
   };
@@ -132,7 +132,7 @@ export interface OrganizationAuthorityRuntimeDependencies {
 class IdleOrganizationAuthorityProcessing
   implements OrganizationAuthorityProcessingCycleV1 {
   async recoverV4Appends(): Promise<void> {}
-  async pollAndStageLiveOnlySource(): Promise<void> {}
+  async pollAndStageAdmittedMeetings(): Promise<void> {}
   async observeAndFinalizePendingApprovals(): Promise<void> {}
   async appendFinalizedApprovalsToV4(): Promise<void> {}
   async reconcileReadableSearchGeneration(): Promise<void> {}
@@ -159,7 +159,7 @@ class OrganizationAuthorityProcessingCoordinator
     return this.approvals.recoverV4Appends(signal);
   }
 
-  async pollAndStageLiveOnlySource(signal: AbortSignal): Promise<void> {
+  async pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void> {
     await this.source.runOnce(signal);
   }
 
@@ -247,19 +247,19 @@ export async function openOrganizationAuthorityRuntime(
   try {
     const sourceState = new SqliteAuthorityMeetingProcessingStateV1(
       authority,
-      config.source_runtime.source_boundary,
-      config.processor_runtime.processor_adapter_id,
+      config.meeting_source_bundle.source_cursor_policy,
+      config.decision_processor_bundle.processor_adapter_id,
     );
-    const commitments = readAdmittedMeetingSourceRuntimeCommitmentsV1(authority);
-    config.source_runtime.assert_runtime_commitments(commitments);
-    config.processor_runtime.assert_runtime_commitments(commitments);
+    const commitments = readAdmittedMeetingProcessingCommitmentsV1(authority);
+    config.meeting_source_bundle.assert_runtime_commitments(commitments);
+    config.decision_processor_bundle.assert_runtime_commitments(commitments);
     const admission = await sourceState.readAdmission();
     const source =
-      dependencies.live_adapters?.source ??
-      config.source_runtime.create_source(admission);
+      dependencies.processing_adapter_overrides?.source ??
+      config.meeting_source_bundle.create_source(admission);
     const processor =
-      dependencies.live_adapters?.processor ??
-      config.processor_runtime.create_processor(admission);
+      dependencies.processing_adapter_overrides?.processor ??
+      config.decision_processor_bundle.create_processor(admission);
     if (
       source.identity.adapter_id !== admission.source.adapter_id ||
       source.identity.instance_id !== admission.source.instance_id ||
@@ -297,16 +297,16 @@ export async function openOrganizationAuthorityRuntime(
       coordinates,
       next_envelope_id: () => `env_${randomUUID()}`,
     };
-    await config.approval_runtime.assert_existing_presentations_owned(
+    await config.approval_workflow_bundle.assert_existing_presentations_owned(
       approvalContext,
     );
-    const approvals = await config.approval_runtime.open(approvalContext);
+    const approvals = await config.approval_workflow_bundle.open(approvalContext);
     const sourceCycle = new AdmittedMeetingProcessingCycleV1({
       source,
       processor,
       state: sourceState,
       stager: approvals.stager,
-      source_boundary: config.source_runtime.source_boundary,
+      source_cursor_policy: config.meeting_source_bundle.source_cursor_policy,
     });
     const readableSearch = createReadableSearchGenerationReconcilerV1({
       state_directory: config.state_directory,
@@ -326,9 +326,9 @@ export async function openOrganizationAuthorityRuntime(
         ),
         api: {
           ...dependencies.api,
-          answer_composition_runtime:
-            dependencies.api?.answer_composition_runtime ??
-            config.answer_composition_runtime.open(),
+          answer_composition_generation:
+            dependencies.api?.answer_composition_generation ??
+            config.answer_composition_generation_bundle.load(),
           ...(dependencies.api?.answer_failure !== undefined
             ? { answer_failure: dependencies.api.answer_failure }
             : config.on_answer_composition_failure === undefined

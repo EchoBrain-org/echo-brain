@@ -44,7 +44,7 @@ const PROCESSOR = {
   version: "1.3.0",
 };
 const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
-const granolaAdmittedMeetingSourceBoundaryV1 = {
+const granolaAdmittedMeetingSourceCursorPolicyV1 = {
   source_adapter_id: "granola",
   assert_live_cursor(cursor: string): void {
     if (!cursor.startsWith("granola:v1:") || granolaCursorPhase(cursor) !== "live") {
@@ -303,14 +303,14 @@ function stager(
 function liveCycle(
   options: Omit<
     ConstructorParameters<typeof AdmittedMeetingProcessingCycleV1>[0],
-    "source_boundary"
+    "source_cursor_policy"
   > &
-    Partial<Pick<ConstructorParameters<typeof AdmittedMeetingProcessingCycleV1>[0], "source_boundary">>,
+    Partial<Pick<ConstructorParameters<typeof AdmittedMeetingProcessingCycleV1>[0], "source_cursor_policy">>,
 ): AdmittedMeetingProcessingCycleV1 {
   return new AdmittedMeetingProcessingCycleV1({
     ...options,
-    source_boundary:
-      options.source_boundary ?? granolaAdmittedMeetingSourceBoundaryV1,
+    source_cursor_policy:
+      options.source_cursor_policy ?? granolaAdmittedMeetingSourceCursorPolicyV1,
   });
 }
 
@@ -1000,7 +1000,7 @@ describe("admitted meeting-processing cycle", () => {
       processor: processor(),
       state: new FakeState(fixtureAdmission),
       stager: stager({ kind: "staged", stage_id: "fixture-stage" }),
-      source_boundary: fixtureBoundary,
+      source_cursor_policy: fixtureBoundary,
     });
 
     await expect(cycle.runOnce()).resolves.toMatchObject({

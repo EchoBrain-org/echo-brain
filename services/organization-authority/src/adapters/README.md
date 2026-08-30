@@ -5,6 +5,7 @@ ports and infrastructure boundaries:
 
 - `persistence/` owns Authority SQLite repositories and database opening;
 - `oidc/` owns OIDC transport and protocol integration;
+- `answer-composition/` owns provider-specific structured-generation adapters;
 - `runtime/` owns clock and other host-runtime ports; and
 - `security/` owns private-file credentials, session cryptography, and the
   file-backed Organization Authority signer.

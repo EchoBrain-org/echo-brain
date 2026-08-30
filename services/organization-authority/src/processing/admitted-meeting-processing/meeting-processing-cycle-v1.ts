@@ -11,7 +11,7 @@ import type {
   MeetingProcessingWorkerPhaseRunnerV1,
   MeetingProcessingWorkerPhaseV1,
 } from "./meeting-processing-worker-lifecycle.js";
-import type { AdmittedMeetingSourceBoundaryV1 } from "./admitted-meeting-source-boundary-v1.js";
+import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
 import {
   reviewInputSha256V1,
   reviewLineageIdV1,
@@ -216,14 +216,14 @@ export interface AdmittedMeetingProcessingCycleV1Options {
   readonly state: AuthorityMeetingProcessingStateV1;
   readonly stager: ApprovalWorkflowStagerV1;
   /** Provider-owned cursor and source-metadata validation. */
-  readonly source_boundary: AdmittedMeetingSourceBoundaryV1;
+  readonly source_cursor_policy: AdmittedMeetingSourceCursorPolicyV1;
 }
 
 function assertAdmissionMatchesAdapters(
   admission: AdmittedMeetingProcessingAdmissionV1,
   source: MeetingSourceAdapter,
   processor: DecisionProcessorAdapter,
-  sourceBoundary: AdmittedMeetingSourceBoundaryV1,
+  sourceCursorPolicy: AdmittedMeetingSourceCursorPolicyV1,
 ): void {
   if (
     source.identity.adapter_id !== admission.source.adapter_id ||
@@ -249,7 +249,7 @@ function assertAdmissionMatchesAdapters(
   ) {
     throw new Error("admitted meeting-processing admission has an invalid live-only cutoff");
   }
-  sourceBoundary.assert_live_cursor(admission.source.cursor);
+  sourceCursorPolicy.assert_live_cursor(admission.source.cursor);
 }
 
 function inputFingerprint(
@@ -373,7 +373,7 @@ export class AdmittedMeetingProcessingCycleV1 {
         admission,
         this.options.source,
         this.options.processor,
-        this.options.source_boundary,
+        this.options.source_cursor_policy,
       );
       // Approval delivery is a durable outbox, not the source checkpoint.
       // Drain prior work first, but never let one provider-ambiguous card

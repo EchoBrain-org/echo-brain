@@ -8,7 +8,7 @@ import {
   assertStagingSyntheticMeetingCanaryV1,
   createStagingSyntheticMeetingCanaryV1,
 } from "../../src/processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
-import { granolaAdmittedMeetingSourceBoundaryV1 } from "../../src/composition/granola-admitted-meeting-source-boundary-v1.js";
+import { granolaAdmittedMeetingSourceCursorPolicyV1 } from "../../src/composition/granola-admitted-meeting-source-cursor-policy-v1.js";
 import type {
   ApprovalWorkflowStageInputV1,
   ApprovalWorkflowStagerV1,
@@ -164,7 +164,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -209,7 +209,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );
@@ -228,7 +228,7 @@ describe("staging synthetic private-DM canary", () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaAdmittedMeetingSourceBoundaryV1,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
       "llm",
       () => NOW,
     );

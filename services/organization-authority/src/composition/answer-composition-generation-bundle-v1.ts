@@ -13,16 +13,16 @@ export interface AnswerCompositionGenerationProfileV1 {
 }
 
 /**
- * Provider-neutral active-runtime seam for answer composition. Provider
+ * Provider-neutral generation binding for answer composition. Provider
  * composition owns credentials and structured-output construction; Person
  * routes receive only this port and its explicit non-secret generation profile.
  */
-export interface AnswerCompositionRuntimeV1 {
+export interface AnswerCompositionGenerationBindingV1 {
   readonly structured_output: StructuredGenerationPort;
   readonly generation: AnswerCompositionGenerationProfileV1;
 }
 
-/** Defers provider access until the admitted live runtime is opened. */
-export interface AnswerCompositionRuntimeBundleV1 {
-  open(): AnswerCompositionRuntimeV1;
+/** Defers provider access until the admitted live runtime loads its generation binding. */
+export interface AnswerCompositionGenerationBundleV1 {
+  load(): AnswerCompositionGenerationBindingV1;
 }

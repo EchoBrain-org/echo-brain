@@ -7,7 +7,7 @@ import type { BegunPersonOidcLogin } from "../src/application/person-identity-se
 import type {
   FrozenPersonSessionOidcConfiguration,
   OidcAuthorizationCodeResult,
-} from "../src/application/ports/person-session-runtime.js";
+} from "../src/application/ports/person-session-dependencies.js";
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";

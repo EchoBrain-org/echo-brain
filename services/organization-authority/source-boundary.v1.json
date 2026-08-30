@@ -96,9 +96,9 @@
         "export": "runReferenceMeetingProcessingCycle"
       },
       {
-        "name": "Answer-composition runtime",
-        "path": "services/organization-authority/src/composition/answer-composition-runtime.ts",
-        "export": "AnswerCompositionRuntimeBundleV1"
+        "name": "Answer-composition generation bundle",
+        "path": "services/organization-authority/src/composition/answer-composition-generation-bundle-v1.ts",
+        "export": "AnswerCompositionGenerationBundleV1"
       },
       {
         "name": "Readable-search generation composition",
@@ -114,6 +114,14 @@
       "services/organization-authority/src/processing/core/processing/run-core-cycle.ts",
       "services/organization-authority/src/answer-composition/lean-answer-composition.ts",
       "services/organization-authority/src/composition/clean-answer-composition-runtime.ts",
+      "services/organization-authority/src/composition/answer-composition-runtime.ts",
+      "services/organization-authority/src/composition/openrouter-answer-composition-runtime-v1.ts",
+      "services/organization-authority/src/answer-composition/openrouter-structured-output.ts",
+      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-runtime-commitments.ts",
+      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-source-boundary-v1.ts",
+      "services/organization-authority/src/composition/granola-admitted-meeting-source-boundary-v1.ts",
+      "services/organization-authority/src/application/ports/person-session-runtime.ts",
+      "services/organization-authority/src/composition/slack-person-external-identity-runtime.ts",
       "services/organization-authority/src/composition/clean-readable-search-runtime.ts",
       "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts",
       "services/organization-authority/src/adapters/persistence/sqlite/open-unmigrated-database.ts",
@@ -436,6 +444,17 @@
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
       ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-answer-composition-adapters-implement-generation-port",
+      "from": "services/organization-authority/src/adapters/answer-composition/**",
+      "allowed_imports": [
+        "services/organization-authority/src/adapters/answer-composition/**",
+        "services/organization-authority/src/answer-composition/**"
+      ],
+      "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },

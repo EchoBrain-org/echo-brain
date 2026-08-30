@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { createOpenRouterStructuredOutput } from "../answer-composition/openrouter-structured-output.js";
+import { createOpenRouterStructuredGenerationAdapter } from "../adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 import { readPrivateAuthorityCredential } from "../adapters/security/private-file-credentials.js";
 import {
   createLlmDecisionProcessor,
@@ -19,7 +19,7 @@ import {
   OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
   OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
   OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "./openrouter-answer-composition-runtime-v1.js";
+} from "./openrouter-answer-composition-generation-bundle-v1.js";
 import { fixedOpenRouterDecisionProcessorConfigV1 } from "./openrouter-decision-processor-config-v1.js";
 
 const USAGE =
@@ -34,7 +34,7 @@ const PROCESS_IO: SyntheticMeetingQualityCliIoV1 = {
   stdout: (line) => process.stdout.write(line),
 };
 
-type StructuredOutput = ReturnType<typeof createOpenRouterStructuredOutput>;
+type StructuredOutput = ReturnType<typeof createOpenRouterStructuredGenerationAdapter>;
 
 /** Narrow seams keep tests offline while the default command uses real adapters. */
 export interface SyntheticMeetingQualityCliDependenciesV1 {
@@ -143,7 +143,7 @@ export async function runSyntheticMeetingQualityCommandV1(
     assertValidProcessor(processor, processorConfig);
     const createStructuredOutput = dependencies.create_structured_output ??
       ((reference: string, resolvedCredential: string) =>
-        createOpenRouterStructuredOutput({
+        createOpenRouterStructuredGenerationAdapter({
           credential_ref: reference,
           credential_resolver: (candidate) =>
             candidate === reference ? resolvedCredential : undefined,

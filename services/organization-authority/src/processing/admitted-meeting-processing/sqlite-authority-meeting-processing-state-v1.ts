@@ -9,7 +9,7 @@ import {
   type DecisionSet,
   type MeetingDocument,
 } from "../core/index.js";
-import type { AdmittedMeetingSourceBoundaryV1 } from "./admitted-meeting-source-boundary-v1.js";
+import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
 import {
   assertLegacyReviewPolicySnapshotV1,
   reviewInputSha256V1,
@@ -149,16 +149,16 @@ function assertCanonicalUtcMillis(value: string): void {
 function admissionFrom(
   row: AdmissionRow,
   progress: ProgressRow,
-  sourceBoundary: AdmittedMeetingSourceBoundaryV1,
+  sourceCursorPolicy: AdmittedMeetingSourceCursorPolicyV1,
   expectedProcessorAdapterId: string,
 ): AdmittedMeetingProcessingAdmissionV1 {
   assertAdmissionAdapterIdentity(
     row,
-    sourceBoundary,
+    sourceCursorPolicy,
     expectedProcessorAdapterId,
   );
   assertCanonicalUtcMillis(row.cutoff_at);
-  sourceBoundary.assert_live_cursor(progress.cursor);
+  sourceCursorPolicy.assert_live_cursor(progress.cursor);
   return Object.freeze({
     source: {
       adapter_id: row.source_adapter_id,
@@ -188,7 +188,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
 
   constructor(
     private readonly database: Database.Database,
-    private readonly sourceBoundary: AdmittedMeetingSourceBoundaryV1,
+    private readonly sourceCursorPolicy: AdmittedMeetingSourceCursorPolicyV1,
     /**
      * The caller must name the processor adapter selected by its runtime
      * bundle. An admitted source cannot be reopened through a different
@@ -241,7 +241,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       return admissionFrom(
         admission,
         progress,
-        this.sourceBoundary,
+        this.sourceCursorPolicy,
         this.expectedProcessorAdapterId,
       );
     })();
@@ -286,7 +286,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       const current = admissionFrom(
         admission,
         progress,
-        this.sourceBoundary,
+        this.sourceCursorPolicy,
         this.expectedProcessorAdapterId,
       );
       if (
@@ -462,7 +462,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       }
       assertAdmissionAdapterIdentity(
         admission,
-        this.sourceBoundary,
+        this.sourceCursorPolicy,
         this.expectedProcessorAdapterId,
       );
       const candidate = this.candidate(
@@ -489,7 +489,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       }
       assertAdmissionAdapterIdentity(
         admission,
-        this.sourceBoundary,
+        this.sourceCursorPolicy,
         this.expectedProcessorAdapterId,
       );
       const row = this.database
@@ -630,11 +630,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     const admission = this.admission();
     assertAdmissionAdapterIdentity(
       admission,
-      this.sourceBoundary,
+      this.sourceCursorPolicy,
       this.expectedProcessorAdapterId,
     );
-    this.sourceBoundary.assert_live_cursor(input.expected_cursor);
-    this.sourceBoundary.assert_live_cursor(input.next_cursor);
+    this.sourceCursorPolicy.assert_live_cursor(input.expected_cursor);
+    this.sourceCursorPolicy.assert_live_cursor(input.next_cursor);
     if (input.next_cursor === input.expected_cursor) {
       throw new Error(
         "admitted meeting-processing cursor advance must change the cursor",
@@ -788,7 +788,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     } else {
       assertAdmissionSnapshot(
         admission,
-        this.sourceBoundary,
+        this.sourceCursorPolicy,
         this.expectedProcessorAdapterId,
       );
       assertCanonicalMeetingDocument(meeting, {
@@ -1234,10 +1234,10 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
 
 function assertAdmissionSnapshot(
   admission: AdmittedMeetingProcessingAdmissionV1,
-  sourceBoundary: AdmittedMeetingSourceBoundaryV1,
+  sourceCursorPolicy: AdmittedMeetingSourceCursorPolicyV1,
   expectedProcessorAdapterId: string,
 ): void {
-  if (admission.source.adapter_id !== sourceBoundary.source_adapter_id) {
+  if (admission.source.adapter_id !== sourceCursorPolicy.source_adapter_id) {
     throw new Error(
       "admitted meeting-processing admission adapter differs from its configured boundary",
     );
@@ -1248,15 +1248,15 @@ function assertAdmissionSnapshot(
     );
   }
   assertCanonicalUtcMillis(admission.source.cutoff_at);
-  sourceBoundary.assert_live_cursor(admission.source.cursor);
+  sourceCursorPolicy.assert_live_cursor(admission.source.cursor);
 }
 
 function assertAdmissionAdapterIdentity(
   row: AdmissionRow,
-  sourceBoundary: AdmittedMeetingSourceBoundaryV1,
+  sourceCursorPolicy: AdmittedMeetingSourceCursorPolicyV1,
   expectedProcessorAdapterId: string,
 ): void {
-  if (row.source_adapter_id !== sourceBoundary.source_adapter_id) {
+  if (row.source_adapter_id !== sourceCursorPolicy.source_adapter_id) {
     throw new Error(
       "admitted meeting-processing admission adapter differs from its configured boundary",
     );

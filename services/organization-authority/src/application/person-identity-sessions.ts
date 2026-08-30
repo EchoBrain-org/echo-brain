@@ -43,9 +43,9 @@ import type {
   PersonSessionOidcConfiguration,
   PersonSessionOidcFailureReason,
   PersonSessionRandomPurpose,
-  PersonSessionRuntime,
+  PersonSessionDependencies,
   VerifiedOidcIdentityToken,
-} from "./ports/person-session-runtime.js";
+} from "./ports/person-session-dependencies.js";
 import { personLoginGrantExpectedEmailDigestInput } from "../domain/person-email-binding.js";
 
 const SHA256_BYTES = 32;
@@ -355,7 +355,7 @@ export class PersonIdentitySessionApplication {
   constructor(
     private readonly repository: PersonSessionRepository,
     configuration: PersonSessionOidcConfiguration,
-    private readonly runtime: PersonSessionRuntime,
+    private readonly runtime: PersonSessionDependencies,
   ) {
     validateOidcConfiguration(configuration);
     const tenant: OidcTenantConstraint =
