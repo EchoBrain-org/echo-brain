@@ -7,7 +7,6 @@ export default defineConfig({
       'services/*/test/**/*.test.ts',
       'tests/person-client/**/*.test.ts',
       'tests/architecture/**/*.test.ts',
-      'tests/integration/**/*.test.ts',
     ],
     testTimeout: 180_000,
     hookTimeout: 180_000,

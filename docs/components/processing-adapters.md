@@ -74,7 +74,7 @@ semantics.
 - [Failure-pattern registry](../failure-patterns/README.md)
 - [Qualification](../qualification/README.md)
 
-The founder-live ledger has been converted into the linked sanitized
+The prior live-evaluation ledger has been converted into the linked sanitized
 [failure-pattern records](../failure-patterns/README.md) and the
 [provider adapter matrix](../qualification/adapter-matrix-v1.md). Raw provider
 payloads and private receipt locators were not copied.

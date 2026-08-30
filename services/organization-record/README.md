@@ -3,7 +3,7 @@
 This library owns the append-only organization record. The retained
 `organization-record-api-v1` is the canonical package entrypoint. The
 retained `new-lineage-v1` path is a thin compatibility re-export, not a
-component name. The runtime exposes the V4 record appender, the
+component name. The API exposes the V4 record appender, the
 permission-aware person reader, and the record retrieval-source snapshot port.
 
 The V4 canonical envelope bytes and their authorization and provider-action

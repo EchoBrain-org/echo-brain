@@ -18,7 +18,9 @@ provider API -> server adapter -> processing contracts <- processing cycle
 - `services/organization-authority/src/processing/core/` imports no adapters,
   vendor SDKs, Authority composition, or persistence implementation.
 - `processing/adapters/` implement typed core ports and own provider transport.
-- `processing/storage/` owns Authority processing durability.
+- `processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.ts`
+  owns the SQLite implementation of production processing state; the core
+  storage port remains under `processing/core/storage/`.
 - `processing/admitted-meeting-processing/` owns the serialized bounded server cycle.
 - Authority composition selects concrete adapters, credentials, organization
   policy, and stores through explicit bundles for meeting source, decision
@@ -26,9 +28,10 @@ provider API -> server adapter -> processing contracts <- processing cycle
   identity. Those bundles are the only place an active external-capability
   provider is selected.
 
-`npm run check:architecture-boundaries` enforces these rules for every owned source file, not
-only today's entry-point closure. Processing tests live beside the Authority;
-cross-workspace checks remain under `tests/integration/`.
+`npm run check:architecture-boundaries` enforces these rules for every owned
+source file, not only today's entry-point closure. Processing tests live beside
+the Authority; cross-workspace source and artifact checks live under
+`tests/architecture/`.
 
 ## Canonical flow
 

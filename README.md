@@ -52,13 +52,13 @@ memory, streaming, or direct record or retrieval-store access.
 
 ```text
 packages/                         Shared protocol and HTTP contracts
-services/organization-authority/ Deployable Authority and processing runtime
+services/organization-authority/ Deployable Authority and processing service
 services/organization-control-plane/
 services/organization-record/
 services/organization-retrieval/
 src/product/person-client/       Standalone Person CLI package
 deploy/organization-authority/   Container and EC2 deployment assets
-tests/                            Cross-workspace architecture/integration tests
+tests/                            Cross-workspace architecture and Person tests
 ```
 
 ## Development
@@ -76,7 +76,9 @@ Useful focused commands:
 npm run test:person
 npm run test:authority
 npm run test:protocols
-npm run test:integration
+npm run test:core
+npm run test:reference-meeting-processing
+npm run test:architecture
 npm run check:architecture-boundaries
 ```
 

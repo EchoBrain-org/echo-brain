@@ -2,7 +2,7 @@
 
 **Status:** Current
 
-The repository contains eight runtime workspaces. The root package is private
+The repository contains eight workspaces. The root package is private
 workspace orchestration only: it has no executable, runtime export, product
 database, or packable application.
 
@@ -66,7 +66,7 @@ application   commands, queries, and transaction ports
 adapters      SQLite, signing, credentials, OIDC, private files
 presentation  JSON routes and server-rendered admin console
 composition   configuration and concrete wiring
-processing    meeting core, adapters, live cycle, replay, and durability
+processing    meeting core, adapters, admitted-meeting cycle, replay, and durability
 ```
 
 Routes call application use cases rather than SQLite. The service is bound to

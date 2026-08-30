@@ -89,7 +89,7 @@ Authority boundary.
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
-- [Permission invariant registry](../product/2026-08-11-architecture-invariant-registry.md)
+- [Permission release-boundary invariant](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
 - [`services/organization-authority/`](../../services/organization-authority)
 - [`services/organization-control-plane/`](../../services/organization-control-plane)
 - [`services/organization-record/`](../../services/organization-record)
