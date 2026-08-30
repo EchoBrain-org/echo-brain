@@ -108,12 +108,15 @@ export async function stageStagingSyntheticPrivateDmCanaryV1(
       input.signal === undefined ? undefined : { signal: input.signal },
     );
     assertCanonicalDecisionSet(decisions, meeting, input.processor.identity);
-    await input.state.stageStagingSyntheticCanaryCandidate({
-      admission,
-      meeting,
-      decisions,
-      review_policy: legacyRestrictedReviewerReviewPolicySnapshotV1,
-    });
+    await input.state.stageStagingSyntheticCanaryCandidate(
+      {
+        admission,
+        meeting,
+        decisions,
+        review_policy: legacyRestrictedReviewerReviewPolicySnapshotV1,
+      },
+      input.canary,
+    );
     frozen = await input.state.readFrozenCandidateForSourceRevision({
       external_id: meeting.provenance.external_id,
       canonical_revision: meeting.provenance.canonical_revision,

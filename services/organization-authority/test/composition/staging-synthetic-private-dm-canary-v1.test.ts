@@ -4,6 +4,10 @@ import { applyAuthorityBaselineV3 } from "../../src/adapters/persistence/sqlite/
 import { stageStagingSyntheticPrivateDmCanaryV1 } from "../../src/composition/staging-synthetic-private-dm-canary-v1.js";
 import { CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1 } from "../../src/composition/clean-live-llm-processor-config.js";
 import { createGranolaLiveOnlyCursor } from "../../src/processing/adapters/meeting-sources/granola/index.js";
+import {
+  assertStagingSyntheticMeetingCanaryV1,
+  createStagingSyntheticMeetingCanaryV1,
+} from "../../src/processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
 import { granolaLiveSourceBoundaryV1 } from "../../src/composition/granola-live-source-boundary-v1.js";
 import type {
   CleanApprovalStageInputV1,
@@ -120,6 +124,42 @@ afterEach(() => {
 });
 
 describe("staging synthetic private-DM canary", () => {
+  const canaryInput = {
+    canary_id: "private-dm",
+    owner_email: "founder@example.com",
+    observed_at: NOW,
+  } as const;
+
+  function canary(): MeetingDocument {
+    return createStagingSyntheticMeetingCanaryV1(canaryInput);
+  }
+
+  it("rejects altered content, ownership context, and provenance", () => {
+    const content = structuredClone(canary());
+    content.content[0]!.text = "Synthetic staging canary only. Decision: altered.";
+    const context = structuredClone(canary());
+    context.context!.owner_participant_id = "someone-else";
+    const provenance = structuredClone(canary());
+    provenance.provenance.normalizer_version = "altered-normalizer-v1";
+
+    for (const tampered of [content, context, provenance]) {
+      expect(() =>
+        assertStagingSyntheticMeetingCanaryV1(tampered, canaryInput),
+      ).toThrow("fixed staging synthetic canary");
+    }
+  });
+
+  it("rejects an otherwise canonical canary with different fixed inputs", () => {
+    const anotherOwner = createStagingSyntheticMeetingCanaryV1({
+      ...canaryInput,
+      owner_email: "other@example.com",
+    });
+
+    expect(() =>
+      assertStagingSyntheticMeetingCanaryV1(anotherOwner, canaryInput),
+    ).toThrow("fixed staging synthetic canary");
+  });
+
   it("uses the admitted LLM and existing approval stager without advancing Granola", async () => {
     const value = database();
     const state = new SqliteCleanLiveOnlySourceStateV1(

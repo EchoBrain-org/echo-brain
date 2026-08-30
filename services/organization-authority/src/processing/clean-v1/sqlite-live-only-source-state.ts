@@ -29,6 +29,7 @@ import {
   assertStagingSyntheticMeetingCanaryV1,
   isStagingSyntheticMeetingCanaryV1,
   stagingSyntheticMeetingCanaryCursorV1,
+  type StagingSyntheticMeetingCanaryInputV1,
 } from "./staging-synthetic-meeting-canary-v1.js";
 
 interface AdmissionRow {
@@ -259,8 +260,9 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
    */
   async stageStagingSyntheticCanaryCandidate(
     input: CleanLiveCandidateSnapshotInputV1,
+    canary: StagingSyntheticMeetingCanaryInputV1,
   ): Promise<CleanLiveCandidateV1> {
-    assertStagingSyntheticMeetingCanaryV1(input.meeting);
+    assertStagingSyntheticMeetingCanaryV1(input.meeting, canary);
     const canaryId = input.meeting.provenance.metadata?.["canary_id"];
     if (typeof canaryId !== "string") {
       throw new Error("staging synthetic canary has no canary id");
