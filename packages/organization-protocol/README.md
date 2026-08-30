@@ -34,8 +34,8 @@ as a fresh bootstrap. A valid result is only an installation-level organization
 gate; user-session and record-audience authorization remain separate.
 
 The stable enrollment shape intentionally never copied the identity-manifest
-and publication-policy fields of the product-local founder federation, which
-is now deleted. Where those fields exist at all, they are historical evidence
+and publication-policy fields of the deleted product-local federation
+implementation. Where those fields exist at all, they are historical evidence
 in preserved state and backups, not current product-local evidence. Enrollment
 remains self-contained.
 

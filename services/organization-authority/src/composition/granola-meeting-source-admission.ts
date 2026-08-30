@@ -246,7 +246,7 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
         );
       if (completedInitialOwnerIdentity === undefined) {
         throw new Error(
-          "Granola source admission requires completed initial-owner OIDC re-onboarding bound to the supplied owner email (legacy check: completed founder OIDC re-onboarding)",
+          "Granola source admission requires completed initial-owner OIDC re-onboarding bound to the supplied owner email",
         );
       }
       const semanticInputSha256 = canonicalSha256({

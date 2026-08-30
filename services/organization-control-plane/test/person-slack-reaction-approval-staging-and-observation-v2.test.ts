@@ -305,7 +305,7 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-describe("clean Person Slack reaction approval finalization", () => {
+describe("Person Slack reaction approval staging", () => {
   it.each(["approve", "reject"] as const)(
     "commits and exactly replays a founder %s reaction",
     async (action) => {
@@ -375,7 +375,7 @@ describe("clean Person Slack reaction approval finalization", () => {
   });
 });
 
-describe("clean Slack reaction observer", () => {
+describe("Slack reaction approval observer", () => {
   const expectation = {
     schema_version: 2,
     kind: "echo-person-slack-provider-expectation-v2",

@@ -12,7 +12,7 @@ export const RESTRICTED_REVIEWER_POLICY_ID = "restricted-reviewer-v1";
 export const RESTRICTED_REVIEWER_PRESENTATION_MODE = "restricted-reviewer-v1";
 
 /**
- * The founder-confirmed human consequence, shown before approval and frozen
+ * The human-facing consequence, shown before approval and frozen
  * into the Authority-computed semantic preimage. Changing one byte changes
  * `policy_contract_sha256` and every semantic digest, so it is a contract
  * revision rather than copy editing.

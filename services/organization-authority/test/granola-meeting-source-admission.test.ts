@@ -269,7 +269,7 @@ describe("clean Granola source admission", () => {
     const input = fixture();
     await expect(
       admitGranolaMeetingSource({ ...input, now: () => ADMITTED_AT }),
-    ).rejects.toThrow("completed founder OIDC re-onboarding");
+    ).rejects.toThrow("completed initial-owner OIDC re-onboarding");
     await bootstrapFounder(input);
     const admitted = await admitGranolaMeetingSource({
       ...input,
@@ -359,7 +359,7 @@ describe("clean Granola source admission", () => {
     ).rejects.toThrow("semantic input conflicts");
   });
 
-  it("refuses a Granola owner email that differs from the completed founder identity", async () => {
+  it("refuses a Granola owner email that differs from the completed initial-owner identity", async () => {
     const input = fixture();
     await bootstrapFounder(input);
     const otherOwner = privateFile(
@@ -372,7 +372,7 @@ describe("clean Granola source admission", () => {
         ...input,
         granola_owner_email_reference: `file:${otherOwner}`,
       }),
-    ).rejects.toThrow("completed founder OIDC re-onboarding");
+    ).rejects.toThrow("completed initial-owner OIDC re-onboarding");
   });
 
   it("fails closed without an admission or cutoff when provider observation fails or cannot find the owner", async () => {

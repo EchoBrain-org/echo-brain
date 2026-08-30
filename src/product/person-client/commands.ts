@@ -614,7 +614,7 @@ export async function runPersonClientCli(
         break;
       case "slack-link": {
         const begun = await client.beginSlackLink();
-        // Retain the code and opaque challenge handles in memory. The founder
+        // Retain the code and opaque challenge handles in memory. The person
         // copies the code into Slack, then confirms with one empty line.
         print(stdout, {
           ok: true,

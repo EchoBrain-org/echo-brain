@@ -3,7 +3,7 @@ import { runLegacySlackReactionApprovalActivationCli } from "./composition/legac
 void runLegacySlackReactionApprovalActivationCli(process.argv.slice(2)).catch(
   (error: unknown) => {
     process.stderr.write(
-      `${error instanceof Error ? error.message : "clean Slack reaction approval activation failed"}\n`,
+      `${error instanceof Error ? error.message : "Slack reaction approval activation failed"}\n`,
     );
     process.exitCode = 1;
   },

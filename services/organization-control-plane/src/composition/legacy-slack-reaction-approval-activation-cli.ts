@@ -172,7 +172,7 @@ export async function runLegacySlackReactionApprovalActivationCli(
       },
     );
     if (owner === undefined)
-      throw new Error("clean founder owner is unavailable");
+      throw new Error("organization owner is unavailable");
     const target = selectCurrentOwnerSlackReactionApprovalTargetV1(
       database,
       state,
