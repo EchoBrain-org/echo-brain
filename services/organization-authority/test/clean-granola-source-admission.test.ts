@@ -33,7 +33,7 @@ import {
   issueCleanPersonInvitation,
 } from "../src/composition/clean-person-onboarding.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
-import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { granolaLiveOnlyCutoff } from "../src/processing/adapters/meeting-sources/granola/index.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 
@@ -108,7 +108,7 @@ function privateFile(rootPath: string, name: string, value: string): string {
 
 function fixture() {
   const parent = root();
-  const initialized = initializeCleanResetState({
+  const initialized = initializeAuthorityState({
     state_directory: join(parent, "state"),
     organization_display_name: "Founder Organization",
     owner_display_name: "Founder",

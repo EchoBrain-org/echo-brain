@@ -100,10 +100,10 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-clean-founder-entrypoint-calls-composition",
+      "name": "authority-setup-compatibility-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-founder-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-founder-cli.ts"
+        "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -352,7 +352,7 @@
       ]
     },
     {
-      "name": "state-lineage-guard-is-unwired-and-read-only",
+      "name": "state-lineage-guard-is-read-only",
       "from": "services/organization-authority/src/state-lineage/**",
       "allowed_imports": [
         "services/organization-authority/src/state-lineage/**"
@@ -369,7 +369,7 @@
       ]
     },
     {
-      "name": "clean-live-only-source-cycle-is-provider-neutral",
+      "name": "live-source-processing-is-provider-neutral",
       "from": "services/organization-authority/src/processing/clean-v1/**",
       "allowed_imports": [
         "services/organization-authority/src/processing/clean-v1/**",
@@ -383,26 +383,6 @@
       "allowed_external_packages": [
         "better-sqlite3"
       ],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "clean-d2-d3-coordinator-uses-only-selected-clean-ports",
-      "from": "services/organization-authority/src/processing/clean-v1-d2-d3/**",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/clean-v1-d2-d3/**",
-        "services/organization-authority/src/processing/clean-v1/**",
-        "services/organization-authority/src/processing/clean-v1-record/**",
-        "services/organization-authority/src/application/ports/runtime-ports.ts",
-        "services/organization-authority/src/composition/clean-live-runtime.ts",
-        "services/organization-authority/src/processing/core/**"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-control-plane",
-        "@echo-brain/organization-protocol",
-        "@echo-brain/organization-record"
-      ],
-      "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
     {

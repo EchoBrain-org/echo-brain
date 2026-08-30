@@ -16,7 +16,7 @@ import { OpenIdClientPersonSessionProvider } from "../adapters/oidc/openid-clien
 import { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
 import { SystemAuthorityClock } from "../adapters/runtime/system-runtime-ports.js";
-import { createCleanPersonHttpServer } from "../presentation/clean-person-http-server.js";
+import { createOrganizationAuthorityHttpServer } from "../presentation/organization-authority-http-server.js";
 import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
 import { LazyPersonSessionOidcProvider } from "./lazy-person-session-oidc-provider.js";
 import { createCleanPersonRecordReadRouteV1 } from "./clean-person-record-read-route.js";
@@ -36,7 +36,7 @@ import type {
   OpenedCleanPersonExternalIdentityRuntimeV1,
 } from "./clean-person-external-identity-runtime.js";
 
-export interface CleanPersonRuntimeConfig {
+export interface OrganizationAuthorityApiRuntimeConfig {
   readonly state_directory: string;
   readonly host: "127.0.0.1" | "::1";
   readonly port: number;
@@ -52,11 +52,11 @@ export interface CleanPersonRuntimeConfig {
   readonly pkce_sealing_key: Uint8Array;
 }
 
-export interface CleanPersonRuntimeDependencies {
+export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
   readonly external_identity_runtime?: CleanPersonExternalIdentityRuntimeBundleV1;
-  /** Present only in the active live runtime; omitted during founder setup. */
+  /** Present only after source admission; omitted during organization setup. */
   readonly answer_composition_runtime?: AnswerCompositionRuntimeV1;
   /** Metadata-only Layer 4 failure observer for the live server log. */
   readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
@@ -65,29 +65,30 @@ export interface CleanPersonRuntimeDependencies {
     PrivateApprovalInteractionHttpApplicationV1;
 }
 
-export interface RunningCleanPersonRuntime {
+export interface RunningOrganizationAuthorityApiRuntime {
   readonly address: AddressInfo;
   close(): Promise<void>;
 }
 
-export function verifyCleanPersonLineage(stateDirectory: string) {
+export function verifyOrganizationAuthorityApiLineage(stateDirectory: string) {
   return verifyCleanStateLineage(stateDirectory);
 }
 
 /**
- * Starts only the clean founder Person flow. It verifies every role read-only
- * before opening Authority writeable and never imports legacy serve/migrations.
+ * Opens the Organization Authority HTTP API and its request-serving database
+ * handles. It verifies lineage before opening Authority writeable and never
+ * imports installation, migration, or background-worker lifecycle behavior.
  */
-export async function startCleanPersonRuntime(
-  config: CleanPersonRuntimeConfig,
-  dependencies: CleanPersonRuntimeDependencies = {},
-): Promise<RunningCleanPersonRuntime> {
+export async function startOrganizationAuthorityApiRuntime(
+  config: OrganizationAuthorityApiRuntimeConfig,
+  dependencies: OrganizationAuthorityApiRuntimeDependencies = {},
+): Promise<RunningOrganizationAuthorityApiRuntime> {
   if (
     !Number.isSafeInteger(config.port) ||
     config.port < 1 ||
     config.port > 65_535
   ) {
-    throw new Error("clean Person runtime port is invalid");
+    throw new Error("Organization Authority API port is invalid");
   }
   validateOrganizationAuthorityOrigin(config.authority_url);
   if (
@@ -98,9 +99,9 @@ export async function startCleanPersonRuntime(
       "clean Person OIDC redirect URI must match the public Authority callback",
     );
   }
-  const lineage = verifyCleanPersonLineage(config.state_directory);
+  const lineage = verifyOrganizationAuthorityApiLineage(config.state_directory);
   // Do not contact an OIDC provider merely to bind the clean local runtime.
-  // Discovery is deferred until the founder begins an OIDC login.
+  // Discovery is deferred until the initial owner begins an OIDC login.
   const provider =
     dependencies.oidc_provider ??
     new LazyPersonSessionOidcProvider(() =>
@@ -130,7 +131,7 @@ export async function startCleanPersonRuntime(
       metadata.organization_id !== lineage.root.organization_id
     ) {
       throw new Error(
-        "clean Person runtime Authority metadata differs from verified lineage",
+        "Organization Authority API metadata differs from verified lineage",
       );
     }
     const crypto = new NodePersonSessionCrypto(config.pkce_sealing_key);
@@ -181,7 +182,7 @@ export async function startCleanPersonRuntime(
       record: recordDatabase,
       audit: readAudit,
     });
-    const server = createCleanPersonHttpServer({
+    const server = createOrganizationAuthorityHttpServer({
       descriptor: metadata.descriptor,
       sessions,
       oidc_provider: provider,
@@ -232,7 +233,7 @@ export async function startCleanPersonRuntime(
     await once(server, "listening");
     const address = server.address();
     if (address === null || typeof address === "string")
-      throw new Error("clean Person runtime did not bind TCP");
+      throw new Error("Organization Authority API did not bind TCP");
     return {
       address,
       close: async () => {

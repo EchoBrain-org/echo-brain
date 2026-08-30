@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  runCleanLiveProcessingCycleV1,
-  startCleanLiveRuntime,
-  type CleanLiveProcessingCycleV1,
-} from "../src/composition/clean-live-runtime.js";
+  runOrganizationAuthorityProcessingCycleV1,
+  startOrganizationAuthorityServiceLifecycle,
+  type OrganizationAuthorityProcessingCycleV1,
+} from "../src/composition/organization-authority-service-lifecycle.js";
 import type { CleanLiveWorkerTelemetryEventV1 } from "../src/processing/clean-v1/clean-live-worker-lifecycle.js";
 import { AdapterError } from "../src/processing/core/contracts/adapter.js";
 import type {
-  CleanPersonRuntimeConfig,
-  RunningCleanPersonRuntime,
-} from "../src/composition/clean-person-runtime.js";
+  OrganizationAuthorityApiRuntimeConfig,
+  RunningOrganizationAuthorityApiRuntime,
+} from "../src/composition/organization-authority-api-runtime.js";
 
-const personConfig: CleanPersonRuntimeConfig = {
+const apiConfig: OrganizationAuthorityApiRuntimeConfig = {
   state_directory: "/clean-state",
   host: "127.0.0.1",
   port: 14_000,
@@ -31,7 +31,7 @@ function processing(
   operations: string[],
   append: () => Promise<void> = async () => undefined,
   reconcile: () => Promise<void> = async () => undefined,
-): CleanLiveProcessingCycleV1 {
+): OrganizationAuthorityProcessingCycleV1 {
   return {
     recoverV4Appends: async () => {
       operations.push("recover");
@@ -53,25 +53,25 @@ function processing(
   };
 }
 
-function personRuntime(events: string[]): RunningCleanPersonRuntime {
+function apiRuntime(events: string[]): RunningOrganizationAuthorityApiRuntime {
   return {
     address: { address: "127.0.0.1", family: "IPv4", port: 14_000 },
     close: async () => {
-      events.push("person-close");
+      events.push("api-close");
     },
   };
 }
 
-describe("clean live runtime", () => {
+describe("Organization Authority service lifecycle", () => {
   it("emits a successful content-free heartbeat for an empty cycle", async () => {
     vi.useFakeTimers();
     const events: CleanLiveWorkerTelemetryEventV1[] = [];
     let now = 1_000;
-    const runtime = await startCleanLiveRuntime(
-      { person: personConfig, worker_interval_ms: 1_000 },
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 1_000 },
       {
         processing: processing([]),
-        start_person_runtime: async () => personRuntime([]),
+        start_api_runtime: async () => apiRuntime([]),
         on_worker_telemetry: (event) => events.push(event),
         worker_telemetry_now: () => now,
       },
@@ -85,20 +85,20 @@ describe("clean live runtime", () => {
       event: "succeeded",
       elapsed_ms: 0,
     });
-    expect(JSON.stringify(events)).not.toContain("personConfig");
+    expect(JSON.stringify(events)).not.toContain("apiConfig");
     await runtime.close();
   });
 
   it("recovers and prewarms before starting Person, then retains worker ordering", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
-    const runtime = await startCleanLiveRuntime(
-      { person: personConfig, worker_interval_ms: 1_000 },
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 1_000 },
       {
         processing: processing(events),
-        start_person_runtime: async () => {
-          events.push("person-start");
-          return personRuntime(events);
+        start_api_runtime: async () => {
+          events.push("api-start");
+          return apiRuntime(events);
         },
         clear_readable_search_handle: () => events.push("handle-clear"),
       },
@@ -109,7 +109,7 @@ describe("clean live runtime", () => {
     expect(events).toEqual([
       "recover",
       "reconcile",
-      "person-start",
+      "api-start",
       "recover",
       "stage",
       "finalize",
@@ -121,13 +121,13 @@ describe("clean live runtime", () => {
     expect(events).toEqual([
       "recover",
       "reconcile",
-      "person-start",
+      "api-start",
       "recover",
       "stage",
       "finalize",
       "append",
       "reconcile",
-      "person-close",
+      "api-close",
       "handle-clear",
     ]);
     vi.useRealTimers();
@@ -138,14 +138,14 @@ describe("clean live runtime", () => {
     const events: string[] = [];
     let attempts = 0;
     const errors: string[] = [];
-    const runtime = await startCleanLiveRuntime(
-      { person: personConfig, worker_interval_ms: 100 },
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 100 },
       {
         processing: processing(events, async () => {
           attempts += 1;
           if (attempts === 1) throw new Error("append interrupted");
         }),
-        start_person_runtime: async () => personRuntime(events),
+        start_api_runtime: async () => apiRuntime(events),
         on_worker_error: (error) => {
           errors.push(error.message);
         },
@@ -185,7 +185,7 @@ describe("clean live runtime", () => {
   it("reconciles once after a coalesced append phase", async () => {
     const events: string[] = [];
 
-    await runCleanLiveProcessingCycleV1(
+    await runOrganizationAuthorityProcessingCycleV1(
       processing(events, async () => {
         events.push("append:one");
         events.push("append:two");
@@ -204,24 +204,24 @@ describe("clean live runtime", () => {
     ]);
   });
 
-  it("rejects startup, clears the handle, and never starts Person when prewarm fails", async () => {
+  it("rejects startup, clears the handle, and never starts the API when prewarm fails", async () => {
     const events: string[] = [];
     const telemetry: CleanLiveWorkerTelemetryEventV1[] = [];
-    const startPerson = vi.fn(async () => personRuntime(events));
+    const startApi = vi.fn(async () => apiRuntime(events));
     await expect(
-      startCleanLiveRuntime(
-        { person: personConfig, worker_interval_ms: 100 },
+      startOrganizationAuthorityServiceLifecycle(
+        { api: apiConfig, worker_interval_ms: 100 },
         {
           processing: processing(events, undefined, async () => {
             throw new Error("generation reconciliation interrupted");
           }),
-          start_person_runtime: startPerson,
+          start_api_runtime: startApi,
           on_worker_telemetry: (event) => telemetry.push(event),
           clear_readable_search_handle: () => events.push("handle-clear"),
         },
       ),
     ).rejects.toThrow("generation reconciliation interrupted");
-    expect(startPerson).not.toHaveBeenCalled();
+    expect(startApi).not.toHaveBeenCalled();
     expect(events).toEqual(["recover", "reconcile", "handle-clear"]);
     expect(telemetry).toMatchObject([
       { event: "started", cycle_phase: "recovery" },
@@ -236,15 +236,15 @@ describe("clean live runtime", () => {
     ]);
   });
 
-  it("rejects startup before prewarm or Person when append recovery fails", async () => {
+  it("rejects startup before prewarm or API start when append recovery fails", async () => {
     const events: string[] = [];
     const telemetry: CleanLiveWorkerTelemetryEventV1[] = [];
-    const startPerson = vi.fn(async () => personRuntime(events));
+    const startApi = vi.fn(async () => apiRuntime(events));
     const startupProcessing = processing(events);
 
     await expect(
-      startCleanLiveRuntime(
-        { person: personConfig, worker_interval_ms: 100 },
+      startOrganizationAuthorityServiceLifecycle(
+        { api: apiConfig, worker_interval_ms: 100 },
         {
           processing: {
             ...startupProcessing,
@@ -253,14 +253,14 @@ describe("clean live runtime", () => {
               throw new Error("append recovery interrupted");
             },
           },
-          start_person_runtime: startPerson,
+          start_api_runtime: startApi,
           on_worker_telemetry: (event) => telemetry.push(event),
           clear_readable_search_handle: () => events.push("handle-clear"),
         },
       ),
     ).rejects.toThrow("append recovery interrupted");
 
-    expect(startPerson).not.toHaveBeenCalled();
+    expect(startApi).not.toHaveBeenCalled();
     expect(events).toEqual(["recover", "handle-clear"]);
     expect(telemetry).toMatchObject([
       { event: "started", cycle_phase: "recovery" },
@@ -279,8 +279,8 @@ describe("clean live runtime", () => {
     const started = new Promise<void>((resolve) => {
       phaseStarted = resolve;
     });
-    const runtime = await startCleanLiveRuntime(
-      { person: personConfig, worker_interval_ms: 100 },
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 100 },
       {
         processing: {
           ...processing([]),
@@ -295,7 +295,7 @@ describe("clean live runtime", () => {
             });
           },
         },
-        start_person_runtime: async () => personRuntime([]),
+        start_api_runtime: async () => apiRuntime([]),
         on_worker_telemetry: (event) => telemetry.push(event),
       },
     );
@@ -322,8 +322,8 @@ describe("clean live runtime", () => {
     const telemetry: CleanLiveWorkerTelemetryEventV1[] = [];
     const order: string[] = [];
     let attempts = 0;
-    const runtime = await startCleanLiveRuntime(
-      { person: personConfig, worker_interval_ms: 100 },
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 100 },
       {
         processing: processing([], async () => {
           attempts += 1;
@@ -331,7 +331,7 @@ describe("clean live runtime", () => {
             throw new AdapterError("invalid_config", "private adapter sentinel", false);
           }
         }),
-        start_person_runtime: async () => personRuntime([]),
+        start_api_runtime: async () => apiRuntime([]),
         on_worker_telemetry: (event) => {
           if (event.event === "failed") {
             order.push(
@@ -382,7 +382,7 @@ describe("clean live runtime", () => {
     const controller = new AbortController();
 
     await expect(
-      runCleanLiveProcessingCycleV1(
+      runOrganizationAuthorityProcessingCycleV1(
         processing(events, async () => {
           controller.abort();
         }),

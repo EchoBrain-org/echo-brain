@@ -20,12 +20,12 @@ import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
-import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import {
   initializeCleanPersonCredentials,
   issueCleanPersonInvitation,
 } from "../src/composition/clean-person-onboarding.js";
-import { startCleanPersonRuntime } from "../src/composition/clean-person-runtime.js";
+import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
 import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/clean-slack-person-external-identity-runtime.js";
 import type {
   CleanPersonExternalIdentityRuntimeInputV1,
@@ -37,7 +37,7 @@ import { MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS } from "../src/domain/person-session
 const roots: string[] = [];
 
 function root(): string {
-  const created = mkdtempSync(join(tmpdir(), "echo-clean-person-runtime-"));
+  const created = mkdtempSync(join(tmpdir(), "echo-authority-api-runtime-"));
   chmodSync(created, 0o700);
   const value = realpathSync(created);
   roots.push(value);
@@ -94,10 +94,10 @@ afterEach(() => {
     rmSync(value, { recursive: true, force: true });
 });
 
-describe("clean Person runtime", () => {
+describe("Organization Authority API runtime", () => {
   it("wires an injected external-identity application without selecting a provider", async () => {
     const parent = root();
-    const initialized = initializeCleanResetState({
+    const initialized = initializeAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -109,7 +109,7 @@ describe("clean Person runtime", () => {
     });
     const opened: CleanPersonExternalIdentityRuntimeInputV1[] = [];
     let closed = 0;
-    const runtime = await startCleanPersonRuntime(
+    const runtime = await startOrganizationAuthorityApiRuntime(
       {
         state_directory: initialized.state_directory,
         host: "127.0.0.1",
@@ -181,7 +181,7 @@ describe("clean Person runtime", () => {
 
   it("burns a bootstrap invitation when the verified email does not match", async () => {
     const parent = root();
-    const initialized = initializeCleanResetState({
+    const initialized = initializeAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -271,7 +271,7 @@ describe("clean Person runtime", () => {
 
   it("releases retryable bootstrap redemption before consuming the invitation", async () => {
     const parent = root();
-    const initialized = initializeCleanResetState({
+    const initialized = initializeAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -393,7 +393,7 @@ describe("clean Person runtime", () => {
 
   it("caps unauthenticated OIDC begins durably and releases expired capacity", () => {
     const parent = root();
-    const initialized = initializeCleanResetState({
+    const initialized = initializeAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -479,12 +479,12 @@ describe("clean Person runtime", () => {
 
   it("runs fresh genesis through founder grant, OIDC bootstrap, refresh, and logout without legacy state", async () => {
     const parent = root();
-    const initialized = initializeCleanResetState({
+    const initialized = initializeAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
       created_at: new Date(Date.now() - 1_000).toISOString(),
-      creating_artifact_revision: "clean-person-runtime-test",
+      creating_artifact_revision: "organization-authority-api-runtime-test",
     });
     const oidc = {
       issuer: "https://issuer.example",
@@ -553,7 +553,7 @@ describe("clean Person runtime", () => {
     const invitationBody = JSON.parse(readFileSync(invitationPath, "utf8")) as {
       login_grant: string;
     };
-    const runtime = await startCleanPersonRuntime(
+    const runtime = await startOrganizationAuthorityApiRuntime(
       {
         state_directory: initialized.state_directory,
         host: "127.0.0.1",

@@ -49,7 +49,7 @@ const MAXIMUM_TRACKED_OIDC_BEGIN_CLIENTS = 1024;
  * ownership of an Authority route. Keep this list beside the dispatch below:
  * a new built-in route has to be reserved before an adapter can be mounted.
  */
-const CORE_PERSON_HTTP_ROUTES = new Set<string>([
+const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `GET ${ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH}`,
   `POST ${PERSON_SESSION_OIDC_BEGIN_PATH}`,
   `GET ${PERSON_SESSION_OIDC_CALLBACK_PATH}`,
@@ -67,16 +67,16 @@ const CORE_PERSON_HTTP_ROUTES = new Set<string>([
 function routeKey(method: string, path: string): string {
   return `${method} ${path}`;
 }
-export interface CleanPersonOidcProvider {
+export interface AuthorityOidcAuthorizationUrlProvider {
   buildAuthorizationUrl(
     input: ReturnType<PersonIdentitySessionApplication["beginOidcLogin"]>,
   ): string | Promise<string>;
 }
 
-export interface CleanPersonHttpServerOptions {
+export interface OrganizationAuthorityHttpServerOptions {
   readonly descriptor: OrganizationAuthorityDescriptorV1;
   readonly sessions: PersonIdentitySessionApplication;
-  readonly oidc_provider: CleanPersonOidcProvider;
+  readonly oidc_provider: AuthorityOidcAuthorizationUrlProvider;
   readonly expected_issuer: string;
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: PersonExternalIdentityLinkHttpApplicationV1;
@@ -94,7 +94,7 @@ export interface CleanPersonHttpServerOptions {
 }
 
 function validateProviderIngressRoutes(
-  options: CleanPersonHttpServerOptions,
+  options: OrganizationAuthorityHttpServerOptions,
 ): void {
   const providerRoutes = [
     ...(options.private_approval_interaction_ingress === undefined
@@ -110,7 +110,7 @@ function validateProviderIngressRoutes(
   const seen = new Set<string>();
   for (const route of providerRoutes) {
     const key = routeKey(route.method, route.path);
-    if (CORE_PERSON_HTTP_ROUTES.has(key)) {
+    if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key)) {
       throw new Error(`provider ingress route collides with Authority route: ${key}`);
     }
     if (seen.has(key)) {
@@ -416,9 +416,9 @@ function answerInput(value: unknown): { readonly question: string } {
   return Object.freeze({ question });
 }
 
-/** Exactly the founder Person surface, with no legacy machine routes. */
-export function createCleanPersonHttpServer(
-  options: CleanPersonHttpServerOptions,
+/** The Organization Authority Person API surface, with no machine routes. */
+export function createOrganizationAuthorityHttpServer(
+  options: OrganizationAuthorityHttpServerOptions,
 ): Server {
   validateProviderIngressRoutes(options);
   const handoffs = new Map<string, PendingLoopbackHandoff>();

@@ -11,7 +11,7 @@ import type { PersonAccessAuthorization } from "../src/application/person-identi
 import { ReadableSearchAuthorizationFence } from "../src/application/readable-search-authorization-fence.js";
 import { createCleanPersonSlackIdentityLinkServiceV1 } from "../src/composition/clean-person-slack-identity-link.js";
 import { createCleanSlackExternalIdentityHttpApplicationV1 } from "../src/composition/clean-slack-person-external-identity-runtime.js";
-import { createCleanPersonHttpServer } from "../src/presentation/clean-person-http-server.js";
+import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 
 const NOW = "2026-08-22T00:00:00.000Z";
 const AUTHORITY_ID = "oau_00000000-0000-4000-8000-000000000001";
@@ -210,7 +210,7 @@ describe("clean Person Slack identity-link service", () => {
 
   it("dispatches an authenticated begin through the configured clean HTTP server", async () => {
     const context = await setup();
-    const server = createCleanPersonHttpServer({
+    const server = createOrganizationAuthorityHttpServer({
       descriptor: {} as never,
       sessions: {} as never,
       oidc_provider: {} as never,

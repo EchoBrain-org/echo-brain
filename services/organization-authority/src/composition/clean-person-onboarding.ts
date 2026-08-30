@@ -12,7 +12,7 @@ import {
   reservePersonOnboardingInvitationTarget,
   writePersonOnboardingInvitation,
 } from "../adapters/files/private-person-onboarding-invitation.js";
-import { verifyCleanPersonLineage } from "./clean-person-runtime.js";
+import { verifyOrganizationAuthorityApiLineage } from "./organization-authority-api-runtime.js";
 
 export const CLEAN_PERSON_PKCE_KEY_FILENAME = "person-session-pkce-sealing-key";
 
@@ -26,7 +26,7 @@ export interface InitializedCleanPersonCredentials {
 export function initializeCleanPersonCredentials(input: {
   readonly state_directory: string;
 }): InitializedCleanPersonCredentials {
-  verifyCleanPersonLineage(input.state_directory);
+  verifyOrganizationAuthorityApiLineage(input.state_directory);
   const directory = join(input.state_directory, "credentials");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, CLEAN_PERSON_PKCE_KEY_FILENAME);
@@ -58,7 +58,7 @@ export function issueCleanPersonInvitation(
   readonly output_path: string;
   readonly expires_at: string;
 } {
-  verifyCleanPersonLineage(input.state_directory);
+  verifyOrganizationAuthorityApiLineage(input.state_directory);
   const reservation = reservePersonOnboardingInvitationTarget({
     output_path: input.output_path,
     authority_url: input.authority_url,

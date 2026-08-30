@@ -31,7 +31,7 @@ import {
   type CleanReadableSearchLineagePlaneV1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 import type Database from "better-sqlite3";
-import { DevelopmentFileOrganizationAuthoritySigner } from "../adapters/security/development-file-authority-signer.js";
+import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import {
   CleanReadableSearchGenerationReconcilerV1,
   type CleanReadableSearchRecordHeadV1,
@@ -206,7 +206,7 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
   readonly root: StateLineageRootManifestV1;
   readonly authority: Database.Database;
   readonly record: Database.Database;
-  readonly signer: DevelopmentFileOrganizationAuthoritySigner;
+  readonly signer: FileOrganizationAuthoritySigner;
   /** Chosen with the active approval protocol; this runtime names no provider. */
   readonly policy_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly now?: () => string;

@@ -7,14 +7,14 @@ import {
   openStagingSyntheticPrivateDmCanaryControlV1,
   STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
 } from "../../src/composition/staging-synthetic-private-dm-canary-control-v1.js";
-import type { OpenedCleanLiveRuntime } from "../../src/composition/open-clean-live-runtime.js";
+import type { OpenedOrganizationAuthorityRuntime } from "../../src/composition/organization-authority-runtime.js";
 import { createStagingSyntheticMeetingCanaryV1 } from "../../src/processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
 
 const RELEASE_ID = "clean-v1-staging-canary";
 const OWNER_EMAIL = "founder@example.com";
 const directories: string[] = [];
 type CanaryRun = NonNullable<
-  OpenedCleanLiveRuntime["run_staging_synthetic_private_dm_canary"]
+  OpenedOrganizationAuthorityRuntime["run_staging_synthetic_private_dm_canary"]
 >;
 
 async function socketPath(): Promise<string> {
@@ -49,7 +49,10 @@ async function post(
 
 function runtime(
   runCanary: CanaryRun,
-): Pick<OpenedCleanLiveRuntime, "run_staging_synthetic_private_dm_canary"> {
+): Pick<
+  OpenedOrganizationAuthorityRuntime,
+  "run_staging_synthetic_private_dm_canary"
+> {
   return { run_staging_synthetic_private_dm_canary: runCanary };
 }
 

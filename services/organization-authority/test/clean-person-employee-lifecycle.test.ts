@@ -9,8 +9,8 @@ import type {
   OidcAuthorizationCodeResult,
 } from "../src/application/ports/person-session-runtime.js";
 import { initializeCleanPersonCredentials, issueCleanPersonInvitation } from "../src/composition/clean-person-onboarding.js";
-import { startCleanPersonRuntime } from "../src/composition/clean-person-runtime.js";
-import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
+import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 
@@ -63,7 +63,10 @@ async function login(
 ): Promise<Record<string, unknown>> {
   const begun = await fetch(`${origin}/v2/session/oidc/begin`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-echo-client-ip": "192.0.2.1",
+    },
     body: JSON.stringify({
       kind: "identity_bootstrap",
       login_grant: grant,
@@ -94,7 +97,7 @@ afterEach(() => {
 describe("clean Person employee lifecycle", () => {
   it("keeps employee lifecycle owner-only, invalidates reissued grants, revokes reads, and permits a new tenure", async () => {
     const parent = root();
-    const initialized = initializeCleanResetState({
+    const initialized = initializeAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Example",
       owner_display_name: "Founder",
@@ -127,7 +130,7 @@ describe("clean Person employee lifecycle", () => {
       output_path: founderInvitation,
     });
     const provider = new MockOidcProvider();
-    const runtime = await startCleanPersonRuntime(
+    const runtime = await startOrganizationAuthorityApiRuntime(
       {
         state_directory: initialized.state_directory,
         host: "127.0.0.1",

@@ -1,5 +1,5 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { initializeCleanResetState } from "./clean-reset-state.js";
+import { initializeAuthorityState } from "./authority-state-initializer.js";
 
 export interface CleanResetCliIo {
   stdout(value: string): void;
@@ -53,7 +53,7 @@ export function runCleanResetCli(
   io: CleanResetCliIo = PROCESS_IO,
 ): number {
   const flags = parseFlags(arguments_);
-  const result = initializeCleanResetState({
+  const result = initializeAuthorityState({
     state_directory: flags["--state-dir"]!,
     organization_display_name: flags["--organization-name"]!,
     owner_display_name: flags["--owner-display-name"]!,

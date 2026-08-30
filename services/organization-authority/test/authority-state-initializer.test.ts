@@ -38,7 +38,7 @@ import {
 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { runCleanResetCli } from "../src/composition/clean-reset-cli.js";
-import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { verifyCleanStateLineage } from "../src/composition/verify-clean-state-lineage.js";
 import { initializeNewStateLineageV1 } from "../src/state-lineage/new-lineage-genesis-v1.js";
 import { StateLineagePreopenRefusal } from "../src/state-lineage/state-lineage-preopen-guard.js";
@@ -52,7 +52,7 @@ afterEach(() => {
 });
 
 function fixtureRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "echo-clean-reset-"));
+  const root = mkdtempSync(join(tmpdir(), "echo-authority-state-init-"));
   chmodSync(root, 0o700);
   roots.push(root);
   return root;
@@ -139,11 +139,11 @@ function initializeRecordLogV1State(stateDirectory: string): void {
   });
 }
 
-describe("clean reset state initialization", () => {
+describe("Authority state initialization", () => {
   it("creates only the fresh binding metadata, active owner, and derived cursor", () => {
     const root = fixtureRoot();
     const stateDirectory = join(root, "new-state");
-    const result = initializeCleanResetState({
+    const result = initializeAuthorityState({
       state_directory: stateDirectory,
       organization_display_name: "Example Organization",
       owner_display_name: "Ada Owner",
@@ -287,7 +287,7 @@ describe("clean reset state initialization", () => {
     ).toEqual([{ last_position: 0, updated_at: CREATED_AT }]);
   });
 
-  it("exposes the clean reset through its dedicated CLI without legacy flags", () => {
+  it("exposes state initialization through its compatibility CLI without legacy flags", () => {
     const root = fixtureRoot();
     const stateDirectory = join(root, "new-state");
     const output: string[] = [];
@@ -324,7 +324,7 @@ describe("clean reset state initialization", () => {
     const root = fixtureRoot();
     const stateDirectory = join(root, "new-state");
     expect(() =>
-      initializeCleanResetState({
+      initializeAuthorityState({
         state_directory: stateDirectory,
         organization_display_name: "Example Organization",
         owner_display_name: "Ada Owner",
@@ -358,7 +358,7 @@ describe("clean reset state initialization", () => {
       expect(error).toMatchObject({ family: "schema_version_mismatch" });
     }
     expect(() =>
-      initializeCleanResetState({
+      initializeAuthorityState({
         state_directory: stateDirectory,
         organization_display_name: "Example Organization",
         owner_display_name: "Ada Owner",

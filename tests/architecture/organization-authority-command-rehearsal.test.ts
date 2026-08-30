@@ -16,19 +16,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../../services/organization-authority/src/application/person-identity-sessions.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../../services/organization-authority/src/adapters/security/private-file-credentials.js";
 import {
-  runCleanFounderCli,
-  type CleanFounderCliDependencies,
-} from "../../services/organization-authority/src/composition/clean-founder-cli.js";
+  runOrganizationAuthoritySetupCli,
+  type OrganizationAuthoritySetupCliDependencies,
+} from "../../services/organization-authority/src/composition/organization-authority-setup-cli.js";
 import { runCleanGranolaSourceCli } from "../../services/organization-authority/src/composition/clean-granola-source-cli.js";
 import {
   initializeCleanPersonCredentials,
   issueCleanPersonInvitation,
 } from "../../services/organization-authority/src/composition/clean-person-onboarding.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
-import { openCleanOrganizationAuthorityRuntime } from "../../services/organization-authority/src/composition/open-clean-organization-authority-runtime.js";
+import { openOrganizationAuthorityService } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
 import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/clean-slack-person-external-identity-runtime.js";
-import { initializeCleanResetState } from "../../services/organization-authority/src/composition/clean-reset-state.js";
-import type { CleanLiveProcessingCycleV1 } from "../../services/organization-authority/src/composition/clean-live-runtime.js";
+import { initializeAuthorityState } from "../../services/organization-authority/src/composition/authority-state-initializer.js";
+import type { OrganizationAuthorityProcessingCycleV1 } from "../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
 import { runPersonClientCli } from "../../src/product/person-client/commands.js";
 
 const roots: string[] = [];
@@ -158,7 +158,7 @@ const fakeSlack: CleanSlackIdentityProviderV1 = {
   }),
 };
 
-const inactiveWorker: CleanLiveProcessingCycleV1 = {
+const inactiveWorker: OrganizationAuthorityProcessingCycleV1 = {
   recoverV4Appends: async () => undefined,
   pollAndStageLiveOnlySource: async () => undefined,
   observeAndFinalizePendingApprovals: async () => undefined,
@@ -166,10 +166,10 @@ const inactiveWorker: CleanLiveProcessingCycleV1 = {
   reconcileReadableSearchGeneration: async () => undefined,
 };
 
-function authorityAdminDependencies(): CleanFounderCliDependencies {
+function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
   return {
     now: () => "2026-08-22T12:00:00.000Z",
-    reset: initializeCleanResetState,
+    initialize_state: initializeAuthorityState,
     initialize_credentials: async (stateDirectory) => {
       initializeCleanPersonCredentials({ state_directory: stateDirectory });
     },
@@ -324,17 +324,17 @@ describe("Organization Authority command rehearsal", () => {
     ];
     const first = commandOutput();
     expect(
-      await runCleanFounderCli(
+      await runOrganizationAuthoritySetupCli(
         args,
         { stdout: first.write, stderr: first.write, read_stdin: async () => "fake-slack-bot-token" },
-        authorityAdminDependencies(),
+        setupDependencies(),
       ),
     ).toBe(0);
     // Deliberately discard `first`: status and an exact bootstrap retry must
     // reconstruct only durable, safe provider facts without a second token read.
     const status = commandOutput();
     expect(
-      await runCleanFounderCli(
+      await runOrganizationAuthoritySetupCli(
         ["status", "--state-dir", stateDirectory],
         { stdout: status.write, stderr: status.write, read_stdin: async () => "" },
       ),
@@ -353,10 +353,10 @@ describe("Organization Authority command rehearsal", () => {
     expect(JSON.stringify(safeStatus)).not.toContain("2026-08-22T12:00:00.000Z");
     const resumed = commandOutput();
     expect(
-      await runCleanFounderCli(
+      await runOrganizationAuthoritySetupCli(
         args,
         { stdout: resumed.write, stderr: resumed.write, read_stdin: async () => { throw new Error("Slack stdin must not be reread"); } },
-        authorityAdminDependencies(),
+        setupDependencies(),
       ),
     ).toBe(0);
     expect(oneJson<Record<string, unknown>>(resumed)).toMatchObject({
@@ -383,7 +383,7 @@ describe("Organization Authority command rehearsal", () => {
 
     const bootstrap = commandOutput();
     await expect(
-      runCleanFounderCli(
+      runOrganizationAuthoritySetupCli(
         [
           "bootstrap",
           "--state-dir",
@@ -408,12 +408,12 @@ describe("Organization Authority command rehearsal", () => {
           stderr: bootstrap.write,
           read_stdin: async () => "fake-slack-bot-token",
         },
-        authorityAdminDependencies(),
+        setupDependencies(),
       ),
     ).resolves.toBe(0);
     const bootstrapped = oneJson<{ invitation_path: string }>(bootstrap);
 
-    const idle = await openCleanOrganizationAuthorityRuntime(
+    const idle = await openOrganizationAuthorityService(
       {
         state_directory: stateDirectory,
         host: "127.0.0.1",
@@ -436,10 +436,14 @@ describe("Organization Authority command rehearsal", () => {
         slack_identity_link_channel_id: "C12345678",
         granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
         granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
-        llm_credential_file: join(stateDirectory, "credentials", "llm-credential"),
+        openrouter_credential_file: join(
+          stateDirectory,
+          "credentials",
+          "llm-credential",
+        ),
       },
       {
-        person: {
+        api: {
           oidc_provider: new MockOidcProvider(),
           external_identity_runtime:
             createCleanSlackPersonExternalIdentityRuntimeBundleV1({
@@ -527,19 +531,19 @@ describe("Organization Authority command rehearsal", () => {
       "x".repeat(32),
     );
     const finalized = commandOutput();
-    const finalizeStatus = await runCleanFounderCli(
+    const finalizeStatus = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", stateDirectory],
       {
         stdout: finalized.write,
         stderr: finalized.write,
         read_stdin: async () => "",
       },
-      authorityAdminDependencies(),
+      setupDependencies(),
     );
     expect(finalizeStatus, finalized.values.join("")).toBe(0);
     expect(oneJson<{ ok: boolean }>(finalized).ok).toBe(true);
 
-    const active = await openCleanOrganizationAuthorityRuntime(
+    const active = await openOrganizationAuthorityService(
       {
         state_directory: stateDirectory,
         host: "127.0.0.1",
@@ -562,7 +566,11 @@ describe("Organization Authority command rehearsal", () => {
         slack_identity_link_channel_id: "C12345678",
         granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
         granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
-        llm_credential_file: join(stateDirectory, "credentials", "llm-credential"),
+        openrouter_credential_file: join(
+          stateDirectory,
+          "credentials",
+          "llm-credential",
+        ),
       },
       { active_processing: inactiveWorker },
     );

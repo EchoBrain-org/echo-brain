@@ -7,7 +7,7 @@ import {
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/new-lineage-v1";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
-import { DevelopmentFileOrganizationAuthoritySigner } from "../adapters/security/development-file-authority-signer.js";
+import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
 import { CleanLiveOnlySourceCycleV1 } from "../processing/clean-v1/live-only-source-cycle.js";
@@ -25,13 +25,13 @@ import type {
 import type { AnswerCompositionRuntimeBundleV1 } from "./answer-composition-runtime.js";
 import type { CleanLiveProcessorRuntimeBundleV1 } from "./clean-live-processor-runtime.js";
 import {
-  startCleanLiveRuntime,
-  type CleanLiveProcessingCycleV1,
-  type RunningCleanLiveRuntime,
-} from "./clean-live-runtime.js";
+  startOrganizationAuthorityServiceLifecycle,
+  type OrganizationAuthorityProcessingCycleV1,
+  type RunningOrganizationAuthorityServiceLifecycle,
+} from "./organization-authority-service-lifecycle.js";
 import { createCleanReadableSearchGenerationReconcilerV1 } from "./clean-readable-search-runtime.js";
-import type { CleanPersonRuntimeConfig } from "./clean-person-runtime.js";
-import type { CleanPersonRuntimeDependencies } from "./clean-person-runtime.js";
+import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
+import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
 import type { CleanLiveWorkerPhaseRunnerV1 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
@@ -41,16 +41,16 @@ import {
 } from "./staging-synthetic-private-dm-canary-v1.js";
 import type { StagingSyntheticMeetingCanaryInputV1 } from "../processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
 
-export interface OpenCleanLiveRuntimeConfig {
+export interface OrganizationAuthorityRuntimeConfig {
   readonly state_directory: string;
   readonly host: "127.0.0.1" | "::1";
   readonly port: number;
   readonly authority_url: string;
   readonly oidc: PersonSessionOidcConfiguration;
-  readonly client_authentication: CleanPersonRuntimeConfig["client_authentication"];
+  readonly client_authentication: OrganizationAuthorityApiRuntimeConfig["client_authentication"];
   readonly pkce_key_file: string;
   /** Explicit provider/source bundle. This generic root does not select one. */
-  readonly source_runtime: CleanLiveSourceRuntimeBundleV1;
+  readonly source_runtime: MeetingSourceRuntimeBundleV1;
   /** Explicit decision-processor bundle. This generic root does not select one. */
   readonly processor_runtime: CleanLiveProcessorRuntimeBundleV1;
   /** Explicit approval/delivery bundle. This generic root does not select one. */
@@ -72,7 +72,8 @@ export interface OpenCleanLiveRuntimeConfig {
   ) => void;
 }
 
-export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
+export interface OpenedOrganizationAuthorityRuntime
+  extends RunningOrganizationAuthorityServiceLifecycle {
   readonly processing: "idle_until_finalize" | "active";
   /**
    * A staging-guarded rehearsal hook. It exists only after live admission and
@@ -85,19 +86,19 @@ export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
   ) => Promise<StagingSyntheticPrivateDmCanaryResultV1>;
 }
 
-type CleanLiveSourceAdapter = ConstructorParameters<
+type MeetingSourceAdapter = ConstructorParameters<
   typeof CleanLiveOnlySourceCycleV1
 >[0]["source"];
-type CleanLiveProcessorAdapter = ConstructorParameters<
+type DecisionProcessorAdapter = ConstructorParameters<
   typeof CleanLiveOnlySourceCycleV1
 >[0]["processor"];
 /**
  * All provider-specific live-source facts are constructed outside this
  * runtime. The stable core only knows the admitted source contract.
  */
-export interface CleanLiveSourceRuntimeBundleV1 {
+export interface MeetingSourceRuntimeBundleV1 {
   /** Creates the one source adapter for the admitted source identity. */
-  create_source(admission: CleanLiveSourceAdmissionV1): CleanLiveSourceAdapter;
+  create_source(admission: CleanLiveSourceAdmissionV1): MeetingSourceAdapter;
   /**
    * Proves this provider's current local source configuration still matches
    * its immutable admission before the provider credential is read.
@@ -113,22 +114,23 @@ export interface CleanLiveSourceRuntimeBundleV1 {
  * Narrow composition seams for deterministic local rehearsals. Production
  * callers leave this absent and retain the concrete provider adapters.
  */
-export interface OpenCleanLiveRuntimeDependencies {
-  /** Passed straight to the Person runtime, for example a local OIDC fake. */
-  readonly person?: CleanPersonRuntimeDependencies;
+export interface OrganizationAuthorityRuntimeDependencies {
+  /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
+  readonly api?: OrganizationAuthorityApiRuntimeDependencies;
   /**
    * Replaces the active post-finalize worker only. It is ignored before source
    * admission, so stopped-state startup remains provider-free by default.
    */
-  readonly active_processing?: CleanLiveProcessingCycleV1;
+  readonly active_processing?: OrganizationAuthorityProcessingCycleV1;
   /** Optional provider-free substitutes for the concrete active adapters. */
   readonly live_adapters?: {
-    readonly source?: CleanLiveSourceAdapter;
-    readonly processor?: CleanLiveProcessorAdapter;
+    readonly source?: MeetingSourceAdapter;
+    readonly processor?: DecisionProcessorAdapter;
   };
 }
 
-class IdleCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
+class IdleOrganizationAuthorityProcessing
+  implements OrganizationAuthorityProcessingCycleV1 {
   async recoverV4Appends(): Promise<void> {}
   async pollAndStageLiveOnlySource(): Promise<void> {}
   async observeAndFinalizePendingApprovals(): Promise<void> {}
@@ -140,7 +142,8 @@ interface CleanReadableSearchReconcilerV1 {
   reconcile(signal: AbortSignal): Promise<unknown>;
 }
 
-class CombinedCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
+class OrganizationAuthorityProcessingCoordinator
+  implements OrganizationAuthorityProcessingCycleV1 {
   readonly hasFineGrainedSourceLifecycle = true;
   constructor(
     private readonly source: CleanLiveOnlySourceCycleV1,
@@ -174,17 +177,17 @@ class CombinedCleanLiveProcessing implements CleanLiveProcessingCycleV1 {
 }
 
 /**
- * The provider-neutral server composition. Before stopped-state finalize, it
- * exposes Person routes and does no work. An explicit source bundle supplies
+ * Provider-neutral Organization Authority runtime composition. Before source
+ * admission, it exposes API routes and does no background work. An explicit source bundle supplies
  * the admitted source only after finalization; all remaining construction is
  * shared by every meeting provider.
  */
-export async function openCleanLiveRuntime(
-  config: OpenCleanLiveRuntimeConfig,
-  dependencies: OpenCleanLiveRuntimeDependencies = {},
-): Promise<OpenedCleanLiveRuntime> {
+export async function openOrganizationAuthorityRuntime(
+  config: OrganizationAuthorityRuntimeConfig,
+  dependencies: OrganizationAuthorityRuntimeDependencies = {},
+): Promise<OpenedOrganizationAuthorityRuntime> {
   const lineage = verifyCleanStateLineage(config.state_directory);
-  const person: CleanPersonRuntimeConfig = {
+  const api: OrganizationAuthorityApiRuntimeConfig = {
     state_directory: config.state_directory,
     host: config.host,
     port: config.port,
@@ -209,11 +212,11 @@ export async function openCleanLiveRuntime(
       .get() !== undefined;
   if (!sourceIsAdmitted) {
     authority.close();
-    const runtime = await startCleanLiveRuntime(
-      { person, worker_interval_ms: config.worker_interval_ms },
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api, worker_interval_ms: config.worker_interval_ms },
       {
-        processing: new IdleCleanLiveProcessing(),
-        person: dependencies.person,
+        processing: new IdleOrganizationAuthorityProcessing(),
+        api: dependencies.api,
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
       },
@@ -222,11 +225,11 @@ export async function openCleanLiveRuntime(
   }
   if (dependencies.active_processing !== undefined) {
     authority.close();
-    const runtime = await startCleanLiveRuntime(
-      { person, worker_interval_ms: config.worker_interval_ms },
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api, worker_interval_ms: config.worker_interval_ms },
       {
         processing: dependencies.active_processing,
-        person: dependencies.person,
+        api: dependencies.api,
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
       },
@@ -274,7 +277,7 @@ export async function openCleanLiveRuntime(
       organization_id: lineage.root.organization_id,
       state_lineage_id: lineage.root.state_lineage_id,
     });
-    const signer = DevelopmentFileOrganizationAuthoritySigner.openExisting({
+    const signer = FileOrganizationAuthoritySigner.openExisting({
       directory: join(config.state_directory, "keys"),
       authority_id: lineage.root.authority_id,
       organization_id: lineage.root.organization_id,
@@ -313,25 +316,25 @@ export async function openCleanLiveRuntime(
       signer,
       policy_projectors: config.record_policy_fact_projectors,
     });
-    const runtime = await startCleanLiveRuntime(
-      { person, worker_interval_ms: config.worker_interval_ms },
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api, worker_interval_ms: config.worker_interval_ms },
       {
-        processing: new CombinedCleanLiveProcessing(
+        processing: new OrganizationAuthorityProcessingCoordinator(
           sourceCycle,
           approvals.processing,
           readableSearch,
         ),
-        person: {
-          ...dependencies.person,
+        api: {
+          ...dependencies.api,
           answer_composition_runtime:
-            dependencies.person?.answer_composition_runtime ??
+            dependencies.api?.answer_composition_runtime ??
             config.answer_composition_runtime.open(),
-          ...(dependencies.person?.answer_failure !== undefined
-            ? { answer_failure: dependencies.person.answer_failure }
+          ...(dependencies.api?.answer_failure !== undefined
+            ? { answer_failure: dependencies.api.answer_failure }
             : config.on_answer_composition_failure === undefined
               ? {}
               : { answer_failure: config.on_answer_composition_failure }),
-          ...(dependencies.person?.private_approval_interaction_ingress !==
+          ...(dependencies.api?.private_approval_interaction_ingress !==
           undefined
             ? {}
             : approvals.interaction_ingress === undefined

@@ -16,12 +16,13 @@ const runtimeState = vi.hoisted(() => ({
   startup_error: undefined as Error | undefined,
   slack_signing_secret_file: undefined as string | undefined,
   slack_connection_id: undefined as string | undefined,
+  openrouter_credential_file: undefined as string | undefined,
   authority_url: "https://authority.example",
   processing: "active" as "active" | "idle_until_finalize",
 }));
 
-vi.mock("../src/composition/clean-founder-cli.js", () => ({
-  readCleanFounderOnboardingManifest: () => ({
+vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
+  readOrganizationAuthoritySetupManifest: () => ({
     authority_url: runtimeState.authority_url,
     oidc_config_path: "/private/oidc.json",
     pkce_key_file: "/private/pkce.key",
@@ -41,13 +42,14 @@ vi.mock("../src/composition/clean-person-cli.js", () => ({
   }),
 }));
 
-vi.mock("../src/composition/open-clean-organization-authority-runtime.js", () => ({
-  openCleanOrganizationAuthorityRuntime: async (config: {
+vi.mock("../src/composition/organization-authority-composition-root.js", () => ({
+  openOrganizationAuthorityService: async (config: {
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly on_answer_composition_failure?: AnswerCompositionFailureObserver;
     readonly slack_signing_secret_file: string;
     readonly slack_connection_id: string;
+    readonly openrouter_credential_file: string;
   }) => {
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
     runtimeState.worker_error = config.on_worker_error;
@@ -56,6 +58,7 @@ vi.mock("../src/composition/open-clean-organization-authority-runtime.js", () =>
       config.on_answer_composition_failure;
     runtimeState.slack_signing_secret_file = config.slack_signing_secret_file;
     runtimeState.slack_connection_id = config.slack_connection_id;
+    runtimeState.openrouter_credential_file = config.openrouter_credential_file;
     return {
       address: { address: "127.0.0.1", port: 43179 },
       processing: runtimeState.processing,
@@ -75,6 +78,7 @@ afterEach(() => {
   runtimeState.startup_error = undefined;
   runtimeState.slack_signing_secret_file = undefined;
   runtimeState.slack_connection_id = undefined;
+  runtimeState.openrouter_credential_file = undefined;
   runtimeState.authority_url = "https://authority.example";
   runtimeState.processing = "active";
 });
@@ -126,6 +130,9 @@ describe("clean live CLI runtime events", () => {
     await expect(running).resolves.toBe(0);
     expect(stderr.join("")).not.toContain("slack-signing-secret");
     expect(runtimeState.slack_connection_id).toBe("con_manifest");
+    expect(runtimeState.openrouter_credential_file).toBe(
+      "/private/llm.credential",
+    );
   });
 
   it("writes the closed worker lifecycle event without mutation", async () => {

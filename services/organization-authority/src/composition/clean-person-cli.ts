@@ -11,7 +11,7 @@ import {
   issueCleanPersonInvitation,
 } from "./clean-person-onboarding.js";
 import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-slack-person-external-identity-runtime.js";
-import { startCleanPersonRuntime } from "./clean-person-runtime.js";
+import { startOrganizationAuthorityApiRuntime } from "./organization-authority-api-runtime.js";
 
 const USAGE = `usage:
   echo-organization-authority-clean-person credentials-init --state-dir <absolute-path>
@@ -187,7 +187,7 @@ export async function runCleanPersonCli(
     const port = Number(required(parsed, "--port"));
     const host = required(parsed, "--host");
     const stateDirectory = required(parsed, "--state-dir");
-    const runtime = await startCleanPersonRuntime({
+    const runtime = await startOrganizationAuthorityApiRuntime({
       state_directory: stateDirectory,
       host:
         host === "127.0.0.1" || host === "::1"

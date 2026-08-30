@@ -22,9 +22,9 @@ import {
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/new-lineage-v1";
 import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-unmigrated-database.js";
-import { DevelopmentFileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/development-file-authority-signer.js";
+import { FileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/file-organization-authority-signer.js";
 import { createCleanReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/clean-readable-search-runtime.js";
-import { initializeCleanResetState } from "../../services/organization-authority/src/composition/clean-reset-state.js";
+import { initializeAuthorityState } from "../../services/organization-authority/src/composition/authority-state-initializer.js";
 import { verifyCleanStateLineage } from "../../services/organization-authority/src/composition/verify-clean-state-lineage.js";
 import {
   inspectLinuxReadOnlyMount,
@@ -78,7 +78,7 @@ async function writeFixture(): Promise<string> {
     mode: 0o600,
   });
 
-  const initialized = initializeCleanResetState({
+  const initialized = initializeAuthorityState({
     state_directory: stateDirectory,
     organization_display_name: "Recovery Verifier Organization",
     owner_display_name: "Founder",
@@ -104,7 +104,7 @@ async function writeFixture(): Promise<string> {
       root: lineage.root,
       authority,
       record,
-      signer: DevelopmentFileOrganizationAuthoritySigner.openExisting({
+      signer: FileOrganizationAuthoritySigner.openExisting({
         directory: join(stateDirectory, "keys"),
         authority_id: initialized.authority_id,
         organization_id: initialized.organization_id,

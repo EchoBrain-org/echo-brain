@@ -945,7 +945,7 @@ describe("workspace source boundaries", () => {
       "services/organization-authority/source-boundary.v1.json",
     );
     const cleanRuntimeRule = manifest.layer_rules.find(
-      (rule) => rule.name === "clean-live-only-source-cycle-is-provider-neutral",
+      (rule) => rule.name === "live-source-processing-is-provider-neutral",
     );
     expect(cleanRuntimeRule).toBeDefined();
     expect(cleanRuntimeRule?.allowed_imports).not.toContain(
@@ -959,7 +959,7 @@ describe("workspace source boundaries", () => {
     );
     for (const concreteCompositionModule of [
       "services/organization-authority/src/composition/granola-live-source-boundary-v1.ts",
-      "services/organization-authority/src/composition/open-clean-organization-authority-runtime.ts",
+      "services/organization-authority/src/composition/organization-authority-composition-root.ts",
     ]) {
       expect(existsSync(join(fixture, concreteCompositionModule))).toBe(true);
     }
@@ -1161,7 +1161,7 @@ describe("workspace source boundaries", () => {
   it("rejects direct and transitive neutral-module reachability into declared provider roots", () => {
     const fixture = fixtureRepository();
     const neutralPath =
-      "services/organization-authority/src/composition/open-clean-live-runtime.ts";
+      "services/organization-authority/src/composition/organization-authority-runtime.ts";
     const neutral = join(fixture, neutralPath);
     const original = readFileSync(neutral, "utf8");
     const providerPath =
@@ -1201,7 +1201,7 @@ describe("workspace source boundaries", () => {
   it("rejects a bland three-hop bridge from a neutral root into provider composition", () => {
     const fixture = fixtureRepository();
     const neutralPath =
-      "services/organization-authority/src/composition/open-clean-live-runtime.ts";
+      "services/organization-authority/src/composition/organization-authority-runtime.ts";
     const neutral = join(fixture, neutralPath);
     const original = readFileSync(neutral, "utf8");
     const firstBridge = "services/organization-authority/src/composition/bland-bridge-one.ts";
@@ -1224,7 +1224,7 @@ describe("workspace source boundaries", () => {
     const fixture = fixtureRepository();
     const compositionPath = join(
       fixture,
-      "services/organization-authority/src/composition/clean-founder-cli.ts",
+      "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
     );
     writeFileSync(
       compositionPath,
@@ -1235,7 +1235,7 @@ describe("workspace source boundaries", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/clean-founder-cli.ts -> services/organization-authority/src/processing/core/index.ts",
+      "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/organization-authority-setup-cli.ts -> services/organization-authority/src/processing/core/index.ts",
     );
   });
 

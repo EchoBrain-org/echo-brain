@@ -1,6 +1,6 @@
 import { chmodSync, lstatSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import type { OpenedCleanLiveRuntime } from "./open-clean-live-runtime.js";
+import type { OpenedOrganizationAuthorityRuntime } from "./organization-authority-runtime.js";
 
 export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1 =
   "/echo-runtime/authority-staging-private-dm-canary-v1.sock";
@@ -23,7 +23,7 @@ export interface OpenStagingSyntheticPrivateDmCanaryControlV1Input {
   readonly release_id: string;
   readonly owner_email: string;
   readonly runtime: Pick<
-    OpenedCleanLiveRuntime,
+    OpenedOrganizationAuthorityRuntime,
     "run_staging_synthetic_private_dm_canary"
   >;
   /** A focused test seam. Production uses the fixed non-mounted runtime path. */
@@ -97,7 +97,7 @@ function receipt(
   result: Awaited<
     ReturnType<
       NonNullable<
-        OpenedCleanLiveRuntime["run_staging_synthetic_private_dm_canary"]
+        OpenedOrganizationAuthorityRuntime["run_staging_synthetic_private_dm_canary"]
       >
     >
   >,

@@ -36,9 +36,9 @@ import {
   readPrivateAuthorityGranolaOwnerEmail,
 } from "../adapters/security/private-file-credentials.js";
 import {
-  initializeCleanResetState,
-  type CleanResetSeedV1,
-} from "./clean-reset-state.js";
+  initializeAuthorityState,
+  type AuthorityStateSeedV1,
+} from "./authority-state-initializer.js";
 import { runCleanGranolaSourceCli } from "./clean-granola-source-cli.js";
 import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
 import {
@@ -66,8 +66,12 @@ const USAGE = `usage:
   echo-organization-authority-clean-founder finalize --state-dir <absolute-path>
   echo-organization-authority-clean-founder status --state-dir <absolute-path>
 
-The legacy --slack-approval-channel-id flag names the temporary public founder
+The legacy --slack-approval-channel-id flag names the temporary public initial-owner
 identity-link channel only. Private approval cards are never sent to it.`;
+
+// The remaining `clean-founder` filenames, command paths, instance IDs, wire
+// kinds, status fields, and next-step literals are frozen V1 compatibility
+// vocabulary. They do not name this component or limit setup to a founder.
 
 interface CliIo {
   readonly stdout: (value: string) => void;
@@ -86,11 +90,11 @@ const PROCESS_IO: CliIo = {
   },
 };
 
-export interface CleanFounderSetupSeedV1 extends CleanResetSeedV1 {
+export interface OrganizationAuthoritySetupSeedV1 extends AuthorityStateSeedV1 {
   readonly slack_connection_id: string;
 }
 
-export interface CleanFounderOnboardingManifestV1 {
+export interface OrganizationAuthoritySetupManifestV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-founder-onboarding-manifest-v1";
   readonly state_directory: string;
@@ -102,7 +106,7 @@ export interface CleanFounderOnboardingManifestV1 {
   readonly invitation_path: string;
   /**
    * Transitional field name. This public channel exists only for the current
-   * founder Person-to-Slack identity-link challenge. It is never an approval
+   * initial-owner Person-to-Slack identity-link challenge. It is never an approval
    * destination, approval binding, or approval-readiness gate.
    */
   readonly slack_approval_channel_id: string;
@@ -115,7 +119,7 @@ export interface CleanFounderOnboardingManifestV1 {
   readonly granola_credential_file: string;
   readonly granola_owner_email_file: string;
   readonly llm_credential_file: string;
-  readonly setup_seed: CleanFounderSetupSeedV1;
+  readonly setup_seed: OrganizationAuthoritySetupSeedV1;
   readonly owner_email: string;
   readonly organization_name: string;
   readonly owner_display_name: string;
@@ -149,7 +153,7 @@ interface SafeSlackVerification {
   readonly app_id: string;
   readonly bot_id: string;
   readonly bot_user_id: string;
-  /** Temporary public channel used solely by the founder identity-link flow. */
+  /** Temporary public channel used solely by initial-owner identity linking. */
   readonly identity_link_channel_id: string;
   readonly required_scopes: readonly string[];
   readonly identity_link_channel_access: "verified";
@@ -165,19 +169,19 @@ interface ConnectedSlack {
   readonly verification?: SafeSlackVerification;
 }
 
-interface CleanFounderSetupStage {
+interface OrganizationAuthoritySetupStage {
   readonly credentials_ready: boolean;
   readonly slack_connected: boolean;
   readonly invitation_file_present: boolean;
 }
 
-export interface CleanFounderCliDependencies {
+export interface OrganizationAuthoritySetupCliDependencies {
   readonly now: () => string;
-  readonly reset: typeof initializeCleanResetState;
+  readonly initialize_state: typeof initializeAuthorityState;
   readonly initialize_credentials: (stateDirectory: string) => Promise<void>;
   readonly connect_slack: (input: {
     readonly state_directory: string;
-    /** Legacy adapter name for the temporary founder identity-link channel. */
+    /** Legacy adapter name for the temporary initial-owner identity-link channel. */
     readonly approval_channel_id: string;
     readonly connection_id?: string;
     readonly read_stdin: () => Promise<string>;
@@ -198,17 +202,17 @@ export interface CleanFounderCliDependencies {
     readonly llm_credential_file: string;
   }) => Promise<void>;
   /** Test seam only; production derives these facts from durable state. */
-  readonly read_full_founder_status?: (
-    manifest: CleanFounderOnboardingManifestV1,
-  ) => FullFounderStatus;
+  readonly read_initial_owner_setup_status?: (
+    manifest: OrganizationAuthoritySetupManifestV1,
+  ) => InitialOwnerSetupStatus;
   /** Test seam only; production derives this from immutable state. */
-  readonly read_founder_canary_evidence?: (
-    manifest: CleanFounderOnboardingManifestV1,
-  ) => FounderCanaryEvidence;
+  readonly read_setup_canary_evidence?: (
+    manifest: OrganizationAuthoritySetupManifestV1,
+  ) => SetupCanaryEvidence;
   /** Test seam only; production derives these facts from durable state. */
   readonly read_setup_stage?: (
-    manifest: CleanFounderOnboardingManifestV1,
-  ) => CleanFounderSetupStage;
+    manifest: OrganizationAuthoritySetupManifestV1,
+  ) => OrganizationAuthoritySetupStage;
 }
 
 function captureCommand(
@@ -217,20 +221,20 @@ function captureCommand(
   let output = "";
   return Promise.resolve(run((value) => (output += value))).then((status) => {
     if (status !== 0)
-      throw new Error("clean founder stopped-state command failed");
+      throw new Error("organization setup stopped-state command failed");
     try {
       return JSON.parse(output) as Record<string, unknown>;
     } catch {
       throw new Error(
-        "clean founder stopped-state command returned invalid JSON",
+        "organization setup stopped-state command returned invalid JSON",
       );
     }
   });
 }
 
-const DEFAULT_DEPENDENCIES: CleanFounderCliDependencies = {
+const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   now: () => new Date().toISOString(),
-  reset: initializeCleanResetState,
+  initialize_state: initializeAuthorityState,
   initialize_credentials: async (stateDirectory) => {
     await captureCommand((stdout) =>
       runCleanPersonCli(["credentials-init", "--state-dir", stateDirectory], {
@@ -286,7 +290,9 @@ const DEFAULT_DEPENDENCIES: CleanFounderCliDependencies = {
       throw new Error("clean Slack connection did not return complete channel verification");
     }
     if (input.connection_id === undefined) {
-      throw new Error("clean founder Slack setup requires a planned connection ID");
+      throw new Error(
+        "organization setup Slack connection requires a planned connection ID",
+      );
     }
     return Object.freeze({
       connection_id: input.connection_id,
@@ -482,7 +488,7 @@ function siblingSetupPlanPath(stateDirectory: string): string {
 
 function writeCanonicalPrivateFile(
   path: string,
-  value: CleanFounderOnboardingManifestV1,
+  value: OrganizationAuthoritySetupManifestV1,
 ): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temporaryPath = `${path}.installing-${randomUUID()}`;
@@ -499,7 +505,7 @@ function writeCanonicalPrivateFile(
   }
   try {
     // link(2) is an exclusive no-clobber publish: unlike rename it cannot
-    // overwrite another concurrent founder's plan at the final path.
+    // overwrite another concurrent setup plan at the final path.
     linkSync(temporaryPath, path);
     const parent = openSync(dirname(path), constants.O_RDONLY);
     try {
@@ -516,7 +522,7 @@ function writeCanonicalPrivateFile(
   }
 }
 
-function assertSetupSeed(seed: CleanFounderSetupSeedV1): void {
+function assertSetupSeed(seed: OrganizationAuthoritySetupSeedV1): void {
   try {
     assertFederationId(seed.authority_id, "oau", "setup authority_id");
     assertFederationId(seed.organization_id, "org", "setup organization_id");
@@ -524,20 +530,20 @@ function assertSetupSeed(seed: CleanFounderSetupSeedV1): void {
     assertFederationId(seed.owner_membership_id, "mem", "setup owner_membership_id");
     assertFederationId(seed.slack_connection_id, "con", "setup slack_connection_id");
   } catch {
-    throw new Error("clean founder setup seed is invalid");
+    throw new Error("organization setup seed is invalid");
   }
   const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
   if (
     !new RegExp(`^lineage-${uuid}$`).test(seed.state_lineage_id) ||
     !new RegExp(`^ocp_${uuid}$`).test(seed.control_plane_id)
   ) {
-    throw new Error("clean founder setup seed is invalid");
+    throw new Error("organization setup seed is invalid");
   }
 }
 
-function validateManifest(value: unknown): CleanFounderOnboardingManifestV1 {
+function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("clean founder onboarding manifest is invalid");
+    throw new Error("organization setup manifest is invalid");
   }
   const record = value as Record<string, unknown>;
   const keys = [
@@ -577,16 +583,16 @@ function validateManifest(value: unknown): CleanFounderOnboardingManifestV1 {
       .filter((key) => key !== "schema_version")
       .some((key) => typeof record[key] !== "string")
   ) {
-    throw new Error("clean founder onboarding manifest is invalid");
+    throw new Error("organization setup manifest is invalid");
   }
-  const manifest = record as unknown as CleanFounderOnboardingManifestV1;
+  const manifest = record as unknown as OrganizationAuthoritySetupManifestV1;
   if (
     !isCanonicalPersonEmail(manifest.owner_email) ||
     typeof manifest.organization_name !== "string" ||
     typeof manifest.owner_display_name !== "string" ||
     manifest.setup_seed === undefined
   ) {
-    throw new Error("clean founder onboarding manifest is invalid");
+    throw new Error("organization setup manifest is invalid");
   }
   assertSetupSeed(manifest.setup_seed);
   for (const path of [
@@ -598,12 +604,12 @@ function validateManifest(value: unknown): CleanFounderOnboardingManifestV1 {
     manifest.granola_owner_email_file,
     manifest.llm_credential_file,
   ]) {
-    absolutePath(path, "clean founder manifest path");
+    absolutePath(path, "organization setup manifest path");
   }
   return Object.freeze(manifest);
 }
 
-function readPrivateManifest(path: string): CleanFounderOnboardingManifestV1 {
+function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV1 {
   const metadata = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -612,22 +618,26 @@ function readPrivateManifest(path: string): CleanFounderOnboardingManifestV1 {
     (currentUid !== undefined && metadata.uid !== currentUid) ||
     (metadata.mode & 0o777) !== 0o600
   ) {
-    throw new Error("clean founder onboarding manifest must be current-user 0600");
+    throw new Error(
+      "organization setup manifest must be current-user 0600",
+    );
   }
   const bytes = readFileSync(path);
   if (bytes.byteLength === 0 || bytes.byteLength > 16 * 1024) {
-    throw new Error("clean founder onboarding manifest is invalid");
+    throw new Error("organization setup manifest is invalid");
   }
   const manifest = validateManifest(JSON.parse(bytes.toString("utf8")) as unknown);
   if (`${canonicalJson(manifest as never)}\n` !== bytes.toString("utf8")) {
-    throw new Error("clean founder onboarding manifest is not canonically encoded");
+    throw new Error(
+      "organization setup manifest is not canonically encoded",
+    );
   }
   return manifest;
 }
 
-export function readCleanFounderOnboardingManifest(
+export function readOrganizationAuthoritySetupManifest(
   stateDirectory: string,
-): CleanFounderOnboardingManifestV1 {
+): OrganizationAuthoritySetupManifestV1 {
   const canonicalStateDirectory = absolutePath(
     stateDirectory,
     "state directory",
@@ -635,7 +645,7 @@ export function readCleanFounderOnboardingManifest(
   const manifest = readPrivateManifest(manifestPath(canonicalStateDirectory));
   if (manifest.state_directory !== canonicalStateDirectory) {
     throw new Error(
-      "clean founder onboarding manifest belongs to another state directory",
+      "organization setup manifest belongs to another state directory",
     );
   }
   return manifest;
@@ -644,9 +654,9 @@ export function readCleanFounderOnboardingManifest(
 function setupManifest(
   input: BootstrapInput,
   createdAt: string,
-): CleanFounderOnboardingManifestV1 {
+): OrganizationAuthoritySetupManifestV1 {
   const credentialsDirectory = join(input.state_directory, "credentials");
-  const seed: CleanFounderSetupSeedV1 = Object.freeze({
+  const seed: OrganizationAuthoritySetupSeedV1 = Object.freeze({
     authority_id: federationId("oau"),
     organization_id: federationId("org"),
     state_lineage_id: `lineage-${randomUUID()}`,
@@ -683,7 +693,7 @@ function setupManifest(
 }
 
 function setupInputMatches(
-  manifest: CleanFounderOnboardingManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV1,
   input: BootstrapInput,
 ): boolean {
   return (
@@ -698,7 +708,7 @@ function setupInputMatches(
 }
 
 function loadSetupManifest(stateDirectory: string): {
-  readonly manifest: CleanFounderOnboardingManifestV1;
+  readonly manifest: OrganizationAuthoritySetupManifestV1;
   readonly location: "sibling" | "state";
 } | undefined {
   const sibling = siblingSetupPlanPath(stateDirectory);
@@ -711,11 +721,13 @@ function loadSetupManifest(stateDirectory: string): {
     stateManifest !== undefined &&
     canonicalJson(siblingManifest as never) !== canonicalJson(stateManifest as never)
   ) {
-    throw new Error("clean founder setup has conflicting durable plans");
+    throw new Error("organization setup has conflicting durable plans");
   }
   const manifest = stateManifest ?? siblingManifest!;
   if (manifest.state_directory !== stateDirectory) {
-    throw new Error("clean founder setup plan belongs to another state directory");
+    throw new Error(
+      "organization setup plan belongs to another state directory",
+    );
   }
   return Object.freeze({
     manifest,
@@ -723,22 +735,26 @@ function loadSetupManifest(stateDirectory: string): {
   });
 }
 
-function verifySetupGenesis(manifest: CleanFounderOnboardingManifestV1): void {
+function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1): void {
   const verified = verifyCleanStateLineage(manifest.state_directory);
   if (
     verified.root.authority_id !== manifest.setup_seed.authority_id ||
     verified.root.organization_id !== manifest.setup_seed.organization_id ||
     verified.root.state_lineage_id !== manifest.setup_seed.state_lineage_id
   ) {
-    throw new Error("clean founder setup plan does not match published genesis");
+    throw new Error(
+      "organization setup plan does not match published genesis",
+    );
   }
 }
 
-function publishSetupPlan(manifest: CleanFounderOnboardingManifestV1): void {
+function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV1): void {
   const source = siblingSetupPlanPath(manifest.state_directory);
   const destination = manifestPath(manifest.state_directory);
   if (existsSync(destination)) return;
-  if (!existsSync(source)) throw new Error("clean founder setup plan is missing");
+  if (!existsSync(source)) {
+    throw new Error("organization setup plan is missing");
+  }
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   renameSync(source, destination);
   const parent = openSync(dirname(destination), constants.O_RDONLY);
@@ -777,7 +793,7 @@ function installPrivateCredentialValue(path: string, value: string): void {
     (parent.mode & 0o777) !== 0o700
   ) {
     throw new Error(
-      "clean founder credential destination must have a current-user 0700 parent",
+      "organization setup credential destination must have a current-user 0700 parent",
     );
   }
   const temporaryPath = `${path}.installing-${randomUUID()}`;
@@ -829,7 +845,9 @@ function sha256Secret(value: string): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }
 
-function usableFounderInvitation(manifest: CleanFounderOnboardingManifestV1): boolean {
+function usableInitialOwnerInvitation(
+  manifest: OrganizationAuthoritySetupManifestV1,
+): boolean {
   try {
     const path = manifest.invitation_path;
     if (!privateFilePresent(path)) return false;
@@ -889,7 +907,9 @@ function usableFounderInvitation(manifest: CleanFounderOnboardingManifestV1): bo
 function discardUnusableInvitation(path: string): void {
   if (!existsSync(path)) return;
   if (!privateFilePresent(path)) {
-    throw new Error("unusable founder invitation is not a private regular file");
+    throw new Error(
+      "unusable initial-owner invitation is not a private regular file",
+    );
   }
   unlinkSync(path);
   const parent = openSync(dirname(path), constants.O_RDONLY);
@@ -900,7 +920,9 @@ function discardUnusableInvitation(path: string): void {
   }
 }
 
-function plannedSlackIsActive(manifest: CleanFounderOnboardingManifestV1): boolean {
+function plannedSlackIsActive(
+  manifest: OrganizationAuthoritySetupManifestV1,
+): boolean {
   try {
     verifySetupGenesis(manifest);
     const database = new Database(join(manifest.state_directory, "integrations.sqlite"), {
@@ -923,8 +945,8 @@ function plannedSlackIsActive(manifest: CleanFounderOnboardingManifestV1): boole
 }
 
 function durableSetupStage(
-  manifest: CleanFounderOnboardingManifestV1,
-): CleanFounderSetupStage {
+  manifest: OrganizationAuthoritySetupManifestV1,
+): OrganizationAuthoritySetupStage {
   return Object.freeze({
     credentials_ready: validPkceKeyPresent(manifest.pkce_key_file),
     slack_connected: plannedSlackIsActive(manifest),
@@ -932,7 +954,7 @@ function durableSetupStage(
   });
 }
 
-interface FullFounderStatus {
+interface InitialOwnerSetupStatus {
   readonly founder_oidc_bound: boolean;
   readonly founder_slack_link_active: boolean;
   readonly granola_credentials_valid: boolean;
@@ -945,11 +967,11 @@ interface FullFounderStatus {
 }
 
 /**
- * A deliberately non-descriptive proof that the one-note founder rehearsal
+ * A deliberately non-descriptive proof that the one-note setup rehearsal
  * reached the durable read boundary.  This is status output, so it must never
  * reveal a record, reader, query, source cursor, or timestamp.
  */
-interface FounderCanaryEvidence {
+interface SetupCanaryEvidence {
   readonly source_progress_observed: boolean;
   readonly approved_record_present: boolean;
   readonly active_generation_current: boolean;
@@ -958,7 +980,7 @@ interface FounderCanaryEvidence {
   readonly complete: boolean;
 }
 
-const EMPTY_FOUNDER_CANARY_EVIDENCE: FounderCanaryEvidence = Object.freeze({
+const EMPTY_SETUP_CANARY_EVIDENCE: SetupCanaryEvidence = Object.freeze({
   source_progress_observed: false,
   approved_record_present: false,
   active_generation_current: false,
@@ -983,7 +1005,7 @@ interface CurrentGenerationPointer {
   readonly published_at: string;
 }
 
-type FounderSetupNextStep =
+type OrganizationAuthoritySetupNextStep =
   | "resume_bootstrap"
   | "complete_founder_browser_login"
   | "complete_founder_slack_link"
@@ -992,14 +1014,14 @@ type FounderSetupNextStep =
   | "ready_to_start"
   | "complete";
 
-function nextFounderSetupStep(input: {
+function nextOrganizationAuthoritySetupStep(input: {
   readonly genesis_published: boolean;
   readonly setup_plan_location: "sibling" | "state";
   readonly credentials_ready: boolean;
   readonly slack_connected: boolean;
   readonly founder_invitation_valid: boolean;
-  readonly full: FullFounderStatus;
-}): FounderSetupNextStep {
+  readonly full: InitialOwnerSetupStatus;
+}): OrganizationAuthoritySetupNextStep {
   if (
     !input.genesis_published ||
     input.setup_plan_location === "sibling" ||
@@ -1016,29 +1038,31 @@ function nextFounderSetupStep(input: {
   return "ready_to_start";
 }
 
-function nextFounderSetupInstruction(step: FounderSetupNextStep): string {
+function organizationAuthoritySetupInstruction(
+  step: OrganizationAuthoritySetupNextStep,
+): string {
   return {
     resume_bootstrap:
       "Run echo-organization-authority-clean-founder resume --state-dir <absolute-path>.",
     complete_founder_browser_login:
-      "Start the clean Authority and complete founder browser login.",
+      "Start the Authority and complete the initial-owner browser login.",
     complete_founder_slack_link:
-      "Complete the founder Slack identity link in the clean Authority.",
+      "Complete the initial-owner Slack identity link in the Authority.",
     install_provider_credentials:
       "Run the credentials-install command with the three private source files.",
     run_finalize: "Run the finalize command.",
     ready_to_start:
-      "Start or restart the clean runtime, then complete the founder canary.",
-    complete: "Founder onboarding is complete.",
+      "Start or restart the Authority runtime, then complete the setup canary.",
+    complete: "Organization setup is complete.",
   }[step];
 }
 
-function readFullFounderStatus(
-  manifest: CleanFounderOnboardingManifestV1,
-  dependencies?: CleanFounderCliDependencies,
-): FullFounderStatus {
-  return dependencies?.read_full_founder_status?.(manifest) ??
-    fullFounderStatus(manifest);
+function readInitialOwnerSetupStatus(
+  manifest: OrganizationAuthoritySetupManifestV1,
+  dependencies?: OrganizationAuthoritySetupCliDependencies,
+): InitialOwnerSetupStatus {
+  return dependencies?.read_initial_owner_setup_status?.(manifest) ??
+    initialOwnerSetupStatus(manifest);
 }
 
 function currentRecordHead(database: Database.Database): CurrentRecordHead {
@@ -1068,7 +1092,7 @@ function currentRecordHead(database: Database.Database): CurrentRecordHead {
     (typeof row.record_sha256 !== "string" && row.record_sha256 !== null) ||
     typeof row.receipt_issued_at !== "string"
   ) {
-    throw new Error("clean founder canary record head is invalid");
+    throw new Error("organization setup canary record head is invalid");
   }
   return Object.freeze({
     position: row.position as number,
@@ -1109,7 +1133,9 @@ function activeGenerationPointer(
     (typeof row.record_head_hash !== "string" && row.record_head_hash !== null) ||
     typeof row.published_at !== "string"
   ) {
-    throw new Error("clean founder canary generation pointer is invalid");
+    throw new Error(
+      "organization setup canary generation pointer is invalid",
+    );
   }
   return Object.freeze({
     organization_id: row.organization_id,
@@ -1165,7 +1191,7 @@ function pointerMatchesHead(
 
 function ownerReadAfter(
   authority: Database.Database,
-  manifest: CleanFounderOnboardingManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV1,
   mode: "layer1" | "layer2",
   after: string,
 ): boolean {
@@ -1200,9 +1226,9 @@ function ownerReadAfter(
  * before and after the proof query: any append or generation publication in
  * between makes the terminal claim fail closed until the owner reruns status.
  */
-function founderCanaryEvidence(
-  manifest: CleanFounderOnboardingManifestV1,
-): FounderCanaryEvidence {
+function setupCanaryEvidence(
+  manifest: OrganizationAuthoritySetupManifestV1,
+): SetupCanaryEvidence {
   let authority: Database.Database | undefined;
   let record: Database.Database | undefined;
   try {
@@ -1264,7 +1290,7 @@ function founderCanaryEvidence(
     const stable =
       sameRecordHead(initialHead, currentRecordHead(record)) &&
       sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
-    if (!stable) return EMPTY_FOUNDER_CANARY_EVIDENCE;
+    if (!stable) return EMPTY_SETUP_CANARY_EVIDENCE;
     const complete =
       sourceProgressObserved &&
       approvedRecordPresent &&
@@ -1280,23 +1306,25 @@ function founderCanaryEvidence(
       complete,
     });
   } catch {
-    return EMPTY_FOUNDER_CANARY_EVIDENCE;
+    return EMPTY_SETUP_CANARY_EVIDENCE;
   } finally {
     record?.close();
     authority?.close();
   }
 }
 
-function readFounderCanaryEvidence(
-  manifest: CleanFounderOnboardingManifestV1,
-  dependencies?: CleanFounderCliDependencies,
-): FounderCanaryEvidence {
-  return dependencies?.read_founder_canary_evidence?.(manifest) ??
-    founderCanaryEvidence(manifest);
+function readSetupCanaryEvidence(
+  manifest: OrganizationAuthoritySetupManifestV1,
+  dependencies?: OrganizationAuthoritySetupCliDependencies,
+): SetupCanaryEvidence {
+  return dependencies?.read_setup_canary_evidence?.(manifest) ??
+    setupCanaryEvidence(manifest);
 }
 
-function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFounderStatus {
-  const empty: FullFounderStatus = {
+function initialOwnerSetupStatus(
+  manifest: OrganizationAuthoritySetupManifestV1,
+): InitialOwnerSetupStatus {
+  const empty: InitialOwnerSetupStatus = {
     founder_oidc_bound: false,
     founder_slack_link_active: false,
     granola_credentials_valid: false,
@@ -1308,10 +1336,10 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
       readonly: true,
       fileMustExist: true,
     });
-    let founderOidcBound = false;
-    let granolaAdmissionProof: FullFounderStatus["granola_admission_proof"];
+    let initialOwnerOidcBound = false;
+    let granolaAdmissionProof: InitialOwnerSetupStatus["granola_admission_proof"];
     try {
-      founderOidcBound = authority.prepare(
+      initialOwnerOidcBound = authority.prepare(
         `SELECT 1 FROM authority_oidc_identity_bindings AS binding
           JOIN authority_person_login_grants AS grant_row
             ON grant_row.login_grant_sha256 = binding.initial_login_grant_sha256
@@ -1375,7 +1403,7 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
       fileMustExist: true,
     });
     try {
-      const founderSlackLinkActive = control.prepare(
+      const initialOwnerSlackLinkActive = control.prepare(
         `SELECT 1 FROM organization_external_human_link_current AS link
           JOIN organization_tool_connection_contracts AS connection
             ON connection.connection_id = ?
@@ -1458,8 +1486,8 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
             })
           : undefined;
       return Object.freeze({
-        founder_oidc_bound: founderOidcBound,
-        founder_slack_link_active: founderSlackLinkActive,
+        founder_oidc_bound: initialOwnerOidcBound,
+        founder_slack_link_active: initialOwnerSlackLinkActive,
         granola_credentials_valid: granolaCredentialsValid,
         granola_admission_present: granolaAdmissionProof !== undefined,
         ...(slackVerification === undefined ? {} : { slack_verification: slackVerification }),
@@ -1478,7 +1506,7 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
 async function bootstrap(
   input: BootstrapInput,
   io: CliIo,
-  dependencies: CleanFounderCliDependencies,
+  dependencies: OrganizationAuthoritySetupCliDependencies,
 ): Promise<void> {
   // This must happen before a durable setup plan, genesis, or Slack call. The
   // same current OIDC parser and callback rule power the Person CLI.
@@ -1487,7 +1515,9 @@ async function bootstrap(
   let setup = loadSetupManifest(input.state_directory);
   if (setup === undefined) {
     if (existsSync(input.state_directory)) {
-      throw new Error("state directory exists without a clean founder setup plan");
+      throw new Error(
+        "state directory exists without an organization setup plan",
+      );
     }
     const manifest = setupManifest(input, dependencies.now());
     writeCanonicalPrivateFile(siblingSetupPlanPath(input.state_directory), manifest);
@@ -1498,7 +1528,7 @@ async function bootstrap(
   const manifest = setup.manifest;
   if (!existsSync(input.state_directory)) {
     const seed = manifest.setup_seed;
-    dependencies.reset({
+    dependencies.initialize_state({
       state_directory: input.state_directory,
       organization_display_name: input.organization_name,
       owner_display_name: input.owner_display_name,
@@ -1536,13 +1566,13 @@ async function bootstrap(
   if (slack.connection_id !== manifest.slack_connection_id) {
     throw new Error("clean Slack connection did not retain the setup ID");
   }
-  const full = readFullFounderStatus(manifest, dependencies);
-  const founderAlreadyBound = full.founder_oidc_bound;
+  const full = readInitialOwnerSetupStatus(manifest, dependencies);
+  const initialOwnerAlreadyBound = full.founder_oidc_bound;
   const invitationIsUsable = () =>
     dependencies.read_setup_stage === undefined
-      ? usableFounderInvitation(manifest)
+      ? usableInitialOwnerInvitation(manifest)
       : stage().invitation_file_present;
-  if (!founderAlreadyBound && !invitationIsUsable()) {
+  if (!initialOwnerAlreadyBound && !invitationIsUsable()) {
     discardUnusableInvitation(invitationPath);
     await dependencies.issue_invitation({
       state_directory: input.state_directory,
@@ -1555,8 +1585,8 @@ async function bootstrap(
     });
   }
   const completedStage = stage();
-  const completedFull = readFullFounderStatus(manifest, dependencies);
-  const nextStep = nextFounderSetupStep({
+  const completedFull = readInitialOwnerSetupStatus(manifest, dependencies);
+  const nextStep = nextOrganizationAuthoritySetupStep({
     genesis_published: true,
     setup_plan_location: "state",
     credentials_ready: completedStage.credentials_ready,
@@ -1567,7 +1597,7 @@ async function bootstrap(
   io.stdout(
     `${canonicalJson({
       ok: true,
-      ...(!founderAlreadyBound ? { invitation_path: invitationPath } : {}),
+      ...(!initialOwnerAlreadyBound ? { invitation_path: invitationPath } : {}),
       ...((completedFull.slack_verification ?? slack.verification) === undefined
         ? {}
         : { slack_verification: completedFull.slack_verification ?? slack.verification }),
@@ -1575,7 +1605,7 @@ async function bootstrap(
         ? {}
         : { granola_admission_proof: completedFull.granola_admission_proof }),
       next_step: nextStep,
-      next_instruction: nextFounderSetupInstruction(nextStep),
+      next_instruction: organizationAuthoritySetupInstruction(nextStep),
     } as never)}\n`,
   );
 }
@@ -1583,17 +1613,17 @@ async function bootstrap(
 async function resume(
   input: FinalizeInput,
   io: CliIo,
-  dependencies: CleanFounderCliDependencies,
+  dependencies: OrganizationAuthoritySetupCliDependencies,
 ): Promise<void> {
   const setup = loadSetupManifest(input.state_directory);
   if (setup === undefined) {
     if (existsSync(input.state_directory)) {
       throw new Error(
-        "clean founder setup plan is missing; restore the exact setup plan or choose a new clean state directory",
+        "organization setup plan is missing; restore the exact setup plan or choose a new state directory",
       );
     }
     throw new Error(
-      "clean founder resume requires an existing durable clean founder setup plan",
+      "organization setup resume requires an existing durable setup plan",
     );
   }
   const manifest = setup.manifest;
@@ -1606,19 +1636,19 @@ async function resume(
   } catch {}
   const durable =
     dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
-  const full = readFullFounderStatus(manifest, dependencies);
-  const setupStep = nextFounderSetupStep({
+  const full = readInitialOwnerSetupStatus(manifest, dependencies);
+  const setupStep = nextOrganizationAuthoritySetupStep({
     genesis_published: genesisPublished,
     setup_plan_location: setup.location,
     credentials_ready: genesisPublished && durable.credentials_ready,
     slack_connected: genesisPublished && durable.slack_connected,
     founder_invitation_valid:
-      genesisPublished && usableFounderInvitation(manifest),
+      genesisPublished && usableInitialOwnerInvitation(manifest),
     full,
   });
   if (
     setupStep === "ready_to_start" &&
-    readFounderCanaryEvidence(manifest, dependencies).complete
+    readSetupCanaryEvidence(manifest, dependencies).complete
   ) {
     status(input, io, dependencies);
     return;
@@ -1643,7 +1673,7 @@ function installProviderCredentials(
   input: CredentialInstallInput,
   io: CliIo,
 ): void {
-  const manifest = readCleanFounderOnboardingManifest(input.state_directory);
+  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory);
   verifySetupGenesis(manifest);
   if (
     manifest.granola_credential_file !==
@@ -1654,7 +1684,7 @@ function installProviderCredentials(
       join(input.state_directory, "credentials", LLM_CREDENTIAL_FILENAME)
   ) {
     throw new Error(
-      "clean founder setup does not have fixed provider credential destinations",
+      "organization setup does not have fixed provider credential destinations",
     );
   }
 
@@ -1673,7 +1703,7 @@ function installProviderCredentials(
   );
   if (granolaOwnerEmail !== manifest.owner_email) {
     throw new Error(
-      "Granola owner email does not match the founder setup email",
+      "Granola owner email does not match the initial-owner setup email",
     );
   }
 
@@ -1686,14 +1716,15 @@ function installProviderCredentials(
     granolaOwnerEmail,
   );
   installPrivateCredentialValue(manifest.llm_credential_file, llmCredential);
-  if (!fullFounderStatus(manifest).granola_credentials_valid) {
-    throw new Error("clean founder provider credentials did not install");
+  if (!initialOwnerSetupStatus(manifest).granola_credentials_valid) {
+    throw new Error("organization setup provider credentials did not install");
   }
   io.stdout(
     `${canonicalJson({
       ok: true,
       credentials_ready: true,
-      next_instruction: "Run the clean founder status command to continue.",
+      next_instruction:
+        "Run echo-organization-authority-clean-founder status to continue.",
     } as never)}\n`,
   );
 }
@@ -1701,20 +1732,22 @@ function installProviderCredentials(
 async function finalize(
   input: FinalizeInput,
   io: CliIo,
-  dependencies: CleanFounderCliDependencies,
+  dependencies: OrganizationAuthoritySetupCliDependencies,
 ): Promise<void> {
-  const manifest = readCleanFounderOnboardingManifest(input.state_directory);
+  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory);
   // This is a stopped-state publication gate, not merely a convenience
   // command. Prove genesis before a dependency can admit anything.
   verifySetupGenesis(manifest);
-  const full = readFullFounderStatus(manifest, dependencies);
+  const full = readInitialOwnerSetupStatus(manifest, dependencies);
   const missing = [
-    !full.founder_oidc_bound && "founder OIDC binding",
-    !full.founder_slack_link_active && "founder Slack link",
+    !full.founder_oidc_bound && "initial-owner OIDC binding",
+    !full.founder_slack_link_active && "initial-owner Slack link",
     !full.granola_credentials_valid && "provider credentials",
   ].filter((value): value is string => typeof value === "string");
   if (missing.length > 0) {
-    throw new Error(`clean founder finalize requires ${missing.join(", ")}`);
+    throw new Error(
+      `organization setup finalize requires ${missing.join(", ")}`,
+    );
   }
   if (!full.granola_admission_present) {
     await dependencies.admit_source({
@@ -1739,7 +1772,7 @@ async function finalize(
 function status(
   input: FinalizeInput,
   io: CliIo,
-  dependencies?: CleanFounderCliDependencies,
+  dependencies?: OrganizationAuthoritySetupCliDependencies,
 ): void {
   const setup = loadSetupManifest(input.state_directory);
   if (setup === undefined) {
@@ -1782,13 +1815,14 @@ function status(
   const durable =
     dependencies?.read_setup_stage?.(setup.manifest) ??
     durableSetupStage(setup.manifest);
-  const full = readFullFounderStatus(setup.manifest, dependencies);
+  const full = readInitialOwnerSetupStatus(setup.manifest, dependencies);
   const credentialsReady = genesisPublished && durable.credentials_ready;
   const slackConnected = genesisPublished && durable.slack_connected;
   const invitationFilePresent =
     genesisPublished && durable.invitation_file_present;
-  const invitationValid = genesisPublished && usableFounderInvitation(setup.manifest);
-  const nextStep = nextFounderSetupStep({
+  const invitationValid =
+    genesisPublished && usableInitialOwnerInvitation(setup.manifest);
+  const nextStep = nextOrganizationAuthoritySetupStep({
     genesis_published: genesisPublished,
     setup_plan_location: setup.location,
     credentials_ready: credentialsReady,
@@ -1800,9 +1834,9 @@ function status(
     ? "ready_to_start"
     : "not_ready";
   const canary = nextStep === "ready_to_start"
-    ? readFounderCanaryEvidence(setup.manifest, dependencies)
-    : EMPTY_FOUNDER_CANARY_EVIDENCE;
-  const terminalStep: FounderSetupNextStep = canary.complete
+    ? readSetupCanaryEvidence(setup.manifest, dependencies)
+    : EMPTY_SETUP_CANARY_EVIDENCE;
+  const terminalStep: OrganizationAuthoritySetupNextStep = canary.complete
     ? "complete"
     : nextStep;
   const canaryStatus = terminalStep === "complete"
@@ -1838,10 +1872,10 @@ function status(
   );
 }
 
-export async function runCleanFounderCli(
+export async function runOrganizationAuthoritySetupCli(
   argv: readonly string[],
   io: CliIo = PROCESS_IO,
-  dependencies: CleanFounderCliDependencies = DEFAULT_DEPENDENCIES,
+  dependencies: OrganizationAuthoritySetupCliDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<number> {
   try {
     if (argv[0] === "bootstrap") {
@@ -1867,7 +1901,7 @@ export async function runCleanFounderCli(
     throw new Error(USAGE);
   } catch (error) {
     io.stderr(
-      `${error instanceof Error ? error.message : "clean founder command failed"}\n`,
+      `${error instanceof Error ? error.message : "organization setup command failed"}\n`,
     );
     return 1;
   }

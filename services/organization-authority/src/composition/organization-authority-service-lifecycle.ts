@@ -9,21 +9,21 @@ import {
   type CleanLiveWorkerTelemetryEventV1,
 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
 import {
-  startCleanPersonRuntime,
-  type CleanPersonRuntimeConfig,
-  type CleanPersonRuntimeDependencies,
-  type RunningCleanPersonRuntime,
-} from "./clean-person-runtime.js";
+  startOrganizationAuthorityApiRuntime,
+  type OrganizationAuthorityApiRuntimeConfig,
+  type OrganizationAuthorityApiRuntimeDependencies,
+  type RunningOrganizationAuthorityApiRuntime,
+} from "./organization-authority-api-runtime.js";
 import { clearCleanReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 
 /**
- * The narrow durable-work seam for the clean live runtime. The concrete
+ * The narrow durable-work seam for the Organization Authority service. The concrete
  * adapters own their respective stores: source cursor and staged approvals in
  * Authority/control, then the V4 record append outbox. Keeping those writes
  * behind this seam makes the process lifecycle independent of old runtime
  * installation, enrollment, lease, and record-writer machinery.
  */
-export interface CleanLiveProcessingCycleV1 {
+export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
   recoverV4Appends(signal: AbortSignal): Promise<void>;
   /** Polls the admitted live-only source cursor and durably stages one card. */
@@ -44,18 +44,18 @@ export interface CleanLiveProcessingCycleV1 {
   readonly hasFineGrainedSourceLifecycle?: boolean;
 }
 
-export interface CleanLiveRuntimeConfig {
-  readonly person: CleanPersonRuntimeConfig;
+export interface OrganizationAuthorityServiceLifecycleConfig {
+  readonly api: OrganizationAuthorityApiRuntimeConfig;
   readonly worker_interval_ms?: number;
 }
 
-export interface CleanLiveRuntimeDependencies {
-  readonly person?: CleanPersonRuntimeDependencies;
-  readonly processing: CleanLiveProcessingCycleV1;
-  readonly start_person_runtime?: (
-    config: CleanPersonRuntimeConfig,
-    dependencies: CleanPersonRuntimeDependencies,
-  ) => Promise<RunningCleanPersonRuntime>;
+export interface OrganizationAuthorityServiceLifecycleDependencies {
+  readonly api?: OrganizationAuthorityApiRuntimeDependencies;
+  readonly processing: OrganizationAuthorityProcessingCycleV1;
+  readonly start_api_runtime?: (
+    config: OrganizationAuthorityApiRuntimeConfig,
+    dependencies: OrganizationAuthorityApiRuntimeDependencies,
+  ) => Promise<RunningOrganizationAuthorityApiRuntime>;
   readonly on_worker_error?: SerializedAuthorityMeetingWorkerOptions["onError"];
   /** Content-free lifecycle events; observer failures never affect the worker. */
   readonly on_worker_telemetry?: (event: CleanLiveWorkerTelemetryEventV1) => void;
@@ -65,22 +65,23 @@ export interface CleanLiveRuntimeDependencies {
   readonly clear_readable_search_handle?: () => void;
 }
 
-export interface RunningCleanLiveRuntime {
+export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
   /** Runs bounded operator work through the same gate as the live worker. */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
-  /** Stops the worker before closing its Person HTTP database handles. */
+  /** Stops the worker before closing the Authority API database handles. */
   close(): Promise<void>;
 }
 
 /**
- * Runs exactly one clean V1 cycle. Recovery leads so a restart completes an
+ * Runs exactly one Organization Authority processing cycle. Recovery leads so
+ * a restart completes an
  * already-finalized action before consuming new source input. Every operation
  * is awaited in order; `SerializedAuthorityMeetingWorker` supplies the single
  * in-process serialization guarantee.
  */
-export async function runCleanLiveProcessingCycleV1(
-  processing: CleanLiveProcessingCycleV1,
+export async function runOrganizationAuthorityProcessingCycleV1(
+  processing: OrganizationAuthorityProcessingCycleV1,
   signal: AbortSignal,
   lifecycle?: CleanLiveWorkerPhaseRunnerV1,
 ): Promise<void> {
@@ -110,18 +111,17 @@ export async function runCleanLiveProcessingCycleV1(
 }
 
 /**
- * The clean server process: the existing self-session-authenticated Person
- * HTTP surface plus a single serialized, live-only worker. There is no
- * fallback to the former authority meeting runtime.
- * The Person runtime also owns the current-Person V4 record route; this
- * lifecycle only adds the serialized processing worker around it.
+ * Owns the Organization Authority process lifecycle: the self-session-
+ * authenticated API plus one serialized source-processing worker. The API
+ * runtime owns request handling and database handles; this component owns
+ * their startup and shutdown order around the worker.
  */
-export async function startCleanLiveRuntime(
-  config: CleanLiveRuntimeConfig,
-  dependencies: CleanLiveRuntimeDependencies,
-): Promise<RunningCleanLiveRuntime> {
-  const startPerson =
-    dependencies.start_person_runtime ?? startCleanPersonRuntime;
+export async function startOrganizationAuthorityServiceLifecycle(
+  config: OrganizationAuthorityServiceLifecycleConfig,
+  dependencies: OrganizationAuthorityServiceLifecycleDependencies,
+): Promise<RunningOrganizationAuthorityServiceLifecycle> {
+  const startApi =
+    dependencies.start_api_runtime ?? startOrganizationAuthorityApiRuntime;
   const clearHandle =
     dependencies.clear_readable_search_handle ??
     clearCleanReadableSearchActiveGenerationV1;
@@ -131,7 +131,7 @@ export async function startCleanLiveRuntime(
     dependencies.worker_telemetry_now,
   );
   dependencies.processing.setWorkerLifecycle?.(lifecycle);
-  let person: RunningCleanPersonRuntime | undefined;
+  let api: RunningOrganizationAuthorityApiRuntime | undefined;
   try {
     // Recovery can append a finalized approval and advance the V4 head. Finish
     // it before validating the generation that will be served at startup.
@@ -143,7 +143,7 @@ export async function startCleanLiveRuntime(
     );
     startup.signal.throwIfAborted();
     // A persisted pointer is not ready until its immutable generation has been
-    // validated into the sole process-local handle. Never bind the Person
+    // validated into the sole process-local handle. Never bind the API
     // listener before that startup boundary succeeds.
     await lifecycle.runPhase(
       "search_reconciliation",
@@ -152,14 +152,14 @@ export async function startCleanLiveRuntime(
       false,
     );
     startup.signal.throwIfAborted();
-    person = await startPerson(config.person, dependencies.person ?? {});
-    const startedPerson = person;
+    api = await startApi(config.api, dependencies.api ?? {});
+    const startedApi = api;
     const worker = new SerializedAuthorityMeetingWorker({
       intervalMs: config.worker_interval_ms,
       runCycle: async (signal) => {
         lifecycle.startCycle();
         try {
-          await runCleanLiveProcessingCycleV1(
+          await runOrganizationAuthorityProcessingCycleV1(
             dependencies.processing,
             signal,
             lifecycle,
@@ -173,14 +173,14 @@ export async function startCleanLiveRuntime(
       onError: dependencies.on_worker_error,
     });
     return {
-      address: startedPerson.address,
+      address: startedApi.address,
       runExclusive: (operation) => worker.runExclusive(operation),
       close: async () => {
         try {
           try {
             await worker.close();
           } finally {
-            await startedPerson.close();
+            await startedApi.close();
           }
         } finally {
           clearHandle();
@@ -189,7 +189,7 @@ export async function startCleanLiveRuntime(
     };
   } catch (error) {
     clearHandle();
-    await person?.close();
+    await api?.close();
     throw error;
   }
 }

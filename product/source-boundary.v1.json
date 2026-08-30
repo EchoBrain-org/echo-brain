@@ -36,7 +36,7 @@
       },
       {
         "identifier": "granola",
-        "root": "services/organization-authority/src/composition/clean-founder-cli.ts"
+        "root": "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
       },
       {
         "identifier": "granola",
@@ -137,17 +137,17 @@
       "services/organization-authority/src/processing/clean-v1/review-lineage-semantics.ts",
       "services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts",
       "services/organization-authority/src/answer-composition/retrieval-grounded-answer-composition.ts",
-      "services/organization-authority/src/composition/clean-live-runtime.ts",
-      "services/organization-authority/src/composition/open-clean-live-runtime.ts",
+      "services/organization-authority/src/composition/organization-authority-service-lifecycle.ts",
+      "services/organization-authority/src/composition/organization-authority-runtime.ts",
       "services/organization-authority/src/composition/approval-runtime-bundle-v1.ts",
       "services/organization-authority/src/composition/answer-composition-runtime.ts",
       "services/organization-authority/src/composition/clean-live-processor-runtime.ts",
       "services/organization-authority/src/composition/person-answer-route.ts",
       "services/organization-authority/src/composition/clean-person-external-identity-runtime.ts",
-      "services/organization-authority/src/composition/clean-person-runtime.ts",
+      "services/organization-authority/src/composition/organization-authority-api-runtime.ts",
       "services/organization-authority/src/composition/clean-readable-search-runtime.ts",
       "services/organization-authority/src/presentation/person-external-identity-link-http-application.ts",
-      "services/organization-authority/src/presentation/clean-person-http-server.ts",
+      "services/organization-authority/src/presentation/organization-authority-http-server.ts",
       "services/organization-authority/src/presentation/private-approval-interaction-http-application-v1.ts",
       "services/organization-record/src/application/record-policy-fact-projection-v1.ts",
       "services/organization-record/src/application/person-policy-facts-v2.ts",

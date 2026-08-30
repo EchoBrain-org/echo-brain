@@ -18,9 +18,9 @@ import {
   searchCleanReadableSearchGenerationV1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
-import { DevelopmentFileOrganizationAuthoritySigner } from "../src/adapters/security/development-file-authority-signer.js";
+import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
 import { createCleanReadableSearchGenerationReconcilerV1 } from "../src/composition/clean-readable-search-runtime.js";
-import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { verifyCleanStateLineage } from "../src/composition/verify-clean-state-lineage.js";
 
 const roots: string[] = [];
@@ -42,7 +42,7 @@ afterEach(() => {
 describe("clean readable-search runtime composition", () => {
   it("publishes the zero-head generation once and leaves a restart-verifiable pointer", async () => {
     const parent = root();
-    const initialized = initializeCleanResetState({
+    const initialized = initializeAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Clean Search Organization",
       owner_display_name: "Founder",
@@ -64,7 +64,7 @@ describe("clean readable-search runtime composition", () => {
         root: lineage.root,
         authority,
         record,
-        signer: DevelopmentFileOrganizationAuthoritySigner.openExisting({
+        signer: FileOrganizationAuthoritySigner.openExisting({
           directory: join(initialized.state_directory, "keys"),
           authority_id: initialized.authority_id,
           organization_id: initialized.organization_id,

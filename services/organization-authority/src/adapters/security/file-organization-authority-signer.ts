@@ -31,18 +31,18 @@ import { validateOrganizationAuthorityDescriptor } from "@echo-brain/organizatio
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import type { OrganizationAuthoritySigner } from "../../application/ports/runtime-ports.js";
 
-export const DEVELOPMENT_AUTHORITY_KEY_FILENAME =
+export const FILE_ORGANIZATION_AUTHORITY_KEY_FILENAME =
   "authority-development-key.v1.json";
 const MAX_KEY_FILE_BYTES = 8 * 1024;
 
-interface StoredDevelopmentKey {
+interface StoredFileOrganizationAuthorityKey {
   schema_version: 1;
   descriptor: OrganizationAuthorityDescriptorV1;
   private_key_pkcs8_der_base64: string;
 }
 
 function fail(message: string): never {
-  throw new Error(`development authority signer: ${message}`);
+  throw new Error(`file organization authority signer: ${message}`);
 }
 
 function assertPrivateDirectory(directory: string): void {
@@ -58,7 +58,7 @@ function assertPrivateDirectory(directory: string): void {
   }
 }
 
-function readKeyFile(path: string): StoredDevelopmentKey {
+function readKeyFile(path: string): StoredFileOrganizationAuthorityKey {
   const descriptor = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -146,7 +146,7 @@ function readKeyFile(path: string): StoredDevelopmentKey {
   }
 }
 
-function privateKey(value: StoredDevelopmentKey): KeyObject {
+function privateKey(value: StoredFileOrganizationAuthorityKey): KeyObject {
   return createPrivateKey({
     key: Buffer.from(value.private_key_pkcs8_der_base64, "base64"),
     format: "der",
@@ -154,26 +154,26 @@ function privateKey(value: StoredDevelopmentKey): KeyObject {
   });
 }
 
-export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationAuthoritySigner {
+export class FileOrganizationAuthoritySigner implements OrganizationAuthoritySigner {
   private constructor(
     private readonly keyPath: string,
     private readonly pinnedDescriptor: OrganizationAuthorityDescriptorV1,
   ) {}
 
   /**
-   * Creates the development identity exactly once, or reopens the exact same
+   * Creates the file-backed identity exactly once, or reopens the exact same
    * identity. Only explicit initialization paths may call this method.
    */
   static initialize(options: {
     directory: string;
     authority_id: string;
     organization_id: string;
-  }): DevelopmentFileOrganizationAuthoritySigner {
-    assertFederationId(options.authority_id, "oau", "development authority_id");
+  }): FileOrganizationAuthoritySigner {
+    assertFederationId(options.authority_id, "oau", "file authority_id");
     assertFederationId(
       options.organization_id,
       "org",
-      "development organization_id",
+      "file organization_id",
     );
     const existed = existsSync(options.directory);
     mkdirSync(options.directory, { recursive: true, mode: 0o700 });
@@ -184,7 +184,10 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
       }
     }
     assertPrivateDirectory(options.directory);
-    const keyPath = join(options.directory, DEVELOPMENT_AUTHORITY_KEY_FILENAME);
+    const keyPath = join(
+      options.directory,
+      FILE_ORGANIZATION_AUTHORITY_KEY_FILENAME,
+    );
     if (!existsSync(keyPath)) {
       const pair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
       const publicBytes = pair.publicKey.export({
@@ -210,7 +213,7 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
         },
       };
       verifyP256SigningKeyDescriptor(descriptor.signing_key);
-      const stored: StoredDevelopmentKey = {
+      const stored: StoredFileOrganizationAuthorityKey = {
         schema_version: 1,
         descriptor,
         private_key_pkcs8_der_base64: privateBytes.toString("base64"),
@@ -245,7 +248,7 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
     ) {
       fail("persisted key belongs to another authority or organization");
     }
-    return new DevelopmentFileOrganizationAuthoritySigner(
+    return new FileOrganizationAuthoritySigner(
       keyPath,
       stored.descriptor,
     );
@@ -259,18 +262,21 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
     directory: string;
     authority_id: string;
     organization_id: string;
-  }): DevelopmentFileOrganizationAuthoritySigner {
-    assertFederationId(options.authority_id, "oau", "development authority_id");
+  }): FileOrganizationAuthoritySigner {
+    assertFederationId(options.authority_id, "oau", "file authority_id");
     assertFederationId(
       options.organization_id,
       "org",
-      "development organization_id",
+      "file organization_id",
     );
     if (!existsSync(options.directory)) {
       fail("directory does not exist; run init-development first");
     }
     assertPrivateDirectory(options.directory);
-    const keyPath = join(options.directory, DEVELOPMENT_AUTHORITY_KEY_FILENAME);
+    const keyPath = join(
+      options.directory,
+      FILE_ORGANIZATION_AUTHORITY_KEY_FILENAME,
+    );
     if (!existsSync(keyPath)) {
       fail("key file does not exist; run init-development first");
     }
@@ -281,7 +287,7 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
     ) {
       fail("persisted key belongs to another authority or organization");
     }
-    return new DevelopmentFileOrganizationAuthoritySigner(
+    return new FileOrganizationAuthoritySigner(
       keyPath,
       stored.descriptor,
     );
@@ -292,8 +298,8 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
     directory: string;
     authority_id: string;
     organization_id: string;
-  }): DevelopmentFileOrganizationAuthoritySigner {
-    return DevelopmentFileOrganizationAuthoritySigner.initialize(options);
+  }): FileOrganizationAuthoritySigner {
+    return FileOrganizationAuthoritySigner.initialize(options);
   }
 
   /** Synchronous counterpart for private stopped-state initialization only. */

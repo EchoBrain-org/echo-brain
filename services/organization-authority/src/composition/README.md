@@ -1,47 +1,31 @@
 # Composition
 
-Configuration parsing and concrete wiring belong here. This is the only layer
-allowed to assemble application ports with persistence, signing,
-authentication, HTTP, and web implementations.
+This directory is the Organization Authority assembly layer. It may select
+concrete adapters and connect them to application ports, but provider-neutral
+runtime components must not import a provider implementation.
 
-The operator lifecycle also belongs here, but not its concrete storage and
-security mechanisms. `cli.ts` owns strict command parsing, `operator-config.ts`
-owns the secret-free versioned file contract, `operator-state.ts` coordinates
-explicit initialization and read-only state verification, `status.ts` probes
-the instance-bound loopback runtime proof, and `runtime.ts` wires the
-foreground server. `admin-cli.ts` owns the separate HTTP-only organization
-administrator command surface and verifies the runtime ownership proof before
-using credentials. Concrete key, credential, invitation-file, lock, proof, and
-SQLite behavior remains in `adapters/`.
+The service path has three deliberately separate roots:
 
-`activate-meeting-source.ts` owns the stopped singleton and fixed private
-credential boundary. It performs no provider call: one Authority SQLite
-transaction admits the exact active Person, digest-only organization credential
-configuration, and a live-only Granola cutoff. A retry returns the stored
-cutoff; changed custody or configuration conflicts. It is source admission,
-not a processor or approval handoff.
+- `organization-authority-composition-root.ts` is the deployable composition
+  root. It selects the current Granola, OpenRouter, and Slack bundles.
+- `organization-authority-runtime.ts` is provider-neutral runtime composition.
+  It verifies admitted commitments and wires source processing, approval,
+  record append, retrieval reconciliation, and the API runtime.
+- `organization-authority-service-lifecycle.ts` owns process startup, the
+  serialized worker, shutdown order, and the exclusive operator-work gate.
 
-When a source binding and its exact policy-surface Slack capability exist,
-`meeting-processing-runtime.ts` wires `serve` to one immediate serialized,
-limit-1 cycle and another 30 seconds after each prior cycle completes. No cycles
-overlap, and processing has no HTTP route.
+`organization-authority-api-runtime.ts` owns API-serving database handles and
+constructs `presentation/organization-authority-http-server.ts`. It does not
+own the background worker. `granola-meeting-source-runtime-v1.ts` contains the
+Granola-specific source bundle; other provider bundles must follow the same
+pattern rather than entering the provider-neutral runtime.
 
-Serving composition is deliberately stricter than direct repository tests: it
-requires a persistent database path and an authenticated loopback-proxy client
-identity contract. Missing proxy credentials, an invalid proxy token, or
-SQLite `:memory:` aborts startup before the authority opens its database.
-Config-backed `serve` additionally requires a complete initialized state and
-an exact match between the requested config path/config contents and the
-private initialization manifest published with that state. It opens both the
-signer and database without any identity-creation path. The process owns a
-singleton state-directory lock until graceful SIGINT/SIGTERM shutdown. Its
-health proof is pinned to a fingerprint of the exact canonical database/key
-files, listener, credentials, and access policy.
+Stopped-state setup is split by responsibility. `authority-state-initializer.ts`
+creates a new absent-state lineage. `organization-authority-setup-cli.ts`
+coordinates initial organization and owner setup. Public `clean-*` command
+names and versioned `clean-founder` wire values remain compatibility contracts;
+they are not component names and do not constrain the service to a founder.
 
-Runtime ownership uses an authenticated, filesystem-visible Unix-socket guard.
-The Docker deployment places the socket and lock in a shared native
-coordination volume; direct process deployments default them to the state
-directory. The same ownership proof is therefore visible across container
-network namespaces without depending on a shared TCP namespace. An unrelated
-process cannot impersonate a live authority by occupying an abandoned socket
-pathname.
+Secret values enter only through explicit private-file adapters. Composition
+may pass credential file locations into a concrete provider bundle, while the
+provider-neutral runtime sees only the bundle contract and admitted digests.

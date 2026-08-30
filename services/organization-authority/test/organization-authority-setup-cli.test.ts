@@ -25,11 +25,11 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  readCleanFounderOnboardingManifest,
-  runCleanFounderCli,
-  type CleanFounderCliDependencies,
-} from "../src/composition/clean-founder-cli.js";
-import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+  readOrganizationAuthoritySetupManifest,
+  runOrganizationAuthoritySetupCli,
+  type OrganizationAuthoritySetupCliDependencies,
+} from "../src/composition/organization-authority-setup-cli.js";
+import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
 import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
 
@@ -61,14 +61,14 @@ function stateDirectory(): string {
   return join(root, "state");
 }
 
-function dependencies(order: string[]): CleanFounderCliDependencies {
+function dependencies(order: string[]): OrganizationAuthoritySetupCliDependencies {
   return {
     now: () => "2026-08-22T12:00:00.000Z",
-    reset: (input) => {
+    initialize_state: (input) => {
       order.push(
-        `reset:${input.created_at}:${input.creating_artifact_revision}`,
+        `initialize:${input.created_at}:${input.creating_artifact_revision}`,
       );
-      return initializeCleanResetState(input);
+      return initializeAuthorityState(input);
     },
     initialize_credentials: async () => {
       order.push("credentials");
@@ -105,7 +105,7 @@ function dependencies(order: string[]): CleanFounderCliDependencies {
     issue_invitation: async (input) => {
       order.push(`invite:${input.membership_id}`);
       expect(
-        readCleanFounderOnboardingManifest(input.state_directory),
+        readOrganizationAuthoritySetupManifest(input.state_directory),
       ).toMatchObject({
         invitation_path: input.output_path,
         pkce_key_file: input.pkce_key_file,
@@ -120,7 +120,7 @@ function dependencies(order: string[]): CleanFounderCliDependencies {
 function readyStatusDependencies(
   order: string[],
   complete: () => boolean = () => false,
-): CleanFounderCliDependencies {
+): OrganizationAuthoritySetupCliDependencies {
   return {
     ...dependencies(order),
     read_setup_stage: () => ({
@@ -128,13 +128,13 @@ function readyStatusDependencies(
       slack_connected: true,
       invitation_file_present: false,
     }),
-    read_full_founder_status: () => ({
+    read_initial_owner_setup_status: () => ({
       founder_oidc_bound: true,
       founder_slack_link_active: true,
       granola_credentials_valid: true,
       granola_admission_present: true,
     }),
-    read_founder_canary_evidence: () => ({
+    read_setup_canary_evidence: () => ({
       source_progress_observed: complete(),
       approved_record_present: complete(),
       active_generation_current: complete(),
@@ -157,7 +157,7 @@ interface DurableCanaryFixtureOptions {
 
 function buildInputForCanary(
   state: string,
-  manifest: ReturnType<typeof readCleanFounderOnboardingManifest>,
+  manifest: ReturnType<typeof readOrganizationAuthoritySetupManifest>,
   recordSha256: Sha256Digest,
 ) {
   const contract = cleanReadableSearchRuntimeContractV1();
@@ -226,7 +226,7 @@ function installDurableCanaryFixture(
   state: string,
   options: DurableCanaryFixtureOptions = {},
 ): void {
-  const manifest = readCleanFounderOnboardingManifest(state);
+  const manifest = readOrganizationAuthoritySetupManifest(state);
   const issuedAt = "2026-08-23T00:00:00.000Z";
   const recordSha256 = sha256Digest("founder-canary-record");
   const semanticSha256 = sha256Digest("founder-canary-semantic");
@@ -390,7 +390,7 @@ function installDurableCanaryFixture(
   }
 }
 
-describe("clean founder coordinator", () => {
+describe("Organization Authority setup coordinator", () => {
   const bootstrapArgs = (state: string) => [
     "bootstrap",
     "--state-dir",
@@ -414,7 +414,7 @@ describe("clean founder coordinator", () => {
     const order: string[] = [];
     let stdout = "";
     let stderr = "";
-    const status = await runCleanFounderCli(
+    const status = await runOrganizationAuthoritySetupCli(
       [
         "bootstrap",
         "--state-dir",
@@ -443,7 +443,7 @@ describe("clean founder coordinator", () => {
     expect(stderr).toBe("");
     expect(status).toBe(0);
     expect(order).toEqual([
-      "reset:2026-08-22T12:00:00.000Z:clean-founder-v1",
+      "initialize:2026-08-22T12:00:00.000Z:clean-founder-v1",
       "credentials",
       "slack:xoxb-test-token\n",
       expect.stringMatching(/^invite:mem_/),
@@ -489,7 +489,7 @@ describe("clean founder coordinator", () => {
     const manifestPath = join(state, "onboarding", "clean-founder-v1.json");
     expect(statSync(manifestPath).mode & 0o777).toBe(0o600);
     expect(readFileSync(manifestPath, "utf8")).not.toContain("xoxb-test-token");
-    expect(readCleanFounderOnboardingManifest(state)).toMatchObject({
+    expect(readOrganizationAuthoritySetupManifest(state)).toMatchObject({
       owner_membership_id: expect.stringMatching(/^mem_/),
       slack_connection_id: expect.stringMatching(/^con_/),
       granola_credential_file: join(state, "credentials", "granola-credential"),
@@ -500,7 +500,7 @@ describe("clean founder coordinator", () => {
     const state = stateDirectory();
     const order: string[] = [];
     let stderr = "";
-    const status = await runCleanFounderCli(
+    const status = await runOrganizationAuthoritySetupCli(
       [
         "bootstrap",
         "--state-dir",
@@ -537,7 +537,7 @@ describe("clean founder coordinator", () => {
     writeFileSync(join(dirname(state), "oidc.json"), "{}", { mode: 0o600 });
     let stderr = "";
 
-    const result = await runCleanFounderCli(
+    const result = await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
       { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "token" },
       dependencies(order),
@@ -553,7 +553,7 @@ describe("clean founder coordinator", () => {
   it("rejects a legacy founder manifest shape instead of treating it as compatible", async () => {
     const state = stateDirectory();
     const order: string[] = [];
-    await runCleanFounderCli(
+    await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
       { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" },
       dependencies(order),
@@ -567,8 +567,8 @@ describe("clean founder coordinator", () => {
     writeFileSync(path, JSON.stringify(manifest), { mode: 0o600 });
     chmodSync(path, 0o600);
 
-    expect(() => readCleanFounderOnboardingManifest(state)).toThrow(
-      "clean founder onboarding manifest is invalid",
+    expect(() => readOrganizationAuthoritySetupManifest(state)).toThrow(
+      "organization setup manifest is invalid",
     );
   });
 
@@ -577,7 +577,7 @@ describe("clean founder coordinator", () => {
     mkdirSync(state, { mode: 0o700 });
     let stderr = "";
 
-    const result = await runCleanFounderCli(
+    const result = await runOrganizationAuthoritySetupCli(
       ["resume", "--state-dir", state],
       {
         stdout: () => undefined,
@@ -591,14 +591,14 @@ describe("clean founder coordinator", () => {
 
     expect(result).toBe(1);
     expect(stderr).toContain("restore the exact setup plan");
-    expect(stderr).toContain("new clean state directory");
+    expect(stderr).toContain("new state directory");
   });
 
   it("finalizes from the private manifest without asking for IDs", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const deps = dependencies(order);
-    await runCleanFounderCli(
+    await runOrganizationAuthoritySetupCli(
       [
         "bootstrap",
         "--state-dir",
@@ -625,7 +625,7 @@ describe("clean founder coordinator", () => {
     );
     order.splice(0);
     let stdout = "";
-    const status = await runCleanFounderCli(
+    const status = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", state],
       {
         stdout: (value) => (stdout += value),
@@ -634,7 +634,7 @@ describe("clean founder coordinator", () => {
       },
       {
         ...deps,
-        read_full_founder_status: () => ({
+        read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
           granola_credentials_valid: true,
@@ -655,7 +655,7 @@ describe("clean founder coordinator", () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
-    await runCleanFounderCli(
+    await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
       { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" },
       base,
@@ -663,12 +663,12 @@ describe("clean founder coordinator", () => {
     order.splice(0);
 
     let stderr = "";
-    const result = await runCleanFounderCli(
+    const result = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", state],
       { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "" },
       {
         ...base,
-        read_full_founder_status: () => ({
+        read_initial_owner_setup_status: () => ({
           founder_oidc_bound: false,
           founder_slack_link_active: false,
           granola_credentials_valid: false,
@@ -678,8 +678,8 @@ describe("clean founder coordinator", () => {
     );
 
     expect(result).toBe(1);
-    expect(stderr).toContain("founder OIDC binding");
-    expect(stderr).toContain("founder Slack link");
+    expect(stderr).toContain("initial-owner OIDC binding");
+    expect(stderr).toContain("initial-owner Slack link");
     expect(stderr).toContain("provider credentials");
     expect(order).toEqual([]);
   });
@@ -688,7 +688,7 @@ describe("clean founder coordinator", () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
-    await runCleanFounderCli(
+    await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
       { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" },
       base,
@@ -697,12 +697,12 @@ describe("clean founder coordinator", () => {
     writeFileSync(join(state, "state-lineage-root.v1.json"), "{}", { mode: 0o600 });
 
     let stderr = "";
-    const result = await runCleanFounderCli(
+    const result = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", state],
       { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "" },
       {
         ...base,
-        read_full_founder_status: () => ({
+        read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
           granola_credentials_valid: true,
@@ -720,7 +720,7 @@ describe("clean founder coordinator", () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
-    await runCleanFounderCli(
+    await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
       { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" },
       base,
@@ -733,7 +733,7 @@ describe("clean founder coordinator", () => {
       granola_admission_present: false,
     };
     let failAdmission = true;
-    const retrying: CleanFounderCliDependencies = {
+    const retrying: OrganizationAuthoritySetupCliDependencies = {
       ...base,
       admit_source: async (input) => {
         order.push(`admit:${input.granola_credential_file}`);
@@ -743,12 +743,12 @@ describe("clean founder coordinator", () => {
         }
         full.granola_admission_present = true;
       },
-      read_full_founder_status: () => ({ ...full }),
+      read_initial_owner_setup_status: () => ({ ...full }),
     };
     const io = { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "" };
 
-    expect(await runCleanFounderCli(["finalize", "--state-dir", state], io, retrying)).toBe(1);
-    expect(await runCleanFounderCli(["finalize", "--state-dir", state], io, retrying)).toBe(0);
+    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying)).toBe(1);
+    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying)).toBe(0);
     expect(order.filter((entry) => entry.startsWith("activate:"))).toHaveLength(0);
     expect(order.filter((entry) => entry.startsWith("admit:"))).toHaveLength(2);
   });
@@ -762,13 +762,13 @@ describe("clean founder coordinator", () => {
       invitation_file_present: false,
     };
     let stdout = "";
-    const result = await runCleanFounderCli(
+    const result = await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
       { stdout: (value) => (stdout += value), stderr: () => undefined, read_stdin: async () => "token" },
       {
         ...dependencies(order),
         read_setup_stage: () => completedStage,
-        read_full_founder_status: () => ({
+        read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: false,
           granola_credentials_valid: false,
@@ -780,16 +780,19 @@ describe("clean founder coordinator", () => {
     expect(result).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({
       next_step: "complete_founder_slack_link",
-      next_instruction: "Complete the founder Slack identity link in the clean Authority.",
+      next_instruction:
+        "Complete the initial-owner Slack identity link in the Authority.",
     });
     expect(stdout).not.toContain("invitation_path");
-    expect(order).toEqual(["reset:2026-08-22T12:00:00.000Z:clean-founder-v1"]);
+    expect(order).toEqual([
+      "initialize:2026-08-22T12:00:00.000Z:clean-founder-v1",
+    ]);
   });
 
   it("installs all provider credentials from private files without printing their values", async () => {
     const state = stateDirectory();
     const order: string[] = [];
-    await runCleanFounderCli(
+    await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
       {
         stdout: () => undefined,
@@ -819,7 +822,7 @@ describe("clean founder coordinator", () => {
     }
     let stdout = "";
     let stderr = "";
-    const result = await runCleanFounderCli(
+    const result = await runOrganizationAuthoritySetupCli(
       [
         "credentials-install",
         "--state-dir",
@@ -875,11 +878,11 @@ describe("clean founder coordinator", () => {
       undefined;
     let stdinReads = 0;
     const base = dependencies(order);
-    const deps: CleanFounderCliDependencies = {
+    const deps: OrganizationAuthoritySetupCliDependencies = {
       ...base,
-      reset: (input) => {
+      initialize_state: (input) => {
         if (resetFails) throw new Error("injected before genesis");
-        return initializeCleanResetState(input);
+        return initializeAuthorityState(input);
       },
       initialize_credentials: async () => {
         order.push("credentials");
@@ -907,10 +910,10 @@ describe("clean founder coordinator", () => {
       read_stdin: async () => "xoxb-test-token",
     };
 
-    expect(await runCleanFounderCli(bootstrapArgs(state), io, deps)).toBe(1);
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps)).toBe(1);
     let status = "";
     expect(
-      await runCleanFounderCli(["status", "--state-dir", state], {
+      await runOrganizationAuthoritySetupCli(["status", "--state-dir", state], {
         ...io,
         stdout: (value) => (status += value),
       }),
@@ -928,22 +931,22 @@ describe("clean founder coordinator", () => {
     resetFails = false;
     failAfter = "credentials";
     expect(
-      await runCleanFounderCli(["resume", "--state-dir", state], io, deps),
+      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps),
     ).toBe(1);
     failAfter = "slack";
     expect(
-      await runCleanFounderCli(["resume", "--state-dir", state], io, deps),
+      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps),
     ).toBe(1);
     expect(order.filter((value) => value === "credentials")).toHaveLength(1);
     failAfter = "invitation";
     expect(
-      await runCleanFounderCli(["resume", "--state-dir", state], io, deps),
+      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps),
     ).toBe(1);
     expect(order.filter((value) => value === "slack")).toHaveLength(1);
     expect(stdinReads).toBe(1);
     failAfter = undefined;
     expect(
-      await runCleanFounderCli(["resume", "--state-dir", state], io, deps),
+      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps),
     ).toBe(0);
     expect(order.filter((value) => value === "invitation")).toHaveLength(1);
     expect(stdinReads).toBe(1);
@@ -959,11 +962,11 @@ describe("clean founder coordinator", () => {
       stderr: () => undefined,
       read_stdin: async () => "token",
     };
-    expect(await runCleanFounderCli(bootstrapArgs(state), io, deps)).toBe(0);
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps)).toBe(0);
 
     let incompleteOutput = "";
     expect(
-      await runCleanFounderCli(
+      await runOrganizationAuthoritySetupCli(
         ["status", "--state-dir", state],
         { ...io, stdout: (value) => (incompleteOutput += value) },
         deps,
@@ -984,7 +987,7 @@ describe("clean founder coordinator", () => {
     canaryComplete = true;
     let completeOutput = "";
     expect(
-      await runCleanFounderCli(
+      await runOrganizationAuthoritySetupCli(
         ["status", "--state-dir", state],
         { ...io, stdout: (value) => (completeOutput += value) },
         deps,
@@ -1011,7 +1014,7 @@ describe("clean founder coordinator", () => {
 
     let resumedOutput = "";
     expect(
-      await runCleanFounderCli(
+      await runOrganizationAuthoritySetupCli(
         ["resume", "--state-dir", state],
         { ...io, stdout: (value) => (resumedOutput += value) },
         deps,
@@ -1044,9 +1047,9 @@ describe("clean founder coordinator", () => {
     ) => {
       const state = stateDirectory();
       const prereq = readyStatusDependencies([]);
-      const productionDependencies: CleanFounderCliDependencies = {
+      const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
         ...prereq,
-        read_founder_canary_evidence: undefined,
+        read_setup_canary_evidence: undefined,
       };
       const io = {
         stdout: () => undefined,
@@ -1054,13 +1057,13 @@ describe("clean founder coordinator", () => {
         read_stdin: async () => "token",
       };
       expect(
-        await runCleanFounderCli(bootstrapArgs(state), io, productionDependencies),
+        await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, productionDependencies),
       ).toBe(0);
       installDurableCanaryFixture(state, fixtureOptions);
 
       let stdout = "";
       expect(
-        await runCleanFounderCli(
+        await runOrganizationAuthoritySetupCli(
           ["status", "--state-dir", state],
           { ...io, stdout: (value) => (stdout += value) },
           productionDependencies,

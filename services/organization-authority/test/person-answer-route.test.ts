@@ -18,7 +18,7 @@ import type {
   CleanPersonRecordSearchBatchReleaseV1,
 } from "../src/composition/clean-person-record-search-route.js";
 import { AuthorityOperationError } from "../src/domain/errors.js";
-import { createCleanPersonHttpServer } from "../src/presentation/clean-person-http-server.js";
+import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type {
   PersonAnswerHttpApplicationV1,
   PersonAnswerResponseV1,
@@ -416,7 +416,7 @@ describe("Person answer route", () => {
 });
 
 async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
-  const server = createCleanPersonHttpServer({
+  const server = createOrganizationAuthorityHttpServer({
     descriptor: {} as never,
     sessions: {} as never,
     oidc_provider: {} as never,

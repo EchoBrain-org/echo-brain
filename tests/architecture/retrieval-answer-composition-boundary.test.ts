@@ -24,9 +24,9 @@ const ANSWER_COMPOSITION_AUDIT_WRITER =
   "services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts";
 const ANSWER_COMPOSITION_RUNTIME_WIRING = new Set([
   "services/organization-authority/src/composition/clean-live-cli.ts",
-  "services/organization-authority/src/composition/clean-person-runtime.ts",
-  "services/organization-authority/src/composition/open-clean-live-runtime.ts",
-  "services/organization-authority/src/composition/open-clean-organization-authority-runtime.ts",
+  "services/organization-authority/src/composition/organization-authority-api-runtime.ts",
+  "services/organization-authority/src/composition/organization-authority-composition-root.ts",
+  "services/organization-authority/src/composition/organization-authority-runtime.ts",
 ]);
 const MODEL_IMPORT =
   /(?:anthropic|openai|openrouter|ollama|processing\/adapters\/decision-processors\/llm)/;

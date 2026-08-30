@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { createCleanPersonHttpServer } from "../../src/presentation/clean-person-http-server.js";
+import { createOrganizationAuthorityHttpServer } from "../../src/presentation/organization-authority-http-server.js";
 import {
   PRIVATE_SLACK_APPROVAL_INTERACTIONS_PATH_V1,
   type PrivateSlackApprovalInteractionsHttpApplicationV1,
@@ -31,7 +31,9 @@ function serverOptions(input: {
 async function start(
   application?: PrivateApprovalInteractionHttpApplicationV1,
 ) {
-  const server = createCleanPersonHttpServer(serverOptions({ approval: application }));
+  const server = createOrganizationAuthorityHttpServer(
+    serverOptions({ approval: application }),
+  );
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -65,7 +67,7 @@ describe("private Slack approval interactions HTTP mount V1", () => {
       created_at: "2026-08-18T00:00:00.000Z",
       expires_at: "2026-08-18T00:10:00.000Z",
     }));
-    const server = createCleanPersonHttpServer({
+    const server = createOrganizationAuthorityHttpServer({
       ...serverOptions(),
       sessions: { beginOidcLogin } as never,
       oidc_provider: {
@@ -109,7 +111,7 @@ describe("private Slack approval interactions HTTP mount V1", () => {
 
   it("rejects a provider route that would shadow a core Authority route", () => {
     expect(() =>
-      createCleanPersonHttpServer(
+      createOrganizationAuthorityHttpServer(
         serverOptions({
           approval: {
             method: "POST",
@@ -126,7 +128,7 @@ describe("private Slack approval interactions HTTP mount V1", () => {
   it("rejects duplicate provider routes across independently selected adapters", () => {
     const path = "/v2/integrations/example/identity";
     expect(() =>
-      createCleanPersonHttpServer(
+      createOrganizationAuthorityHttpServer(
         serverOptions({
           approval: { method: "POST", path, accept: async () => "accepted" },
           external_identity: {

@@ -1,7 +1,7 @@
-# Organization Authority: clean V1 runbook
+# Organization Authority V1 runbook
 
-`organization-authority` is the clean-V1 Authority runtime. It owns clean
-genesis, Person OIDC sessions, the founder Slack identity link, live-only
+`organization-authority` is the Authority service. It owns state
+initialization, Person OIDC sessions, initial-owner Slack identity linking, live-only
 Granola processing, approval finalization, immutable V4 records, and
 permission-aware Person reads. It has no compatibility runtime for a prior
 Authority state: start with a new state directory and do not reuse legacy
@@ -12,6 +12,20 @@ For the production Compose profile and host preparation, use the
 [organization onboarding and employee rollout](../../docs/product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md)
 defines the supported operator and employee flow.
 
+## Runtime component map
+
+- `organization-authority-composition-root.ts` selects deployable providers.
+- `organization-authority-runtime.ts` composes the provider-neutral runtime.
+- `organization-authority-service-lifecycle.ts` owns worker and API lifecycle.
+- `organization-authority-api-runtime.ts` owns request-serving resources.
+- `organization-authority-http-server.ts` owns HTTP mechanics and dispatch.
+- `organization-authority-setup-cli.ts` coordinates organization setup.
+- `authority-state-initializer.ts` initializes a new absent-state lineage.
+
+Existing `clean-*` binaries and `clean-founder` files and wire values are
+versioned compatibility names. They are not component boundaries and do not
+limit the service to a founder.
+
 ## Build and commands
 
 Build the workspace before using the local `dist/` entrypoints:
@@ -20,7 +34,7 @@ Build the workspace before using the local `dist/` entrypoints:
 npm run build --workspace @echo-brain/organization-authority
 ```
 
-The package exposes these clean commands:
+The package exposes these compatibility commands:
 
 - `echo-organization-authority-init-clean-state`
 - `echo-organization-authority-clean-founder`
@@ -32,9 +46,9 @@ must be current-user `0700`; private input and invitation files must be
 current-user `0600` regular files. Never place token or credential bytes on a
 command line.
 
-## Fresh clean state
+## Fresh Authority state
 
-The standalone reset command creates a new clean lineage from an absent state
+The standalone initializer command creates a new lineage from an absent state
 directory. It applies the frozen baselines, creates the Authority descriptor
 and owner, and prints only its JSON result.
 

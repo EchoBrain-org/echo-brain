@@ -1,7 +1,7 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
-import { readCleanFounderOnboardingManifest } from "./clean-founder-cli.js";
-import { openCleanOrganizationAuthorityRuntime } from "./open-clean-organization-authority-runtime.js";
+import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
+import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
 import { readCleanPersonOidcConfiguration } from "./clean-person-cli.js";
 import {
   openStagingSyntheticPrivateDmCanaryControlV1,
@@ -134,7 +134,7 @@ export async function runCleanLiveCli(
     if (argv[0] !== "serve") throw new Error(USAGE);
     const parsed = flags(argv.slice(1));
     const stateDirectory = required(parsed, "--state-dir");
-    const manifest = readCleanFounderOnboardingManifest(stateDirectory);
+    const manifest = readOrganizationAuthoritySetupManifest(stateDirectory);
     const configured = readCleanPersonOidcConfiguration(
       manifest.oidc_config_path,
     );
@@ -149,7 +149,7 @@ export async function runCleanLiveCli(
     }
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
-    const runtime = await openCleanOrganizationAuthorityRuntime({
+    const runtime = await openOrganizationAuthorityService({
       state_directory: stateDirectory,
       host,
       port: positiveInteger(required(parsed, "--port"), "clean live port"),
@@ -174,7 +174,8 @@ export async function runCleanLiveCli(
       slack_identity_link_channel_id: manifest.slack_approval_channel_id,
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
-      llm_credential_file: manifest.llm_credential_file,
+      // The V1 manifest retains its serialized compatibility field.
+      openrouter_credential_file: manifest.llm_credential_file,
       on_worker_error: () => {
         io.stderr(`${CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
       },

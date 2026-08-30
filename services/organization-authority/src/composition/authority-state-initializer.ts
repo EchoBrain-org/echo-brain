@@ -38,7 +38,7 @@ import {
   authorityBaselineSha256V3,
 } from "../adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
-import { DevelopmentFileOrganizationAuthoritySigner } from "../adapters/security/development-file-authority-signer.js";
+import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { assertDisplayName } from "../domain/rules.js";
 import {
   initializeNewStateLineageV1,
@@ -51,11 +51,11 @@ import {
 } from "../state-lineage/state-lineage-manifest-v1.js";
 
 /**
- * Explicit, stopped-state clean reset. It creates a new lineage only; it does
+ * Explicit, absent-state initializer. It creates a new lineage only; it does
  * not write operator configuration, credentials, listener state, provider
  * configuration, installation state, enrollment state, or leases.
  */
-export interface InitializeCleanResetStateInput {
+export interface InitializeAuthorityStateInput {
   readonly state_directory: string;
   readonly organization_display_name: string;
   readonly owner_display_name: string;
@@ -65,16 +65,16 @@ export interface InitializeCleanResetStateInput {
    * A caller may persist this non-secret identity seed before genesis so a
    * stopped setup can be resumed without allocating a second lineage.
    */
-  readonly seed?: CleanResetSeedV1;
+  readonly seed?: AuthorityStateSeedV1;
 }
 
-export interface CleanResetManifestEvidenceV1 {
+export interface AuthorityStateManifestEvidenceV1 {
   readonly root_manifest_sha256: Sha256Digest;
   readonly database_manifests: Readonly<Record<string, Sha256Digest>>;
   readonly retrieval_present: false;
 }
 
-export interface InitializedCleanResetStateV1 {
+export interface InitializedAuthorityStateV1 {
   readonly schema_version: 1;
   readonly kind: "echo-organization-authority-clean-reset-state-v1";
   readonly state_directory: string;
@@ -85,10 +85,10 @@ export interface InitializedCleanResetStateV1 {
   readonly owner_membership_id: string;
   readonly control_plane_id: string;
   readonly authority_descriptor_sha256: Sha256Digest;
-  readonly manifests: CleanResetManifestEvidenceV1;
+  readonly manifests: AuthorityStateManifestEvidenceV1;
 }
 
-export interface CleanResetSeedV1 {
+export interface AuthorityStateSeedV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -97,7 +97,7 @@ export interface CleanResetSeedV1 {
   readonly control_plane_id: string;
 }
 
-function generatedSeed(): CleanResetSeedV1 {
+function generatedAuthorityStateSeed(): AuthorityStateSeedV1 {
   return Object.freeze({
     authority_id: federationId("oau"),
     organization_id: federationId("org"),
@@ -108,7 +108,9 @@ function generatedSeed(): CleanResetSeedV1 {
   });
 }
 
-function validateSeed(seed: CleanResetSeedV1): CleanResetSeedV1 {
+function validateAuthorityStateSeed(
+  seed: AuthorityStateSeedV1,
+): AuthorityStateSeedV1 {
   const value = seed as unknown as Record<string, unknown>;
   const fields = [
     "authority_id",
@@ -124,15 +126,27 @@ function validateSeed(seed: CleanResetSeedV1): CleanResetSeedV1 {
     Array.isArray(value) ||
     Object.keys(value).sort().join(",") !== fields.sort().join(",")
   ) {
-    throw new Error("clean reset seed has an invalid shape");
+    throw new Error("authority state seed has an invalid shape");
   }
   try {
-    assertFederationId(seed.authority_id, "oau", "clean reset seed authority_id");
-    assertFederationId(seed.organization_id, "org", "clean reset seed organization_id");
-    assertFederationId(seed.owner_principal_id, "prn", "clean reset seed owner_principal_id");
-    assertFederationId(seed.owner_membership_id, "mem", "clean reset seed owner_membership_id");
+    assertFederationId(seed.authority_id, "oau", "authority state seed authority_id");
+    assertFederationId(
+      seed.organization_id,
+      "org",
+      "authority state seed organization_id",
+    );
+    assertFederationId(
+      seed.owner_principal_id,
+      "prn",
+      "authority state seed owner_principal_id",
+    );
+    assertFederationId(
+      seed.owner_membership_id,
+      "mem",
+      "authority state seed owner_membership_id",
+    );
   } catch {
-    throw new Error("clean reset seed has an invalid federation identifier");
+    throw new Error("authority state seed has an invalid federation identifier");
   }
   const uuid =
     "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
@@ -140,7 +154,9 @@ function validateSeed(seed: CleanResetSeedV1): CleanResetSeedV1 {
     !new RegExp(`^lineage-${uuid}$`).test(seed.state_lineage_id) ||
     !new RegExp(`^ocp_${uuid}$`).test(seed.control_plane_id)
   ) {
-    throw new Error("clean reset seed has an invalid lineage or control-plane identifier");
+    throw new Error(
+      "authority state seed has an invalid lineage or control-plane identifier",
+    );
   }
   return Object.freeze({
     authority_id: seed.authority_id,
@@ -154,13 +170,13 @@ function validateSeed(seed: CleanResetSeedV1): CleanResetSeedV1 {
 
 function seedAuthority(
   state: NewLineageStagedStateV1,
-  input: InitializeCleanResetStateInput,
-  seed: CleanResetSeedV1,
+  input: InitializeAuthorityStateInput,
+  seed: AuthorityStateSeedV1,
 ): {
   readonly descriptor: OrganizationAuthorityDescriptorV1;
   readonly descriptor_sha256: Sha256Digest;
 } {
-  const signer = DevelopmentFileOrganizationAuthoritySigner.initialize({
+  const signer = FileOrganizationAuthoritySigner.initialize({
     directory: join(state.state_directory, "keys"),
     authority_id: seed.authority_id,
     organization_id: seed.organization_id,
@@ -226,10 +242,10 @@ function seedAuthority(
   return { descriptor, descriptor_sha256: descriptorSha256 };
 }
 
-function prepareCleanResetState(
+function prepareAuthorityState(
   state: NewLineageStagedStateV1,
-  input: InitializeCleanResetStateInput,
-  seed: CleanResetSeedV1,
+  input: InitializeAuthorityStateInput,
+  seed: AuthorityStateSeedV1,
   captured: { descriptor_sha256?: Sha256Digest },
 ): void {
   const authority = seedAuthority(state, input, seed);
@@ -312,7 +328,7 @@ function prepareCleanResetState(
 
 function manifestEvidence(
   initialized: InitializedNewStateLineageV1,
-): CleanResetManifestEvidenceV1 {
+): AuthorityStateManifestEvidenceV1 {
   const databaseManifests = Object.fromEntries(
     initialized.verification.databases.map((database) => [
       database.role,
@@ -321,7 +337,7 @@ function manifestEvidence(
   ) as Record<string, Sha256Digest>;
   if (initialized.verification.retrieval.present) {
     throw new Error(
-      "clean reset unexpectedly published a retrieval generation",
+      "authority state initialization unexpectedly published a retrieval generation",
     );
   }
   return Object.freeze({
@@ -333,12 +349,14 @@ function manifestEvidence(
   });
 }
 
-export function initializeCleanResetState(
-  input: InitializeCleanResetStateInput,
-): InitializedCleanResetStateV1 {
+export function initializeAuthorityState(
+  input: InitializeAuthorityStateInput,
+): InitializedAuthorityStateV1 {
   assertDisplayName(input.organization_display_name);
   assertDisplayName(input.owner_display_name);
-  const seed = validateSeed(input.seed ?? generatedSeed());
+  const seed = validateAuthorityStateSeed(
+    input.seed ?? generatedAuthorityStateSeed(),
+  );
   const captured: { descriptor_sha256?: Sha256Digest } = {};
   const initialized = initializeNewStateLineageV1({
     state_directory: input.state_directory,
@@ -404,10 +422,12 @@ export function initializeCleanResetState(
       return openOrganizationRecordDatabase(path);
     },
     prepare_staged_state: (state) =>
-      prepareCleanResetState(state, input, seed, captured),
+      prepareAuthorityState(state, input, seed, captured),
   });
   if (captured.descriptor_sha256 === undefined) {
-    throw new Error("clean reset did not create an authority descriptor");
+    throw new Error(
+      "authority state initialization did not create an authority descriptor",
+    );
   }
   return Object.freeze({
     schema_version: 1,

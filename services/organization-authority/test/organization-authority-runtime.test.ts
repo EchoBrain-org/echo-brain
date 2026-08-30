@@ -46,13 +46,13 @@ import {
   issueCleanPersonInvitation,
 } from "../src/composition/clean-person-onboarding.js";
 import {
-  openCleanOrganizationAuthorityRuntime,
-  type OpenCleanOrganizationAuthorityRuntimeConfig,
-} from "../src/composition/open-clean-organization-authority-runtime.js";
+  openOrganizationAuthorityService,
+  type OrganizationAuthorityServiceConfig,
+} from "../src/composition/organization-authority-composition-root.js";
 import {
-  openCleanLiveRuntime,
-  type CleanLiveSourceRuntimeBundleV1,
-} from "../src/composition/open-clean-live-runtime.js";
+  openOrganizationAuthorityRuntime,
+  type MeetingSourceRuntimeBundleV1,
+} from "../src/composition/organization-authority-runtime.js";
 import type { CleanLiveProcessorRuntimeBundleV1 } from "../src/composition/clean-live-processor-runtime.js";
 import type { AnswerCompositionRuntimeBundleV1 } from "../src/composition/answer-composition-runtime.js";
 import type {
@@ -68,7 +68,7 @@ import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateSlackApprovalBlockKitActionIdV1,
 } from "../src/composition/private-slack-approval-block-kit-card-v1.js";
-import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import type {
   AdapterHealth,
@@ -113,7 +113,7 @@ const OIDC = {
 };
 
 function root(): string {
-  const created = mkdtempSync(join(tmpdir(), "echo-open-clean-live-"));
+  const created = mkdtempSync(join(tmpdir(), "echo-authority-runtime-"));
   chmodSync(created, 0o700);
   const value = realpathSync(created);
   roots.push(value);
@@ -510,12 +510,12 @@ async function admittedFixture(input: {
   readonly seed_private_slack_connection?: boolean;
 } = {}) {
   const parent = root();
-  const initialized = initializeCleanResetState({
+  const initialized = initializeAuthorityState({
     state_directory: join(parent, "state"),
     organization_display_name: "Founder Organization",
     owner_display_name: "Founder",
     created_at: "2026-08-22T11:00:00.000Z",
-    creating_artifact_revision: "open-clean-live-runtime-test",
+    creating_artifact_revision: "organization-authority-runtime-test",
   });
   const pkce_key_file = await completeFounderReonboarding({
     state_directory: initialized.state_directory,
@@ -532,7 +532,7 @@ async function admittedFixture(input: {
     "granola-owner-email",
     "founder@example.com",
   );
-  const llm_credential_file = privateFile(
+  const openrouterCredentialFile = privateFile(
     parent,
     "llm.key",
     "llm-private-credential-material-000000",
@@ -549,7 +549,7 @@ async function admittedFixture(input: {
     granola_owner_email_reference: `file:${granola_owner_email_file}`,
     processor: createOpenRouterCleanProcessorAdmissionCommitmentV1({
       instance_id: "founder-llm",
-      credential_reference: `file:${llm_credential_file}`,
+      credential_reference: `file:${openrouterCredentialFile}`,
     }),
     create_granola_record_owner_client: () => ({
       async listNotes() {
@@ -582,7 +582,7 @@ async function admittedFixture(input: {
   });
   const poster = new FakePrivateApprovalPoster();
   const errors: Error[] = [];
-  const config: OpenCleanOrganizationAuthorityRuntimeConfig = {
+  const config: OrganizationAuthorityServiceConfig = {
     state_directory: initialized.state_directory,
     host: "127.0.0.1",
     port: await availablePort(),
@@ -596,7 +596,7 @@ async function admittedFixture(input: {
     slack_identity_link_channel_id: "C0123456789",
     granola_credential_file,
     granola_owner_email_file,
-    llm_credential_file,
+    openrouter_credential_file: openrouterCredentialFile,
     worker_interval_ms: 10,
     on_worker_error: (error) => errors.push(error),
   };
@@ -620,7 +620,7 @@ async function activeFixture() {
   const fixture = await admittedFixture({
     seed_private_slack_connection: true,
   });
-  const runtime = await openCleanOrganizationAuthorityRuntime(fixture.config, {
+  const runtime = await openOrganizationAuthorityService(fixture.config, {
     live_adapters: {
       source: fixture.source,
       processor: fakeProcessor(fixture.processorIdentity),
@@ -939,20 +939,20 @@ afterEach(() => {
     rmSync(value, { recursive: true, force: true });
 });
 
-describe("open clean live runtime private approval lane", () => {
-  it("starts the Person server before finalize without reading provider credentials", async () => {
+describe("Organization Authority runtime private approval lane", () => {
+  it("starts the Authority API before finalize without reading provider credentials", async () => {
     const parent = root();
-    const initialized = initializeCleanResetState({
+    const initialized = initializeAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
       created_at: NOW,
-      creating_artifact_revision: "open-clean-live-runtime-test",
+      creating_artifact_revision: "organization-authority-runtime-test",
     });
     const credentials = initializeCleanPersonCredentials({
       state_directory: initialized.state_directory,
     });
-    const runtime = await openCleanOrganizationAuthorityRuntime({
+    const runtime = await openOrganizationAuthorityService({
       state_directory: initialized.state_directory,
       host: "127.0.0.1",
       port: await availablePort(),
@@ -967,7 +967,7 @@ describe("open clean live runtime private approval lane", () => {
       slack_identity_link_channel_id: "C0123456789",
       granola_credential_file: join(parent, "not-read-granola"),
       granola_owner_email_file: join(parent, "not-read-owner"),
-      llm_credential_file: join(parent, "not-read-llm"),
+      openrouter_credential_file: join(parent, "not-read-openrouter"),
     });
     try {
       expect(runtime.processing).toBe("idle_until_finalize");
@@ -987,7 +987,7 @@ describe("open clean live runtime private approval lane", () => {
     const fixture = await activeFixture();
     await fixture.runtime.close();
     await expect(
-      openCleanOrganizationAuthorityRuntime({
+      openOrganizationAuthorityService({
         ...fixture.config,
         granola_credential_file: join(
           fixture.initialized.state_directory,
@@ -1007,7 +1007,7 @@ describe("open clean live runtime private approval lane", () => {
       "replacement-owner@example.com",
     );
     chmodSync(fixture.config.granola_owner_email_file, 0o600);
-    await expect(openCleanOrganizationAuthorityRuntime(fixture.config)).rejects.toThrow(
+    await expect(openOrganizationAuthorityService(fixture.config)).rejects.toThrow(
       /owner differs from the admitted custodian commitment/,
     );
   });
@@ -1016,9 +1016,9 @@ describe("open clean live runtime private approval lane", () => {
     const fixture = await activeFixture();
     await fixture.runtime.close();
     await expect(
-      openCleanOrganizationAuthorityRuntime({
+      openOrganizationAuthorityService({
         ...fixture.config,
-        llm_credential_file: join(
+        openrouter_credential_file: join(
           fixture.initialized.state_directory,
           "replacement-llm-credential-not-read",
         ),
@@ -1034,7 +1034,7 @@ describe("open clean live runtime private approval lane", () => {
     let ingressCalls = 0;
     const ownershipContexts: CleanApprovalRuntimeContextV1[] = [];
     const openedContexts: CleanApprovalRuntimeContextV1[] = [];
-    const sourceRuntime: CleanLiveSourceRuntimeBundleV1 = {
+    const sourceRuntime: MeetingSourceRuntimeBundleV1 = {
       source_boundary: {
         source_adapter_id: fixture.source.identity.adapter_id,
         assert_live_cursor(cursor) {
@@ -1118,13 +1118,13 @@ describe("open clean live runtime private approval lane", () => {
     const {
       granola_credential_file: _granolaCredentialFile,
       granola_owner_email_file: _granolaOwnerEmailFile,
-      llm_credential_file: _llmCredentialFile,
+      openrouter_credential_file: _openRouterCredentialFile,
       slack_signing_secret_file: _slackSigningSecretFile,
       slack_connection_id: _slackConnectionId,
       slack_identity_link_channel_id: _slackIdentityLinkChannelId,
       ...sharedConfig
     } = fixture.config;
-    const runtime = await openCleanLiveRuntime(
+    const runtime = await openOrganizationAuthorityRuntime(
       {
         ...sharedConfig,
         source_runtime: sourceRuntime,
@@ -1136,7 +1136,7 @@ describe("open clean live runtime private approval lane", () => {
             createPersonPolicyFactProjectorV2(),
           ]),
       },
-      { person: { oidc_provider: new FounderOidcProvider() } },
+      { api: { oidc_provider: new FounderOidcProvider() } },
     );
     try {
       expect(runtime.processing).toBe("active");
@@ -1391,7 +1391,7 @@ describe("open clean live runtime private approval lane", () => {
       });
       await fixture.runtime.close();
       const restartedPoster = new FakePrivateApprovalPoster();
-      const restarted = await openCleanOrganizationAuthorityRuntime(fixture.config, {
+      const restarted = await openOrganizationAuthorityService(fixture.config, {
         live_adapters: {
           source: fixture.source,
           processor: fakeProcessor(fixture.processorIdentity),
@@ -1451,7 +1451,7 @@ describe("open clean live runtime private approval lane", () => {
         .run(card.approval_id);
 
       await expect(
-        openCleanOrganizationAuthorityRuntime(fixture.config, {
+        openOrganizationAuthorityService(fixture.config, {
           live_adapters: {
             source: fixture.source,
             processor: fakeProcessor(fixture.processorIdentity),
@@ -1521,7 +1521,7 @@ describe("open clean live runtime private approval lane", () => {
 
       const replacementPoster = new FakePrivateApprovalPoster();
       await expect(
-        openCleanOrganizationAuthorityRuntime(fixture.config, {
+        openOrganizationAuthorityService(fixture.config, {
           live_adapters: {
             source: fixture.source,
             processor: fakeProcessor(fixture.processorIdentity),
