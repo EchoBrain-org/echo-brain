@@ -12,7 +12,7 @@ import type Database from "better-sqlite3";
  * resolved it.  Rejections produce no Person fact and consequently cannot be
  * returned by this query.
  */
-export interface CleanPersonRecordReaderV1Input {
+export interface PersonRecordReaderV1Input {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -21,7 +21,7 @@ export interface CleanPersonRecordReaderV1Input {
   readonly limit?: number;
 }
 
-export interface CleanPersonReadableRecordV1 {
+export interface PersonReadableRecordV1 {
   readonly position: number;
   readonly approval_id: string;
   readonly record_sha256: Sha256Digest;
@@ -49,12 +49,12 @@ function asObject(value: unknown, label: string): JsonObject {
  * It intentionally has no write methods, no derived-store dependency, and no
  * fallback to historical record schemas.
  */
-export class CleanPersonRecordReaderV1 {
+export class PersonRecordReaderV1 {
   constructor(private readonly database: Database.Database) {}
 
   list(
-    input: CleanPersonRecordReaderV1Input,
-  ): readonly CleanPersonReadableRecordV1[] {
+    input: PersonRecordReaderV1Input,
+  ): readonly PersonReadableRecordV1[] {
     requiredText(input.authority_id, "clean Person record authority_id");
     requiredText(input.organization_id, "clean Person record organization_id");
     requiredText(

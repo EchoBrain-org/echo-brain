@@ -7,7 +7,7 @@
   "source_root": "services/organization-record/src",
   "package_json": "services/organization-record/package.json",
   "entry_points": [
-    "services/organization-record/src/new-lineage-v1.ts"
+    "services/organization-record/src/organization-record-runtime-v1.ts"
   ],
   "owned_source_paths": [
     "services/organization-record/src/**"

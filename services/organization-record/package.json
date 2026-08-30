@@ -5,6 +5,10 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./organization-record-runtime-v1": {
+      "types": "./dist/organization-record-runtime-v1.d.ts",
+      "import": "./dist/organization-record-runtime-v1.js"
+    },
     "./new-lineage-v1": {
       "types": "./dist/new-lineage-v1.d.ts",
       "import": "./dist/new-lineage-v1.js"

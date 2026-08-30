@@ -20,7 +20,7 @@ import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/new-lineage-v1";
+} from "@echo-brain/organization-record/organization-record-runtime-v1";
 import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/readable-search-runtime.js";

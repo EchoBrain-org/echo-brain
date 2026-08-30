@@ -2,9 +2,9 @@ import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
-  CleanPersonRecordReaderV1,
+  PersonRecordReaderV1,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/new-lineage-v1";
+} from "@echo-brain/organization-record/organization-record-runtime-v1";
 import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
@@ -192,7 +192,7 @@ export async function startOrganizationAuthorityApiRuntime(
         organization_id: metadata.organization_id,
         state_lineage_id: lineage.root.state_lineage_id,
         sessions,
-        records: new CleanPersonRecordReaderV1(recordDatabase),
+        records: new PersonRecordReaderV1(recordDatabase),
         audit: readAudit,
       }),
       person_record_search: recordSearch,

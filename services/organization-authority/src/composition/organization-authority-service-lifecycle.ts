@@ -14,7 +14,7 @@ import {
   type OrganizationAuthorityApiRuntimeDependencies,
   type RunningOrganizationAuthorityApiRuntime,
 } from "./organization-authority-api-runtime.js";
-import { clearCleanReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/new-lineage-v1";
+import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
 
 /**
  * The narrow durable-work seam for the Organization Authority's admitted
@@ -125,7 +125,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     dependencies.start_api_runtime ?? startOrganizationAuthorityApiRuntime;
   const clearHandle =
     dependencies.clear_readable_search_handle ??
-    clearCleanReadableSearchActiveGenerationV1;
+    clearReadableSearchActiveGenerationV1;
   const startup = new AbortController();
   const lifecycle = new MeetingProcessingWorkerLifecycleV1(
     dependencies.on_worker_telemetry ?? (() => undefined),

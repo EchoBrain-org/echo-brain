@@ -11,19 +11,19 @@ import {
 import {
   applyOrganizationRecordLogBaselineV1,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/new-lineage-v1";
+} from "@echo-brain/organization-record/organization-record-runtime-v1";
 import {
-  buildCleanReadableSearchGenerationV1,
+  buildReadableSearchGenerationV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   readableSearchPlaneBaselineSha256V1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
-  warmCleanReadableSearchActiveGenerationV1,
-  type BuildCleanReadableSearchGenerationV1Input,
-  type CleanReadableSearchAtomV1,
-} from "@echo-brain/organization-retrieval/new-lineage-v1";
+  warmReadableSearchActiveGenerationV1,
+  type BuildReadableSearchGenerationV1Input,
+  type ReadableSearchAtomV1,
+} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
@@ -80,8 +80,8 @@ function readerAuthorization(input: {
 
 function realGenerationInput(
   state_directory: string,
-  atoms: readonly CleanReadableSearchAtomV1[],
-): BuildCleanReadableSearchGenerationV1Input {
+  atoms: readonly ReadableSearchAtomV1[],
+): BuildReadableSearchGenerationV1Input {
   const authority_id = "oau_clean";
   const organization_id = "org_clean";
   const state_lineage_id = "lineage_clean";
@@ -160,8 +160,8 @@ function realGenerationInput(
 
 function policyAtom(input: {
   readonly id: "member" | "restricted";
-  readonly policy_id: CleanReadableSearchAtomV1["policy_id"];
-}): CleanReadableSearchAtomV1 {
+  readonly policy_id: ReadableSearchAtomV1["policy_id"];
+}): ReadableSearchAtomV1 {
   const reviewer = input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
   return {
     authority_id: "oau_clean",
@@ -189,7 +189,7 @@ function policyAtom(input: {
   };
 }
 
-function benchmarkAtom(index: number): CleanReadableSearchAtomV1 {
+function benchmarkAtom(index: number): ReadableSearchAtomV1 {
   const reviewer = index >= 500;
   // Fourteen benchmark reviewer tuples plus the exact owner tuple used by the
   // policy fixture yield fifteen reviewer segments and one member segment.
@@ -372,7 +372,7 @@ describe("clean Person Layer 2 route", () => {
       )
       .run(2, restrictedRecordHash);
     const buildStarted = performance.now();
-    const built = buildCleanReadableSearchGenerationV1(
+    const built = buildReadableSearchGenerationV1(
       realGenerationInput(value.state_directory, [
         policyAtom({
           id: "member",
@@ -389,7 +389,7 @@ describe("clean Person Layer 2 route", () => {
     );
     const buildMilliseconds = performance.now() - buildStarted;
     const prewarmStarted = performance.now();
-    warmCleanReadableSearchActiveGenerationV1({
+    warmReadableSearchActiveGenerationV1({
       state_directory: value.state_directory,
       active_generation: {
         generation_id: built.manifest.generation_id,

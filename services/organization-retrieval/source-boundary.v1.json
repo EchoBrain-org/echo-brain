@@ -7,7 +7,7 @@
   "source_root": "services/organization-retrieval/src",
   "package_json": "services/organization-retrieval/package.json",
   "entry_points": [
-    "services/organization-retrieval/src/new-lineage-v1.ts"
+    "services/organization-retrieval/src/readable-search-runtime-v1.ts"
   ],
   "owned_source_paths": [
     "services/organization-retrieval/src/**"
@@ -38,8 +38,8 @@
   ],
   "layer_rules": [
     {
-      "name": "retrieval-new-lineage-v1-owns-genesis-composition",
-      "from": "services/organization-retrieval/src/new-lineage-v1.ts",
+      "name": "readable-search-runtime-v1-owns-generation-composition",
+      "from": "services/organization-retrieval/src/readable-search-runtime-v1.ts",
       "allowed_imports": [
         "services/organization-retrieval/src/**"
       ],
@@ -54,6 +54,16 @@
         "fs",
         "path"
       ]
+    },
+    {
+      "name": "retrieval-compatibility-entrypoint-is-thin",
+      "from": "services/organization-retrieval/src/new-lineage-v1.ts",
+      "allowed_imports": [
+        "services/organization-retrieval/src/readable-search-runtime-v1.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     },
     {
       "name": "retrieval-application-is-pure",

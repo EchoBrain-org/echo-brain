@@ -72,7 +72,7 @@ import {
   createPrivateSlackBlockApprovalPolicyProjectorV1,
   type ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1,
 } from "../src/application/private-slack-block-approval-policy-facts-v1.js";
-import { CleanPersonRecordReaderV1 } from "../src/retrieve/clean-person-record-reader-v1.js";
+import { PersonRecordReaderV1 } from "../src/retrieve/person-record-reader-v1.js";
 import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordRetrievalSourceVerifiedEnvelopeV1,
@@ -81,7 +81,7 @@ import {
   applyOrganizationRecordLogBaselineV1,
   applyOrganizationRecordLogBaselineV2,
 } from "../src/persistence/record-log-baseline.js";
-import { openOrganizationRecordDatabase } from "../src/persistence/open-unmigrated-database.js";
+import { openOrganizationRecordDatabase } from "../src/persistence/open-organization-record-database.js";
 
 const COORDINATES = {
   authority_id: "oau_00000000-0000-4000-8000-000000000001",
@@ -999,7 +999,7 @@ describe("V4 organization-record append", () => {
           action: "reject",
         }),
       );
-      const reader = new CleanPersonRecordReaderV1(db);
+      const reader = new PersonRecordReaderV1(db);
       expect(
         reader.list({
           ...COORDINATES,

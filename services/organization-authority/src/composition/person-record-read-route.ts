@@ -4,9 +4,9 @@ import {
 } from "@echo-brain/federation-protocol";
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
-  CleanPersonReadableRecordV1,
-  CleanPersonRecordReaderV1Input,
-} from "@echo-brain/organization-record/new-lineage-v1";
+  PersonReadableRecordV1,
+  PersonRecordReaderV1Input,
+} from "@echo-brain/organization-record/organization-record-runtime-v1";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
@@ -23,8 +23,8 @@ interface CurrentPersonSessions {
 
 interface PersonRecordReader {
   list(
-    input: CleanPersonRecordReaderV1Input,
-  ): readonly CleanPersonReadableRecordV1[];
+    input: PersonRecordReaderV1Input,
+  ): readonly PersonReadableRecordV1[];
 }
 
 export interface CreatePersonRecordReadRouteV1Options {
@@ -63,7 +63,7 @@ function assertExpectedOrganization(
 }
 
 function asResponse(
-  records: readonly CleanPersonReadableRecordV1[],
+  records: readonly PersonReadableRecordV1[],
 ): PersonRecordReadResponseV1 {
   return Object.freeze({
     schema_version: 1,

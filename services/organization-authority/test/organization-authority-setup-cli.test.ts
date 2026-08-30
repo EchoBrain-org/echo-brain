@@ -16,12 +16,12 @@ import {
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import {
-  buildCleanReadableSearchGenerationV1,
+  buildReadableSearchGenerationV1,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   readableSearchPlaneBaselineSha256V1,
-} from "@echo-brain/organization-retrieval/new-lineage-v1";
+} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -288,7 +288,7 @@ function installDurableCanaryFixture(
   } finally {
     record.close();
   }
-  const built = buildCleanReadableSearchGenerationV1(
+  const built = buildReadableSearchGenerationV1(
     buildInputForCanary(state, manifest, recordSha256),
   );
   const authority = new Database(join(state, "authority.sqlite"));

@@ -25,7 +25,7 @@ import {
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
 } from "../../organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.js";
-import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/new-lineage-v1";
+import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-runtime-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
   BegunPersonOidcLogin,
@@ -59,7 +59,7 @@ import type {
   ApprovalWorkflowRuntimeBundleV1,
   ApprovalWorkflowRuntimeContextV1,
 } from "../src/composition/approval-runtime-bundle-v1.js";
-import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/new-lineage-v1";
+import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-runtime-v1";
 import { readableSearchRuntimeContractV1 } from "../src/composition/readable-search-runtime.js";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";

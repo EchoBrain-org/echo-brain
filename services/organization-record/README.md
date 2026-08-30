@@ -1,9 +1,10 @@
 # Organization record
 
 This library owns the append-only organization record. The retained
-`new-lineage-v1` package path is a compatibility entrypoint, not a component
-name. It exposes the V4 record appender, the permission-aware person reader,
-and the record retrieval-source snapshot port.
+`organization-record-runtime-v1` is the canonical package entrypoint. The
+retained `new-lineage-v1` path is a thin compatibility re-export, not a
+component name. The runtime exposes the V4 record appender, the
+permission-aware person reader, and the record retrieval-source snapshot port.
 
 The V4 canonical envelope bytes and their authorization and provider-action
 proof digests are immutable contracts. Reads resolve current permissions for

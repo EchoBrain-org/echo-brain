@@ -15,10 +15,10 @@ import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordPolicyFactProjectorRegistryV1,
   type RecordRetrievalSourceSnapshotV1,
-} from "@echo-brain/organization-record/new-lineage-v1";
+} from "@echo-brain/organization-record/organization-record-runtime-v1";
 import {
-  buildCleanReadableSearchGenerationV1,
-  clearCleanReadableSearchActiveGenerationV1,
+  buildReadableSearchGenerationV1,
+  clearReadableSearchActiveGenerationV1,
   CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
   CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
@@ -26,10 +26,10 @@ import {
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   readableSearchPlaneBaselineSha256V1,
-  warmCleanReadableSearchActiveGenerationV1,
-  type CleanReadableSearchAtomV1,
-  type CleanReadableSearchLineagePlaneV1,
-} from "@echo-brain/organization-retrieval/new-lineage-v1";
+  warmReadableSearchActiveGenerationV1,
+  type ReadableSearchAtomV1,
+  type ReadableSearchLineagePlaneV1,
+} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
 import type Database from "better-sqlite3";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import {
@@ -173,7 +173,7 @@ function lineagePlane(
     "retrieval-facts" | "retrieval-content" | "retrieval-lexical"
   >,
   schemaSha256: Sha256Digest,
-): CleanReadableSearchLineagePlaneV1 {
+): ReadableSearchLineagePlaneV1 {
   const body = validateStateLineageDatabaseManifestV1({
     schema_version: 1,
     kind: STATE_LINEAGE_DATABASE_MANIFEST_V1_KIND,
@@ -279,7 +279,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
           row.envelope_sha256,
         ]),
       );
-      const atoms: CleanReadableSearchAtomV1[] = snapshot.source_snapshot.atoms.map(
+      const atoms: ReadableSearchAtomV1[] = snapshot.source_snapshot.atoms.map(
         (atom) => {
           const envelopeSha256 = envelopeByPosition.get(atom.record_position);
           if (envelopeSha256 === undefined) {
@@ -313,7 +313,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
           });
         },
       );
-      const built = buildCleanReadableSearchGenerationV1({
+      const built = buildReadableSearchGenerationV1({
         state_directory: input.state_directory,
         lineage: {
           authority_id: input.root.authority_id,
@@ -350,7 +350,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
       });
     },
     prepare_generation: (generation) =>
-      warmCleanReadableSearchActiveGenerationV1({
+      warmReadableSearchActiveGenerationV1({
         state_directory: input.state_directory,
         active_generation: {
           generation_id: generation.generation_id,
@@ -365,7 +365,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
           },
         },
       }),
-    invalidate_generation: clearCleanReadableSearchActiveGenerationV1,
+    invalidate_generation: clearReadableSearchActiveGenerationV1,
     ...(input.now === undefined ? {} : { now: input.now }),
   });
 }

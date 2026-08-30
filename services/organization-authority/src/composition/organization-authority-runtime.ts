@@ -5,7 +5,7 @@ import {
   type RecordPolicyFactProjectorRegistryV1,
   OrganizationRecordAppenderV4,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/new-lineage-v1";
+} from "@echo-brain/organization-record/organization-record-runtime-v1";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";

@@ -4,10 +4,10 @@ import {
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import {
-  clearCleanReadableSearchActiveGenerationV1,
-  searchCleanReadableSearchGenerationV1,
-  type CleanReadableSearchResultItemV1,
-} from "@echo-brain/organization-retrieval/new-lineage-v1";
+  clearReadableSearchActiveGenerationV1,
+  searchReadableSearchGenerationV1,
+  type ReadableSearchResultItemV1,
+} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
 import type Database from "better-sqlite3";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
@@ -37,7 +37,7 @@ interface RecordHead {
   readonly record_sha256: Sha256Digest | null;
 }
 
-type SearchGeneration = typeof searchCleanReadableSearchGenerationV1;
+type SearchGeneration = typeof searchReadableSearchGenerationV1;
 
 /**
  * In-process Layer 3 input for a bounded answer-composition retrieval plan. This is not
@@ -234,7 +234,7 @@ function unavailable(): never {
 function asResponse(input: {
   readonly generation_id: Sha256Digest;
   readonly record_head: RecordHead;
-  readonly items: readonly CleanReadableSearchResultItemV1[];
+  readonly items: readonly ReadableSearchResultItemV1[];
 }): PersonRecordSearchResponseV1 {
   return Object.freeze({
     schema_version: 1,
@@ -266,7 +266,7 @@ export function createPersonRecordSearchRouteV1(
   options: CreatePersonRecordSearchRouteV1Options,
 ): PersonRecordSearchRouteV1 {
   const search =
-    options.search_generation ?? searchCleanReadableSearchGenerationV1;
+    options.search_generation ?? searchReadableSearchGenerationV1;
   const releaseWitnesses = new WeakSet<PersonRecordSearchBatchReleaseV1>();
 
   function assertExpectedOrganization(
@@ -296,7 +296,7 @@ export function createPersonRecordSearchRouteV1(
       pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 ||
       !sameHead(pointer, head)
     ) {
-      clearCleanReadableSearchActiveGenerationV1();
+      clearReadableSearchActiveGenerationV1();
       unavailable();
     }
     let results;
@@ -348,7 +348,7 @@ export function createPersonRecordSearchRouteV1(
     // Preserve the answer-composition plan's order while giving every focused query one
     // result per round. This is deterministic breadth without pretending that
     // the Layer 3 boundary has a cross-query reranker.
-    const merged = new Map<Sha256Digest, CleanReadableSearchResultItemV1>();
+    const merged = new Map<Sha256Digest, ReadableSearchResultItemV1>();
     const longestResult = Math.max(
       ...results.map((result) => result.items.length),
     );

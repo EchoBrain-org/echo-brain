@@ -5,7 +5,7 @@ import {
   applyOrganizationRecordLogBaselineV2,
   organizationRecordLogBaselineSha256V2,
 } from "../src/persistence/record-log-baseline.js";
-import { openOrganizationRecordDatabase } from "../src/persistence/open-unmigrated-database.js";
+import { openOrganizationRecordDatabase } from "../src/persistence/open-organization-record-database.js";
 
 describe("organization record log baseline V2", () => {
   it("creates a fresh V2 lineage with a stable baseline digest", () => {

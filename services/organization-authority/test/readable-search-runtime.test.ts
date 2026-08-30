@@ -12,11 +12,11 @@ import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/new-lineage-v1";
+} from "@echo-brain/organization-record/organization-record-runtime-v1";
 import {
-  clearCleanReadableSearchActiveGenerationV1,
-  searchCleanReadableSearchGenerationV1,
-} from "@echo-brain/organization-retrieval/new-lineage-v1";
+  clearReadableSearchActiveGenerationV1,
+  searchReadableSearchGenerationV1,
+} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../src/composition/readable-search-runtime.js";
@@ -119,9 +119,9 @@ describe("clean readable-search runtime composition", () => {
           record_sha256: null,
         },
       };
-      clearCleanReadableSearchActiveGenerationV1();
+      clearReadableSearchActiveGenerationV1();
       expect(() =>
-        searchCleanReadableSearchGenerationV1({
+        searchReadableSearchGenerationV1({
           state_directory: initialized.state_directory,
           active_generation,
           reader: { principal_id: "restart", membership_id: "restart" },
@@ -135,7 +135,7 @@ describe("clean readable-search runtime composition", () => {
         record_head: { position: 0, record_sha256: null },
       });
       expect(
-        searchCleanReadableSearchGenerationV1({
+        searchReadableSearchGenerationV1({
           state_directory: initialized.state_directory,
           active_generation,
           reader: { principal_id: "restart", membership_id: "restart" },

@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import { canonicalJson, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
-  buildCleanReadableSearchGenerationV1,
+  buildReadableSearchGenerationV1,
   CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
@@ -13,18 +13,18 @@ import {
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   readableSearchPlaneBaselineSha256V1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
-  searchCleanReadableSearchGenerationV1,
-  warmCleanReadableSearchActiveGenerationV1,
-  type BuildCleanReadableSearchGenerationV1Input,
-  type CleanReadableSearchAtomV1,
-} from "../src/new-lineage-v1.js";
+  searchReadableSearchGenerationV1,
+  warmReadableSearchActiveGenerationV1,
+  type BuildReadableSearchGenerationV1Input,
+  type ReadableSearchAtomV1,
+} from "../src/readable-search-runtime-v1.js";
 
 const digest = (value: string): `sha256:${string}` => sha256Digest(value);
 
 function input(
   directory: string,
-  atoms: readonly CleanReadableSearchAtomV1[] = [],
-): BuildCleanReadableSearchGenerationV1Input {
+  atoms: readonly ReadableSearchAtomV1[] = [],
+): BuildReadableSearchGenerationV1Input {
   const authority_id = "auth_clean";
   const organization_id = "org_clean";
   const state_lineage_id = "lineage_clean";
@@ -106,8 +106,8 @@ function input(
 
 function atom(
   id: string,
-  policy_id: CleanReadableSearchAtomV1["policy_id"],
-): CleanReadableSearchAtomV1 {
+  policy_id: ReadableSearchAtomV1["policy_id"],
+): ReadableSearchAtomV1 {
   const reviewer = policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
   return {
     authority_id: "auth_clean",
@@ -137,8 +137,8 @@ function atom(
 
 function atomWith(
   id: string,
-  overrides: Partial<CleanReadableSearchAtomV1> = {},
-): CleanReadableSearchAtomV1 {
+  overrides: Partial<ReadableSearchAtomV1> = {},
+): ReadableSearchAtomV1 {
   const base = atom(id, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2);
   const value = { ...base, ...overrides };
   return { ...value, text_sha256: digest(value.text) };
@@ -200,7 +200,7 @@ describe("clean immutable readable-search generation v1", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
     try {
       expect(() =>
-        buildCleanReadableSearchGenerationV1(input(directory, atoms())),
+        buildReadableSearchGenerationV1(input(directory, atoms())),
       ).toThrow(dimension);
       expect(existsSync(join(directory, "record-retrieval"))).toBe(false);
     } finally {
@@ -210,7 +210,7 @@ describe("clean immutable readable-search generation v1", () => {
   it("builds an empty member generation from the exact head", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
     try {
-      const built = buildCleanReadableSearchGenerationV1(input(directory));
+      const built = buildReadableSearchGenerationV1(input(directory));
       expect(built.manifest.segments).toHaveLength(1);
       expect(built.manifest.segments[0]!.segment_id).toMatch(/^sha256:/);
       expect(
@@ -224,7 +224,7 @@ describe("clean immutable readable-search generation v1", () => {
   it("separates member and exact reviewer tuples into immutable segments", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
     try {
-      const built = buildCleanReadableSearchGenerationV1(
+      const built = buildReadableSearchGenerationV1(
         input(directory, [
           atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
           atom("reviewer", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2),
@@ -246,7 +246,7 @@ describe("clean immutable readable-search generation v1", () => {
   it("stamps every plane manifest and never creates a migration ledger", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
     try {
-      const built = buildCleanReadableSearchGenerationV1(
+      const built = buildReadableSearchGenerationV1(
         input(directory, [
           atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
         ]),
@@ -292,8 +292,8 @@ describe("clean immutable readable-search generation v1", () => {
       const source = input(directory, [
         atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
       ]);
-      const first = buildCleanReadableSearchGenerationV1(source);
-      const second = buildCleanReadableSearchGenerationV1(source);
+      const first = buildReadableSearchGenerationV1(source);
+      const second = buildReadableSearchGenerationV1(source);
       expect(second.generation_directory).toBe(first.generation_directory);
       expect(second.manifest_sha256).toBe(first.manifest_sha256);
     } finally {
@@ -304,7 +304,7 @@ describe("clean immutable readable-search generation v1", () => {
   it("searches only the member segment and the reader's exact reviewer tuple", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
     try {
-      const built = buildCleanReadableSearchGenerationV1(
+      const built = buildReadableSearchGenerationV1(
         input(directory, [
           atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
           atom("reviewer", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2),
@@ -316,11 +316,11 @@ describe("clean immutable readable-search generation v1", () => {
         retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
         exact_head: built.manifest.exact_head,
       };
-      warmCleanReadableSearchActiveGenerationV1({
+      warmReadableSearchActiveGenerationV1({
         state_directory: directory,
         active_generation,
       });
-      const matching = searchCleanReadableSearchGenerationV1({
+      const matching = searchReadableSearchGenerationV1({
         state_directory: directory,
         active_generation,
         reader: {
@@ -333,7 +333,7 @@ describe("clean immutable readable-search generation v1", () => {
         "searchable reviewer",
         "searchable member",
       ]);
-      const otherReader = searchCleanReadableSearchGenerationV1({
+      const otherReader = searchReadableSearchGenerationV1({
         state_directory: directory,
         active_generation,
         reader: { principal_id: "prn_other", membership_id: "mem_reviewer" },
@@ -350,9 +350,9 @@ describe("clean immutable readable-search generation v1", () => {
   it("fails closed when the active pointer does not bind the immutable manifest", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
     try {
-      const built = buildCleanReadableSearchGenerationV1(input(directory));
+      const built = buildReadableSearchGenerationV1(input(directory));
       expect(() =>
-        searchCleanReadableSearchGenerationV1({
+        searchReadableSearchGenerationV1({
           state_directory: directory,
           active_generation: {
             generation_id: built.manifest.generation_id,
@@ -374,7 +374,7 @@ describe("clean immutable readable-search generation v1", () => {
     const missing = join(directory, "missing");
     try {
       expect(() =>
-        searchCleanReadableSearchGenerationV1({
+        searchReadableSearchGenerationV1({
           state_directory: missing,
           active_generation: {
             generation_id: digest("generation"),

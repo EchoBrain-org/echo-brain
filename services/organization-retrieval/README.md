@@ -1,5 +1,8 @@
 # Organization retrieval
 
+`readable-search-runtime-v1` is the canonical package entrypoint. The retained
+`new-lineage-v1` path is a thin compatibility re-export.
+
 ## Clean readable-search lean V1 budget
 
 Lean V1 admits at most 1,024 atoms, 32 permission segments, 4,096 UTF-8
