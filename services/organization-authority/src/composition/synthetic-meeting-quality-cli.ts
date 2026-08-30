@@ -34,7 +34,7 @@ const PROCESS_IO: SyntheticMeetingQualityCliIoV1 = {
   stdout: (line) => process.stdout.write(line),
 };
 
-type StructuredOutput = ReturnType<typeof createOpenRouterStructuredGenerationAdapter>;
+type StructuredGeneration = ReturnType<typeof createOpenRouterStructuredGenerationAdapter>;
 
 /** Narrow seams keep tests offline while the default command uses real adapters. */
 export interface SyntheticMeetingQualityCliDependenciesV1 {
@@ -44,10 +44,10 @@ export interface SyntheticMeetingQualityCliDependenciesV1 {
     config: AdapterConfig,
     credential: string,
   ) => DecisionProcessorAdapter;
-  readonly create_structured_output?: (
+  readonly create_structured_generation?: (
     credential_reference: string,
     credential: string,
-  ) => StructuredOutput;
+  ) => StructuredGeneration;
 }
 
 interface ParsedFlagsV1 {
@@ -109,7 +109,7 @@ function failed(io: SyntheticMeetingQualityCliIoV1, failure: "usage" | "evaluati
 
 /**
  * Local-only composition for evaluating an invented replay corpus with the
- * same fixed OpenRouter models used by the clean runtime. It opens no state,
+ * same fixed OpenRouter models used by the selected Authority composition. It opens no state,
  * delivery, provider-source, or staging connection; OpenRouter is the sole
  * network dependency and its credential never appears in output.
  */
@@ -141,14 +141,14 @@ export async function runSyntheticMeetingQualityCommandV1(
         })
       : dependencies.create_processor(processorConfig, credential);
     assertValidProcessor(processor, processorConfig);
-    const createStructuredOutput = dependencies.create_structured_output ??
+    const createStructuredGeneration = dependencies.create_structured_generation ??
       ((reference: string, resolvedCredential: string) =>
         createOpenRouterStructuredGenerationAdapter({
           credential_ref: reference,
           credential_resolver: (candidate) =>
             candidate === reference ? resolvedCredential : undefined,
         }));
-    const model = createStructuredOutput(credentialReference, credential);
+    const model = createStructuredGeneration(credentialReference, credential);
     const meetings = await (dependencies.load_corpus ?? loadSyntheticReplayMeetingsV1)(
       flags.corpus_path,
     );

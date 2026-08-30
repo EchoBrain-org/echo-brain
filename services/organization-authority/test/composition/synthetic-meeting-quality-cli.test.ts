@@ -117,7 +117,7 @@ describe("synthetic meeting quality command", () => {
           received.credential = credential;
           return expectedProcessor();
         },
-        create_structured_output: () => ({
+        create_structured_generation: () => ({
           generate: async (input) =>
             Array.isArray(input.schema.required) && input.schema.required.includes("queries")
               ? { queries: [] }

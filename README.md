@@ -42,7 +42,7 @@ Tokens are never printed by successful commands.
 
 The server starts only from the seven byte-pinned clean baselines. Historical
 migration runners and compatibility APIs are not shipped. Released retrieval
-is the sole content-release boundary. The answer-composition runtime is one
+is the sole content-release boundary. The answer-composition generation path is one
 synchronous Person `ask` path: one bounded plan, one released-retrieval batch,
 at most one answer call, and
 citations limited to that request's released atoms. It has no agents, tools,

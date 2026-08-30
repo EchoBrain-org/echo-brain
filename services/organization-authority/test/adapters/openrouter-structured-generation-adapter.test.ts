@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createOpenRouterStructuredGenerationAdapter,
-  OpenRouterStructuredOutputError,
+  OpenRouterStructuredGenerationError,
 } from "../../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 
 const structuredRequest = {
@@ -17,7 +17,7 @@ async function caught(adapter: ReturnType<typeof createOpenRouterStructuredGener
   try {
     await adapter.generate(structuredRequest);
   } catch (error) {
-    if (error instanceof OpenRouterStructuredOutputError) return error;
+    if (error instanceof OpenRouterStructuredGenerationError) return error;
     throw error;
   }
   throw new Error("expected OpenRouter adapter to fail");

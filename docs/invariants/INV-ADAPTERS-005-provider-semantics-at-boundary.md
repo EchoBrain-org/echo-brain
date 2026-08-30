@@ -98,7 +98,7 @@ The reviewed source is covered by:
 - `services/organization-authority/test/processing/admitted-meeting-processing/meeting-processing-cycle-v1.test.ts`;
 - `services/organization-authority/test/organization-authority-runtime.test.ts`;
 - `services/organization-authority/test/composition/openrouter-decision-processor-runtime-bundle-v1.test.ts`;
-- `services/organization-authority/test/composition/openrouter-answer-composition-runtime.test.ts`;
+- `services/organization-authority/test/composition/openrouter-answer-composition-generation-bundle-v1.test.ts`;
 - `services/organization-record/test/record-log-v4-append.test.ts`; and
 - the synthetic meeting-source adapter and evaluator tests.
 

@@ -1051,7 +1051,7 @@ describe("workspace source boundaries", () => {
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
     );
     for (const concreteCompositionModule of [
-      "services/organization-authority/src/composition/granola-admitted-meeting-source-boundary-v1.ts",
+      "services/organization-authority/src/composition/granola-admitted-meeting-source-cursor-policy-v1.ts",
       "services/organization-authority/src/composition/organization-authority-composition-root.ts",
     ]) {
       expect(existsSync(join(fixture, concreteCompositionModule))).toBe(true);
@@ -1116,7 +1116,7 @@ describe("workspace source boundaries", () => {
     ]));
 
     const probePath =
-      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-source-boundary-v1.ts";
+      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.ts";
     const probe = join(fixture, probePath);
     const original = readFileSync(probe, "utf8");
     for (const providerIdentifier of [

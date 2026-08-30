@@ -4,8 +4,8 @@ import {
   type StructuredGenerationPort,
 } from "../../../answer-composition/retrieval-grounded-answer-composition.js";
 
-export const OPENROUTER_STRUCTURED_OUTPUT_TIMEOUT_MS = 30_000;
-export const OPENROUTER_STRUCTURED_OUTPUT_MAX_TIMEOUT_MS = 120_000;
+export const OPENROUTER_STRUCTURED_GENERATION_TIMEOUT_MS = 30_000;
+export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
 export type OpenRouterFailureClass =
   | "adapter_timeout"
@@ -36,7 +36,7 @@ export interface OpenRouterFailureDiagnostic {
   readonly adapter_request_id: string | null;
 }
 
-export class OpenRouterStructuredOutputError extends Error {
+export class OpenRouterStructuredGenerationError extends Error {
   readonly diagnostic: OpenRouterFailureDiagnostic;
 
   constructor(
@@ -46,12 +46,12 @@ export class OpenRouterStructuredOutputError extends Error {
     }),
   ) {
     super(message);
-    this.name = "OpenRouterStructuredOutputError";
+    this.name = "OpenRouterStructuredGenerationError";
     this.diagnostic = diagnostic;
   }
 }
 
-export interface OpenRouterStructuredOutputOptions {
+export interface OpenRouterStructuredGenerationOptions {
   readonly credential_ref: string;
   readonly credential_resolver: (reference: string) => string | undefined;
   readonly fetch_impl?: typeof fetch;
@@ -68,23 +68,23 @@ function endpoint(value: string | undefined): string {
   try {
     parsed = new URL(selected);
   } catch {
-    throw new OpenRouterStructuredOutputError("OpenRouter endpoint is invalid");
+    throw new OpenRouterStructuredGenerationError("OpenRouter endpoint is invalid");
   }
   if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") {
-    throw new OpenRouterStructuredOutputError("OpenRouter endpoint is invalid");
+    throw new OpenRouterStructuredGenerationError("OpenRouter endpoint is invalid");
   }
   return parsed.toString();
 }
 
 function model(value: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)) {
-    throw new OpenRouterStructuredOutputError("OpenRouter model is invalid");
+    throw new OpenRouterStructuredGenerationError("OpenRouter model is invalid");
   }
 }
 
 function boundedInteger(value: number, label: string, maximum: number): void {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
-    throw new OpenRouterStructuredOutputError(`${label} is invalid`);
+    throw new OpenRouterStructuredGenerationError(`${label} is invalid`);
   }
 }
 
@@ -141,34 +141,34 @@ function fail(
   message: "OpenRouter request failed" | "OpenRouter response is invalid",
   input: Parameters<typeof failureDiagnostic>[0],
 ): never {
-  throw new OpenRouterStructuredOutputError(message, failureDiagnostic(input));
+  throw new OpenRouterStructuredGenerationError(message, failureDiagnostic(input));
 }
 
 /** A small, credential-contained OpenRouter JSON-schema adapter for answer composition. */
 export function createOpenRouterStructuredGenerationAdapter(
-  options: OpenRouterStructuredOutputOptions,
+  options: OpenRouterStructuredGenerationOptions,
 ): StructuredGenerationPort {
   if (!nonEmpty(options.credential_ref)) {
-    throw new OpenRouterStructuredOutputError("OpenRouter credential reference is invalid");
+    throw new OpenRouterStructuredGenerationError("OpenRouter credential reference is invalid");
   }
   const url = endpoint(options.endpoint);
   const fetchImpl = options.fetch_impl ?? fetch;
   return Object.freeze({
     async generate(input: StructuredGenerationInput): Promise<unknown> {
       model(input.model);
-      boundedInteger(input.timeout_ms, "OpenRouter timeout", OPENROUTER_STRUCTURED_OUTPUT_MAX_TIMEOUT_MS);
+      boundedInteger(input.timeout_ms, "OpenRouter timeout", OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS);
       boundedInteger(input.max_output_tokens, "OpenRouter output limit", 4_096);
       if (!nonEmpty(input.system_prompt) || !nonEmpty(input.user_prompt)) {
-        throw new OpenRouterStructuredOutputError("OpenRouter request is invalid");
+        throw new OpenRouterStructuredGenerationError("OpenRouter request is invalid");
       }
       let apiKey: string | undefined;
       try {
         apiKey = options.credential_resolver(options.credential_ref);
       } catch {
-        throw new OpenRouterStructuredOutputError("OpenRouter credential is unavailable");
+        throw new OpenRouterStructuredGenerationError("OpenRouter credential is unavailable");
       }
       if (!nonEmpty(apiKey)) {
-        throw new OpenRouterStructuredOutputError("OpenRouter credential is unavailable");
+        throw new OpenRouterStructuredGenerationError("OpenRouter credential is unavailable");
       }
       const signals: AbortSignal[] = [AbortSignal.timeout(input.timeout_ms)];
       if (input.signal !== undefined) signals.push(input.signal);
