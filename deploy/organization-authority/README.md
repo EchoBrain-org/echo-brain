@@ -72,7 +72,7 @@ Slack app as `slack-signing-secret`: one no-newline value in a current-user
 or a shell argument.
 
 `slack_approval_channel_id` in the onboarding JSON is a transitional legacy
-field. It names only the public founder identity-link channel used during
+field. It names only the public initial-owner identity-link channel used during
 onboarding. It never receives approval cards and no shared approval binding is
 created from it. Run the re-onboarding only with a wholly fresh provider-
 neutral V3 staging lineage; do not reuse an older shared-channel rehearsal
@@ -85,7 +85,7 @@ configuration, or state mutation. This is deliberately a replacement boundary,
 not a hidden migration path; use `replace-rehearsal --confirm-no-live-users`
 for pre-live state that does not meet this floor.
 
-Complete the bootstrap, founder identity link, credential installation, and
+Complete the bootstrap, initial-owner identity link, credential installation, and
 finalization, then start the active runtime. `resume` stops at this point and
 prints the exact URL. Only once that runtime is healthy, enable
 **Interactivity & Shortcuts**, save this Request URL, create the first
@@ -137,7 +137,7 @@ organization.
 
 The roster candidate changes the fresh Authority baseline. It cannot start over
 an earlier rehearsal lineage. Because that lineage has no live users, retire it
-once through the explicit founder attestation:
+once through the explicit initial-owner attestation:
 
 ```sh
 ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
@@ -153,7 +153,7 @@ Run `prepare` again with the new exact release record. Never use this command
 after the first live-user release; subsequent baseline-preserving updates use
 the release procedure below.
 
-## Resumable founder onboarding
+## Resumable initial-owner onboarding
 
 Run this same command after each human step:
 
@@ -162,13 +162,13 @@ Run this same command after each human step:
 ```
 
 It pulls the accepted immutable image only when the host lacks it, calls the
-durable clean-founder status command, and advances the next safe stage. It
+durable `clean-founder` compatibility status command, and advances the next safe stage. It
 starts the runtime for browser login and Slack linking, stops it for credential
 installation and finalization, then starts it again. It never reads SQLite,
 prints secret values, or asks for generated IDs.
 
-When prompted for browser login, transfer the founder invitation to the
-founder's current-user machine through a private channel, then run the exact
+When prompted for browser login, transfer the initial-owner invitation to the
+initial owner's current-user machine through a private channel, then run the exact
 path and command printed by `resume`. Install the exact Person client from the
 same release record first, using [the release installer](../release/README.md).
 The received invitation must be a current-user mode-`0600` file inside a
@@ -186,7 +186,7 @@ present locally:
 ```
 
 It creates one transient no-dependency local container, prints safe running,
-health, exact-image, and clean-founder status booleans, and never pulls an
+health, exact-image, and `clean-founder` compatibility status booleans, and never pulls an
 image implicitly. If the image is absent, use `resume`, whose pull is explicit.
 Re-running `resume` is also idempotent after terminal completion.
 
@@ -279,7 +279,7 @@ procedure in [the clean-v1 release loop](../release/README.md), including
 baseline-preserving `clean-v1` replacements, not schema migrations or automatic
 client updates. This routine path preserves the existing Google identity,
 Slack link and configuration, provider credentials, private-DM assignment, and
-Authority data; do not rerun founder onboarding for an ordinary update. Use
+Authority data; do not rerun initial-owner onboarding for an ordinary update. Use
 `update-clean-v1.sh canary` to create the release-bound synthetic private-DM
 rehearsal instead of making a new Granola note. A routine promotion is refused
 until that exact candidate has a persisted `staged` receipt and the operator

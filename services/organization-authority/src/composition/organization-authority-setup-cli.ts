@@ -71,7 +71,7 @@ identity-link channel only. Private approval cards are never sent to it.`;
 
 // The remaining `clean-founder` filenames, command paths, instance IDs, wire
 // kinds, status fields, and next-step literals are frozen V1 compatibility
-// vocabulary. They do not name this component or limit setup to a founder.
+// vocabulary. They do not name this component or limit setup to an initial owner.
 
 interface CliIo {
   readonly stdout: (value: string) => void;

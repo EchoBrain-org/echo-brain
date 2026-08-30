@@ -324,7 +324,7 @@
       ]
     },
     {
-      "name": "authority-lean-layer4-answer-composition-is-a-layer3-client",
+      "name": "authority-answer-composition-consumes-only-readable-search-release",
       "from": "services/organization-authority/src/answer-composition/**",
       "allowed_imports": [
         "services/organization-authority/src/answer-composition/**"

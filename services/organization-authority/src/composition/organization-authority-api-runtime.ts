@@ -58,7 +58,7 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly external_identity_runtime?: PersonExternalIdentityRuntimeBundleV1;
   /** Present only after source admission; omitted during organization setup. */
   readonly answer_composition_runtime?: AnswerCompositionRuntimeV1;
-  /** Metadata-only Layer 4 failure observer for the live server log. */
+  /** Metadata-only answer-composition failure observer for the live server log. */
   readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
   /** Present only when the signed private-approval surface is active. */
   readonly private_approval_interaction_ingress?:

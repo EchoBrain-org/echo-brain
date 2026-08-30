@@ -21,7 +21,7 @@ export interface PersonAnswerResponseV1 {
   }[];
 }
 
-/** A bearer-only Layer 4 route. Caller identity never appears in the body. */
+/** A bearer-only answer-composition route. Caller identity never appears in the body. */
 export interface PersonAnswerHttpApplicationV1 {
   ask(input: {
     readonly access_token: string;

@@ -45,7 +45,7 @@ The core operates on bounded domain values. It reaches sources, processors,
 approval surfaces, delivery surfaces, and storage only through ports. Concrete
 provider and infrastructure code depends inward on the core; the core must not
 depend outward on them. Provider selection belongs in explicit composition
-bundles for source, processor, Layer 4 generation, approval/interaction, and
+bundles for source, processor, answer composition, approval/interaction, and
 Person external identity. Shared flow retains only opaque presentation
 references and approved-record policy projectors.
 

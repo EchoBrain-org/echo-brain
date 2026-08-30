@@ -42,8 +42,9 @@ Tokens are never printed by successful commands.
 
 The server starts only from the seven byte-pinned clean baselines. Historical
 migration runners and compatibility APIs are not shipped. Layer 3 is the sole
-release boundary. The only Layer 4 runtime is one synchronous Person `ask`
-path: one bounded plan, one Layer 3 batch, at most one answer call, and
+release boundary. The answer-composition runtime (the Layer 4 protocol
+boundary) is one synchronous Person `ask` path: one bounded plan, one Layer 3
+batch, at most one answer call, and
 citations limited to that request's released atoms. It has no agents, tools,
 memory, streaming, or direct Layer 1/2 access.
 
@@ -282,7 +283,7 @@ does not permit reformatting a volume that already has a filesystem. Omit the
 flag only after the first host has reached ready.
 
 The initial token creation, SNS email confirmation, provider applications,
-founder login, observability deployment, and first canary remain explicit human
+initial-owner login, observability deployment, and first canary remain explicit human
 steps. V1 is single-operator: never run overlapping lifecycle commands for this
 slot from different terminals or machines. For failed-create, rollback, mount,
 and recovery procedures, follow the full staging specification rather than

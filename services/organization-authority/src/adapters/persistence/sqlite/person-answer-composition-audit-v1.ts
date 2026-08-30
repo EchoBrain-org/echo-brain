@@ -5,7 +5,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
-/** Local persistence shape: this adapter deliberately does not depend on Layer 4. */
+/** Local persistence shape: this adapter deliberately does not depend on answer composition. */
 export interface PersonAnswerCompositionAuditEntryV1 {
   readonly authority_id: string;
   readonly organization_id: string;

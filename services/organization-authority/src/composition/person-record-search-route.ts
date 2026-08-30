@@ -40,7 +40,7 @@ interface RecordHead {
 type SearchGeneration = typeof searchCleanReadableSearchGenerationV1;
 
 /**
- * In-process Layer 3 input for a bounded Layer 4 retrieval plan. This is not
+ * In-process Layer 3 input for a bounded answer-composition retrieval plan. This is not
  * part of the Person HTTP contract: the bearer remains server-side while the
  * caller's plan is executed under one reader tuple and one exact snapshot.
  */
@@ -345,9 +345,9 @@ export function createPersonRecordSearchRouteV1(
         unavailable();
       }
     }
-    // Preserve the Layer 4 plan's order while giving every focused query one
+    // Preserve the answer-composition plan's order while giving every focused query one
     // result per round. This is deterministic breadth without pretending that
-    // Layer 3 has a cross-query reranker.
+    // the Layer 3 boundary has a cross-query reranker.
     const merged = new Map<Sha256Digest, CleanReadableSearchResultItemV1>();
     const longestResult = Math.max(
       ...results.map((result) => result.items.length),

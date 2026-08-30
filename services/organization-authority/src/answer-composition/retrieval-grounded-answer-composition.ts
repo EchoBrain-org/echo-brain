@@ -64,7 +64,7 @@ export interface Layer4ReleasedAtom {
 
 /**
  * This is intentionally structural. Layer 3's eventual exported response may
- * be adapted here without giving Layer 4 a lower-layer database dependency.
+ * be adapted here without giving answer composition a lower-layer database dependency.
  */
 export interface Layer4ReleasedBatch {
   readonly release_id: Sha256Digest;
@@ -284,7 +284,7 @@ function configuredModel(value: string, label: string): string {
 function timeout(value: number | undefined): number {
   const chosen = value ?? LAYER4_DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(chosen) || chosen < 1 || chosen > LAYER4_MAX_TIMEOUT_MS) {
-    throw new RetrievalGroundedAnswerCompositionError("Layer 4 timeout is invalid");
+    throw new RetrievalGroundedAnswerCompositionError("answer-composition timeout is invalid");
   }
   return chosen;
 }

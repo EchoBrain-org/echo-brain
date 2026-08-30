@@ -1,9 +1,9 @@
 # Organization Authority V1 runbook
 
-`organization-authority` is the Authority service. It owns state
-initialization, Person OIDC sessions, initial-owner Slack identity linking, live-only
-Granola processing, approval finalization, immutable V4 records, and
-permission-aware Person reads. It has no compatibility runtime for a prior
+`organization-authority` is the Organization Authority service. It owns state
+initialization, Person OIDC sessions, initial-owner Slack identity linking,
+admitted meeting processing, approval finalization, immutable V4 records, and
+permission-aware Person reads and answer composition. It has no compatibility runtime for a prior
 Authority state: start with a new state directory and do not reuse legacy
 state, credentials, or volumes.
 
@@ -61,12 +61,12 @@ echo-organization-authority-init-clean-state \
   --artifact-revision clean-v1
 ```
 
-Normally use the initial-owner bootstrap below instead: it creates this same
-clean state with a durable setup plan, generated internal IDs, Person
-credentials, Slack connection, and initial-owner invitation. Do not run reset into a directory
+Normally use the initial-owner setup below instead: it creates this same clean
+state with a durable setup plan, generated internal IDs, Person credentials,
+Slack connection, and initial-owner invitation. Do not run reset into a directory
 that already contains state.
 
-## Initial-owner onboarding
+## Initial-owner setup and onboarding
 
 Bootstrap and finalization are stopped-state operations. The path is:
 
@@ -90,7 +90,7 @@ Pass the Slack bot token through standard input. The token file contains the
 token with at most one trailing newline; it is never recorded in the setup
 manifest or command output. `--slack-approval-channel-id` is a transitional
 legacy name: it supplies only the temporary public channel used to complete the
-initial owner’s Slack identity-link challenge. It is not an approval destination or
+initial owner's Slack identity-link challenge. It is not an approval destination or
 approval-readiness gate.
 
 ```sh
@@ -243,8 +243,8 @@ The Person `serve` form additionally accepts
 client-secret authentication method, and an optional
 `--slack-approval-channel-id <channel-id>` to expose the temporary public
 initial-owner identity-link channel. Do not use
-the low-level invitation form for the initial-owner or employee product flow: the
-initial-owner setup flow and the owner-facing Person client keep membership IDs
+the low-level invitation form for the initial-owner or employee product flow:
+initial-owner setup and the owner-facing Person client keep membership IDs
 internal.
 
 ### 3. Install credentials and finalize while stopped

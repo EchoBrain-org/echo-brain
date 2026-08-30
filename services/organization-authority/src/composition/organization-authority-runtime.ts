@@ -66,7 +66,7 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly on_worker_telemetry?: (
     event: import("../processing/clean-v1/clean-live-worker-lifecycle.js").CleanLiveWorkerTelemetryEventV1,
   ) => void;
-  /** Observational only: redacted Layer 4 model-stage failures. */
+  /** Observational only: redacted answer-composition model-stage failures. */
   readonly on_answer_composition_failure?: (
     event: AnswerCompositionFailureEventV1,
   ) => void;

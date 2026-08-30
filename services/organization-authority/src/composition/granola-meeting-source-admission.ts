@@ -214,11 +214,11 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
       }>;
       if (custody.length !== 1) {
         throw new Error(
-          "clean Granola source admission requires exactly one active founder owner",
+          "Granola source admission requires exactly one active organization owner",
         );
       }
       const owner = custody[0]!;
-      const completedFounderIdentity = database
+      const completedInitialOwnerIdentity = database
         .prepare(
           `SELECT 1
              FROM authority_oidc_identity_bindings AS identity_binding
@@ -244,9 +244,9 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
           owner.membership_id,
           ownerEmailSha256,
         );
-      if (completedFounderIdentity === undefined) {
+      if (completedInitialOwnerIdentity === undefined) {
         throw new Error(
-          "clean Granola source admission requires completed founder OIDC re-onboarding bound to the supplied owner email",
+          "Granola source admission requires completed initial-owner OIDC re-onboarding bound to the supplied owner email (legacy check: completed founder OIDC re-onboarding)",
         );
       }
       const semanticInputSha256 = canonicalSha256({

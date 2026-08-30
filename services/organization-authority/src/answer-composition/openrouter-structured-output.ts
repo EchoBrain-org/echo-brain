@@ -144,7 +144,7 @@ function fail(
   throw new OpenRouterStructuredOutputError(message, failureDiagnostic(input));
 }
 
-/** A small, credential-contained OpenRouter JSON-schema adapter for Layer 4. */
+/** A small, credential-contained OpenRouter JSON-schema adapter for answer composition. */
 export function createOpenRouterStructuredOutput(
   options: OpenRouterStructuredOutputOptions,
 ): Layer4StructuredOutputPort {

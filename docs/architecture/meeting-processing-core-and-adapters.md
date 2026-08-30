@@ -22,7 +22,7 @@ provider API -> server adapter -> processing contracts <- processing cycle
 - `processing/live/` composes one bounded server cycle.
 - Authority composition selects concrete adapters, credentials, organization
   policy, and stores through explicit bundles for meeting source, decision
-  processor, Layer 4 generation, approval/interaction, and Person external
+  processor, answer composition, approval/interaction, and Person external
   identity. Those bundles are the only place an active external-capability
   provider is selected.
 
@@ -130,8 +130,9 @@ not evidence that every active provider has completed qualification.
 The source-processing model remains separate from the permission-aware
 read/model path. It receives one admitted source revision through the processor
 port and has no Person session, retrieval-generation handle, broad corpus
-access, or authorization-widening fallback. Layer 4 receives only the atoms
-Layer 3 released for one authenticated Person request and cannot read lower
+access, or authorization-widening fallback. Answer composition receives only
+the atoms released by the Layer 3 protocol boundary for one authenticated
+Person request and cannot read lower
 layers directly.
 
 Current live composition delivers private meeting-owner approval DMs. Their
