@@ -19,7 +19,7 @@ import {
 } from "../processing/admitted-meeting-processing/decision-processor-admission-commitment.js";
 import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 
-export const CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1 = "2.2.0";
+export const GRANOLA_MEETING_SOURCE_ADAPTER_VERSION_V1 = "2.2.0";
 const INSTANCE_ID = /^[a-z][a-z0-9-]{0,127}$/;
 
 export interface AdmitGranolaMeetingSourceInput {
@@ -49,7 +49,7 @@ export interface GranolaMeetingSourceAdmissionResult {
   readonly source: {
     readonly adapter_id: "granola";
     readonly instance_id: string;
-    readonly version: typeof CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1;
+    readonly version: typeof GRANOLA_MEETING_SOURCE_ADAPTER_VERSION_V1;
     readonly cursor: string;
     readonly cutoff_at: string;
   };
@@ -119,7 +119,7 @@ function result(
       adapter_id: "granola" as const,
       instance_id: admission.source_adapter_instance_id,
       version:
-        CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1 as typeof CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1,
+        GRANOLA_MEETING_SOURCE_ADAPTER_VERSION_V1 as typeof GRANOLA_MEETING_SOURCE_ADAPTER_VERSION_V1,
       cursor: admission.initial_cursor,
       cutoff_at: admission.cutoff_at,
     },
@@ -258,9 +258,9 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
         membership_type: owner.membership_type,
         source: {
           adapter_id: "granola",
-          adapter_version: CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1,
+          adapter_version: GRANOLA_MEETING_SOURCE_ADAPTER_VERSION_V1,
           instance_id: input.source_instance_id,
-          normalizer_version: CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1,
+          normalizer_version: GRANOLA_MEETING_SOURCE_ADAPTER_VERSION_V1,
           owner_email_sha256: ownerEmailSha256,
           owner_observation_assurance: "provider_record_owner_observed",
           credential_reference_sha256: sourceCredentialReferenceSha256,
@@ -328,9 +328,9 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
         membership_id: owner.membership_id,
         membership_type: "owner",
         source_adapter_id: "granola",
-        source_adapter_version: CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1,
+        source_adapter_version: GRANOLA_MEETING_SOURCE_ADAPTER_VERSION_V1,
         source_adapter_instance_id: input.source_instance_id,
-        normalizer_version: CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1,
+        normalizer_version: GRANOLA_MEETING_SOURCE_ADAPTER_VERSION_V1,
         source_custodian_sha256: ownerEmailSha256,
         source_custodian_assurance: "provider_record_owner_observed",
         source_custodian_observed_at: ownerObservedAt,

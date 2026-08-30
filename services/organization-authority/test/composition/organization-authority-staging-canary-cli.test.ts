@@ -25,7 +25,7 @@ afterEach(() => {
   else process.env.ECHO_CLEAN_RELEASE_ID = previousReleaseId;
 });
 
-describe("clean live staging canary CLI", () => {
+describe("Organization Authority staging canary CLI", () => {
   it("uses the existing private socket client without opening a runtime", async () => {
     process.env.ECHO_CLEAN_RELEASE_ID = RELEASE_ID;
     state.request.mockResolvedValue({

@@ -1,6 +1,6 @@
 import { AdapterError } from "../core/contracts/adapter.js";
 
-export const CLEAN_LIVE_WORKER_PHASES_V1 = [
+export const MEETING_PROCESSING_WORKER_PHASES_V1 = [
   "recovery",
   "source_intake",
   "extraction",
@@ -11,7 +11,7 @@ export const CLEAN_LIVE_WORKER_PHASES_V1 = [
 ] as const;
 
 export type MeetingProcessingWorkerPhaseV1 =
-  (typeof CLEAN_LIVE_WORKER_PHASES_V1)[number];
+  (typeof MEETING_PROCESSING_WORKER_PHASES_V1)[number];
 
 export type MeetingProcessingWorkerFailureClassV1 =
   | "authorization"

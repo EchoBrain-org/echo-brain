@@ -166,7 +166,7 @@ describe("clean live CLI runtime events", () => {
   });
 
   // This covers the lifecycle-schema to CLI-serialization seam. Runtime
-  // lifecycle behavior is covered separately by clean-live-runtime tests.
+  // Lifecycle behavior is covered separately by Organization Authority service tests.
   it("redacts generic and typed lifecycle failures through the CLI observer", async () => {
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) });
