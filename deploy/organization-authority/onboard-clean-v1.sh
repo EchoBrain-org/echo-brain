@@ -38,6 +38,8 @@ OPERATION_LOCK_HELD=false
 REHEARSAL_ARCHIVE=''
 REHEARSAL_ARCHIVED_DATA=''
 REHEARSAL_ROLLBACK_ARMED=false
+REHEARSAL_RUNTIME_STOPPED=false
+REHEARSAL_DATA_MUTATED=false
 
 fail() { printf 'onboard-clean-v1: %s\n' "$*" >&2; exit 1; }
 
@@ -890,12 +892,18 @@ bootstrap() {
 }
 
 replace_rehearsal_rollback_on_exit() {
-  local exit_status="${1:-1}" restored=true archived_environment
+  local exit_status="${1:-1}" restored=true restarted=true archived_environment
   trap - EXIT HUP INT TERM
   archived_environment="$REHEARSAL_ARCHIVE/.env.clean-v1"
   if [[ "$REHEARSAL_ROLLBACK_ARMED" == true ]]; then
-    if ! cp -a -x "$REHEARSAL_ARCHIVED_DATA/." "$DATA_DIR/"; then
-      restored=false
+    if [[ "$REHEARSAL_DATA_MUTATED" == true ]]; then
+      if ! find "$DATA_DIR" -xdev -depth -mindepth 1 \
+        ! -path "$OPERATION_LOCK_DIR" \
+        ! -path "$OPERATION_LOCK_DIR/*" \
+        -delete ||
+        ! cp -a -x "$REHEARSAL_ARCHIVED_DATA/." "$DATA_DIR/"; then
+        restored=false
+      fi
     fi
     if [[ -f "$archived_environment" && ! -L "$archived_environment" ]]; then
       if [[ -e "$ENV_FILE" || -L "$ENV_FILE" ]]; then
@@ -909,11 +917,21 @@ replace_rehearsal_rollback_on_exit() {
     elif [[ ! -f "$ENV_FILE" || -L "$ENV_FILE" ]]; then
       restored=false
     fi
-    if [[ "$restored" == true ]] && ! rm -rf -- "$REHEARSAL_ARCHIVE"; then
+    if [[ "$restored" == true && "$REHEARSAL_RUNTIME_STOPPED" == true ]]; then
+      if ! start_runtime ||
+        ! running_authority ||
+        ! healthy_authority ||
+        ! authority_uses_accepted_image ||
+        ! runtime_uses_accepted_runtime_profile; then
+        restarted=false
+      fi
+    fi
+    if [[ "$restored" == true && "$restarted" == true ]] &&
+      [[ -n "$REHEARSAL_ARCHIVE" ]] && ! rm -rf -- "$REHEARSAL_ARCHIVE"; then
       restored=false
     fi
-    if [[ "$restored" == true ]]; then
-      printf 'onboard-clean-v1: live data and environment were restored after interrupted rehearsal replacement\n' >&2
+    if [[ "$restored" == true && "$restarted" == true ]]; then
+      printf 'onboard-clean-v1: live data and environment were restored and the prior runtime was restarted after interrupted rehearsal replacement\n' >&2
     else
       printf 'onboard-clean-v1: interrupted rehearsal replacement requires recovery from %s\n' "$REHEARSAL_ARCHIVE" >&2
     fi
@@ -944,6 +962,8 @@ replace_rehearsal() {
     fail 'clean rehearsal data directory is not the retained data mount'
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || \
     fail 'clean rehearsal environment file is unsafe'
+  REHEARSAL_ROLLBACK_ARMED=true
+  REHEARSAL_RUNTIME_STOPPED=true
   compose_clean down --remove-orphans
   local archive_root="$DEPLOY_DIR/retired-rehearsals" archive archived_data
   archive="$archive_root/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -964,10 +984,10 @@ replace_rehearsal() {
   fi
   REHEARSAL_ARCHIVE="$archive"
   REHEARSAL_ARCHIVED_DATA="$archived_data"
-  REHEARSAL_ROLLBACK_ARMED=true
   if ! mv "$ENV_FILE" "$archive/.env.clean-v1"; then
     fail 'could not archive the rehearsal environment; automatic rollback will run'
   fi
+  REHEARSAL_DATA_MUTATED=true
   if ! find "$DATA_DIR" -xdev -depth -mindepth 1 \
     ! -path "$OPERATION_LOCK_DIR" \
     ! -path "$OPERATION_LOCK_DIR/*" \

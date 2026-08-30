@@ -248,6 +248,21 @@ exit 1
 `,
   );
   chmodSync(fakeDocker, 0o755);
+  writeFileSync(
+    join(bin, "mountpoint"),
+    "#!/usr/bin/env bash\nexit 0\n",
+  );
+  chmodSync(join(bin, "mountpoint"), 0o755);
+  writeFileSync(
+    join(bin, "cp"),
+    `#!/usr/bin/env bash
+if [[ "$ECHO_FAKE_FAIL_REHEARSAL_ARCHIVE" == true && "$*" == *"clean-data/."* && "$*" == *"retired-rehearsals"* ]]; then
+  exit 1
+fi
+exec /bin/cp "$@"
+`,
+  );
+  chmodSync(join(bin, "cp"), 0o755);
   const environment = (overrides: Record<string, string>) => ({
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
@@ -258,11 +273,16 @@ exit 1
     ECHO_FAKE_RUNNING: "true",
     ECHO_FAKE_HEALTH: "healthy",
     ECHO_FAKE_FAIL_FIRST_UP: "false",
+    ECHO_FAKE_FAIL_REHEARSAL_ARCHIVE: "false",
     ECHO_FAKE_WAIT_DURING_INSTALL: "false",
     ...overrides,
   });
   const run = (
-    command: "activate-provider-credentials" | "status" | "resume",
+    command:
+      | "activate-provider-credentials"
+      | "replace-rehearsal"
+      | "status"
+      | "resume",
     overrides: Record<string, string> = {},
     args: readonly string[] = [],
   ) =>
@@ -435,6 +455,40 @@ describe("clean founder deployment profile", () => {
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
       );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("restarts the accepted runtime when rehearsal archival fails after shutdown", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const environment = readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8");
+      const sentinel = join(fixture.deploy, "clean-data", "rehearsal-sentinel");
+      writeFileSync(sentinel, "live-data-must-survive");
+
+      const result = fixture.run(
+        "replace-rehearsal",
+        { ECHO_FAKE_FAIL_REHEARSAL_ARCHIVE: "true" },
+        ["--confirm-no-live-users"],
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "live data and environment were restored and the prior runtime was restarted",
+      );
+      expect(readFileSync(sentinel, "utf8")).toBe("live-data-must-survive");
+      expect(readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8")).toBe(
+        environment,
+      );
+      expect(existsSync(join(fixture.deploy, "retired-rehearsals"))).toBe(true);
+      expect(readdirSync(join(fixture.deploy, "retired-rehearsals"))).toHaveLength(0);
+
+      const calls = readFileSync(fixture.calls, "utf8");
+      const down = calls.indexOf(" down --remove-orphans");
+      const restarted = calls.indexOf(" up -d --no-build --wait --wait-timeout 90");
+      expect(down).toBeGreaterThanOrEqual(0);
+      expect(restarted).toBeGreaterThan(down);
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
