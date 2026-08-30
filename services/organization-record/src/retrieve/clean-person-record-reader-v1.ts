@@ -3,7 +3,7 @@ import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
 /**
- * The intentionally small new-lineage Person read model.
+ * The intentionally small permission-aware person-record read model.
  *
  * Authority has already authenticated the current Person session before this
  * query is called.  This reader makes the remaining record-side decision from

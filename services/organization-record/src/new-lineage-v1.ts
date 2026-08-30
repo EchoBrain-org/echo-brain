@@ -1,4 +1,8 @@
-/** Private workspace entrypoint for new-lineage genesis composition. */
+/**
+ * Compatibility entrypoint for record storage and retrieval-source composition.
+ * The historical export path remains stable while component symbols use their
+ * durable responsibilities rather than migration-era lineage labels.
+ */
 export {
   applyOrganizationRecordDerivedBaselineV1,
   ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
@@ -14,7 +18,7 @@ export {
 } from "./persistence/record-log-baseline.js";
 export { openOrganizationRecordDatabase } from "./persistence/open-unmigrated-database.js";
 export {
-  OrganizationRecordV4AppendApplication,
+  OrganizationRecordAppenderV4,
   V4RecordIdempotencyConflictError,
   type AppendV4RecordInput,
   type AppendedV4Record,
@@ -28,20 +32,20 @@ export {
   type CleanPersonRecordReaderV1Input,
 } from "./retrieve/clean-person-record-reader-v1.js";
 export {
-  CleanV4Layer1SnapshotPort,
-  type CleanV4Layer1Atom,
-  type CleanV4Layer1Head,
-  type CleanV4Layer1Row,
-  type CleanV4Layer1Signal,
-  type CleanV4Layer1Snapshot,
-  type CleanV4Layer1SnapshotInput,
-  type CleanV4Layer1VerifiedEnvelope,
-} from "./retrieve/clean-v4-layer1-snapshot.js";
+  RecordRetrievalSourceSnapshotPortV1,
+  type RecordRetrievalSourceAtomV1,
+  type RecordRetrievalSourceHeadV1,
+  type RecordRetrievalSourceRowV1,
+  type RecordRetrievalSourceSignalV1,
+  type RecordRetrievalSourceSnapshotV1,
+  type RecordRetrievalSourceSnapshotInputV1,
+  type RecordRetrievalSourceVerifiedEnvelopeV1,
+} from "./retrieve/record-retrieval-source-snapshot-v1.js";
 export {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   createPersonPolicyFactProjectorV2,
-  type ReprovedPersonPolicyD2WitnessV2,
+  type ReprovedPersonPolicyAuthorizationWitnessV2,
   type ReprovedPersonPolicyAuthorizationAllowV2View,
   type ReprovedPersonPolicyAuditEntryV2View,
 } from "./application/person-policy-facts-v2.js";
@@ -54,13 +58,13 @@ export {
 } from "./application/private-slack-block-approval-policy-facts-v1.js";
 export type {
   PrivateSlackBlockApprovalPolicyFactsInputV1,
-  ReprovedPrivateSlackBlockApprovalD2WitnessV1,
+  ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1,
 } from "./application/private-slack-block-approval-policy-facts-v1.js";
 export {
-  createApprovedRecordPolicyProjectorRegistryV1,
-} from "./application/approved-record-policy-projection-v1.js";
+  createRecordPolicyFactProjectorRegistryV1,
+} from "./application/record-policy-fact-projection-v1.js";
 export type {
-  ApprovedRecordPolicyEnvelopeV1,
-  ApprovedRecordPolicyProjectorRegistryV1,
-  ApprovedRecordPolicyProjectorV1,
-} from "./application/approved-record-policy-projection-v1.js";
+  RecordPolicyFactEnvelopeV1,
+  RecordPolicyFactProjectorRegistryV1,
+  RecordPolicyFactProjectorV1,
+} from "./application/record-policy-fact-projection-v1.js";

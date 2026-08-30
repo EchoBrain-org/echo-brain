@@ -87,7 +87,7 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "record-clean-readers-use-only-v4-facts",
+      "name": "record-retrieval-readers-use-only-v4-facts",
       "from": "services/organization-record/src/retrieve/**",
       "allowed_imports": [
         "services/organization-record/src/application/**",

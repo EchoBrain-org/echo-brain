@@ -1,8 +1,9 @@
 # Organization record
 
-This library owns the clean V1 append-only organization record. The retained
-surface is `new-lineage-v1`, the V4 append implementation, the permission-aware
-Person reader, and the clean V4 Layer 1 snapshot implementation.
+This library owns the append-only organization record. The retained
+`new-lineage-v1` package path is a compatibility entrypoint, not a component
+name. It exposes the V4 record appender, the permission-aware person reader,
+and the record retrieval-source snapshot port.
 
 The V4 canonical envelope bytes and their authorization and provider-action
 proof digests are immutable contracts. Reads resolve current permissions for

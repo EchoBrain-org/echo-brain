@@ -15,7 +15,7 @@ import {
   type PersonPolicyFactItemKindV2,
   type PersonPolicyIdV2,
   type ProjectPersonPolicyFactsV2Input,
-  type ReprovedPersonPolicyD2WitnessV2,
+  type ReprovedPersonPolicyAuthorizationWitnessV2,
   type StructurallyVerifiedPersonPolicyRecordV4View,
 } from '../src/application/person-policy-facts-v2.js';
 
@@ -69,7 +69,7 @@ function reference(
 
 function witness(
   ref: PersonHumanActResolutionRefV1View,
-): ReprovedPersonPolicyD2WitnessV2 {
+): ReprovedPersonPolicyAuthorizationWitnessV2 {
   return {
     authorization_allow: {
       authority_id: ref.authority_id,

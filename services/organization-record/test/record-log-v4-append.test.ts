@@ -51,10 +51,10 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonHumanActActionV2,
   type PersonPolicyIdV2,
-  type ReprovedPersonPolicyD2WitnessV2,
+  type ReprovedPersonPolicyAuthorizationWitnessV2,
 } from "../src/application/person-policy-facts-v2.js";
 import {
-  OrganizationRecordV4AppendApplication,
+  OrganizationRecordAppenderV4,
   V4RecordIdempotencyConflictError,
   type AppendV4RecordInput,
   type V4ReceiptFactory,
@@ -62,21 +62,21 @@ import {
   type V4RecordEnvelopeView,
 } from "../src/log/record-log-v4-append.js";
 import {
-  createApprovedRecordPolicyProjectorRegistryV1,
-  type ApprovedRecordPolicyProjectorV1,
-} from "../src/application/approved-record-policy-projection-v1.js";
+  createRecordPolicyFactProjectorRegistryV1,
+  type RecordPolicyFactProjectorV1,
+} from "../src/application/record-policy-fact-projection-v1.js";
 import {
   createPersonPolicyFactProjectorV2,
 } from "../src/application/person-policy-facts-v2.js";
 import {
   createPrivateSlackBlockApprovalPolicyProjectorV1,
-  type ReprovedPrivateSlackBlockApprovalD2WitnessV1,
+  type ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1,
 } from "../src/application/private-slack-block-approval-policy-facts-v1.js";
 import { CleanPersonRecordReaderV1 } from "../src/retrieve/clean-person-record-reader-v1.js";
 import {
-  CleanV4Layer1SnapshotPort,
-  type CleanV4Layer1VerifiedEnvelope,
-} from "../src/retrieve/clean-v4-layer1-snapshot.js";
+  RecordRetrievalSourceSnapshotPortV1,
+  type RecordRetrievalSourceVerifiedEnvelopeV1,
+} from "../src/retrieve/record-retrieval-source-snapshot-v1.js";
 import {
   applyOrganizationRecordLogBaselineV1,
   applyOrganizationRecordLogBaselineV2,
@@ -89,15 +89,15 @@ const COORDINATES = {
   state_lineage_id: "state-lineage-1",
 } as const;
 
-const PRIVATE_APPROVAL_PROJECTORS = createApprovedRecordPolicyProjectorRegistryV1([
+const PRIVATE_APPROVAL_PROJECTORS = createRecordPolicyFactProjectorRegistryV1([
   createPersonPolicyFactProjectorV2(),
   createPrivateSlackBlockApprovalPolicyProjectorV1(),
 ]);
 
 function privateApprovalAppend(
   db: ReturnType<typeof database>,
-): OrganizationRecordV4AppendApplication {
-  return new OrganizationRecordV4AppendApplication(
+): OrganizationRecordAppenderV4 {
+  return new OrganizationRecordAppenderV4(
     db,
     COORDINATES,
     PRIVATE_APPROVAL_PROJECTORS,
@@ -336,9 +336,9 @@ function humanAct(
   });
 }
 
-function d2Witness(
+function authorizationWitness(
   human: ReturnType<typeof humanAct>,
-): ReprovedPersonPolicyD2WitnessV2 {
+): ReprovedPersonPolicyAuthorizationWitnessV2 {
   const ref = human.human_act_resolution_ref;
   return {
     authorization_allow: {
@@ -435,9 +435,9 @@ function privateSlackBlockHumanAct(
   });
 }
 
-function privateSlackBlockD2Witness(
+function privateSlackBlockAuthorizationWitness(
   human: ReturnType<typeof privateSlackBlockHumanAct>,
-): ReprovedPrivateSlackBlockApprovalD2WitnessV1 {
+): ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1 {
   const ref = human.private_slack_block_approval_resolution_ref;
   return {
     authorization_allow: {
@@ -667,7 +667,7 @@ function appendInput(input: {
     semantic_idempotency_key:
       input.semantic_idempotency_key ?? human.semantic_idempotency_key,
     receipt_issued_at: "2026-08-21T12:02:00.000Z",
-    d2_witness: d2Witness(human),
+    authorization_witness: authorizationWitness(human),
     envelope_factory: envelopeFactory(
       input.authority,
       human,
@@ -701,7 +701,7 @@ function privateSlackBlockAppendInput(input: {
     semantic_idempotency_key:
       input.semantic_idempotency_key ?? human.semantic_idempotency_key,
     receipt_issued_at: "2026-08-21T12:02:00.000Z",
-    d2_witness: privateSlackBlockD2Witness(human),
+    authorization_witness: privateSlackBlockAuthorizationWitness(human),
     envelope_factory: privateSlackBlockEnvelopeFactory(
       input.authority,
       human,
@@ -713,8 +713,8 @@ function privateSlackBlockAppendInput(input: {
   };
 }
 
-describe("private V4 new-lineage record-log append", () => {
-  it("uses the same append and Layer 1 core path with a non-Slack policy projector", async () => {
+describe("V4 organization-record append", () => {
+  it("uses the same append and retrieval-source path with a non-Slack policy projector", async () => {
     const db = database();
     try {
       const semantic = sha256Digest("synthetic-projector-semantic-key");
@@ -751,7 +751,7 @@ describe("private V4 new-lineage record-log append", () => {
           },
         },
       } as V4RecordEnvelopeView & JsonObject;
-      const fakeProjector: ApprovedRecordPolicyProjectorV1 = {
+      const fakeProjector: RecordPolicyFactProjectorV1 = {
         id: "test-local-approval-v1",
         matches: (candidate) =>
           (candidate.body.human_act_resolution_ref as { readonly kind?: unknown })
@@ -764,16 +764,16 @@ describe("private V4 new-lineage record-log append", () => {
             policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
           },
         }),
-        approvedPolicy: () => ({
+        policyBinding: () => ({
           policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
           policy_contract_sha256:
             organizationMemberReadablePersonPolicyContractSha256(),
         }),
       };
-      const projectors = createApprovedRecordPolicyProjectorRegistryV1([
+      const projectors = createRecordPolicyFactProjectorRegistryV1([
         fakeProjector,
       ]);
-      const app = new OrganizationRecordV4AppendApplication(
+      const app = new OrganizationRecordAppenderV4(
         db,
         COORDINATES,
         projectors,
@@ -783,7 +783,7 @@ describe("private V4 new-lineage record-log append", () => {
         action: "approve",
         semantic_idempotency_key: semantic,
         receipt_issued_at: "2026-08-21T12:02:00.000Z",
-        d2_witness: { test: true },
+        authorization_witness: { test: true },
         envelope_factory: {
           create: async () => envelope,
           verify: () => envelope,
@@ -813,10 +813,11 @@ describe("private V4 new-lineage record-log append", () => {
           verify: ({ receipt }) => receipt as JsonObject,
         },
       });
-      const snapshot = new CleanV4Layer1SnapshotPort(db).snapshot({
+      const snapshot = new RecordRetrievalSourceSnapshotPortV1(db).snapshot({
         ...COORDINATES,
         policy_projectors: projectors,
-        verify_envelope: () => envelope as CleanV4Layer1VerifiedEnvelope,
+        verify_envelope: () =>
+          envelope as RecordRetrievalSourceVerifiedEnvelopeV1,
       });
       expect(snapshot.rows[0]?.classification).toEqual({
         kind: "approved",
@@ -846,7 +847,9 @@ describe("private V4 new-lineage record-log append", () => {
           "SELECT count(*) AS count FROM organization_record_restricted_reviewer_person_fact",
         ).get(),
       ).toEqual({ count: 2 });
-      const layer1 = new CleanV4Layer1SnapshotPort(db).snapshot({
+      const sourceSnapshot = new RecordRetrievalSourceSnapshotPortV1(
+        db,
+      ).snapshot({
         ...COORDINATES,
         policy_projectors: PRIVATE_APPROVAL_PROJECTORS,
         verify_envelope: (value) =>
@@ -854,10 +857,10 @@ describe("private V4 new-lineage record-log append", () => {
             value,
             authority.pinned,
             COORDINATES.state_lineage_id,
-          ) as unknown as CleanV4Layer1VerifiedEnvelope,
+          ) as unknown as RecordRetrievalSourceVerifiedEnvelopeV1,
       });
-      expect(layer1.atoms).toHaveLength(2);
-      expect(layer1.rows[0]?.classification).toEqual({
+      expect(sourceSnapshot.atoms).toHaveLength(2);
+      expect(sourceSnapshot.rows[0]?.classification).toEqual({
         kind: "approved",
         policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
         atom_count: 2,
@@ -901,7 +904,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       const result = await app.append(
         appendInput({
           authority,
@@ -943,7 +946,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       expect(
         (
           await app.append(
@@ -978,7 +981,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       const approved = appendInput({
         authority,
         approval_id: "approval-reader",
@@ -1022,11 +1025,11 @@ describe("private V4 new-lineage record-log append", () => {
     }
   });
 
-  it("materializes a verified dense V4 Layer 1 snapshot for both Person policies", async () => {
+  it("materializes a verified dense retrieval-source snapshot for both person policies", async () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       const member = await app.append(
         appendInput({
           authority,
@@ -1049,14 +1052,14 @@ describe("private V4 new-lineage record-log append", () => {
           action: "reject",
         }),
       );
-      const snapshot = new CleanV4Layer1SnapshotPort(db).snapshot({
+      const snapshot = new RecordRetrievalSourceSnapshotPortV1(db).snapshot({
         ...COORDINATES,
         verify_envelope: (value) =>
           verifyOrganizationRecordEnvelopeV4(
             value,
             authority.pinned,
             COORDINATES.state_lineage_id,
-          ) as unknown as CleanV4Layer1VerifiedEnvelope,
+          ) as unknown as RecordRetrievalSourceVerifiedEnvelopeV1,
       });
 
       expect(snapshot.head).toEqual({
@@ -1120,7 +1123,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       await app.append(
         appendInput({
           authority,
@@ -1135,14 +1138,14 @@ describe("private V4 new-lineage record-log append", () => {
             SET provider_action_sha256 = ? WHERE record_position = 1`,
       ).run(sha256Digest("tampered-provider-action"));
       expect(() =>
-        new CleanV4Layer1SnapshotPort(db).snapshot({
+        new RecordRetrievalSourceSnapshotPortV1(db).snapshot({
           ...COORDINATES,
           verify_envelope: (value) =>
             verifyOrganizationRecordEnvelopeV4(
               value,
               authority.pinned,
               COORDINATES.state_lineage_id,
-            ) as unknown as CleanV4Layer1VerifiedEnvelope,
+            ) as unknown as RecordRetrievalSourceVerifiedEnvelopeV1,
         }),
       ).toThrow("provider action digest");
     } finally {
@@ -1154,7 +1157,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       const envelope_calls = { value: 0 };
       const sign_calls = { value: 0 };
       const input = appendInput({
@@ -1178,7 +1181,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       const first = appendInput({ authority });
       await app.append(first);
       const calls = { value: 0 };
@@ -1202,7 +1205,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       const input = appendInput({
         authority,
         receipt: receiptFactory(authority, {
@@ -1218,7 +1221,7 @@ describe("private V4 new-lineage record-log append", () => {
           "SELECT receipt_payload FROM organization_record_log WHERE position = 1",
         )
         .get() as { receipt_payload: string };
-      const recovered = await new OrganizationRecordV4AppendApplication(
+      const recovered = await new OrganizationRecordAppenderV4(
         db,
         COORDINATES,
       ).append(appendInput({ authority }));
@@ -1240,7 +1243,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       const input = appendInput({
         authority,
         receipt: receiptFactory(authority, {
@@ -1255,7 +1258,7 @@ describe("private V4 new-lineage record-log append", () => {
         `INSERT INTO organization_record_signed_receipt (position, signed_receipt, materialized_at) VALUES (1, ?, '2026-08-21T12:03:00.000Z')`,
       ).run('{"body":{}}');
       await expect(
-        new OrganizationRecordV4AppendApplication(db, COORDINATES).append(
+        new OrganizationRecordAppenderV4(db, COORDINATES).append(
           appendInput({ authority }),
         ),
       ).rejects.toThrow();
@@ -1268,7 +1271,7 @@ describe("private V4 new-lineage record-log append", () => {
     const db = database();
     try {
       const authority = protocolAuthority();
-      const app = new OrganizationRecordV4AppendApplication(db, COORDINATES);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
       const input = appendInput({
         authority,
         receipt: receiptFactory(authority, {
@@ -1299,7 +1302,7 @@ describe("private V4 new-lineage record-log append", () => {
         VALUES (1, ?, '2026-08-21T12:04:00.000Z')`,
       ).run(canonicalJson(wrongSeedReceipt));
       await expect(
-        new OrganizationRecordV4AppendApplication(db, COORDINATES).append(
+        new OrganizationRecordAppenderV4(db, COORDINATES).append(
           appendInput({ authority }),
         ),
       ).rejects.toThrow("committed receipt seed");

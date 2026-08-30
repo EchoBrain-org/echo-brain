@@ -1,10 +1,10 @@
 import { sha256Digest } from "@echo-brain/federation-protocol";
-import type { Sha256Digest } from "./contracts.js";
+import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import { derivedAtomIdentity } from "./atom-identity.js";
 import type {
-  ApprovedRecordPolicyEnvelopeV1,
-  ApprovedRecordPolicyProjectorV1,
-} from "./approved-record-policy-projection-v1.js";
+  RecordPolicyFactEnvelopeV1,
+  RecordPolicyFactProjectorV1,
+} from "./record-policy-fact-projection-v1.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
@@ -31,7 +31,7 @@ export interface PrivateSlackBlockApprovalPolicyFactsInputV1 {
 }
 
 /** D2 reproof shape for the signed private Slack Block Kit action. */
-export interface ReprovedPrivateSlackBlockApprovalD2WitnessV1 {
+export interface ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1 {
   readonly authorization_allow: {
     readonly authority_id: string;
     readonly organization_id: string;
@@ -208,7 +208,7 @@ export function projectPrivateSlackBlockApprovalPolicyFactsV1(input: PrivateSlac
 }
 
 function privateSlackPolicyEnvelope(
-  envelope: ApprovedRecordPolicyEnvelopeV1,
+  envelope: RecordPolicyFactEnvelopeV1,
 ): unknown {
   const event = envelope.body.event as {
     readonly kind: "approved" | "rejected";
@@ -265,17 +265,18 @@ function privateSlackPolicyEnvelope(
 }
 
 /**
- * Slack's signed Block Kit contract is selected only here. Append and Layer 1
- * pass the verified envelope through the generic approved-record seam.
+ * Slack's signed Block Kit contract is selected only here. Record append and
+ * retrieval-source snapshotting pass the verified envelope through the
+ * generic record-policy-fact seam.
  */
-export function createPrivateSlackBlockApprovalPolicyProjectorV1(): ApprovedRecordPolicyProjectorV1 {
-  const projector: ApprovedRecordPolicyProjectorV1 = {
+export function createPrivateSlackBlockApprovalPolicyProjectorV1(): RecordPolicyFactProjectorV1 {
+  const projector: RecordPolicyFactProjectorV1 = {
     id: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
-    matches: (envelope: ApprovedRecordPolicyEnvelopeV1) =>
+    matches: (envelope: RecordPolicyFactEnvelopeV1) =>
       (envelope.body.human_act_resolution_ref as { readonly kind?: unknown }).kind ===
       PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
     project: ({ envelope, record_position, witness }: {
-      readonly envelope: ApprovedRecordPolicyEnvelopeV1;
+      readonly envelope: RecordPolicyFactEnvelopeV1;
       readonly record_position: number;
       readonly witness: unknown;
     }) =>
@@ -284,7 +285,7 @@ export function createPrivateSlackBlockApprovalPolicyProjectorV1(): ApprovedReco
         record_position,
         witness,
       }),
-    approvedPolicy: (envelope: ApprovedRecordPolicyEnvelopeV1) => {
+    policyBinding: (envelope: RecordPolicyFactEnvelopeV1) => {
       const resolution = ref(envelope.body.human_act_resolution_ref);
       if (resolution.action !== "approve" || envelope.body.event.kind !== "approved") {
         invalid("approved private Slack policy binding is unavailable");

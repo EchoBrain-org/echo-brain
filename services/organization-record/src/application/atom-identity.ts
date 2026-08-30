@@ -1,5 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { Sha256Digest } from './contracts.js';
+import type { Sha256Digest } from '@echo-brain/federation-protocol';
 
 /**
  * The one internal atom identity.

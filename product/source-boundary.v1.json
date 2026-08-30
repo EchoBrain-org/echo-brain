@@ -149,10 +149,10 @@
       "services/organization-authority/src/presentation/person-external-identity-link-http-application.ts",
       "services/organization-authority/src/presentation/clean-person-http-server.ts",
       "services/organization-authority/src/presentation/private-approval-interaction-http-application-v1.ts",
-      "services/organization-record/src/application/approved-record-policy-projection-v1.ts",
+      "services/organization-record/src/application/record-policy-fact-projection-v1.ts",
       "services/organization-record/src/application/person-policy-facts-v2.ts",
       "services/organization-record/src/log/record-log-v4-append.ts",
-      "services/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts"
+      "services/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.ts"
     ],
     "provider_identifier_registry": [
       {

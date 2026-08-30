@@ -59,7 +59,7 @@ import type {
   CleanApprovalRuntimeBundleV1,
   CleanApprovalRuntimeContextV1,
 } from "../src/composition/approval-runtime-bundle-v1.js";
-import { createApprovedRecordPolicyProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/new-lineage-v1";
+import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/new-lineage-v1";
 import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
 import { createCleanPersonAnswerRouteV1 } from "../src/composition/clean-person-answer-route.js";
 import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
@@ -1131,8 +1131,8 @@ describe("open clean live runtime private approval lane", () => {
         processor_runtime: processorRuntime,
         approval_runtime: approvalRuntime,
         answer_composition_runtime: answerCompositionRuntime,
-        approved_record_policy_projectors:
-          createApprovedRecordPolicyProjectorRegistryV1([
+        record_policy_fact_projectors:
+          createRecordPolicyFactProjectorRegistryV1([
             createPersonPolicyFactProjectorV2(),
           ]),
       },

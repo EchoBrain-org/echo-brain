@@ -4,20 +4,15 @@ import type Database from 'better-sqlite3';
 import { ORGANIZATION_RECORD_DERIVED_DATABASE } from './database-definition.js';
 
 /**
- * New-lineage baseline v1 for the organization record derived database role.
+ * Exact schema baseline v1 for the organization record derived database role.
  *
  * One exact baseline replaces the historical migration chain: the applier
  * stamps the role application ID and `user_version = 1` on an empty database
  * and the committed SQL file creates the complete behavior schema. The legacy
- * migration-ledger objects are deliberately absent; new-lineage schema
+ * migration-ledger objects are deliberately absent; schema
  * identity is carried by the state-lineage manifest digest and the pre-open
- * guard's exact-version check. This module is private and unwired: the
- * new-lineage initializer that composes it is later Phase 3 work, and no
- * current runtime path may create new-lineage state.
- *
- * The record log role has no baseline here on purpose: its current schema
- * carries an installation-scoped dedupe identity, so its new-lineage shape is
- * contract work beside the authority baseline, not a mechanical dump.
+ * guard's exact-version check. This module is a private persistence primitive;
+ * runtime composition opens it through the organization-record database port.
  */
 export const ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1 = 1;
 

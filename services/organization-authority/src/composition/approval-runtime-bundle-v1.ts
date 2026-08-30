@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { OrganizationAuthoritySigner } from "../application/ports/runtime-ports.js";
-import type { OrganizationRecordV4AppendApplication } from "@echo-brain/organization-record/new-lineage-v1";
+import type { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/new-lineage-v1";
 import type { CleanApprovalStagerV1 } from "../processing/clean-v1/live-only-source-cycle.js";
 import type { SqliteCleanLiveOnlySourceStateV1 } from "../processing/clean-v1/sqlite-live-only-source-state.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
@@ -17,7 +17,7 @@ export interface CleanApprovalRuntimeContextV1 {
   readonly state: SqliteCleanLiveOnlySourceStateV1;
   readonly authority_database: Database.Database;
   readonly control_plane_database: Database.Database;
-  readonly record_append: OrganizationRecordV4AppendApplication;
+  readonly record_append: OrganizationRecordAppenderV4;
   readonly signer: OrganizationAuthoritySigner;
   readonly coordinates: {
     readonly authority_id: string;

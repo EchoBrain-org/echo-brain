@@ -12,15 +12,15 @@ import {
   type PersonPolicyFactProjectionV2,
 } from "../application/person-policy-facts-v2.js";
 import {
-  createApprovedRecordPolicyProjectorRegistryV1,
-  type ApprovedRecordPolicyEnvelopeV1,
-  type ApprovedRecordPolicyProjectorRegistryV1,
-} from "../application/approved-record-policy-projection-v1.js";
+  createRecordPolicyFactProjectorRegistryV1,
+  type RecordPolicyFactEnvelopeV1,
+  type RecordPolicyFactProjectorRegistryV1,
+} from "../application/record-policy-fact-projection-v1.js";
 
 type Action = "approve" | "reject";
 type EventKind = "approved" | "rejected";
 
-export type V4RecordEnvelopeView = ApprovedRecordPolicyEnvelopeV1;
+export type V4RecordEnvelopeView = RecordPolicyFactEnvelopeV1;
 
 export interface V4RecordEnvelopeFactory {
   /** Creates the complete protocol-owned V4 envelope. */
@@ -65,8 +65,8 @@ export interface AppendV4RecordInput {
   readonly action: Action;
   readonly semantic_idempotency_key: Sha256Digest;
   readonly receipt_issued_at: string;
-  /** Exact D2 evidence is interpreted only by the selected policy projector. */
-  readonly d2_witness: unknown;
+  /** Exact authorization evidence is interpreted only by the selected policy projector. */
+  readonly authorization_witness: unknown;
   readonly envelope_factory: V4RecordEnvelopeFactory;
   readonly receipt_factory: V4ReceiptFactory;
 }
@@ -114,11 +114,11 @@ function eventForAction(action: Action): EventKind {
 }
 
 /**
- * Private new-lineage append application. Protocol validation/signing stays at
+ * V4 organization-record appender. Protocol validation/signing stays at
  * the Authority boundary; this module owns only log serialization, durable
  * seed storage, and the D3 projector's append-atomic persistence.
  */
-export class OrganizationRecordV4AppendApplication {
+export class OrganizationRecordAppenderV4 {
   private appendTail: Promise<void> = Promise.resolve();
 
   constructor(
@@ -128,8 +128,8 @@ export class OrganizationRecordV4AppendApplication {
       readonly organization_id: string;
       readonly state_lineage_id: string;
     },
-    private readonly policyProjectors: ApprovedRecordPolicyProjectorRegistryV1 =
-      createApprovedRecordPolicyProjectorRegistryV1([
+    private readonly policyProjectors: RecordPolicyFactProjectorRegistryV1 =
+      createRecordPolicyFactProjectorRegistryV1([
         createPersonPolicyFactProjectorV2(),
       ]),
   ) {
@@ -230,7 +230,11 @@ export class OrganizationRecordV4AppendApplication {
       );
       const canonical_envelope = canonicalJson(envelope);
       const envelope_sha256 = sha256Digest(canonical_envelope);
-      const projected = this.projectPolicyFacts(envelope, position, input.d2_witness);
+      const projected = this.projectPolicyFacts(
+        envelope,
+        position,
+        input.authorization_witness,
+      );
       const receipt_seed = input.receipt_factory.createSeed({
         envelope,
         position,

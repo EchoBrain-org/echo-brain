@@ -60,7 +60,7 @@ Bootstrap and finalization are stopped-state operations. The path is:
    bot and temporary public founder identity-link channel, and issue the
    founder invitation. That channel never receives an approval card.
 2. Start clean live, complete the founder's browser OIDC sign-in, and link the
-   signed-in founder to Slack.
+   signed-in person to Slack.
 3. Stop clean live, install the three provider credentials, then finalize.
 4. Restart clean live and complete the live-only canary.
 
@@ -261,9 +261,9 @@ not imported.
 
 Restart the same `clean-live serve` command. Optional
 `--worker-interval-ms <positive-integer>` changes the worker interval. At
-startup, the runtime reconciles Layer 2 once, then each cycle recovers pending
+startup, the runtime reconciles the search index once, then each cycle recovers pending
 V4 appends, polls the admitted live-only source, finalizes approvals, appends
-approved records, and reconciles Layer 2 again.
+approved records, and reconciles the search index again.
 
 Create one new post-finalization Granola note with a unique marker, approve its
 private meeting-owner Slack DM card, then check both read paths:
@@ -276,7 +276,7 @@ echo-brain person records --query 'known marker'
 Rerun `echo-organization-authority-clean-founder resume --state-dir
 /absolute/clean-state`, then `status`. The one-note canary is complete only
 when durable state proves source progress, an approved record, an exact-head
-Layer 2 generation, and positive owner Layer 1 and Layer 2 reads after that
+search index generation, and positive owner record-list and indexed-search reads after that
 head and generation. The status output contains only boolean or enum evidence;
 it never prints record, reader, query, or timestamp data.
 
@@ -289,10 +289,10 @@ releasing results.
 
 | Path | Client command | Behavior |
 | --- | --- | --- |
-| Layer 1 list | `echo-brain person records --limit 20` | Returns released immutable V4 record envelopes. It remains available while Layer 2 catches up. |
-| Layer 2 search | `echo-brain person records --query 'text'` | Searches the current immutable generation and returns its generation/head metadata plus per-item atom, record, and policy identity. It is unavailable until the active generation matches the exact Layer-1 head. |
+| Record list | `echo-brain person records --limit 20` | Returns released immutable V4 record envelopes. It remains available while the search index catches up. |
+| Indexed search | `echo-brain person records --query 'text'` | Searches the current immutable generation and returns its generation/head metadata plus per-item atom, record, and policy identity. It is unavailable until the active generation matches the exact record head. |
 
-Layer 2 is rebuilt at startup and after a coalesced approved-record append; a
+The search index is rebuilt at startup and after a coalesced approved-record append; a
 query never triggers a build. If the head advances or a generation build fails,
 the existing pointer is not used for the new head. The Person client reports
 that search is catching up; wait for the next worker cycle and retry.

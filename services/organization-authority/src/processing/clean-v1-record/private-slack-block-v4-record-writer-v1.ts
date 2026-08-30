@@ -21,9 +21,9 @@ import type {
   PinnedOrganizationAuthority,
 } from "@echo-brain/organization-protocol";
 import {
-  OrganizationRecordV4AppendApplication,
+  OrganizationRecordAppenderV4,
   type AppendedV4Record,
-  type ReprovedPrivateSlackBlockApprovalD2WitnessV1,
+  type ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1,
   type V4ReceiptFactory,
   type V4RecordEnvelopeFactory,
   type V4RecordEnvelopeView,
@@ -87,7 +87,7 @@ export interface PrivateSlackBlockApprovalTerminalV1 {
 }
 
 export interface PrivateSlackBlockV4RecordWriterV1Options {
-  readonly append: OrganizationRecordV4AppendApplication;
+  readonly append: OrganizationRecordAppenderV4;
   readonly signer: OrganizationAuthoritySigner;
   readonly pinned_authority: PinnedOrganizationAuthority;
   readonly state_lineage_id: string;
@@ -207,7 +207,7 @@ export class PrivateSlackBlockV4RecordWriterV1 {
         policy_consequence_sha256: policy.policy_consequence_sha256,
       },
     });
-    const d2Witness: ReprovedPrivateSlackBlockApprovalD2WitnessV1 = {
+    const authorizationWitness: ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1 = {
       authorization_allow: {
         authority_id: candidate.authority_id,
         organization_id: candidate.organization_id,
@@ -247,7 +247,7 @@ export class PrivateSlackBlockV4RecordWriterV1 {
       action: "approve",
       semantic_idempotency_key: human.semantic_idempotency_key,
       receipt_issued_at: issuedAt,
-      d2_witness: d2Witness,
+      authorization_witness: authorizationWitness,
       envelope_factory: this.envelopeFactory({
         human_act_record_input: {
           private_slack_block_approval_resolution_ref:
@@ -320,7 +320,7 @@ export class PrivateSlackBlockV4RecordWriterV1 {
 }
 
 export async function createPrivateSlackBlockV4RecordWriterV1(input: {
-  readonly append: OrganizationRecordV4AppendApplication;
+  readonly append: OrganizationRecordAppenderV4;
   readonly signer: OrganizationAuthoritySigner;
   readonly state_lineage_id: string;
   readonly now?: () => string;

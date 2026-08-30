@@ -12,9 +12,9 @@ import {
   verifyOrganizationRecordEnvelopeV4,
 } from "@echo-brain/organization-protocol";
 import {
-  CleanV4Layer1SnapshotPort,
-  type ApprovedRecordPolicyProjectorRegistryV1,
-  type CleanV4Layer1Snapshot,
+  RecordRetrievalSourceSnapshotPortV1,
+  type RecordPolicyFactProjectorRegistryV1,
+  type RecordRetrievalSourceSnapshotV1,
 } from "@echo-brain/organization-record/new-lineage-v1";
 import {
   buildCleanReadableSearchGenerationV1,
@@ -147,7 +147,7 @@ export function cleanReadableSearchRuntimeContractV1(): CleanReadableSearchRunti
 
 interface ReconciliationSnapshotV1 {
   readonly record_head: CleanReadableSearchRecordHeadV1;
-  readonly layer1: CleanV4Layer1Snapshot;
+  readonly source_snapshot: RecordRetrievalSourceSnapshotV1;
 }
 
 function recordHead(database: Database.Database): CleanReadableSearchRecordHeadV1 {
@@ -197,7 +197,8 @@ function lineagePlane(
 }
 
 /**
- * Composes the verified V4 Layer 1 snapshot, clean immutable builder, and the
+ * Composes the verified record retrieval-source snapshot, immutable search
+ * index builder, and the
  * single Authority publication pointer. It performs no provider IO.
  */
 export function createCleanReadableSearchGenerationReconcilerV1(input: {
@@ -207,7 +208,7 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
   readonly record: Database.Database;
   readonly signer: DevelopmentFileOrganizationAuthoritySigner;
   /** Chosen with the active approval protocol; this runtime names no provider. */
-  readonly policy_projectors: ApprovedRecordPolicyProjectorRegistryV1;
+  readonly policy_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly now?: () => string;
 }): CleanReadableSearchGenerationReconcilerV1<ReconciliationSnapshotV1> {
   const contract = cleanReadableSearchRuntimeContractV1();
@@ -216,7 +217,7 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
     descriptor,
     organizationAuthorityPinSha256(descriptor),
   );
-  const snapshotPort = new CleanV4Layer1SnapshotPort(input.record);
+  const snapshotPort = new RecordRetrievalSourceSnapshotPortV1(input.record);
   const facts = lineagePlane(
     input.root,
     "retrieval-facts",
@@ -250,7 +251,7 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
     retrieval_contract_sha256: contract.retrieval_contract_sha256,
     read_record_head: () => recordHead(input.record),
     capture_snapshot: (): ReconciliationSnapshotV1 => {
-      const layer1 = snapshotPort.snapshot({
+      const sourceSnapshot = snapshotPort.snapshot({
         authority_id: input.root.authority_id,
         organization_id: input.root.organization_id,
         state_lineage_id: input.root.state_lineage_id,
@@ -263,22 +264,22 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
           ),
       });
       const capturedHead: CleanReadableSearchRecordHeadV1 =
-        layer1.head === null
+        sourceSnapshot.head === null
           ? Object.freeze({ position: 0, record_sha256: null })
-          : layer1.head;
+          : sourceSnapshot.head;
       return Object.freeze({
         record_head: capturedHead,
-        layer1,
+        source_snapshot: sourceSnapshot,
       });
     },
     build_generation: (snapshot) => {
       const envelopeByPosition = new Map(
-        snapshot.layer1.rows.map((row) => [
+        snapshot.source_snapshot.rows.map((row) => [
           row.position,
           row.envelope_sha256,
         ]),
       );
-      const atoms: CleanReadableSearchAtomV1[] = snapshot.layer1.atoms.map(
+      const atoms: CleanReadableSearchAtomV1[] = snapshot.source_snapshot.atoms.map(
         (atom) => {
           const envelopeSha256 = envelopeByPosition.get(atom.record_position);
           if (envelopeSha256 === undefined) {

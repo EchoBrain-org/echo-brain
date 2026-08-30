@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  createApprovedRecordPolicyProjectorRegistryV1,
+  createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/new-lineage-v1";
@@ -69,7 +69,7 @@ describe("clean readable-search runtime composition", () => {
           authority_id: initialized.authority_id,
           organization_id: initialized.organization_id,
         }),
-        policy_projectors: createApprovedRecordPolicyProjectorRegistryV1([
+        policy_projectors: createRecordPolicyFactProjectorRegistryV1([
           createPersonPolicyFactProjectorV2(),
         ]),
         now: () => "2026-08-22T12:01:00.000Z",

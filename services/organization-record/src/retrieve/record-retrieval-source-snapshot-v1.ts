@@ -13,10 +13,10 @@ import {
 } from "../application/person-policy-facts-v2.js";
 import { derivedAtomIdentity } from "../application/atom-identity.js";
 import {
-  createApprovedRecordPolicyProjectorRegistryV1,
-  type ApprovedRecordPolicyEnvelopeV1,
-  type ApprovedRecordPolicyProjectorRegistryV1,
-} from "../application/approved-record-policy-projection-v1.js";
+  createRecordPolicyFactProjectorRegistryV1,
+  type RecordPolicyFactEnvelopeV1,
+  type RecordPolicyFactProjectorRegistryV1,
+} from "../application/record-policy-fact-projection-v1.js";
 
 type RecordEventKind = "approved" | "rejected";
 type RecordAction = "approve" | "reject";
@@ -26,18 +26,18 @@ type RecordAction = "approve" | "reject";
  * composition. This workspace verifies no signatures and imports no durable
  * Organization Protocol shape; it only reads the already-proved V4 view.
  */
-export interface CleanV4Layer1VerifiedEnvelope
-  extends ApprovedRecordPolicyEnvelopeV1 {
-  readonly body: ApprovedRecordPolicyEnvelopeV1["body"] & {
+export interface RecordRetrievalSourceVerifiedEnvelopeV1
+  extends RecordPolicyFactEnvelopeV1 {
+  readonly body: RecordPolicyFactEnvelopeV1["body"] & {
     readonly event:
       | {
           readonly kind: "approved";
           readonly approved_snapshot: {
             readonly approved_payload: {
               readonly brief: {
-                readonly decisions: readonly CleanV4Layer1Signal[];
-                readonly actions: readonly CleanV4Layer1Signal[];
-                readonly rationales: readonly CleanV4Layer1Signal[];
+                readonly decisions: readonly RecordRetrievalSourceSignalV1[];
+                readonly actions: readonly RecordRetrievalSourceSignalV1[];
+                readonly rationales: readonly RecordRetrievalSourceSignalV1[];
               };
             };
           };
@@ -46,28 +46,28 @@ export interface CleanV4Layer1VerifiedEnvelope
   };
 }
 
-export interface CleanV4Layer1Signal {
+export interface RecordRetrievalSourceSignalV1 {
   readonly id: string;
   readonly kind: PersonPolicyFactItemKindV2;
   readonly text: string;
 }
 
-export interface CleanV4Layer1SnapshotInput {
+export interface RecordRetrievalSourceSnapshotInputV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
   /** Must invoke the protocol's signature and V4 schema verifier. */
-  readonly verify_envelope: (value: unknown) => CleanV4Layer1VerifiedEnvelope;
+  readonly verify_envelope: (value: unknown) => RecordRetrievalSourceVerifiedEnvelopeV1;
   /** Explicit approval-protocol registry selected by composition. */
-  readonly policy_projectors?: ApprovedRecordPolicyProjectorRegistryV1;
+  readonly policy_projectors?: RecordPolicyFactProjectorRegistryV1;
 }
 
-export interface CleanV4Layer1Head {
+export interface RecordRetrievalSourceHeadV1 {
   readonly position: number;
   readonly record_sha256: Sha256Digest;
 }
 
-export interface CleanV4Layer1Row {
+export interface RecordRetrievalSourceRowV1 {
   readonly position: number;
   readonly envelope_id: string;
   readonly event_kind: RecordEventKind;
@@ -87,8 +87,8 @@ export interface CleanV4Layer1Row {
     | { readonly kind: "rejected" };
 }
 
-/** An atom released to Layer 2, with every immutable Person-v2 proof fact. */
-export interface CleanV4Layer1Atom {
+/** An atom released to the search index, with every immutable Person-v2 proof fact. */
+export interface RecordRetrievalSourceAtomV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -112,18 +112,18 @@ export interface CleanV4Layer1Atom {
   readonly reviewer_membership_id: string | null;
 }
 
-export interface CleanV4Layer1Snapshot {
+export interface RecordRetrievalSourceSnapshotV1 {
   readonly coordinates: {
     readonly authority_id: string;
     readonly organization_id: string;
     readonly state_lineage_id: string;
   };
-  readonly head: CleanV4Layer1Head | null;
-  /** Canonical bytes of the dense rows and atoms handed to a Layer 2 build. */
+  readonly head: RecordRetrievalSourceHeadV1 | null;
+  /** Canonical bytes of the dense rows and atoms handed to a search index build. */
   readonly upstream_input_preimage: string;
   readonly upstream_input_sha256: Sha256Digest;
-  readonly rows: readonly CleanV4Layer1Row[];
-  readonly atoms: readonly CleanV4Layer1Atom[];
+  readonly rows: readonly RecordRetrievalSourceRowV1[];
+  readonly atoms: readonly RecordRetrievalSourceAtomV1[];
 }
 
 interface StoredRecordRow {
@@ -177,7 +177,7 @@ interface MaterializedSnapshot {
 }
 
 function invalid(message: string): never {
-  throw new Error(`clean V4 Layer 1 snapshot is invalid: ${message}`);
+  throw new Error(`record retrieval-source snapshot is invalid: ${message}`);
 }
 
 function requiredText(value: unknown, label: string): string {
@@ -212,11 +212,11 @@ function assertEqual(actual: unknown, expected: unknown, label: string): void {
 }
 
 function expectedSignals(
-  envelope: CleanV4Layer1VerifiedEnvelope,
-): readonly CleanV4Layer1Signal[] {
+  envelope: RecordRetrievalSourceVerifiedEnvelopeV1,
+): readonly RecordRetrievalSourceSignalV1[] {
   if (envelope.body.event.kind !== "approved") return Object.freeze([]);
   const grouped: ReadonlyArray<
-    readonly [PersonPolicyFactItemKindV2, readonly CleanV4Layer1Signal[]]
+    readonly [PersonPolicyFactItemKindV2, readonly RecordRetrievalSourceSignalV1[]]
   > = [
     [
       "decision",
@@ -232,7 +232,7 @@ function expectedSignals(
     ],
   ];
   const ids = new Set<string>();
-  const signals: CleanV4Layer1Signal[] = [];
+  const signals: RecordRetrievalSourceSignalV1[] = [];
   for (const [kind, values] of grouped) {
     for (const signal of values) {
       requiredText(signal.id, "approved signal id");
@@ -303,20 +303,20 @@ function asJsonObject(value: unknown, label: string): JsonObject {
 }
 
 /**
- * A V4-only, permission-neutral Layer 1 input port. It makes no live
+ * A V4-only, permission-neutral retrieval-source snapshot port. It makes no live
  * membership decision: it carries the exact immutable policy facts which the
- * Layer 2 builder will scope before indexing.
+ * search index builder will scope before indexing.
  */
-export class CleanV4Layer1SnapshotPort {
+export class RecordRetrievalSourceSnapshotPortV1 {
   constructor(
     private readonly database: Database.Database,
-    private readonly defaultPolicyProjectors: ApprovedRecordPolicyProjectorRegistryV1 =
-      createApprovedRecordPolicyProjectorRegistryV1([
+    private readonly defaultPolicyProjectors: RecordPolicyFactProjectorRegistryV1 =
+      createRecordPolicyFactProjectorRegistryV1([
         createPersonPolicyFactProjectorV2(),
       ]),
   ) {}
 
-  snapshot(input: CleanV4Layer1SnapshotInput): CleanV4Layer1Snapshot {
+  snapshot(input: RecordRetrievalSourceSnapshotInputV1): RecordRetrievalSourceSnapshotV1 {
     requiredText(input.authority_id, "authority_id");
     requiredText(input.organization_id, "organization_id");
     requiredText(input.state_lineage_id, "state_lineage_id");
@@ -349,8 +349,8 @@ export class CleanV4Layer1SnapshotPort {
       factsByPosition.set(fact.record_position, group);
     }
 
-    const atoms: CleanV4Layer1Atom[] = [];
-    const rows: CleanV4Layer1Row[] = [];
+    const atoms: RecordRetrievalSourceAtomV1[] = [];
+    const rows: RecordRetrievalSourceRowV1[] = [];
     let prior: StoredRecordRow | undefined;
     for (const [index, row] of source.records.entries()) {
       const position = requiredPositiveInteger(row.position, "record position");
@@ -490,7 +490,7 @@ export class CleanV4Layer1SnapshotPort {
         );
       }
       const binding = (input.policy_projectors ?? this.defaultPolicyProjectors)
-        .approvedPolicy(envelope);
+        .policyBinding(envelope);
       const expectedFamily =
         binding.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
           ? "reviewer"
@@ -682,6 +682,7 @@ export class CleanV4Layer1SnapshotPort {
     const frozenAtoms = Object.freeze(atoms);
     const upstream_input_preimage = canonicalJson({
       schema_version: 1,
+      // Legacy digest-domain literal: renaming it would invalidate existing generations.
       kind: "echo-clean-v4-layer1-snapshot-input",
       coordinates,
       rows: frozenRows,

@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import {
-  type ApprovedRecordPolicyProjectorRegistryV1,
-  OrganizationRecordV4AppendApplication,
+  type RecordPolicyFactProjectorRegistryV1,
+  OrganizationRecordAppenderV4,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/new-lineage-v1";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
@@ -57,8 +57,8 @@ export interface OpenCleanLiveRuntimeConfig {
   readonly approval_runtime: CleanApprovalRuntimeBundleV1;
   /** Explicit answer-composition bundle. This generic root does not select one. */
   readonly answer_composition_runtime: CleanAnswerCompositionRuntimeBundleV1;
-  /** Exact durable approval protocols admitted into append and Layer 1. */
-  readonly approved_record_policy_projectors: ApprovedRecordPolicyProjectorRegistryV1;
+  /** Exact durable record-resolution protocols admitted into append and retrieval. */
+  readonly record_policy_fact_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly worker_interval_ms?: number;
   /** Observational only: a failed cycle is retried by the serialized worker. */
   readonly on_worker_error?: (error: Error) => void;
@@ -283,12 +283,12 @@ export async function openCleanLiveRuntime(
       state: sourceState,
       authority_database: authority,
       control_plane_database: control,
-      record_append: new OrganizationRecordV4AppendApplication(
+      record_append: new OrganizationRecordAppenderV4(
         record,
         {
           ...coordinates,
         },
-        config.approved_record_policy_projectors,
+        config.record_policy_fact_projectors,
       ),
       signer,
       coordinates,
@@ -311,7 +311,7 @@ export async function openCleanLiveRuntime(
       authority,
       record,
       signer,
-      policy_projectors: config.approved_record_policy_projectors,
+      policy_projectors: config.record_policy_fact_projectors,
     });
     const runtime = await startCleanLiveRuntime(
       { person, worker_interval_ms: config.worker_interval_ms },

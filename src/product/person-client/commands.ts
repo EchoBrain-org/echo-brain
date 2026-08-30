@@ -115,7 +115,7 @@ Commands:
   ask         Ask a question over records you may read.
   records     List records or search the current generation.
   employee    List, invite, reissue, or revoke an employee.
-  slack-link  Link the signed-in founder to Slack.
+  slack-link  Link the signed-in person to Slack.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -141,7 +141,7 @@ Ask one bounded question. ECHO searches only records you may read and returns a 
 `,
   records: `usage: echo-brain person records [--limit <1-100>] [--query <text>]
 
-Without --query, lists recent released records. With --query, searches the current Layer 2 generation.
+Without --query, lists recent released records. With --query, searches the current search index generation.
 `,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 

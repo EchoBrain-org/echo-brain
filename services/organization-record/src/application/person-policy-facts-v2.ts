@@ -1,10 +1,10 @@
 import { sha256Digest } from '@echo-brain/federation-protocol';
-import type { Sha256Digest } from './contracts.js';
+import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import { derivedAtomIdentity } from './atom-identity.js';
 import type {
-  ApprovedRecordPolicyEnvelopeV1,
-  ApprovedRecordPolicyProjectorV1,
-} from './approved-record-policy-projection-v1.js';
+  RecordPolicyFactEnvelopeV1,
+  RecordPolicyFactProjectorV1,
+} from './record-policy-fact-projection-v1.js';
 
 /**
  * Private D3-3 structural views for append-atomic Person-v2 policy facts.
@@ -130,7 +130,7 @@ export interface ReprovedPersonPolicyAuditEntryV2View {
  * Ephemeral, already-reproved D2 evidence. It is a structural injection seam,
  * never a caller-signed or stored document.
  */
-export interface ReprovedPersonPolicyD2WitnessV2 {
+export interface ReprovedPersonPolicyAuthorizationWitnessV2 {
   readonly authorization_allow: ReprovedPersonPolicyAuthorizationAllowV2View;
   readonly authorization_proof_sha256: Sha256Digest;
   readonly provider_action_kind: 'echo-provider-human-action-v2';
@@ -191,7 +191,7 @@ export interface PersonPolicyFactProjectionV2 {
 export interface ProjectPersonPolicyFactsV2Input {
   readonly envelope: StructurallyVerifiedPersonPolicyRecordV4View;
   readonly record_position: number;
-  readonly witness: ReprovedPersonPolicyD2WitnessV2;
+  readonly witness: ReprovedPersonPolicyAuthorizationWitnessV2;
 }
 
 export class PersonPolicyFactProjectionV2Error extends Error {
@@ -545,7 +545,7 @@ function auditEntry(value: unknown): ValidatedAuditEntry {
   });
 }
 
-interface ValidatedD2Witness {
+interface ValidatedAuthorizationWitness {
   readonly authorization_allow: ValidatedAuthorizationAllow;
   readonly authorization_proof_sha256: Sha256Digest;
   readonly provider_action_kind: 'echo-provider-human-action-v2';
@@ -554,7 +554,7 @@ interface ValidatedD2Witness {
   readonly audit_entry_sha256: Sha256Digest;
 }
 
-function d2Witness(value: unknown): ValidatedD2Witness {
+function authorizationWitness(value: unknown): ValidatedAuthorizationWitness {
   const record = exactRecord(
     value,
     WITNESS_KEYS,
@@ -588,14 +588,14 @@ function same(actual: unknown, expected: unknown, label: string): void {
   if (actual !== expected) invalid(`${label} does not match`);
 }
 
-function joinResolutionToD2(
+function joinResolutionToAuthorizationWitness(
   body: {
     readonly authority_id: string;
     readonly organization_id: string;
     readonly state_lineage_id: string;
   },
   ref: ValidatedResolutionRef,
-  witness: ValidatedD2Witness,
+  witness: ValidatedAuthorizationWitness,
 ): void {
   const allow = witness.authorization_allow;
   const audit = witness.audit_entry;
@@ -814,8 +814,8 @@ export function projectPersonPolicyFactsV2(
     ),
   });
   const ref = resolutionRef(bodyRecord.human_act_resolution_ref);
-  const witness = d2Witness(source.witness);
-  joinResolutionToD2(body, ref, witness);
+  const witness = authorizationWitness(source.witness);
+  joinResolutionToAuthorizationWitness(body, ref, witness);
 
   const eventRecord = exactRecord(
     bodyRecord.event,
@@ -877,10 +877,10 @@ export function projectPersonPolicyFactsV2(
 }
 
 function personPolicyEnvelope(
-  envelope: ApprovedRecordPolicyEnvelopeV1,
+  envelope: RecordPolicyFactEnvelopeV1,
 ): StructurallyVerifiedPersonPolicyRecordV4View {
   const reference = envelope.body.human_act_resolution_ref as
-    ApprovedRecordPolicyEnvelopeV1["body"]["human_act_resolution_ref"] & {
+    RecordPolicyFactEnvelopeV1["body"]["human_act_resolution_ref"] & {
       readonly policy_id: PersonPolicyIdV2;
       readonly policy_contract_sha256: Sha256Digest;
       readonly provider_action_kind: "echo-provider-human-action-v2";
@@ -938,24 +938,24 @@ function personPolicyEnvelope(
 }
 
 /** The established provider-human action protocol behind the generic seam. */
-export function createPersonPolicyFactProjectorV2(): ApprovedRecordPolicyProjectorV1 {
-  const projector: ApprovedRecordPolicyProjectorV1 = {
+export function createPersonPolicyFactProjectorV2(): RecordPolicyFactProjectorV1 {
+  const projector: RecordPolicyFactProjectorV1 = {
     id: 'echo-provider-human-action-v2',
-    matches: (envelope: ApprovedRecordPolicyEnvelopeV1) =>
+    matches: (envelope: RecordPolicyFactEnvelopeV1) =>
       envelope.body.human_act_resolution_ref.provider_action_kind ===
         'echo-provider-human-action-v2' &&
       envelope.body.human_act_resolution_ref.provider_action_schema_version === 2,
     project: ({ envelope, record_position, witness }: {
-      readonly envelope: ApprovedRecordPolicyEnvelopeV1;
+      readonly envelope: RecordPolicyFactEnvelopeV1;
       readonly record_position: number;
       readonly witness: unknown;
     }) =>
       projectPersonPolicyFactsV2({
         envelope: personPolicyEnvelope(envelope),
         record_position,
-        witness: witness as ReprovedPersonPolicyD2WitnessV2,
+        witness: witness as ReprovedPersonPolicyAuthorizationWitnessV2,
     }),
-    approvedPolicy: (envelope: ApprovedRecordPolicyEnvelopeV1) => {
+    policyBinding: (envelope: RecordPolicyFactEnvelopeV1) => {
       const reference = resolutionRef(
         personPolicyEnvelope(envelope).body.human_act_resolution_ref,
       );

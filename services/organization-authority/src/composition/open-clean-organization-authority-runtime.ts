@@ -8,7 +8,7 @@ import type { CleanLiveSourceAdmissionV1 } from "../processing/clean-v1/live-onl
 import type { CleanLiveSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
-  createApprovedRecordPolicyProjectorRegistryV1,
+  createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
   createPrivateSlackBlockApprovalPolicyProjectorV1,
 } from "@echo-brain/organization-record/new-lineage-v1";
@@ -35,7 +35,7 @@ export interface OpenCleanOrganizationAuthorityRuntimeConfig
     | "processor_runtime"
     | "approval_runtime"
     | "answer_composition_runtime"
-    | "approved_record_policy_projectors"
+    | "record_policy_fact_projectors"
   > {
   readonly granola_credential_file: string;
   readonly granola_owner_email_file: string;
@@ -234,8 +234,8 @@ export function openCleanOrganizationAuthorityRuntime(
         createOpenRouterCleanAnswerCompositionRuntimeBundleV1({
         credential_file: llm_credential_file,
         }),
-      approved_record_policy_projectors:
-        createApprovedRecordPolicyProjectorRegistryV1([
+      record_policy_fact_projectors:
+        createRecordPolicyFactProjectorRegistryV1([
           createPersonPolicyFactProjectorV2(),
           createPrivateSlackBlockApprovalPolicyProjectorV1(),
         ]),

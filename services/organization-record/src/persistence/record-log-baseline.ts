@@ -7,11 +7,11 @@ import type Database from "better-sqlite3";
 import { ORGANIZATION_RECORD_LOG_DATABASE } from "./database-definition.js";
 
 /**
- * New-lineage baseline v1 for the organization record log role.
+ * Exact schema baseline v1 for the organization record log role.
  *
- * The new-lineage initializer owns composition and remains later Phase 3
- * work. This private applier only claims a completely empty database; it
- * never relabels, upgrades, or imports an existing file.
+ * Runtime composition opens this through the organization-record database
+ * port. This private applier only claims a completely empty database; it never
+ * relabels, upgrades, or imports an existing file.
  */
 export const ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1 = 1;
 export const ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2 = 2;

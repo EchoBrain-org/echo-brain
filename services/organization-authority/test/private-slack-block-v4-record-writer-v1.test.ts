@@ -79,10 +79,10 @@ describe("private Slack Block Kit V4 record writer", () => {
     await recordWriter.appendApproved(value, frozen);
     await recordWriter.appendApproved(value, frozen);
     expect(calls).toHaveLength(2);
-    const first = calls[0] as { readonly action: string; readonly d2_witness: { readonly authorization_allow: { readonly provider_action_sha256: string } }; readonly semantic_idempotency_key: string };
+    const first = calls[0] as { readonly action: string; readonly authorization_witness: { readonly authorization_allow: { readonly provider_action_sha256: string } }; readonly semantic_idempotency_key: string };
     const second = calls[1] as typeof first;
     expect(first.action).toBe("approve");
-    expect(first.d2_witness.authorization_allow.provider_action_sha256).toBe(value.signed_action_receipt_sha256);
+    expect(first.authorization_witness.authorization_allow.provider_action_sha256).toBe(value.signed_action_receipt_sha256);
     expect(second.semantic_idempotency_key).toBe(first.semantic_idempotency_key);
   });
 
