@@ -148,7 +148,7 @@ export function createStagingSyntheticMeetingCanaryV1(
 /**
  * Rebuilds the one permitted document rather than accepting a lookalike.
  * A staging intake supplies its fixed inputs; reads infer them from the
- * immutable snapshot they are reproving.
+ * immutable snapshot they are revalidating.
  */
 export function assertStagingSyntheticMeetingCanaryV1(
   meeting: MeetingDocument,
