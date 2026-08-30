@@ -4,19 +4,20 @@ import { Buffer } from "node:buffer";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export const ORGANIZATION_MEMBER_READABLE_POLICY_ID = "organization-member-readable-v1";
-export const ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE = "organization-member-readable-v1";
+export const ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_PRESENTATION_MODE =
+  "organization-member-readable-v1";
 export const ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_VERSION = 1;
 export const ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_TEXT =
   "Approving records this package under organization-member-readable-v1. Any person using an enrolled installation with a current unexpired access lease and current active owner or employee membership in this organization, including someone who joins later, may search and read its decisions, actions, and rationales while that access and membership remain active.";
 export const ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE =
   "active_organization_member_readable_notice_v1";
-export const ORGANIZATION_MEMBER_READABLE_RECORD_SURFACE =
+export const ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_RECORD_SURFACE =
   "slack-organization-member-readable-v1";
 export const ORGANIZATION_MEMBER_READABLE_RELEASE_DRAFT_KIND =
   "organization-member-readable-release-draft-v1";
-export const ORGANIZATION_MEMBER_READABLE_APPROVAL_PRESENTATION_KIND =
+export const ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_APPROVAL_PRESENTATION_KIND =
   "organization-member-readable-approval-presentation-v1";
-export const ORGANIZATION_MEMBER_READABLE_POLICY_CONTRACT_KIND =
+export const ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_APPROVAL_POLICY_CONTRACT_KIND =
   "organization-member-readable-policy-contract-v1";
 export const ORGANIZATION_MEMBER_READABLE_ELIGIBLE_MEMBERSHIP_TYPES = Object.freeze([
   "employee",
@@ -33,13 +34,17 @@ export const MAX_ORGANIZATION_MEMBER_READABLE_CARD_TITLE_SCALARS = 150;
 export const MAX_ORGANIZATION_MEMBER_READABLE_ITEM_TEXT_SCALARS = 240;
 export const MAX_ORGANIZATION_MEMBER_READABLE_SIGNAL_ID_BYTES = 512;
 export const MAX_ORGANIZATION_MEMBER_READABLE_RELEASE_ITEMS = 10;
-export const ORGANIZATION_MEMBER_READABLE_REACTION_PATTERN = /^[a-z0-9_+-]{1,64}$/;
+export const ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_PATTERN =
+  /^[a-z0-9_+-]{1,64}$/;
 export const ORGANIZATION_MEMBER_READABLE_APPROVAL_ID_PATTERN = /^[0-9a-f]{64}$/;
 
-export function organizationMemberReadablePolicyContract(): Readonly<Record<string, unknown>> {
+export function organizationMemberReadableSlackReactionApprovalPolicyContract(): Readonly<
+  Record<string, unknown>
+> {
   return Object.freeze({
     schema_version: 1,
-    kind: ORGANIZATION_MEMBER_READABLE_POLICY_CONTRACT_KIND,
+    kind:
+      ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_APPROVAL_POLICY_CONTRACT_KIND,
     policy_id: ORGANIZATION_MEMBER_READABLE_POLICY_ID,
     consequence_version: ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_VERSION,
     eligible_membership_types: [...ORGANIZATION_MEMBER_READABLE_ELIGIBLE_MEMBERSHIP_TYPES],
@@ -56,14 +61,18 @@ export function organizationMemberReadablePolicyContract(): Readonly<Record<stri
     message_presentation_kind: "organization-member-readable-message-presentation-v1",
     record_envelope_kind: "echo-organization-record-envelope",
     record_envelope_schema_version: 3,
-    payload_surface: ORGANIZATION_MEMBER_READABLE_RECORD_SURFACE,
+    payload_surface:
+      ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_RECORD_SURFACE,
     release_draft_kind: ORGANIZATION_MEMBER_READABLE_RELEASE_DRAFT_KIND,
-    presentation_kind: ORGANIZATION_MEMBER_READABLE_APPROVAL_PRESENTATION_KIND,
+    presentation_kind:
+      ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_APPROVAL_PRESENTATION_KIND,
   });
 }
 
-export function organizationMemberReadablePolicyContractSha256(): Sha256Digest {
-  return canonicalSha256(organizationMemberReadablePolicyContract());
+export function organizationMemberReadableSlackReactionApprovalPolicyContractSha256(): Sha256Digest {
+  return canonicalSha256(
+    organizationMemberReadableSlackReactionApprovalPolicyContract(),
+  );
 }
 
 function assertPresentable(value: unknown, label: string, maximum: number): asserts value is string {
@@ -95,6 +104,18 @@ export function assertOrganizationMemberReadableApprovalId(value: unknown, label
 export function assertOrganizationMemberReadableItemKind(value: unknown, label: string): asserts value is OrganizationMemberReadableItemKindV1 {
   if (typeof value !== "string" || !ORGANIZATION_MEMBER_READABLE_ITEM_KINDS.includes(value as OrganizationMemberReadableItemKindV1)) organizationProtocolValidationFailure(`${label} must be decision, action, or rationale`);
 }
-export function assertOrganizationMemberReadableReactionPair(approve: unknown, reject: unknown, label: string): void {
-  if (typeof approve !== "string" || !ORGANIZATION_MEMBER_READABLE_REACTION_PATTERN.test(approve) || typeof reject !== "string" || !ORGANIZATION_MEMBER_READABLE_REACTION_PATTERN.test(reject) || approve === reject) organizationProtocolValidationFailure(`${label} reaction pair is invalid`);
+export function assertOrganizationMemberReadableSlackReactionPair(
+  approve: unknown,
+  reject: unknown,
+  label: string,
+): void {
+  if (
+    typeof approve !== "string" ||
+    !ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_PATTERN.test(approve) ||
+    typeof reject !== "string" ||
+    !ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_PATTERN.test(reject) ||
+    approve === reject
+  ) {
+    organizationProtocolValidationFailure(`${label} reaction pair is invalid`);
+  }
 }

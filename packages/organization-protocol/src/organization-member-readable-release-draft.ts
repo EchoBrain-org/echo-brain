@@ -2,7 +2,7 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import { asRecord, assertDigest, assertExactKeys, assertLiteral, canonicalSnapshot } from "./validation-support.js";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
-import { ORGANIZATION_MEMBER_READABLE_RELEASE_DRAFT_KIND, MAX_ORGANIZATION_MEMBER_READABLE_CARD_TITLE_SCALARS, MAX_ORGANIZATION_MEMBER_READABLE_ITEM_TEXT_SCALARS, MAX_ORGANIZATION_MEMBER_READABLE_RELEASE_ITEMS, assertOrganizationMemberReadableApprovalId, assertOrganizationMemberReadableItemKind, assertOrganizationMemberReadablePresentableText, assertOrganizationMemberReadableSignalId, type OrganizationMemberReadableItemKindV1 } from "./organization-member-readable-policy.js";
+import { ORGANIZATION_MEMBER_READABLE_RELEASE_DRAFT_KIND, MAX_ORGANIZATION_MEMBER_READABLE_CARD_TITLE_SCALARS, MAX_ORGANIZATION_MEMBER_READABLE_ITEM_TEXT_SCALARS, MAX_ORGANIZATION_MEMBER_READABLE_RELEASE_ITEMS, assertOrganizationMemberReadableApprovalId, assertOrganizationMemberReadableItemKind, assertOrganizationMemberReadablePresentableText, assertOrganizationMemberReadableSignalId, type OrganizationMemberReadableItemKindV1 } from "./organization-member-readable-slack-reaction-approval-policy.js";
 
 export interface OrganizationMemberReadableReleaseDraftItemV1 { signal_id_sha256: Sha256Digest; kind: OrganizationMemberReadableItemKindV1; text: string }
 export interface OrganizationMemberReadableReleaseDraftV1 { schema_version: 1; kind: typeof ORGANIZATION_MEMBER_READABLE_RELEASE_DRAFT_KIND; approval_id: string; card_title: string; items: readonly OrganizationMemberReadableReleaseDraftItemV1[] }

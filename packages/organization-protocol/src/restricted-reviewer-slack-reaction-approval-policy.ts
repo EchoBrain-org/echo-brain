@@ -8,8 +8,9 @@ import { organizationProtocolValidationFailure } from "./validation-error.js";
  */
 export const RESTRICTED_REVIEWER_POLICY_ID = "restricted-reviewer-v1";
 
-/** The one publication mode name that carries the reviewer consequence. */
-export const RESTRICTED_REVIEWER_PRESENTATION_MODE = "restricted-reviewer-v1";
+/** The Slack-reaction publication mode that carries the restricted-reviewer consequence. */
+export const RESTRICTED_REVIEWER_SLACK_REACTION_PRESENTATION_MODE =
+  "restricted-reviewer-v1";
 
 /**
  * The human-facing consequence, shown before approval and frozen
@@ -27,24 +28,26 @@ export const RESTRICTED_REVIEWER_ALLOW_REASON_CODE =
   "active_reviewer_restricted_notice_v1";
 
 /** The only `payload.surface` an envelope-v2 reviewer approval may carry. */
-export const RESTRICTED_REVIEWER_RECORD_SURFACE = "slack-reviewer-v1";
+export const RESTRICTED_REVIEWER_SLACK_REACTION_RECORD_SURFACE =
+  "slack-reviewer-v1";
 
-export const REVIEWER_RELEASE_ITEM_KINDS = Object.freeze([
+export const RESTRICTED_REVIEWER_RELEASE_ITEM_KINDS = Object.freeze([
   "decision",
   "action",
   "rationale",
 ] as const);
 
-export type ReviewerReleaseItemKindV1 =
-  (typeof REVIEWER_RELEASE_ITEM_KINDS)[number];
+export type RestrictedReviewerReleaseItemKindV1 =
+  (typeof RESTRICTED_REVIEWER_RELEASE_ITEM_KINDS)[number];
 
-export const MAX_REVIEWER_CARD_TITLE_SCALARS = 150;
-export const MAX_REVIEWER_ITEM_TEXT_SCALARS = 240;
-export const MAX_REVIEWER_SIGNAL_ID_BYTES = 512;
-export const MAX_REVIEWER_RELEASE_ITEMS = 10;
+export const MAX_RESTRICTED_REVIEWER_CARD_TITLE_SCALARS = 150;
+export const MAX_RESTRICTED_REVIEWER_ITEM_TEXT_SCALARS = 240;
+export const MAX_RESTRICTED_REVIEWER_SIGNAL_ID_BYTES = 512;
+export const MAX_RESTRICTED_REVIEWER_RELEASE_ITEMS = 10;
 
-export const REVIEWER_REACTION_PATTERN = /^[a-z0-9_+-]{1,64}$/;
-export const REVIEWER_APPROVAL_ID_PATTERN = /^[0-9a-f]{64}$/;
+export const RESTRICTED_REVIEWER_SLACK_REACTION_PATTERN =
+  /^[a-z0-9_+-]{1,64}$/;
+export const RESTRICTED_REVIEWER_APPROVAL_ID_PATTERN = /^[0-9a-f]{64}$/;
 
 /**
  * Rejects every character class that could make one released string render or
@@ -79,7 +82,7 @@ function assertPresentableScalars(value: string, label: string): void {
  * bounded in Unicode scalar values rather than UTF-16 code units so an astral
  * character costs exactly one unit of the reviewed budget.
  */
-export function assertReviewerPresentableText(
+export function assertRestrictedReviewerPresentableText(
   value: unknown,
   label: string,
   maximumScalars: number,
@@ -109,7 +112,7 @@ export function assertReviewerPresentableText(
  * member host in the clear: only its SHA-256 digest reaches the card, the
  * signed action request, and the fact plane.
  */
-export function assertReviewerSignalId(
+export function assertRestrictedReviewerSignalId(
   value: unknown,
   label: string,
 ): asserts value is string {
@@ -126,20 +129,23 @@ export function assertReviewerSignalId(
   if (value.normalize("NFC") !== value) {
     organizationProtocolValidationFailure(`${label} must be NFC normalized`);
   }
-  if (Buffer.byteLength(value, "utf8") > MAX_REVIEWER_SIGNAL_ID_BYTES) {
+  if (
+    Buffer.byteLength(value, "utf8") >
+    MAX_RESTRICTED_REVIEWER_SIGNAL_ID_BYTES
+  ) {
     organizationProtocolValidationFailure(
-      `${label} must be at most ${MAX_REVIEWER_SIGNAL_ID_BYTES} UTF-8 bytes`,
+      `${label} must be at most ${MAX_RESTRICTED_REVIEWER_SIGNAL_ID_BYTES} UTF-8 bytes`,
     );
   }
 }
 
-export function assertReviewerApprovalId(
+export function assertRestrictedReviewerApprovalId(
   value: unknown,
   label: string,
 ): asserts value is string {
   if (
     typeof value !== "string" ||
-    !REVIEWER_APPROVAL_ID_PATTERN.test(value)
+    !RESTRICTED_REVIEWER_APPROVAL_ID_PATTERN.test(value)
   ) {
     organizationProtocolValidationFailure(
       `${label} must be a lowercase sha256 approval id`,
@@ -147,13 +153,15 @@ export function assertReviewerApprovalId(
   }
 }
 
-export function assertReviewerItemKind(
+export function assertRestrictedReviewerItemKind(
   value: unknown,
   label: string,
-): asserts value is ReviewerReleaseItemKindV1 {
+): asserts value is RestrictedReviewerReleaseItemKindV1 {
   if (
     typeof value !== "string" ||
-    !REVIEWER_RELEASE_ITEM_KINDS.includes(value as ReviewerReleaseItemKindV1)
+    !RESTRICTED_REVIEWER_RELEASE_ITEM_KINDS.includes(
+      value as RestrictedReviewerReleaseItemKindV1,
+    )
   ) {
     organizationProtocolValidationFailure(
       `${label} must be decision, action, or rationale`,
@@ -166,7 +174,7 @@ export function assertReviewerItemKind(
  * single observed reaction can never satisfy both the approve and the reject
  * interpretation of the same message.
  */
-export function assertReviewerReactionPair(
+export function assertRestrictedReviewerSlackReactionPair(
   approveReaction: unknown,
   rejectReaction: unknown,
   label: string,
@@ -175,7 +183,10 @@ export function assertReviewerReactionPair(
     [approveReaction, "approve_reaction"],
     [rejectReaction, "reject_reaction"],
   ] as const) {
-    if (typeof value !== "string" || !REVIEWER_REACTION_PATTERN.test(value)) {
+    if (
+      typeof value !== "string" ||
+      !RESTRICTED_REVIEWER_SLACK_REACTION_PATTERN.test(value)
+    ) {
       organizationProtocolValidationFailure(`${label} ${name} is invalid`);
     }
   }
