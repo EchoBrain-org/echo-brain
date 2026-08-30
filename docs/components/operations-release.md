@@ -63,8 +63,8 @@ Keep these claims separate:
 - artifact built;
 - CI tested;
 - deployed;
-- founder-live qualified;
-- client-live qualified; and
+- internal-dogfood qualified;
+- customer-acceptance qualified; and
 - released.
 
 An exact artifact or state change invalidates any qualification evidence whose
@@ -74,8 +74,8 @@ identity no longer matches.
 
 - [Operations records](../operations/README.md)
 - [Minimal Authority observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md)
-- [Current Authority recovery-floor runbook](../operations/RB-OPERATIONS-002-authority-recovery-floor.md)
-- [Canonical source and immutable clean-beta release runbook](../operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md)
+- [Authority root-volume recovery-floor runbook](../operations/RB-OPERATIONS-002-authority-recovery-floor.md)
+- [Canonical source and immutable release runbook](../operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md)
 - [Qualification and evidence](../qualification/README.md)
 - [`deploy/organization-authority/`](../../deploy/organization-authority)
 - [`tools/`](../../tools)
@@ -83,13 +83,13 @@ identity no longer matches.
 
 Operational documents must name prerequisites, permissions, expected evidence,
 stop conditions, rollback, and the last date the exact procedure was tested.
-The current-host recovery floor additionally requires private evidence that the
-live source EBS volume is encrypted, account-owned, and backed by an enabled,
+The root-volume recovery floor additionally requires private evidence that the
+deployed source EBS volume is encrypted, account-owned, and backed by an enabled,
 usable source key whose manager is recorded as either AWS or CUSTOMER. EBS
 recovery points inherit that source encryption; a backup vault does not
 independently re-encrypt them. The current same-account AWS-managed key blocks
 future cross-account copying, while a customer-managed-key migration belongs to
 the later data-volume/foundation decision. The recovery template cannot
-establish these live facts. Its qualifying backup stop/start is a durable,
+establish these deployed-volume facts. Its qualifying backup stop/start is a durable,
 script-managed transaction with external backup acknowledgement and
 accepted-tuple/public-descriptor restart proof; it has not yet been rehearsed.

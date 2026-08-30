@@ -1,4 +1,4 @@
-# Clean-v1 release and update loop
+# Organization Authority release and update procedure
 
 This directory contains the small release boundary used after the first live
 organization release. It is deliberately an artifact-selection process, not a

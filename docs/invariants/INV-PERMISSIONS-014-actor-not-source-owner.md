@@ -33,7 +33,7 @@ Permission mode can change the read audience; it does not delegate approval.
 
 ## Enforcement and verification
 
-The bounded Slack paths enforce this rule, and focused founder-live evidence
+The bounded Slack paths enforce this rule, and focused internal-dogfood evidence
 observed the second actor receiving no unintended result. That receipt is not
 yet promoted into an exact qualification report, and this is not a global role
 or delegation system.

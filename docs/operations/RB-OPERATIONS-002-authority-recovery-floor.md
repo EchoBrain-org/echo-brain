@@ -2,7 +2,7 @@
 schema_version: 1
 id: RB-OPERATIONS-002
 kind: runbook
-title: Establish and rehearse the current Authority recovery floor
+title: Establish and rehearse the Authority root-volume recovery floor
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-25
@@ -11,23 +11,23 @@ reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
 tested_at: null
 ---
 
-# RB-OPERATIONS-002: Establish and rehearse the current Authority recovery floor
+# RB-OPERATIONS-002: Establish and rehearse the Authority root-volume recovery floor
 
 ## Trigger, outcome, preconditions, and stop conditions
 
-Use this runbook to establish the first off-host protection for the current
-single-host Authority, and to prove that a restored copy can be inspected
+Use this runbook to establish off-host protection for the deployed Authority
+root volume, and to prove that a restored copy can be inspected
 without becoming another Authority. Use it again after the Authority root
 volume, its backup configuration, or its on-host `clean-data/` layout changes.
 
 The outcome has two deliberately different parts:
 
-1. an AWS Backup plan selects exactly the current Authority root volume and,
+1. an AWS Backup plan selects exactly the deployed Authority root volume and,
    after a separately recorded source-volume encryption evidence gate, produces
    scheduled recovery points while the Authority is running; these recovery
    points are crash-consistent only; and
 2. one separately created, explicitly quiesced qualifying recovery point is
-   restored to a clean helper, attached only as a secondary device, and
+   restored to an isolated recovery inspection host, attached only as a secondary device, and
    inspected read-only without journal replay or network/provider access.
 
 This is a structural recovery floor. It does not restore service, prove a
@@ -38,10 +38,10 @@ proof.
 
 The selected account owner authorizes creation, retention, restoration, or
 deletion of recovery points. For a default-hosted Authority that authority is
-the ECHO founder; for an organization-controlled account it is the
+the ECHO account administrator; for an organization-controlled account it is the
 organization's account administrator. The operator owns this procedure.
 Escalate to that authority before changing a backup vault, KMS ownership,
-schedule, retention, restore permissions, or any live Authority host setting.
+schedule, retention, restore permissions, or any deployed Authority host setting.
 
 Under [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md),
 the operator is ECHO for a default-hosted Authority. For an Authority selected
@@ -50,7 +50,7 @@ the organization or an explicitly authorized support operator. The selected
 account controls the volume, backups, encryption boundary, logs, and
 infrastructure credentials.
 
-Before any mutation, record in the founder-private operator receipt:
+Before any mutation, record in the operator-private receipt:
 
 - the Authority hostname and root volume as identified from the running host's
   root block-device mapping;
@@ -61,7 +61,7 @@ Before any mutation, record in the founder-private operator receipt:
   is implemented or explicitly deferred; and
 - the maintenance window and the source commit used to stage the verifier.
 
-The recovery template cannot inspect the live EBS volume. For Amazon EBS, AWS
+The recovery template cannot inspect the deployed EBS volume. For Amazon EBS, AWS
 Backup recovery points inherit the source volume's encryption and are not
 independently encrypted by the backup vault. The source-volume evidence gate in
 step 1 is therefore a hard precondition for a CloudFormation change, not a
@@ -79,15 +79,15 @@ Prerequisites:
   restore caller has `iam:PassRole` only for the exact
   `RestoreServiceRoleArn` stack output, not a wildcard or the Authority host
   role;
-- a completed, founder-private evidence gate for the source EBS volume's
+- a completed, operator-private evidence gate for the source EBS volume's
   `Encrypted`, `KmsKeyId`, and account-ownership facts, plus the source KMS
   key's account, manager, enabled, and AWS Backup usability facts described in
   step 1;
 - the running Authority's accepted release and deployment directory are known;
 - the Authority operation lock is absent, or its documented recovery has
   completed before the qualifying point is made;
-- a maintenance window is available for the clean stop and qualifying point;
-- a clean helper OS in the restore volume's Availability Zone and an isolated
+- a maintenance window is available for the quiesced stop and qualifying point;
+- an isolated recovery inspection host OS in the restore volume's Availability Zone and an isolated
   management path are prepared before any restored state is attached; and
 - the checksum-verified Authority source root, Node runtime, locked dependency
   tree, and required workspace build output are present on that helper before
@@ -139,7 +139,7 @@ can reach only those endpoints and the helper role is the sole EC2 identity
 with SSM permissions. The S3 gateway endpoint is different: its policy binds
 both exact `aws:PrincipalArn` and exact `s3:VersionId` conditions.
 
-Before attachment, retain a founder-private reviewed-IaC receipt showing the
+Before attachment, retain an operator-private reviewed-IaC receipt showing the
 helper-only instance role, helper security group, subnet route table, every
 interface-endpoint security group, and every endpoint policy. The receipt must
 establish that the helper role has only SSM core access plus
@@ -282,7 +282,7 @@ The verified current `aws/ebs` class is an AWS-managed source key and is valid
 for this same-account recovery floor. It blocks a future cross-account copy
 because AWS-managed key policies cannot be shared across accounts. Moving the
 root volume to a customer-managed key requires a data migration and belongs to
-the later retained-data-volume/foundation decision, not this sprint. A
+the later retained-data-volume/foundation decision, not this recovery floor. A
 cross-account key, a disabled key, a missing `KmsKeyId`, or an unusable source
 key fails this gate. Do not attempt to make the CloudFormation template
 compensate for a failed gate.
@@ -303,7 +303,7 @@ The checked-in Guard policy is
 `deploy/organization-authority/authority-current-host-recovery-v1.guard`.
 
 From the exact reviewed source root, run the same checksum-pinned local
-validation used by CI. It validates both the current-host recovery template
+validation used by CI. It validates both the root-volume recovery template
 and the disposable helper template against their paired Guard policies. The
 command must exit `0` and report exactly `cfn-lint` 1.55.1 and `cfn-guard`
 3.2.1:
@@ -393,15 +393,15 @@ Before executing a new-stack change set, enable termination protection on its
 `REVIEW_IN_PROGRESS` stack shell and verify `EnableTerminationProtection=true`
 with `describe-stacks`. For an existing stack, verify protection before the
 plan change. Creating the change set and enabling protection do not authorize
-execution. Do not execute until the founder has approved the exact cadence,
+execution. Do not execute until the account owner has approved the exact cadence,
 retention, resource list, IAM roles, and reviewed change set. Do not execute a
 change set that would replace or delete the vault, plan, selection, or either
-service role without a founder-approved migration. The exact current-volume
+service role without an account-owner-approved migration. The exact current-volume
 selection is an interim recovery floor: C1 must migrate it deliberately to the
 later `Org`-tag-selected foundation plan, with a reviewed overlap or handoff
 rather than an unprotected gap.
 
-AWS Backup Vault Lock is deliberately deferred from this sprint. It may make
+AWS Backup Vault Lock is deliberately deferred from this recovery floor. It may make
 retention immutable and changes the operator's ability to correct a mistake or
 clean up the interim vault. Record that decision explicitly when C1 defines the
 foundation retention and governance boundary; do not imply this retained vault
@@ -497,7 +497,7 @@ exit trap to restart and prove the accepted tuple before systemd can send a
 final kill signal. Keep the acknowledgement timeout at or below 3,600 seconds;
 choose a shorter value for the approved window when possible.
 
-Keep its `operation_id` and `coordinator_nonce` in the founder-private receipt.
+Keep its `operation_id` and `coordinator_nonce` in the operator-private receipt.
 They bind this one stop window to one acknowledgement and are never committed or
 placed in a ticket or chat. A terminal or SSM-session disconnect does not
 authorize a manual recovery: inspect the transient systemd unit and follow the
@@ -523,7 +523,7 @@ that exact backup-role ARN with
 or an alternate service principal.
 
 The coordinator must explicitly set `Lifecycle.DeleteAfterDays` on the
-on-demand job to the founder-approved value equal to the scheduled plan's
+on-demand job to the account-owner-approved value equal to the scheduled plan's
 `RecoveryPointRetentionDays`. It waits for the AWS Backup job to complete and
 for its qualifying recovery point to be visible in the approved vault, then
 verifies that recovery point's expiry records that same approved retention. If
@@ -718,7 +718,7 @@ closest mount for `clean-data/` from Linux `/proc/self/mountinfo` is read-only
 both before and after inspection. It must not emit paths, identifiers, database
 rows, credential contents, hashes of private contents, or private entry names.
 
-The verifier runs offline. Do not run `serve`, founder `status`, onboarding,
+The verifier runs offline. Do not run `serve`, setup `status`, onboarding,
 Docker Compose, image pulls, provider calls, or a Person client against the
 restored state. A structurally valid result does not establish freshness: V1
 has no independently retained monotonic witness.
@@ -733,7 +733,7 @@ Unmount the restored filesystem, detach the validated restored EBS volume, and
 wait until account-scoped `describe-volumes` reports that exact restored volume
 as `available` with zero attachments before deletion. Re-confirm the volume
 identity against the restore receipt immediately before deletion; delete only
-that restored drill volume, never the helper root, the live Authority volume,
+that restored drill volume, never the inspection-host root, the deployed Authority volume,
 or any source volume. Do not terminate the helper independently. Delete the
 helper CloudFormation stack only after restored-volume cleanup so its instance,
 instance profile, role, endpoints, subnet, route table, and security groups are
@@ -780,7 +780,7 @@ not execute it. Keep the prior approved plan unchanged while the scope is
 corrected. If the maintenance transaction reports `recovery_required`, do not
 remove its lock or run Compose manually: follow the deployment lock-recovery
 procedure and preserve the private transaction and AWS Backup evidence. If the
-live Authority does not return healthy after the qualifying point, follow the
+deployed Authority does not return healthy after the qualifying point, follow the
 existing release/onboarding recovery procedures; do not use the restored volume
 as an emergency boot disk.
 
@@ -788,7 +788,7 @@ If helper isolation, secondary-device attachment, read-only no-replay mounting,
 or offline verification cannot be proven, detach the restored volume and
 use the same wait-for-`available`, identity re-confirmation, restored-volume
 only deletion, helper-stack deletion, and sanitized cleanup confirmation.
-Preserve only the founder-private operator receipt and sanitized
+Preserve only the operator-private receipt and sanitized
 finding. The failure is evidence that the recovery floor has not been rehearsed,
 not permission to relax the isolation boundary.
 
@@ -802,7 +802,7 @@ Record only:
 - scheduled job success/failure, source-encryption evidence result, and time;
 - qualifying maintenance operation result, backup-job/recovery-point evidence,
   automatic restart result, and accepted-tuple/public-descriptor proof;
-- qualifying clean-stop and recovery-point completion times;
+- qualifying quiesced-stop and recovery-point completion times;
 - recovery-point age at drill start and elapsed restore/inspection times;
 - helper-IaC isolation, exact-restore-role `iam:PassRole`, restore-volume
   identity, Availability-Zone, encryption/KMS-boundary, non-root-attachment,

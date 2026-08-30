@@ -31,7 +31,7 @@ the wrong human actor from looking like defects requiring mitigation.
 
 ## Index
 
-The private founder-live adapter qualification ledger seeded these sanitized
+The private internal-dogfood adapter qualification ledger seeded these sanitized
 records. Its source-custody trap is represented by `INV-PERMISSIONS-014` and
 the `ADP-A01` negative qualification case because the observed behavior was a
 correct rejection, not a product failure. Raw provider payloads, credentials,

@@ -5,13 +5,13 @@
 `application/readable-search-contracts` owns the builder's named read-model
 contracts.
 
-## Clean readable-search lean V1 budget
+## Readable-search capacity budget
 
-Lean V1 admits at most 1,024 atoms, 32 permission segments, 4,096 UTF-8
-bytes per atom, and 16,384 lexical postings. Admission is checked before a
-staging directory is created. The exact budget and the one-entry reader
-behavior are inputs to both the Authority retrieval contract and builder
-artifact identity.
+The current capacity contract admits at most 1,024 atoms, 32 permission
+segments, 4,096 UTF-8 bytes per atom, and 16,384 lexical postings. Admission is
+checked before a staging directory is created. The exact budget and the
+one-entry reader behavior are inputs to both the Authority retrieval contract
+and builder artifact identity.
 
 The process keeps exactly one fully validated active-generation handle. A
 reconciler validates every manifest, root, row binding, permission tuple, and
@@ -20,7 +20,7 @@ pointer current. Requests never warm it. They fail bounded-unavailable on a
 miss and inspect only the member segment plus the caller's exact reviewer
 tuple.
 
-The lean V1 acceptance target, defined for the admitted maximum before timing
+The acceptance target, defined for the admitted maximum before timing
 evidence is considered, is **50 ms** for a real Layer 3 batch of four queries
 and **25 ms** event-loop delay on the Cloud development runner. Build and
 prewarm happen outside the request path and are recorded separately. Timing is

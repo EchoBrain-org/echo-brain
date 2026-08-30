@@ -1,11 +1,10 @@
-# Minimum organization control plane v1
+# Organization control plane
 
 **Status:** current organization-owned Slack onboarding and Person identity
 linking, plus a retained installation-bound V1 permission slice with no shipped
 caller.
 
-This milestone is intentionally smaller than the eventual organization
-platform. It implements two current customer-visible behaviors:
+This component implements two current customer-visible behaviors:
 
 1. A current Authority owner can make one organization-owned Slack connection
    active only after the Authority independently verifies its provider
@@ -21,7 +20,7 @@ server compatibility surface, not a current Person workflow.
 
 ## Ownership boundaries
 
-| Boundary | Owner | V1 authority |
+| Boundary | Owner | Responsibility |
 | --- | --- | --- |
 | Organization Authority | Customer | Principal, membership, role, Person session, processing, retained installation compatibility, and revocation truth |
 | Organization control plane | Customer | Provider links, connection handles, adapter bindings, direct grants, and integration audit |
@@ -43,9 +42,9 @@ adapter permission, resolve a customer secret, or read customer organization
 state. The customer may operate the Authority and control plane internally
 without exposing their provider accounts, employees, meetings, or decisions.
 
-## V1 behavior
+## Current behavior
 
-### Organization-tool onboarding gate
+### Slack connection onboarding gate
 
 The organization connection has one deliberately small state contract:
 
@@ -112,7 +111,7 @@ client can initiate that compatibility flow. A profileless active connection
 is compatibility-only. Automatic multi-provider tool discovery and Person-bound
 approval configuration remain later work.
 
-The live database upgrade preserves one active organization-owned Slack
+The database migration preserves one active organization-owned Slack
 connection. Migration `0002_organization_tool_public_configuration.sql` is an
 immutable, checksummed historical migration: it backfilled the earlier
 combined-bootstrap configuration without assigning the employee-connectable
