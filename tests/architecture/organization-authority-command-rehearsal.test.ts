@@ -26,7 +26,7 @@ import {
 } from "../../services/organization-authority/src/composition/person-onboarding-service.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
 import { openOrganizationAuthorityService } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/slack-person-external-identity-runtime.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/slack-person-external-identity-runtime-bundle-v1.js";
 import { initializeAuthorityState } from "../../services/organization-authority/src/composition/authority-state-initializer.js";
 import type { OrganizationAuthorityProcessingCycleV1 } from "../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
 import { runPersonClientCli } from "../../src/product/person-client/commands.js";
@@ -160,7 +160,7 @@ const fakeSlack: SlackIdentityProviderV1 = {
 
 const inactiveWorker: OrganizationAuthorityProcessingCycleV1 = {
   recoverV4Appends: async () => undefined,
-  pollAndStageLiveOnlySource: async () => undefined,
+  pollAndStageAdmittedMeetings: async () => undefined,
   observeAndFinalizePendingApprovals: async () => undefined,
   appendFinalizedApprovalsToV4: async () => undefined,
   reconcileReadableSearchGeneration: async () => undefined,
