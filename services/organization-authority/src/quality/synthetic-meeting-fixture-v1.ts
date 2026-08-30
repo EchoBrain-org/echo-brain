@@ -60,7 +60,7 @@ export interface SyntheticAnswerCompositionCaseV1 {
 
 /**
  * Invented, provider-independent meeting input. It deliberately contains no
- * provider payload shape, credential reference, or production-record identifier.
+ * provider payload shape, credential reference, or persisted-record identifier.
  */
 export interface SyntheticMeetingFixtureV1 {
   readonly id: string;

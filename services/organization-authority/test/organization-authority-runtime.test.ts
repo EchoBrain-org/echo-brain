@@ -369,7 +369,7 @@ function fakeSource(
       {
         id: "note-live-test",
         kind: "note",
-        text: "Ship the source-admission migration.",
+        text: "Ship the clean live migration.",
       },
     ],
     artifacts: [],
@@ -418,7 +418,7 @@ function fakeProcessor(
           id: "decision-live-test",
           kind: "decision",
           status: "decided",
-          text: meeting.content[0]?.text ?? "Ship the source-admission migration.",
+          text: meeting.content[0]?.text ?? "Ship the clean live migration.",
           subject: null,
           confidence: 1,
           evidence: [
@@ -876,7 +876,7 @@ function answerModel(): StructuredGenerationPort {
       }
       return {
         status: "answered",
-        answer: "Ship the source-admission migration.",
+        answer: "Ship the clean live migration.",
         citations: ["a1"],
       };
     },
@@ -1290,13 +1290,13 @@ describe("Organization Authority runtime private approval lane", () => {
         record,
       });
       expect(teamAnswers.owner).toMatchObject({
-        answer: "Ship the source-admission migration.",
+        answer: "Ship the clean live migration.",
         citations: [
           { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
         ],
       });
       expect(teamAnswers.member).toMatchObject({
-        answer: "Ship the source-admission migration.",
+        answer: "Ship the clean live migration.",
         citations: [
           { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
         ],
@@ -1382,7 +1382,7 @@ describe("Organization Authority runtime private approval lane", () => {
         record,
       });
       expect(onlyMeAnswers.owner).toMatchObject({
-        answer: "Ship the source-admission migration.",
+        answer: "Ship the clean live migration.",
         citations: [{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }],
       });
       expect(onlyMeAnswers.member).toMatchObject({
@@ -1410,7 +1410,7 @@ describe("Organization Authority runtime private approval lane", () => {
           record,
         });
         expect(recoveredOnlyMeAnswer).toMatchObject({
-          answer: "Ship the source-admission migration.",
+          answer: "Ship the clean live migration.",
           citations: [{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }],
         });
       } finally {
