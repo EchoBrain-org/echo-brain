@@ -14,13 +14,13 @@ import {
   type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
 } from '@echo-brain/organization-api';
 
-export interface PersonRequestIdentity {
+export interface PersonApiRequestIdentity {
   readonly authority_id: string;
   readonly session: OrganizationPersonSessionV2;
 }
 
 function base(
-  identity: PersonRequestIdentity,
+  identity: PersonApiRequestIdentity,
   requestId: string,
 ): {
   request_id: string;
@@ -39,7 +39,7 @@ function base(
 }
 
 export function createPersonMeetingIngestionExclusionChangeRequest(
-  identity: PersonRequestIdentity,
+  identity: PersonApiRequestIdentity,
   requestId: string,
   excluded: boolean,
   selector: OrganizationPersonMeetingIngestionExclusionSelectorV2,
@@ -55,7 +55,7 @@ export function createPersonMeetingIngestionExclusionChangeRequest(
 }
 
 export function createPersonMeetingIngestionExclusionListRequest(
-  identity: PersonRequestIdentity,
+  identity: PersonApiRequestIdentity,
   requestId: string,
   sourceAdapterId: string,
   sourceInstanceId: string,

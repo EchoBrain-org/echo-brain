@@ -23,8 +23,8 @@ export {
   createPersonMeetingIngestionExclusionListRequest,
   createPersonSlackIdentityLinkBeginRequest,
   createPersonSlackIdentityLinkCompleteRequest,
-  type PersonRequestIdentity,
-} from "./requests.js";
+  type PersonApiRequestIdentity,
+} from "./person-api-request-builders.js";
 export {
   readPersonOnboardingInvitation,
   writePersonOnboardingInvitation,

@@ -18,7 +18,7 @@ import {
   createPersonMeetingIngestionExclusionListRequest,
   createPersonSlackIdentityLinkBeginRequest,
   createPersonSlackIdentityLinkCompleteRequest,
-} from "./requests.js";
+} from "./person-api-request-builders.js";
 import {
   PersonClientSessionUnavailableError,
   PersonSessionStore,
