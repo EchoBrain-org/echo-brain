@@ -11,7 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
-import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
+import {
+  PersonIdentitySessionApplication,
+  PersonOidcRetryableError,
+} from "../src/application/person-identity-sessions.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
@@ -260,6 +263,207 @@ describe("clean Person runtime", () => {
           .pluck()
           .get(),
       ).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("releases retryable bootstrap redemption before consuming the invitation", async () => {
+    const parent = root();
+    const initialized = initializeCleanResetState({
+      state_directory: join(parent, "state"),
+      organization_display_name: "Founder Organization",
+      owner_display_name: "Founder",
+      created_at: new Date(Date.now() - 1_000).toISOString(),
+      creating_artifact_revision: "clean-person-bootstrap-retry-test",
+    });
+    const oidc = {
+      issuer: "https://issuer.example",
+      client_id: "founder-client",
+      redirect_uri: "https://authority.example/v2/session/oidc/callback",
+      tenant: { kind: "issuer" as const },
+      id_token_algorithms: ["RS256"],
+    };
+    const credentials = initializeCleanPersonCredentials({
+      state_directory: initialized.state_directory,
+    });
+    const pkce = readPrivateAuthorityPersonSessionPkceKey(
+      credentials.pkce_sealing_key_reference,
+    );
+    const invitations = join(parent, "invitations");
+    mkdirSync(invitations, { mode: 0o700 });
+    chmodSync(invitations, 0o700);
+    const invitationPath = join(invitations, "founder.invitation.json");
+    issueCleanPersonInvitation({
+      state_directory: initialized.state_directory,
+      oidc,
+      pkce_sealing_key: pkce,
+      membership_id: initialized.owner_membership_id,
+      expected_email: "founder@example.com",
+      authority_url: "https://authority.example",
+      output_path: invitationPath,
+    });
+    const invitation = JSON.parse(readFileSync(invitationPath, "utf8")) as {
+      login_grant: string;
+    };
+    const database = openAuthorityDatabase(
+      join(initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      let now = new Date().toISOString();
+      const crypto = new NodePersonSessionCrypto(pkce);
+      const sessions = new PersonIdentitySessionApplication(
+        new SqliteCleanPersonSessionRepository(database),
+        oidc,
+        {
+          clock: { now: () => now },
+          random: crypto,
+          hash: crypto,
+          pkce_sealer: crypto,
+          oidc_provider: {
+            buildAuthorizationUrl: () => "https://issuer.example/authorize",
+            async redeemAuthorizationCode() {
+              return { kind: "retryable_before_redemption" };
+            },
+          },
+        },
+      );
+      const first = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: invitation.login_grant,
+      });
+      const reattached = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: invitation.login_grant,
+      });
+      expect(reattached).toMatchObject({
+        login_attempt_id: first.login_attempt_id,
+        state: first.state,
+        nonce: first.nonce,
+      });
+
+      await expect(
+        sessions.completeOidcLogin({
+          state: first.state,
+          authorization_code: "retryable-provider-result",
+        }),
+      ).rejects.toBeInstanceOf(PersonOidcRetryableError);
+      expect(
+        database
+          .prepare("SELECT consumed_at FROM authority_person_login_grants")
+          .pluck()
+          .get(),
+      ).toBeNull();
+      expect(
+        database
+          .prepare(
+            "SELECT redemption_claim_id IS NULL AND terminal_outcome IS NULL FROM authority_oidc_login_attempts",
+          )
+          .pluck()
+          .get(),
+      ).toBe(1);
+      expect(
+        sessions.beginOidcLogin({
+          kind: "identity_bootstrap",
+          login_grant: invitation.login_grant,
+        }),
+      ).toMatchObject({ login_attempt_id: first.login_attempt_id });
+      now = new Date(Date.parse(now) + 11 * 60 * 1000).toISOString();
+      let expiredError: unknown;
+      try {
+        sessions.beginOidcLogin({
+          kind: "identity_bootstrap",
+          login_grant: invitation.login_grant,
+        });
+      } catch (error) {
+        expiredError = error;
+      }
+      expect(expiredError).toMatchObject({ code: "unauthorized" });
+      expect(
+        database
+          .prepare("SELECT invalidated_at IS NOT NULL FROM authority_person_login_grants")
+          .pluck()
+          .get(),
+      ).toBe(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("caps unauthenticated OIDC begins durably and releases expired capacity", () => {
+    const parent = root();
+    const initialized = initializeCleanResetState({
+      state_directory: join(parent, "state"),
+      organization_display_name: "Founder Organization",
+      owner_display_name: "Founder",
+      created_at: new Date(Date.now() - 1_000).toISOString(),
+      creating_artifact_revision: "clean-person-oidc-capacity-test",
+    });
+    const pkce = readPrivateAuthorityPersonSessionPkceKey(
+      initializeCleanPersonCredentials({
+        state_directory: initialized.state_directory,
+      }).pkce_sealing_key_reference,
+    );
+    const database = openAuthorityDatabase(
+      join(initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      let now = new Date().toISOString();
+      const crypto = new NodePersonSessionCrypto(pkce);
+      const sessions = new PersonIdentitySessionApplication(
+        new SqliteCleanPersonSessionRepository(database),
+        {
+          issuer: "https://issuer.example",
+          client_id: "founder-client",
+          redirect_uri: "https://authority.example/v2/session/oidc/callback",
+          tenant: { kind: "issuer" },
+          id_token_algorithms: ["RS256"],
+        },
+        {
+          clock: { now: () => now },
+          random: crypto,
+          hash: crypto,
+          pkce_sealer: crypto,
+          oidc_provider: { buildAuthorizationUrl: () => "https://issuer.example/authorize" },
+        },
+      );
+      for (let index = 0; index < 32; index += 1) {
+        sessions.beginOidcLogin({ kind: "existing_identity_login" });
+      }
+      let capacityError: unknown;
+      try {
+        sessions.beginOidcLogin({ kind: "existing_identity_login" });
+      } catch (error) {
+        capacityError = error;
+      }
+      expect(capacityError).toMatchObject({ code: "rate_limited" });
+      expect(
+        database
+          .prepare("SELECT count(*) FROM authority_oidc_login_attempts")
+          .pluck()
+          .get(),
+      ).toBe(32);
+
+      now = new Date(Date.parse(now) + 11 * 60 * 1000).toISOString();
+      expect(
+        sessions.beginOidcLogin({ kind: "existing_identity_login" }),
+      ).toMatchObject({ issuer: "https://issuer.example" });
+      expect(
+        database
+          .prepare(
+            "SELECT count(*) FROM authority_oidc_login_attempts WHERE terminal_outcome IS NULL",
+          )
+          .pluck()
+          .get(),
+      ).toBe(1);
+      expect(
+        database
+          .prepare("SELECT count(*) FROM authority_oidc_login_attempts")
+          .pluck()
+          .get(),
+      ).toBe(33);
     } finally {
       database.close();
     }

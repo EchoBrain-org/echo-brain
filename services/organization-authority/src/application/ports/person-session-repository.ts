@@ -38,6 +38,7 @@ export interface PersonSessionReadTransaction {
   oidcLoginAttemptForLoginGrant(
     loginGrantSha256: Sha256Digest,
   ): StoredOidcLoginAttempt | undefined;
+  hasOidcLoginAttemptCapacity(limit: number): boolean;
   personLoginGrant(
     loginGrantSha256: Sha256Digest,
   ): StoredPersonLoginGrant | undefined;
@@ -73,6 +74,9 @@ export interface PersonSessionWriteTransaction extends PersonSessionReadTransact
     completion: OidcLoginAttemptCompletion,
   ): StoredOidcLoginAttempt | undefined;
   expireOidcLoginAttempts(limit: number): number;
+  invalidatePersonLoginGrant(
+    loginGrantSha256: Sha256Digest,
+  ): StoredPersonLoginGrant | undefined;
   insertPersonLoginGrant(grant: NewPersonLoginGrant): StoredPersonLoginGrant;
   consumePersonLoginGrant(
     loginGrantSha256: Sha256Digest,

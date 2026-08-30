@@ -16,7 +16,10 @@ export interface PersonLoopbackHandoff {
 
 export type PersonLoopbackHandoffResult =
   | { readonly kind: "session"; readonly session: unknown }
-  | { readonly kind: "error"; readonly code: "identity_not_bound" };
+  | {
+      readonly kind: "error";
+      readonly code: "identity_not_bound" | "retryable";
+    };
 
 function randomSecret(randomBytes: (size: number) => Uint8Array): string {
   const value = randomBytes(32);
@@ -65,11 +68,18 @@ async function readForm(request: IncomingMessage): Promise<{
   if (keys === "error,token") {
     if (
       form.getAll("error").length !== 1 ||
-      form.get("error") !== "identity_not_bound"
+      (form.get("error") !== "identity_not_bound" &&
+        form.get("error") !== "retryable")
     ) {
       throw new Error("invalid local handoff error");
     }
-    return { token, result: { kind: "error", code: "identity_not_bound" } };
+    return {
+      token,
+      result: {
+        kind: "error",
+        code: form.get("error") as "identity_not_bound" | "retryable",
+      },
+    };
   }
   if (keys !== "session,token" || form.getAll("session").length !== 1) {
     throw new Error("invalid local handoff form");

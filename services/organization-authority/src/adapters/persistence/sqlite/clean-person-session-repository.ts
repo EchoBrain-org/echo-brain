@@ -439,6 +439,18 @@ class Transaction implements PersonSessionWriteTransaction {
     return row === undefined ? undefined : attempt(row);
   }
 
+  hasOidcLoginAttemptCapacity(limit: number): boolean {
+    if (!Number.isSafeInteger(limit) || limit < 1)
+      throw new Error("clean OIDC attempt capacity is invalid");
+    return (
+      this.database
+        .prepare(
+          `SELECT count(*) AS count FROM authority_oidc_login_attempts WHERE terminal_outcome IS NULL`,
+        )
+        .get() as { count: number }
+    ).count < limit;
+  }
+
   personLoginGrant(
     loginGrantSha256: Sha256Digest,
   ): StoredPersonLoginGrant | undefined {
@@ -612,6 +624,18 @@ class Transaction implements PersonSessionWriteTransaction {
         .run(now, row.state_sha256);
     }
     return rows.length;
+  }
+
+  invalidatePersonLoginGrant(
+    loginGrantSha256: Sha256Digest,
+  ): StoredPersonLoginGrant | undefined {
+    const now = this.writeTime();
+    const changed = this.database
+      .prepare(
+        `UPDATE authority_person_login_grants SET invalidated_at = ? WHERE login_grant_sha256 = ? AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at > ?`,
+      )
+      .run(now, loginGrantSha256, now).changes;
+    return changed === 1 ? this.personLoginGrant(loginGrantSha256) : undefined;
   }
 
   insertPersonLoginGrant(value: NewPersonLoginGrant): StoredPersonLoginGrant {

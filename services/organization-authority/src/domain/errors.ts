@@ -4,6 +4,7 @@ export type AuthorityErrorCode =
   | 'not_found'
   | 'stale_access_state'
   | 'unauthorized'
+  | 'rate_limited'
   | 'unavailable';
 
 export class AuthorityOperationError extends Error {

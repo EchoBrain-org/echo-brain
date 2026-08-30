@@ -10,6 +10,7 @@ import {
   isCanonicalPersonEmail,
   isStrictlyBefore,
   OIDC_ASSERTION_ISSUED_AT_SKEW_MS,
+  MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS,
   OIDC_LOGIN_ATTEMPT_LIFETIME_MS,
   PERSON_ACCESS_CREDENTIAL_LIFETIME_MS,
   PERSON_LOGIN_GRANT_LIFETIME_MS,
@@ -212,6 +213,12 @@ interface VerifiedIdentity {
   upstream_assertion_issued_at: string;
 }
 
+interface BootstrapAttemptSecrets {
+  readonly state: string;
+  readonly nonce: string;
+  readonly verifier: string;
+}
+
 class PersonSessionOidcDiagnosticError extends Error {
   constructor(readonly reason: PersonSessionOidcFailureReason) {
     super(reason);
@@ -229,6 +236,14 @@ export class PersonOidcIdentityNotBoundError extends AuthorityOperationError {
   constructor() {
     super("unauthorized", "person authentication failed");
     this.name = "PersonOidcIdentityNotBoundError";
+  }
+}
+
+/** A loopback receiver may safely tell its initiating client to retry. */
+export class PersonOidcRetryableError extends AuthorityOperationError {
+  constructor() {
+    super("unauthorized", "person authentication failed");
+    this.name = "PersonOidcRetryableError";
   }
 }
 
@@ -563,7 +578,9 @@ export class PersonIdentitySessionApplication {
         ? this.digestSecret(input.login_grant)
         : null;
 
-    return this.repository.writeAtLinearization(
+    const begun = this.repository.writeAtLinearization<
+      BegunPersonOidcLogin | undefined
+    >(
       () => this.runtime.clock.now(),
       (transaction, createdAt) => {
         const expiresAt = addPersonSessionMilliseconds(
@@ -581,14 +598,76 @@ export class PersonIdentitySessionApplication {
             grant.oidc_configuration_sha256 !==
               this.configuration.oidc_configuration_sha256 ||
             !isStrictlyBefore(createdAt, grant.expires_at) ||
-            !this.hasActiveExactMembership(transaction, grant) ||
-            transaction.oidcLoginAttemptForLoginGrant(loginGrantSha256) !==
-              undefined
+            !this.hasActiveExactMembership(transaction, grant)
           ) {
             throw personSessionUnauthorized();
           }
+          const existing = transaction.oidcLoginAttemptForLoginGrant(
+            loginGrantSha256,
+          );
+          if (existing !== undefined) {
+            if (!isStrictlyBefore(createdAt, existing.expires_at)) {
+              // The frozen schema permits one attempt per grant. Retire both
+              // sides atomically so an abandoned browser state is truthful and
+              // the operator can safely reissue instead of guessing.
+              transaction.invalidatePersonLoginGrant(loginGrantSha256);
+              transaction.expireOidcLoginAttempts(
+                MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS,
+              );
+              return undefined;
+            }
+            if (
+              existing.terminal_outcome !== null ||
+              existing.redemption_claim_id !== null ||
+              !this.attemptUsesCurrentConfiguration(existing)
+            ) {
+              throw personSessionUnauthorized();
+            }
+            let material: BootstrapAttemptSecrets;
+            try {
+              material = this.unsealBootstrapAttemptSecrets(existing);
+            } catch {
+              transaction.invalidatePersonLoginGrant(loginGrantSha256);
+              return undefined;
+            }
+            if (
+              this.digestSecret(material.state) !== existing.state_sha256 ||
+              this.digestSecret(material.nonce) !== existing.nonce_sha256
+            ) {
+              transaction.invalidatePersonLoginGrant(loginGrantSha256);
+              return undefined;
+            }
+            return {
+              login_attempt_id: existing.login_attempt_id,
+              issuer: existing.issuer,
+              client_id: existing.client_id,
+              redirect_uri: existing.redirect_uri,
+              state: material.state,
+              nonce: material.nonce,
+              code_challenge: this.pkceChallenge(material.verifier),
+              code_challenge_method: "S256",
+              response_type: "code",
+              scope: "openid email",
+              created_at: existing.created_at,
+              expires_at: existing.expires_at,
+            };
+          }
         } else if (input.kind !== "existing_identity_login") {
           throw personSessionUnauthorized();
+        }
+        // Scrub expired verifier material before admitting a new unauthenticated
+        // attempt. The bounded query and following insert share this write
+        // transaction, so restarts and concurrent requests cannot bypass it.
+        transaction.expireOidcLoginAttempts(MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS);
+        if (
+          !transaction.hasOidcLoginAttemptCapacity(
+            MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS,
+          )
+        ) {
+          throw new AuthorityOperationError(
+            "rate_limited",
+            "person authentication failed",
+          );
         }
 
         const attemptForAad = {
@@ -607,7 +686,19 @@ export class PersonIdentitySessionApplication {
           expires_at: expiresAt,
         } as const;
         const seal = this.runtime.pkce_sealer.seal({
-          plaintext: Buffer.from(verifier, "ascii"),
+          plaintext:
+            input.kind === "identity_bootstrap"
+              ? Buffer.from(
+                  canonicalJson({
+                    schema_version: 1,
+                    kind: "authority-oidc-bootstrap-attempt-secrets-v1",
+                    state,
+                    nonce,
+                    verifier,
+                  }),
+                  "utf8",
+                )
+              : Buffer.from(verifier, "ascii"),
           authenticated_data: this.pkceAuthenticatedData(attemptForAad),
         });
         validateText(seal.key_id, "PKCE sealing key ID", 200);
@@ -652,6 +743,8 @@ export class PersonIdentitySessionApplication {
         };
       },
     );
+    if (begun === undefined) throw personSessionUnauthorized();
+    return begun;
   }
 
   async completeOidcLogin(input: {
@@ -930,6 +1023,7 @@ export class PersonIdentitySessionApplication {
           ? error.reason
           : "internal_failure";
       this.diagnoseOidcFailure(reason);
+      if (releasedForRetry) throw new PersonOidcRetryableError();
       if (
         reason === "identity_binding_denied" ||
         reason === "bootstrap_binding_denied" ||
@@ -1327,6 +1421,64 @@ export class PersonIdentitySessionApplication {
   }
 
   private unsealVerifier(attempt: StoredOidcLoginAttempt): string {
+    const plaintext = this.unsealAttemptPlaintext(attempt);
+    const decoded = Buffer.from(plaintext).toString("utf8");
+    if (decoded.startsWith("{")) {
+      return this.unsealBootstrapAttemptSecrets(attempt).verifier;
+    }
+    const verifier = Buffer.from(plaintext).toString("ascii");
+    this.decodeSecret(verifier);
+    return verifier;
+  }
+
+  private unsealBootstrapAttemptSecrets(
+    attempt: StoredOidcLoginAttempt,
+  ): BootstrapAttemptSecrets {
+    if (attempt.attempt_purpose !== "identity_bootstrap") {
+      throw personSessionUnauthorized();
+    }
+    let parsed: unknown;
+    let plaintext: Uint8Array;
+    try {
+      plaintext = this.unsealAttemptPlaintext(attempt);
+      const text = Buffer.from(plaintext).toString("utf8");
+      parsed = JSON.parse(text) as unknown;
+      if (canonicalJson(parsed) !== text) throw new Error("not canonical");
+    } catch {
+      // A verifier-only legacy pending attempt cannot expose its original
+      // state and nonce for a fresh loopback handoff.
+      throw personSessionUnauthorized();
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).sort().join(",") !==
+        "kind,nonce,schema_version,state,verifier"
+    ) {
+      throw personSessionUnauthorized();
+    }
+    const value = parsed as Record<string, unknown>;
+    if (
+      value.schema_version !== 1 ||
+      value.kind !== "authority-oidc-bootstrap-attempt-secrets-v1" ||
+      typeof value.state !== "string" ||
+      typeof value.nonce !== "string" ||
+      typeof value.verifier !== "string"
+    ) {
+      throw personSessionUnauthorized();
+    }
+    this.decodeSecret(value.state);
+    this.decodeSecret(value.nonce);
+    this.decodeSecret(value.verifier);
+    return Object.freeze({
+      state: value.state,
+      nonce: value.nonce,
+      verifier: value.verifier,
+    });
+  }
+
+  private unsealAttemptPlaintext(attempt: StoredOidcLoginAttempt): Uint8Array {
     if (
       attempt.pkce_verifier_seal_key_id === null ||
       attempt.pkce_verifier_sealed === null
@@ -1334,14 +1486,11 @@ export class PersonIdentitySessionApplication {
       throw personSessionUnauthorized();
     }
     try {
-      const plaintext = this.runtime.pkce_sealer.unseal({
+      return this.runtime.pkce_sealer.unseal({
         key_id: attempt.pkce_verifier_seal_key_id,
         sealed_bytes: Uint8Array.from(attempt.pkce_verifier_sealed),
         authenticated_data: this.pkceAuthenticatedData(attempt),
       });
-      const verifier = Buffer.from(plaintext).toString("ascii");
-      this.decodeSecret(verifier);
-      return verifier;
     } catch {
       throw personSessionUnauthorized();
     }

@@ -99,4 +99,24 @@ describe("Person loopback browser handoff", () => {
       await handoff.close();
     }
   });
+  it("accepts the Authority's token-authenticated retryable terminal handoff", async () => {
+    const handoff = await startPersonLoopbackHandoff({});
+    try {
+      const response = await fetch(handoff.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ token: handoff.token, error: "retryable" }),
+      });
+
+      expect(response.status).toBe(400);
+      await expect(handoff.wait()).resolves.toEqual({
+        kind: "error",
+        code: "retryable",
+      });
+    } finally {
+      await handoff.close();
+    }
+  });
 });

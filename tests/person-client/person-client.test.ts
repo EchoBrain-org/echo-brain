@@ -1567,7 +1567,9 @@ describe("Person client", () => {
       );
       expect(status).toBe(0);
       expect(begins).toHaveLength(2);
-      expect(stdout).toContain("The invitation was already consumed.");
+      expect(stdout).toContain(
+        "A previous invitation sign-in already completed.",
+      );
       expect(stdout).toContain('"phase":"installed"');
     });
   });

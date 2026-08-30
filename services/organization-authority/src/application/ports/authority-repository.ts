@@ -537,6 +537,8 @@ export interface AuthorityReadTransaction {
   oidcLoginAttemptForLoginGrant(
     loginGrantSha256: Sha256Digest,
   ): StoredOidcLoginAttempt | undefined;
+  /** Counts pending attempts inside the same write transaction as insertion. */
+  hasOidcLoginAttemptCapacity(limit: number): boolean;
   personLoginGrant(
     loginGrantSha256: Sha256Digest,
   ): StoredPersonLoginGrant | undefined;
@@ -583,6 +585,10 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
   ): StoredOidcLoginAttempt | undefined;
   /** Scrubs at most `limit` pending attempts whose exact expiry has passed. */
   expireOidcLoginAttempts(limit: number): number;
+  /** Permanently retires one still-live grant when its sole attempt expires. */
+  invalidatePersonLoginGrant(
+    loginGrantSha256: Sha256Digest,
+  ): StoredPersonLoginGrant | undefined;
   insertPersonLoginGrant(
     grant: NewPersonLoginGrant,
   ): StoredPersonLoginGrant;

@@ -15,6 +15,7 @@ import {
 } from "./person-identity-session-http-application.js";
 import {
   PersonOidcIdentityNotBoundError,
+  PersonOidcRetryableError,
   type PersonIdentitySessionApplication,
 } from "../application/person-identity-sessions.js";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
@@ -180,16 +181,17 @@ function handoffHtml(response: ServerResponse, value: {
   response.end(page);
 }
 
-function identityNotBoundHandoffHtml(
+function handoffErrorHtml(
   response: ServerResponse,
   value: {
     url: string;
     token: string;
+    code: "identity_not_bound" | "retryable";
   },
 ): void {
   const receiverOrigin = new URL(value.url).origin;
   const page = Buffer.from(
-    `<!doctype html><meta charset="utf-8"><title>Echo sign-in</title><p>Completing sign-in…</p><form id="handoff" method="post" action="${value.url}"><input type="hidden" name="token" value="${value.token}"><input type="hidden" name="error" value="identity_not_bound"></form><script>document.getElementById("handoff").submit()</script>`,
+    `<!doctype html><meta charset="utf-8"><title>Echo sign-in</title><p>Completing sign-in…</p><form id="handoff" method="post" action="${value.url}"><input type="hidden" name="token" value="${value.token}"><input type="hidden" name="error" value="${value.code}"></form><script>document.getElementById("handoff").submit()</script>`,
     "utf8",
   );
   response.writeHead(200, {
@@ -419,6 +421,9 @@ export function createCleanPersonHttpServer(
         url.pathname === PERSON_SESSION_OIDC_BEGIN_PATH &&
         url.search === ""
       ) {
+        for (const [state, handoff] of handoffs) {
+          if (Date.parse(handoff.expires_at) <= Date.now()) handoffs.delete(state);
+        }
         const input = validateOrganizationPersonOidcBeginRequest(
           await body(request),
         );
@@ -427,9 +432,6 @@ export function createCleanPersonHttpServer(
             ? { kind: input.kind, login_grant: input.login_grant }
             : { kind: input.kind },
         );
-        for (const [state, handoff] of handoffs) {
-          if (Date.parse(handoff.expires_at) <= Date.now()) handoffs.delete(state);
-        }
         if (input.loopback_handoff !== undefined) {
           handoffs.set(
             begun.state,
@@ -480,7 +482,18 @@ export function createCleanPersonHttpServer(
             Date.parse(handoff.expires_at) > Date.now() &&
             error instanceof PersonOidcIdentityNotBoundError
           ) {
-            identityNotBoundHandoffHtml(response, handoff);
+            handoffErrorHtml(response, {
+              ...handoff,
+              code: "identity_not_bound",
+            });
+            return;
+          }
+          if (
+            handoff !== undefined &&
+            Date.parse(handoff.expires_at) > Date.now() &&
+            error instanceof PersonOidcRetryableError
+          ) {
+            handoffErrorHtml(response, { ...handoff, code: "retryable" });
             return;
           }
           throw error;
@@ -653,7 +666,9 @@ export function createCleanPersonHttpServer(
                 ? 409
                 : error.code === "unavailable"
                   ? 503
-                  : 400;
+                  : error.code === "rate_limited"
+                    ? 429
+                    : 400;
         fail(response, status, error.code);
         return;
       }

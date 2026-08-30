@@ -268,7 +268,7 @@ async function completePersonLogin(input: {
   });
   try {
     let begun;
-    let recoveredConsumedInvitation = false;
+    let recoveredExistingInvitation = false;
     try {
       begun = await input.client.beginLogin(
         input.authority_url,
@@ -276,10 +276,9 @@ async function completePersonLogin(input: {
         { url: handoff.url, token: handoff.token },
       );
     } catch (error) {
-      // The Authority can complete an OIDC bootstrap even when a browser
-      // never reaches this short-lived local receiver. In that case its
-      // one-use invitation is consumed; retry once as the now-bound
-      // identity, never by exposing the session in the callback.
+      // A prior bootstrap may have completed even when its browser never
+      // reached this short-lived receiver. Try the now-bound identity once;
+      // an invitation is consumed only by a definitive bootstrap outcome.
       if (
         input.login_grant !== undefined &&
         error instanceof PersonAuthorityClientError &&
@@ -299,12 +298,12 @@ async function completePersonLogin(input: {
             recoveryError.status === 401
           ) {
             throw new Error(
-              "This ECHO invitation can no longer be used and no existing ECHO identity was found. Ask the ECHO owner to reissue an invitation.",
+              "This ECHO invitation could not start and no existing ECHO identity was found. It may be in progress, expired, invalid, or already used. Ask the ECHO owner to reissue it if needed.",
             );
           }
           throw recoveryError;
         }
-        recoveredConsumedInvitation = true;
+        recoveredExistingInvitation = true;
       } else {
         throw error;
       }
@@ -319,12 +318,12 @@ async function completePersonLogin(input: {
       authorization_url: begun.authorization_url,
       expires_at: begun.expires_at,
       ...(browserOpened === undefined ? {} : { browser_opened: browserOpened }),
-      instruction: recoveredConsumedInvitation
+      instruction: recoveredExistingInvitation
         ? browserOpened === undefined
-          ? "The invitation was already consumed. Open authorization_url to finish sign-in as the existing identity."
+          ? "A previous invitation sign-in already completed. Open authorization_url to finish sign-in as the existing identity."
           : browserOpened
-            ? "The invitation was already consumed. Finish sign-in as the existing identity in the opened browser."
-            : "The invitation was already consumed. Open authorization_url to finish sign-in as the existing identity."
+            ? "A previous invitation sign-in already completed. Finish sign-in as the existing identity in the opened browser."
+            : "A previous invitation sign-in already completed. Open authorization_url to finish sign-in as the existing identity."
         : browserOpened === false
           ? "Open authorization_url to complete sign-in in your browser."
           : browserOpened === true
@@ -338,6 +337,11 @@ async function completePersonLogin(input: {
           input.login_grant === undefined
             ? "No existing ECHO identity was found. Ask the ECHO owner for an invitation."
             : "The selected Google account has no active ECHO identity. Select the invited Google account, or ask the ECHO owner to reissue the invitation.",
+        );
+      }
+      if (handoffResult.code === "retryable") {
+        throw new Error(
+          "Person browser sign-in can be retried. Rerun the same command before the invitation expires.",
         );
       }
       throw new Error("Person browser sign-in could not be completed");
