@@ -1,4 +1,4 @@
-# Opt-in clean founder-onboarding deployment. It intentionally does not share
+# Opt-in clean initial-owner-onboarding deployment. It intentionally does not share
 # the legacy compose file, legacy data directory, or legacy process entrypoint.
 name: echo-organization-authority-clean-v1
 

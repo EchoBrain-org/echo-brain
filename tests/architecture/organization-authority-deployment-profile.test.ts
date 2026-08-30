@@ -357,7 +357,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     );
     expect(source).toContain("docker image inspect");
     expect(source).toContain("compose_clean pull authority");
-    expect(source).toContain('"$FOUNDER_MAIN" resume --state-dir /echo-clean/state');
+    expect(source).toContain('"$SETUP_COMMAND" resume --state-dir /echo-clean/state');
     expect(source).toContain("status_boolean \"$status_json\" slack_connected");
     expect(source).toContain("require_image_present");
     expect(source).toContain("healthy_authority()");
