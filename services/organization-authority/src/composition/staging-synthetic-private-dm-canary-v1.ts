@@ -80,16 +80,19 @@ function actionable(
 export async function stageStagingSyntheticPrivateDmCanaryV1(
   input: StageStagingSyntheticPrivateDmCanaryV1Input,
 ): Promise<StageStagingSyntheticPrivateDmCanaryV1Result> {
+  input.signal?.throwIfAborted();
   assertStagingAuthorityUrl(input.authority_url);
   const meeting = createStagingSyntheticMeetingCanaryV1(input.canary);
   const existing = await input.state.readFrozenCandidateForSourceRevision({
     external_id: meeting.provenance.external_id,
     canonical_revision: meeting.provenance.canonical_revision,
   });
+  input.signal?.throwIfAborted();
   const reusedFrozenExtraction = existing !== undefined;
   let frozen = existing;
   if (frozen === undefined) {
     const admission = await input.state.readAdmission();
+    input.signal?.throwIfAborted();
     if (
       input.processor.identity.adapter_id !== admission.processor.adapter_id ||
       input.processor.identity.instance_id !== admission.processor.instance_id ||
@@ -107,7 +110,9 @@ export async function stageStagingSyntheticPrivateDmCanaryV1(
       },
       input.signal === undefined ? undefined : { signal: input.signal },
     );
+    input.signal?.throwIfAborted();
     assertCanonicalDecisionSet(decisions, meeting, input.processor.identity);
+    input.signal?.throwIfAborted();
     await input.state.stageStagingSyntheticCanaryCandidate(
       {
         admission,
@@ -117,10 +122,12 @@ export async function stageStagingSyntheticPrivateDmCanaryV1(
       },
       input.canary,
     );
+    input.signal?.throwIfAborted();
     frozen = await input.state.readFrozenCandidateForSourceRevision({
       external_id: meeting.provenance.external_id,
       canonical_revision: meeting.provenance.canonical_revision,
     });
+    input.signal?.throwIfAborted();
   }
   if (frozen === undefined) {
     throw new Error("staging synthetic canary was not durably frozen");
@@ -142,9 +149,10 @@ export async function stageStagingSyntheticPrivateDmCanaryV1(
       kind: "staged",
       approval_id: frozen.approval_id,
       stage_id: frozen.approval_id,
-      reused_frozen_extraction: true,
+      reused_frozen_extraction: reusedFrozenExtraction,
     };
   }
+  input.signal?.throwIfAborted();
   const staged = await input.stager.stage(
     {
       admission: frozen.admission,
@@ -154,6 +162,7 @@ export async function stageStagingSyntheticPrivateDmCanaryV1(
     },
     input.signal === undefined ? undefined : { signal: input.signal },
   );
+  input.signal?.throwIfAborted();
   if (staged.kind === "staged") {
     return {
       kind: "staged",

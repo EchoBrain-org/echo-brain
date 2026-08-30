@@ -228,6 +228,37 @@ describe("staging synthetic private-DM canary control", () => {
     await control.close();
   });
 
+  it("does not receipt a successful canary result after its deadline", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
+      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
+      authority_host: "authority-staging.echobrain.org",
+      release_id: RELEASE_ID,
+      owner_email: OWNER_EMAIL,
+      runtime: runtime(async (_input, options) => {
+        observedSignal = options?.signal;
+        await new Promise<void>((resolve) => {
+          options?.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+        return {
+          kind: "staged",
+          approval_id: "apr_late",
+          stage_id: "stage_late",
+          reused_frozen_extraction: false,
+        };
+      }),
+      socket_path: await socketPath(),
+      operation_timeout_ms: 5,
+    });
+
+    const response = await post(control.socket_path);
+    expect(response.status).toBe(500);
+    expect(observedSignal?.aborted).toBe(true);
+    await control.close();
+  });
+
   it("aborts in-flight canary work before closing its socket", async () => {
     let observedSignal: AbortSignal | undefined;
     let markStarted!: () => void;

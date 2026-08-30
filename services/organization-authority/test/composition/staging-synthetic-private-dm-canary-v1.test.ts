@@ -223,4 +223,43 @@ describe("staging synthetic private-DM canary", () => {
     })).rejects.toThrow("staging-only");
     expect(processor.calls).toBe(0);
   });
+
+  it("does not invoke the stager for an already-aborted frozen candidate", async () => {
+    const value = database();
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      granolaLiveSourceBoundaryV1,
+      "llm",
+      () => NOW,
+    );
+    const processor = new SyntheticCanaryProcessor();
+    let stageCalls = 0;
+    const stager: CleanApprovalStagerV1 = {
+      async stage() {
+        stageCalls += 1;
+        return { kind: "revoked" };
+      },
+      async reconcilePendingDeliveries() {},
+      async reconcileSuperseded() {},
+    };
+    const input = {
+      authority_url: "https://authority-staging.echobrain.org",
+      canary: canaryInput,
+      state,
+      processor,
+      stager,
+    } as const;
+
+    await expect(stageStagingSyntheticPrivateDmCanaryV1(input)).resolves.toMatchObject({
+      kind: "not_staged",
+    });
+    stageCalls = 0;
+    const controller = new AbortController();
+    controller.abort(new Error("queued canary deadline exceeded"));
+
+    await expect(
+      stageStagingSyntheticPrivateDmCanaryV1({ ...input, signal: controller.signal }),
+    ).rejects.toThrow("queued canary deadline exceeded");
+    expect(stageCalls).toBe(0);
+  });
 });

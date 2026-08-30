@@ -223,6 +223,7 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
         },
         { signal: controller.signal },
       );
+      controller.signal.throwIfAborted();
       if (!response.destroyed) receipt(response, input.release_id, result);
     } catch {
       if (!response.destroyed) internalError(response);
