@@ -1382,7 +1382,7 @@ describe("Organization Authority runtime private approval lane", () => {
         record,
       });
       expect(onlyMeAnswers.owner).toMatchObject({
-        answer: "Ship the clean live migration.",
+        answer: "Ship the source-admission migration.",
         citations: [{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }],
       });
       expect(onlyMeAnswers.member).toMatchObject({
