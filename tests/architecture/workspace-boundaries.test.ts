@@ -1123,11 +1123,11 @@ describe("workspace source boundaries", () => {
       },
       {
         identifier: "openrouter",
-        root: "services/organization-authority/src/composition/*openrouter*.ts",
+        root: "services/organization-authority/src/composition/providers/openrouter/",
       },
       {
         identifier: "slack",
-        root: "services/organization-authority/src/composition/*slack*.ts",
+        root: "services/organization-authority/src/composition/providers/slack/",
       },
       {
         identifier: "synthetic-source",

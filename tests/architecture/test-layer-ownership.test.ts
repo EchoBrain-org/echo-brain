@@ -38,9 +38,9 @@ interface TestLayerRule {
 
 const rules: readonly TestLayerRule[] = [
   {
-    root: 'services/organization-authority/test/processing',
+    root: 'services/organization-authority/test/processing/core',
     allows: (path) =>
-      path.startsWith('services/organization-authority/src/processing/') ||
+      path.startsWith('services/organization-authority/src/processing/core/') ||
       path.startsWith('tests/support/'),
   },
   {
