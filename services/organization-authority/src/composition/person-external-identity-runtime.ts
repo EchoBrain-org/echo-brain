@@ -6,7 +6,7 @@ import type { PersonExternalIdentityLinkHttpApplicationV1 } from "../presentatio
  * Authority session store. External identity providers own all connection,
  * token, and channel details behind this boundary.
  */
-export interface CleanPersonExternalIdentityRuntimeInputV1 {
+export interface PersonExternalIdentityRuntimeInputV1 {
   readonly state_directory: string;
   readonly authority_id: string;
   readonly organization_id: string;
@@ -22,7 +22,7 @@ export interface CleanPersonExternalIdentityRuntimeInputV1 {
   }) => "employee" | "owner";
 }
 
-export interface OpenedCleanPersonExternalIdentityRuntimeV1 {
+export interface OpenedPersonExternalIdentityRuntimeV1 {
   /** The currently-versioned external-identity HTTP application. */
   readonly application: PersonExternalIdentityLinkHttpApplicationV1;
   close(): void;
@@ -32,8 +32,8 @@ export interface OpenedCleanPersonExternalIdentityRuntimeV1 {
  * Builds an optional external-identity application. Person runtime does not
  * select a provider or inspect provider connection material.
  */
-export interface CleanPersonExternalIdentityRuntimeBundleV1 {
+export interface PersonExternalIdentityRuntimeBundleV1 {
   open(
-    input: CleanPersonExternalIdentityRuntimeInputV1,
-  ): OpenedCleanPersonExternalIdentityRuntimeV1;
+    input: PersonExternalIdentityRuntimeInputV1,
+  ): OpenedPersonExternalIdentityRuntimeV1;
 }

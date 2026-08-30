@@ -26,7 +26,7 @@ import {
 } from "../../services/organization-authority/src/composition/clean-person-onboarding.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
 import { openOrganizationAuthorityService } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
-import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/clean-slack-person-external-identity-runtime.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/slack-person-external-identity-runtime.js";
 import { initializeAuthorityState } from "../../services/organization-authority/src/composition/authority-state-initializer.js";
 import type { OrganizationAuthorityProcessingCycleV1 } from "../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
 import { runPersonClientCli } from "../../src/product/person-client/commands.js";
@@ -446,7 +446,7 @@ describe("Organization Authority command rehearsal", () => {
         api: {
           oidc_provider: new MockOidcProvider(),
           external_identity_runtime:
-            createCleanSlackPersonExternalIdentityRuntimeBundleV1({
+            createSlackPersonExternalIdentityRuntimeBundleV1({
               identity_link_channel_id: "C12345678",
               provider: fakeSlack,
             }),

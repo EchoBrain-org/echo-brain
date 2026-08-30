@@ -30,8 +30,8 @@ import {
   type OrganizationAuthoritySetupCliDependencies,
 } from "../src/composition/organization-authority-setup-cli.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
-import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
-import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
+import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import { readableSearchRuntimeContractV1 } from "../src/composition/readable-search-runtime.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -160,7 +160,7 @@ function buildInputForCanary(
   manifest: ReturnType<typeof readOrganizationAuthoritySetupManifest>,
   recordSha256: Sha256Digest,
 ) {
-  const contract = cleanReadableSearchRuntimeContractV1();
+  const contract = readableSearchRuntimeContractV1();
   const plane = (role: string, schemaSha256: Sha256Digest) => {
     const manifestJson = canonicalJson({
       schema_version: 1,
@@ -350,7 +350,7 @@ function installDurableCanaryFixture(
         pointerCurrent ? recordSha256 : null,
         "2026-08-23T00:00:01.000Z",
       );
-    const audit = new SqliteCleanPersonRecordReadAuditV1(authority);
+    const audit = new SqlitePersonRecordReadAuditV1(authority);
     const appendAudit = (
       mode: "layer1" | "layer2",
       resultCount: number | null | undefined,

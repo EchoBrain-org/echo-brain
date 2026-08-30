@@ -11,10 +11,10 @@ const LAYER1_3_READ_SEARCH_ROOTS = [
   "services/organization-record/src/retrieve",
   "services/organization-retrieval/src",
   "services/organization-authority/src/application/readable-search-authorization-fence.ts",
-  "services/organization-authority/src/composition/clean-person-record-read-route.ts",
-  "services/organization-authority/src/composition/clean-person-record-search-route.ts",
-  "services/organization-authority/src/presentation/clean-person-record-read-http-application.ts",
-  "services/organization-authority/src/presentation/clean-person-record-search-http-application.ts",
+  "services/organization-authority/src/composition/person-record-read-route.ts",
+  "services/organization-authority/src/composition/person-record-search-route.ts",
+  "services/organization-authority/src/presentation/person-record-read-http-application.ts",
+  "services/organization-authority/src/presentation/person-record-search-http-application.ts",
 ] as const;
 const ANSWER_COMPOSITION_ROOT =
   "services/organization-authority/src/answer-composition";
@@ -22,7 +22,8 @@ const ANSWER_COMPOSITION_ROUTE =
   "services/organization-authority/src/composition/person-answer-route.ts";
 const ANSWER_COMPOSITION_AUDIT_WRITER =
   "services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts";
-const ANSWER_COMPOSITION_RUNTIME_WIRING = new Set([
+/** Composition roots may select an answer-composition runtime, but never inspect its implementation. */
+const ANSWER_COMPOSITION_WIRING_ROOTS = new Set([
   "services/organization-authority/src/composition/clean-live-cli.ts",
   "services/organization-authority/src/composition/organization-authority-api-runtime.ts",
   "services/organization-authority/src/composition/organization-authority-composition-root.ts",
@@ -248,7 +249,7 @@ describe("retrieval and answer-composition boundaries", () => {
           /answer_composition/.test(source(path)) &&
           !path.startsWith(`${ANSWER_COMPOSITION_ROOT}/`) &&
           path !== ANSWER_COMPOSITION_AUDIT_WRITER &&
-          !ANSWER_COMPOSITION_RUNTIME_WIRING.has(path),
+          !ANSWER_COMPOSITION_WIRING_ROOTS.has(path),
       ),
     ).toEqual([]);
   });

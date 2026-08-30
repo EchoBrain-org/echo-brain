@@ -9,13 +9,13 @@ import {
   type CleanReadableSearchResultItemV1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 import type Database from "better-sqlite3";
-import { SqliteCleanPersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
+import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type {
-  CleanPersonRecordSearchHttpApplicationV1,
-  CleanPersonRecordSearchResponseV1,
-} from "../presentation/clean-person-record-search-http-application.js";
+  PersonRecordSearchHttpApplicationV1,
+  PersonRecordSearchResponseV1,
+} from "../presentation/person-record-search-http-application.js";
 
 interface CurrentPersonSessions {
   authenticateAccess(input: {
@@ -44,16 +44,16 @@ type SearchGeneration = typeof searchCleanReadableSearchGenerationV1;
  * part of the Person HTTP contract: the bearer remains server-side while the
  * caller's plan is executed under one reader tuple and one exact snapshot.
  */
-export interface CleanPersonRecordSearchBatchInputV1 {
+export interface PersonRecordSearchBatchInputV1 {
   readonly access_token: string;
   readonly queries: readonly string[];
   readonly limit?: number;
 }
 
-export type CleanPersonRecordSearchReleaseAuthorizationV1 =
+export type PersonRecordSearchReleaseAuthorizationV1 =
   Readonly<PersonAccessAuthorization>;
 
-export interface CleanPersonRecordSearchReleasePointerV1 {
+export interface PersonRecordSearchReleasePointerV1 {
   readonly generation_id: Sha256Digest;
   readonly manifest_sha256: Sha256Digest;
   readonly retrieval_contract_sha256: Sha256Digest;
@@ -68,33 +68,33 @@ export interface CleanPersonRecordSearchReleasePointerV1 {
  * originating route instance accepts its object identity. It has no bearer
  * token or secret.
  */
-export interface CleanPersonRecordSearchBatchReleaseV1 {
-  readonly initial_authorization: CleanPersonRecordSearchReleaseAuthorizationV1;
-  readonly current_authorization: CleanPersonRecordSearchReleaseAuthorizationV1;
-  readonly active_pointer: CleanPersonRecordSearchReleasePointerV1;
+export interface PersonRecordSearchBatchReleaseV1 {
+  readonly initial_authorization: PersonRecordSearchReleaseAuthorizationV1;
+  readonly current_authorization: PersonRecordSearchReleaseAuthorizationV1;
+  readonly active_pointer: PersonRecordSearchReleasePointerV1;
   readonly record_read_audit_row_sha256: Sha256Digest;
 }
 
-export interface CleanPersonRecordSearchBatchResultV1 {
-  readonly response: CleanPersonRecordSearchResponseV1;
-  readonly release: CleanPersonRecordSearchBatchReleaseV1;
+export interface PersonRecordSearchBatchResultV1 {
+  readonly response: PersonRecordSearchResponseV1;
+  readonly release: PersonRecordSearchBatchReleaseV1;
 }
 
-export interface CleanPersonRecordSearchBatchApplicationV1 {
+export interface PersonRecordSearchBatchApplicationV1 {
   searchBatch(
-    input: CleanPersonRecordSearchBatchInputV1,
-  ): CleanPersonRecordSearchBatchResultV1;
+    input: PersonRecordSearchBatchInputV1,
+  ): PersonRecordSearchBatchResultV1;
   revalidateBatchRelease(input: {
     readonly access_token: string;
-    readonly release: CleanPersonRecordSearchBatchReleaseV1;
-  }): CleanPersonRecordSearchReleaseAuthorizationV1;
+    readonly release: PersonRecordSearchBatchReleaseV1;
+  }): PersonRecordSearchReleaseAuthorizationV1;
 }
 
-export type CleanPersonRecordSearchRouteV1 =
-  CleanPersonRecordSearchHttpApplicationV1 &
-    CleanPersonRecordSearchBatchApplicationV1;
+export type PersonRecordSearchRouteV1 =
+  PersonRecordSearchHttpApplicationV1 &
+    PersonRecordSearchBatchApplicationV1;
 
-export interface CreateCleanPersonRecordSearchRouteV1Options {
+export interface CreatePersonRecordSearchRouteV1Options {
   readonly state_directory: string;
   readonly authority_id: string;
   readonly organization_id: string;
@@ -103,7 +103,7 @@ export interface CreateCleanPersonRecordSearchRouteV1Options {
   readonly sessions: CurrentPersonSessions;
   readonly authority: Database.Database;
   readonly record: Database.Database;
-  readonly audit: SqliteCleanPersonRecordReadAuditV1;
+  readonly audit: SqlitePersonRecordReadAuditV1;
   readonly search_generation?: SearchGeneration;
 }
 
@@ -187,7 +187,7 @@ function sameReleaseAuthorization(
 
 function releaseAuthorization(
   authorization: PersonAccessAuthorization,
-): CleanPersonRecordSearchReleaseAuthorizationV1 {
+): PersonRecordSearchReleaseAuthorizationV1 {
   return Object.freeze({ ...authorization });
 }
 
@@ -209,7 +209,7 @@ function validBatchQuery(query: string): boolean {
   );
 }
 
-function assertValidBatch(input: CleanPersonRecordSearchBatchInputV1): void {
+function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
   if (
     input.queries.length < 1 ||
     input.queries.length > 4 ||
@@ -235,7 +235,7 @@ function asResponse(input: {
   readonly generation_id: Sha256Digest;
   readonly record_head: RecordHead;
   readonly items: readonly CleanReadableSearchResultItemV1[];
-}): CleanPersonRecordSearchResponseV1 {
+}): PersonRecordSearchResponseV1 {
   return Object.freeze({
     schema_version: 1,
     kind: "echo-clean-person-record-search-v1",
@@ -262,12 +262,12 @@ function asResponse(input: {
  * Resolves the current Person once, reads only an exact-head immutable Layer 2
  * generation, and commits the same compact release audit used by Layer 1.
  */
-export function createCleanPersonRecordSearchRouteV1(
-  options: CreateCleanPersonRecordSearchRouteV1Options,
-): CleanPersonRecordSearchRouteV1 {
+export function createPersonRecordSearchRouteV1(
+  options: CreatePersonRecordSearchRouteV1Options,
+): PersonRecordSearchRouteV1 {
   const search =
     options.search_generation ?? searchCleanReadableSearchGenerationV1;
-  const releaseWitnesses = new WeakSet<CleanPersonRecordSearchBatchReleaseV1>();
+  const releaseWitnesses = new WeakSet<PersonRecordSearchBatchReleaseV1>();
 
   function assertExpectedOrganization(
     authorization: PersonAccessAuthorization,
@@ -281,8 +281,8 @@ export function createCleanPersonRecordSearchRouteV1(
   }
 
   function searchBatch(
-    input: CleanPersonRecordSearchBatchInputV1,
-  ): CleanPersonRecordSearchBatchResultV1 {
+    input: PersonRecordSearchBatchInputV1,
+  ): PersonRecordSearchBatchResultV1 {
     assertValidBatch(input);
     const authorization = options.sessions.authenticateAccess({
       access_token: input.access_token,
@@ -397,7 +397,7 @@ export function createCleanPersonRecordSearchRouteV1(
       ),
       checked_at: released.checked_at,
     });
-    const release: CleanPersonRecordSearchBatchReleaseV1 = Object.freeze({
+    const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({
       initial_authorization: releaseAuthorization(authorization),
       current_authorization: releaseAuthorization(released),
       active_pointer: Object.freeze({
@@ -420,7 +420,7 @@ export function createCleanPersonRecordSearchRouteV1(
       readonly access_token: string;
       readonly query: string;
       readonly limit?: number;
-    }): CleanPersonRecordSearchResponseV1 {
+    }): PersonRecordSearchResponseV1 {
       return searchBatch({
         access_token: input.access_token,
         queries: [input.query],
@@ -430,8 +430,8 @@ export function createCleanPersonRecordSearchRouteV1(
     searchBatch,
     revalidateBatchRelease(input: {
       readonly access_token: string;
-      readonly release: CleanPersonRecordSearchBatchReleaseV1;
-    }): CleanPersonRecordSearchReleaseAuthorizationV1 {
+      readonly release: PersonRecordSearchBatchReleaseV1;
+    }): PersonRecordSearchReleaseAuthorizationV1 {
       if (!releaseWitnesses.has(input.release)) {
         throw new AuthorityOperationError(
           "unauthorized",

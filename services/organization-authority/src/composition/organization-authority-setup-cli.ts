@@ -40,7 +40,7 @@ import {
   type AuthorityStateSeedV1,
 } from "./authority-state-initializer.js";
 import { runCleanGranolaSourceCli } from "./clean-granola-source-cli.js";
-import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
+import { readableSearchRuntimeContractV1 } from "./readable-search-runtime.js";
 import {
   assertCleanPersonAuthorityCallback,
   readCleanPersonOidcConfiguration,
@@ -1269,7 +1269,7 @@ function setupCanaryEvidence(
       manifest.organization_id,
     ) &&
       initialPointer.retrieval_contract_sha256 ===
-        cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256;
+        readableSearchRuntimeContractV1().retrieval_contract_sha256;
     const ownerLayer1ReadAfterHead =
       activeGenerationCurrent &&
       initialHead.receipt_issued_at !== null &&

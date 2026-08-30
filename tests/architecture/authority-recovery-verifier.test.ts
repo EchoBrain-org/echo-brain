@@ -23,7 +23,7 @@ import {
 } from "@echo-brain/organization-record/new-lineage-v1";
 import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { FileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/file-organization-authority-signer.js";
-import { createCleanReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/clean-readable-search-runtime.js";
+import { createReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/readable-search-runtime.js";
 import { initializeAuthorityState } from "../../services/organization-authority/src/composition/authority-state-initializer.js";
 import { verifyCleanStateLineage } from "../../services/organization-authority/src/composition/verify-clean-state-lineage.js";
 import {
@@ -99,7 +99,7 @@ async function writeFixture(): Promise<string> {
     },
   );
   try {
-    const reconciler = createCleanReadableSearchGenerationReconcilerV1({
+    const reconciler = createReadableSearchGenerationReconcilerV1({
       state_directory: stateDirectory,
       root: lineage.root,
       authority,

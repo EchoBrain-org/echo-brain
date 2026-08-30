@@ -10,8 +10,8 @@ import {
   initializeCleanPersonCredentials,
   issueCleanPersonInvitation,
 } from "./clean-person-onboarding.js";
-import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-slack-person-external-identity-runtime.js";
 import { startOrganizationAuthorityApiRuntime } from "./organization-authority-api-runtime.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime.js";
 
 const USAGE = `usage:
   echo-organization-authority-clean-person credentials-init --state-dir <absolute-path>
@@ -212,7 +212,7 @@ export async function runCleanPersonCli(
       ),
     }, {
       external_identity_runtime:
-        createCleanSlackPersonExternalIdentityRuntimeBundleV1({
+        createSlackPersonExternalIdentityRuntimeBundleV1({
           // The public V1 flag keeps its compatibility-bound legacy name.
           identity_link_channel_id: parsed["--slack-approval-channel-id"],
         }),

@@ -3,9 +3,9 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
 import {
-  CleanReadableSearchGenerationReconcilerV1,
-  type CleanReadableSearchRecordHeadV1,
-} from "../src/composition/clean-readable-search-generation-reconciler.js";
+  ReadableSearchGenerationReconcilerV1,
+  type ReadableSearchRecordHeadV1,
+} from "../src/composition/readable-search-generation-reconciler.js";
 
 const ORGANIZATION_ID = "org_clean";
 const CONTRACT = canonicalSha256({ contract: "clean-search" });
@@ -29,7 +29,7 @@ function database(): Database.Database {
   return value;
 }
 
-function head(position: number): CleanReadableSearchRecordHeadV1 {
+function head(position: number): ReadableSearchRecordHeadV1 {
   return Object.freeze({
     position,
     record_sha256:
@@ -52,7 +52,7 @@ describe("clean readable-search generation reconciliation", () => {
       retrieval_contract_sha256: CONTRACT,
       record_head: current,
     }));
-    const reconciler = new CleanReadableSearchGenerationReconcilerV1({
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
       authority,
       organization_id: ORGANIZATION_ID,
       retrieval_contract_sha256: CONTRACT,
@@ -108,7 +108,7 @@ describe("clean readable-search generation reconciliation", () => {
         NOW,
       );
     const current = head(2);
-    const reconciler = new CleanReadableSearchGenerationReconcilerV1({
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
       authority,
       organization_id: ORGANIZATION_ID,
       retrieval_contract_sha256: CONTRACT,
@@ -138,7 +138,7 @@ describe("clean readable-search generation reconciliation", () => {
     const captured = head(2);
     const advanced = head(3);
     let reads = 0;
-    const reconciler = new CleanReadableSearchGenerationReconcilerV1({
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
       authority,
       organization_id: ORGANIZATION_ID,
       retrieval_contract_sha256: CONTRACT,
@@ -176,7 +176,7 @@ describe("clean readable-search generation reconciliation", () => {
     const beforeBuild = new AbortController();
     beforeBuild.abort();
     const build = vi.fn();
-    const reconciler = new CleanReadableSearchGenerationReconcilerV1({
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
       authority,
       organization_id: ORGANIZATION_ID,
       retrieval_contract_sha256: CONTRACT,
@@ -189,7 +189,7 @@ describe("clean readable-search generation reconciliation", () => {
     expect(build).not.toHaveBeenCalled();
 
     const duringBuild = new AbortController();
-    const second = new CleanReadableSearchGenerationReconcilerV1({
+    const second = new ReadableSearchGenerationReconcilerV1({
       authority,
       organization_id: ORGANIZATION_ID,
       retrieval_contract_sha256: CONTRACT,

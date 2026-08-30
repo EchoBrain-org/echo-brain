@@ -10,9 +10,9 @@ import {
 } from "../answer-composition/retrieval-grounded-answer-composition.js";
 import type { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import type {
-  CleanPersonRecordSearchBatchApplicationV1,
-  CleanPersonRecordSearchBatchReleaseV1,
-} from "./clean-person-record-search-route.js";
+  PersonRecordSearchBatchApplicationV1,
+  PersonRecordSearchBatchReleaseV1,
+} from "./person-record-search-route.js";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type {
   PersonAnswerHttpApplicationV1,
@@ -30,7 +30,7 @@ export interface CreatePersonAnswerRouteV1Options {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
-  readonly search: CleanPersonRecordSearchBatchApplicationV1;
+  readonly search: PersonRecordSearchBatchApplicationV1;
   readonly model: Layer4StructuredOutputPort;
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAnswerCompositionAuditV1;
@@ -118,7 +118,7 @@ export function createPersonAnswerRouteV1(
         throw error;
       }
 
-      let internalRelease: CleanPersonRecordSearchBatchReleaseV1 | undefined;
+      let internalRelease: PersonRecordSearchBatchReleaseV1 | undefined;
       let layer4Release: Layer4ReleasedBatch | undefined;
       const layer3 = Object.freeze({
         retrieve: async (request: {

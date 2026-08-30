@@ -14,9 +14,9 @@ import type {
   Layer4StructuredOutputPort,
 } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
 import type {
-  CleanPersonRecordSearchBatchApplicationV1,
-  CleanPersonRecordSearchBatchReleaseV1,
-} from "../src/composition/clean-person-record-search-route.js";
+  PersonRecordSearchBatchApplicationV1,
+  PersonRecordSearchBatchReleaseV1,
+} from "../src/composition/person-record-search-route.js";
 import { AuthorityOperationError } from "../src/domain/errors.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type {
@@ -50,7 +50,7 @@ function authorization(): PersonAccessAuthorization {
   };
 }
 
-function release(): CleanPersonRecordSearchBatchReleaseV1 {
+function release(): PersonRecordSearchBatchReleaseV1 {
   const current = authorization();
   return Object.freeze({
     initial_authorization: Object.freeze({ ...current }),
@@ -100,7 +100,7 @@ function setup(input: {
   applyAuthorityBaselineV1(database);
   const events: string[] = [];
   const witness = release();
-  const search: CleanPersonRecordSearchBatchApplicationV1 = {
+  const search: PersonRecordSearchBatchApplicationV1 = {
     searchBatch: vi.fn((_value) => {
       events.push("batch");
       const response = searchResponse();

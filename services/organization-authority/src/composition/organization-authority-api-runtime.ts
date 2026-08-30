@@ -8,8 +8,8 @@ import {
 import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqliteCleanPersonSessionRepository } from "../adapters/persistence/sqlite/clean-person-session-repository.js";
-import { SqliteCleanPersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
+import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
 import { OpenIdClientPersonSessionProvider } from "../adapters/oidc/openid-client-person-session-provider.js";
@@ -19,11 +19,11 @@ import { SystemAuthorityClock } from "../adapters/runtime/system-runtime-ports.j
 import { createOrganizationAuthorityHttpServer } from "../presentation/organization-authority-http-server.js";
 import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
 import { LazyPersonSessionOidcProvider } from "./lazy-person-session-oidc-provider.js";
-import { createCleanPersonRecordReadRouteV1 } from "./clean-person-record-read-route.js";
-import { createCleanPersonRecordSearchRouteV1 } from "./clean-person-record-search-route.js";
-import { CleanPersonEmployeeLifecycleApplication } from "../application/clean-person-employee-lifecycle.js";
-import { createCleanPersonEmployeeHttpApplication } from "../presentation/clean-person-employee-http-application.js";
-import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
+import { createPersonRecordReadRouteV1 } from "./person-record-read-route.js";
+import { createPersonRecordSearchRouteV1 } from "./person-record-search-route.js";
+import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
+import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
+import { readableSearchRuntimeContractV1 } from "./readable-search-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import {
   createPersonAnswerRouteV1,
@@ -32,9 +32,9 @@ import {
 import type { AnswerCompositionRuntimeV1 } from "./answer-composition-runtime.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
 import type {
-  CleanPersonExternalIdentityRuntimeBundleV1,
-  OpenedCleanPersonExternalIdentityRuntimeV1,
-} from "./clean-person-external-identity-runtime.js";
+  PersonExternalIdentityRuntimeBundleV1,
+  OpenedPersonExternalIdentityRuntimeV1,
+} from "./person-external-identity-runtime.js";
 
 export interface OrganizationAuthorityApiRuntimeConfig {
   readonly state_directory: string;
@@ -55,7 +55,7 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
-  readonly external_identity_runtime?: CleanPersonExternalIdentityRuntimeBundleV1;
+  readonly external_identity_runtime?: PersonExternalIdentityRuntimeBundleV1;
   /** Present only after source admission; omitted during organization setup. */
   readonly answer_composition_runtime?: AnswerCompositionRuntimeV1;
   /** Metadata-only Layer 4 failure observer for the live server log. */
@@ -117,7 +117,7 @@ export async function startOrganizationAuthorityApiRuntime(
   let recordDatabase:
     ReturnType<typeof openOrganizationRecordDatabase> | undefined;
   let externalIdentity:
-    | OpenedCleanPersonExternalIdentityRuntimeV1
+    | OpenedPersonExternalIdentityRuntimeV1
     | undefined;
   try {
     recordDatabase = openOrganizationRecordDatabase(
@@ -169,14 +169,14 @@ export async function startOrganizationAuthorityApiRuntime(
         return membership.membership_type;
       },
     });
-    const readAudit = new SqliteCleanPersonRecordReadAuditV1(database);
-    const recordSearch = createCleanPersonRecordSearchRouteV1({
+    const readAudit = new SqlitePersonRecordReadAuditV1(database);
+    const recordSearch = createPersonRecordSearchRouteV1({
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
       organization_id: metadata.organization_id,
       state_lineage_id: lineage.root.state_lineage_id,
       retrieval_contract_sha256:
-        cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
+        readableSearchRuntimeContractV1().retrieval_contract_sha256,
       sessions,
       authority: database,
       record: recordDatabase,
@@ -187,7 +187,7 @@ export async function startOrganizationAuthorityApiRuntime(
       sessions,
       oidc_provider: provider,
       expected_issuer: config.oidc.issuer,
-      person_record_read: createCleanPersonRecordReadRouteV1({
+      person_record_read: createPersonRecordReadRouteV1({
         authority_id: metadata.authority_id,
         organization_id: metadata.organization_id,
         state_lineage_id: lineage.root.state_lineage_id,
@@ -212,8 +212,8 @@ export async function startOrganizationAuthorityApiRuntime(
                 : { on_failure: dependencies.answer_failure }),
             }),
           }),
-      person_employees: createCleanPersonEmployeeHttpApplication(
-        new CleanPersonEmployeeLifecycleApplication(sessions, {
+      person_employees: createPersonEmployeeHttpApplication(
+        new PersonEmployeeLifecycleApplication(sessions, {
           next(prefix) {
             return `${prefix}_${randomUUID()}`;
           },

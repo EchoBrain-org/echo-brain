@@ -9,11 +9,11 @@ import type {
 } from "@echo-brain/organization-record/new-lineage-v1";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
-import { SqliteCleanPersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
+import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import type {
-  CleanPersonRecordReadHttpApplicationV1,
-  CleanPersonRecordReadResponseV1,
-} from "../presentation/clean-person-record-read-http-application.js";
+  PersonRecordReadHttpApplicationV1,
+  PersonRecordReadResponseV1,
+} from "../presentation/person-record-read-http-application.js";
 
 interface CurrentPersonSessions {
   authenticateAccess(input: {
@@ -27,13 +27,13 @@ interface PersonRecordReader {
   ): readonly CleanPersonReadableRecordV1[];
 }
 
-export interface CreateCleanPersonRecordReadRouteV1Options {
+export interface CreatePersonRecordReadRouteV1Options {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
   readonly sessions: CurrentPersonSessions;
   readonly records: PersonRecordReader;
-  readonly audit: SqliteCleanPersonRecordReadAuditV1;
+  readonly audit: SqlitePersonRecordReadAuditV1;
 }
 
 function sameReleaseAuthorization(
@@ -64,7 +64,7 @@ function assertExpectedOrganization(
 
 function asResponse(
   records: readonly CleanPersonReadableRecordV1[],
-): CleanPersonRecordReadResponseV1 {
+): PersonRecordReadResponseV1 {
   return Object.freeze({
     schema_version: 1,
     kind: "echo-clean-person-record-list-v1",
@@ -86,14 +86,14 @@ function asResponse(
  * caller-owned value is the bearer: principal and membership are resolved
  * afresh from it immediately before the immutable V4 response is released.
  */
-export function createCleanPersonRecordReadRouteV1(
-  options: CreateCleanPersonRecordReadRouteV1Options,
-): CleanPersonRecordReadHttpApplicationV1 {
+export function createPersonRecordReadRouteV1(
+  options: CreatePersonRecordReadRouteV1Options,
+): PersonRecordReadHttpApplicationV1 {
   return Object.freeze({
     list(input: {
       readonly access_token: string;
       readonly limit?: number;
-    }): CleanPersonRecordReadResponseV1 {
+    }): PersonRecordReadResponseV1 {
       const admitted = options.sessions.authenticateAccess({
         access_token: input.access_token,
       });

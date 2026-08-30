@@ -22,17 +22,17 @@ import {
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import type { PersonExternalIdentityLinkHttpApplicationV1 } from "./person-external-identity-link-http-application.js";
 import {
-  CLEAN_PERSON_RECORDS_PATH_V1,
-  type CleanPersonRecordReadHttpApplicationV1,
-} from "./clean-person-record-read-http-application.js";
+  PERSON_RECORDS_PATH_V1,
+  type PersonRecordReadHttpApplicationV1,
+} from "./person-record-read-http-application.js";
 import {
-  CLEAN_PERSON_RECORD_SEARCH_PATH_V1,
-  type CleanPersonRecordSearchHttpApplicationV1,
-} from "./clean-person-record-search-http-application.js";
+  PERSON_RECORD_SEARCH_PATH_V1,
+  type PersonRecordSearchHttpApplicationV1,
+} from "./person-record-search-http-application.js";
 import {
-  CLEAN_PERSON_EMPLOYEES_PATH_V1,
-  type CleanPersonEmployeeHttpApplication,
-} from "./clean-person-employee-http-application.js";
+  PERSON_EMPLOYEES_PATH_V1,
+  type PersonEmployeeHttpApplication,
+} from "./person-employee-http-application.js";
 import {
   PERSON_ANSWER_PATH_V1,
   type PersonAnswerHttpApplicationV1,
@@ -55,12 +55,12 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `GET ${PERSON_SESSION_OIDC_CALLBACK_PATH}`,
   `POST ${PERSON_SESSION_REFRESH_PATH}`,
   `POST ${PERSON_SESSION_REVOCATIONS_PATH}`,
-  `GET ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
-  `POST ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
-  `PUT ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
-  `DELETE ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
-  `GET ${CLEAN_PERSON_RECORDS_PATH_V1}`,
-  `POST ${CLEAN_PERSON_RECORD_SEARCH_PATH_V1}`,
+  `GET ${PERSON_EMPLOYEES_PATH_V1}`,
+  `POST ${PERSON_EMPLOYEES_PATH_V1}`,
+  `PUT ${PERSON_EMPLOYEES_PATH_V1}`,
+  `DELETE ${PERSON_EMPLOYEES_PATH_V1}`,
+  `GET ${PERSON_RECORDS_PATH_V1}`,
+  `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V1}`,
 ]);
 
@@ -81,11 +81,11 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: PersonExternalIdentityLinkHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Clean live wires it. */
-  readonly person_record_read?: CleanPersonRecordReadHttpApplicationV1;
+  readonly person_record_read?: PersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Clean live wires it. */
-  readonly person_record_search?: CleanPersonRecordSearchHttpApplicationV1;
+  readonly person_record_search?: PersonRecordSearchHttpApplicationV1;
   /** Owner-only employee invite, reissue, and revoke. */
-  readonly person_employees?: CleanPersonEmployeeHttpApplication;
+  readonly person_employees?: PersonEmployeeHttpApplication;
   /** Optional until the active clean runtime has a configured answer model. */
   readonly person_answer?: PersonAnswerHttpApplicationV1;
   /** Optional until an active private-approval surface is fully composed. */
@@ -618,7 +618,7 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (
         options.person_employees !== undefined &&
-        url.pathname === CLEAN_PERSON_EMPLOYEES_PATH_V1 &&
+        url.pathname === PERSON_EMPLOYEES_PATH_V1 &&
         url.search === ""
       ) {
         const authenticated = accessToken(request.headers.authorization);
@@ -662,7 +662,7 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
       }
-      if (method === "GET" && url.pathname === CLEAN_PERSON_RECORDS_PATH_V1) {
+      if (method === "GET" && url.pathname === PERSON_RECORDS_PATH_V1) {
         if (options.person_record_read === undefined) {
           fail(response, 503, "unavailable");
           return;
@@ -680,7 +680,7 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (
         method === "POST" &&
-        url.pathname === CLEAN_PERSON_RECORD_SEARCH_PATH_V1 &&
+        url.pathname === PERSON_RECORD_SEARCH_PATH_V1 &&
         url.search === ""
       ) {
         if (options.person_record_search === undefined) {

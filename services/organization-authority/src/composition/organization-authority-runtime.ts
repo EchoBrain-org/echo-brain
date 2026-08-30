@@ -29,7 +29,7 @@ import {
   type OrganizationAuthorityProcessingCycleV1,
   type RunningOrganizationAuthorityServiceLifecycle,
 } from "./organization-authority-service-lifecycle.js";
-import { createCleanReadableSearchGenerationReconcilerV1 } from "./clean-readable-search-runtime.js";
+import { createReadableSearchGenerationReconcilerV1 } from "./readable-search-runtime.js";
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
@@ -138,7 +138,7 @@ class IdleOrganizationAuthorityProcessing
   async reconcileReadableSearchGeneration(): Promise<void> {}
 }
 
-interface CleanReadableSearchReconcilerV1 {
+interface ReadableSearchReconcilerV1 {
   reconcile(signal: AbortSignal): Promise<unknown>;
 }
 
@@ -148,7 +148,7 @@ class OrganizationAuthorityProcessingCoordinator
   constructor(
     private readonly source: CleanLiveOnlySourceCycleV1,
     private readonly approvals: CleanApprovalProcessingV1,
-    private readonly readableSearch: CleanReadableSearchReconcilerV1,
+    private readonly readableSearch: ReadableSearchReconcilerV1,
   ) {}
 
   setWorkerLifecycle(lifecycle: CleanLiveWorkerPhaseRunnerV1): void {
@@ -308,7 +308,7 @@ export async function openOrganizationAuthorityRuntime(
       stager: approvals.stager,
       source_boundary: config.source_runtime.source_boundary,
     });
-    const readableSearch = createCleanReadableSearchGenerationReconcilerV1({
+    const readableSearch = createReadableSearchGenerationReconcilerV1({
       state_directory: config.state_directory,
       root: lineage.root,
       authority,

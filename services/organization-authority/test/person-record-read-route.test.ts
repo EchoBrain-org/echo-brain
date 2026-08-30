@@ -1,11 +1,11 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
-import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
+import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
-import { createCleanPersonRecordReadRouteV1 } from "../src/composition/clean-person-record-read-route.js";
+import { createPersonRecordReadRouteV1 } from "../src/composition/person-record-read-route.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 
@@ -39,7 +39,7 @@ function setup(
   applyAuthorityBaselineV1(authority);
   let authenticateCalls = 0;
   const inputs: unknown[] = [];
-  const route = createCleanPersonRecordReadRouteV1({
+  const route = createPersonRecordReadRouteV1({
     authority_id: "authority_clean",
     organization_id: "org_clean",
     state_lineage_id: "lineage_clean",
@@ -64,7 +64,7 @@ function setup(
         ]);
       },
     },
-    audit: new SqliteCleanPersonRecordReadAuditV1(authority),
+    audit: new SqlitePersonRecordReadAuditV1(authority),
   });
   return {
     authority,

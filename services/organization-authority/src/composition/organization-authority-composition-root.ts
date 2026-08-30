@@ -13,7 +13,7 @@ import { createGranolaMeetingSourceRuntimeBundleV1 } from "./granola-meeting-sou
 import { createOpenRouterCleanLiveProcessorRuntimeBundleV1 } from "./openrouter-clean-live-processor-runtime.js";
 import { createOpenRouterAnswerCompositionRuntimeBundleV1 } from "./openrouter-answer-composition-runtime-v1.js";
 import { createPrivateSlackApprovalRuntimeBundleV1 } from "./private-slack-approval-runtime-v1.js";
-import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-slack-person-external-identity-runtime.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime.js";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
 
@@ -89,7 +89,7 @@ export function openOrganizationAuthorityService(
     ...dependencies.api,
     external_identity_runtime:
       dependencies.api?.external_identity_runtime ??
-      createCleanSlackPersonExternalIdentityRuntimeBundleV1({
+      createSlackPersonExternalIdentityRuntimeBundleV1({
         identity_link_channel_id: slack_identity_link_channel_id,
       }),
   };

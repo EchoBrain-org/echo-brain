@@ -35,21 +35,21 @@ import {
 const CHALLENGE_LIFETIME_MS = 15 * 60 * 1000;
 
 /** Avoid loading the legacy integration repository for its error class. */
-class CleanPersonSlackIdentityLinkConflictError extends Error {
+class PersonSlackIdentityLinkConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "OrganizationIntegrationConflictError";
   }
 }
 
-export interface CleanSlackTokenAccessV1 {
+export interface SlackBotTokenAccessV1 {
   readActiveSlackBotToken(input: {
     readonly connection: OrganizationToolConnectionContractV2;
     readonly state: OrganizationToolConnectionStateV2;
   }): string;
 }
 
-export interface CreateCleanPersonSlackIdentityLinkServiceV1Input {
+export interface CreatePersonSlackIdentityLinkServiceV1Input {
   readonly database: Database.Database;
   readonly authority_id: string;
   readonly organization_id: string;
@@ -63,7 +63,7 @@ export interface CreateCleanPersonSlackIdentityLinkServiceV1Input {
     readonly membership_id: string;
   }) => "employee" | "owner";
   readonly slack: CleanSlackIdentityProviderV1;
-  readonly slack_token_access: CleanSlackTokenAccessV1;
+  readonly slack_token_access: SlackBotTokenAccessV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
   readonly now?: () => string;
 }
@@ -174,9 +174,9 @@ function sameTool(
  * state in the frozen D2 baseline; authentication and token retrieval remain
  * Authority/runtime ports.
  */
-class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLinkRepositoryPort {
+class PersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLinkRepositoryPort {
   constructor(
-    private readonly options: CreateCleanPersonSlackIdentityLinkServiceV1Input,
+    private readonly options: CreatePersonSlackIdentityLinkServiceV1Input,
   ) {}
 
   activeSlackOrganizationTool(): ActiveSlackOrganizationTool | null {
@@ -197,7 +197,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
     if (
       !sameTool(input.organization_tool, this.activeSlackOrganizationTool())
     ) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "active clean Slack connection changed",
       );
     }
@@ -226,7 +226,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
       | undefined;
     if (row === undefined) return null;
     if (row.command_semantic_sha256 !== input.request_sha256) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack begin request ID was reused with different input",
       );
     }
@@ -234,12 +234,12 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
       row.person_session_sha256 !== personSessionSha256(input.person_session) ||
       !this.matchesChallengeTool(row, input.organization_tool)
     ) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack begin replay no longer matches the current session or tool",
       );
     }
     if (row.challenge_message_ts === null) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack identity link challenge is still being posted",
       );
     }
@@ -334,7 +334,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
       )
       .run(input.challenge_message_ts, input.challenge_attempt_id);
     if (recorded.changes !== 1) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack identity link challenge could not record its posted message",
       );
     }
@@ -356,7 +356,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
          WHERE challenge_attempt_id = ? AND status = 'pending'`,
         )
         .run(input.now, input.challenge_attempt_id);
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack identity link challenge expired",
       );
     }
@@ -370,7 +370,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
       row.membership_id !== input.person_session.membership_id ||
       !sameTool(input.organization_tool, this.activeSlackOrganizationTool())
     ) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack identity link challenge does not match this session",
       );
     }
@@ -414,13 +414,13 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
       | undefined;
     if (command === undefined) return null;
     if (command.command_semantic_sha256 !== commandSha256) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack completion request ID was reused with different input",
       );
     }
     const tool = this.activeSlackOrganizationTool();
     if (tool === null) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Slack is not active for this organization",
       );
     }
@@ -437,7 +437,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
     const row = this.challenge(input.challenge_attempt_id);
     if (row.status !== "completed") return null;
     if (row.completion_sha256 !== completionSha256(input)) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack identity link challenge was completed with different input",
       );
     }
@@ -455,7 +455,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
       input.observed.channel_id !== input.organization_tool.channel_id ||
       input.observed.challenge_message_ts !== input.challenge_message_ts
     ) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack identity link evidence is inconsistent",
       );
     }
@@ -470,7 +470,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
       const active = this.requireSameActiveTool(input.organization_tool);
       const row = this.challenge(input.challenge_attempt_id);
       if (row.status !== "pending") {
-        throw new CleanPersonSlackIdentityLinkConflictError(
+        throw new PersonSlackIdentityLinkConflictError(
           "Person Slack identity link challenge cannot be completed",
         );
       }
@@ -526,7 +526,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
           member.external_identity_link_id !==
             subject.external_identity_link_id)
       ) {
-        throw new CleanPersonSlackIdentityLinkConflictError(
+        throw new PersonSlackIdentityLinkConflictError(
           "Slack identity is already linked to another active membership",
         );
       }
@@ -608,7 +608,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
           input.challenge_attempt_id,
         );
       if (completed.changes !== 1) {
-        throw new CleanPersonSlackIdentityLinkConflictError(
+        throw new PersonSlackIdentityLinkConflictError(
           "Person Slack identity link challenge lost its completion race",
         );
       }
@@ -661,7 +661,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
   ): CompletedPersonSlackIdentityLink {
     const challenge = this.challenge(challengeAttemptId);
     if (!this.matchesChallengeTool(challenge, tool)) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack replay no longer matches the current tool",
       );
     }
@@ -708,7 +708,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
       )
       .get(challengeAttemptId) as ChallengeRow | undefined;
     if (row === undefined)
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "Person Slack identity link challenge was not found",
       );
     return row;
@@ -733,7 +733,7 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
   ): ActiveCleanConnection {
     const active = this.activeConnection();
     if (active === null || !sameTool(tool, active.tool)) {
-      throw new CleanPersonSlackIdentityLinkConflictError(
+      throw new PersonSlackIdentityLinkConflictError(
         "active clean Slack connection changed",
       );
     }
@@ -823,10 +823,10 @@ class CleanPersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLin
 }
 
 /** Factory for clean runtime composition; it does not open a listener itself. */
-export function createCleanPersonSlackIdentityLinkServiceV1(
-  input: CreateCleanPersonSlackIdentityLinkServiceV1Input,
+export function createPersonSlackIdentityLinkServiceV1(
+  input: CreatePersonSlackIdentityLinkServiceV1Input,
 ): PersonSlackIdentityLinkService {
-  const repository = new CleanPersonSlackIdentityLinkRepositoryV1(input);
+  const repository = new PersonSlackIdentityLinkRepositoryV1(input);
   const secrets: Pick<OrganizationSecretStore, "read"> = {
     read(reference) {
       return repository.readSlackToken(reference);

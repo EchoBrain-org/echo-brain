@@ -1,7 +1,7 @@
 import { AuthorityOperationError } from "../domain/errors.js";
-import type { CleanPersonEmployeeLifecycleApplication } from "../application/clean-person-employee-lifecycle.js";
+import type { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 
-export const CLEAN_PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
+export const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
 
 function exactObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -20,7 +20,7 @@ function exactObject(value: unknown, keys: readonly string[]): Record<string, un
   return record;
 }
 
-export interface CleanPersonEmployeeHttpApplication {
+export interface PersonEmployeeHttpApplication {
   list(input: { access_token: string }): {
     schema_version: 1;
     kind: "echo-clean-person-employee-roster-v1";
@@ -42,9 +42,9 @@ export interface CleanPersonEmployeeHttpApplication {
   revoke(input: { access_token: string; body: unknown }): void;
 }
 
-export function createCleanPersonEmployeeHttpApplication(
-  lifecycle: CleanPersonEmployeeLifecycleApplication,
-): CleanPersonEmployeeHttpApplication {
+export function createPersonEmployeeHttpApplication(
+  lifecycle: PersonEmployeeLifecycleApplication,
+): PersonEmployeeHttpApplication {
   return Object.freeze({
     list: ({ access_token }: { access_token: string }) =>
       lifecycle.list({ access_token }),

@@ -26,11 +26,11 @@ import {
   issueCleanPersonInvitation,
 } from "../src/composition/clean-person-onboarding.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
-import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/clean-slack-person-external-identity-runtime.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/slack-person-external-identity-runtime.js";
 import type {
-  CleanPersonExternalIdentityRuntimeInputV1,
-  OpenedCleanPersonExternalIdentityRuntimeV1,
-} from "../src/composition/clean-person-external-identity-runtime.js";
+  PersonExternalIdentityRuntimeInputV1,
+  OpenedPersonExternalIdentityRuntimeV1,
+} from "../src/composition/person-external-identity-runtime.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 import { MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS } from "../src/domain/person-session-rules.js";
 
@@ -102,12 +102,12 @@ describe("Organization Authority API runtime", () => {
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
       created_at: new Date(Date.now() - 1_000).toISOString(),
-      creating_artifact_revision: "clean-person-external-identity-runtime-test",
+      creating_artifact_revision: "person-external-identity-runtime-test",
     });
     const credentials = initializeCleanPersonCredentials({
       state_directory: initialized.state_directory,
     });
-    const opened: CleanPersonExternalIdentityRuntimeInputV1[] = [];
+    const opened: PersonExternalIdentityRuntimeInputV1[] = [];
     let closed = 0;
     const runtime = await startOrganizationAuthorityApiRuntime(
       {
@@ -130,7 +130,7 @@ describe("Organization Authority API runtime", () => {
       {
         oidc_provider: new MockOidcProvider(),
         external_identity_runtime: {
-          open(input): OpenedCleanPersonExternalIdentityRuntimeV1 {
+          open(input): OpenedPersonExternalIdentityRuntimeV1 {
             opened.push(input);
             return {
               application: {
@@ -566,7 +566,7 @@ describe("Organization Authority API runtime", () => {
       {
         oidc_provider: new MockOidcProvider(),
         external_identity_runtime:
-          createCleanSlackPersonExternalIdentityRuntimeBundleV1({}),
+          createSlackPersonExternalIdentityRuntimeBundleV1({}),
       },
     );
     try {

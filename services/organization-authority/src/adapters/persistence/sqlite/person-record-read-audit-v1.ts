@@ -5,7 +5,7 @@ import {
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
-export interface CleanPersonRecordReadAuditEntryV1 {
+export interface PersonRecordReadAuditEntryV1 {
   readonly read_mode: "layer1" | "layer2";
   readonly authority_id: string;
   readonly organization_id: string;
@@ -23,10 +23,10 @@ export interface CleanPersonRecordReadAuditEntryV1 {
  * bearer credential, query, or response body: the digest commits to the exact
  * released response while the Authority row binds the current Person tuple.
  */
-export class SqliteCleanPersonRecordReadAuditV1 {
+export class SqlitePersonRecordReadAuditV1 {
   constructor(private readonly database: Database.Database) {}
 
-  append(entry: CleanPersonRecordReadAuditEntryV1): Sha256Digest {
+  append(entry: PersonRecordReadAuditEntryV1): Sha256Digest {
     if (
       !Number.isSafeInteger(entry.result_count) ||
       entry.result_count < 0 ||

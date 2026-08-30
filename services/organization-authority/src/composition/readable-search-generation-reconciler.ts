@@ -1,56 +1,56 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
-export interface CleanReadableSearchRecordHeadV1 {
+export interface ReadableSearchRecordHeadV1 {
   readonly position: number;
   readonly record_sha256: Sha256Digest | null;
 }
 
-export interface CleanReadableSearchSnapshotV1 {
-  readonly record_head: CleanReadableSearchRecordHeadV1;
+export interface ReadableSearchSnapshotV1 {
+  readonly record_head: ReadableSearchRecordHeadV1;
 }
 
-export interface BuiltCleanReadableSearchGenerationV1 {
+export interface BuiltReadableSearchGenerationV1 {
   readonly generation_id: Sha256Digest;
   readonly manifest_sha256: Sha256Digest;
   readonly retrieval_contract_sha256: Sha256Digest;
-  readonly record_head: CleanReadableSearchRecordHeadV1;
+  readonly record_head: ReadableSearchRecordHeadV1;
 }
 
-export type CleanReadableSearchGenerationReconciliationV1 =
+export type ReadableSearchGenerationReconciliationV1 =
   | {
       readonly status: "current";
-      readonly record_head: CleanReadableSearchRecordHeadV1;
+      readonly record_head: ReadableSearchRecordHeadV1;
     }
   | {
       readonly status: "published";
-      readonly record_head: CleanReadableSearchRecordHeadV1;
+      readonly record_head: ReadableSearchRecordHeadV1;
       readonly generation_id: Sha256Digest;
       readonly manifest_sha256: Sha256Digest;
     }
   | {
       readonly status: "superseded";
-      readonly captured_head: CleanReadableSearchRecordHeadV1;
-      readonly current_head: CleanReadableSearchRecordHeadV1;
+      readonly captured_head: ReadableSearchRecordHeadV1;
+      readonly current_head: ReadableSearchRecordHeadV1;
     };
 
-export interface CleanReadableSearchGenerationReconcilerV1Options<
-  Snapshot extends CleanReadableSearchSnapshotV1,
+export interface ReadableSearchGenerationReconcilerV1Options<
+  Snapshot extends ReadableSearchSnapshotV1,
 > {
   readonly authority: Database.Database;
   readonly organization_id: string;
   readonly retrieval_contract_sha256: Sha256Digest;
   /** Cheap exact-head read used before snapshotting and again before publish. */
-  readonly read_record_head: () => CleanReadableSearchRecordHeadV1;
+  readonly read_record_head: () => ReadableSearchRecordHeadV1;
   /** Materializes the complete verified Layer 1 input and releases its read transaction. */
   readonly capture_snapshot: () => Snapshot;
   /** Builds and atomically renames immutable files, but never mutates the pointer. */
   readonly build_generation: (
     snapshot: Snapshot,
-  ) => BuiltCleanReadableSearchGenerationV1;
+  ) => BuiltReadableSearchGenerationV1;
   /** Complete immutable validation must succeed before current/publication. */
   readonly prepare_generation?: (
-    generation: BuiltCleanReadableSearchGenerationV1,
+    generation: BuiltReadableSearchGenerationV1,
   ) => void;
   readonly invalidate_generation?: () => void;
   readonly now?: () => string;
@@ -73,9 +73,9 @@ function digest(value: string, label: string): Sha256Digest {
 }
 
 function head(
-  value: CleanReadableSearchRecordHeadV1,
+  value: ReadableSearchRecordHeadV1,
   label: string,
-): CleanReadableSearchRecordHeadV1 {
+): ReadableSearchRecordHeadV1 {
   if (!Number.isSafeInteger(value.position) || value.position < 0) {
     throw new Error(`${label} position is invalid`);
   }
@@ -90,8 +90,8 @@ function head(
 }
 
 function sameHead(
-  left: CleanReadableSearchRecordHeadV1,
-  right: CleanReadableSearchRecordHeadV1,
+  left: ReadableSearchRecordHeadV1,
+  right: ReadableSearchRecordHeadV1,
 ): boolean {
   return (
     left.position === right.position &&
@@ -101,7 +101,7 @@ function sameHead(
 
 function pointerHead(
   pointer: StoredActiveGeneration,
-): CleanReadableSearchRecordHeadV1 {
+): ReadableSearchRecordHeadV1 {
   return head(
     {
       position: pointer.record_head_position,
@@ -119,13 +119,13 @@ function pointerHead(
  * final head comparison prevents an obsolete completed generation from being
  * published if that ownership rule is widened later.
  */
-export class CleanReadableSearchGenerationReconcilerV1<
-  Snapshot extends CleanReadableSearchSnapshotV1,
+export class ReadableSearchGenerationReconcilerV1<
+  Snapshot extends ReadableSearchSnapshotV1,
 > {
   private readonly now: () => string;
 
   constructor(
-    private readonly options: CleanReadableSearchGenerationReconcilerV1Options<Snapshot>,
+    private readonly options: ReadableSearchGenerationReconcilerV1Options<Snapshot>,
   ) {
     if (options.organization_id.length === 0) {
       throw new Error("clean readable-search organization_id is empty");
@@ -139,7 +139,7 @@ export class CleanReadableSearchGenerationReconcilerV1<
 
   async reconcile(
     signal: AbortSignal,
-  ): Promise<CleanReadableSearchGenerationReconciliationV1> {
+  ): Promise<ReadableSearchGenerationReconciliationV1> {
     signal.throwIfAborted();
     const observedHead = head(
       this.options.read_record_head(),

@@ -34,7 +34,7 @@ import type {
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
-import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
+import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
@@ -60,9 +60,9 @@ import type {
   CleanApprovalRuntimeContextV1,
 } from "../src/composition/approval-runtime-bundle-v1.js";
 import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/new-lineage-v1";
-import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
+import { readableSearchRuntimeContractV1 } from "../src/composition/readable-search-runtime.js";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
-import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
+import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import type { Layer4StructuredOutputPort } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
 import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
@@ -838,13 +838,13 @@ function createOwnerAndMemberSearchRoute(input: {
     ["owner", owner],
     ["member", member],
   ]);
-  const route = createCleanPersonRecordSearchRouteV1({
+  const route = createPersonRecordSearchRouteV1({
     state_directory: input.fixture.initialized.state_directory,
     authority_id: input.fixture.initialized.authority_id,
     organization_id: input.fixture.initialized.organization_id,
     state_lineage_id: input.fixture.initialized.state_lineage_id,
     retrieval_contract_sha256:
-      cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
+      readableSearchRuntimeContractV1().retrieval_contract_sha256,
     sessions: {
       authenticateAccess: ({ access_token }) => {
         const authorization = byToken.get(access_token);
@@ -860,7 +860,7 @@ function createOwnerAndMemberSearchRoute(input: {
     },
     authority: input.authority,
     record: input.record,
-    audit: new SqliteCleanPersonRecordReadAuditV1(input.authority),
+    audit: new SqlitePersonRecordReadAuditV1(input.authority),
   });
   return route;
 }

@@ -17,12 +17,12 @@ import type {
   PersonExternalIdentityHttpRequestV1,
   PersonExternalIdentityLinkHttpApplicationV1,
 } from "../presentation/person-external-identity-link-http-application.js";
-import { createCleanPersonSlackIdentityLinkServiceV1 } from "./clean-person-slack-identity-link.js";
+import { createPersonSlackIdentityLinkServiceV1 } from "./person-slack-identity-link-service.js";
 import type {
-  CleanPersonExternalIdentityRuntimeBundleV1,
-  CleanPersonExternalIdentityRuntimeInputV1,
-  OpenedCleanPersonExternalIdentityRuntimeV1,
-} from "./clean-person-external-identity-runtime.js";
+  PersonExternalIdentityRuntimeBundleV1,
+  PersonExternalIdentityRuntimeInputV1,
+  OpenedPersonExternalIdentityRuntimeV1,
+} from "./person-external-identity-runtime.js";
 
 const SLACK_IDENTITY_ROUTES_V1 = Object.freeze([
   Object.freeze({
@@ -53,7 +53,7 @@ function accessToken(headers: Readonly<Record<string, string | undefined>>): str
   return value.slice("Bearer ".length);
 }
 
-export function createCleanSlackExternalIdentityHttpApplicationV1(input: {
+export function createSlackExternalIdentityHttpApplicationV1(input: {
   readonly service: {
     begin(input: unknown, accessToken: string): Promise<unknown>;
     complete(input: unknown, accessToken: string): Promise<unknown>;
@@ -101,14 +101,14 @@ function unavailableSlackIdentityApplication(): PersonExternalIdentityLinkHttpAp
  * protocol. Its channel, control database, provider client, and token lookup
  * never enter the generic Person runtime.
  */
-export function createCleanSlackPersonExternalIdentityRuntimeBundleV1(input: {
+export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
   readonly identity_link_channel_id?: string;
   readonly provider?: CleanSlackIdentityProviderV1;
-}): CleanPersonExternalIdentityRuntimeBundleV1 {
+}): PersonExternalIdentityRuntimeBundleV1 {
   return Object.freeze({
     open(
-      runtime: CleanPersonExternalIdentityRuntimeInputV1,
-    ): OpenedCleanPersonExternalIdentityRuntimeV1 {
+      runtime: PersonExternalIdentityRuntimeInputV1,
+    ): OpenedPersonExternalIdentityRuntimeV1 {
       if (input.identity_link_channel_id === undefined) {
         return Object.freeze({
           application: unavailableSlackIdentityApplication(),
@@ -120,7 +120,7 @@ export function createCleanSlackPersonExternalIdentityRuntimeBundleV1(input: {
         { fileMustExist: true },
       );
       try {
-        const application = createCleanPersonSlackIdentityLinkServiceV1({
+        const application = createPersonSlackIdentityLinkServiceV1({
           database,
           authority_id: runtime.authority_id,
           organization_id: runtime.organization_id,
@@ -151,7 +151,7 @@ export function createCleanSlackPersonExternalIdentityRuntimeBundleV1(input: {
           authorization_fence: new ReadableSearchAuthorizationFence(),
         });
         return Object.freeze({
-          application: createCleanSlackExternalIdentityHttpApplicationV1({
+          application: createSlackExternalIdentityHttpApplicationV1({
             service: application,
           }),
           close: () => database.close(),

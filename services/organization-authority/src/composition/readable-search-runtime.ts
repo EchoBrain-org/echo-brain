@@ -33,9 +33,9 @@ import {
 import type Database from "better-sqlite3";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import {
-  CleanReadableSearchGenerationReconcilerV1,
-  type CleanReadableSearchRecordHeadV1,
-} from "./clean-readable-search-generation-reconciler.js";
+  ReadableSearchGenerationReconcilerV1,
+  type ReadableSearchRecordHeadV1,
+} from "./readable-search-generation-reconciler.js";
 import {
   STATE_LINEAGE_DATABASE_MANIFEST_V1_KIND,
   stateLineageDatabaseManifestSha256V1,
@@ -44,10 +44,10 @@ import {
   type StateLineageRootManifestV1,
 } from "../state-lineage/state-lineage-manifest-v1.js";
 
-export const CLEAN_READABLE_SEARCH_SOURCE_REVISION_V1 =
+export const READABLE_SEARCH_SOURCE_REVISION_V1 =
   "organization-authority-clean-readable-search-v1" as const;
 
-const CLEAN_READABLE_SEARCH_ANALYZER_RELEASE_V1 = Object.freeze({
+const READABLE_SEARCH_ANALYZER_RELEASE_V1 = Object.freeze({
   schema_version: 1,
   kind: "echo-clean-readable-search-analyzer-release-v1",
   analyzer_id: "echo-unicode-alnum-frequency-v1",
@@ -59,17 +59,17 @@ const CLEAN_READABLE_SEARCH_ANALYZER_RELEASE_V1 = Object.freeze({
   document_overlong_term_policy: "omit",
 });
 
-const CLEAN_READABLE_SEARCH_BUILDER_RELEASE_V1 = Object.freeze({
+const READABLE_SEARCH_BUILDER_RELEASE_V1 = Object.freeze({
   schema_version: 1,
   kind: "echo-clean-readable-search-builder-release-v1",
-  source_revision: CLEAN_READABLE_SEARCH_SOURCE_REVISION_V1,
+  source_revision: READABLE_SEARCH_SOURCE_REVISION_V1,
   input: "verified-organization-record-envelope-v4-layer1-snapshot",
   output: "immutable-baseline-only-three-plane-generation-v1",
   admission_budget: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
   reader_behavior: CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1,
 });
 
-export interface CleanReadableSearchRuntimeContractV1 {
+export interface ReadableSearchRuntimeContractV1 {
   readonly retrieval_contract_sha256: Sha256Digest;
   readonly organization_member_policy_contract_sha256: Sha256Digest;
   readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;
@@ -80,18 +80,18 @@ export interface CleanReadableSearchRuntimeContractV1 {
     readonly unicode_version: string;
     readonly icu_version: string;
   };
-  readonly source_revision: typeof CLEAN_READABLE_SEARCH_SOURCE_REVISION_V1;
+  readonly source_revision: typeof READABLE_SEARCH_SOURCE_REVISION_V1;
   readonly builder_artifact_sha256: Sha256Digest;
 }
 
-/** One current-only contract shared by clean generation publication and serving. */
-export function cleanReadableSearchRuntimeContractV1(): CleanReadableSearchRuntimeContractV1 {
+/** One current-only contract shared by current generation publication and serving. */
+export function readableSearchRuntimeContractV1(): ReadableSearchRuntimeContractV1 {
   const organizationMemberPolicy =
     organizationMemberReadablePersonPolicyContractSha256();
   const restrictedReviewerPolicy =
     restrictedReviewerPersonPolicyContractSha256();
   const analyzerSource = sha256Digest(
-    canonicalJson(CLEAN_READABLE_SEARCH_ANALYZER_RELEASE_V1),
+    canonicalJson(READABLE_SEARCH_ANALYZER_RELEASE_V1),
   );
   const analyzer = Object.freeze({
     analyzer_contract_sha256: canonicalSha256({
@@ -138,19 +138,19 @@ export function cleanReadableSearchRuntimeContractV1(): CleanReadableSearchRunti
     organization_member_policy_contract_sha256: organizationMemberPolicy,
     restricted_reviewer_policy_contract_sha256: restrictedReviewerPolicy,
     analyzer,
-    source_revision: CLEAN_READABLE_SEARCH_SOURCE_REVISION_V1,
+    source_revision: READABLE_SEARCH_SOURCE_REVISION_V1,
     builder_artifact_sha256: sha256Digest(
-      canonicalJson(CLEAN_READABLE_SEARCH_BUILDER_RELEASE_V1),
+      canonicalJson(READABLE_SEARCH_BUILDER_RELEASE_V1),
     ),
   });
 }
 
 interface ReconciliationSnapshotV1 {
-  readonly record_head: CleanReadableSearchRecordHeadV1;
+  readonly record_head: ReadableSearchRecordHeadV1;
   readonly source_snapshot: RecordRetrievalSourceSnapshotV1;
 }
 
-function recordHead(database: Database.Database): CleanReadableSearchRecordHeadV1 {
+function recordHead(database: Database.Database): ReadableSearchRecordHeadV1 {
   const row = database
     .prepare(
       `SELECT position, record_sha256
@@ -201,7 +201,7 @@ function lineagePlane(
  * index builder, and the
  * single Authority publication pointer. It performs no provider IO.
  */
-export function createCleanReadableSearchGenerationReconcilerV1(input: {
+export function createReadableSearchGenerationReconcilerV1(input: {
   readonly state_directory: string;
   readonly root: StateLineageRootManifestV1;
   readonly authority: Database.Database;
@@ -210,8 +210,8 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
   /** Chosen with the active approval protocol; this runtime names no provider. */
   readonly policy_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly now?: () => string;
-}): CleanReadableSearchGenerationReconcilerV1<ReconciliationSnapshotV1> {
-  const contract = cleanReadableSearchRuntimeContractV1();
+}): ReadableSearchGenerationReconcilerV1<ReconciliationSnapshotV1> {
+  const contract = readableSearchRuntimeContractV1();
   const descriptor = input.signer.inspectSync();
   const pinnedAuthority = verifyOrganizationAuthorityPin(
     descriptor,
@@ -245,7 +245,7 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
     }
   ).version;
 
-  return new CleanReadableSearchGenerationReconcilerV1({
+  return new ReadableSearchGenerationReconcilerV1({
     authority: input.authority,
     organization_id: input.root.organization_id,
     retrieval_contract_sha256: contract.retrieval_contract_sha256,
@@ -263,7 +263,7 @@ export function createCleanReadableSearchGenerationReconcilerV1(input: {
             input.root.state_lineage_id,
           ),
       });
-      const capturedHead: CleanReadableSearchRecordHeadV1 =
+      const capturedHead: ReadableSearchRecordHeadV1 =
         sourceSnapshot.head === null
           ? Object.freeze({ position: 0, record_sha256: null })
           : sourceSnapshot.head;

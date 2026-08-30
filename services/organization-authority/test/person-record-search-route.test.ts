@@ -26,12 +26,12 @@ import {
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
+import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../src/domain/errors.js";
-import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
+import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 
 const roots: string[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -296,7 +296,7 @@ describe("clean Person Layer 2 route", () => {
       ],
     }));
     try {
-      const route = createCleanPersonRecordSearchRouteV1({
+      const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory,
         authority_id: "oau_clean",
         organization_id: "org_clean",
@@ -305,7 +305,7 @@ describe("clean Person Layer 2 route", () => {
         sessions: { authenticateAccess: () => authorization() },
         authority: value.authority,
         record: value.record,
-        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: search,
       });
       expect(
@@ -434,7 +434,7 @@ describe("clean Person Layer 2 route", () => {
       }),
     } as const;
     try {
-      const route = createCleanPersonRecordSearchRouteV1({
+      const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory,
         authority_id: "oau_clean",
         organization_id: "org_clean",
@@ -450,7 +450,7 @@ describe("clean Person Layer 2 route", () => {
         },
         authority: value.authority,
         record,
-        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
       });
 
       const owner = route.search({
@@ -539,7 +539,7 @@ describe("clean Person Layer 2 route", () => {
     const value = setup(false);
     const search = vi.fn();
     try {
-      const route = createCleanPersonRecordSearchRouteV1({
+      const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory,
         authority_id: "oau_clean",
         organization_id: "org_clean",
@@ -548,7 +548,7 @@ describe("clean Person Layer 2 route", () => {
         sessions: { authenticateAccess: () => authorization() },
         authority: value.authority,
         record: value.record,
-        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: search,
       });
       expect(() =>
@@ -612,7 +612,7 @@ describe("clean Person Layer 2 route", () => {
     }));
     let authenticateCount = 0;
     try {
-      const route = createCleanPersonRecordSearchRouteV1({
+      const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory,
         authority_id: "oau_clean",
         organization_id: "org_clean",
@@ -626,7 +626,7 @@ describe("clean Person Layer 2 route", () => {
         },
         authority: value.authority,
         record: value.record,
-        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: search,
       });
       const batch = route.searchBatch({
@@ -692,7 +692,7 @@ describe("clean Person Layer 2 route", () => {
     const search = vi.fn();
     const authenticateAccess = vi.fn(() => authorization());
     try {
-      const route = createCleanPersonRecordSearchRouteV1({
+      const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory,
         authority_id: "oau_clean",
         organization_id: "org_clean",
@@ -701,7 +701,7 @@ describe("clean Person Layer 2 route", () => {
         sessions: { authenticateAccess },
         authority: value.authority,
         record: value.record,
-        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: search,
       });
       expect(() =>
@@ -726,7 +726,7 @@ describe("clean Person Layer 2 route", () => {
     const value = setup();
     let currentAuthorization = authorization();
     try {
-      const route = createCleanPersonRecordSearchRouteV1({
+      const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory,
         authority_id: "oau_clean",
         organization_id: "org_clean",
@@ -735,7 +735,7 @@ describe("clean Person Layer 2 route", () => {
         sessions: { authenticateAccess: () => currentAuthorization },
         authority: value.authority,
         record: value.record,
-        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: () => ({
           generation_id: digest("generation"),
           exact_head: {
@@ -808,7 +808,7 @@ describe("clean Person Layer 2 route", () => {
   it("refuses release when the active generation changes during the read", () => {
     const value = setup();
     try {
-      const route = createCleanPersonRecordSearchRouteV1({
+      const route = createPersonRecordSearchRouteV1({
         state_directory: value.state_directory,
         authority_id: "oau_clean",
         organization_id: "org_clean",
@@ -817,7 +817,7 @@ describe("clean Person Layer 2 route", () => {
         sessions: { authenticateAccess: () => authorization() },
         authority: value.authority,
         record: value.record,
-        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: () => {
           value.authority
             .prepare(
@@ -883,7 +883,7 @@ describe("clean Person Layer 2 route", () => {
       const admitted = authorization();
       let authenticateCount = 0;
       try {
-        const route = createCleanPersonRecordSearchRouteV1({
+        const route = createPersonRecordSearchRouteV1({
           state_directory: value.state_directory,
           authority_id: "oau_clean",
           organization_id: "org_clean",
@@ -899,7 +899,7 @@ describe("clean Person Layer 2 route", () => {
           },
           authority: value.authority,
           record: value.record,
-          audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+          audit: new SqlitePersonRecordReadAuditV1(value.authority),
           search_generation: () => ({
             generation_id: digest("generation"),
             exact_head: {

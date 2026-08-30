@@ -19,7 +19,7 @@ import {
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
-import { createCleanReadableSearchGenerationReconcilerV1 } from "../src/composition/clean-readable-search-runtime.js";
+import { createReadableSearchGenerationReconcilerV1 } from "../src/composition/readable-search-runtime.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { verifyCleanStateLineage } from "../src/composition/verify-clean-state-lineage.js";
 
@@ -59,7 +59,7 @@ describe("clean readable-search runtime composition", () => {
       { fileMustExist: true },
     );
     try {
-      const reconciler = createCleanReadableSearchGenerationReconcilerV1({
+      const reconciler = createReadableSearchGenerationReconcilerV1({
         state_directory: initialized.state_directory,
         root: lineage.root,
         authority,

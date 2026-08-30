@@ -9,8 +9,8 @@ import { applyOrganizationControlBaselineV1 } from "../../organization-control-p
 import { connectCleanSlackV1 } from "../../organization-control-plane/src/persistence/sqlite-clean-slack-connection-v1.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { ReadableSearchAuthorizationFence } from "../src/application/readable-search-authorization-fence.js";
-import { createCleanPersonSlackIdentityLinkServiceV1 } from "../src/composition/clean-person-slack-identity-link.js";
-import { createCleanSlackExternalIdentityHttpApplicationV1 } from "../src/composition/clean-slack-person-external-identity-runtime.js";
+import { createPersonSlackIdentityLinkServiceV1 } from "../src/composition/person-slack-identity-link-service.js";
+import { createSlackExternalIdentityHttpApplicationV1 } from "../src/composition/slack-person-external-identity-runtime.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 
 const NOW = "2026-08-22T00:00:00.000Z";
@@ -137,7 +137,7 @@ async function setup(
   return {
     database,
     slack,
-    application: createCleanPersonSlackIdentityLinkServiceV1({
+    application: createPersonSlackIdentityLinkServiceV1({
       database,
       authority_id: AUTHORITY_ID,
       organization_id: ORGANIZATION_ID,
@@ -216,7 +216,7 @@ describe("clean Person Slack identity-link service", () => {
       oidc_provider: {} as never,
       expected_issuer: "https://issuer.example",
       person_external_identity_link:
-        createCleanSlackExternalIdentityHttpApplicationV1({
+        createSlackExternalIdentityHttpApplicationV1({
           service: context.application,
         }),
     });

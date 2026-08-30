@@ -60,7 +60,7 @@ function invitation(grant: IssuedPersonLoginGrant): IssuedCleanEmployeeInvitatio
 }
 
 /** Owner-only employee lifecycle. It is intentionally not a generic admin API. */
-export class CleanPersonEmployeeLifecycleApplication {
+export class PersonEmployeeLifecycleApplication {
   constructor(
     private readonly sessions: PersonIdentitySessionApplication,
     private readonly identities: CleanEmployeeIdentityFactory,
