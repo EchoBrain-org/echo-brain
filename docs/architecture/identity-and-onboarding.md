@@ -66,8 +66,10 @@ Authority posts the challenge, observes the exact Slack human replying in the
 exact thread, and creates or reuses that membership's external identity link.
 The Person flow creates no shared-channel/reaction adapter binding or
 approve/reject grant. Private meeting-owner approvals are instead delivered as
-signed Block Kit DMs and bind their visibility policy only when the owner
-clicks Approve; Reject creates no V4 record.
+signed Block Kit DMs. The visibility selector defaults to **Only me**
+(`restricted-reviewer-person-v2`); the owner may select **Team**
+(`organization-member-readable-person-v2`) before clicking Approve. The
+selected policy binds only at approval; Reject creates no V4 record.
 
 ## Retained V1 compatibility
 

@@ -297,15 +297,16 @@ query never triggers a build. If the head advances or a generation build fails,
 the existing pointer is not used for the new head. The Person client reports
 that search is catching up; wait for the next worker cycle and retry.
 
-Approved content is selected at the frozen Granola source snapshot:
+The private owner-approval card chooses approved-content visibility. It defaults
+to **Only me** (`restricted-reviewer-person-v2`), which allows only the exact
+approving owner and that owner's current membership tenure to read the record.
+Before approving, the owner may select **Team**
+(`organization-member-readable-person-v2`), which allows every current active
+owner or employee in the organization to read it. The selected policy freezes
+with the approved record.
 
-- By default, `organization-member-readable-person-v2` allows every current
-  active owner or employee in the organization to read the record.
-- A note in a folder named exactly `echo-restricted` selects
-  `restricted-reviewer-person-v2`; only the exact approving owner and that
-  owner's current membership tenure may read it.
-
-A later folder move does not reinterpret a posted card or approved record.
+A later source-folder move does not reinterpret a posted card or approved
+record.
 Revoking a membership denies both list and search for that tenure. A newly
 invited employee gets a new membership tenure and may read only content allowed
 to that membership. The owner sees the current roster with

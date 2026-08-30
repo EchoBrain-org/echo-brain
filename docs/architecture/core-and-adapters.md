@@ -123,12 +123,12 @@ access, or authorization-widening fallback. Layer 4 receives only the atoms
 Layer 3 released for one authenticated Person request and cannot read lower
 layers directly.
 
-The persisted approval contracts include both restricted-reviewer and
-organization-member modes, but current live composition accepts only the
-organization-member mode. That is a migration gap, not permission to delete the
-reviewer policy. The active
-[lean-down plan v4](../product/2026-08-20-server-core-migration-lean-down-plan-v4.md)
-requires both modes to be composed and tested before compatibility deletion.
+Current live composition delivers private meeting-owner approval DMs. Their
+visibility selector defaults to **Only me**, which binds
+`restricted-reviewer-person-v2` if approved unchanged. The owner may select
+**Team** before approving to bind `organization-member-readable-person-v2`.
+The selected policy is frozen with the approved record; rejection creates no
+record.
 
 ## Extension rule
 
