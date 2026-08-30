@@ -76,7 +76,7 @@ npm run test:person
 npm run test:authority
 npm run test:protocols
 npm run test:integration
-npm run check:boundary
+npm run check:architecture-boundaries
 ```
 
 `npm run check` performs boundary and documentation checks, TypeScript
@@ -391,7 +391,7 @@ before a credential transfer.
 - [ECHO-hosted Authority by default](docs/decisions/ADR-0008-echo-hosted-authority-by-default.md)
 - [Retained Authority data-volume boundary](docs/decisions/ADR-0009-retained-authority-data-volume-boundary.md)
 - [Workspace boundaries](docs/architecture/organization-workspace-boundaries.md)
-- [Product runtime boundary](docs/architecture/product-runtime.md)
+- [Person client architecture](docs/architecture/person-client-architecture.md)
 
 Typed ADR, RFC, invariant, and qualification evidence remains as design and
 verification history. Historical executable migrations are intentionally not

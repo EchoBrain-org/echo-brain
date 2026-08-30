@@ -1,12 +1,12 @@
 ---
 schema_version: 1
-id: CMP-CENTRAL-ORGANIZATION
+id: CMP-ORGANIZATION-AUTHORITY
 kind: component
-title: Central organization
+title: Organization Authority
 owners:
   - unassigned
 component_ids:
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-13
 reviewed_at: 2026-08-26
 reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
@@ -43,7 +43,7 @@ qualification_ids:
   - QUAL-20260814-194049-001
 ---
 
-# Central organization
+# Organization Authority
 
 ## Responsibility
 

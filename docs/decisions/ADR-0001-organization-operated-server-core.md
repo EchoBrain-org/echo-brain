@@ -4,9 +4,9 @@ id: ADR-0001
 kind: decision
 title: Organization-operated server-core processing
 component_ids:
-  - CMP-LOCAL-RUNTIME
-  - CMP-CENTRAL-ORGANIZATION
-  - CMP-CORE-PIPELINE
+  - CMP-PERSON-CLIENT
+  - CMP-ORGANIZATION-AUTHORITY
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-17
 reviewed_at: 2026-08-17
 reviewed_ref: 4665c3a93187095d5d14acbe95e825cd69aaf31e

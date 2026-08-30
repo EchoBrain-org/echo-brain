@@ -60,7 +60,7 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(join(REPO, path), "utf8")) as T;
 }
 
-// Mirrors matchesGlob in tools/check-boundary.mjs. The tool runs main() at
+// Mirrors matchesGlob in tools/check-architecture-boundaries.mjs. The tool runs main() at
 // import time, so its matcher cannot be imported; a boundary pattern is
 // compared against another pattern exactly as the tool compares it to a path.
 function matchesGlob(path: string, pattern: string): boolean {
@@ -146,7 +146,7 @@ function runBoundary(fixture: string): {
 } {
   const result = spawnSync(
     process.execPath,
-    [join(fixture, "tools/check-boundary.mjs")],
+    [join(fixture, "tools/check-architecture-boundaries.mjs")],
     {
       cwd: fixture,
       encoding: "utf8",

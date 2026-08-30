@@ -118,7 +118,7 @@ runtime closure are enforced by the Dockerfile and architecture tests. A
 multi-replica deployment requires a later persistence/coordination design and
 is outside minimum V1.
 
-See [Product runtime](product-runtime.md),
-[Core and adapters](core-and-adapters.md), and
+See [Person client architecture](person-client-architecture.md),
+[meeting processing core and adapters](meeting-processing-core-and-adapters.md), and
 [Identity and onboarding](identity-and-onboarding.md) for the adjacent
 boundaries.

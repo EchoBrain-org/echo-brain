@@ -4,10 +4,10 @@ id: QMAT-ADAPTERS-001
 kind: qualification-matrix
 title: Provider adapter adversarial qualification matrix
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-MEETING-PROCESSING-CORE
   - CMP-IDENTITY-ACCESS
-  - CMP-LOCAL-RUNTIME
+  - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

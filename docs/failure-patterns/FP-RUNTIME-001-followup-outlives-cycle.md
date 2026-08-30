@@ -4,8 +4,8 @@ id: FP-RUNTIME-001
 kind: failure-pattern
 title: Durable provider resolution is not followed by a fresh bounded sweep
 component_ids:
-  - CMP-LOCAL-RUNTIME
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-PERSON-CLIENT
+  - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: a132c35aa9399876cc633c727d2c820af506bcf4

@@ -275,7 +275,7 @@ afterEach(() => {
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
-describe("clean-v1 release record", () => {
+describe("Organization Authority clean-v1 release record", () => {
   it("accepts the same canonical non-secret record in build and operator tools", () => {
     const path = writeRecord(record());
     const node = run(process.execPath, [TOOL, "validate", path]);

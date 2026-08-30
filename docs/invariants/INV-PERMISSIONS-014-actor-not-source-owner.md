@@ -4,7 +4,7 @@ id: INV-PERMISSIONS-014
 kind: invariant
 title: Approval authority is independent from source custody
 component_ids:
-  - CMP-ADAPTERS
+  - CMP-PROCESSING-ADAPTERS
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
 created_at: 2026-08-13

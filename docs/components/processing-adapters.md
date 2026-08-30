@@ -1,12 +1,12 @@
 ---
 schema_version: 1
-id: CMP-ADAPTERS
+id: CMP-PROCESSING-ADAPTERS
 kind: component
-title: Adapters
+title: Processing adapters
 owners:
   - unassigned
 component_ids:
-  - CMP-ADAPTERS
+  - CMP-PROCESSING-ADAPTERS
 created_at: 2026-08-13
 reviewed_at: 2026-08-29
 reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
@@ -37,7 +37,7 @@ qualification_ids:
   - QMAT-ADAPTERS-001
 ---
 
-# Adapters
+# Processing adapters
 
 ## Responsibility
 
@@ -66,7 +66,7 @@ semantics.
 
 ## Current references
 
-- [Core and adapters](../architecture/core-and-adapters.md)
+- [Meeting processing core and adapters](../architecture/meeting-processing-core-and-adapters.md)
 - [Active-provider boundary invariant](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
 - [First-provider architecture failure pattern](../failure-patterns/FP-ADAPTERS-005-first-provider-becomes-architecture.md)
 - Source: [`services/organization-authority/src/processing/adapters/`](../../services/organization-authority/src/processing/adapters)

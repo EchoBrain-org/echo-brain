@@ -5,7 +5,7 @@ kind: failure-pattern
 title: Missing provider identity is repaired by blind backfill
 component_ids:
   - CMP-IDENTITY-ACCESS
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

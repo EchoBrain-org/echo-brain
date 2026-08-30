@@ -1,12 +1,12 @@
 ---
 schema_version: 1
-id: CMP-CORE-PIPELINE
+id: CMP-MEETING-PROCESSING-CORE
 kind: component
-title: Core pipeline
+title: Meeting processing core
 owners:
   - unassigned
 component_ids:
-  - CMP-CORE-PIPELINE
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-13
 reviewed_at: 2026-08-29
 reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
@@ -28,7 +28,7 @@ qualification_ids:
   - QMAT-ADAPTERS-001
 ---
 
-# Core pipeline
+# Meeting processing core
 
 ## Responsibility
 
@@ -51,7 +51,7 @@ references and approved-record policy projectors.
 
 ## Current references
 
-- [Core and adapters](../architecture/core-and-adapters.md)
+- [Meeting processing core and adapters](../architecture/meeting-processing-core-and-adapters.md)
 - Source: [`services/organization-authority/src/processing/core/`](../../services/organization-authority/src/processing/core)
 - Core tests: [`services/organization-authority/test/processing/core/`](../../services/organization-authority/test/processing/core)
 

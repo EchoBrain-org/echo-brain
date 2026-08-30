@@ -4,9 +4,9 @@ id: INV-IDENTITY-005
 kind: invariant
 title: Adapter and provider identities confer ECHO authority only through explicit links
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CENTRAL-ORGANIZATION
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-ORGANIZATION-AUTHORITY
+  - CMP-MEETING-PROCESSING-CORE
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
 created_at: 2026-08-20

@@ -4,7 +4,7 @@ id: ADR-0008
 kind: decision
 title: ECHO-hosted Authority by default
 component_ids:
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-25
 reviewed_at: 2026-08-26

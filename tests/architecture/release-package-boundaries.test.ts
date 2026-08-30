@@ -45,7 +45,7 @@ function npmPackDryRun(packageRoot: string): { files: Array<{ path: string }> } 
   }>)[0];
 }
 
-describe("clean workspace package artifacts", () => {
+describe("workspace release package boundaries", () => {
   it("removes stale retired dist modules before each package pack", () => {
     for (const artifact of RETIRED_ARTIFACTS) {
       const packageRoot = resolve(REPO, artifact.packagePath);

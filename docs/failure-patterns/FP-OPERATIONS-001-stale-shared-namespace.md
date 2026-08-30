@@ -4,7 +4,7 @@ id: FP-OPERATIONS-001
 kind: failure-pattern
 title: Dependency restart leaves a proxy in a stale shared namespace
 component_ids:
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

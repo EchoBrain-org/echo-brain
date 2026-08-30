@@ -4,9 +4,9 @@ id: EVID-INDEX-001
 kind: evidence-index
 title: Founder-live permission qualification sanitized evidence index
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-LOCAL-RUNTIME
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-PERSON-CLIENT
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
   - CMP-OPERATIONS-RELEASE

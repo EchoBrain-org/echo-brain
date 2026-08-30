@@ -194,7 +194,7 @@ function directLayer4LowerLayerEdges(): readonly string[] {
     .sort();
 }
 
-describe("clean Layer 3 and lean Layer 4 boundaries", () => {
+describe("retrieval and answer-composition boundaries", () => {
   it("keeps every Layer 1 through Layer 3 read/search import path independent from LLM processors and model SDKs", () => {
     expect(reachableModelEdges()).toEqual([]);
   });
@@ -202,14 +202,14 @@ describe("clean Layer 3 and lean Layer 4 boundaries", () => {
   it("follows runtime re-exports, import(), and require() when checking the Layer 3 closure", () => {
     expect(
       reachableModelEdges([
-        "tests/fixtures/layer3-layer4-exclusion/re-export.ts",
-        "tests/fixtures/layer3-layer4-exclusion/dynamic-import.ts",
-        "tests/fixtures/layer3-layer4-exclusion/require.ts",
+        "tests/fixtures/retrieval-answer-composition-boundary/re-export.ts",
+        "tests/fixtures/retrieval-answer-composition-boundary/dynamic-import.ts",
+        "tests/fixtures/retrieval-answer-composition-boundary/require.ts",
       ]),
     ).toEqual([
-      "tests/fixtures/layer3-layer4-exclusion/dynamic-import.ts -> ./openai-adapter.js",
-      "tests/fixtures/layer3-layer4-exclusion/re-export.ts -> ./openai-adapter.js",
-      "tests/fixtures/layer3-layer4-exclusion/require.ts -> ./openai-adapter.js",
+      "tests/fixtures/retrieval-answer-composition-boundary/dynamic-import.ts -> ./openai-adapter.js",
+      "tests/fixtures/retrieval-answer-composition-boundary/re-export.ts -> ./openai-adapter.js",
+      "tests/fixtures/retrieval-answer-composition-boundary/require.ts -> ./openai-adapter.js",
     ]);
   });
 
@@ -225,7 +225,7 @@ describe("clean Layer 3 and lean Layer 4 boundaries", () => {
     ]);
   });
 
-  it("allows answer_composition only in the declared Layer 4 source root and one audit writer", () => {
+  it("keeps the persisted answer_composition audit kind in the audit writer", () => {
     const production = [
       "services/organization-authority/src",
       "services/organization-control-plane/src",
@@ -239,8 +239,7 @@ describe("clean Layer 3 and lean Layer 4 boundaries", () => {
     expect(
       production.filter(
         (path) =>
-          /answer_composition/.test(source(path)) &&
-          !path.startsWith(`${ANSWER_COMPOSITION_ROOT}/`) &&
+          /["']answer_composition["']/.test(source(path)) &&
           path !== ANSWER_COMPOSITION_AUDIT_WRITER,
       ),
     ).toEqual([]);

@@ -4,7 +4,7 @@ id: INV-OPERATIONS-001
 kind: invariant
 title: Components sharing a runtime namespace share lifecycle qualification
 component_ids:
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

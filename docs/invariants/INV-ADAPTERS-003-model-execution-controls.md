@@ -4,8 +4,8 @@ id: INV-ADAPTERS-003
 kind: invariant
 title: Model execution controls are explicit processing identity
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: fd762a45e8745eebf27f346317e97038be69de44

@@ -35,14 +35,14 @@ const roots: string[] = [];
 const AUTHORITY_URL = "https://authority.example";
 const OIDC = {
   issuer: "https://issuer.example",
-  client_id: "founder-client",
+  client_id: "person-client",
   redirect_uri: `${AUTHORITY_URL}/v2/session/oidc/callback`,
   tenant: { kind: "issuer" as const },
   id_token_algorithms: ["RS256"],
 };
 
 function directory(): string {
-  const created = mkdtempSync(join(tmpdir(), "echo-clean-founder-rehearsal-"));
+  const created = mkdtempSync(join(tmpdir(), "echo-authority-command-rehearsal-"));
   chmodSync(created, 0o700);
   const value = realpathSync(created);
   roots.push(value);
@@ -103,11 +103,11 @@ class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
       kind: "verified",
       token: {
         issuer: OIDC.issuer,
-        subject: "founder-subject",
+        subject: "initial-owner-subject",
         audience: OIDC.client_id,
         nonce: this.last.nonce,
         issued_at: Math.floor(Date.now() / 1000),
-        claims: { email: "founder@example.com", email_verified: true },
+        claims: { email: "owner@example.com", email_verified: true },
       },
     };
   }
@@ -166,7 +166,7 @@ const inactiveWorker: CleanLiveProcessingCycleV1 = {
   reconcileReadableSearchGeneration: async () => undefined,
 };
 
-function founderDependencies(): CleanFounderCliDependencies {
+function authorityAdminDependencies(): CleanFounderCliDependencies {
   return {
     now: () => "2026-08-22T12:00:00.000Z",
     reset: initializeCleanResetState,
@@ -248,9 +248,9 @@ function founderDependencies(): CleanFounderCliDependencies {
           "--state-dir",
           input.state_directory,
           "--source-instance",
-          "founder-granola-v1",
+          "initial-owner-granola-v1",
           "--processor-instance",
-          "founder-llm-v1",
+          "initial-owner-llm-v1",
           "--granola-credential-file",
           input.granola_credential_file,
           "--granola-owner-email-file",
@@ -265,8 +265,8 @@ function founderDependencies(): CleanFounderCliDependencies {
               return {
                 notes: [
                   {
-                    id: "founder-preflight-note",
-                    owner: { email: "founder@example.com" },
+                    id: "initial-owner-preflight-note",
+                    owner: { email: "owner@example.com" },
                   },
                 ],
                 hasMore: false,
@@ -292,7 +292,7 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
 });
 
-describe("clean founder command rehearsal", () => {
+describe("Organization Authority command rehearsal", () => {
   it("recovers durable Slack preflight proof after a lost bootstrap response", async () => {
     const root = directory();
     const stateDirectory = join(root, "state");
@@ -308,11 +308,11 @@ describe("clean founder command rehearsal", () => {
       "--state-dir",
       stateDirectory,
       "--organization-name",
-      "Founder Organization",
+      "Example Organization",
       "--owner-display-name",
-      "Founder",
+      "Initial Owner",
       "--owner-email",
-      "founder@example.com",
+      "owner@example.com",
       "--authority-url",
       AUTHORITY_URL,
       "--oidc-config",
@@ -320,14 +320,14 @@ describe("clean founder command rehearsal", () => {
       "--slack-approval-channel-id",
       "C12345678",
       "--artifact-revision",
-      "clean-founder-command-rehearsal",
+      "organization-authority-command-rehearsal",
     ];
     const first = commandOutput();
     expect(
       await runCleanFounderCli(
         args,
         { stdout: first.write, stderr: first.write, read_stdin: async () => "fake-slack-bot-token" },
-        founderDependencies(),
+        authorityAdminDependencies(),
       ),
     ).toBe(0);
     // Deliberately discard `first`: status and an exact bootstrap retry must
@@ -356,7 +356,7 @@ describe("clean founder command rehearsal", () => {
       await runCleanFounderCli(
         args,
         { stdout: resumed.write, stderr: resumed.write, read_stdin: async () => { throw new Error("Slack stdin must not be reread"); } },
-        founderDependencies(),
+        authorityAdminDependencies(),
       ),
     ).toBe(0);
     expect(oneJson<Record<string, unknown>>(resumed)).toMatchObject({
@@ -389,11 +389,11 @@ describe("clean founder command rehearsal", () => {
           "--state-dir",
           stateDirectory,
           "--organization-name",
-          "Founder Organization",
+          "Example Organization",
           "--owner-display-name",
-          "Founder",
+          "Initial Owner",
           "--owner-email",
-          "founder@example.com",
+          "owner@example.com",
           "--authority-url",
           AUTHORITY_URL,
           "--oidc-config",
@@ -401,14 +401,14 @@ describe("clean founder command rehearsal", () => {
           "--slack-approval-channel-id",
           "C12345678",
           "--artifact-revision",
-          "clean-founder-command-rehearsal",
+          "organization-authority-command-rehearsal",
         ],
         {
           stdout: bootstrap.write,
           stderr: bootstrap.write,
           read_stdin: async () => "fake-slack-bot-token",
         },
-        founderDependencies(),
+        authorityAdminDependencies(),
       ),
     ).resolves.toBe(0);
     const bootstrapped = oneJson<{ invitation_path: string }>(bootstrap);
@@ -520,7 +520,7 @@ describe("clean founder command rehearsal", () => {
     );
     privateCredential(
       join(stateDirectory, "credentials", "granola-owner-email"),
-      "founder@example.com",
+      "owner@example.com",
     );
     privateCredential(
       join(stateDirectory, "credentials", "llm-credential"),
@@ -534,7 +534,7 @@ describe("clean founder command rehearsal", () => {
         stderr: finalized.write,
         read_stdin: async () => "",
       },
-      founderDependencies(),
+      authorityAdminDependencies(),
     );
     expect(finalizeStatus, finalized.values.join("")).toBe(0);
     expect(oneJson<{ ok: boolean }>(finalized).ok).toBe(true);

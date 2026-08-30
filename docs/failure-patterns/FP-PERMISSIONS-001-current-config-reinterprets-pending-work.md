@@ -4,8 +4,8 @@ id: FP-PERMISSIONS-001
 kind: failure-pattern
 title: Current configuration reinterprets frozen pending work
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-LOCAL-RUNTIME
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

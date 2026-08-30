@@ -6,7 +6,7 @@ title: Access duration changes are versioned compatibility changes
 component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-PROTOCOLS-CRYPTO
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 280db80479a39ba51708b5923cc4b3eb3cfcd7ef

@@ -4,9 +4,9 @@ id: ADR-0002
 kind: decision
 title: External OIDC person sessions
 component_ids:
-  - CMP-LOCAL-RUNTIME
+  - CMP-PERSON-CLIENT
   - CMP-IDENTITY-ACCESS
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERMISSIONS
   - CMP-PROTOCOLS-CRYPTO
 created_at: 2026-08-18

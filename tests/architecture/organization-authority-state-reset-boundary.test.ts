@@ -209,7 +209,7 @@ function cleanClosure(entry: string): ReadonlySet<string> {
   return closure;
 }
 
-describe("selected clean executable closures", () => {
+describe("Organization Authority executable closure boundaries", () => {
   for (const entry of CLEAN_ENTRIES) {
     it(`${entry} excludes retired machine, migration, and reaction-policy runtime`, () => {
       const closure = cleanClosure(entry);

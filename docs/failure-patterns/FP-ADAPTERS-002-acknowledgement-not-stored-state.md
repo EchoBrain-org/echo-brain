@@ -4,8 +4,8 @@ id: FP-ADAPTERS-002
 kind: failure-pattern
 title: Provider accepts a write but acknowledgement differs from stored state
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-LOCAL-RUNTIME
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

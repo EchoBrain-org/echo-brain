@@ -4,8 +4,8 @@ id: FP-ADAPTERS-003
 kind: failure-pattern
 title: Model spends the output budget outside the visible answer channel
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: fd762a45e8745eebf27f346317e97038be69de44

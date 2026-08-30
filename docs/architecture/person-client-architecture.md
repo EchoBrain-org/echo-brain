@@ -1,11 +1,12 @@
-# Product runtime architecture
+# Person client architecture
 
 **Status:** Current
 
-The machine product is the standalone Person client. It authenticates one
-human to one organization Authority, keeps that session private, and sends
-bounded authenticated requests. Meeting processing and organization data live
-on the server.
+The machine-installed Person client authenticates one human to one
+Organization Authority, keeps that session private, and sends bounded
+authenticated requests. Meeting processing and organization data live on the
+server. Other machine-installed interfaces may invoke this client, but they
+are separate components with their own lifecycle and packaging boundaries.
 
 ## Composition
 
@@ -54,14 +55,17 @@ CI installs the exact tarball offline on macOS arm64 and checks version, help,
 and absent-session behavior. Server deployment is a separate Authority
 container workflow.
 
-## Product boundary
+## Deployment boundary
 
-The product has two operational artifacts:
+This repository currently produces two independently operated artifacts:
 
 - the single-organization Authority container, whose hosting and custody model
   is defined by
   [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md); and
 - the thin Person CLI tarball.
+
+This list describes the Authority and Person-client release boundary, not
+every current or future machine interface.
 
 The repository root is workspace orchestration only. It is private and has no
 runtime export or executable.

@@ -4,8 +4,8 @@ id: INV-ADAPTERS-002
 kind: invariant
 title: External object identity is durable before verification
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-LOCAL-RUNTIME
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-PERSON-CLIENT
   - CMP-PERMISSIONS
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

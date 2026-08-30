@@ -1,4 +1,4 @@
-// Source independence: no sibling-repository reference, symlink, or submodule
+// Product source independence: no sibling-repository reference, symlink, or submodule
 // escape in the tracked product source tree.
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -22,7 +22,7 @@ function git(...args: string[]): string {
   return r.stdout;
 }
 
-describe('source independence', () => {
+describe('product source independence', () => {
   it('no tracked entry is a symlink or gitlink (submodule)', () => {
     const lines = git('ls-tree', '-r', 'HEAD').trim().split('\n');
     for (const line of lines) {

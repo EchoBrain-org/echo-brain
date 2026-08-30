@@ -1,4 +1,4 @@
-# Core and adapter architecture
+# Meeting processing core and adapter architecture
 
 **Status:** Current
 
@@ -26,7 +26,7 @@ provider API -> server adapter -> processing contracts <- processing cycle
   identity. Those bundles are the only place an active external-capability
   provider is selected.
 
-`npm run check:boundary` enforces these rules for every owned source file, not
+`npm run check:architecture-boundaries` enforces these rules for every owned source file, not
 only today's entry-point closure. Processing tests live beside the Authority;
 cross-workspace checks remain under `tests/integration/`.
 

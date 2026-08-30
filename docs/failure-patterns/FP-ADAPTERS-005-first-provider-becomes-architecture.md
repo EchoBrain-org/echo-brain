@@ -4,8 +4,8 @@ id: FP-ADAPTERS-005
 kind: failure-pattern
 title: The first provider becomes the architecture
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-29
 reviewed_at: 2026-08-29
 reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f

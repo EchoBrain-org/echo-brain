@@ -39,8 +39,10 @@
     "lint": "eslint . --max-warnings 0",
     "test": "npm run build && vitest run --config vitest.config.ts",
     "test:core": "npm run build:workspaces && vitest run --config vitest.config.ts services/organization-authority/test/processing/core",
-    "test:quality": "npm run build:workspaces && vitest run --config vitest.config.ts services/organization-authority/test/quality",
-    "eval:synthetic": "npm run build:workspaces && node services/organization-authority/dist/synthetic-meeting-quality-main.js",
+    "test:meeting-processing-quality": "npm run build:workspaces && vitest run --config vitest.config.ts services/organization-authority/test/quality",
+    "test:quality": "npm run test:meeting-processing-quality",
+    "eval:synthetic-meetings": "npm run build:workspaces && node services/organization-authority/dist/synthetic-meeting-quality-main.js",
+    "eval:synthetic": "npm run eval:synthetic-meetings --",
     "test:architecture": "npm run build:workspaces && vitest run --config vitest.config.ts tests/architecture",
     "test:protocols": "npm run build:workspaces && npm test --workspace @echo-brain/federation-protocol && npm test --workspace @echo-brain/organization-protocol && npm test --workspace @echo-brain/organization-api",
     "test:authority": "npm run build:workspaces && npm test --workspace @echo-brain/organization-authority",
@@ -48,11 +50,12 @@
     "test:record": "npm run build:workspaces && npm test --workspace @echo-brain/organization-record",
     "test:integration": "npm run build:workspaces && vitest run --config vitest.config.ts tests/integration",
     "test:person": "node tools/build.mjs --person-client && vitest run --config vitest.config.ts tests/person-client",
-    "check:boundary": "node tools/check-boundary.mjs",
+    "check:architecture-boundaries": "node tools/check-architecture-boundaries.mjs",
+    "check:boundary": "npm run check:architecture-boundaries",
     "check:docs": "node tools/check-docs.mjs",
     "check:authority-recovery-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
     "check:authority-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
-    "check": "npm run check:boundary && npm run check:docs && npm run typecheck && npm run lint && npm test"
+    "check": "npm run check:architecture-boundaries && npm run check:docs && npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.11",
