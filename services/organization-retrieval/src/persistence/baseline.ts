@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import type Database from 'better-sqlite3';
-import type { ReadableSearchPlane } from '../application/contracts.js';
+import type { ReadableSearchPlane } from '../application/readable-search-contracts.js';
 import {
   READABLE_SEARCH_CONTENT_DATABASE,
   READABLE_SEARCH_FACTS_DATABASE,

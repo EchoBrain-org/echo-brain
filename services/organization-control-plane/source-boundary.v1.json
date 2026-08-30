@@ -63,6 +63,11 @@
         "export": "PersonApprovalPolicyId"
       },
       {
+        "name": "Slack integration contracts",
+        "path": "services/organization-control-plane/src/application/slack-integration-contracts.ts",
+        "export": "SlackIntegrationProvider"
+      },
+      {
         "name": "Slack connection setup command",
         "path": "services/organization-control-plane/src/composition/slack-connection-setup-cli.ts",
         "export": "runSlackConnectionSetupCli"

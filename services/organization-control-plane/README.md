@@ -15,6 +15,11 @@ The Slack approval integration keeps both the member-readable and
 restricted-reviewer policies and performs permission checks against current
 Authority membership.
 
+`record-visibility-policy-contracts-v1` is provider-neutral. Its public facade
+re-exports the application policy contracts consumed by the Slack reaction
+approval contracts; Slack integration contracts are separately named under
+`application/slack-integration-contracts`.
+
 Private-approval fresh state is initialized from the composed V2 baseline:
 the retained `baselines/organization-control-plane-baseline-v1.sql` plus
 `baselines/organization-control-plane-private-approval-v2.sql`. It applies

@@ -5,7 +5,7 @@ import {
   type OrganizationSecretStore,
   type VerifiedSlackChannel,
   type VerifiedSlackConnection,
-} from "../application/contracts.js";
+} from "../application/slack-integration-contracts.js";
 import {
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,

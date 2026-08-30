@@ -71,7 +71,7 @@ import {
 import {
   createPrivateSlackBlockApprovalPolicyProjectorV1,
   type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1,
-} from "../src/application/private-slack-block-approval-policy-facts-v1.js";
+} from "../src/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js";
 import { PersonRecordReaderV1 } from "../src/retrieve/person-record-reader-v1.js";
 import {
   RecordRetrievalSourceSnapshotPortV1,

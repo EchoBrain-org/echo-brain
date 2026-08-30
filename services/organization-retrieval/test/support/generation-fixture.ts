@@ -6,7 +6,7 @@ import type {
   ReadableSearchAdmittedAtom,
   ReadableSearchStoppedBuildInput,
   ReadableSearchUpstreamInputRootPreimageV1,
-} from '../../src/application/contracts.js';
+} from '../../src/application/readable-search-contracts.js';
 
 export const digest = (value: string): `sha256:${string}` => sha256Digest(value);
 

@@ -13,7 +13,7 @@ export {
   type OrganizationSecretStore,
   type PendingPersonSlackIdentityLinkChallenge,
   type PersonSlackIdentityLinkSession,
-} from "./application/contracts.js";
+} from "./application/slack-integration-contracts.js";
 export {
   SlackIdentityProviderErrorV1,
   SlackWebIdentityProviderV1,

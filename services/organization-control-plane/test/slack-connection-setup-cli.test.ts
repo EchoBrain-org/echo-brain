@@ -12,7 +12,7 @@ import {
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
   type VerifiedSlackChannel,
   type VerifiedSlackConnection,
-} from "../src/application/contracts.js";
+} from "../src/application/slack-integration-contracts.js";
 import {
   canonicalJson,
   canonicalSha256,

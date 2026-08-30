@@ -1,4 +1,4 @@
-import { ReadableSearchValidationError } from './contracts.js';
+import { ReadableSearchValidationError } from './readable-search-contracts.js';
 
 export const MAXIMUM_QUERY_TERMS = 16;
 export const MAXIMUM_TERM_UTF8_BYTES = 64;

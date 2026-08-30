@@ -8,7 +8,7 @@ import type {
   VerifiedSlackChannel,
   VerifiedSlackConnection,
   VerifiedSlackHuman,
-} from "../../application/contracts.js";
+} from "../../application/slack-integration-contracts.js";
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;

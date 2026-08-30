@@ -51,11 +51,11 @@ export {
   SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
   createPrivateSlackBlockApprovalPolicyProjectorV1,
   projectPrivateSlackBlockApprovalPolicyFactsV1,
-} from "./application/private-slack-block-approval-policy-facts-v1.js";
+} from "./adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js";
 export type {
   PrivateSlackBlockApprovalPolicyFactsInputV1,
   RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1,
-} from "./application/private-slack-block-approval-policy-facts-v1.js";
+} from "./adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js";
 export {
   createRecordPolicyFactProjectorRegistryV1,
 } from "./application/record-policy-fact-projection-v1.js";

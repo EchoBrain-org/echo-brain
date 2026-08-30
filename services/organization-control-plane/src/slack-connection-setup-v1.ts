@@ -10,4 +10,4 @@ export {
   type SlackConnectionSetupCliDependencies as CleanSlackConnectCliDependencies,
   type SlackConnectionSetupCliIo as CleanSlackConnectCliIo,
 } from "./composition/slack-connection-setup-cli.js";
-export { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "./application/contracts.js";
+export { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "./application/slack-integration-contracts.js";

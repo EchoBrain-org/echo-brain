@@ -11,6 +11,10 @@ proof digests are immutable contracts. Reads resolve current permissions for
 multi-person organizations and preserve both member-readable and
 restricted-reviewer policy behavior.
 
+Provider-neutral policy-fact registry contracts remain in `application`. The
+Private Slack Block Kit policy projector is an adapter under
+`adapters/record-policy-projection/slack`; the public API retains its exports.
+
 Fresh log and derived stores are created only from the two byte-pinned SQL
 baselines. Historical migrations, broad append and maintenance barrels,
 reviewer compatibility APIs, and derived compatibility paths are not shipped.

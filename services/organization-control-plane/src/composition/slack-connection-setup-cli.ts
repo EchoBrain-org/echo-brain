@@ -13,7 +13,7 @@ import {
   type VerifiedOrganizationControlStateV1,
 } from "../persistence/verified-organization-control-state-v1.js";
 import { FileOrganizationSecretStore } from "../security/file-secret-store.js";
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../application/contracts.js";
+import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../application/slack-integration-contracts.js";
 
 export interface SlackConnectionSetupCliIo {
   readonly stdout: (value: string) => void;

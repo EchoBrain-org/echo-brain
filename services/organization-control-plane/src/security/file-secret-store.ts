@@ -20,7 +20,7 @@ import {
   AUTHORITY_FILE_SECRET_BACKEND,
   type OrganizationSecretReference,
   type OrganizationSecretStore,
-} from '../application/contracts.js';
+} from '../application/slack-integration-contracts.js';
 
 const MAXIMUM_SECRET_BYTES = 16 * 1024;
 const SECRET_HANDLE_PATTERN = /^sch_[0-9a-f-]{36}$/;

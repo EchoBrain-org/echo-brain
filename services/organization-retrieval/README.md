@@ -2,6 +2,8 @@
 
 `readable-search-engine-v1` is the canonical package entrypoint. The retained
 `new-lineage-v1` path is a thin compatibility re-export.
+`application/readable-search-contracts` owns the builder's named read-model
+contracts.
 
 ## Clean readable-search lean V1 budget
 

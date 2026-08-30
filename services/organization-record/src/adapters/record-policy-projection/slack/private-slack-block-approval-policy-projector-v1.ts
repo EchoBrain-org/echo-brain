@@ -1,10 +1,10 @@
 import { sha256Digest } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import { derivedAtomIdentity } from "./atom-identity.js";
+import { derivedAtomIdentity } from "../../../application/atom-identity.js";
 import type {
   RecordPolicyFactEnvelopeV1,
   RecordPolicyFactProjectorV1,
-} from "./record-policy-fact-projection-v1.js";
+} from "../../../application/record-policy-fact-projection-v1.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
@@ -12,10 +12,10 @@ import {
   type PersonPolicyFactProjectionV2,
   type PersonPolicyFactRowV2,
   type PersonPolicyIdV2,
-} from "./person-policy-facts-v2.js";
+} from "../../../application/person-policy-facts-v2.js";
 
 /**
- * D3 projection for the private Slack Block Kit approval protocol. This is
+ * D3 adapter projector for the private Slack Block Kit approval protocol. This is
  * deliberately separate from the legacy provider-human/reaction witness so a
  * signed Block Kit action cannot be type-confused with that older contract.
  */
@@ -265,7 +265,7 @@ function privateSlackPolicyEnvelope(
 }
 
 /**
- * Slack's signed Block Kit contract is selected only here. Record append and
+ * Slack's signed Block Kit contract is selected only in this adapter. Record append and
  * retrieval-source snapshotting pass the verified envelope through the
  * generic record-policy-fact seam.
  */

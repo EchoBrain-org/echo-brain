@@ -4,8 +4,8 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
   projectPrivateSlackBlockApprovalPolicyFactsV1,
-} from "../src/organization-record-api-v1.js";
-import type { PersonPolicyIdV2 } from "../src/application/person-policy-facts-v2.js";
+} from "../../../../src/organization-record-api-v1.js";
+import type { PersonPolicyIdV2 } from "../../../../src/application/person-policy-facts-v2.js";
 
 const digest = (letter: string): `sha256:${string}` => `sha256:${letter.repeat(64)}`;
 
@@ -43,7 +43,7 @@ function input(
   };
 }
 
-describe("private Slack Block Kit policy fact projection", () => {
+describe("private Slack Block Kit policy projector", () => {
   it("projects the existing restricted and organization-member facts only after the signed action joins to D2", () => {
     const restricted = projectPrivateSlackBlockApprovalPolicyFactsV1(input());
     expect(restricted.policy_fact_outcome).toEqual({ kind: "appended", policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID });

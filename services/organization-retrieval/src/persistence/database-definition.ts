@@ -1,4 +1,4 @@
-import type { ReadableSearchPlane } from '../application/contracts.js';
+import type { ReadableSearchPlane } from '../application/readable-search-contracts.js';
 
 export interface ReadableSearchPlaneDefinition {
   readonly plane: ReadableSearchPlane;

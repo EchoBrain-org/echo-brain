@@ -9,7 +9,7 @@ import {
   type OrganizationSecretStore,
   type VerifiedSlackChannel,
   type VerifiedSlackConnection,
-} from "../src/application/contracts.js";
+} from "../src/application/slack-integration-contracts.js";
 import { canonicalSha256 } from "../src/canonical/canonical-json.js";
 import { applyOrganizationControlBaselineV1 } from "../src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";

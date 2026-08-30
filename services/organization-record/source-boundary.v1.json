@@ -56,6 +56,11 @@
         "name": "Record retrieval-source snapshot",
         "path": "services/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.ts",
         "export": "RecordRetrievalSourceSnapshotPortV1"
+      },
+      {
+        "name": "Private Slack Block approval policy projector",
+        "path": "services/organization-record/src/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
+        "export": "createPrivateSlackBlockApprovalPolicyProjectorV1"
       }
     ],
     "retired_source_paths": [
@@ -143,6 +148,19 @@
       "allowed_external_packages": [
         "better-sqlite3"
       ],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "record-adapters-implement-provider-specific-projectors",
+      "from": "services/organization-record/src/adapters/**",
+      "allowed_imports": [
+        "services/organization-record/src/adapters/**",
+        "services/organization-record/src/application/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
       "allowed_node_builtins": []
     }
   ]

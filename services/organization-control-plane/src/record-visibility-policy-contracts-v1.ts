@@ -1,16 +1,20 @@
-/**
- * Provider-neutral record visibility policy commitments selected at human
- * approval time. Meeting processing depends on this surface, never on Slack.
- */
+/** Provider-neutral record visibility policy public facade. */
 export {
+  buildOrganizationMemberReadablePersonPolicyContractV2,
+  buildRestrictedReviewerPersonPolicyContractV2,
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_SHA256,
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  PERSON_CONTENT_POLICY_CONTRACT_KIND,
+  PERSON_CONTENT_POLICY_READER_AUTHENTICATION,
+  PERSON_CONTENT_POLICY_READABLE_ITEM_KINDS,
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256,
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type ApprovalContractSha256,
+  type OrganizationMemberReadablePersonPolicyContractV2,
   type PersonApprovalPolicyId,
-} from "./application/person-slack-reaction-approval-contracts-v2.js";
+  type RestrictedReviewerPersonPolicyContractV2,
+} from "./application/record-visibility-policy-contracts-v1.js";
