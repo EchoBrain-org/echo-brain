@@ -42,42 +42,42 @@ const SLACK_TIMEOUT_MS = 75_000;
 const ASK_TIMEOUT_MS = 135_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
-const CLEAN_PERSON_RECORDS_PATH_V1 = "/v1/person/records";
-const CLEAN_PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
-const CLEAN_PERSON_ASK_PATH_V1 = "/v1/person/ask";
+const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
+const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
+const PERSON_ANSWER_PATH_V1 = "/v1/person/ask";
 
-export interface CleanEmployeeInvitationV1 {
+export interface EmployeeInvitationV1 {
   readonly login_grant: string;
   readonly expires_at: string;
 }
 
-export interface CleanEmployeeRosterV1 {
+export interface EmployeeRosterV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-employee-roster-v1";
-  readonly employees: readonly CleanEmployeeRosterItemV1[];
+  readonly employees: readonly EmployeeRosterItemV1[];
 }
 
-export interface CleanEmployeeRosterItemV1 {
+export interface EmployeeRosterItemV1 {
   readonly email: string;
   readonly display_name: string;
   readonly membership_status: "active" | "revoked";
   readonly invitation_state: "pending" | "expired" | "redeemed" | "none";
 }
 
-export interface CleanPersonRecordListV1 {
+export interface PersonRecordListV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-record-list-v1";
-  readonly records: readonly CleanPersonRecordListItemV1[];
+  readonly records: readonly PersonRecordListItemV1[];
 }
 
-export interface CleanPersonRecordListItemV1 {
+export interface PersonRecordListItemV1 {
   readonly position: number;
   readonly approval_id: string;
   readonly record_sha256: `sha256:${string}`;
   readonly envelope: Readonly<Record<string, unknown>>;
 }
 
-export interface CleanPersonRecordSearchV1 {
+export interface PersonRecordSearchV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-record-search-v1";
   readonly generation_id: `sha256:${string}`;
@@ -85,10 +85,10 @@ export interface CleanPersonRecordSearchV1 {
     readonly position: number;
     readonly record_sha256: `sha256:${string}` | null;
   };
-  readonly items: readonly CleanPersonRecordSearchItemV1[];
+  readonly items: readonly PersonRecordSearchItemV1[];
 }
 
-export interface CleanPersonRecordSearchItemV1 {
+export interface PersonRecordSearchItemV1 {
   readonly atom_id: `sha256:${string}`;
   readonly record_sha256: `sha256:${string}`;
   readonly kind: "decision" | "action" | "rationale";
@@ -98,7 +98,7 @@ export interface CleanPersonRecordSearchItemV1 {
     | "restricted-reviewer-person-v2";
 }
 
-export interface CleanPersonAskV1 {
+export interface PersonAnswerV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-answer-v1";
   readonly generation_id: `sha256:${string}`;
@@ -107,10 +107,10 @@ export interface CleanPersonAskV1 {
     readonly record_sha256: `sha256:${string}` | null;
   };
   readonly answer: string;
-  readonly citations: readonly CleanPersonAskCitationV1[];
+  readonly citations: readonly PersonAnswerCitationV1[];
 }
 
-export interface CleanPersonAskCitationV1 {
+export interface PersonAnswerCitationV1 {
   readonly atom_id: `sha256:${string}`;
   readonly record_sha256: `sha256:${string}`;
   readonly policy_id:
@@ -255,9 +255,9 @@ function exactKeys(
   }
 }
 
-function validateCleanPersonRecordList(
+function validatePersonRecordList(
   value: unknown,
-): CleanPersonRecordListV1 {
+): PersonRecordListV1 {
   const response = asPlainRecord(value, "record list response is invalid");
   exactKeys(
     response,
@@ -312,7 +312,7 @@ function validateCleanPersonRecordList(
   });
 }
 
-function validateCleanPersonRecordSearchRequest(value: unknown): {
+function validatePersonRecordSearchRequest(value: unknown): {
   readonly query: string;
   readonly limit?: number;
 } {
@@ -355,7 +355,7 @@ function validateCleanPersonRecordSearchRequest(value: unknown): {
   });
 }
 
-function validateCleanPersonAskRequest(value: unknown): {
+function validatePersonAnswerRequest(value: unknown): {
   readonly question: string;
 } {
   const request = asPlainRecord(value, "ask request is invalid");
@@ -384,9 +384,9 @@ function validateCleanPersonAskRequest(value: unknown): {
   return Object.freeze({ question: request.question });
 }
 
-function validateCleanPersonRecordSearch(
+function validatePersonRecordSearch(
   value: unknown,
-): CleanPersonRecordSearchV1 {
+): PersonRecordSearchV1 {
   const response = asPlainRecord(value, "record search response is invalid");
   exactKeys(
     response,
@@ -458,7 +458,7 @@ function validateCleanPersonRecordSearch(
   });
 }
 
-function validateCleanPersonAsk(value: unknown): CleanPersonAskV1 {
+function validatePersonAnswer(value: unknown): PersonAnswerV1 {
   const response = asPlainRecord(value, "ask response is invalid");
   exactKeys(
     response,
@@ -522,7 +522,7 @@ function validateCleanPersonAsk(value: unknown): CleanPersonAskV1 {
       atom_id: citation.atom_id as `sha256:${string}`,
       record_sha256: citation.record_sha256 as `sha256:${string}`,
       policy_id: citation.policy_id,
-    }) as CleanPersonAskCitationV1;
+    }) as PersonAnswerCitationV1;
   });
   return Object.freeze({
     schema_version: 1,
@@ -537,7 +537,7 @@ function validateCleanPersonAsk(value: unknown): CleanPersonAskV1 {
   });
 }
 
-function validateCleanEmployeeInvitation(value: unknown): CleanEmployeeInvitationV1 {
+function validateEmployeeInvitation(value: unknown): EmployeeInvitationV1 {
   const response = asPlainRecord(value, "employee invitation response is invalid");
   exactKeys(response, ["login_grant", "expires_at"], "employee invitation response is invalid");
   if (
@@ -556,7 +556,7 @@ function validateCleanEmployeeInvitation(value: unknown): CleanEmployeeInvitatio
   });
 }
 
-function validateCleanEmployeeRoster(value: unknown): CleanEmployeeRosterV1 {
+function validateEmployeeRoster(value: unknown): EmployeeRosterV1 {
   const response = asPlainRecord(value, "employee roster response is invalid");
   exactKeys(
     response,
@@ -606,7 +606,7 @@ function validateCleanEmployeeRoster(value: unknown): CleanEmployeeRosterV1 {
       display_name: employee.display_name,
       membership_status: employee.membership_status,
       invitation_state: employee.invitation_state,
-    }) as CleanEmployeeRosterItemV1;
+    }) as EmployeeRosterItemV1;
   });
   return Object.freeze({
     schema_version: 1,
@@ -922,7 +922,7 @@ export class PersonAuthorityClient {
   records(
     accessToken: string,
     limit?: number,
-  ): Promise<CleanPersonRecordListV1> {
+  ): Promise<PersonRecordListV1> {
     if (
       limit !== undefined &&
       (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
@@ -932,10 +932,10 @@ export class PersonAuthorityClient {
     return this.getJson({
       path:
         limit === undefined
-          ? CLEAN_PERSON_RECORDS_PATH_V1
-          : `${CLEAN_PERSON_RECORDS_PATH_V1}?limit=${limit}`,
+          ? PERSON_RECORDS_PATH_V1
+          : `${PERSON_RECORDS_PATH_V1}?limit=${limit}`,
       access_token: accessToken,
-      validate_response: validateCleanPersonRecordList,
+      validate_response: validatePersonRecordList,
       maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }
@@ -944,26 +944,26 @@ export class PersonAuthorityClient {
     accessToken: string,
     query: string,
     limit?: number,
-  ): Promise<CleanPersonRecordSearchV1> {
+  ): Promise<PersonRecordSearchV1> {
     return this.json({
-      path: CLEAN_PERSON_RECORDS_PATH_V1,
+      path: PERSON_RECORDS_PATH_V1,
       body: {
         query,
         ...(limit === undefined ? {} : { limit }),
       },
-      validate_request: validateCleanPersonRecordSearchRequest,
-      validate_response: validateCleanPersonRecordSearch,
+      validate_request: validatePersonRecordSearchRequest,
+      validate_response: validatePersonRecordSearch,
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
     });
   }
 
-  ask(accessToken: string, question: string): Promise<CleanPersonAskV1> {
+  ask(accessToken: string, question: string): Promise<PersonAnswerV1> {
     return this.json({
-      path: CLEAN_PERSON_ASK_PATH_V1,
+      path: PERSON_ANSWER_PATH_V1,
       body: { question },
-      validate_request: validateCleanPersonAskRequest,
-      validate_response: validateCleanPersonAsk,
+      validate_request: validatePersonAnswerRequest,
+      validate_response: validatePersonAnswer,
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       timeout_ms: ASK_TIMEOUT_MS,
@@ -1024,11 +1024,11 @@ export class PersonAuthorityClient {
     });
   }
 
-  employees(accessToken: string): Promise<CleanEmployeeRosterV1> {
+  employees(accessToken: string): Promise<EmployeeRosterV1> {
     return this.getJson({
-      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      path: PERSON_EMPLOYEES_PATH_V1,
       access_token: accessToken,
-      validate_response: validateCleanEmployeeRoster,
+      validate_response: validateEmployeeRoster,
       maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }
@@ -1036,12 +1036,12 @@ export class PersonAuthorityClient {
   inviteEmployee(
     input: { name: string; email: string },
     accessToken: string,
-  ): Promise<CleanEmployeeInvitationV1> {
+  ): Promise<EmployeeInvitationV1> {
     return this.json({
-      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      path: PERSON_EMPLOYEES_PATH_V1,
       body: input,
       validate_request: (value) => employeeInviteRequest(value, true),
-      validate_response: validateCleanEmployeeInvitation,
+      validate_response: validateEmployeeInvitation,
       access_token: accessToken,
     });
   }
@@ -1049,12 +1049,12 @@ export class PersonAuthorityClient {
   reissueEmployee(
     input: { email: string },
     accessToken: string,
-  ): Promise<CleanEmployeeInvitationV1> {
+  ): Promise<EmployeeInvitationV1> {
     return this.json({
-      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      path: PERSON_EMPLOYEES_PATH_V1,
       body: input,
       validate_request: (value) => employeeInviteRequest(value, false),
-      validate_response: validateCleanEmployeeInvitation,
+      validate_response: validateEmployeeInvitation,
       access_token: accessToken,
       method: "PUT",
     });
@@ -1062,7 +1062,7 @@ export class PersonAuthorityClient {
 
   revokeEmployee(input: { email: string }, accessToken: string): Promise<void> {
     return this.noContent({
-      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      path: PERSON_EMPLOYEES_PATH_V1,
       body: input,
       validate_request: (value) => employeeInviteRequest(value, false),
       access_token: accessToken,

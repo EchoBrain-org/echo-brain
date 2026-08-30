@@ -29,7 +29,7 @@ import type {
   PersonSessionWriteTransaction,
 } from "../../../application/ports/person-session-repository.js";
 import type {
-  CleanEmployeeRosterEntry,
+  EmployeeRosterEntry,
   PersonMembershipWriteRepository,
   PersonMembershipWriteTransaction,
 } from "../../../application/ports/person-membership-write.js";
@@ -279,7 +279,7 @@ class Transaction implements PersonSessionWriteTransaction {
       .get(membershipId) !== undefined;
   }
 
-  listEmployeeRoster(observedAt: string): readonly CleanEmployeeRosterEntry[] {
+  listEmployeeRoster(observedAt: string): readonly EmployeeRosterEntry[] {
     const rows = this.database
       .prepare(
         `SELECT membership.employee_email AS email,

@@ -80,13 +80,13 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly expected_issuer: string;
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: PersonExternalIdentityLinkHttpApplicationV1;
-  /** Optional only for focused identity-runtime tests. Clean live wires it. */
+  /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
   readonly person_record_read?: PersonRecordReadHttpApplicationV1;
-  /** Optional only for focused identity-runtime tests. Clean live wires it. */
+  /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
   readonly person_record_search?: PersonRecordSearchHttpApplicationV1;
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees?: PersonEmployeeHttpApplication;
-  /** Optional until the active clean runtime has a configured answer model. */
+  /** Optional until the active Organization Authority runtime has a configured answer model. */
   readonly person_answer?: PersonAnswerHttpApplicationV1;
   /** Optional until an active private-approval surface is fully composed. */
   readonly private_approval_interaction_ingress?:

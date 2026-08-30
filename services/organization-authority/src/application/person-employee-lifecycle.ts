@@ -2,25 +2,25 @@ import { AuthorityOperationError } from "../domain/errors.js";
 import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import type {
-  CleanEmployeeRosterEntry,
+  EmployeeRosterEntry,
 } from "./ports/person-membership-write.js";
 import type {
   IssuedPersonLoginGrant,
   PersonIdentitySessionApplication,
 } from "./person-identity-sessions.js";
 
-export interface IssuedCleanEmployeeInvitation {
+export interface IssuedEmployeeInvitation {
   readonly login_grant: string;
   readonly expires_at: string;
 }
 
-export interface CleanEmployeeRosterV1 {
+export interface EmployeeRosterV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-employee-roster-v1";
-  readonly employees: readonly CleanEmployeeRosterEntry[];
+  readonly employees: readonly EmployeeRosterEntry[];
 }
 
-export interface CleanEmployeeIdentityFactory {
+export interface EmployeeIdentityFactory {
   next(prefix: "prn" | "mem"): string;
 }
 
@@ -52,7 +52,7 @@ function ownerOnly(membershipType: "owner" | "employee"): void {
   }
 }
 
-function invitation(grant: IssuedPersonLoginGrant): IssuedCleanEmployeeInvitation {
+function invitation(grant: IssuedPersonLoginGrant): IssuedEmployeeInvitation {
   return Object.freeze({
     login_grant: grant.login_grant,
     expires_at: grant.expires_at,
@@ -63,14 +63,14 @@ function invitation(grant: IssuedPersonLoginGrant): IssuedCleanEmployeeInvitatio
 export class PersonEmployeeLifecycleApplication {
   constructor(
     private readonly sessions: PersonIdentitySessionApplication,
-    private readonly identities: CleanEmployeeIdentityFactory,
+    private readonly identities: EmployeeIdentityFactory,
   ) {}
 
   invite(input: {
     access_token: string;
     name: string;
     email: string;
-  }): IssuedCleanEmployeeInvitation {
+  }): IssuedEmployeeInvitation {
     validateEmployeeName(input.name);
     validateEmployeeEmail(input.email);
     const emailSha256 = personLoginGrantExpectedEmailSha256(input.email);
@@ -102,7 +102,7 @@ export class PersonEmployeeLifecycleApplication {
     });
   }
 
-  list(input: { access_token: string }): CleanEmployeeRosterV1 {
+  list(input: { access_token: string }): EmployeeRosterV1 {
     return this.sessions.withAuthenticatedMembershipWrite({
       access_token: input.access_token,
       commit: (authorization, transaction, observedAt) => {
@@ -119,7 +119,7 @@ export class PersonEmployeeLifecycleApplication {
   reissue(input: {
     access_token: string;
     email: string;
-  }): IssuedCleanEmployeeInvitation {
+  }): IssuedEmployeeInvitation {
     validateEmployeeEmail(input.email);
     const emailSha256 = personLoginGrantExpectedEmailSha256(input.email);
     return this.sessions.withAuthenticatedMembershipWrite({

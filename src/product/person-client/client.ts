@@ -8,10 +8,10 @@ import {
 import {
   PersonAuthorityClient,
   PersonAuthorityClientError,
-  type CleanEmployeeRosterV1,
-  type CleanPersonAskV1,
-  type CleanPersonRecordListV1,
-  type CleanPersonRecordSearchV1,
+  type EmployeeRosterV1,
+  type PersonAnswerV1,
+  type PersonRecordListV1,
+  type PersonRecordSearchV1,
 } from "./authority-client.js";
 import {
   createPersonMemberExclusionChangeRequest,
@@ -231,7 +231,7 @@ export class PersonClient {
   async records(
     limit?: number,
     query?: string,
-  ): Promise<CleanPersonRecordListV1 | CleanPersonRecordSearchV1> {
+  ): Promise<PersonRecordListV1 | PersonRecordSearchV1> {
     const stored = await this.accessSession();
     if (query !== undefined) {
       return await this.authority(stored.authority_origin).searchRecords(
@@ -246,7 +246,7 @@ export class PersonClient {
     );
   }
 
-  async ask(question: string): Promise<CleanPersonAskV1> {
+  async ask(question: string): Promise<PersonAnswerV1> {
     const stored = await this.accessSession();
     return await this.authority(stored.authority_origin).ask(
       stored.session.access_token,
@@ -317,7 +317,7 @@ export class PersonClient {
     );
   }
 
-  async employees(): Promise<CleanEmployeeRosterV1> {
+  async employees(): Promise<EmployeeRosterV1> {
     const stored = await this.accessSession();
     return await this.authority(stored.authority_origin).employees(
       stored.session.access_token,

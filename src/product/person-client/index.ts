@@ -2,12 +2,12 @@ export {
   PersonAuthorityClient,
   PersonAuthorityClientError,
   type PersonAuthorityClientOptions,
-  type CleanPersonAskCitationV1,
-  type CleanPersonAskV1,
-  type CleanPersonRecordListItemV1,
-  type CleanPersonRecordListV1,
-  type CleanPersonRecordSearchItemV1,
-  type CleanPersonRecordSearchV1,
+  type PersonAnswerCitationV1,
+  type PersonAnswerV1,
+  type PersonRecordListItemV1,
+  type PersonRecordListV1,
+  type PersonRecordSearchItemV1,
+  type PersonRecordSearchV1,
 } from "./authority-client.js";
 export {
   PersonClient,
