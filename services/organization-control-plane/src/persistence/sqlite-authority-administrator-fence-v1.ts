@@ -13,13 +13,13 @@ const AUTHORITY_SCHEMA_VERSION_V1 = 1;
 const AUTHORITY_BASELINE_SHA256_V1 =
   "sha256:007a1498dd1db87d03ba2876086c5ec6b6c655f77e5c25691abafd18451465d6";
 
-export interface CleanStoppedStateAuthorityCoordinatesV1 {
+export interface OrganizationAuthorityCoordinatesV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
 }
 
-export interface CleanStoppedStateAuthorityAdministratorFenceV1Input extends CleanStoppedStateAuthorityCoordinatesV1 {
+export interface SqliteAuthorityAdministratorFenceV1Input extends OrganizationAuthorityCoordinatesV1 {
   readonly authority_database_path: string;
 }
 
@@ -30,7 +30,7 @@ type AdministratorFence = Omit<
 
 function verifyAuthorityLineageManifest(
   database: Database.Database,
-  expected: CleanStoppedStateAuthorityCoordinatesV1,
+  expected: OrganizationAuthorityCoordinatesV1,
 ): void {
   const row = database
     .prepare(
@@ -100,7 +100,7 @@ function assertPrivateAuthorityDatabase(path: string): void {
 
 function readExactActiveOwner(
   database: Database.Database,
-  expected: CleanStoppedStateAuthorityCoordinatesV1,
+  expected: OrganizationAuthorityCoordinatesV1,
 ): AdministratorFence {
   if (
     database.pragma("application_id", { simple: true }) !==
@@ -186,9 +186,9 @@ function readExactActiveOwner(
  * a local stopped-state fence, not an administrator bearer credential or a
  * cross-database transaction.
  */
-export class CleanStoppedStateAuthorityAdministratorFenceV1 implements StableAuthorityAdministratorFenceV2 {
+export class SqliteAuthorityAdministratorFenceV1 implements StableAuthorityAdministratorFenceV2 {
   constructor(
-    private readonly input: CleanStoppedStateAuthorityAdministratorFenceV1Input,
+    private readonly input: SqliteAuthorityAdministratorFenceV1Input,
   ) {}
 
   async withStableAdministratorFence<T>(

@@ -9,40 +9,40 @@ import {
 import { activatePersonSlackReactionApprovalV2 } from "../application/person-slack-reaction-approval-activation-v2.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import { openOrganizationControlDatabase } from "../persistence/open-organization-control-database.js";
-import { CleanStoppedStateAuthorityAdministratorFenceV1 } from "../persistence/clean-stopped-state-authority-administrator-fence-v1.js";
+import { SqliteAuthorityAdministratorFenceV1 } from "../persistence/sqlite-authority-administrator-fence-v1.js";
 import {
   selectCurrentOwnerSlackReactionApprovalTargetV1,
   type SelectedOwnerSlackReactionApprovalTargetV1,
-} from "../persistence/clean-person-slack-reaction-approval-target-v1.js";
+} from "../persistence/sqlite-slack-reaction-approval-target-v1.js";
 import { SqlitePersonSlackReactionApprovalActivationCoordinatorV2 } from "../persistence/sqlite-person-slack-reaction-approval-activation-v2.js";
 import {
-  verifyCleanControlPlaneStateV1,
-  type VerifiedCleanControlPlaneStateV1,
-} from "../persistence/verified-clean-control-plane-state-v1.js";
+  verifyOrganizationControlStateV1,
+  type VerifiedOrganizationControlStateV1,
+} from "../persistence/verified-organization-control-state-v1.js";
 
 const APPROVAL_ADAPTER_INSTANCE_ID = "clean_slack_reactions_v1";
 const APPROVAL_ADAPTER_VERSION = "1.0.0";
 const APPROVE_REACTION = "white_check_mark";
 const REJECT_REACTION = "x";
 
-export interface CleanPersonSlackReactionApprovalActivateCliIo {
+export interface LegacySlackReactionApprovalActivationCliIo {
   readonly stdout: (value: string) => void;
 }
 
-export interface CleanPersonSlackReactionApprovalActivateCliDependencies {
+export interface LegacySlackReactionApprovalActivationCliDependencies {
   readonly verify_state: (
     stateDirectory: string,
-  ) => VerifiedCleanControlPlaneStateV1;
+  ) => VerifiedOrganizationControlStateV1;
   readonly now: () => string;
   readonly next_id: (kind: "approval_binding" | "action_capability") => string;
 }
 
-const PROCESS_IO: CleanPersonSlackReactionApprovalActivateCliIo = {
+const PROCESS_IO: LegacySlackReactionApprovalActivationCliIo = {
   stdout: (value) => process.stdout.write(value),
 };
 
-const DEFAULT_DEPENDENCIES: CleanPersonSlackReactionApprovalActivateCliDependencies = {
-  verify_state: verifyCleanControlPlaneStateV1,
+const DEFAULT_DEPENDENCIES: LegacySlackReactionApprovalActivationCliDependencies = {
+  verify_state: verifyOrganizationControlStateV1,
   now: () => new Date().toISOString(),
   next_id: (kind) =>
     `${kind === "approval_binding" ? "bnd" : "cap"}_${randomUUID()}`,
@@ -94,7 +94,7 @@ function parseFlags(arguments_: readonly string[]): ParsedFlags {
 }
 
 function deterministicCommandId(input: {
-  readonly state: VerifiedCleanControlPlaneStateV1;
+  readonly state: VerifiedOrganizationControlStateV1;
   readonly target: SelectedOwnerSlackReactionApprovalTargetV1;
   readonly approval_channel_id: string;
 }): string {
@@ -131,17 +131,17 @@ function publicResult(
 }
 
 /**
- * Offline founder activation of the one clean Slack reaction approval surface.
+ * Offline activation of the legacy Slack reaction approval surface.
  * It makes no provider call and accepts no administrator bearer or legacy IDs.
  */
-export async function runCleanPersonSlackReactionApprovalActivateCli(
+export async function runLegacySlackReactionApprovalActivationCli(
   arguments_: readonly string[],
-  io: CleanPersonSlackReactionApprovalActivateCliIo = PROCESS_IO,
-  dependencies: CleanPersonSlackReactionApprovalActivateCliDependencies = DEFAULT_DEPENDENCIES,
+  io: LegacySlackReactionApprovalActivationCliIo = PROCESS_IO,
+  dependencies: LegacySlackReactionApprovalActivationCliDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<number> {
   const flags = parseFlags(arguments_);
   const state = dependencies.verify_state(flags.state_directory);
-  const authorityFence = new CleanStoppedStateAuthorityAdministratorFenceV1({
+  const authorityFence = new SqliteAuthorityAdministratorFenceV1({
     authority_database_path: join(state.state_directory, "authority.sqlite"),
     authority_id: state.authority_id,
     organization_id: state.organization_id,

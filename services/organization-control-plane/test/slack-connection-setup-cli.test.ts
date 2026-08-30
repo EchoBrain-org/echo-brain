@@ -17,7 +17,7 @@ import {
   canonicalJson,
   canonicalSha256,
 } from "../src/canonical/canonical-json.js";
-import { runCleanSlackConnectCli } from "../src/composition/clean-slack-connect-cli.js";
+import { runSlackConnectionSetupCli } from "../src/composition/slack-connection-setup-cli.js";
 import {
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
@@ -27,8 +27,8 @@ import {
   organizationControlBaselineSha256V2,
 } from "../src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
-import type { CleanSlackConnectionVerifierV1 } from "../src/persistence/sqlite-clean-slack-connection-v1.js";
-import { verifyCleanControlPlaneStateV1 } from "../src/persistence/verified-clean-control-plane-state-v1.js";
+import type { SlackConnectionVerifierV1 } from "../src/persistence/sqlite-slack-connection-coordinator-v1.js";
+import { verifyOrganizationControlStateV1 } from "../src/persistence/verified-organization-control-state-v1.js";
 
 const directories: string[] = [];
 const COORDINATES = Object.freeze({
@@ -167,7 +167,7 @@ function setupCleanState(baseline: "v1" | "v2" = "v2"): string {
   return directory;
 }
 
-function verifier(): CleanSlackConnectionVerifierV1 & {
+function verifier(): SlackConnectionVerifierV1 & {
   readonly verifyConnection: ReturnType<typeof vi.fn>;
   readonly verifyChannel: ReturnType<typeof vi.fn>;
 } {
@@ -202,7 +202,7 @@ afterEach(() => {
 
 describe("clean Slack connect founder command", () => {
   it("refuses a V1 control-plane lineage before a stopped-state command can open it", () => {
-    expect(() => verifyCleanControlPlaneStateV1(setupCleanState("v1"))).toThrow(
+    expect(() => verifyOrganizationControlStateV1(setupCleanState("v1"))).toThrow(
       "wrong baseline identity",
     );
   });
@@ -212,7 +212,7 @@ describe("clean Slack connect founder command", () => {
     const slack = verifier();
     const output: string[] = [];
     const token = "xoxb-cli-test-token";
-    const result = await runCleanSlackConnectCli(
+    const result = await runSlackConnectionSetupCli(
       [
         "--state-dir",
         directory,
@@ -226,7 +226,7 @@ describe("clean Slack connect founder command", () => {
         read_stdin: async () => `${token}\n`,
       },
       {
-        verify_state: verifyCleanControlPlaneStateV1,
+        verify_state: verifyOrganizationControlStateV1,
         create_verifier: () => slack,
         now: () => "2026-08-22T00:00:00.000Z",
       },
@@ -255,7 +255,7 @@ describe("clean Slack connect founder command", () => {
     const directory = setupCleanState();
     const createVerifier = vi.fn(() => verifier());
     await expect(
-      runCleanSlackConnectCli(
+      runSlackConnectionSetupCli(
         ["--state-dir", directory, "--approval-channel-id", "C_APPROVAL"],
         { stdout: vi.fn(), read_stdin: async () => "xoxb-one\nxoxb-two\n" },
         {

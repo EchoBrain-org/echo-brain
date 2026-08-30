@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import {
   FileOrganizationSecretStore,
-  SqliteCleanSlackBotTokenReaderV1,
+  SqliteSlackBotTokenReaderV1,
   SqliteSlackDmApprovalPersistenceV1,
 } from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import { readPrivateAuthoritySlackSigningSecret } from "../adapters/security/private-file-credentials.js";
@@ -132,7 +132,7 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
       const poster =
         config.poster ??
         new PrivateSlackApprovalCardPosterV1(
-          new SqliteCleanSlackBotTokenReaderV1(
+          new SqliteSlackBotTokenReaderV1(
             context.control_plane_database,
             new FileOrganizationSecretStore(
               join(config.state_directory, "secrets"),

@@ -6,7 +6,7 @@ import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organizati
 import type { SlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOrganizationControlBaselineV1 } from "../../organization-control-plane/src/persistence/baseline.js";
-import { connectCleanSlackV1 } from "../../organization-control-plane/src/persistence/sqlite-clean-slack-connection-v1.js";
+import { connectSlackConnectionV1 } from "../../organization-control-plane/src/persistence/sqlite-slack-connection-coordinator-v1.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { ReadableSearchAuthorizationFence } from "../src/application/readable-search-authorization-fence.js";
 import { createSqliteSlackPersonIdentityLinkWorkflowV1 } from "../src/composition/sqlite-slack-person-identity-link-repository-v1.js";
@@ -115,7 +115,7 @@ async function setup(
       verification_evidence_sha256: canonicalSha256("observed"),
     })),
   };
-  await connectCleanSlackV1({
+  await connectSlackConnectionV1({
     authority_id: AUTHORITY_ID,
     organization_id: ORGANIZATION_ID,
     state_lineage_id: LINEAGE_ID,

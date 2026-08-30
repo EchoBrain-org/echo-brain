@@ -14,11 +14,11 @@ import { canonicalSha256 } from "../src/canonical/canonical-json.js";
 import { applyOrganizationControlBaselineV1 } from "../src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 import {
-  CleanSlackConnectionConflictError,
-  connectCleanSlackV1,
-  runCleanSlackConnectCommandV1,
-  type CleanSlackConnectionVerifierV1,
-} from "../src/persistence/sqlite-clean-slack-connection-v1.js";
+  SlackConnectionConflictError,
+  connectSlackConnectionV1,
+  runSlackConnectionSetupCommandV1,
+  type SlackConnectionVerifierV1,
+} from "../src/persistence/sqlite-slack-connection-coordinator-v1.js";
 import { FileOrganizationSecretStore } from "../src/security/file-secret-store.js";
 
 const directories: string[] = [];
@@ -79,7 +79,7 @@ function verifier(
     readonly connection_error: Error;
     readonly channel_error: Error;
   }> = {},
-): CleanSlackConnectionVerifierV1 & {
+): SlackConnectionVerifierV1 & {
   readonly verifyConnection: ReturnType<typeof vi.fn>;
   readonly verifyChannel: ReturnType<typeof vi.fn>;
 } {
@@ -120,7 +120,7 @@ function verifier(
 function request(
   database: Database.Database,
   secrets: Pick<OrganizationSecretStore, "create" | "remove">,
-  slack: CleanSlackConnectionVerifierV1,
+  slack: SlackConnectionVerifierV1,
   overrides: Partial<typeof COORDINATES> = {},
 ) {
   return {
@@ -147,7 +147,7 @@ describe("clean stopped-state Slack connection v1", () => {
     );
     const slack = verifier();
 
-    const result = await connectCleanSlackV1(
+    const result = await connectSlackConnectionV1(
       request(state.database, secrets, slack),
     );
 
@@ -194,10 +194,10 @@ describe("clean stopped-state Slack connection v1", () => {
       join(state.directory, "secrets"),
     );
     const slack = verifier();
-    const first = await connectCleanSlackV1(
+    const first = await connectSlackConnectionV1(
       request(state.database, secrets, slack),
     );
-    const retried = await connectCleanSlackV1(
+    const retried = await connectSlackConnectionV1(
       request(state.database, secrets, slack),
     );
 
@@ -213,7 +213,7 @@ describe("clean stopped-state Slack connection v1", () => {
       join(state.directory, "secrets"),
     );
     const readSlackBotToken = vi.fn(() => "xoxb-test-token-only");
-    const result = await runCleanSlackConnectCommandV1({
+    const result = await runSlackConnectionSetupCommandV1({
       ...COORDINATES,
       database: state.database,
       secrets,
@@ -232,15 +232,15 @@ describe("clean stopped-state Slack connection v1", () => {
       join(state.directory, "secrets"),
     );
     const slack = verifier();
-    await connectCleanSlackV1(request(state.database, secrets, slack));
+    await connectSlackConnectionV1(request(state.database, secrets, slack));
 
     await expect(
-      connectCleanSlackV1(
+      connectSlackConnectionV1(
         request(state.database, secrets, slack, {
           approval_channel_id: "C_DIFFERENT",
         }),
       ),
-    ).rejects.toBeInstanceOf(CleanSlackConnectionConflictError);
+    ).rejects.toBeInstanceOf(SlackConnectionConflictError);
     expect(secrets.listReferences()).toHaveLength(1);
     expect(slack.verifyConnection).toHaveBeenCalledTimes(1);
   });
@@ -262,13 +262,13 @@ describe("clean stopped-state Slack connection v1", () => {
       },
     });
     await expect(
-      connectCleanSlackV1(request(state.database, secrets, missingScope)),
+      connectSlackConnectionV1(request(state.database, secrets, missingScope)),
     ).rejects.toThrow("missing required scope");
     const unavailable = verifier({
       connection_error: new Error("provider unavailable"),
     });
     await expect(
-      connectCleanSlackV1(request(state.database, secrets, unavailable)),
+      connectSlackConnectionV1(request(state.database, secrets, unavailable)),
     ).rejects.toThrow("provider unavailable");
     expect(secrets.listReferences()).toEqual([]);
   });
@@ -297,7 +297,7 @@ describe("clean stopped-state Slack connection v1", () => {
       });
 
       await expect(
-        connectCleanSlackV1(
+        connectSlackConnectionV1(
           request(state.database, secrets, missingPrivateDmScope),
         ),
       ).rejects.toThrow(`missing required scope ${missingScope}`);
@@ -335,7 +335,7 @@ describe("clean stopped-state Slack connection v1", () => {
       );
 
     await expect(
-      connectCleanSlackV1(request(state.database, secrets, verifier())),
+      connectSlackConnectionV1(request(state.database, secrets, verifier())),
     ).rejects.toThrow();
     expect(created).toHaveLength(1);
     expect(removed).toEqual(created);

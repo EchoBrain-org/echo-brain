@@ -20,7 +20,7 @@ import {
   canonicalJson,
   canonicalSha256,
 } from "../src/canonical/canonical-json.js";
-import { runCleanPersonSlackReactionApprovalActivateCli } from "../src/composition/clean-person-slack-reaction-approval-activate-cli.js";
+import { runLegacySlackReactionApprovalActivationCli } from "../src/composition/legacy-slack-reaction-approval-activation-cli.js";
 import {
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
   applyOrganizationControlBaselineV2,
@@ -365,8 +365,8 @@ describe("clean stopped-state Person Slack reaction approval activation command"
         return `${kind === "approval_binding" ? "bnd" : "cap"}_${identifiers}`;
       },
       verify_state: (
-        await import("../src/persistence/verified-clean-control-plane-state-v1.js")
-      ).verifyCleanControlPlaneStateV1,
+        await import("../src/persistence/verified-organization-control-state-v1.js")
+      ).verifyOrganizationControlStateV1,
     };
     const arguments_ = [
       "--state-dir",
@@ -377,7 +377,7 @@ describe("clean stopped-state Person Slack reaction approval activation command"
       APPROVAL_CHANNEL_ID,
     ];
     await expect(
-      runCleanPersonSlackReactionApprovalActivateCli(
+      runLegacySlackReactionApprovalActivationCli(
         arguments_,
         { stdout: (line) => output.push(line) },
         dependencies,
@@ -391,7 +391,7 @@ describe("clean stopped-state Person Slack reaction approval activation command"
       provider_connection_id: CONNECTION_ID,
     });
     await expect(
-      runCleanPersonSlackReactionApprovalActivateCli(
+      runLegacySlackReactionApprovalActivationCli(
         arguments_,
         { stdout: (line) => output.push(line) },
         dependencies,
@@ -404,7 +404,7 @@ describe("clean stopped-state Person Slack reaction approval activation command"
   it("requires the current founder Slack identity link", async () => {
     const directory = setupState(false);
     await expect(
-      runCleanPersonSlackReactionApprovalActivateCli([
+      runLegacySlackReactionApprovalActivationCli([
         "--state-dir",
         directory,
         "--connection-id",

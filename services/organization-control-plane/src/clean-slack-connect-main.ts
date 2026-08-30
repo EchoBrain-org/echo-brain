@@ -1,6 +1,6 @@
-import { runCleanSlackConnectCli } from "./composition/clean-slack-connect-cli.js";
+import { runSlackConnectionSetupCli } from "./composition/slack-connection-setup-cli.js";
 
-void runCleanSlackConnectCli(process.argv.slice(2)).catch((error: unknown) => {
+void runSlackConnectionSetupCli(process.argv.slice(2)).catch((error: unknown) => {
   process.stderr.write(
     `${error instanceof Error ? error.message : "clean Slack connect failed"}\n`,
   );

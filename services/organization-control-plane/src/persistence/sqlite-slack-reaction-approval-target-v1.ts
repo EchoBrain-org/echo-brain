@@ -3,7 +3,7 @@ import {
   validateOrganizationToolConnectionContractV2,
 } from "../application/person-slack-reaction-approval-contracts-v2.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
-import type { VerifiedCleanControlPlaneStateV1 } from "./verified-clean-control-plane-state-v1.js";
+import type { VerifiedOrganizationControlStateV1 } from "./verified-organization-control-state-v1.js";
 import type Database from "better-sqlite3";
 
 const APPROVE_REACTION = "white_check_mark";
@@ -29,7 +29,7 @@ function parseCanonical(json: string): unknown {
   return value;
 }
 
-function cleanConnectionConfigurationSha256(approvalChannelId: string) {
+function slackConnectionConfigurationSha256(approvalChannelId: string) {
   return canonicalSha256({
     approval_adapter_id: "slack-reactions",
     approval_channel_id: approvalChannelId,
@@ -42,7 +42,7 @@ function cleanConnectionConfigurationSha256(approvalChannelId: string) {
 /** Reproves the exact current owner link against the one active clean tool. */
 export function selectCurrentOwnerSlackReactionApprovalTargetV1(
   database: Database.Database,
-  state: VerifiedCleanControlPlaneStateV1,
+  state: VerifiedOrganizationControlStateV1,
   flags: SlackReactionApprovalTargetSelectionV1,
   owner: { readonly principal_id: string; readonly membership_id: string },
 ): SelectedOwnerSlackReactionApprovalTargetV1 {
@@ -74,7 +74,7 @@ export function selectCurrentOwnerSlackReactionApprovalTargetV1(
     connection.connection_id !== flags.connection_id ||
     connection.tool_kind !== "slack" ||
     connection.public_connection_configuration_sha256 !==
-      cleanConnectionConfigurationSha256(flags.approval_channel_id)
+      slackConnectionConfigurationSha256(flags.approval_channel_id)
   ) {
     throw new Error(
       "clean approval activation connection is not the selected clean Slack surface",

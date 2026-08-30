@@ -5,17 +5,17 @@ import {
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import type Database from "better-sqlite3";
 
-export interface CleanSlackSecretReferenceV1 {
+export interface SlackSecretReferenceV1 {
   readonly secret_backend_id: string;
   readonly secret_handle_id: string;
 }
 
-export interface CleanSlackSecretReaderV1 {
-  listReferences(): readonly CleanSlackSecretReferenceV1[];
-  read(reference: CleanSlackSecretReferenceV1): string;
+export interface SlackSecretReaderV1 {
+  listReferences(): readonly SlackSecretReferenceV1[];
+  read(reference: SlackSecretReferenceV1): string;
 }
 
-export interface CleanSlackBotTokenReaderV1 {
+export interface SlackBotTokenReaderV1 {
   readBotToken(input: {
     readonly connection_id: string;
     readonly connection_state_sha256: ApprovalContractSha256;
@@ -35,10 +35,10 @@ function parseCanonical(json: string): unknown {
  * the active clean Slack state. No secret reference or token is persisted in
  * the control database, returned by this seam, or placed in the observer API.
  */
-export class SqliteCleanSlackBotTokenReaderV1 implements CleanSlackBotTokenReaderV1 {
+export class SqliteSlackBotTokenReaderV1 implements SlackBotTokenReaderV1 {
   constructor(
     private readonly database: Database.Database,
-    private readonly secrets: CleanSlackSecretReaderV1,
+    private readonly secrets: SlackSecretReaderV1,
   ) {}
 
   readBotToken(input: {

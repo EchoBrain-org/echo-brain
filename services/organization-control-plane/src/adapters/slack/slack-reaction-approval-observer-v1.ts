@@ -11,11 +11,11 @@ const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const SLACK_USER_ID = /^[UW][A-Z0-9]{2,}$/;
 const SLACK_TIMESTAMP = /^[0-9]{1,16}\.[0-9]{6}$/;
 
-export interface CleanSlackReactionObserverFetchV1 {
+export interface SlackReactionApprovalObserverFetchV1 {
   (input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 }
 
-export interface CleanSlackReactionObserverV1Input {
+export interface SlackReactionApprovalObserverV1Input {
   readonly token_reader: {
     readBotToken(input: {
       readonly connection_id: string;
@@ -23,7 +23,7 @@ export interface CleanSlackReactionObserverV1Input {
     }): string;
   };
   readonly now: () => string;
-  readonly fetch?: CleanSlackReactionObserverFetchV1;
+  readonly fetch?: SlackReactionApprovalObserverFetchV1;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -169,13 +169,13 @@ function observation(
 }
 
 /**
- * Small live-only observer for the clean connection. It reads one matching
+ * Small live-only observer for the active Slack connection. It reads one matching
  * opaque credential from the file-secret seam and observes only one message.
  */
-export class CleanSlackReactionObserverV1 implements PersonSlackReactionApprovalObserverV2 {
-  private readonly fetch: CleanSlackReactionObserverFetchV1;
+export class SlackReactionApprovalObserverV1 implements PersonSlackReactionApprovalObserverV2 {
+  private readonly fetch: SlackReactionApprovalObserverFetchV1;
 
-  constructor(private readonly input: CleanSlackReactionObserverV1Input) {
+  constructor(private readonly input: SlackReactionApprovalObserverV1Input) {
     this.fetch = input.fetch ?? fetch;
   }
 

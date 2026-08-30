@@ -21,7 +21,7 @@ const REQUIRED_ROLES = [
   "retrieval-content",
 ] as const;
 
-export interface VerifiedCleanControlPlaneStateV1 {
+export interface VerifiedOrganizationControlStateV1 {
   readonly state_directory: string;
   readonly integrations_database_path: string;
   readonly authority_id: string;
@@ -96,13 +96,13 @@ function text(value: unknown, label: string): string {
   return value;
 }
 
-interface CleanRootBinding {
+interface OrganizationControlRootBinding {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
 }
 
-function parseRootManifest(path: string): CleanRootBinding {
+function parseRootManifest(path: string): OrganizationControlRootBinding {
   assertPrivateFile(path, "clean state root manifest");
   const raw = readFileSync(path, "utf8");
   if (Buffer.byteLength(raw, "utf8") > 16 * 1024) {
@@ -185,7 +185,7 @@ function parseRootManifest(path: string): CleanRootBinding {
   });
 }
 
-function verifyControlDatabase(path: string, binding: CleanRootBinding): void {
+function verifyControlDatabase(path: string, binding: OrganizationControlRootBinding): void {
   assertPrivateFile(path, "clean integrations database");
   const database = new Database(path, { readonly: true, fileMustExist: true });
   try {
@@ -277,9 +277,9 @@ function verifyControlDatabase(path: string, binding: CleanRootBinding): void {
  * cross-role Authority pre-open guard remains Authority-owned and is not
  * imported into this package.
  */
-export function verifyCleanControlPlaneStateV1(
+export function verifyOrganizationControlStateV1(
   stateDirectory: string,
-): VerifiedCleanControlPlaneStateV1 {
+): VerifiedOrganizationControlStateV1 {
   if (
     typeof stateDirectory !== "string" ||
     !isAbsolute(stateDirectory) ||

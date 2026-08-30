@@ -10,8 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { SlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
-import { runCleanSlackConnectCli } from "../../services/organization-control-plane/src/composition/clean-slack-connect-cli.js";
-import { verifyCleanControlPlaneStateV1 } from "../../services/organization-control-plane/src/persistence/verified-clean-control-plane-state-v1.js";
+import { runSlackConnectionSetupCli } from "../../services/organization-control-plane/src/composition/slack-connection-setup-cli.js";
+import { verifyOrganizationControlStateV1 } from "../../services/organization-control-plane/src/persistence/verified-organization-control-state-v1.js";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../../services/organization-authority/src/application/person-identity-sessions.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../../services/organization-authority/src/adapters/security/private-file-credentials.js";
@@ -178,7 +178,7 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
         throw new Error("missing planned connection ID");
       }
       const output = commandOutput();
-      const status = await runCleanSlackConnectCli(
+      const status = await runSlackConnectionSetupCli(
         [
           "--state-dir",
           input.state_directory,
@@ -189,7 +189,7 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
         ],
         { stdout: output.write, read_stdin: input.read_stdin },
         {
-          verify_state: verifyCleanControlPlaneStateV1,
+          verify_state: verifyOrganizationControlStateV1,
           create_verifier: () => fakeSlack,
           now: () => "2026-08-22T12:00:00.000Z",
         },

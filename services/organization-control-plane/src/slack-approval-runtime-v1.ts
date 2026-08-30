@@ -23,8 +23,8 @@ export {
   stagePersonSlackReactionApprovalPendingV1,
   type StagePersonSlackReactionApprovalPendingCommandV1,
 } from "./persistence/sqlite-person-slack-reaction-approval-pending-v1.js";
-export { SqliteCleanSlackBotTokenReaderV1 } from "./persistence/clean-slack-bot-token-reader-v1.js";
-export { CleanSlackReactionObserverV1 } from "./adapters/slack/clean-slack-reaction-observer-v1.js";
+export { SqliteSlackBotTokenReaderV1 } from "./persistence/sqlite-slack-bot-token-reader-v1.js";
+export { SlackReactionApprovalObserverV1 } from "./adapters/slack/slack-reaction-approval-observer-v1.js";
 export { SqlitePersonSlackReactionApprovalFinalizationCoordinatorV2 } from "./persistence/sqlite-person-slack-reaction-approval-finalization-v2.js";
 export {
   finalizePersonSlackReactionApprovalV2,

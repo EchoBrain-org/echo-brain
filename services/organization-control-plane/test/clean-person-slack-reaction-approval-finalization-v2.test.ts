@@ -20,7 +20,7 @@ import {
   type PersonSlackReactionApprovalProviderExpectationV2,
   type PersonSlackReactionApprovalProviderResultV2,
 } from "../src/application/person-slack-reaction-approval-finalization-v2.js";
-import { CleanSlackReactionObserverV1 } from "../src/adapters/slack/clean-slack-reaction-observer-v1.js";
+import { SlackReactionApprovalObserverV1 } from "../src/adapters/slack/slack-reaction-approval-observer-v1.js";
 import {
   canonicalJson,
   canonicalSha256,
@@ -413,7 +413,7 @@ describe("clean Slack reaction observer", () => {
 
   it("observes one matching reaction without a live provider", async () => {
     let authorization = "";
-    const observer = new CleanSlackReactionObserverV1({
+    const observer = new SlackReactionApprovalObserverV1({
       token_reader: { readBotToken: () => "private-token" },
       now: () => OBSERVED,
       fetch: async (_url, init) => {
@@ -442,7 +442,7 @@ describe("clean Slack reaction observer", () => {
   });
 
   it("does not choose between conflicting reactions", async () => {
-    const observer = new CleanSlackReactionObserverV1({
+    const observer = new SlackReactionApprovalObserverV1({
       token_reader: { readBotToken: () => "private-token" },
       now: () => OBSERVED,
       fetch: async () =>

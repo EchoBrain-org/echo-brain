@@ -4,31 +4,31 @@ import { SlackWebIdentityProviderV1 } from "../adapters/slack/slack-web-identity
 import { canonicalJson } from "../canonical/canonical-json.js";
 import { openOrganizationControlDatabase } from "../persistence/open-organization-control-database.js";
 import {
-  connectCleanSlackV1,
-  type CleanSlackConnectionVerifierV1,
-  type ConnectedCleanSlackV1,
-} from "../persistence/sqlite-clean-slack-connection-v1.js";
+  connectSlackConnectionV1,
+  type ConnectedSlackConnectionV1,
+  type SlackConnectionVerifierV1,
+} from "../persistence/sqlite-slack-connection-coordinator-v1.js";
 import {
-  verifyCleanControlPlaneStateV1,
-  type VerifiedCleanControlPlaneStateV1,
-} from "../persistence/verified-clean-control-plane-state-v1.js";
+  verifyOrganizationControlStateV1,
+  type VerifiedOrganizationControlStateV1,
+} from "../persistence/verified-organization-control-state-v1.js";
 import { FileOrganizationSecretStore } from "../security/file-secret-store.js";
 import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../application/contracts.js";
 
-export interface CleanSlackConnectCliIo {
+export interface SlackConnectionSetupCliIo {
   readonly stdout: (value: string) => void;
   readonly read_stdin: () => Promise<string>;
 }
 
-export interface CleanSlackConnectCliDependencies {
+export interface SlackConnectionSetupCliDependencies {
   readonly verify_state: (
     stateDirectory: string,
-  ) => VerifiedCleanControlPlaneStateV1;
-  readonly create_verifier: () => CleanSlackConnectionVerifierV1;
+  ) => VerifiedOrganizationControlStateV1;
+  readonly create_verifier: () => SlackConnectionVerifierV1;
   readonly now: () => string;
 }
 
-const PROCESS_IO: CleanSlackConnectCliIo = {
+const PROCESS_IO: SlackConnectionSetupCliIo = {
   stdout: (value) => process.stdout.write(value),
   read_stdin: async () => {
     process.stdin.setEncoding("utf8");
@@ -38,8 +38,8 @@ const PROCESS_IO: CleanSlackConnectCliIo = {
   },
 };
 
-const DEFAULT_DEPENDENCIES: CleanSlackConnectCliDependencies = {
-  verify_state: verifyCleanControlPlaneStateV1,
+const DEFAULT_DEPENDENCIES: SlackConnectionSetupCliDependencies = {
+  verify_state: verifyOrganizationControlStateV1,
   create_verifier: () => new SlackWebIdentityProviderV1(),
   now: () => new Date().toISOString(),
 };
@@ -109,7 +109,7 @@ function oneStdinToken(input: string): string {
 }
 
 function publicResult(
-  result: ConnectedCleanSlackV1,
+  result: ConnectedSlackConnectionV1,
   approvalChannelId: string,
 ): Readonly<Record<string, unknown>> {
   return Object.freeze({
@@ -127,13 +127,13 @@ function publicResult(
 }
 
 /**
- * Offline founder command: verify clean lineage, then connect one Slack bot.
- * It does not start a server or touch legacy runtime state.
+ * Offline Slack connection setup: verify the organization lineage, then
+ * connect one Slack bot. It does not start a server or touch legacy runtime state.
  */
-export async function runCleanSlackConnectCli(
+export async function runSlackConnectionSetupCli(
   arguments_: readonly string[],
-  io: CleanSlackConnectCliIo = PROCESS_IO,
-  dependencies: CleanSlackConnectCliDependencies = DEFAULT_DEPENDENCIES,
+  io: SlackConnectionSetupCliIo = PROCESS_IO,
+  dependencies: SlackConnectionSetupCliDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<number> {
   const flags = parseFlags(arguments_);
   const state = dependencies.verify_state(flags.state_directory);
@@ -143,7 +143,7 @@ export async function runCleanSlackConnectCli(
     { fileMustExist: true },
   );
   try {
-    const result = await connectCleanSlackV1({
+    const result = await connectSlackConnectionV1({
       authority_id: state.authority_id,
       organization_id: state.organization_id,
       state_lineage_id: state.state_lineage_id,

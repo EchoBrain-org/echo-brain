@@ -16,8 +16,8 @@ import {
 } from "../application/person-slack-reaction-approval-contracts-v2.js";
 import type Database from "better-sqlite3";
 
-/** A provider seam deliberately limited to stopped-state connection setup. */
-export interface CleanSlackConnectionVerifierV1 {
+/** A provider seam deliberately limited to Slack connection setup. */
+export interface SlackConnectionVerifierV1 {
   verifyConnection(
     token: string,
     signal?: AbortSignal,
@@ -30,7 +30,7 @@ export interface CleanSlackConnectionVerifierV1 {
   ): Promise<VerifiedSlackChannel>;
 }
 
-export interface CleanSlackConnectionPublicInputV1 {
+export interface SlackConnectionSetupInputV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -39,11 +39,11 @@ export interface CleanSlackConnectionPublicInputV1 {
 }
 
 /** The token is injected, never part of the public command shape or result. */
-export interface ConnectCleanSlackInputV1 extends CleanSlackConnectionPublicInputV1 {
+export interface ConnectSlackConnectionInputV1 extends SlackConnectionSetupInputV1 {
   readonly slack_bot_token: string;
   readonly database: Database.Database;
   readonly secrets: Pick<OrganizationSecretStore, "create" | "remove">;
-  readonly verifier: CleanSlackConnectionVerifierV1;
+  readonly verifier: SlackConnectionVerifierV1;
   readonly now: () => string;
   readonly signal?: AbortSignal;
 }
@@ -53,14 +53,14 @@ export interface ConnectCleanSlackInputV1 extends CleanSlackConnectionPublicInpu
  * Keeping this adapter free of process I/O makes it safe to test with a fake
  * provider and prevents a caller from accidentally echoing its stdin bytes.
  */
-export interface RunCleanSlackConnectCommandV1Input extends Omit<
-  ConnectCleanSlackInputV1,
+export interface RunSlackConnectionSetupCommandV1Input extends Omit<
+  ConnectSlackConnectionInputV1,
   "slack_bot_token"
 > {
   readonly read_slack_bot_token: () => Promise<string> | string;
 }
 
-export interface ConnectedCleanSlackV1 {
+export interface ConnectedSlackConnectionV1 {
   readonly connection: OrganizationToolConnectionContractV2;
   readonly state: OrganizationToolConnectionStateV2;
   readonly idempotent: boolean;
@@ -73,10 +73,10 @@ export interface ConnectedCleanSlackV1 {
   };
 }
 
-export class CleanSlackConnectionConflictError extends Error {
+export class SlackConnectionConflictError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "CleanSlackConnectionConflictError";
+    this.name = "SlackConnectionConflictError";
   }
 }
 
@@ -94,7 +94,7 @@ function parseCanonical(json: string): unknown {
 }
 
 function publicConfigurationSha256(
-  input: CleanSlackConnectionPublicInputV1,
+  input: SlackConnectionSetupInputV1,
 ): `sha256:${string}` {
   return canonicalSha256({
     approval_adapter_id: "slack-reactions",
@@ -146,7 +146,7 @@ function activeConnection(
 
 function samePublicConnection(
   existing: StoredActiveConnection,
-  input: CleanSlackConnectionPublicInputV1,
+  input: SlackConnectionSetupInputV1,
 ): boolean {
   return (
     existing.connection.connection_id === input.connection_id &&
@@ -160,12 +160,12 @@ function samePublicConnection(
 
 function existingResult(
   database: Database.Database,
-  input: CleanSlackConnectionPublicInputV1,
-): ConnectedCleanSlackV1 | undefined {
+  input: SlackConnectionSetupInputV1,
+): ConnectedSlackConnectionV1 | undefined {
   const existing = activeConnection(database);
   if (existing === undefined) return undefined;
   if (!samePublicConnection(existing, input)) {
-    throw new CleanSlackConnectionConflictError(
+    throw new SlackConnectionConflictError(
       "a different clean Slack organization connection is already active",
     );
   }
@@ -184,7 +184,7 @@ function existingResult(
 
 function assertMetadata(
   database: Database.Database,
-  input: CleanSlackConnectionPublicInputV1,
+  input: SlackConnectionSetupInputV1,
 ): void {
   const metadata = database
     .prepare(
@@ -226,9 +226,9 @@ function normalizedScopes(
  * intentionally a stopped-state seam: it neither opens a listener nor reads
  * an installation, enrollment, or lease.
  */
-export async function connectCleanSlackV1(
-  input: ConnectCleanSlackInputV1,
-): Promise<ConnectedCleanSlackV1> {
+export async function connectSlackConnectionV1(
+  input: ConnectSlackConnectionInputV1,
+): Promise<ConnectedSlackConnectionV1> {
   assertMetadata(input.database, input);
   const replay = existingResult(input.database, input);
   if (replay !== undefined) return replay;
@@ -356,9 +356,9 @@ export async function connectCleanSlackV1(
 }
 
 /** A stopped-state `clean slack connect` command seam for a future CLI. */
-export async function runCleanSlackConnectCommandV1(
-  input: RunCleanSlackConnectCommandV1Input,
-): Promise<ConnectedCleanSlackV1> {
+export async function runSlackConnectionSetupCommandV1(
+  input: RunSlackConnectionSetupCommandV1Input,
+): Promise<ConnectedSlackConnectionV1> {
   const slackBotToken = await input.read_slack_bot_token();
-  return connectCleanSlackV1({ ...input, slack_bot_token: slackBotToken });
+  return connectSlackConnectionV1({ ...input, slack_bot_token: slackBotToken });
 }

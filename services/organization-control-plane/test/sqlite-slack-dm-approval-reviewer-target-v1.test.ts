@@ -15,7 +15,7 @@ import {
   type CurrentSlackDmApprovalReviewerV1,
   type SlackDmApprovalReviewerTargetCoordinatesV1,
 } from "../src/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
-import { selectCurrentOwnerSlackReactionApprovalTargetV1 } from "../src/persistence/clean-person-slack-reaction-approval-target-v1.js";
+import { selectCurrentOwnerSlackReactionApprovalTargetV1 } from "../src/persistence/sqlite-slack-reaction-approval-target-v1.js";
 import { applyOrganizationControlBaselineV1 } from "../src/persistence/baseline.js";
 
 const CONNECTION_ID = "con_00000000-0000-4000-8000-000000000001";
