@@ -211,6 +211,104 @@ function collectRegisteredProviderIdentifiers(tree, adapterArchitecture, errors)
   return identifiers;
 }
 
+function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) {
+  const declared = adapterArchitecture?.provider_adapter_roots;
+  if (!Array.isArray(declared)) {
+    errors.push('adapter architecture provider_adapter_roots must be an array');
+    return { roots: [], identifiers: new Set() };
+  }
+
+  const roots = [];
+  const identifiers = new Set();
+  const declaredRoots = new Set();
+  for (const entry of declared) {
+    if (
+      entry === null ||
+      typeof entry !== 'object' ||
+      typeof entry.identifier !== 'string' ||
+      !/^[a-z][a-z0-9-]*$/.test(entry.identifier) ||
+      typeof entry.root !== 'string' ||
+      !isRepositoryPath(entry.root)
+    ) {
+      errors.push('adapter architecture provider_adapter_roots contains an invalid entry');
+      continue;
+    }
+    if (identifiers.has(entry.identifier)) {
+      errors.push(`adapter architecture provider_adapter_roots duplicates identifier '${entry.identifier}'`);
+      continue;
+    }
+    if (declaredRoots.has(entry.root)) {
+      errors.push(`adapter architecture provider_adapter_roots duplicates root '${entry.root}'`);
+      continue;
+    }
+    const sourceFiles = [...tree.keys()].filter(
+      (path) => SOURCE_FILE_RE.test(path) && matchesGlob(path, entry.root),
+    );
+    if (sourceFiles.length === 0) {
+      errors.push(
+        `adapter architecture provider/adapter root '${entry.identifier}' matches no source file: ${entry.root}`,
+      );
+      continue;
+    }
+    identifiers.add(entry.identifier);
+    declaredRoots.add(entry.root);
+    roots.push({ identifier: entry.identifier, root: entry.root });
+  }
+
+  const adapterRoots = adapterArchitecture?.adapters_roots;
+  if (!isStringArray(adapterRoots)) {
+    errors.push('adapter architecture adapters_roots must be a string array');
+  } else {
+    for (const adapterRoot of adapterRoots) {
+      if (!isRepositoryPath(adapterRoot)) {
+        errors.push(`adapter architecture has a non-normalized adapter root: ${adapterRoot}`);
+        continue;
+      }
+      for (const [path] of tree) {
+        if (!SOURCE_FILE_RE.test(path) || !matchesGlob(path, adapterRoot)) continue;
+        if (!roots.some((entry) => matchesGlob(path, entry.root))) {
+          errors.push(
+            `provider/adapter source is not covered by declared provider_adapter_roots: ${path}`,
+          );
+        }
+      }
+    }
+  }
+
+  for (const [path] of tree) {
+    if (
+      !SOURCE_FILE_RE.test(path) ||
+      !path.startsWith('services/organization-authority/src/') ||
+      !/\bimplements\s+(?:MeetingSourceAdapter|DecisionProcessorAdapter|DeliverySurfaceAdapter|ApprovalSurfaceAdapter)\b/.test(textFile(tree, path))
+    ) continue;
+    if (!roots.some((entry) => matchesGlob(path, entry.root))) {
+      errors.push(
+        `provider/adapter implementation is not covered by declared provider_adapter_roots: ${path}`,
+      );
+    }
+  }
+  return { roots, identifiers };
+}
+
+function reachableProviderAdapterRoot(tree, start, providerAdapterRoots) {
+  const seen = new Set();
+  const work = [start];
+  while (work.length > 0) {
+    const path = work.pop();
+    if (path === undefined || seen.has(path)) continue;
+    seen.add(path);
+    for (const reference of moduleReferences(path, textFile(tree, path))) {
+      if (reference.specifier === null || !reference.specifier.startsWith('.')) continue;
+      const resolved = resolveRelative(tree, path, reference.specifier);
+      if (resolved === null) continue;
+      const root = providerAdapterRoots.find((entry) => matchesGlob(resolved, entry.root));
+      if (root !== undefined) return { root, path: resolved };
+      work.push(resolved);
+    }
+  }
+  return undefined;
+}
+
 function checkWorkspaceBoundaries(tree, errors) {
   const registry = parseJsonFile(tree, WORKSPACE_BOUNDARY_REGISTRY, errors);
   if (registry === null) {
@@ -699,17 +797,12 @@ function main() {
     adapterArchitecture,
     errors,
   );
+  const {
+    roots: declaredProviderAdapterRoots,
+    identifiers: declaredProviderAdapterIdentifiers,
+  } = collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors);
 
-  const discoveredAdapterIds = new Set();
   if (adapterArchitecture?.forbid_discovered_adapter_ids_in_provider_neutral_paths === true) {
-    for (const adaptersRoot of adapterArchitecture.adapters_roots) {
-      for (const [path] of tree) {
-        if (!path.startsWith(adaptersRoot)) continue;
-        const relative = path.slice(adaptersRoot.length);
-        const parts = relative.split('/');
-        if (parts.length >= 3) discoveredAdapterIds.add(parts[1]);
-      }
-    }
     const neutralPaths = adapterArchitecture.provider_neutral_paths;
     if (!isStringArray(neutralPaths)) {
       errors.push('adapter architecture provider_neutral_paths must be a string array');
@@ -717,7 +810,7 @@ function main() {
     if (isStringArray(neutralPaths)) {
       const forbiddenProviderIdentifiers = new Set([
         ...registeredProviderIdentifiers,
-        ...discoveredAdapterIds,
+        ...declaredProviderAdapterIdentifiers,
       ]);
       for (const [path] of tree) {
         if (
@@ -730,6 +823,16 @@ function main() {
           if (new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(source)) {
             errors.push(`provider identifier '${providerIdentifier}' leaked into provider-neutral module: ${path}`);
           }
+        }
+        const reachable = reachableProviderAdapterRoot(
+          tree,
+          path,
+          declaredProviderAdapterRoots,
+        );
+        if (reachable !== undefined) {
+          errors.push(
+            `provider-neutral module reaches declared provider/adapter root '${reachable.root.identifier}': ${path} -> ${reachable.path}`,
+          );
         }
       }
     }
@@ -866,7 +969,7 @@ function main() {
     runtime_assets: runtimeAssets,
     removed_internal_roots: removed,
     layer_rules: layerRules.map((rule) => rule.name),
-    discovered_adapter_ids: [...discoveredAdapterIds].sort(),
+    discovered_adapter_ids: [...declaredProviderAdapterIdentifiers].sort(),
     workspace_boundaries: workspaceBoundaries,
     errors,
   };

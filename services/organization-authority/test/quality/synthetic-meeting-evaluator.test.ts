@@ -10,6 +10,7 @@ import type {
   DecisionExtractionContext,
   DecisionProcessorAdapter,
   DecisionSet,
+  MeetingSourceAdapter,
   MeetingDocument,
 } from "../../src/processing/core/index.js";
 import {
@@ -31,6 +32,31 @@ const fixtureAnswerer = {
       ? { status: "answered" as const, answer: "Only me.", citations: ["a1"] }
       : { status: "answered" as const, answer: "Organization members can read records.", citations: ["a1"] },
 };
+
+function syntheticSourceWithPull(
+  pull: MeetingSourceAdapter["pull"],
+): MeetingSourceAdapter {
+  return {
+    identity: syntheticMeetingSourceIdentityV1,
+    validateConfig: () => ({ ok: true, errors: [] }),
+    healthCheck: async () => ({
+      status: "healthy",
+      checked_at: "2026-08-29T00:00:00.000Z",
+    }),
+    pull,
+  };
+}
+
+function evaluatorDependencies(processor: DecisionProcessorAdapter) {
+  return {
+    processor,
+    planner: { generate: async () => ({ queries: [] }) },
+    answerer: fixtureAnswerer,
+    generation_adapter_id: "fixture-model-adapter",
+    planner_model: "fixture/eval",
+    answer_model: "fixture/eval",
+  };
+}
 
 class ExpectedSignalProcessor implements DecisionProcessorAdapter {
   readonly identity = {
@@ -258,5 +284,66 @@ describe("synthetic meeting quality support", () => {
         extraction_expectations: [{ meeting_id: "absent", expected_signals: [] }],
       }),
     ).rejects.toThrow(/no explicit extraction expectation/);
+  });
+
+  it("rejects a malformed source batch cursor before extraction scoring", async () => {
+    const source = syntheticSourceWithPull(async () => ({
+      meetings: syntheticMeetingQualityDocumentsV1().slice(0, 1),
+      next_cursor: "",
+    }));
+
+    await expect(
+      evaluateSyntheticMeetingQualityV1({
+        ...evaluatorDependencies(new ExpectedSignalProcessor()),
+        source,
+      }),
+    ).rejects.toThrow(/meeting_batch.next_cursor must be a non-empty string/);
+  });
+
+  it("rejects source documents with provenance from another adapter", async () => {
+    const meeting = syntheticMeetingQualityDocumentsV1()[0]!;
+    const source = syntheticSourceWithPull(async () => ({
+      meetings: [
+        {
+          ...meeting,
+          provenance: {
+            ...meeting.provenance,
+            source: { ...meeting.provenance.source, adapter_id: "other-source" },
+          },
+        },
+      ],
+    }));
+
+    await expect(
+      evaluateSyntheticMeetingQualityV1({
+        ...evaluatorDependencies(new ExpectedSignalProcessor()),
+        source,
+      }),
+    ).rejects.toThrow(/meeting provenance does not match the meeting-source adapter instance/);
+  });
+
+  it("rejects decision sets with provenance from another processor", async () => {
+    const expected = new ExpectedSignalProcessor();
+    const processor: DecisionProcessorAdapter = {
+      identity: expected.identity,
+      validateConfig: expected.validateConfig.bind(expected),
+      healthCheck: expected.healthCheck.bind(expected),
+      async extract(meeting, context) {
+        const decisions = await expected.extract(meeting, context);
+        return {
+          ...decisions,
+          processor: { ...decisions.processor, adapter_id: "other-processor" },
+        };
+      },
+    };
+
+    await expect(
+      evaluateSyntheticMeetingQualityV1({
+        ...evaluatorDependencies(processor),
+        source: new SyntheticMeetingSourceAdapterV1(
+          syntheticMeetingQualityDocumentsV1().slice(0, 1),
+        ),
+      }),
+    ).rejects.toThrow(/decision processor result identity does not match the configured adapter/);
   });
 });

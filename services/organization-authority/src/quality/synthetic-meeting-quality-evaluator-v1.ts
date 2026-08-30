@@ -2,6 +2,11 @@ import {
   createLeanAnswerComposition,
   type Layer4StructuredOutputPort,
 } from "../answer-composition/lean-answer-composition.js";
+import {
+  assertCanonicalDecisionSet,
+  assertCanonicalMeetingBatch,
+  assertCanonicalMeetingDocument,
+} from "../processing/core/index.js";
 import type {
   DecisionProcessorAdapter,
   ExtractedSignal,
@@ -185,7 +190,9 @@ async function evaluateExtraction(
   let processedMeetingCount = 0;
   do {
     const batch = await source.pull({ limit: 100, ...(cursor === undefined ? {} : { cursor }) });
+    assertCanonicalMeetingBatch(batch);
     for (const meeting of batch.meetings) {
+      assertCanonicalMeetingDocument(meeting, source.identity);
       if (seenMeetingIds.has(meeting.id)) {
         throw new Error("synthetic source returned a duplicate meeting id");
       }
@@ -195,6 +202,7 @@ async function evaluateExtraction(
         processor_version: processor.identity.version,
         input_fingerprint: `synthetic-eval:${meeting.id}`,
       });
+      assertCanonicalDecisionSet(decisionSet, meeting, processor.identity);
       const expectation = byId.get(meeting.id);
       if (expectation === undefined) {
         throw new Error("synthetic source meeting has no explicit extraction expectation");

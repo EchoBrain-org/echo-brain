@@ -918,6 +918,7 @@ describe("workspace source boundaries", () => {
       "granola",
       "llm",
       "slack",
+      "synthetic-source",
     ]);
 
     const probe = join(
@@ -965,6 +966,10 @@ describe("workspace source boundaries", () => {
           identifier: string;
           source_evidence_paths: string[];
         }>;
+        provider_adapter_roots: Array<{
+          identifier: string;
+          root: string;
+        }>;
         forbid_discovered_adapter_ids_in_provider_neutral_paths: boolean;
       };
     }>(fixture, "product/source-boundary.v1.json");
@@ -975,46 +980,72 @@ describe("workspace source boundaries", () => {
       product.adapter_architecture.provider_identifier_registry.map(
         ({ identifier }) => identifier,
       ),
-    ).toEqual(["openrouter"]);
+    ).toEqual(["openrouter", "openai", "anthropic", "ollama"]);
     expect(
       product.adapter_architecture
         .forbid_discovered_adapter_ids_in_provider_neutral_paths,
     ).toBe(true);
+    expect(product.adapter_architecture.provider_adapter_roots).toEqual([
+      {
+        identifier: "granola",
+        root: "services/organization-authority/src/processing/adapters/meeting-sources/granola/",
+      },
+      {
+        identifier: "llm",
+        root: "services/organization-authority/src/processing/adapters/decision-processors/llm/",
+      },
+      {
+        identifier: "slack",
+        root: "services/organization-authority/src/processing/adapters/shared/slack/",
+      },
+      {
+        identifier: "synthetic-source",
+        root: "services/organization-authority/src/quality/synthetic-meeting-fixture-v1.ts",
+      },
+    ]);
 
     const probePath =
       "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts";
     const probe = join(fixture, probePath);
     const original = readFileSync(probe, "utf8");
-    try {
-      writeFileSync(probe, `${original}\n// openrouter compatibility leak.\n`);
-      const result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        `provider identifier 'openrouter' leaked into provider-neutral module: ${probePath}`,
-      );
-    } finally {
-      writeFileSync(probe, original);
+    for (const providerIdentifier of [
+      "openrouter",
+      "openai",
+      "anthropic",
+      "ollama",
+    ]) {
+      try {
+        writeFileSync(
+          probe,
+          `${original}\n// ${providerIdentifier} compatibility leak.\n`,
+        );
+        const result = runBoundary(fixture);
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        expect(result.stdout + result.stderr).toContain(
+          `provider identifier '${providerIdentifier}' leaked into provider-neutral module: ${probePath}`,
+        );
+      } finally {
+        writeFileSync(probe, original);
+      }
     }
 
-    const registeredProvider =
-      product.adapter_architecture.provider_identifier_registry[0];
-    if (registeredProvider === undefined) {
-      throw new Error("expected a supplemental provider identifier");
-    }
-    const sourceEvidence = registeredProvider.source_evidence_paths;
-    try {
-      registeredProvider.source_evidence_paths = [
-        "services/organization-authority/src/composition/missing-openrouter-provider.ts",
-      ];
-      writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
-      const result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        "adapter architecture provider 'openrouter' source evidence path matches no source file",
-      );
-    } finally {
-      registeredProvider.source_evidence_paths = sourceEvidence;
-      writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
+    for (const registeredProvider of product.adapter_architecture
+      .provider_identifier_registry) {
+      const sourceEvidence = registeredProvider.source_evidence_paths;
+      try {
+        registeredProvider.source_evidence_paths = [
+          `services/organization-authority/src/composition/missing-${registeredProvider.identifier}-provider.ts`,
+        ];
+        writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
+        const result = runBoundary(fixture);
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        expect(result.stdout + result.stderr).toContain(
+          `adapter architecture provider '${registeredProvider.identifier}' source evidence path matches no source file`,
+        );
+      } finally {
+        registeredProvider.source_evidence_paths = sourceEvidence;
+        writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
+      }
     }
 
     const authority = readFixtureJson<{
@@ -1039,15 +1070,66 @@ describe("workspace source boundaries", () => {
     );
     mkdirSync(dirname(fixtureProvider), { recursive: true });
     writeFileSync(fixtureProvider, "export const fixtureProvider = true;\n");
+    let result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain(
+      "provider/adapter source is not covered by declared provider_adapter_roots: services/organization-authority/src/processing/adapters/delivery-surfaces/fixture-provider/client.ts",
+    );
+
+    product.adapter_architecture.provider_adapter_roots.push({
+      identifier: "fixture-provider",
+      root: "services/organization-authority/src/processing/adapters/delivery-surfaces/fixture-provider/",
+    });
+    writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
     try {
       writeFileSync(probe, `${original}\n// fixture-provider compatibility leak.\n`);
-      const result = runBoundary(fixture);
+      result = runBoundary(fixture);
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stdout + result.stderr).toContain(
         `provider identifier 'fixture-provider' leaked into provider-neutral module: ${probePath}`,
       );
     } finally {
       writeFileSync(probe, original);
+    }
+  });
+
+  it("rejects direct and transitive neutral-module reachability into declared provider roots", () => {
+    const fixture = fixtureRepository();
+    const neutralPath =
+      "services/organization-authority/src/composition/open-clean-live-runtime.ts";
+    const neutral = join(fixture, neutralPath);
+    const original = readFileSync(neutral, "utf8");
+    const providerPath =
+      "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts";
+    try {
+      writeFileSync(
+        neutral,
+        `${original}\nimport \"../processing/adapters/meeting-sources/granola/index.js\";\n`,
+      );
+      let result = runBoundary(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        `provider-neutral module reaches declared provider/adapter root 'granola': ${neutralPath} -> ${providerPath}`,
+      );
+
+      writeFileSync(neutral, original);
+      const intermediaryPath =
+        "services/organization-authority/src/composition/provider-reach-probe.ts";
+      writeFileSync(
+        join(fixture, intermediaryPath),
+        'import "../processing/adapters/meeting-sources/granola/index.js";\n',
+      );
+      writeFileSync(
+        neutral,
+        `${original}\nimport \"./provider-reach-probe.js\";\n`,
+      );
+      result = runBoundary(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        `provider-neutral module reaches declared provider/adapter root 'granola': ${neutralPath} -> ${providerPath}`,
+      );
+    } finally {
+      writeFileSync(neutral, original);
     }
   });
 

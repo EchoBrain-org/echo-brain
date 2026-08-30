@@ -55,14 +55,15 @@ introduced as a conditional for one vendor.
 
 ## Enforcement and failure behavior
 
-The source-boundary manifest names provider-neutral modules. It automatically
-discovers processing-adapter IDs and supplements them with source-backed
-identifiers for providers whose bundle identity lives elsewhere. Both sets are
-forbidden in neutral modules, and stale supplemental evidence fails the gate.
-Architecture tests cover both paths. The source path stores generic source
-identity and opaque cursors, and the shared runtime receives explicit source,
-processor, Layer 4, approval, and external-identity bundles instead of selecting
-a provider.
+The source-boundary manifest names every active provider/adapter root, including
+the synthetic source. The gate rejects an unlisted adapter implementation or a
+source file under the adapter tree, and rejects a provider-neutral module that
+directly or transitively reaches a declared root. A supplemental, source-backed
+lexical registry covers provider identifiers such as the LLM drivers; stale
+evidence and identifier leaks also fail the gate. Architecture tests cover all
+three checks. The source path stores generic source identity and opaque cursors,
+and the shared runtime receives explicit source, processor, Layer 4, approval,
+and external-identity bundles instead of selecting a provider.
 
 A provider identity, runtime commitment, interaction, cursor, or presentation
 reference that does not match its admitted boundary fails closed before it can

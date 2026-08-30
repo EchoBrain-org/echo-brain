@@ -21,6 +21,24 @@
     "adapters_roots": [
       "services/organization-authority/src/processing/adapters/"
     ],
+    "provider_adapter_roots": [
+      {
+        "identifier": "granola",
+        "root": "services/organization-authority/src/processing/adapters/meeting-sources/granola/"
+      },
+      {
+        "identifier": "llm",
+        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/"
+      },
+      {
+        "identifier": "slack",
+        "root": "services/organization-authority/src/processing/adapters/shared/slack/"
+      },
+      {
+        "identifier": "synthetic-source",
+        "root": "services/organization-authority/src/quality/synthetic-meeting-fixture-v1.ts"
+      }
+    ],
     "provider_neutral_paths": [
       "services/organization-authority/src/processing/core/**",
       "services/organization-authority/src/processing/live/**",
@@ -53,6 +71,24 @@
         "identifier": "openrouter",
         "source_evidence_paths": [
           "services/organization-authority/src/composition/openrouter-clean-layer4-runtime.ts"
+        ]
+      },
+      {
+        "identifier": "openai",
+        "source_evidence_paths": [
+          "services/organization-authority/src/processing/adapters/decision-processors/llm/openai-client.ts"
+        ]
+      },
+      {
+        "identifier": "anthropic",
+        "source_evidence_paths": [
+          "services/organization-authority/src/processing/adapters/decision-processors/llm/anthropic-client.ts"
+        ]
+      },
+      {
+        "identifier": "ollama",
+        "source_evidence_paths": [
+          "services/organization-authority/src/processing/adapters/decision-processors/llm/ollama-client.ts"
         ]
       }
     ],
