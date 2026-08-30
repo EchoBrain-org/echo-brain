@@ -161,7 +161,10 @@ only the in-container private socket. The printed receipt has only the release
 identity, outcome, and opaque approval identity. A `delivery_pending` outcome
 is safe to retry; every release uses one stable canary and one Slack message.
 Only `staged` succeeds. Other outcomes stop the command without creating
-promotion evidence.
+promotion evidence. During a replacement, the accepted image must also
+advertise `org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1=true`
+before the candidate can create synthetic canary state, so the rollback image
+can read that state if recovery is needed.
 
 Approve the resulting private card. Then use the packaged Person client to
 search for that exact release ID and ask one cited question before making the
@@ -187,6 +190,11 @@ environment tuple and leave the accepted record unchanged:
 ```sh
 ./update-clean-v1.sh rollback
 ```
+
+For a first deployment, where no accepted release record exists yet, the same
+command is an abort: it stops the staged candidate before archiving that
+candidate as failed and does not create an accepted record. After it succeeds,
+stage the next candidate with a new release ID.
 
 The operation lock prevents concurrent changes. The environment, active
 profile, and four materialized deployment files are replaced individually, so

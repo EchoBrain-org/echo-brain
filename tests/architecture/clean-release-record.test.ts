@@ -1276,6 +1276,85 @@ fi
     expect(existsSync(join(state, "current.clean-v1.json"))).toBe(true);
   });
 
+  it.each([
+    ["delivery_pending", "delivery is still pending", '"approval_outcome":"delivery_pending","approval_id":"approval-canary"'],
+    ["not_actionable", "did not stage a private approval card: not_actionable", '"approval_outcome":"not_actionable"'],
+  ])("aborts a first-deployment candidate after a %s canary and permits a new stage", (_outcome, expectedFailure, outcomeFields) => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-first-deploy-abort-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const state = join(root, "release-state");
+    const started = join(root, "started");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const firstProfile = writeRuntimeProfile();
+    const nextProfile = writeRuntimeProfile("a".repeat(40), "\n# next candidate\n");
+    const first = releaseWithRuntimeProfile(firstProfile, {
+      release_id: "clean-v1-20260822-005",
+      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}` },
+    });
+    const next = releaseWithRuntimeProfile(nextProfile, {
+      release_id: "clean-v1-20260822-006",
+      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"e".repeat(64)}` },
+    });
+    const firstCandidate = writeRecord(first);
+    const nextCandidate = writeRecord(next);
+    const runtimeConfig = prepareRuntimeConfig(root, firstProfile);
+    mkdirSync(bin);
+    writeFileSync(docker, `#!/usr/bin/env bash
+if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then [[ -f "${started}" ]] && printf 'authority-container\\n'; exit 0; fi
+if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
+if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${started}"; exit 0; fi
+if [[ "$1" == compose && "$*" == *" down"* ]]; then rm -f "${started}"; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"f".repeat(64)}\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+if [[ "$1" == image ]]; then printf '%s\\n' '${first.authority_image.reference}' '${next.authority_image.reference}'; exit 0; fi
+if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_id="$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}")"; printf '{"schema_version":1,"kind":"echo-staging-synthetic-private-dm-canary-receipt-v1","release_id":"%s",${outcomeFields}}\\n' "$release_id"; exit 0; fi
+`);
+    chmodSync(docker, 0o755);
+    writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n", { mode: 0o600 });
+    const environment = { PATH: `${bin}:${process.env.PATH}`, ECHO_CLEAN_ENV_FILE: envFile, ECHO_CLEAN_RELEASE_STATE_DIR: state, ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig };
+    expect(run("bash", [UPDATE, "stage", "--release", firstCandidate, "--runtime-profile", firstProfile], environment).status).toBe(0);
+    const canary = run("bash", [UPDATE, "canary"], environment);
+    expect(canary.status).toBe(1);
+    expect(canary.stderr).toContain(expectedFailure);
+    expect(run("bash", [UPDATE, "rollback"], environment).stdout).toContain('"stage":"aborted"');
+    expect(existsSync(started)).toBe(false);
+    expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
+    expect(existsSync(join(state, "current.clean-v1.json"))).toBe(false);
+    expect(existsSync(join(state, "failed", "clean-v1-20260822-005.json"))).toBe(true);
+    expect(run("bash", [UPDATE, "stage", "--release", nextCandidate, "--runtime-profile", nextProfile], environment).status).toBe(0);
+  });
+
+  it("keeps a first-deployment candidate staged when an automatic stop fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-first-deploy-stop-retry-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const state = join(root, "release-state");
+    const stopAttempted = join(root, "stop-attempted");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const profile = writeRuntimeProfile();
+    const candidate = writeRecord(releaseWithRuntimeProfile(profile, { release_id: "clean-v1-20260822-008", authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}` } }));
+    mkdirSync(bin);
+    writeFileSync(docker, `#!/usr/bin/env bash
+if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
+if [[ "$1" == compose && "$*" == *" up "* ]]; then exit 1; fi
+if [[ "$1" == compose && "$*" == *" down"* ]]; then touch "${stopAttempted}"; exit 1; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+`);
+    chmodSync(docker, 0o755);
+    writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\n", { mode: 0o600 });
+    const result = run("bash", [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile], { PATH: `${bin}:${process.env.PATH}`, ECHO_CLEAN_ENV_FILE: envFile, ECHO_CLEAN_RELEASE_STATE_DIR: state, ECHO_CLEAN_RUNTIME_CONFIG_DIR: prepareRuntimeConfig(root, profile) });
+    expect(result.stderr).toContain("candidate stop could not be confirmed");
+    expect(existsSync(stopAttempted)).toBe(true);
+    expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
+    expect(existsSync(join(state, "failed", "clean-v1-20260822-008.json"))).toBe(false);
+  });
+
   it("rejects a misrouted public descriptor before accepting a first deployment", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-public-descriptor-"));
     roots.push(root);
@@ -1346,6 +1425,39 @@ if [[ "$1" == compose && "$*" == *" down"* ]]; then exit 0; fi
     );
   });
 
+  it("requires an accepted-image rollback reader before an upgrade canary creates state", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-canary-rollback-reader-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const state = join(root, "release-state");
+    const invoked = join(root, "canary-invoked");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const acceptedProfile = writeRuntimeProfile();
+    const candidateProfile = writeRuntimeProfile("a".repeat(40), "\n# candidate\n");
+    const accepted = releaseWithRuntimeProfile(acceptedProfile);
+    const candidate = releaseWithRuntimeProfile(candidateProfile, {
+      release_id: "clean-v1-20260822-007",
+      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}` },
+    });
+    mkdirSync(bin);
+    writeFileSync(docker, `#!/usr/bin/env bash
+if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then touch "${invoked}"; fi
+`);
+    chmodSync(docker, 0o755);
+    installActiveTuple(state, envFile, candidate, candidateProfile);
+    copyFileSync(writeRecord(accepted), join(state, "current.clean-v1.json"));
+    copyFileSync(writeRecord(candidate), join(state, "candidate.clean-v1.json"));
+    const result = run("bash", [UPDATE, "canary"], {
+      PATH: `${bin}:${process.env.PATH}`,
+      ECHO_CLEAN_ENV_FILE: envFile,
+      ECHO_CLEAN_RELEASE_STATE_DIR: state,
+      ECHO_CLEAN_RUNTIME_CONFIG_DIR: prepareRuntimeConfig(root, candidateProfile),
+    });
+    expect(result.stderr).toContain("rollback-read capability");
+    expect(existsSync(invoked)).toBe(false);
+  });
+
   it("binds routine promotion to staged canary evidence and recovers a promotion crash", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-promote-retry-"));
     roots.push(root);
@@ -1376,6 +1488,7 @@ if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; e
 if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"f".repeat(64)}\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'* ]]; then printf 'true\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image ]]; then printf '%s\\n' '${accepted.authority_image.reference}' '${next.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then

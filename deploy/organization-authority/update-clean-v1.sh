@@ -22,6 +22,7 @@ ENVIRONMENT_STATE_DIR="$RELEASE_STATE_DIR/runtime-environments"
 CANARY_RECEIPT_DIR="$RELEASE_STATE_DIR/canary-receipts"
 ACTIVE_RUNTIME_PROFILE="$RELEASE_STATE_DIR/runtime-profile.active"
 OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.authority-operation-lock}"
+ROLLBACK_READER_CAPABILITY_LABEL='org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'
 OPERATION_LOCK_HELD=false
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -456,6 +457,13 @@ image_source_matches() {
   [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" == "$expected_source" ]]
 }
 
+accepted_image_can_read_staging_canary_state() {
+  local image format
+  image="$(field "$CURRENT_RECORD" authority-image)"
+  format='{{index .Config.Labels "'"$ROLLBACK_READER_CAPABILITY_LABEL"'"}}'
+  [[ "$(docker image inspect --format "$format" "$image")" == true ]]
+}
+
 running_exact_release() {
   local record="$1" expected expected_source expected_release expected_profile_sha authority_id proxy_id image_id
   expected="$(field "$record" authority-image)"
@@ -645,6 +653,11 @@ run_staging_private_dm_canary() {
   local record release_id host receipt normalized outcome
   if [[ -f "$CANDIDATE_RECORD" ]]; then
     record="$CANDIDATE_RECORD"
+    if [[ -f "$CURRENT_RECORD" ]]; then
+      validate "$CURRENT_RECORD"
+      accepted_image_can_read_staging_canary_state || \
+        fail 'staging canary requires the accepted Authority image to advertise staging-synthetic-meeting-canary rollback-read capability'
+    fi
   elif [[ -f "$CURRENT_RECORD" ]]; then
     record="$CURRENT_RECORD"
   else
@@ -766,8 +779,8 @@ case "$command" in
       exit 0
     fi
     if [[ "$first_deploy" == true ]]; then
-      archive_candidate_as_failed || fail 'first deployment candidate failed and could not be marked failed; do not continue automatically'
       compose_clean down || fail 'first deployment failed and candidate stop could not be confirmed'
+      archive_candidate_as_failed || fail 'first deployment candidate was stopped but could not be marked failed; leave it staged and retry rollback'
       fail 'first deployment candidate failed health/setup checks; candidate was stopped and no release was accepted'
     fi
     restore_accepted "$CURRENT_RECORD" || fail 'candidate failed and rollback also failed; candidate remains staged so recovery can be retried'
@@ -812,8 +825,20 @@ case "$command" in
     ;;
   rollback)
     [[ $# -eq 1 ]] || usage
-    [[ -f "$CURRENT_RECORD" && -f "$CANDIDATE_RECORD" ]] || fail 'rollback requires an accepted current release and a staged candidate'
-    validate "$CURRENT_RECORD"; validate "$CANDIDATE_RECORD"
+    [[ -f "$CANDIDATE_RECORD" ]] || fail 'rollback requires a staged candidate'
+    validate "$CANDIDATE_RECORD"
+    if [[ ! -e "$CURRENT_RECORD" && ! -L "$CURRENT_RECORD" ]]; then
+      active_runtime_profile_matches "$CANDIDATE_RECORD"
+      active_materialized_profile_matches
+      active_environment_matches "$CANDIDATE_RECORD"
+      running_exact_release "$CANDIDATE_RECORD" || fail 'first deployment candidate is stopped or runtime image drifted; leave it staged and investigate before retrying rollback'
+      compose_clean down || fail 'first deployment abort failed; candidate remains staged and runtime stop is unconfirmed'
+      archive_candidate_as_failed || fail 'first deployment candidate was stopped but could not be marked failed; leave it staged and retry rollback'
+      printf '{"ok":true,"stage":"aborted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
+      exit 0
+    fi
+    [[ -f "$CURRENT_RECORD" ]] || fail 'accepted current release record is unsafe'
+    validate "$CURRENT_RECORD"
     if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
       remove_record "$CANDIDATE_RECORD"
       printf '{"ok":true,"stage":"already_promoted","baseline_compatibility_class":"clean-v1"}\n'
