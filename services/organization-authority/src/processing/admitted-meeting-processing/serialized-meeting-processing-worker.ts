@@ -1,6 +1,6 @@
-export const DEFAULT_AUTHORITY_MEETING_WORKER_INTERVAL_MS = 30_000;
+export const DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS = 30_000;
 
-export interface SerializedAuthorityMeetingWorkerOptions {
+export interface SerializedMeetingProcessingWorkerOptions {
   readonly runCycle: (signal: AbortSignal) => Promise<void>;
   readonly intervalMs?: number;
   /** A cycle failure notification; callback failures never stop the worker. */
@@ -29,7 +29,7 @@ function errorFrom(value: unknown): Error {
  * completion. The single loop is the serialization guarantee: no second cycle
  * can start while the first is in flight.
  */
-export class SerializedAuthorityMeetingWorker {
+export class SerializedMeetingProcessingWorker {
   private readonly controller = new AbortController();
   private readonly intervalMs: number;
   private readonly loop: Promise<void>;
@@ -42,12 +42,12 @@ export class SerializedAuthorityMeetingWorker {
   private exclusiveActive = false;
 
   constructor(
-    private readonly options: SerializedAuthorityMeetingWorkerOptions,
+    private readonly options: SerializedMeetingProcessingWorkerOptions,
   ) {
     this.intervalMs =
-      options.intervalMs ?? DEFAULT_AUTHORITY_MEETING_WORKER_INTERVAL_MS;
+      options.intervalMs ?? DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS;
     if (!Number.isSafeInteger(this.intervalMs) || this.intervalMs < 1) {
-      throw new Error('authority meeting worker interval must be a positive integer');
+      throw new Error('meeting-processing worker interval must be a positive integer');
     }
     this.loop = this.run();
   }

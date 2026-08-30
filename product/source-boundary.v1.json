@@ -129,7 +129,6 @@
     ],
     "provider_neutral_paths": [
       "services/organization-authority/src/processing/core/**",
-      "services/organization-authority/src/processing/live/**",
       "services/organization-authority/src/processing/admitted-meeting-processing/**",
       "services/organization-authority/src/processing/reference/**",
       "services/organization-authority/src/answer-composition/retrieval-grounded-answer-composition.ts",

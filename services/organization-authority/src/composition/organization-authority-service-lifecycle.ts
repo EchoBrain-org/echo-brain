@@ -1,8 +1,8 @@
 import type { AddressInfo } from "node:net";
 import {
-  SerializedAuthorityMeetingWorker,
-  type SerializedAuthorityMeetingWorkerOptions,
-} from "../processing/live/serialized-authority-meeting-worker.js";
+  SerializedMeetingProcessingWorker,
+  type SerializedMeetingProcessingWorkerOptions,
+} from "../processing/admitted-meeting-processing/serialized-meeting-processing-worker.js";
 import {
   MeetingProcessingWorkerLifecycleV1,
   type MeetingProcessingWorkerPhaseRunnerV1,
@@ -57,7 +57,7 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
     config: OrganizationAuthorityApiRuntimeConfig,
     dependencies: OrganizationAuthorityApiRuntimeDependencies,
   ) => Promise<RunningOrganizationAuthorityApiRuntime>;
-  readonly on_worker_error?: SerializedAuthorityMeetingWorkerOptions["onError"];
+  readonly on_worker_error?: SerializedMeetingProcessingWorkerOptions["onError"];
   /** Content-free lifecycle events; observer failures never affect the worker. */
   readonly on_worker_telemetry?: (event: MeetingProcessingWorkerTelemetryEventV1) => void;
   /** Deterministic test seam for elapsed lifecycle telemetry. */
@@ -78,7 +78,7 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
  * Runs exactly one Organization Authority processing cycle. Recovery leads so
  * a restart completes an
  * already-finalized action before consuming new source input. Every operation
- * is awaited in order; `SerializedAuthorityMeetingWorker` supplies the single
+ * is awaited in order; `SerializedMeetingProcessingWorker` supplies the single
  * in-process serialization guarantee.
  */
 export async function runOrganizationAuthorityProcessingCycleV1(
@@ -155,7 +155,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     startup.signal.throwIfAborted();
     api = await startApi(config.api, dependencies.api ?? {});
     const startedApi = api;
-    const worker = new SerializedAuthorityMeetingWorker({
+    const worker = new SerializedMeetingProcessingWorker({
       intervalMs: config.worker_interval_ms,
       runCycle: async (signal) => {
         lifecycle.startCycle();

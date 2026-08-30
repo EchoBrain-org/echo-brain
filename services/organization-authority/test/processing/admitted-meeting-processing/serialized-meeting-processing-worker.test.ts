@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SerializedAuthorityMeetingWorker } from '../../../src/processing/live/serialized-authority-meeting-worker.js';
+import { SerializedMeetingProcessingWorker } from '../../../src/processing/admitted-meeting-processing/serialized-meeting-processing-worker.js';
 
 function deferred(): {
   readonly promise: Promise<void>;
@@ -16,7 +16,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('serialized Authority meeting worker', () => {
+describe('serialized meeting-processing worker', () => {
   it('runs immediately and never overlaps a slow cycle', async () => {
     vi.useFakeTimers();
     const first = deferred();
@@ -24,7 +24,7 @@ describe('serialized Authority meeting worker', () => {
     let calls = 0;
     let active = 0;
     let maximumActive = 0;
-    const worker = new SerializedAuthorityMeetingWorker({
+    const worker = new SerializedMeetingProcessingWorker({
       intervalMs: 1_000,
       runCycle: async () => {
         const index = calls++;
@@ -56,7 +56,7 @@ describe('serialized Authority meeting worker', () => {
     vi.useFakeTimers();
     const cycle = deferred();
     const events: string[] = [];
-    const worker = new SerializedAuthorityMeetingWorker({
+    const worker = new SerializedMeetingProcessingWorker({
       intervalMs: 1_000,
       runCycle: async () => {
         events.push("cycle:start");
@@ -81,7 +81,7 @@ describe('serialized Authority meeting worker', () => {
     vi.useFakeTimers();
     const errors: string[] = [];
     let calls = 0;
-    const worker = new SerializedAuthorityMeetingWorker({
+    const worker = new SerializedMeetingProcessingWorker({
       intervalMs: 100,
       runCycle: async () => {
         calls += 1;
@@ -109,7 +109,7 @@ describe('serialized Authority meeting worker', () => {
     const events: string[] = [];
     let calls = 0;
     let capturedSignal: AbortSignal | undefined;
-    const worker = new SerializedAuthorityMeetingWorker({
+    const worker = new SerializedMeetingProcessingWorker({
       intervalMs: 100,
       runCycle: async (signal) => {
         calls += 1;

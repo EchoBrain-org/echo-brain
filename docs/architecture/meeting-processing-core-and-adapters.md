@@ -19,7 +19,7 @@ provider API -> server adapter -> processing contracts <- processing cycle
   vendor SDKs, Authority composition, or persistence implementation.
 - `processing/adapters/` implement typed core ports and own provider transport.
 - `processing/storage/` owns Authority processing durability.
-- `processing/live/` composes one bounded server cycle.
+- `processing/admitted-meeting-processing/` owns the serialized bounded server cycle.
 - Authority composition selects concrete adapters, credentials, organization
   policy, and stores through explicit bundles for meeting source, decision
   processor, answer composition, approval/interaction, and Person external

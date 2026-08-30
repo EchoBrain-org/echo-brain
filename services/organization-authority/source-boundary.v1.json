@@ -357,7 +357,6 @@
         "services/organization-authority/src/processing/core/processing/brief.ts",
         "services/organization-authority/src/processing/admitted-meeting-processing/**",
         "services/organization-authority/src/processing/private-approval-records/**",
-        "services/organization-authority/src/processing/live/**",
         "services/organization-authority/src/quality/**",
         "services/organization-authority/src/processing/record/**",
         "services/organization-authority/src/processing/storage/**"
@@ -564,14 +563,6 @@
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-record"
       ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-serialized-authority-meeting-worker-is-generic",
-      "from": "services/organization-authority/src/processing/live/serialized-authority-meeting-worker.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     }
