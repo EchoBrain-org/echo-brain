@@ -46,9 +46,9 @@ import {
   issueCleanPersonInvitation,
 } from "../src/composition/clean-person-onboarding.js";
 import {
-  openCleanGranolaLiveRuntime,
-  type OpenCleanGranolaLiveRuntimeConfig,
-} from "../src/composition/open-clean-granola-live-runtime.js";
+  openCleanFounderLiveRuntime,
+  type OpenCleanFounderLiveRuntimeConfig,
+} from "../src/composition/open-clean-founder-live-runtime.js";
 import {
   openCleanLiveRuntime,
   type CleanLiveSourceRuntimeBundleV1,
@@ -582,7 +582,7 @@ async function admittedFixture(input: {
   });
   const poster = new FakePrivateApprovalPoster();
   const errors: Error[] = [];
-  const config: OpenCleanGranolaLiveRuntimeConfig = {
+  const config: OpenCleanFounderLiveRuntimeConfig = {
     state_directory: initialized.state_directory,
     host: "127.0.0.1",
     port: await availablePort(),
@@ -620,7 +620,7 @@ async function activeFixture() {
   const fixture = await admittedFixture({
     seed_private_slack_connection: true,
   });
-  const runtime = await openCleanGranolaLiveRuntime(fixture.config, {
+  const runtime = await openCleanFounderLiveRuntime(fixture.config, {
     live_adapters: {
       source: fixture.source,
       processor: fakeProcessor(fixture.processorIdentity),
@@ -952,7 +952,7 @@ describe("open clean live runtime private approval lane", () => {
     const credentials = initializeCleanPersonCredentials({
       state_directory: initialized.state_directory,
     });
-    const runtime = await openCleanGranolaLiveRuntime({
+    const runtime = await openCleanFounderLiveRuntime({
       state_directory: initialized.state_directory,
       host: "127.0.0.1",
       port: await availablePort(),
@@ -987,7 +987,7 @@ describe("open clean live runtime private approval lane", () => {
     const fixture = await activeFixture();
     await fixture.runtime.close();
     await expect(
-      openCleanGranolaLiveRuntime({
+      openCleanFounderLiveRuntime({
         ...fixture.config,
         granola_credential_file: join(
           fixture.initialized.state_directory,
@@ -1007,7 +1007,7 @@ describe("open clean live runtime private approval lane", () => {
       "replacement-owner@example.com",
     );
     chmodSync(fixture.config.granola_owner_email_file, 0o600);
-    await expect(openCleanGranolaLiveRuntime(fixture.config)).rejects.toThrow(
+    await expect(openCleanFounderLiveRuntime(fixture.config)).rejects.toThrow(
       /owner differs from the admitted custodian commitment/,
     );
   });
@@ -1016,7 +1016,7 @@ describe("open clean live runtime private approval lane", () => {
     const fixture = await activeFixture();
     await fixture.runtime.close();
     await expect(
-      openCleanGranolaLiveRuntime({
+      openCleanFounderLiveRuntime({
         ...fixture.config,
         llm_credential_file: join(
           fixture.initialized.state_directory,
@@ -1389,7 +1389,7 @@ describe("open clean live runtime private approval lane", () => {
       });
       await fixture.runtime.close();
       const restartedPoster = new FakePrivateApprovalPoster();
-      const restarted = await openCleanGranolaLiveRuntime(fixture.config, {
+      const restarted = await openCleanFounderLiveRuntime(fixture.config, {
         live_adapters: {
           source: fixture.source,
           processor: fakeProcessor(fixture.processorIdentity),
@@ -1449,7 +1449,7 @@ describe("open clean live runtime private approval lane", () => {
         .run(card.approval_id);
 
       await expect(
-        openCleanGranolaLiveRuntime(fixture.config, {
+        openCleanFounderLiveRuntime(fixture.config, {
           live_adapters: {
             source: fixture.source,
             processor: fakeProcessor(fixture.processorIdentity),
@@ -1519,7 +1519,7 @@ describe("open clean live runtime private approval lane", () => {
 
       const replacementPoster = new FakePrivateApprovalPoster();
       await expect(
-        openCleanGranolaLiveRuntime(fixture.config, {
+        openCleanFounderLiveRuntime(fixture.config, {
           live_adapters: {
             source: fixture.source,
             processor: fakeProcessor(fixture.processorIdentity),

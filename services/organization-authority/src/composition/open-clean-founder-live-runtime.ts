@@ -28,7 +28,7 @@ import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-s
 import type { PrivateApprovalSlackInteractionRejectionStageV1 } from "./private-approval-slack-interaction-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
 
-export interface OpenCleanGranolaLiveRuntimeConfig
+export interface OpenCleanFounderLiveRuntimeConfig
   extends Omit<
     OpenCleanLiveRuntimeConfig,
     | "source_runtime"
@@ -48,7 +48,7 @@ export interface OpenCleanGranolaLiveRuntimeConfig
   }) => void;
 }
 
-type CleanGranolaLiveAdapters = NonNullable<
+type CleanFounderLiveAdapters = NonNullable<
   OpenCleanLiveRuntimeDependencies["live_adapters"]
 > & {
   readonly private_approval_card_poster?: Pick<
@@ -62,9 +62,9 @@ type CleanGranolaLiveAdapters = NonNullable<
   >;
 };
 
-export interface OpenCleanGranolaLiveRuntimeDependencies
+export interface OpenCleanFounderLiveRuntimeDependencies
   extends Omit<OpenCleanLiveRuntimeDependencies, "live_adapters"> {
-  readonly live_adapters?: CleanGranolaLiveAdapters;
+  readonly live_adapters?: CleanFounderLiveAdapters;
 }
 
 function fixedGranolaConfig(
@@ -167,10 +167,10 @@ export function createGranolaLiveSourceRuntimeBundleV1(input: {
   });
 }
 
-/** Maintains the current CLI's Granola-backed public runtime behavior. */
-export function openCleanGranolaLiveRuntime(
-  config: OpenCleanGranolaLiveRuntimeConfig,
-  dependencies: OpenCleanGranolaLiveRuntimeDependencies = {},
+/** Opens the current founder product profile's live runtime. */
+export function openCleanFounderLiveRuntime(
+  config: OpenCleanFounderLiveRuntimeConfig,
+  dependencies: OpenCleanFounderLiveRuntimeDependencies = {},
 ): Promise<OpenedCleanLiveRuntime> {
   const {
     granola_credential_file,

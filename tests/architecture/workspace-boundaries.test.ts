@@ -957,11 +957,11 @@ describe("workspace source boundaries", () => {
     expect(compositionRule?.allowed_imports).toContain(
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
     );
-    for (const providerLeaf of [
+    for (const concreteCompositionModule of [
       "services/organization-authority/src/composition/granola-live-source-boundary-v1.ts",
-      "services/organization-authority/src/composition/open-clean-granola-live-runtime.ts",
+      "services/organization-authority/src/composition/open-clean-founder-live-runtime.ts",
     ]) {
-      expect(existsSync(join(fixture, providerLeaf))).toBe(true);
+      expect(existsSync(join(fixture, concreteCompositionModule))).toBe(true);
     }
 
     const product = readFixtureJson<{

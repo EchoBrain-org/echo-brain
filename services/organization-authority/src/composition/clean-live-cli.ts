@@ -1,7 +1,7 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
 import { readCleanFounderOnboardingManifest } from "./clean-founder-cli.js";
-import { openCleanGranolaLiveRuntime } from "./open-clean-granola-live-runtime.js";
+import { openCleanFounderLiveRuntime } from "./open-clean-founder-live-runtime.js";
 import { readCleanPersonOidcConfiguration } from "./clean-person-cli.js";
 
 const USAGE =
@@ -117,7 +117,7 @@ export async function runCleanLiveCli(
     }
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
-    const runtime = await openCleanGranolaLiveRuntime({
+    const runtime = await openCleanFounderLiveRuntime({
       state_directory: stateDirectory,
       host,
       port: positiveInteger(required(parsed, "--port"), "clean live port"),
