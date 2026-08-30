@@ -13,6 +13,9 @@ import { createStagingSyntheticMeetingCanaryV1 } from "../../src/processing/clea
 const RELEASE_ID = "clean-v1-staging-canary";
 const OWNER_EMAIL = "founder@example.com";
 const directories: string[] = [];
+type CanaryStage = NonNullable<
+  OpenedCleanLiveRuntime["stage_staging_synthetic_private_dm_canary"]
+>;
 
 async function socketPath(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "echo-canary-control-"));
@@ -45,9 +48,7 @@ async function post(
 }
 
 function runtime(
-  stage: NonNullable<
-    OpenedCleanLiveRuntime["stage_staging_synthetic_private_dm_canary"]
-  >,
+  stage: CanaryStage,
 ): Pick<OpenedCleanLiveRuntime, "stage_staging_synthetic_private_dm_canary"> {
   return { stage_staging_synthetic_private_dm_canary: stage };
 }
@@ -256,6 +257,53 @@ describe("staging synthetic private-DM canary control", () => {
     const response = await post(control.socket_path);
     expect(response.status).toBe(500);
     expect(observedSignal?.aborted).toBe(true);
+    await control.close();
+  });
+
+  it("returns at its deadline while a queued canary waits behind prior work", async () => {
+    let releasePreceding!: () => void;
+    const preceding = new Promise<void>((resolve) => {
+      releasePreceding = resolve;
+    });
+    let observeAbort!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      observeAbort = resolve;
+    });
+    let queuedStage: ReturnType<CanaryStage> | undefined;
+    let sideEffects = 0;
+    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
+      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
+      authority_host: "authority-staging.echobrain.org",
+      release_id: RELEASE_ID,
+      owner_email: OWNER_EMAIL,
+      runtime: runtime((_input, options) => {
+        options?.signal?.addEventListener("abort", observeAbort, {
+          once: true,
+        });
+        queuedStage = preceding.then(() => {
+          options?.signal?.throwIfAborted();
+          sideEffects += 1;
+          return {
+            kind: "staged",
+            approval_id: "apr_queued",
+            stage_id: "stage_queued",
+            reused_frozen_extraction: false,
+          };
+        });
+        return queuedStage;
+      }),
+      socket_path: await socketPath(),
+      operation_timeout_ms: 5,
+    });
+
+    const response = post(control.socket_path);
+    await aborted;
+    expect((await response).status).toBe(500);
+    expect(sideEffects).toBe(0);
+
+    releasePreceding();
+    await expect(queuedStage).rejects.toBeInstanceOf(Error);
+    expect(sideEffects).toBe(0);
     await control.close();
   });
 

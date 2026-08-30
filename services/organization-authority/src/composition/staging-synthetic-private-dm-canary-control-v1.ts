@@ -160,6 +160,27 @@ function close(server: Server): Promise<void> {
   });
 }
 
+function raceStageWithAbort<T>(
+  stage: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  let removeAbortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const rejectAborted = (): void => reject(signal.reason);
+    if (signal.aborted) {
+      rejectAborted();
+      return;
+    }
+    signal.addEventListener("abort", rejectAborted, { once: true });
+    removeAbortListener = () =>
+      signal.removeEventListener("abort", rejectAborted);
+  });
+  // A queued serialized operation can reject after the request has timed out.
+  // Keep that eventual rejection observed after the race has already returned.
+  void stage.catch(() => undefined);
+  return Promise.race([stage, aborted]).finally(() => removeAbortListener?.());
+}
+
 /**
  * Opens the staging rehearsal trigger only on a Unix socket inside the
  * Authority container. Caddy has no filesystem access to this socket, so it
@@ -215,13 +236,16 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
     request.once("aborted", abort);
     response.once("close", abortIfUnfinished);
     try {
-      const result = await stage(
-        {
-          canary_id: input.release_id,
-          owner_email: input.owner_email,
-          observed_at: now(),
-        },
-        { signal: controller.signal },
+      const result = await raceStageWithAbort(
+        stage(
+          {
+            canary_id: input.release_id,
+            owner_email: input.owner_email,
+            observed_at: now(),
+          },
+          { signal: controller.signal },
+        ),
+        controller.signal,
       );
       controller.signal.throwIfAborted();
       if (!response.destroyed) receipt(response, input.release_id, result);
