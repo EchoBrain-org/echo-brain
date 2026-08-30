@@ -9,12 +9,12 @@ import {
   type OrganizationAuthorityRuntimeDependencies,
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
-import { createGranolaMeetingSourceRuntimeBundleV1 } from "./granola-meeting-source-runtime-v1.js";
-import { createOpenRouterDecisionProcessorRuntimeBundleV1 } from "./openrouter-decision-processor-runtime-bundle-v1.js";
+import { createGranolaMeetingSourceBundleV1 } from "./granola-meeting-source-bundle-v1.js";
+import { createOpenRouterDecisionProcessorBundleV1 } from "./openrouter-decision-processor-bundle-v1.js";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "./openrouter-answer-composition-generation-bundle-v1.js";
-import { createPrivateSlackApprovalRuntimeBundleV1 } from "./private-slack-approval-runtime-v1.js";
+import { createPrivateSlackApprovalWorkflowBundleV1 } from "./private-slack-approval-workflow-bundle-v1.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime-bundle-v1.js";
-import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-v1.js";
+import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-protocol-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 
 export interface OrganizationAuthorityServiceConfig
@@ -96,14 +96,14 @@ export function openOrganizationAuthorityService(
   return openOrganizationAuthorityRuntime(
     {
       ...sharedConfig,
-      meeting_source_bundle: createGranolaMeetingSourceRuntimeBundleV1({
+      meeting_source_bundle: createGranolaMeetingSourceBundleV1({
         granola_credential_file,
         granola_owner_email_file,
       }),
-      decision_processor_bundle: createOpenRouterDecisionProcessorRuntimeBundleV1({
+      decision_processor_bundle: createOpenRouterDecisionProcessorBundleV1({
         credential_file: openrouter_credential_file,
       }),
-      approval_workflow_bundle: createPrivateSlackApprovalRuntimeBundleV1({
+      approval_workflow_bundle: createPrivateSlackApprovalWorkflowBundleV1({
         state_directory: sharedConfig.state_directory,
         signing_secret_file: slack_signing_secret_file,
         connection_id: slack_connection_id,

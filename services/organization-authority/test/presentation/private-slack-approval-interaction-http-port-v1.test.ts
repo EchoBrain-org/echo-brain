@@ -2,10 +2,10 @@ import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createOrganizationAuthorityHttpServer } from "../../src/presentation/organization-authority-http-server.js";
 import {
-  PRIVATE_SLACK_APPROVAL_INTERACTIONS_PATH_V1,
-  type PrivateSlackApprovalInteractionsHttpApplicationV1,
-} from "../../src/presentation/private-slack-approval-interactions-http-application-v1.js";
-import { createPrivateSlackApprovalInteractionHttpIngressV1 } from "../../src/composition/private-slack-approval-interaction-http-ingress-v1.js";
+  PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1,
+  type PrivateSlackApprovalInteractionHttpPortV1,
+} from "../../src/presentation/private-slack-approval-interaction-http-port-v1.js";
+import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/composition/private-slack-approval-http-adapter-v1.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../../src/presentation/private-approval-interaction-http-application-v1.js";
 import type { PersonExternalIdentityLinkHttpApplicationV1 } from "../../src/presentation/person-external-identity-link-http-application.js";
 import { PERSON_SESSION_OIDC_BEGIN_PATH } from "../../src/presentation/person-identity-session-http-application.js";
@@ -183,17 +183,17 @@ describe("private Slack approval interactions HTTP mount V1", () => {
     const accept = vi.fn(
       async (
         _request: Parameters<
-          PrivateSlackApprovalInteractionsHttpApplicationV1["accept"]
+          PrivateSlackApprovalInteractionHttpPortV1["accept"]
         >[0],
       ) => "accepted" as const,
     );
     const server = await start(
-      createPrivateSlackApprovalInteractionHttpIngressV1({ accept }),
+      createPrivateSlackApprovalHttpAdapterV1({ accept }),
     );
     const raw = "payload=%7B%22exact%22%3A%22a%2Bb%2520c%22%7D";
     try {
       const response = await fetch(
-        `${server.url}${PRIVATE_SLACK_APPROVAL_INTERACTIONS_PATH_V1}`,
+        `${server.url}${PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1}`,
         {
           method: "POST",
           headers: {
@@ -223,7 +223,7 @@ describe("private Slack approval interactions HTTP mount V1", () => {
     const server = await start();
     try {
       const response = await fetch(
-        `${server.url}${PRIVATE_SLACK_APPROVAL_INTERACTIONS_PATH_V1}`,
+        `${server.url}${PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1}`,
         { method: "POST", body: "payload=%7B%7D" },
       );
       expect(response.status).toBe(404);
@@ -239,16 +239,16 @@ describe("private Slack approval interactions HTTP mount V1", () => {
     const accept = vi.fn(
       async (
         _request: Parameters<
-          PrivateSlackApprovalInteractionsHttpApplicationV1["accept"]
+          PrivateSlackApprovalInteractionHttpPortV1["accept"]
         >[0],
       ) => "accepted" as const,
     );
     const server = await start(
-      createPrivateSlackApprovalInteractionHttpIngressV1({ accept }),
+      createPrivateSlackApprovalHttpAdapterV1({ accept }),
     );
     try {
       const response = await fetch(
-        `${server.url}${PRIVATE_SLACK_APPROVAL_INTERACTIONS_PATH_V1}`,
+        `${server.url}${PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1}`,
         {
           method: "POST",
           body: `payload=${"a".repeat(64 * 1024)}`,

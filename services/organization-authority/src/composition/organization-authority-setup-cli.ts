@@ -36,9 +36,9 @@ import {
   readPrivateAuthorityGranolaOwnerEmail,
 } from "../adapters/security/private-file-credentials.js";
 import {
-  initializeAuthorityState,
+  bootstrapOrganizationAuthorityState,
   type AuthorityStateSeedV1,
-} from "./authority-state-initializer.js";
+} from "./organization-authority-state-bootstrap.js";
 import { runGranolaMeetingSourceAdmissionCli } from "./granola-meeting-source-admission-cli.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
@@ -60,11 +60,11 @@ const PROCESSOR_INSTANCE_ID = "founder-llm-v1";
 const DEFAULT_ARTIFACT_REVISION = "clean-founder-v1";
 
 const USAGE = `usage:
-  echo-organization-authority-clean-founder bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> --slack-approval-channel-id <id> [--artifact-revision <revision>] < slack-bot-token
-  echo-organization-authority-clean-founder resume --state-dir <absolute-path> < slack-bot-token
-  echo-organization-authority-clean-founder credentials-install --state-dir <absolute-path> --granola-credential-file <absolute-private-path> --granola-owner-email-file <absolute-private-path> --llm-credential-file <absolute-private-path>
-  echo-organization-authority-clean-founder finalize --state-dir <absolute-path>
-  echo-organization-authority-clean-founder status --state-dir <absolute-path>
+  echo-organization-authority-setup bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> --slack-approval-channel-id <id> [--artifact-revision <revision>] < slack-bot-token
+  echo-organization-authority-setup resume --state-dir <absolute-path> < slack-bot-token
+  echo-organization-authority-setup credentials-install --state-dir <absolute-path> --granola-credential-file <absolute-private-path> --granola-owner-email-file <absolute-private-path> --llm-credential-file <absolute-private-path>
+  echo-organization-authority-setup finalize --state-dir <absolute-path>
+  echo-organization-authority-setup status --state-dir <absolute-path>
 
 The legacy --slack-approval-channel-id flag names the temporary public initial-owner
 identity-link channel only. Private approval cards are never sent to it.`;
@@ -177,7 +177,7 @@ interface OrganizationAuthoritySetupStage {
 
 export interface OrganizationAuthoritySetupCliDependencies {
   readonly now: () => string;
-  readonly initialize_state: typeof initializeAuthorityState;
+  readonly initialize_state: typeof bootstrapOrganizationAuthorityState;
   readonly initialize_credentials: (stateDirectory: string) => Promise<void>;
   readonly connect_slack: (input: {
     readonly state_directory: string;
@@ -234,7 +234,7 @@ function captureCommand(
 
 const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   now: () => new Date().toISOString(),
-  initialize_state: initializeAuthorityState,
+  initialize_state: bootstrapOrganizationAuthorityState,
   initialize_credentials: async (stateDirectory) => {
     await captureCommand((stdout) =>
       runOrganizationAuthorityPersonAdministrationCli(["credentials-init", "--state-dir", stateDirectory], {
@@ -1043,7 +1043,7 @@ function organizationAuthoritySetupInstruction(
 ): string {
   return {
     resume_bootstrap:
-      "Run echo-organization-authority-clean-founder resume --state-dir <absolute-path>.",
+      "Run echo-organization-authority-setup resume --state-dir <absolute-path>.",
     complete_founder_browser_login:
       "Start the Authority and complete the initial-owner browser login.",
     complete_founder_slack_link:
@@ -1724,7 +1724,7 @@ function installProviderCredentials(
       ok: true,
       credentials_ready: true,
       next_instruction:
-        "Run echo-organization-authority-clean-founder status to continue.",
+        "Run echo-organization-authority-setup status to continue.",
     } as never)}\n`,
   );
 }
@@ -1764,7 +1764,7 @@ async function finalize(
       runtime_observation: "not_observed",
       canary_status: "not_complete",
       next_instruction:
-        "Restart the same echo-organization-authority-clean-live serve command. The admitted Granola source begins at its post-cutoff boundary.",
+        "Restart the same echo-organization-authority-serve serve command. The admitted Granola source begins at its post-cutoff boundary.",
     } as never)}\n`,
   );
 }

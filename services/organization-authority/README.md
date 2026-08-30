@@ -20,7 +20,14 @@ defines the supported operator and employee flow.
 - `organization-authority-api-runtime.ts` owns request-serving resources.
 - `organization-authority-http-server.ts` owns HTTP mechanics and dispatch.
 - `organization-authority-setup-cli.ts` coordinates organization setup.
-- `authority-state-initializer.ts` initializes a new absent-state lineage.
+- `organization-authority-state-bootstrap.ts` bootstraps a new absent-state lineage.
+- `meeting-source-bundle-v1.ts`, `decision-processor-bundle-v1.ts`, and
+  `approval-workflow-bundle-v1.ts` define provider-neutral composition seams.
+- `granola-meeting-source-bundle-v1.ts`,
+  `openrouter-decision-processor-bundle-v1.ts`, and
+  `private-slack-approval-workflow-bundle-v1.ts` own the selected providers.
+- Private Slack interactions are separated into protocol, handler, HTTP adapter,
+  and presentation-port components.
 
 Existing `clean-*` binaries and `clean-founder` files and wire values are
 versioned compatibility names. They are not component boundaries and do not
@@ -34,12 +41,19 @@ Build the workspace before using the local `dist/` entrypoints:
 npm run build --workspace @echo-brain/organization-authority
 ```
 
-The package exposes these compatibility commands:
+Use these responsibility-named commands for new automation:
 
-- `echo-organization-authority-init-clean-state`
-- `echo-organization-authority-clean-founder`
-- `echo-organization-authority-clean-person`
-- `echo-organization-authority-clean-live`
+- `echo-organization-authority-state-bootstrap`
+- `echo-organization-authority-setup`
+- `echo-organization-authority-person-admin`
+- `echo-organization-authority-serve`
+- `echo-organization-authority-synthetic-meeting-quality`
+- `echo-organization-authority-admit-granola-meeting-source`
+
+The older `echo-organization-authority-init-clean-state`, `-clean-founder`,
+`-clean-person`, `-clean-live`, `-synthetic-quality`, and
+`-admit-clean-granola-source` binaries remain compatibility commands. Existing
+automation may retain them; new docs and scripts should use the names above.
 
 Use absolute canonical paths. Private credential and invitation directories
 must be current-user `0700`; private input and invitation files must be
@@ -53,7 +67,7 @@ directory. It applies the frozen baselines, creates the Authority descriptor
 and owner, and prints only its JSON result.
 
 ```sh
-echo-organization-authority-init-clean-state \
+echo-organization-authority-state-bootstrap \
   --state-dir /absolute/clean-state \
   --organization-name 'Example Organization' \
   --owner-display-name 'Initial Owner' \
@@ -94,7 +108,7 @@ initial owner's Slack identity-link challenge. It is not an approval destination
 approval-readiness gate.
 
 ```sh
-echo-organization-authority-clean-founder bootstrap \
+echo-organization-authority-setup bootstrap \
   --state-dir /absolute/clean-state \
   --organization-name 'Example Organization' \
   --owner-display-name 'Initial Owner' \
@@ -112,7 +126,7 @@ it. If the command stops or its response is lost, resume from that plan without
 repeating the organization, owner, OIDC, origin, channel, or revision inputs:
 
 ```sh
-echo-organization-authority-clean-founder resume \
+echo-organization-authority-setup resume \
   --state-dir /absolute/clean-state \
   < /absolute/private/slack-bot-token
 ```
@@ -125,7 +139,7 @@ directory; do not try to recreate it around existing state. Use this safe
 status view at any time:
 
 ```sh
-echo-organization-authority-clean-founder status \
+echo-organization-authority-setup status \
   --state-dir /absolute/clean-state
 ```
 
@@ -175,7 +189,7 @@ processing worker. The manifest supplies the Authority URL, OIDC configuration,
 PKCE key, and Slack channel, so they are not repeated here.
 
 ```sh
-echo-organization-authority-clean-live serve \
+echo-organization-authority-serve serve \
   --state-dir /absolute/clean-state \
   --host 127.0.0.1 \
   --port 39479 \
@@ -217,10 +231,10 @@ echo-brain person logout
 development, the lower-level Person administration entrypoint has only these forms:
 
 ```sh
-echo-organization-authority-clean-person credentials-init \
+echo-organization-authority-person-admin credentials-init \
   --state-dir /absolute/clean-state
 
-echo-organization-authority-clean-person invite \
+echo-organization-authority-person-admin invite \
   --state-dir /absolute/clean-state \
   --oidc-config /absolute/private/oidc-config.json \
   --pkce-key-file /absolute/private/person-session-pkce-sealing-key \
@@ -229,7 +243,7 @@ echo-organization-authority-clean-person invite \
   --authority-url https://authority.example.com \
   --out /absolute/private/invitation.json
 
-echo-organization-authority-clean-person serve \
+echo-organization-authority-person-admin serve \
   --state-dir /absolute/clean-state \
   --host 127.0.0.1 \
   --port 39479 \
@@ -254,13 +268,13 @@ trailing whitespace. The Granola owner-email file must contain the same
 canonical lowercase email given to bootstrap and proved by OIDC.
 
 ```sh
-echo-organization-authority-clean-founder credentials-install \
+echo-organization-authority-setup credentials-install \
   --state-dir /absolute/clean-state \
   --granola-credential-file /absolute/private/granola-organization-key \
   --granola-owner-email-file /absolute/private/granola-owner-email \
   --llm-credential-file /absolute/private/llm-provider-credential
 
-echo-organization-authority-clean-founder finalize \
+echo-organization-authority-setup finalize \
   --state-dir /absolute/clean-state
 ```
 
@@ -287,7 +301,7 @@ echo-brain person records --limit 20
 echo-brain person records --query 'known marker'
 ```
 
-Rerun `echo-organization-authority-clean-founder resume --state-dir
+Rerun `echo-organization-authority-setup resume --state-dir
 /absolute/clean-state`, then `status`. The one-note canary is complete only
 when durable state proves source progress, an approved record, an exact-head
 search index generation, and positive owner record-list and indexed-search reads after that

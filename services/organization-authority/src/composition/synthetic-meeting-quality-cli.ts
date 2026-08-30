@@ -23,7 +23,7 @@ import {
 import { fixedOpenRouterDecisionProcessorConfigV1 } from "./openrouter-decision-processor-config-v1.js";
 
 const USAGE =
-  "usage: echo-organization-authority-synthetic-quality run " +
+  "usage: echo-organization-authority-synthetic-meeting-quality run " +
   "--corpus <absolute-path> --llm-credential-file <absolute-path>";
 
 export interface SyntheticMeetingQualityCliIoV1 {

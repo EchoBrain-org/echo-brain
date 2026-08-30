@@ -20,7 +20,7 @@ import {
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../src/composition/readable-search-generation-composition.js";
-import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
 
 const roots: string[] = [];
@@ -42,7 +42,7 @@ afterEach(() => {
 describe("readable-search generation composition", () => {
   it("publishes the zero-head generation once and leaves a restart-verifiable pointer", async () => {
     const parent = root();
-    const initialized = initializeAuthorityState({
+    const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Clean Search Organization",
       owner_display_name: "Founder",

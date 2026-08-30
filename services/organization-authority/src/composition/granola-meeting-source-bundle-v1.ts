@@ -9,7 +9,7 @@ import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { AdmittedMeetingProcessingCommitmentsV1 } from "../processing/admitted-meeting-processing/admitted-meeting-processing-commitments.js";
 import { granolaAdmittedMeetingSourceCursorPolicyV1 } from "./granola-admitted-meeting-source-cursor-policy-v1.js";
-import type { MeetingSourceRuntimeBundleV1 } from "./organization-authority-runtime.js";
+import type { MeetingSourceBundleV1 } from "./meeting-source-bundle-v1.js";
 
 function fixedGranolaConfig(
   instanceId: string,
@@ -50,10 +50,10 @@ function granolaCredentialReferenceSha256(reference: string): string {
 }
 
 /** Owns all Granola-specific construction and admission commitments. */
-export function createGranolaMeetingSourceRuntimeBundleV1(input: {
+export function createGranolaMeetingSourceBundleV1(input: {
   readonly granola_credential_file: string;
   readonly granola_owner_email_file: string;
-}): MeetingSourceRuntimeBundleV1 {
+}): MeetingSourceBundleV1 {
   const credentialReference = `file:${input.granola_credential_file}`;
   let committedOwnerEmail: string | undefined;
   return Object.freeze({
@@ -79,7 +79,7 @@ export function createGranolaMeetingSourceRuntimeBundleV1(input: {
       assertAdapter(created, adapterConfig);
       return created;
     },
-    assert_runtime_commitments(
+    assert_admission_commitments(
       commitments: AdmittedMeetingProcessingCommitmentsV1,
     ) {
       if (

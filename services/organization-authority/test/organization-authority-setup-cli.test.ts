@@ -29,7 +29,7 @@ import {
   runOrganizationAuthoritySetupCli,
   type OrganizationAuthoritySetupCliDependencies,
 } from "../src/composition/organization-authority-setup-cli.js";
-import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
 
@@ -68,7 +68,7 @@ function dependencies(order: string[]): OrganizationAuthoritySetupCliDependencie
       order.push(
         `initialize:${input.created_at}:${input.creating_artifact_revision}`,
       );
-      return initializeAuthorityState(input);
+      return bootstrapOrganizationAuthorityState(input);
     },
     initialize_credentials: async () => {
       order.push("credentials");
@@ -481,7 +481,7 @@ describe("Organization Authority setup coordinator", () => {
       },
       next_step: "resume_bootstrap",
       next_instruction:
-        "Run echo-organization-authority-clean-founder resume --state-dir <absolute-path>.",
+        "Run echo-organization-authority-setup resume --state-dir <absolute-path>.",
     });
     expect(stdout).not.toContain("xoxb-test-token");
     expect(stdout).not.toContain("con_clean-founder");
@@ -882,7 +882,7 @@ describe("Organization Authority setup coordinator", () => {
       ...base,
       initialize_state: (input) => {
         if (resetFails) throw new Error("injected before genesis");
-        return initializeAuthorityState(input);
+        return bootstrapOrganizationAuthorityState(input);
       },
       initialize_credentials: async () => {
         order.push("credentials");

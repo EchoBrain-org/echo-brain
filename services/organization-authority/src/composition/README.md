@@ -16,15 +16,22 @@ The service path has three deliberately separate roots:
 
 `organization-authority-api-runtime.ts` owns API-serving database handles and
 constructs `presentation/organization-authority-http-server.ts`. It does not
-own the background worker. `granola-meeting-source-runtime-v1.ts` contains the
+own the background worker. `granola-meeting-source-bundle-v1.ts` contains the
 Granola-specific source bundle; other provider bundles must follow the same
 pattern rather than entering the provider-neutral runtime.
 
-Stopped-state setup is split by responsibility. `authority-state-initializer.ts`
-creates a new absent-state lineage. `organization-authority-setup-cli.ts`
+Stopped-state setup is split by responsibility.
+`organization-authority-state-bootstrap.ts` creates a new absent-state lineage.
+`organization-authority-setup-cli.ts`
 coordinates initial organization and owner setup. Public `clean-*` command
 names and versioned `clean-founder` wire values remain compatibility contracts;
 they are not component names and do not constrain the service to a founder.
+
+Private Slack approval has four explicit layers: the pure
+`private-slack-approval-interaction-protocol-v1.ts`, application
+`private-slack-approval-interaction-handler-v1.ts`, HTTP adapter
+`private-slack-approval-http-adapter-v1.ts`, and presentation port
+`presentation/private-slack-approval-interaction-http-port-v1.ts`.
 
 Secret values enter only through explicit private-file adapters. Composition
 may pass credential file locations into a concrete provider bundle, while the

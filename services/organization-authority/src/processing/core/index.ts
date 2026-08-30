@@ -6,6 +6,6 @@ export * from './contracts/delivery.js';
 export * from './contracts/validation.js';
 export * from './ports/adapters.js';
 export * from './approval/approval-gate.js';
-export * from './storage/core-state-store.js';
+export * from './storage/meeting-processing-state-store.js';
 export * from './processing/brief.js';
 export * from './delivery/envelope.js';

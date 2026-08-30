@@ -27,7 +27,7 @@ import {
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
 import { openOrganizationAuthorityService } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/slack-person-external-identity-runtime-bundle-v1.js";
-import { initializeAuthorityState } from "../../services/organization-authority/src/composition/authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import type { OrganizationAuthorityProcessingCycleV1 } from "../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
 import { runPersonClientCli } from "../../src/product/person-client/commands.js";
 
@@ -169,7 +169,7 @@ const inactiveWorker: OrganizationAuthorityProcessingCycleV1 = {
 function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
   return {
     now: () => "2026-08-22T12:00:00.000Z",
-    initialize_state: initializeAuthorityState,
+    initialize_state: bootstrapOrganizationAuthorityState,
     initialize_credentials: async (stateDirectory) => {
       initializePersonSessionCredentials({ state_directory: stateDirectory });
     },

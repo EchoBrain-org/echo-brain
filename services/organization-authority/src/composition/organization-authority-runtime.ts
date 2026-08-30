@@ -11,19 +11,17 @@ import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organ
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
 import { AdmittedMeetingProcessingCycleV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { AdmittedMeetingSourceCursorPolicyV1 } from "../processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.js";
 import {
   readAdmittedMeetingProcessingCommitmentsV1,
-  type AdmittedMeetingProcessingCommitmentsV1,
 } from "../processing/admitted-meeting-processing/admitted-meeting-processing-commitments.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type {
   ApprovalWorkflowProcessingV1,
-  ApprovalWorkflowRuntimeBundleV1,
-} from "./approval-runtime-bundle-v1.js";
+  ApprovalWorkflowBundleV1,
+} from "./approval-workflow-bundle-v1.js";
 import type { AnswerCompositionGenerationBundleV1 } from "./answer-composition-generation-bundle-v1.js";
-import type { DecisionProcessorRuntimeBundleV1 } from "./decision-processor-runtime-bundle-v1.js";
+import type { DecisionProcessorBundleV1 } from "./decision-processor-bundle-v1.js";
+import type { MeetingSourceBundleV1 } from "./meeting-source-bundle-v1.js";
 import {
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
@@ -50,11 +48,11 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly client_authentication: OrganizationAuthorityApiRuntimeConfig["client_authentication"];
   readonly pkce_key_file: string;
   /** Explicit provider/source bundle. This generic root does not select one. */
-  readonly meeting_source_bundle: MeetingSourceRuntimeBundleV1;
+  readonly meeting_source_bundle: MeetingSourceBundleV1;
   /** Explicit decision-processor bundle. This generic root does not select one. */
-  readonly decision_processor_bundle: DecisionProcessorRuntimeBundleV1;
+  readonly decision_processor_bundle: DecisionProcessorBundleV1;
   /** Explicit approval/delivery bundle. This generic root does not select one. */
-  readonly approval_workflow_bundle: ApprovalWorkflowRuntimeBundleV1;
+  readonly approval_workflow_bundle: ApprovalWorkflowBundleV1;
   /** Explicit answer-composition bundle. This generic root does not select one. */
   readonly answer_composition_generation_bundle: AnswerCompositionGenerationBundleV1;
   /** Exact durable record-resolution protocols admitted into append and retrieval. */
@@ -92,24 +90,6 @@ type MeetingSourceAdapter = ConstructorParameters<
 type DecisionProcessorAdapter = ConstructorParameters<
   typeof AdmittedMeetingProcessingCycleV1
 >[0]["processor"];
-/**
- * All provider-specific live-source facts are constructed outside this
- * runtime. The stable core only knows the admitted source contract.
- */
-export interface MeetingSourceRuntimeBundleV1 {
-  /** Creates the one source adapter for the admitted source identity. */
-  create_source(admission: AdmittedMeetingProcessingAdmissionV1): MeetingSourceAdapter;
-  /**
-   * Proves this provider's current local source configuration still matches
-   * its immutable admission before the provider credential is read.
-   */
-  assert_runtime_commitments(
-    commitments: AdmittedMeetingProcessingCommitmentsV1,
-  ): void;
-  /** Owns provider cursor and metadata validation. */
-  readonly source_cursor_policy: AdmittedMeetingSourceCursorPolicyV1;
-}
-
 /**
  * Narrow composition seams for deterministic local rehearsals. Production
  * callers leave this absent and retain the concrete provider adapters.
@@ -251,8 +231,8 @@ export async function openOrganizationAuthorityRuntime(
       config.decision_processor_bundle.processor_adapter_id,
     );
     const commitments = readAdmittedMeetingProcessingCommitmentsV1(authority);
-    config.meeting_source_bundle.assert_runtime_commitments(commitments);
-    config.decision_processor_bundle.assert_runtime_commitments(commitments);
+    config.meeting_source_bundle.assert_admission_commitments(commitments);
+    config.decision_processor_bundle.assert_admission_commitments(commitments);
     const admission = await sourceState.readAdmission();
     const source =
       dependencies.processing_adapter_overrides?.source ??
@@ -300,7 +280,7 @@ export async function openOrganizationAuthorityRuntime(
     await config.approval_workflow_bundle.assert_existing_presentations_owned(
       approvalContext,
     );
-    const approvals = await config.approval_workflow_bundle.open(approvalContext);
+    const approvals = await config.approval_workflow_bundle.load(approvalContext);
     const sourceCycle = new AdmittedMeetingProcessingCycleV1({
       source,
       processor,

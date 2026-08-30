@@ -8,14 +8,14 @@ import { readPrivateAuthoritySlackSigningSecret } from "../adapters/security/pri
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import { createPrivateSlackBlockV4RecordWriterV1 } from "../processing/private-approval-records/private-slack-block-v4-record-writer-v1.js";
 import type {
-  ApprovalWorkflowRuntimeBundleV1,
-  ApprovalWorkflowRuntimeContextV1,
-} from "./approval-runtime-bundle-v1.js";
-import { createPrivateSlackApprovalInteractionHttpIngressV1 } from "./private-slack-approval-interaction-http-ingress-v1.js";
+  ApprovalWorkflowBundleV1,
+  ApprovalWorkflowContextV1,
+} from "./approval-workflow-bundle-v1.js";
+import { createPrivateSlackApprovalHttpAdapterV1 } from "./private-slack-approval-http-adapter-v1.js";
 import { PrivateSlackDmApprovalStagerV1 } from "./private-slack-dm-approval-stager-v1.js";
 import { PrivateSlackApprovalTerminalCoordinatorV1 } from "./private-slack-approval-terminal-coordinator-v1.js";
-import { createPrivateSlackApprovalInteractionsApplicationV1 } from "./private-slack-approval-interactions-application-v1.js";
-import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-v1.js";
+import { createPrivateSlackApprovalInteractionHandlerV1 } from "./private-slack-approval-interaction-handler-v1.js";
+import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-protocol-v1.js";
 import { resolveMeetingOwnerPrivateSlackApprovalReviewerV1 } from "./resolve-meeting-owner-private-slack-approval-reviewer-v1.js";
 import {
   resolveCurrentPrivateSlackConnectionV1,
@@ -25,7 +25,7 @@ import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "./sqlite-private-sl
 import { SqlitePrivateSlackApprovalTerminalAuthorityV1 } from "./sqlite-private-slack-approval-terminal-authority-v1.js";
 import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "./sqlite-stable-private-approval-authority-fence-v1.js";
 
-export interface PrivateSlackApprovalRuntimeConfigV1 {
+export interface PrivateSlackApprovalWorkflowBundleConfigV1 {
   readonly state_directory: string;
   /** Path only. The secret is read only after live-source admission. */
   readonly signing_secret_file: string;
@@ -62,7 +62,7 @@ interface UnownedApprovalPresentationRowV1 {
  * no message timestamp was durably recovered.
  */
 function assertPrivateSlackApprovalPresentationOwnershipV1(
-  context: ApprovalWorkflowRuntimeContextV1,
+  context: ApprovalWorkflowContextV1,
   connection: CurrentPrivateSlackConnectionV1,
 ): void {
   const unowned = context.authority_database
@@ -96,22 +96,22 @@ function assertPrivateSlackApprovalPresentationOwnershipV1(
     ) as UnownedApprovalPresentationRowV1 | undefined;
   if (unowned !== undefined) {
     throw new Error(
-      `private Slack approval runtime cannot prove ownership of outstanding ${unowned.state} presentation ${unowned.approval_id}`,
+      `private Slack approval workflow cannot prove ownership of outstanding ${unowned.state} presentation ${unowned.approval_id}`,
     );
   }
 }
 
 /**
  * The current Slack private-DM approval lane behind the provider-neutral
- * approval-runtime seam. Its ordering and all durable Slack behavior are
+ * approval-workflow seam. Its ordering and all durable Slack behavior are
  * deliberately unchanged from the V1 live composition.
  */
-export function createPrivateSlackApprovalRuntimeBundleV1(
-  config: PrivateSlackApprovalRuntimeConfigV1,
-): ApprovalWorkflowRuntimeBundleV1 {
+export function createPrivateSlackApprovalWorkflowBundleV1(
+  config: PrivateSlackApprovalWorkflowBundleConfigV1,
+): ApprovalWorkflowBundleV1 {
   return Object.freeze({
     async assert_existing_presentations_owned(
-      context: ApprovalWorkflowRuntimeContextV1,
+      context: ApprovalWorkflowContextV1,
     ): Promise<void> {
       const slack = resolveCurrentPrivateSlackConnectionV1(
         context.control_plane_database,
@@ -123,7 +123,7 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
         slack,
       );
     },
-    async open(context: ApprovalWorkflowRuntimeContextV1) {
+    async load(context: ApprovalWorkflowContextV1) {
       const slack = resolveCurrentPrivateSlackConnectionV1(
         context.control_plane_database,
         config.connection_id,
@@ -179,7 +179,7 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
         record_writer: recordWriter,
         poster,
       });
-      const interactions = createPrivateSlackApprovalInteractionsApplicationV1({
+      const interactions = createPrivateSlackApprovalInteractionHandlerV1({
         signing_secret: readPrivateAuthoritySlackSigningSecret(
           `file:${config.signing_secret_file}`,
         ),
@@ -190,7 +190,7 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
         stager,
         processing,
         interaction_ingress:
-          createPrivateSlackApprovalInteractionHttpIngressV1(interactions),
+          createPrivateSlackApprovalHttpAdapterV1(interactions),
       });
     },
   });

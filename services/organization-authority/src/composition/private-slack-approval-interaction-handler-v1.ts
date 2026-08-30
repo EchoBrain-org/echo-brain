@@ -3,20 +3,20 @@ import type {
   EnqueuePrivateApprovalInteractionResultV1,
   PrivateApprovalSignedTerminalActionV1,
 } from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
-import type { PrivateSlackApprovalInteractionsHttpApplicationV1 } from "../presentation/private-slack-approval-interactions-http-application-v1.js";
+import type { PrivateSlackApprovalInteractionHttpPortV1 } from "../presentation/private-slack-approval-interaction-http-port-v1.js";
 import {
   PrivateSlackApprovalInteractionError,
   parseVerifiedPrivateSlackApprovalInteractionV1,
   type PrivateSlackApprovalInteractionRejectionStageV1,
   verifyPrivateSlackApprovalRequestV1,
-} from "./private-slack-approval-interaction-v1.js";
+} from "./private-slack-approval-interaction-protocol-v1.js";
 
 /**
  * The one durable operation this ingress needs. Keeping this narrow avoids a
  * second queue adapter whose only job was to copy the verified intent into
  * this receipt shape.
  */
-export interface PrivateSlackApprovalResolutionPersistenceV1 {
+export interface PrivateSlackApprovalInteractionResolutionPersistenceV1 {
   enqueue(input: {
     readonly disposition: "resolution";
     readonly receipt: PrivateApprovalSignedTerminalActionV1;
@@ -25,10 +25,10 @@ export interface PrivateSlackApprovalResolutionPersistenceV1 {
     | Promise<EnqueuePrivateApprovalInteractionResultV1>;
 }
 
-export interface PrivateSlackApprovalInteractionsApplicationInputV1 {
+export interface PrivateSlackApprovalInteractionHandlerInputV1 {
   /** Private runtime input. It must never be logged or persisted. */
   readonly signing_secret: string;
-  readonly persistence: PrivateSlackApprovalResolutionPersistenceV1;
+  readonly persistence: PrivateSlackApprovalInteractionResolutionPersistenceV1;
   /** Clock for request freshness and durable receipt timestamps. */
   readonly now_unix_seconds?: () => number;
   readonly now?: () => string;
@@ -42,7 +42,7 @@ export interface PrivateSlackApprovalInteractionsApplicationInputV1 {
 }
 
 function reportRejection(
-  input: PrivateSlackApprovalInteractionsApplicationInputV1,
+  input: PrivateSlackApprovalInteractionHandlerInputV1,
   stage: PrivateSlackApprovalInteractionRejectionStageV1,
 ): void {
   try {
@@ -79,14 +79,14 @@ function isSlackFormContentType(value: string | undefined): boolean {
  * no-ops. Terminal buttons must first be durably queued (or proven an exact
  * replay/denial) before the HTTP layer returns its 200 acknowledgement.
  */
-export function createPrivateSlackApprovalInteractionsApplicationV1(
-  input: PrivateSlackApprovalInteractionsApplicationInputV1,
-): PrivateSlackApprovalInteractionsHttpApplicationV1 {
+export function createPrivateSlackApprovalInteractionHandlerV1(
+  input: PrivateSlackApprovalInteractionHandlerInputV1,
+): PrivateSlackApprovalInteractionHttpPortV1 {
   const now = input.now ?? (() => new Date().toISOString());
   return Object.freeze({
     async accept(
       request: Parameters<
-        PrivateSlackApprovalInteractionsHttpApplicationV1["accept"]
+        PrivateSlackApprovalInteractionHttpPortV1["accept"]
       >[0],
     ): Promise<"accepted"> {
       if (!isSlackFormContentType(request.content_type)) {

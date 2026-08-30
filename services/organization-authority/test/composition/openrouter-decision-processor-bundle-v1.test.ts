@@ -8,7 +8,7 @@ import {
   openRouterDecisionProcessorConfigurationSha256V1,
   openRouterDecisionProcessorCredentialReferenceSha256V1,
 } from "../../src/composition/openrouter-decision-processor-config-v1.js";
-import { createOpenRouterDecisionProcessorRuntimeBundleV1 } from "../../src/composition/openrouter-decision-processor-runtime-bundle-v1.js";
+import { createOpenRouterDecisionProcessorBundleV1 } from "../../src/composition/openrouter-decision-processor-bundle-v1.js";
 
 const directories: string[] = [];
 
@@ -45,10 +45,10 @@ function admission(): AdmittedMeetingProcessingAdmissionV1 {
   };
 }
 
-describe("OpenRouter clean live processor runtime bundle", () => {
+describe("OpenRouter decision processor bundle", () => {
   it("validates the immutable commitment before reading its credential and constructs the admitted processor", () => {
     const credential_file = credentialFile();
-    const bundle = createOpenRouterDecisionProcessorRuntimeBundleV1({
+    const bundle = createOpenRouterDecisionProcessorBundleV1({
       credential_file,
     });
     const commitment = {
@@ -73,9 +73,9 @@ describe("OpenRouter clean live processor runtime bundle", () => {
 
     expect(bundle.processor_adapter_id).toBe("llm");
     expect(() => bundle.create_processor(admission())).toThrow(
-      "runtime commitments were not checked",
+      "admission commitments were not checked",
     );
-    expect(() => bundle.assert_runtime_commitments(commitment)).not.toThrow();
+    expect(() => bundle.assert_admission_commitments(commitment)).not.toThrow();
     expect(bundle.create_processor(admission()).identity).toMatchObject({
       kind: "decision-processor",
       adapter_id: "llm",
@@ -86,12 +86,12 @@ describe("OpenRouter clean live processor runtime bundle", () => {
 
   it("rejects an uncommitted processor credential reference before it reads the credential", () => {
     const credential_file = credentialFile();
-    const bundle = createOpenRouterDecisionProcessorRuntimeBundleV1({
+    const bundle = createOpenRouterDecisionProcessorBundleV1({
       credential_file,
     });
 
     expect(() =>
-      bundle.assert_runtime_commitments({
+      bundle.assert_admission_commitments({
         source: {
           adapter_id: "synthetic-source",
           instance_id: "synthetic-source",

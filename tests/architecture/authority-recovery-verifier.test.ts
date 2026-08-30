@@ -24,7 +24,7 @@ import {
 import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/readable-search-generation-composition.js";
-import { initializeAuthorityState } from "../../services/organization-authority/src/composition/authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "../../services/organization-authority/src/composition/verify-authority-state-lineage.js";
 import {
   inspectLinuxReadOnlyMount,
@@ -78,7 +78,7 @@ async function writeFixture(): Promise<string> {
     mode: 0o600,
   });
 
-  const initialized = initializeAuthorityState({
+  const initialized = bootstrapOrganizationAuthorityState({
     state_directory: stateDirectory,
     organization_display_name: "Recovery Verifier Organization",
     owner_display_name: "Founder",

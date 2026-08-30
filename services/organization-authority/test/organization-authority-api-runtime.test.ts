@@ -20,7 +20,7 @@ import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlit
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
-import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
@@ -97,7 +97,7 @@ afterEach(() => {
 describe("Organization Authority API runtime", () => {
   it("wires an injected external-identity application without selecting a provider", async () => {
     const parent = root();
-    const initialized = initializeAuthorityState({
+    const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -181,7 +181,7 @@ describe("Organization Authority API runtime", () => {
 
   it("burns a bootstrap invitation when the verified email does not match", async () => {
     const parent = root();
-    const initialized = initializeAuthorityState({
+    const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -271,7 +271,7 @@ describe("Organization Authority API runtime", () => {
 
   it("releases retryable bootstrap redemption before consuming the invitation", async () => {
     const parent = root();
-    const initialized = initializeAuthorityState({
+    const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -393,7 +393,7 @@ describe("Organization Authority API runtime", () => {
 
   it("caps unauthenticated OIDC begins durably and releases expired capacity", () => {
     const parent = root();
-    const initialized = initializeAuthorityState({
+    const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -479,7 +479,7 @@ describe("Organization Authority API runtime", () => {
 
   it("runs fresh genesis through founder grant, OIDC bootstrap, refresh, and logout without legacy state", async () => {
     const parent = root();
-    const initialized = initializeAuthorityState({
+    const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",

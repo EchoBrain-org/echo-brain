@@ -10,12 +10,12 @@ import {
 import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging-synthetic-private-dm-canary-client-v1.js";
 
 const USAGE =
-  "usage: echo-organization-authority-clean-live serve " +
+  "usage: echo-organization-authority-serve serve " +
   "--state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> " +
   "--slack-signing-secret-file <absolute-path> " +
   "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>]";
 const STAGING_CANARY_USAGE =
-  "usage: echo-organization-authority-clean-live staging-private-dm-canary " +
+  "usage: echo-organization-authority-serve staging-private-dm-canary " +
   "--release-id <canonical-clean-v1-release-id>";
 const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 

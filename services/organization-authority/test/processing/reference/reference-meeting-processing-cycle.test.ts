@@ -10,7 +10,7 @@ import {
   type ApprovalGate,
   type ApprovalRequest,
   type DeliverySurfaceAdapter,
-  type CoreStateStore,
+  type MeetingProcessingStateStore,
   type DecisionExtractionContext,
   type DecisionProcessorAdapter,
   type DecisionSet,
@@ -359,7 +359,7 @@ class InvalidApprovedBriefGate implements ApprovalGate {
   }
 }
 
-class StateFake implements CoreStateStore {
+class StateFake implements MeetingProcessingStateStore {
   cursor: string | undefined = 'cursor-1';
   meetingAdmission: 'saved' | 'excluded' = 'saved';
   readonly processed = new Set<string>();

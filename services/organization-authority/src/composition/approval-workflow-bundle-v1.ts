@@ -13,7 +13,7 @@ export interface ApprovalWorkflowProcessingV1 {
 }
 
 /** Generic Authority resources made available to the selected approval surface. */
-export interface ApprovalWorkflowRuntimeContextV1 {
+export interface ApprovalWorkflowContextV1 {
   readonly state: SqliteAuthorityMeetingProcessingStateV1;
   readonly authority_database: Database.Database;
   readonly control_plane_database: Database.Database;
@@ -27,7 +27,7 @@ export interface ApprovalWorkflowRuntimeContextV1 {
   readonly next_envelope_id: () => string;
 }
 
-export interface OpenedApprovalWorkflowRuntimeV1 {
+export interface ApprovalWorkflowComponentsV1 {
   readonly stager: ApprovalWorkflowStagerV1;
   readonly processing: ApprovalWorkflowProcessingV1;
   /** Omitted only for an approval surface with no inbound interaction route. */
@@ -38,7 +38,7 @@ export interface OpenedApprovalWorkflowRuntimeV1 {
  * The active approval surface is selected in composition. Source intake and
  * the shared worker only consume the provider-neutral values returned here.
  */
-export interface ApprovalWorkflowRuntimeBundleV1 {
+export interface ApprovalWorkflowBundleV1 {
   /**
    * Fail closed before the worker starts if this surface cannot recover every
    * outstanding external presentation it may need to reconcile, update, or
@@ -52,10 +52,10 @@ export interface ApprovalWorkflowRuntimeBundleV1 {
    * appended before a surface is replaced.
    */
   assert_existing_presentations_owned(
-    context: ApprovalWorkflowRuntimeContextV1,
+    context: ApprovalWorkflowContextV1,
   ): Promise<void>;
 
-  open(
-    context: ApprovalWorkflowRuntimeContextV1,
-  ): Promise<OpenedApprovalWorkflowRuntimeV1>;
+  load(
+    context: ApprovalWorkflowContextV1,
+  ): Promise<ApprovalWorkflowComponentsV1>;
 }

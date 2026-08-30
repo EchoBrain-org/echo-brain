@@ -7,7 +7,7 @@ import { admitGranolaMeetingSource } from "./granola-meeting-source-admission.js
 import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "./openrouter-decision-processor-admission-commitment.js";
 
 const USAGE =
-  "usage: echo-organization-authority-admit-clean-granola-source " +
+  "usage: echo-organization-authority-admit-granola-meeting-source " +
   "--state-dir <absolute-path> --source-instance <id> --processor-instance <id> " +
   "--granola-credential-file <absolute-path> --granola-owner-email-file <absolute-path> " +
   "--llm-credential-file <absolute-path>";

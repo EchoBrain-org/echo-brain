@@ -55,7 +55,7 @@ import {
  * not write operator configuration, credentials, listener state, provider
  * configuration, installation state, enrollment state, or leases.
  */
-export interface InitializeAuthorityStateInput {
+export interface BootstrapOrganizationAuthorityStateInput {
   readonly state_directory: string;
   readonly organization_display_name: string;
   readonly owner_display_name: string;
@@ -74,7 +74,7 @@ export interface AuthorityStateManifestEvidenceV1 {
   readonly retrieval_present: false;
 }
 
-export interface InitializedAuthorityStateV1 {
+export interface BootstrappedOrganizationAuthorityStateV1 {
   readonly schema_version: 1;
   readonly kind: "echo-organization-authority-clean-reset-state-v1";
   readonly state_directory: string;
@@ -170,7 +170,7 @@ function validateAuthorityStateSeed(
 
 function seedAuthority(
   state: StagedAuthorityStateV1,
-  input: InitializeAuthorityStateInput,
+  input: BootstrapOrganizationAuthorityStateInput,
   seed: AuthorityStateSeedV1,
 ): {
   readonly descriptor: OrganizationAuthorityDescriptorV1;
@@ -244,7 +244,7 @@ function seedAuthority(
 
 function prepareAuthorityState(
   state: StagedAuthorityStateV1,
-  input: InitializeAuthorityStateInput,
+  input: BootstrapOrganizationAuthorityStateInput,
   seed: AuthorityStateSeedV1,
   captured: { descriptor_sha256?: Sha256Digest },
 ): void {
@@ -349,9 +349,9 @@ function manifestEvidence(
   });
 }
 
-export function initializeAuthorityState(
-  input: InitializeAuthorityStateInput,
-): InitializedAuthorityStateV1 {
+export function bootstrapOrganizationAuthorityState(
+  input: BootstrapOrganizationAuthorityStateInput,
+): BootstrappedOrganizationAuthorityStateV1 {
   assertDisplayName(input.organization_display_name);
   assertDisplayName(input.owner_display_name);
   const seed = validateAuthorityStateSeed(

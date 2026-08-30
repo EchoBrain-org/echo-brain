@@ -10,7 +10,7 @@ import {
   assertOpenRouterDecisionProcessorRuntimeCommitmentsV1,
   fixedOpenRouterDecisionProcessorConfigV1,
 } from "./openrouter-decision-processor-config-v1.js";
-import type { DecisionProcessorRuntimeBundleV1 } from "./decision-processor-runtime-bundle-v1.js";
+import type { DecisionProcessorBundleV1 } from "./decision-processor-bundle-v1.js";
 
 function assertProcessorConfig(
   adapter: {
@@ -34,14 +34,14 @@ function assertProcessorConfig(
  * never reads this credential, selects this provider, or knows its model
  * configuration.
  */
-export function createOpenRouterDecisionProcessorRuntimeBundleV1(input: {
+export function createOpenRouterDecisionProcessorBundleV1(input: {
   readonly credential_file: string;
-}): DecisionProcessorRuntimeBundleV1 {
+}): DecisionProcessorBundleV1 {
   const credentialReference = `file:${input.credential_file}`;
   let commitmentsChecked = false;
   return Object.freeze({
     processor_adapter_id: "llm",
-    assert_runtime_commitments(
+    assert_admission_commitments(
       commitments: AdmittedMeetingProcessingCommitmentsV1,
     ): void {
       if (commitments.processor.adapter_id !== "llm") {
@@ -60,7 +60,7 @@ export function createOpenRouterDecisionProcessorRuntimeBundleV1(input: {
     create_processor(admission: AdmittedMeetingProcessingAdmissionV1) {
       if (!commitmentsChecked) {
         throw new Error(
-          "OpenRouter decision-processor runtime commitments were not checked",
+          "OpenRouter decision-processor admission commitments were not checked",
         );
       }
       if (admission.processor.adapter_id !== "llm") {

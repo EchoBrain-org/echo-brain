@@ -7,14 +7,14 @@ import type { AdmittedMeetingProcessingCommitmentsV1 } from "../processing/admit
  * by a live-source admission. The shared runtime knows only this committed
  * adapter identity and the canonical decision-processor port.
  */
-export interface DecisionProcessorRuntimeBundleV1 {
+export interface DecisionProcessorBundleV1 {
   /** The only decision-processor adapter identity this bundle can construct. */
   readonly processor_adapter_id: string;
   /**
    * Proves local, provider-owned configuration still matches the immutable
    * admission before the bundle reads any private credential.
    */
-  assert_runtime_commitments(
+  assert_admission_commitments(
     commitments: AdmittedMeetingProcessingCommitmentsV1,
   ): void;
   /** Creates and validates the admitted decision processor. */

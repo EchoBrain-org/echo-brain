@@ -38,7 +38,7 @@ import {
 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { runOrganizationAuthorityResetCli } from "../src/composition/organization-authority-reset-cli.js";
-import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
 import { initializeAuthorityStateLineageV1 } from "../src/state-lineage/authority-state-lineage-initializer.js";
 import { StateLineagePreopenRefusal } from "../src/state-lineage/state-lineage-preopen-guard.js";
@@ -143,7 +143,7 @@ describe("Authority state initialization", () => {
   it("creates only the fresh binding metadata, active owner, and derived cursor", () => {
     const root = fixtureRoot();
     const stateDirectory = join(root, "new-state");
-    const result = initializeAuthorityState({
+    const result = bootstrapOrganizationAuthorityState({
       state_directory: stateDirectory,
       organization_display_name: "Example Organization",
       owner_display_name: "Ada Owner",
@@ -324,7 +324,7 @@ describe("Authority state initialization", () => {
     const root = fixtureRoot();
     const stateDirectory = join(root, "new-state");
     expect(() =>
-      initializeAuthorityState({
+      bootstrapOrganizationAuthorityState({
         state_directory: stateDirectory,
         organization_display_name: "Example Organization",
         owner_display_name: "Ada Owner",
@@ -358,7 +358,7 @@ describe("Authority state initialization", () => {
       expect(error).toMatchObject({ family: "schema_version_mismatch" });
     }
     expect(() =>
-      initializeAuthorityState({
+      bootstrapOrganizationAuthorityState({
         state_directory: stateDirectory,
         organization_display_name: "Example Organization",
         owner_display_name: "Ada Owner",

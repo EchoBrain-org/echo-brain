@@ -13,7 +13,7 @@ import {
   PrivateSlackApprovalInteractionError,
   parseVerifiedPrivateSlackApprovalInteractionV1,
   verifyPrivateSlackApprovalRequestV1,
-} from "../../src/composition/private-slack-approval-interaction-v1.js";
+} from "../../src/composition/private-slack-approval-interaction-protocol-v1.js";
 
 const SECRET = "not-a-real-signing-secret";
 const NOW = 1_800_000_000;

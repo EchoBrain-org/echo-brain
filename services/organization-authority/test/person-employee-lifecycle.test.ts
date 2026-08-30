@@ -10,7 +10,7 @@ import type {
 } from "../src/application/ports/person-session-dependencies.js";
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
-import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 
@@ -97,7 +97,7 @@ afterEach(() => {
 describe("clean Person employee lifecycle", () => {
   it("keeps employee lifecycle owner-only, invalidates reissued grants, revokes reads, and permits a new tenure", async () => {
     const parent = root();
-    const initialized = initializeAuthorityState({
+    const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Example",
       owner_display_name: "Founder",

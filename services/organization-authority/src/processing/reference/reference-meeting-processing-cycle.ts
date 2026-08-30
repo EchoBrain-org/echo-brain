@@ -18,7 +18,7 @@ import type {
   MeetingSourceAdapter,
   ResolvedActWriter,
 } from '../core/ports/adapters.js';
-import type { CoreStateStore } from '../core/storage/core-state-store.js';
+import type { MeetingProcessingStateStore } from '../core/storage/meeting-processing-state-store.js';
 import { compileDecisionBrief } from '../core/processing/brief.js';
 
 export interface ReferenceMeetingProcessingCycleDependencies {
@@ -27,7 +27,7 @@ export interface ReferenceMeetingProcessingCycleDependencies {
   deliverySurfaces: readonly DeliverySurfaceAdapter[];
   resolvedActWriter: ResolvedActWriter;
   approvalGate: ApprovalGate;
-  state: CoreStateStore;
+  state: MeetingProcessingStateStore;
   now?: () => string;
   createId?: () => string;
   signal?: AbortSignal;

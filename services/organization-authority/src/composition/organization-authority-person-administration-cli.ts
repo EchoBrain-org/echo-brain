@@ -14,9 +14,9 @@ import { startOrganizationAuthorityApiRuntime } from "./organization-authority-a
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime-bundle-v1.js";
 
 const USAGE = `usage:
-  echo-organization-authority-clean-person credentials-init --state-dir <absolute-path>
-  echo-organization-authority-clean-person invite --state-dir <absolute-path> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> --membership-id <mem-id> --expected-email <email> --authority-url <https-origin> --out <absolute-path>
-  echo-organization-authority-clean-person serve --state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> --authority-url <https-origin> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> [--client-secret-file <absolute-path>] [--slack-approval-channel-id <channel-id>]`;
+  echo-organization-authority-person-admin credentials-init --state-dir <absolute-path>
+  echo-organization-authority-person-admin invite --state-dir <absolute-path> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> --membership-id <mem-id> --expected-email <email> --authority-url <https-origin> --out <absolute-path>
+  echo-organization-authority-person-admin serve --state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> --authority-url <https-origin> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> [--client-secret-file <absolute-path>] [--slack-approval-channel-id <channel-id>]`;
 
 interface OrganizationAuthorityPersonAdministrationCliIo {
   stdout(value: string): void;

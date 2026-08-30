@@ -1,5 +1,5 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { initializeAuthorityState } from "./authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "./organization-authority-state-bootstrap.js";
 
 export interface OrganizationAuthorityResetCliIo {
   stdout(value: string): void;
@@ -12,7 +12,7 @@ const PROCESS_IO: OrganizationAuthorityResetCliIo = {
 };
 
 const USAGE =
-  "usage: echo-organization-authority-init-clean-state " +
+  "usage: echo-organization-authority-state-bootstrap " +
   "--state-dir <absolute-path> --organization-name <name> " +
   "--owner-display-name <name> --created-at <utc-millis> " +
   "--artifact-revision <revision>";
@@ -53,7 +53,7 @@ export function runOrganizationAuthorityResetCli(
   io: OrganizationAuthorityResetCliIo = PROCESS_IO,
 ): number {
   const flags = parseFlags(arguments_);
-  const result = initializeAuthorityState({
+  const result = bootstrapOrganizationAuthorityState({
     state_directory: flags["--state-dir"]!,
     organization_display_name: flags["--organization-name"]!,
     owner_display_name: flags["--owner-display-name"]!,

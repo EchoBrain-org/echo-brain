@@ -81,6 +81,11 @@
         "export": "initializeAuthorityStateLineageV1"
       },
       {
+        "name": "Organization Authority state bootstrap",
+        "path": "services/organization-authority/src/composition/organization-authority-state-bootstrap.ts",
+        "export": "bootstrapOrganizationAuthorityState"
+      },
+      {
         "name": "Authority state-lineage verifier",
         "path": "services/organization-authority/src/composition/verify-authority-state-lineage.ts",
         "export": "verifyAuthorityStateLineage"
@@ -99,6 +104,41 @@
         "name": "Answer-composition generation bundle",
         "path": "services/organization-authority/src/composition/answer-composition-generation-bundle-v1.ts",
         "export": "AnswerCompositionGenerationBundleV1"
+      },
+      {
+        "name": "Meeting source bundle",
+        "path": "services/organization-authority/src/composition/meeting-source-bundle-v1.ts",
+        "export": "MeetingSourceBundleV1"
+      },
+      {
+        "name": "Decision processor bundle",
+        "path": "services/organization-authority/src/composition/decision-processor-bundle-v1.ts",
+        "export": "DecisionProcessorBundleV1"
+      },
+      {
+        "name": "Approval workflow bundle",
+        "path": "services/organization-authority/src/composition/approval-workflow-bundle-v1.ts",
+        "export": "ApprovalWorkflowBundleV1"
+      },
+      {
+        "name": "Private Slack approval interaction protocol",
+        "path": "services/organization-authority/src/composition/private-slack-approval-interaction-protocol-v1.ts",
+        "export": "verifyPrivateSlackApprovalRequestV1"
+      },
+      {
+        "name": "Private Slack approval interaction handler",
+        "path": "services/organization-authority/src/composition/private-slack-approval-interaction-handler-v1.ts",
+        "export": "createPrivateSlackApprovalInteractionHandlerV1"
+      },
+      {
+        "name": "Private Slack approval HTTP adapter",
+        "path": "services/organization-authority/src/composition/private-slack-approval-http-adapter-v1.ts",
+        "export": "createPrivateSlackApprovalHttpAdapterV1"
+      },
+      {
+        "name": "Private Slack approval interaction HTTP port",
+        "path": "services/organization-authority/src/presentation/private-slack-approval-interaction-http-port-v1.ts",
+        "export": "PrivateSlackApprovalInteractionHttpPortV1"
       },
       {
         "name": "Readable-search generation composition",
@@ -128,7 +168,18 @@
       "services/organization-authority/src/state-lineage/new-lineage-genesis-v1.ts",
       "services/organization-authority/src/composition/verify-clean-state-lineage.ts",
       "services/organization-authority/src/presentation/clean-person-http-server.ts",
-      "services/organization-authority/src/composition/readable-search-runtime.ts"
+      "services/organization-authority/src/composition/readable-search-runtime.ts",
+      "services/organization-authority/src/composition/authority-state-initializer.ts",
+      "services/organization-authority/src/processing/core/storage/core-state-store.ts",
+      "services/organization-authority/src/composition/decision-processor-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/openrouter-decision-processor-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/granola-meeting-source-runtime-v1.ts",
+      "services/organization-authority/src/composition/approval-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-runtime-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interaction-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interactions-application-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interaction-http-ingress-v1.ts",
+      "services/organization-authority/src/presentation/private-slack-approval-interactions-http-application-v1.ts"
     ],
     "compatibility_entrypoints": [
       {

@@ -7,7 +7,7 @@ import type { ApprovalDecision } from '../approval/approval-gate.js';
 /** The atomic pre-record admission result for one canonical meeting. */
 export type MeetingPreRecordAdmission = 'saved' | 'excluded';
 
-export interface CoreStateStore {
+export interface MeetingProcessingStateStore {
   getSourceCursor(source: AdapterIdentity & { kind: 'meeting-source' }): Promise<AdapterCursor | undefined>;
   setSourceCursor(
     source: AdapterIdentity & { kind: 'meeting-source' },

@@ -8,7 +8,7 @@ import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateSlackApprovalBlockKitActionIdV1,
 } from "../../src/composition/private-slack-approval-block-kit-card-v1.js";
-import { createPrivateSlackApprovalInteractionsApplicationV1 } from "../../src/composition/private-slack-approval-interactions-application-v1.js";
+import { createPrivateSlackApprovalInteractionHandlerV1 } from "../../src/composition/private-slack-approval-interaction-handler-v1.js";
 
 const SECRET = "not-a-real-signing-secret";
 const NOW = 1_800_000_000;
@@ -120,7 +120,7 @@ describe("private Slack interactions application V1", () => {
       receipt_sha256: `sha256:${"d".repeat(64)}` as const,
       idempotent: false,
     }));
-    const application = createPrivateSlackApprovalInteractionsApplicationV1({
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
       signing_secret: SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
@@ -149,7 +149,7 @@ describe("private Slack interactions application V1", () => {
 
   it("acknowledges a verified selector event without persisting it", async () => {
     const enqueue = vi.fn();
-    const application = createPrivateSlackApprovalInteractionsApplicationV1({
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
       signing_secret: SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
@@ -170,7 +170,7 @@ describe("private Slack interactions application V1", () => {
       receipt_sha256: `sha256:${"d".repeat(64)}` as const,
       idempotent: false,
     }));
-    const application = createPrivateSlackApprovalInteractionsApplicationV1({
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
       signing_secret: SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
@@ -199,7 +199,7 @@ describe("private Slack interactions application V1", () => {
   });
 
   it("separates authentication failures, malformed media, and durable queue failure", async () => {
-    const queueFailure = createPrivateSlackApprovalInteractionsApplicationV1({
+    const queueFailure = createPrivateSlackApprovalInteractionHandlerV1({
       signing_secret: SECRET,
       persistence: {
         enqueue: async () => {
@@ -212,7 +212,7 @@ describe("private Slack interactions application V1", () => {
       code: "unavailable",
     });
 
-    const application = createPrivateSlackApprovalInteractionsApplicationV1({
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
       signing_secret: SECRET,
       persistence: {
         enqueue: () => ({
@@ -236,7 +236,7 @@ describe("private Slack interactions application V1", () => {
     const onRejection = vi.fn(() => {
       throw new Error("diagnostic sink failed");
     });
-    const application = createPrivateSlackApprovalInteractionsApplicationV1({
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
       signing_secret: SECRET,
       persistence: { enqueue: vi.fn() },
       now_unix_seconds: () => NOW,
@@ -257,7 +257,7 @@ describe("private Slack interactions application V1", () => {
 
   it("does not persist when its durable receipt clock is non-canonical", async () => {
     const enqueue = vi.fn();
-    const application = createPrivateSlackApprovalInteractionsApplicationV1({
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
       signing_secret: SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,

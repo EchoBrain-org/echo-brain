@@ -51,14 +51,14 @@ import {
 } from "../src/composition/organization-authority-composition-root.js";
 import {
   openOrganizationAuthorityRuntime,
-  type MeetingSourceRuntimeBundleV1,
 } from "../src/composition/organization-authority-runtime.js";
+import type { MeetingSourceBundleV1 } from "../src/composition/meeting-source-bundle-v1.js";
 import type { AnswerCompositionGenerationBundleV1 } from "../src/composition/answer-composition-generation-bundle-v1.js";
-import type { DecisionProcessorRuntimeBundleV1 } from "../src/composition/decision-processor-runtime-bundle-v1.js";
+import type { DecisionProcessorBundleV1 } from "../src/composition/decision-processor-bundle-v1.js";
 import type {
-  ApprovalWorkflowRuntimeBundleV1,
-  ApprovalWorkflowRuntimeContextV1,
-} from "../src/composition/approval-runtime-bundle-v1.js";
+  ApprovalWorkflowBundleV1,
+  ApprovalWorkflowContextV1,
+} from "../src/composition/approval-workflow-bundle-v1.js";
 import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
@@ -68,7 +68,7 @@ import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateSlackApprovalBlockKitActionIdV1,
 } from "../src/composition/private-slack-approval-block-kit-card-v1.js";
-import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
+import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import type {
   AdapterHealth,
@@ -510,7 +510,7 @@ async function admittedFixture(input: {
   readonly seed_private_slack_connection?: boolean;
 } = {}) {
   const parent = root();
-  const initialized = initializeAuthorityState({
+  const initialized = bootstrapOrganizationAuthorityState({
     state_directory: join(parent, "state"),
     organization_display_name: "Founder Organization",
     owner_display_name: "Founder",
@@ -942,7 +942,7 @@ afterEach(() => {
 describe("Organization Authority runtime private approval lane", () => {
   it("starts the Authority API before finalize without reading provider credentials", async () => {
     const parent = root();
-    const initialized = initializeAuthorityState({
+    const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
@@ -1032,16 +1032,16 @@ describe("Organization Authority runtime private approval lane", () => {
     const fixture = await admittedFixture();
     const staged: string[] = [];
     let ingressCalls = 0;
-    const ownershipContexts: ApprovalWorkflowRuntimeContextV1[] = [];
-    const openedContexts: ApprovalWorkflowRuntimeContextV1[] = [];
-    const sourceRuntime: MeetingSourceRuntimeBundleV1 = {
+    const ownershipContexts: ApprovalWorkflowContextV1[] = [];
+    const openedContexts: ApprovalWorkflowContextV1[] = [];
+    const sourceRuntime: MeetingSourceBundleV1 = {
       source_cursor_policy: {
         source_adapter_id: fixture.source.identity.adapter_id,
         assert_live_cursor(cursor) {
           expect(cursor.length).toBeGreaterThan(0);
         },
       },
-      assert_runtime_commitments(commitments) {
+      assert_admission_commitments(commitments) {
         expect(commitments.source.adapter_id).toBe(
           fixture.source.identity.adapter_id,
         );
@@ -1053,9 +1053,9 @@ describe("Organization Authority runtime private approval lane", () => {
         return fixture.source;
       },
     };
-    const processorRuntime: DecisionProcessorRuntimeBundleV1 = {
+    const processorRuntime: DecisionProcessorBundleV1 = {
       processor_adapter_id: fixture.processorIdentity.adapter_id,
-      assert_runtime_commitments(commitments) {
+      assert_admission_commitments(commitments) {
         expect(commitments.processor.adapter_id).toBe(
           fixture.processorIdentity.adapter_id,
         );
@@ -1084,11 +1084,11 @@ describe("Organization Authority runtime private approval lane", () => {
         };
       },
     };
-    const approvalRuntime: ApprovalWorkflowRuntimeBundleV1 = {
+    const approvalRuntime: ApprovalWorkflowBundleV1 = {
       async assert_existing_presentations_owned(context) {
         ownershipContexts.push(context);
       },
-      async open(context) {
+      async load(context) {
         openedContexts.push(context);
         return {
           stager: {
