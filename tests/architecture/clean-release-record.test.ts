@@ -1321,9 +1321,29 @@ if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_
     const canary = run("bash", [UPDATE, "canary"], environment);
     expect(canary.status).toBe(1);
     expect(canary.stderr).toContain(expectedFailure);
+    // A running runtime that no longer proves the staged tuple must not be
+    // treated as safely stopped or archived.
+    writeFileSync(
+      envFile,
+      "ECHO_CLEAN_AUTHORITY_IMAGE=wrong-image\nECHO_CLEAN_RELEASE_ID=wrong-release\n",
+      { mode: 0o600 },
+    );
+    const refused = run("bash", [UPDATE, "rollback"], environment);
+    expect(refused.status).toBe(1);
+    expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
+    expect(existsSync(join(state, "failed", "clean-v1-20260822-005.json"))).toBe(false);
     // Simulate an interruption after the runtime stop and immutable failed
-    // record publish, but before the staged candidate was removed.
+    // record publish, but before the staged candidate was removed. The active
+    // environment, profile, and one materialized file are also incomplete.
     rmSync(started);
+    writeFileSync(envFile, "interrupted activation\n", { mode: 0o600 });
+    writeFileSync(activeRuntimeProfile(state), "interrupted activation\n", {
+      mode: 0o600,
+    });
+    writeFileSync(
+      join(runtimeConfig, "Caddyfile.clean-v1"),
+      "interrupted activation\n",
+    );
     mkdirSync(join(state, "failed"), { recursive: true });
     copyFileSync(
       join(state, "candidate.clean-v1.json"),

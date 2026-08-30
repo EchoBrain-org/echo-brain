@@ -460,6 +460,19 @@ candidate_runtime_is_stopped() {
   service_is_stopped authority && service_is_stopped proxy
 }
 
+abort_first_deploy_candidate() {
+  # The persisted candidate tuple, rather than the active cache, is the only
+  # durable source of truth after an interrupted first activation. A running
+  # runtime must still prove its exact tuple before it can be stopped.
+  stored_release_tuple_matches "$CANDIDATE_RECORD"
+  if running_exact_release "$CANDIDATE_RECORD"; then
+    compose_clean down || return 1
+  elif ! candidate_runtime_is_stopped; then
+    return 1
+  fi
+  archive_candidate_as_failed
+}
+
 release_id_unused() {
   local id="$1"
   [[ ! -e "$RELEASE_STATE_DIR/history/$id.json" && ! -e "$RELEASE_STATE_DIR/failed/$id.json" ]] || return 1
@@ -852,15 +865,9 @@ case "$command" in
     [[ -f "$CANDIDATE_RECORD" ]] || fail 'rollback requires a staged candidate'
     validate "$CANDIDATE_RECORD"
     if [[ ! -e "$CURRENT_RECORD" && ! -L "$CURRENT_RECORD" ]]; then
-      active_runtime_profile_matches "$CANDIDATE_RECORD"
-      active_materialized_profile_matches
-      active_environment_matches "$CANDIDATE_RECORD"
-      if running_exact_release "$CANDIDATE_RECORD"; then
-        compose_clean down || fail 'first deployment abort failed; candidate remains staged and runtime stop is unconfirmed'
-      elif ! candidate_runtime_is_stopped; then
+      if ! abort_first_deploy_candidate; then
         fail 'first deployment candidate is stopped or runtime image drifted; leave it staged and investigate before retrying rollback'
       fi
-      archive_candidate_as_failed || fail 'first deployment candidate was stopped but could not be marked failed; leave it staged and retry rollback'
       printf '{"ok":true,"stage":"aborted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
       exit 0
     fi
