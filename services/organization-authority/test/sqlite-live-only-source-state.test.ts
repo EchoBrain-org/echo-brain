@@ -1,5 +1,9 @@
 import Database from "better-sqlite3";
-import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
+import {
+  canonicalJson,
+  canonicalSha256,
+  type Sha256Digest,
+} from "@echo-brain/federation-protocol";
 import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../src/adapters/persistence/sqlite/baseline.js";
@@ -30,7 +34,7 @@ import {
 const ADMITTED_AT = "2026-08-22T02:03:04.005Z";
 const ADVANCED_AT = "2026-08-22T02:04:04.005Z";
 const NEXT_CUTOFF = "2026-08-22T02:05:04.005Z";
-const SHA = `sha256:${"a".repeat(64)}`;
+const SHA: Sha256Digest = `sha256:${"a".repeat(64)}`;
 const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
 const sourceCursor = createGranolaLiveOnlyCursor(ADMITTED_AT);
 const nextCursor = createGranolaLiveOnlyCursor(NEXT_CUTOFF);
