@@ -7,7 +7,7 @@ import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-bind
 import { createGranolaMeetingSourceAdapter } from "../processing/adapters/meeting-sources/granola/index.js";
 import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { CleanLiveSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
+import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
 import { granolaAdmittedMeetingSourceBoundaryV1 } from "./granola-admitted-meeting-source-boundary-v1.js";
 import type { MeetingSourceRuntimeBundleV1 } from "./organization-authority-runtime.js";
 
@@ -80,7 +80,7 @@ export function createGranolaMeetingSourceRuntimeBundleV1(input: {
       return created;
     },
     assert_runtime_commitments(
-      commitments: CleanLiveSourceRuntimeCommitmentsV1,
+      commitments: AdmittedMeetingSourceRuntimeCommitmentsV1,
     ) {
       if (
         commitments.source.adapter_id !== "granola" ||
