@@ -40,7 +40,7 @@
       },
       {
         "identifier": "granola",
-        "root": "services/organization-authority/src/composition/clean-live-cli.ts"
+        "root": "services/organization-authority/src/composition/organization-authority-service-cli.ts"
       },
       {
         "identifier": "llm",
@@ -96,7 +96,7 @@
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/composition/clean-person-cli.ts"
+        "root": "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts"
       },
       {
         "identifier": "slack",

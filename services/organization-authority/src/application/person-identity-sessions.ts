@@ -33,9 +33,9 @@ import type {
   PersonSessionWriteTransaction,
 } from "./ports/person-session-repository.js";
 import {
-  isCleanPersonMembershipWriteRepository,
-  type CleanPersonMembershipWriteTransaction,
-} from "./ports/clean-person-membership-write.js";
+  isPersonMembershipWriteRepository,
+  type PersonMembershipWriteTransaction,
+} from "./ports/person-membership-write.js";
 import type {
   FrozenPersonSessionOidcConfiguration,
   OidcTenantConstraint,
@@ -182,7 +182,7 @@ export interface PersonAuthenticatedMembershipWritePort {
     access_token: string;
     commit: (
       authorization: PersonAccessAuthorization,
-      transaction: CleanPersonMembershipWriteTransaction &
+      transaction: PersonMembershipWriteTransaction &
         PersonSessionWriteTransaction,
       observed_at: string,
     ) => SynchronousResult<T>;
@@ -455,12 +455,12 @@ export class PersonIdentitySessionApplication {
     access_token: string;
     commit: (
       authorization: PersonAccessAuthorization,
-      transaction: CleanPersonMembershipWriteTransaction &
+      transaction: PersonMembershipWriteTransaction &
         PersonSessionWriteTransaction,
       observed_at: string,
     ) => SynchronousResult<T>;
   }): SynchronousResult<T> {
-    if (!isCleanPersonMembershipWriteRepository(this.repository)) {
+    if (!isPersonMembershipWriteRepository(this.repository)) {
       throw new Error("clean Person membership write transaction is unavailable");
     }
     let tokenSha256: Sha256Digest;
@@ -482,7 +482,7 @@ export class PersonIdentitySessionApplication {
         if (resolution.kind === "denied") return { kind: "denied" };
         const result = input.commit(
           resolution.authorization,
-          transaction as CleanPersonMembershipWriteTransaction &
+          transaction as PersonMembershipWriteTransaction &
             PersonSessionWriteTransaction,
           observedAt,
         );

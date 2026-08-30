@@ -50,30 +50,30 @@
   ],
   "layer_rules": [
     {
-      "name": "authority-clean-reset-entrypoint-calls-composition",
+      "name": "authority-legacy-reset-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-reset-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-reset-cli.ts"
+        "services/organization-authority/src/composition/organization-authority-reset-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-clean-person-entrypoint-calls-composition",
+      "name": "authority-legacy-person-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-person-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-person-cli.ts"
+        "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-clean-live-entrypoint-calls-composition",
+      "name": "authority-legacy-service-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-live-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-live-cli.ts"
+        "services/organization-authority/src/composition/organization-authority-service-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -90,10 +90,10 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-clean-granola-source-entrypoint-calls-composition",
+      "name": "authority-legacy-granola-source-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-granola-source-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-granola-source-cli.ts"
+        "services/organization-authority/src/composition/granola-meeting-source-admission-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],

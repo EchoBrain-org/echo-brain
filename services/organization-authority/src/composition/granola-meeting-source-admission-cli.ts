@@ -3,7 +3,7 @@ import {
   HttpGranolaApiClient,
   type GranolaRecordOwnerObservationClient,
 } from "../processing/adapters/meeting-sources/granola/index.js";
-import { admitCleanGranolaSource } from "./clean-granola-source-admission.js";
+import { admitGranolaMeetingSource } from "./granola-meeting-source-admission.js";
 import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "./openrouter-clean-processor-admission-commitment.js";
 
 const USAGE =
@@ -21,23 +21,23 @@ const FLAGS = [
   "--llm-credential-file",
 ] as const;
 
-export interface CleanGranolaSourceCliIo {
+export interface GranolaMeetingSourceAdmissionCliIo {
   stdout(value: string): void;
   stderr(value: string): void;
 }
 
-export interface CleanGranolaSourceCliDependencies {
+export interface GranolaMeetingSourceAdmissionCliDependencies {
   createGranolaRecordOwnerClient(
     credential: string,
   ): GranolaRecordOwnerObservationClient;
 }
 
-const PROCESS_IO: CleanGranolaSourceCliIo = {
+const PROCESS_IO: GranolaMeetingSourceAdmissionCliIo = {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value),
 };
 
-const DEFAULT_DEPENDENCIES: CleanGranolaSourceCliDependencies = {
+const DEFAULT_DEPENDENCIES: GranolaMeetingSourceAdmissionCliDependencies = {
   createGranolaRecordOwnerClient: (credential) =>
     new HttpGranolaApiClient(credential),
 };
@@ -65,15 +65,15 @@ function parseFlags(
 }
 
 /** Dedicated stopped-state CLI. It accepts file paths, never secret values. */
-export async function runCleanGranolaSourceCli(
+export async function runGranolaMeetingSourceAdmissionCli(
   arguments_: readonly string[],
-  io: CleanGranolaSourceCliIo = PROCESS_IO,
-  dependencies: CleanGranolaSourceCliDependencies = DEFAULT_DEPENDENCIES,
+  io: GranolaMeetingSourceAdmissionCliIo = PROCESS_IO,
+  dependencies: GranolaMeetingSourceAdmissionCliDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<number> {
   const flags = parseFlags(arguments_);
   const granolaCredentialReference = `file:${flags["--granola-credential-file"]}`;
   const llmCredentialReference = `file:${flags["--llm-credential-file"]}`;
-  const result = await admitCleanGranolaSource({
+  const result = await admitGranolaMeetingSource({
     state_directory: flags["--state-dir"],
     source_instance_id: flags["--source-instance"],
     granola_credential_reference: granolaCredentialReference,

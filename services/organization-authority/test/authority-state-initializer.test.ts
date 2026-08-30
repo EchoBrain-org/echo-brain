@@ -37,7 +37,7 @@ import {
   authorityBaselineSha256V3,
 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
-import { runCleanResetCli } from "../src/composition/clean-reset-cli.js";
+import { runOrganizationAuthorityResetCli } from "../src/composition/organization-authority-reset-cli.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { verifyCleanStateLineage } from "../src/composition/verify-clean-state-lineage.js";
 import { initializeNewStateLineageV1 } from "../src/state-lineage/new-lineage-genesis-v1.js";
@@ -292,7 +292,7 @@ describe("Authority state initialization", () => {
     const stateDirectory = join(root, "new-state");
     const output: string[] = [];
     expect(
-      runCleanResetCli(
+      runOrganizationAuthorityResetCli(
         [
           "--state-dir",
           stateDirectory,
@@ -313,7 +313,7 @@ describe("Authority state initialization", () => {
       state_directory: stateDirectory,
     });
     expect(() =>
-      runCleanResetCli(["--config", join(root, "legacy-config.json")], {
+      runOrganizationAuthorityResetCli(["--config", join(root, "legacy-config.json")], {
         stdout: () => undefined,
         stderr: () => undefined,
       }),

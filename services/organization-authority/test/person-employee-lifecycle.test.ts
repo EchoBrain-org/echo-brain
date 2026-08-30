@@ -8,7 +8,7 @@ import type {
   FrozenPersonSessionOidcConfiguration,
   OidcAuthorizationCodeResult,
 } from "../src/application/ports/person-session-runtime.js";
-import { initializeCleanPersonCredentials, issueCleanPersonInvitation } from "../src/composition/clean-person-onboarding.js";
+import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
@@ -111,14 +111,14 @@ describe("clean Person employee lifecycle", () => {
       tenant: { kind: "issuer" as const },
       id_token_algorithms: ["RS256"],
     };
-    const credentials = initializeCleanPersonCredentials({
+    const credentials = initializePersonSessionCredentials({
       state_directory: initialized.state_directory,
     });
     const invitations = join(parent, "invitations");
     mkdirSync(invitations, { mode: 0o700 });
     chmodSync(invitations, 0o700);
     const founderInvitation = join(invitations, "founder.json");
-    issueCleanPersonInvitation({
+    issuePersonOnboardingInvitation({
       state_directory: initialized.state_directory,
       oidc,
       pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(

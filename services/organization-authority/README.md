@@ -24,7 +24,7 @@ defines the supported operator and employee flow.
 
 Existing `clean-*` binaries and `clean-founder` files and wire values are
 versioned compatibility names. They are not component boundaries and do not
-limit the service to a founder.
+limit the service to a particular initial owner.
 
 ## Build and commands
 
@@ -56,27 +56,27 @@ and owner, and prints only its JSON result.
 echo-organization-authority-init-clean-state \
   --state-dir /absolute/clean-state \
   --organization-name 'Example Organization' \
-  --owner-display-name 'Founder Name' \
+  --owner-display-name 'Initial Owner' \
   --created-at '2026-08-23T00:00:00.000Z' \
   --artifact-revision clean-v1
 ```
 
-Normally use the founder bootstrap below instead: it creates this same clean
-state with a durable setup plan, generated internal IDs, Person credentials,
-Slack connection, and founder invitation. Do not run reset into a directory
+Normally use the initial-owner bootstrap below instead: it creates this same
+clean state with a durable setup plan, generated internal IDs, Person
+credentials, Slack connection, and initial-owner invitation. Do not run reset into a directory
 that already contains state.
 
-## Founder onboarding
+## Initial-owner onboarding
 
 Bootstrap and finalization are stopped-state operations. The path is:
 
 1. Bootstrap the clean lineage, initialize Person credentials, verify the Slack
-   bot and temporary public founder identity-link channel, and issue the
-   founder invitation. That channel never receives an approval card.
-2. Start clean live, complete the founder's browser OIDC sign-in, and link the
+   bot and temporary public initial-owner identity-link channel, and issue the
+   initial-owner invitation. That channel never receives an approval card.
+2. Start the Organization Authority service, complete the initial owner's browser OIDC sign-in, and link the
    signed-in person to Slack.
-3. Stop clean live, install the three provider credentials, then finalize.
-4. Restart clean live and complete the live-only canary.
+3. Stop the Organization Authority service, install the three provider credentials, then finalize.
+4. Restart the Organization Authority service and complete the live-only canary.
 
 The OIDC JSON must be readable JSON with exactly `issuer`, `client_id`,
 `redirect_uri`, `tenant`, `id_token_algorithms`, and `client_authentication`.
@@ -90,15 +90,15 @@ Pass the Slack bot token through standard input. The token file contains the
 token with at most one trailing newline; it is never recorded in the setup
 manifest or command output. `--slack-approval-channel-id` is a transitional
 legacy name: it supplies only the temporary public channel used to complete the
-founder's Slack identity-link challenge. It is not an approval destination or
+initial owner’s Slack identity-link challenge. It is not an approval destination or
 approval-readiness gate.
 
 ```sh
 echo-organization-authority-clean-founder bootstrap \
   --state-dir /absolute/clean-state \
   --organization-name 'Example Organization' \
-  --owner-display-name 'Founder Name' \
-  --owner-email founder@example.com \
+  --owner-display-name 'Initial Owner' \
+  --owner-email owner@example.com \
   --authority-url https://authority.example.com \
   --oidc-config /absolute/private/oidc-config.json \
   --slack-approval-channel-id C0123456789 \
@@ -151,7 +151,7 @@ workspace:
    reuse an earlier shared-channel rehearsal database, state directory, or
    approval binding.
 
-Complete bootstrap, the founder identity link, credential installation, and
+Complete bootstrap, the initial-owner identity link, credential installation, and
 finalization first, then start the active runtime. Only after that runtime is
 healthy, enable **Interactivity & Shortcuts** and save this Request URL before
 creating the first post-cutoff canary meeting:
@@ -165,12 +165,12 @@ validate or save that URL against a pre-finalize runtime. Event Subscriptions,
 Socket Mode, and a Slack OAuth redirect are not required for this V1.
 
 The temporary public identity-link channel is still required only until the
-linking transport is moved to a private surface. It receives the founder's
+linking transport is moved to a private surface. It receives the initial owner's
 challenge thread, never shared approval cards.
 
 ### 2. Start Person service, sign in, and link Slack
 
-Before finalization, clean live exposes the Person surface with an inert
+Before finalization, the compatibility-named `clean-live` command exposes the Person surface with an inert
 processing worker. The manifest supplies the Authority URL, OIDC configuration,
 PKCE key, and Slack channel, so they are not repeated here.
 
@@ -187,7 +187,7 @@ For `client_secret_basic` or `client_secret_post`, append
 accepts `127.0.0.1` or `::1`; put the configured HTTPS Authority origin behind
 the deployment proxy or tunnel.
 
-On the founder's current-user machine, use the private invitation produced by
+On the initial owner's current-user machine, use the private invitation produced by
 bootstrap:
 
 ```sh
@@ -200,7 +200,7 @@ echo-brain person slack-link
 session at a local loopback handoff; do not paste callback data. `person
 slack-link` prints a challenge code to reply with in its Slack thread, then
 waits for an empty Enter acknowledgement. The Slack link is required for the
-founder to finalize; it is not required for a read-only employee.
+initial owner to finalize; it is not required for a read-only employee.
 
 The Person session surface also supports refresh and logout. The packaged
 client owns those details:
@@ -211,10 +211,10 @@ echo-brain person session-refresh
 echo-brain person logout
 ```
 
-### Clean Person developer commands
+### Person administration developer commands
 
-`clean-live serve` is the normal runtime entrypoint. For focused local
-development, the lower-level clean Person entrypoint has only these forms:
+`clean-live serve` is the legacy name of the normal runtime entrypoint. For focused local
+development, the lower-level Person administration entrypoint has only these forms:
 
 ```sh
 echo-organization-authority-clean-person credentials-init \
@@ -242,14 +242,14 @@ The Person `serve` form additionally accepts
 `--client-secret-file <absolute-path>` when its OIDC configuration uses a
 client-secret authentication method, and an optional
 `--slack-approval-channel-id <channel-id>` to expose the temporary public
-founder identity-link channel. Do not use
-the low-level invitation form for the founder or employee product flow: clean
-founder onboarding and the owner-facing Person client keep membership IDs
+initial-owner identity-link channel. Do not use
+the low-level invitation form for the initial-owner or employee product flow: the
+initial-owner setup flow and the owner-facing Person client keep membership IDs
 internal.
 
 ### 3. Install credentials and finalize while stopped
 
-Stop clean live. Each source file must contain exactly its value, without
+Stop the Organization Authority service. Each source file must contain exactly its value, without
 trailing whitespace. The Granola owner-email file must contain the same
 canonical lowercase email given to bootstrap and proved by OIDC.
 
@@ -266,14 +266,14 @@ echo-organization-authority-clean-founder finalize \
 
 Credential installation validates all three inputs before replacing any fixed
 destination. Finalization requires the clean genesis, an exact active Slack
-connection, the founder's active OIDC binding and Slack identity link, and
+connection, the initial owner's active OIDC binding and Slack identity link, and
 valid provider credentials. It creates no shared-channel/reaction approval
 binding; it only admits Granola at a fresh live-only cutoff. Existing notes are
 not imported.
 
 ### 4. Restart live runtime and canary
 
-Restart the same `clean-live serve` command. Optional
+Restart the same `clean-live serve` compatibility command. Optional
 `--worker-interval-ms <positive-integer>` changes the worker interval. At
 startup, the runtime reconciles the search index once, then each cycle recovers pending
 V4 appends, polls the admitted live-only source, finalizes approvals, appends

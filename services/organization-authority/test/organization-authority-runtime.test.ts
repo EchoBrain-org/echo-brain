@@ -33,18 +33,18 @@ import type {
 } from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
+import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
-import { admitCleanGranolaSource } from "../src/composition/clean-granola-source-admission.js";
+import { admitGranolaMeetingSource } from "../src/composition/granola-meeting-source-admission.js";
 import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-clean-processor-admission-commitment.js";
 import {
-  initializeCleanPersonCredentials,
-  issueCleanPersonInvitation,
-} from "../src/composition/clean-person-onboarding.js";
+  initializePersonSessionCredentials,
+  issuePersonOnboardingInvitation,
+} from "../src/composition/person-onboarding-service.js";
 import {
   openOrganizationAuthorityService,
   type OrganizationAuthorityServiceConfig,
@@ -172,7 +172,7 @@ async function completeFounderReonboarding(input: {
   readonly parent: string;
   readonly owner_membership_id: string;
 }): Promise<string> {
-  const credentials = initializeCleanPersonCredentials({
+  const credentials = initializePersonSessionCredentials({
     state_directory: input.state_directory,
   });
   const pkce = credentials.pkce_sealing_key_reference.slice("file:".length);
@@ -180,7 +180,7 @@ async function completeFounderReonboarding(input: {
   mkdirSync(invitations, { mode: 0o700 });
   chmodSync(invitations, 0o700);
   const invitationPath = join(invitations, "founder.invitation.json");
-  issueCleanPersonInvitation({
+  issuePersonOnboardingInvitation({
     state_directory: input.state_directory,
     oidc: OIDC,
     pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
@@ -206,7 +206,7 @@ async function completeFounderReonboarding(input: {
       ),
     );
     const sessions = new PersonIdentitySessionApplication(
-      new SqliteCleanPersonSessionRepository(authority),
+      new SqlitePersonSessionRepository(authority),
       OIDC,
       {
         clock: new SystemAuthorityClock(),
@@ -542,7 +542,7 @@ async function admittedFixture(input: {
     "slack-signing-secret",
     SLACK_SIGNING_SECRET,
   );
-  const admitted = await admitCleanGranolaSource({
+  const admitted = await admitGranolaMeetingSource({
     state_directory: initialized.state_directory,
     source_instance_id: "founder-granola",
     granola_credential_reference: `file:${granola_credential_file}`,
@@ -949,7 +949,7 @@ describe("Organization Authority runtime private approval lane", () => {
       created_at: NOW,
       creating_artifact_revision: "organization-authority-runtime-test",
     });
-    const credentials = initializeCleanPersonCredentials({
+    const credentials = initializePersonSessionCredentials({
       state_directory: initialized.state_directory,
     });
     const runtime = await openOrganizationAuthorityService({

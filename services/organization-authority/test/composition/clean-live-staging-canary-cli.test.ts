@@ -12,8 +12,8 @@ vi.mock(
   }),
 );
 
-const { runCleanLiveCli } = await import(
-  "../../src/composition/clean-live-cli.js"
+const { runOrganizationAuthorityServiceCli } = await import(
+  "../../src/composition/organization-authority-service-cli.js"
 );
 
 const RELEASE_ID = "clean-v1-staging-canary";
@@ -38,7 +38,7 @@ describe("clean live staging canary CLI", () => {
     const stdout: string[] = [];
 
     await expect(
-      runCleanLiveCli(
+      runOrganizationAuthorityServiceCli(
         ["staging-private-dm-canary", "--release-id", RELEASE_ID],
         { stdout: (value) => stdout.push(value), stderr: () => undefined },
       ),
@@ -62,7 +62,7 @@ describe("clean live staging canary CLI", () => {
     process.env.ECHO_CLEAN_RELEASE_ID = RELEASE_ID;
 
     await expect(
-      runCleanLiveCli(
+      runOrganizationAuthorityServiceCli(
         ["staging-private-dm-canary", "--release-id", "clean-v1-other-release"],
         { stdout: () => undefined, stderr: () => undefined },
       ),

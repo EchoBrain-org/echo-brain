@@ -35,8 +35,8 @@ vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
   }),
 }));
 
-vi.mock("../src/composition/clean-person-cli.js", () => ({
-  readCleanPersonOidcConfiguration: () => ({
+vi.mock("../src/composition/organization-authority-person-administration-cli.js", () => ({
+  readPersonOidcConfiguration: () => ({
     client_authentication: "none",
     configuration: {},
   }),
@@ -67,8 +67,8 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
   },
 }));
 
-const { runCleanLiveCli } = await import(
-  "../src/composition/clean-live-cli.js"
+const { runOrganizationAuthorityServiceCli } = await import(
+  "../src/composition/organization-authority-service-cli.js"
 );
 
 afterEach(() => {
@@ -84,7 +84,7 @@ afterEach(() => {
 });
 
 function start(io: { readonly stderr: (value: string) => void }) {
-  return runCleanLiveCli(
+  return runOrganizationAuthorityServiceCli(
     [
       "serve",
       "--state-dir",

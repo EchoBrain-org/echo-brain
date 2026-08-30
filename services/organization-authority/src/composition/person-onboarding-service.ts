@@ -4,7 +4,7 @@ import type { PersonSessionOidcConfiguration } from "../application/ports/person
 import { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
 import { createPrivateAuthorityCredential } from "../adapters/security/private-file-credentials.js";
-import { SqliteCleanPersonSessionRepository } from "../adapters/persistence/sqlite/clean-person-session-repository.js";
+import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
 import { SystemAuthorityClock } from "../adapters/runtime/system-runtime-ports.js";
 import {
@@ -14,22 +14,23 @@ import {
 } from "../adapters/files/private-person-onboarding-invitation.js";
 import { verifyOrganizationAuthorityApiLineage } from "./organization-authority-api-runtime.js";
 
-export const CLEAN_PERSON_PKCE_KEY_FILENAME = "person-session-pkce-sealing-key";
+// This on-disk name is part of the installed-state layout and remains stable.
+export const PERSON_SESSION_PKCE_KEY_FILENAME = "person-session-pkce-sealing-key";
 
-export interface InitializedCleanPersonCredentials {
+export interface InitializedPersonSessionCredentials {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-runtime-credentials-v1";
   readonly pkce_sealing_key_reference: string;
 }
 
 /** Create-once private runtime material. The secret itself is never returned. */
-export function initializeCleanPersonCredentials(input: {
+export function initializePersonSessionCredentials(input: {
   readonly state_directory: string;
-}): InitializedCleanPersonCredentials {
+}): InitializedPersonSessionCredentials {
   verifyOrganizationAuthorityApiLineage(input.state_directory);
   const directory = join(input.state_directory, "credentials");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const path = join(directory, CLEAN_PERSON_PKCE_KEY_FILENAME);
+  const path = join(directory, PERSON_SESSION_PKCE_KEY_FILENAME);
   createPrivateAuthorityCredential(path);
   return Object.freeze({
     schema_version: 1,
@@ -38,7 +39,7 @@ export function initializeCleanPersonCredentials(input: {
   });
 }
 
-export interface IssueCleanPersonInvitationInput {
+export interface IssuePersonOnboardingInvitationInput {
   readonly state_directory: string;
   readonly oidc: PersonSessionOidcConfiguration;
   readonly pkce_sealing_key: Uint8Array;
@@ -49,11 +50,11 @@ export interface IssueCleanPersonInvitationInput {
 }
 
 /**
- * A stopped-state, founder-only invitation operation. It has no administrator
+ * A stopped-state, organization-owner invitation operation. It has no administrator
  * bearer token and keeps the one-time grant out of stdout and command flags.
  */
-export function issueCleanPersonInvitation(
-  input: IssueCleanPersonInvitationInput,
+export function issuePersonOnboardingInvitation(
+  input: IssuePersonOnboardingInvitationInput,
 ): {
   readonly output_path: string;
   readonly expires_at: string;
@@ -71,7 +72,7 @@ export function issueCleanPersonInvitation(
     );
     const crypto = new NodePersonSessionCrypto(input.pkce_sealing_key);
     const sessions = new PersonIdentitySessionApplication(
-      new SqliteCleanPersonSessionRepository(database),
+      new SqlitePersonSessionRepository(database),
       input.oidc,
       {
         clock: new SystemAuthorityClock(),

@@ -7,9 +7,9 @@ import {
   readPrivateAuthorityPersonSessionPkceKey,
 } from "../adapters/security/private-file-credentials.js";
 import {
-  initializeCleanPersonCredentials,
-  issueCleanPersonInvitation,
-} from "./clean-person-onboarding.js";
+  initializePersonSessionCredentials,
+  issuePersonOnboardingInvitation,
+} from "./person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "./organization-authority-api-runtime.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime.js";
 
@@ -18,11 +18,11 @@ const USAGE = `usage:
   echo-organization-authority-clean-person invite --state-dir <absolute-path> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> --membership-id <mem-id> --expected-email <email> --authority-url <https-origin> --out <absolute-path>
   echo-organization-authority-clean-person serve --state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> --authority-url <https-origin> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> [--client-secret-file <absolute-path>] [--slack-approval-channel-id <channel-id>]`;
 
-interface CliIo {
+interface OrganizationAuthorityPersonAdministrationCliIo {
   stdout(value: string): void;
   stderr(value: string): void;
 }
-const PROCESS_IO: CliIo = {
+const PROCESS_IO: OrganizationAuthorityPersonAdministrationCliIo = {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value),
 };
@@ -57,7 +57,7 @@ function required(
   return value;
 }
 
-export function readCleanPersonOidcConfiguration(path: string): {
+export function readPersonOidcConfiguration(path: string): {
   configuration: PersonSessionOidcConfiguration;
   client_authentication: "none" | "client_secret_basic" | "client_secret_post";
 } {
@@ -65,10 +65,10 @@ export function readCleanPersonOidcConfiguration(path: string): {
   try {
     value = JSON.parse(readFileSync(path, "utf8")) as unknown;
   } catch {
-    throw new Error("clean Person OIDC config must be readable JSON");
+    throw new Error("Person OIDC config must be readable JSON");
   }
   if (value === null || typeof value !== "object" || Array.isArray(value))
-    throw new Error("clean Person OIDC config is invalid");
+    throw new Error("Person OIDC config is invalid");
   const record = value as Record<string, unknown>;
   const keys = [
     "issuer",
@@ -79,14 +79,14 @@ export function readCleanPersonOidcConfiguration(path: string): {
     "client_authentication",
   ];
   if (Object.keys(record).sort().join(",") !== keys.sort().join(","))
-    throw new Error("clean Person OIDC config has an unexpected shape");
+    throw new Error("Person OIDC config has an unexpected shape");
   const method = record.client_authentication;
   if (
     method !== "none" &&
     method !== "client_secret_basic" &&
     method !== "client_secret_post"
   )
-    throw new Error("clean Person OIDC client authentication is invalid");
+    throw new Error("Person OIDC client authentication is invalid");
   return {
     configuration: {
       issuer: record.issuer as string,
@@ -103,28 +103,28 @@ function privateReference(path: string): string {
   return `file:${path}`;
 }
 
-export function assertCleanPersonAuthorityCallback(
+export function assertPersonAuthorityCallback(
   origin: string,
   configuration: PersonSessionOidcConfiguration,
 ): void {
   validateOrganizationAuthorityOrigin(origin);
   if (configuration.redirect_uri !== `${origin}/v2/session/oidc/callback`) {
     throw new Error(
-      "clean Person OIDC redirect URI must be the Authority callback at --authority-url",
+      "Person OIDC redirect URI must be the Organization Authority callback at --authority-url",
     );
   }
 }
 
-export async function runCleanPersonCli(
+export async function runOrganizationAuthorityPersonAdministrationCli(
   argv: readonly string[],
-  io: CliIo = PROCESS_IO,
+  io: OrganizationAuthorityPersonAdministrationCliIo = PROCESS_IO,
 ): Promise<number> {
   const command = argv[0];
   if (command === "credentials-init") {
     const parsed = flags(argv.slice(1), ["--state-dir"]);
     if (Object.keys(parsed).length !== 1) throw new Error(USAGE);
     io.stdout(
-      `${canonicalJson(initializeCleanPersonCredentials({ state_directory: required(parsed, "--state-dir") }) as never)}\n`,
+      `${canonicalJson(initializePersonSessionCredentials({ state_directory: required(parsed, "--state-dir") }) as never)}\n`,
     );
     return 0;
   }
@@ -139,12 +139,12 @@ export async function runCleanPersonCli(
       "--out",
     ]);
     if (Object.keys(parsed).length !== 7) throw new Error(USAGE);
-    const configured = readCleanPersonOidcConfiguration(
+    const configured = readPersonOidcConfiguration(
       required(parsed, "--oidc-config"),
     );
     const authorityUrl = required(parsed, "--authority-url");
-    assertCleanPersonAuthorityCallback(authorityUrl, configured.configuration);
-    const result = issueCleanPersonInvitation({
+    assertPersonAuthorityCallback(authorityUrl, configured.configuration);
+    const result = issuePersonOnboardingInvitation({
       state_directory: required(parsed, "--state-dir"),
       oidc: configured.configuration,
       pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
@@ -171,18 +171,18 @@ export async function runCleanPersonCli(
       "--client-secret-file",
       "--slack-approval-channel-id",
     ]);
-    const configured = readCleanPersonOidcConfiguration(
+    const configured = readPersonOidcConfiguration(
       required(parsed, "--oidc-config"),
     );
     const authorityUrl = required(parsed, "--authority-url");
-    assertCleanPersonAuthorityCallback(authorityUrl, configured.configuration);
+    assertPersonAuthorityCallback(authorityUrl, configured.configuration);
     const secretFile = parsed["--client-secret-file"];
     if (
       (configured.client_authentication === "none") !==
       (secretFile === undefined)
     )
       throw new Error(
-        "clean Person OIDC client-secret flags do not match config",
+        "Person OIDC client-secret flags do not match config",
       );
     const port = Number(required(parsed, "--port"));
     const host = required(parsed, "--host");

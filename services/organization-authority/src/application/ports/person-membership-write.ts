@@ -14,7 +14,7 @@ export interface CleanEmployeeRosterEntry {
  * has no installation, machine, lease, admin-bearer, or generic Authority
  * write surface.
  */
-export interface CleanPersonMembershipWriteTransaction {
+export interface PersonMembershipWriteTransaction {
   metadata(): { readonly organization_id: string };
   employeeMembershipByEmailSha256(
     email_sha256: Sha256Digest,
@@ -35,19 +35,19 @@ export interface CleanPersonMembershipWriteTransaction {
   ): StoredAuthorityMembership | undefined;
 }
 
-export interface CleanPersonMembershipWriteRepository {
+export interface PersonMembershipWriteRepository {
   writeMembershipAtLinearization<T>(
     observe: () => string,
     operation: (
-      transaction: CleanPersonMembershipWriteTransaction,
+      transaction: PersonMembershipWriteTransaction,
       observed_at: string,
     ) => T,
   ): T;
 }
 
-export function isCleanPersonMembershipWriteRepository(
+export function isPersonMembershipWriteRepository(
   value: unknown,
-): value is CleanPersonMembershipWriteRepository {
+): value is PersonMembershipWriteRepository {
   return (
     value !== null &&
     typeof value === "object" &&

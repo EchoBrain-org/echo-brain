@@ -30,9 +30,9 @@ import type {
 } from "../../../application/ports/person-session-repository.js";
 import type {
   CleanEmployeeRosterEntry,
-  CleanPersonMembershipWriteRepository,
-  CleanPersonMembershipWriteTransaction,
-} from "../../../application/ports/clean-person-membership-write.js";
+  PersonMembershipWriteRepository,
+  PersonMembershipWriteTransaction,
+} from "../../../application/ports/person-membership-write.js";
 
 type MetadataRow = {
   authority_id: string;
@@ -152,7 +152,7 @@ type CredentialRow = {
 
 function digest(value: string): Sha256Digest {
   if (!/^sha256:[0-9a-f]{64}$/.test(value)) {
-    throw new Error("clean Person session database contains an invalid digest");
+    throw new Error("Person session database contains an invalid digest");
   }
   return value as Sha256Digest;
 }
@@ -162,7 +162,7 @@ function metadata(row: MetadataRow): StoredAuthorityMetadata {
     parseCanonicalJson(row.descriptor_json),
   );
   if (canonicalJson(descriptor) !== row.descriptor_json) {
-    throw new Error("clean Authority descriptor is not canonical");
+    throw new Error("Organization Authority descriptor is not canonical");
   }
   return Object.freeze({
     authority_id: row.authority_id,
@@ -244,7 +244,7 @@ class Transaction implements PersonSessionWriteTransaction {
       )
       .get() as MetadataRow | undefined;
     if (row === undefined)
-      throw new Error("clean Authority metadata is missing");
+      throw new Error("Organization Authority metadata is missing");
     return metadata(row);
   }
 
@@ -498,7 +498,7 @@ class Transaction implements PersonSessionWriteTransaction {
 
   private writeTime(): string {
     if (this.observedAt === undefined)
-      throw new Error("clean Person session write time is unavailable");
+      throw new Error("Person session write time is unavailable");
     return this.observedAt;
   }
 
@@ -659,7 +659,7 @@ class Transaction implements PersonSessionWriteTransaction {
       );
     const stored = this.personLoginGrant(value.login_grant_sha256);
     if (stored === undefined)
-      throw new Error("clean Person login grant insert did not persist");
+      throw new Error("Person login grant insert did not persist");
     return stored;
   }
 
@@ -699,7 +699,7 @@ class Transaction implements PersonSessionWriteTransaction {
       );
     const stored = this.personSessionFamily(value.session_family_id);
     if (stored === undefined)
-      throw new Error("clean Person session family insert did not persist");
+      throw new Error("Person session family insert did not persist");
     return stored;
   }
 
@@ -722,7 +722,7 @@ class Transaction implements PersonSessionWriteTransaction {
       );
     const stored = this.personSessionCredential(value.token_sha256);
     if (stored === undefined)
-      throw new Error("clean Person session credential insert did not persist");
+      throw new Error("Person session credential insert did not persist");
     return stored;
   }
 
@@ -767,8 +767,8 @@ class Transaction implements PersonSessionWriteTransaction {
 }
 
 /** Migration-free adapter for a fresh Authority baseline only. */
-export class SqliteCleanPersonSessionRepository
-  implements PersonSessionRepository, CleanPersonMembershipWriteRepository
+export class SqlitePersonSessionRepository
+  implements PersonSessionRepository, PersonMembershipWriteRepository
 {
   readonly supports_full_person_authorization_transactions = false;
 
@@ -790,7 +790,7 @@ export class SqliteCleanPersonSessionRepository
       const observedAt = observe();
       const current = new Transaction(this.database, observedAt).metadata();
       if (observedAt < current.last_observed_at) {
-        throw new Error("clean Authority clock regressed since the last write");
+        throw new Error("Organization Authority clock regressed since the last write");
       }
       const result = operation(
         new Transaction(this.database, observedAt),
@@ -814,7 +814,7 @@ export class SqliteCleanPersonSessionRepository
   writeMembershipAtLinearization<T>(
     observe: () => string,
     operation: (
-      transaction: CleanPersonMembershipWriteTransaction,
+      transaction: PersonMembershipWriteTransaction,
       observedAt: string,
     ) => T,
   ): T {

@@ -16,15 +16,15 @@ import {
   PersonOidcRetryableError,
 } from "../src/application/person-identity-sessions.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
-import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
+import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import {
-  initializeCleanPersonCredentials,
-  issueCleanPersonInvitation,
-} from "../src/composition/clean-person-onboarding.js";
+  initializePersonSessionCredentials,
+  issuePersonOnboardingInvitation,
+} from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/slack-person-external-identity-runtime.js";
 import type {
@@ -104,7 +104,7 @@ describe("Organization Authority API runtime", () => {
       created_at: new Date(Date.now() - 1_000).toISOString(),
       creating_artifact_revision: "person-external-identity-runtime-test",
     });
-    const credentials = initializeCleanPersonCredentials({
+    const credentials = initializePersonSessionCredentials({
       state_directory: initialized.state_directory,
     });
     const opened: PersonExternalIdentityRuntimeInputV1[] = [];
@@ -195,7 +195,7 @@ describe("Organization Authority API runtime", () => {
       tenant: { kind: "issuer" as const },
       id_token_algorithms: ["RS256"],
     };
-    const credentials = initializeCleanPersonCredentials({
+    const credentials = initializePersonSessionCredentials({
       state_directory: initialized.state_directory,
     });
     const pkce = readPrivateAuthorityPersonSessionPkceKey(
@@ -205,7 +205,7 @@ describe("Organization Authority API runtime", () => {
     mkdirSync(invitationDirectory, { mode: 0o700 });
     chmodSync(invitationDirectory, 0o700);
     const invitationPath = join(invitationDirectory, "founder.invitation.json");
-    issueCleanPersonInvitation({
+    issuePersonOnboardingInvitation({
       state_directory: initialized.state_directory,
       oidc,
       pkce_sealing_key: pkce,
@@ -224,7 +224,7 @@ describe("Organization Authority API runtime", () => {
     try {
       const crypto = new NodePersonSessionCrypto(pkce);
       const sessions = new PersonIdentitySessionApplication(
-        new SqliteCleanPersonSessionRepository(database),
+        new SqlitePersonSessionRepository(database),
         oidc,
         {
           clock: new SystemAuthorityClock(),
@@ -285,7 +285,7 @@ describe("Organization Authority API runtime", () => {
       tenant: { kind: "issuer" as const },
       id_token_algorithms: ["RS256"],
     };
-    const credentials = initializeCleanPersonCredentials({
+    const credentials = initializePersonSessionCredentials({
       state_directory: initialized.state_directory,
     });
     const pkce = readPrivateAuthorityPersonSessionPkceKey(
@@ -295,7 +295,7 @@ describe("Organization Authority API runtime", () => {
     mkdirSync(invitations, { mode: 0o700 });
     chmodSync(invitations, 0o700);
     const invitationPath = join(invitations, "founder.invitation.json");
-    issueCleanPersonInvitation({
+    issuePersonOnboardingInvitation({
       state_directory: initialized.state_directory,
       oidc,
       pkce_sealing_key: pkce,
@@ -315,7 +315,7 @@ describe("Organization Authority API runtime", () => {
       let now = new Date().toISOString();
       const crypto = new NodePersonSessionCrypto(pkce);
       const sessions = new PersonIdentitySessionApplication(
-        new SqliteCleanPersonSessionRepository(database),
+        new SqlitePersonSessionRepository(database),
         oidc,
         {
           clock: { now: () => now },
@@ -401,7 +401,7 @@ describe("Organization Authority API runtime", () => {
       creating_artifact_revision: "clean-person-oidc-capacity-test",
     });
     const pkce = readPrivateAuthorityPersonSessionPkceKey(
-      initializeCleanPersonCredentials({
+      initializePersonSessionCredentials({
         state_directory: initialized.state_directory,
       }).pkce_sealing_key_reference,
     );
@@ -413,7 +413,7 @@ describe("Organization Authority API runtime", () => {
       let now = new Date().toISOString();
       const crypto = new NodePersonSessionCrypto(pkce);
       const sessions = new PersonIdentitySessionApplication(
-        new SqliteCleanPersonSessionRepository(database),
+        new SqlitePersonSessionRepository(database),
         {
           issuer: "https://issuer.example",
           client_id: "founder-client",
@@ -493,14 +493,14 @@ describe("Organization Authority API runtime", () => {
       tenant: { kind: "issuer" as const },
       id_token_algorithms: ["RS256"],
     };
-    const credentials = initializeCleanPersonCredentials({
+    const credentials = initializePersonSessionCredentials({
       state_directory: initialized.state_directory,
     });
     expect(credentials.pkce_sealing_key_reference).toContain(
       "person-session-pkce-sealing-key",
     );
     expect(() =>
-      initializeCleanPersonCredentials({
+      initializePersonSessionCredentials({
         state_directory: initialized.state_directory,
       }),
     ).toThrow();
@@ -511,7 +511,7 @@ describe("Organization Authority API runtime", () => {
     mkdirSync(invitationDirectory, { mode: 0o700 });
     chmodSync(invitationDirectory, 0o700);
     const invitationPath = join(invitationDirectory, "founder.invitation.json");
-    const invitation = issueCleanPersonInvitation({
+    const invitation = issuePersonOnboardingInvitation({
       state_directory: initialized.state_directory,
       oidc,
       pkce_sealing_key: pkce,
@@ -528,7 +528,7 @@ describe("Organization Authority API runtime", () => {
     try {
       const crypto = new NodePersonSessionCrypto(pkce);
       const cleanOnlySessions = new PersonIdentitySessionApplication(
-        new SqliteCleanPersonSessionRepository(boundaryDatabase),
+        new SqlitePersonSessionRepository(boundaryDatabase),
         oidc,
         {
           clock: new SystemAuthorityClock(),

@@ -39,13 +39,13 @@ import {
   initializeAuthorityState,
   type AuthorityStateSeedV1,
 } from "./authority-state-initializer.js";
-import { runCleanGranolaSourceCli } from "./clean-granola-source-cli.js";
+import { runGranolaMeetingSourceAdmissionCli } from "./granola-meeting-source-admission-cli.js";
 import { readableSearchRuntimeContractV1 } from "./readable-search-runtime.js";
 import {
-  assertCleanPersonAuthorityCallback,
-  readCleanPersonOidcConfiguration,
-  runCleanPersonCli,
-} from "./clean-person-cli.js";
+  assertPersonAuthorityCallback,
+  readPersonOidcConfiguration,
+  runOrganizationAuthorityPersonAdministrationCli,
+} from "./organization-authority-person-administration-cli.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 
 const MANIFEST_DIRECTORY = "onboarding";
@@ -237,7 +237,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   initialize_state: initializeAuthorityState,
   initialize_credentials: async (stateDirectory) => {
     await captureCommand((stdout) =>
-      runCleanPersonCli(["credentials-init", "--state-dir", stateDirectory], {
+      runOrganizationAuthorityPersonAdministrationCli(["credentials-init", "--state-dir", stateDirectory], {
         stdout,
         stderr: () => undefined,
       }),
@@ -315,7 +315,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   },
   issue_invitation: async (input) => {
     await captureCommand((stdout) =>
-      runCleanPersonCli(
+      runOrganizationAuthorityPersonAdministrationCli(
         [
           "invite",
           "--state-dir",
@@ -339,7 +339,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   },
   admit_source: async (input) => {
     await captureCommand((stdout) =>
-      runCleanGranolaSourceCli(
+      runGranolaMeetingSourceAdmissionCli(
         [
           "--state-dir",
           input.state_directory,
@@ -1510,8 +1510,8 @@ async function bootstrap(
 ): Promise<void> {
   // This must happen before a durable setup plan, genesis, or Slack call. The
   // same current OIDC parser and callback rule power the Person CLI.
-  const oidc = readCleanPersonOidcConfiguration(input.oidc_config_path);
-  assertCleanPersonAuthorityCallback(input.authority_url, oidc.configuration);
+  const oidc = readPersonOidcConfiguration(input.oidc_config_path);
+  assertPersonAuthorityCallback(input.authority_url, oidc.configuration);
   let setup = loadSetupManifest(input.state_directory);
   if (setup === undefined) {
     if (existsSync(input.state_directory)) {

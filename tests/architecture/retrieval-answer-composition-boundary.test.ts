@@ -24,7 +24,7 @@ const ANSWER_COMPOSITION_AUDIT_WRITER =
   "services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts";
 /** Composition roots may select an answer-composition runtime, but never inspect its implementation. */
 const ANSWER_COMPOSITION_WIRING_ROOTS = new Set([
-  "services/organization-authority/src/composition/clean-live-cli.ts",
+  "services/organization-authority/src/composition/organization-authority-service-cli.ts",
   "services/organization-authority/src/composition/organization-authority-api-runtime.ts",
   "services/organization-authority/src/composition/organization-authority-composition-root.ts",
   "services/organization-authority/src/composition/organization-authority-runtime.ts",

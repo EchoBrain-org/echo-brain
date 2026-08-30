@@ -1,12 +1,12 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { initializeAuthorityState } from "./authority-state-initializer.js";
 
-export interface CleanResetCliIo {
+export interface OrganizationAuthorityResetCliIo {
   stdout(value: string): void;
   stderr(value: string): void;
 }
 
-const PROCESS_IO: CleanResetCliIo = {
+const PROCESS_IO: OrganizationAuthorityResetCliIo = {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value),
 };
@@ -47,10 +47,10 @@ function parseFlags(
   return parsed;
 }
 
-/** The standalone stopped-state command. It has no legacy CLI/runtime import. */
-export function runCleanResetCli(
+/** The standalone stopped-state reset command. It has no runtime import. */
+export function runOrganizationAuthorityResetCli(
   arguments_: readonly string[],
-  io: CleanResetCliIo = PROCESS_IO,
+  io: OrganizationAuthorityResetCliIo = PROCESS_IO,
 ): number {
   const flags = parseFlags(arguments_);
   const result = initializeAuthorityState({

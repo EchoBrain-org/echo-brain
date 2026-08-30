@@ -14,24 +14,24 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
-import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
+import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import {
-  admitCleanGranolaSource,
-} from "../src/composition/clean-granola-source-admission.js";
+  admitGranolaMeetingSource,
+} from "../src/composition/granola-meeting-source-admission.js";
 import {
   OPENROUTER_CLEAN_PROCESSOR_MODEL_V1,
   OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
 } from "../src/composition/openrouter-clean-processor-config-v1.js";
 import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-clean-processor-admission-commitment.js";
-import { runCleanGranolaSourceCli } from "../src/composition/clean-granola-source-cli.js";
+import { runGranolaMeetingSourceAdmissionCli } from "../src/composition/granola-meeting-source-admission-cli.js";
 import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
 import {
-  initializeCleanPersonCredentials,
-  issueCleanPersonInvitation,
-} from "../src/composition/clean-person-onboarding.js";
+  initializePersonSessionCredentials,
+  issuePersonOnboardingInvitation,
+} from "../src/composition/person-onboarding-service.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { granolaLiveOnlyCutoff } from "../src/processing/adapters/meeting-sources/granola/index.js";
@@ -147,7 +147,7 @@ function fixture() {
 async function bootstrapFounder(
   input: ReturnType<typeof fixture>,
 ): Promise<void> {
-  const credentials = initializeCleanPersonCredentials({
+  const credentials = initializePersonSessionCredentials({
     state_directory: input.state_directory,
   });
   const invitationDirectory = join(input.parent, "invitations");
@@ -157,7 +157,7 @@ async function bootstrapFounder(
   const pkce = readPrivateAuthorityPersonSessionPkceKey(
     credentials.pkce_sealing_key_reference,
   );
-  issueCleanPersonInvitation({
+  issuePersonOnboardingInvitation({
     state_directory: input.state_directory,
     oidc: OIDC,
     pkce_sealing_key: pkce,
@@ -178,7 +178,7 @@ async function bootstrapFounder(
     const denied: string[] = [];
     const provider = new FounderOidcProvider();
     const application = new PersonIdentitySessionApplication(
-      new SqliteCleanPersonSessionRepository(database),
+      new SqlitePersonSessionRepository(database),
       OIDC,
       {
         clock: new SystemAuthorityClock(),
@@ -221,7 +221,7 @@ describe("clean Granola source admission", () => {
     const input = fixture();
     await bootstrapFounder(input);
     let preflightCalls = 0;
-    const admitted = await admitCleanGranolaSource({
+    const admitted = await admitGranolaMeetingSource({
       ...input,
       processor: {
         adapter_id: "fixture-processor",
@@ -268,10 +268,10 @@ describe("clean Granola source admission", () => {
   it("requires founder OIDC re-onboarding, then admits a fresh live-only source and fixed LLM processing identity", async () => {
     const input = fixture();
     await expect(
-      admitCleanGranolaSource({ ...input, now: () => ADMITTED_AT }),
+      admitGranolaMeetingSource({ ...input, now: () => ADMITTED_AT }),
     ).rejects.toThrow("completed founder OIDC re-onboarding");
     await bootstrapFounder(input);
-    const admitted = await admitCleanGranolaSource({
+    const admitted = await admitGranolaMeetingSource({
       ...input,
       now: () => ADMITTED_AT,
     });
@@ -336,11 +336,11 @@ describe("clean Granola source admission", () => {
   it("reuses the exact cutoff for an exact retry and conflicts on changed semantic input", async () => {
     const input = fixture();
     await bootstrapFounder(input);
-    const first = await admitCleanGranolaSource({
+    const first = await admitGranolaMeetingSource({
       ...input,
       now: () => ADMITTED_AT,
     });
-    const retry = await admitCleanGranolaSource({
+    const retry = await admitGranolaMeetingSource({
       ...input,
       now: () => {
         throw new Error("exact retry must not sample a new cutoff");
@@ -352,7 +352,7 @@ describe("clean Granola source admission", () => {
     });
     expect(input.record_owner_calls()).toBe(1);
     await expect(
-      admitCleanGranolaSource({
+      admitGranolaMeetingSource({
         ...input,
         source_instance_id: "different-granola",
       }),
@@ -368,7 +368,7 @@ describe("clean Granola source admission", () => {
       "other@example.com",
     );
     await expect(
-      admitCleanGranolaSource({
+      admitGranolaMeetingSource({
         ...input,
         granola_owner_email_reference: `file:${otherOwner}`,
       }),
@@ -395,7 +395,7 @@ describe("clean Granola source admission", () => {
       const input = fixture();
       await bootstrapFounder(input);
       await expect(
-        admitCleanGranolaSource({
+        admitGranolaMeetingSource({
           ...input,
           create_granola_record_owner_client,
           now: () => ADMITTED_AT,
@@ -423,7 +423,7 @@ describe("clean Granola source admission", () => {
     const input = fixture();
     await bootstrapFounder(input);
     let competingWriteAcquired = false;
-    const admitted = await admitCleanGranolaSource({
+    const admitted = await admitGranolaMeetingSource({
       ...input,
       create_granola_record_owner_client: () => ({
         async listNotes() {
@@ -458,7 +458,7 @@ describe("clean Granola source admission", () => {
     const credentialPath = input.granola_credential_reference.slice(
       "file:".length,
     );
-    const admitted = await admitCleanGranolaSource({
+    const admitted = await admitGranolaMeetingSource({
       ...input,
       create_granola_record_owner_client: (credential) => {
         factoryCredential = credential;
@@ -478,7 +478,7 @@ describe("clean Granola source admission", () => {
     const ownerEmailPath = input.granola_owner_email_reference.slice(
       "file:".length,
     );
-    const admitted = await admitCleanGranolaSource({
+    const admitted = await admitGranolaMeetingSource({
       ...input,
       create_granola_record_owner_client: () => {
         writeFileSync(ownerEmailPath, "other@example.com");
@@ -498,7 +498,7 @@ describe("clean Granola source admission", () => {
     await bootstrapFounder(input);
     const output: string[] = [];
     await expect(
-      runCleanGranolaSourceCli(
+      runGranolaMeetingSourceAdmissionCli(
         [
           "--state-dir",
           input.initialized.state_directory,
@@ -530,7 +530,7 @@ describe("clean Granola source admission", () => {
     expect(Object.keys(status)).not.toContain("processor");
     expect(Object.keys(status)).not.toContain("custody");
     await expect(
-      runCleanGranolaSourceCli(
+      runGranolaMeetingSourceAdmissionCli(
         ["--state-dir", input.initialized.state_directory],
         { stdout: () => undefined, stderr: () => undefined },
       ),

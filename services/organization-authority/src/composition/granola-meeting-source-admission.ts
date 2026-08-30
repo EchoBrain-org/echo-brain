@@ -22,7 +22,7 @@ import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 export const CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1 = "2.2.0";
 const INSTANCE_ID = /^[a-z][a-z0-9-]{0,127}$/;
 
-export interface AdmitCleanGranolaSourceInput {
+export interface AdmitGranolaMeetingSourceInput {
   readonly state_directory: string;
   readonly source_instance_id: string;
   /** A canonical `file:` reference to a current-user 0600 Granola key. */
@@ -42,7 +42,7 @@ export interface AdmitCleanGranolaSourceInput {
   readonly now?: () => string;
 }
 
-export interface CleanGranolaSourceAdmissionResult {
+export interface GranolaMeetingSourceAdmissionResult {
   readonly schema_version: 1;
   readonly kind: "echo-clean-granola-source-admission-v1";
   readonly outcome: "admitted" | "already_admitted";
@@ -108,9 +108,9 @@ function privateReferenceSha256(kind: string, reference: string): Sha256Digest {
 }
 
 function result(
-  outcome: CleanGranolaSourceAdmissionResult["outcome"],
+  outcome: GranolaMeetingSourceAdmissionResult["outcome"],
   admission: ExistingAdmission,
-): CleanGranolaSourceAdmissionResult {
+): GranolaMeetingSourceAdmissionResult {
   return Object.freeze({
     schema_version: 1,
     kind: "echo-clean-granola-source-admission-v1",
@@ -144,9 +144,9 @@ function result(
  * admission. Credential bytes are read only to prove their private-file
  * contracts and are never persisted, logged, or returned.
  */
-export async function admitCleanGranolaSource(
-  input: AdmitCleanGranolaSourceInput,
-): Promise<CleanGranolaSourceAdmissionResult> {
+export async function admitGranolaMeetingSource(
+  input: AdmitGranolaMeetingSourceInput,
+): Promise<GranolaMeetingSourceAdmissionResult> {
   assertCleanProcessorAdmissionCommitmentV1(input.processor);
   await input.processor.preflight();
   const granolaCredential = readPrivateAuthorityGranolaOrganizationCredential(
@@ -155,7 +155,7 @@ export async function admitCleanGranolaSource(
   const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
     input.granola_owner_email_reference,
   );
-  return admitCleanGranolaSourceAfterOwnerPreflight(
+  return admitGranolaMeetingSourceAfterOwnerPreflight(
     input,
     granolaCredential,
     ownerEmail,
@@ -169,12 +169,12 @@ export async function admitCleanGranolaSource(
  * network observation, without holding SQLite's write transaction open while
  * waiting on the provider.
  */
-async function admitCleanGranolaSourceAfterOwnerPreflight(
-  input: AdmitCleanGranolaSourceInput,
+async function admitGranolaMeetingSourceAfterOwnerPreflight(
+  input: AdmitGranolaMeetingSourceInput,
   granolaCredential: string,
   ownerEmail: string,
   ownerPreflightComplete: boolean,
-): Promise<CleanGranolaSourceAdmissionResult> {
+): Promise<GranolaMeetingSourceAdmissionResult> {
   if (
     !INSTANCE_ID.test(input.source_instance_id)
   ) {
@@ -307,7 +307,7 @@ async function admitCleanGranolaSourceAfterOwnerPreflight(
           input.create_granola_record_owner_client(granolaCredential),
           ownerEmail,
         );
-        return admitCleanGranolaSourceAfterOwnerPreflight(
+        return admitGranolaMeetingSourceAfterOwnerPreflight(
           input,
           granolaCredential,
           ownerEmail,

@@ -3,7 +3,7 @@ import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import type {
   CleanEmployeeRosterEntry,
-} from "./ports/clean-person-membership-write.js";
+} from "./ports/person-membership-write.js";
 import type {
   IssuedPersonLoginGrant,
   PersonIdentitySessionApplication,

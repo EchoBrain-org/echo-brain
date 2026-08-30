@@ -7,7 +7,7 @@ import {
 } from "@echo-brain/organization-record/new-lineage-v1";
 import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
-import { SqliteCleanPersonSessionRepository } from "../adapters/persistence/sqlite/clean-person-session-repository.js";
+import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
@@ -124,7 +124,7 @@ export async function startOrganizationAuthorityApiRuntime(
       join(config.state_directory, "record-log.sqlite"),
       { fileMustExist: true },
     );
-    const repository = new SqliteCleanPersonSessionRepository(database);
+    const repository = new SqlitePersonSessionRepository(database);
     const metadata = repository.read((transaction) => transaction.metadata());
     if (
       metadata.authority_id !== lineage.root.authority_id ||

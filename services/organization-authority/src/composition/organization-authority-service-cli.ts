@@ -2,7 +2,7 @@ import { canonicalJson } from "@echo-brain/federation-protocol";
 import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
 import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
-import { readCleanPersonOidcConfiguration } from "./clean-person-cli.js";
+import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
 import {
   openStagingSyntheticPrivateDmCanaryControlV1,
   STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
@@ -19,17 +19,17 @@ const STAGING_CANARY_USAGE =
   "--release-id <canonical-clean-v1-release-id>";
 const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 
-interface CliIo {
+interface OrganizationAuthorityServiceCliIo {
   readonly stdout: (value: string) => void;
   readonly stderr: (value: string) => void;
 }
 
-const PROCESS_IO: CliIo = {
+const PROCESS_IO: OrganizationAuthorityServiceCliIo = {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value),
 };
 
-const CLEAN_LIVE_WORKER_FAILURE_EVENT_V1 = canonicalJson({
+const LEGACY_CLEAN_LIVE_WORKER_FAILURE_EVENT_V1 = canonicalJson({
   schema_version: 1,
   kind: "echo-clean-live-worker-failed-v1",
 } as never);
@@ -38,7 +38,7 @@ const CLEAN_LIVE_WORKER_FAILURE_EVENT_V1 = canonicalJson({
 // New operational diagnostics query the ordered lifecycle events instead:
 // phase failed, then cycle failed, then this legacy marker.
 
-const CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1 = canonicalJson({
+const LEGACY_CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1 = canonicalJson({
   schema_version: 1,
   kind: "echo-clean-live-startup-failed-v1",
 } as never);
@@ -114,14 +114,14 @@ function stagingCanaryReleaseId(argv: readonly string[]): string {
 /**
  * Starts from the private, non-secret V1 onboarding manifest. It deliberately does
  * not repeat the Authority URL, OIDC configuration, PKCE key, or Slack
- * channel at the command line. Before the compatibility command
+ * channel at the command line. Before the legacy compatibility command
  * `clean-founder finalize`, the same
  * command serves Person onboarding with an inert worker; after a restart it
  * opens the admitted live-only processing chain.
  */
-export async function runCleanLiveCli(
+export async function runOrganizationAuthorityServiceCli(
   argv: readonly string[],
-  io: CliIo = PROCESS_IO,
+  io: OrganizationAuthorityServiceCliIo = PROCESS_IO,
 ): Promise<number> {
   try {
     if (argv[0] === "staging-private-dm-canary") {
@@ -135,7 +135,7 @@ export async function runCleanLiveCli(
     const parsed = flags(argv.slice(1));
     const stateDirectory = required(parsed, "--state-dir");
     const manifest = readOrganizationAuthoritySetupManifest(stateDirectory);
-    const configured = readCleanPersonOidcConfiguration(
+    const configured = readPersonOidcConfiguration(
       manifest.oidc_config_path,
     );
     const secretFile = parsed["--client-secret-file"];
@@ -144,7 +144,7 @@ export async function runCleanLiveCli(
       (secretFile === undefined)
     ) {
       throw new Error(
-        "clean live OIDC client-secret flags do not match config",
+        "organization authority service OIDC client-secret flags do not match config",
       );
     }
     const host = required(parsed, "--host");
@@ -152,7 +152,10 @@ export async function runCleanLiveCli(
     const runtime = await openOrganizationAuthorityService({
       state_directory: stateDirectory,
       host,
-      port: positiveInteger(required(parsed, "--port"), "clean live port"),
+      port: positiveInteger(
+        required(parsed, "--port"),
+        "organization authority service port",
+      ),
       authority_url: manifest.authority_url,
       oidc: configured.configuration,
       client_authentication:
@@ -177,7 +180,7 @@ export async function runCleanLiveCli(
       // The V1 manifest retains its serialized compatibility field.
       openrouter_credential_file: manifest.llm_credential_file,
       on_worker_error: () => {
-        io.stderr(`${CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
+        io.stderr(`${LEGACY_CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
       },
       on_worker_telemetry: (event) => {
         // The lifecycle reporter constructs this closed, content-free schema.
@@ -210,7 +213,7 @@ export async function runCleanLiveCli(
         : {
             worker_interval_ms: positiveInteger(
               parsed["--worker-interval-ms"]!,
-              "clean live worker interval",
+              "organization authority service worker interval",
             ),
           }),
     });
@@ -253,7 +256,7 @@ export async function runCleanLiveCli(
     });
     return 0;
   } catch {
-    io.stderr(`${CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1}\n`);
+    io.stderr(`${LEGACY_CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1}\n`);
     return 1;
   }
 }

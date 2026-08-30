@@ -19,11 +19,11 @@ import {
   runOrganizationAuthoritySetupCli,
   type OrganizationAuthoritySetupCliDependencies,
 } from "../../services/organization-authority/src/composition/organization-authority-setup-cli.js";
-import { runCleanGranolaSourceCli } from "../../services/organization-authority/src/composition/clean-granola-source-cli.js";
+import { runGranolaMeetingSourceAdmissionCli } from "../../services/organization-authority/src/composition/granola-meeting-source-admission-cli.js";
 import {
-  initializeCleanPersonCredentials,
-  issueCleanPersonInvitation,
-} from "../../services/organization-authority/src/composition/clean-person-onboarding.js";
+  initializePersonSessionCredentials,
+  issuePersonOnboardingInvitation,
+} from "../../services/organization-authority/src/composition/person-onboarding-service.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
 import { openOrganizationAuthorityService } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/slack-person-external-identity-runtime.js";
@@ -171,7 +171,7 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
     now: () => "2026-08-22T12:00:00.000Z",
     initialize_state: initializeAuthorityState,
     initialize_credentials: async (stateDirectory) => {
-      initializeCleanPersonCredentials({ state_directory: stateDirectory });
+      initializePersonSessionCredentials({ state_directory: stateDirectory });
     },
     connect_slack: async (input) => {
       if (input.connection_id === undefined) {
@@ -229,7 +229,7 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
       };
     },
     issue_invitation: async (input) => {
-      issueCleanPersonInvitation({
+      issuePersonOnboardingInvitation({
         state_directory: input.state_directory,
         oidc: OIDC,
         pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
@@ -243,7 +243,7 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
     },
     admit_source: async (input) => {
       const output = commandOutput();
-      const status = await runCleanGranolaSourceCli(
+      const status = await runGranolaMeetingSourceAdmissionCli(
         [
           "--state-dir",
           input.state_directory,
