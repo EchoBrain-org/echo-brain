@@ -1168,14 +1168,10 @@ describe("clean founder deployment profile", () => {
   });
 
   it("keeps clean ingress free of the retired authenticated proxy contract", () => {
-    const caddyfiles = [
-      deploymentFile("Caddyfile.clean-v1"),
-      deploymentFile("Caddyfile.clean-v1.ec2"),
-    ];
-
-    for (const caddyfile of caddyfiles) {
+    const localCaddyfile = deploymentFile("Caddyfile.clean-v1");
+    const ec2Caddyfile = deploymentFile("Caddyfile.clean-v1.ec2");
+    for (const caddyfile of [localCaddyfile, ec2Caddyfile]) {
       expect(caddyfile).toContain("reverse_proxy 127.0.0.1:39479");
-      expect(caddyfile).toContain("header_up X-Echo-Client-IP {remote_host}");
       for (const forbidden of [
         "X-Echo-Proxy-Authorization",
         "X-Echo-Authenticated-Client-Id",
@@ -1185,6 +1181,15 @@ describe("clean founder deployment profile", () => {
         expect(caddyfile).not.toContain(forbidden);
       }
     }
+    expect(localCaddyfile).toContain(
+      "header_up X-Echo-Client-IP {remote_host}",
+    );
+    expect(ec2Caddyfile).toContain(
+      "header_up X-Echo-Client-IP {http.request.header.CF-Connecting-IP}",
+    );
+    expect(ec2Caddyfile).not.toContain(
+      "header_up X-Echo-Client-IP {remote_host}",
+    );
   });
 
   it("offers a loopback-only HTTP origin for the EC2 tunnel", () => {

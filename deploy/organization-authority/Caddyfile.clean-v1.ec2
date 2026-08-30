@@ -1,7 +1,7 @@
 http://{$ECHO_CLEAN_AUTHORITY_HOST:localhost} {
 	route {
 		reverse_proxy 127.0.0.1:39479 {
-			header_up X-Echo-Client-IP {remote_host}
+			header_up X-Echo-Client-IP {http.request.header.CF-Connecting-IP}
 		}
 	}
 }
