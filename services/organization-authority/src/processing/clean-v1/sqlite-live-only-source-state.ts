@@ -258,7 +258,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
    * conspicuously named operation so ordinary source processing cannot ever
    * submit arbitrary meetings under the staging exception.
    */
-  async stageStagingSyntheticCanaryCandidate(
+  async stageSyntheticCanaryCandidate(
     input: CleanLiveCandidateSnapshotInputV1,
     canary: StagingSyntheticMeetingCanaryInputV1,
   ): Promise<CleanLiveCandidateV1> {

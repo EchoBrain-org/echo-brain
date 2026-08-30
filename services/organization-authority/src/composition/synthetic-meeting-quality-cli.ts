@@ -16,11 +16,11 @@ import {
   SyntheticMeetingSourceAdapterV1,
 } from "../quality/synthetic-meeting-fixture-v1.js";
 import {
-  OPENROUTER_CLEAN_LAYER4_ADAPTER_ID_V1,
-  OPENROUTER_CLEAN_LAYER4_MODEL_V1,
-  OPENROUTER_CLEAN_LAYER4_TIMEOUT_MS_V1,
-} from "./openrouter-clean-layer4-runtime.js";
-import { fixedCleanLlmProcessorConfigV1 } from "./clean-live-llm-processor-config.js";
+  OPENROUTER_CLEAN_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+  OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
+  OPENROUTER_CLEAN_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+} from "./openrouter-clean-answer-composition-runtime.js";
+import { fixedOpenRouterCleanProcessorConfigV1 } from "./openrouter-clean-processor-config-v1.js";
 
 const USAGE =
   "usage: echo-organization-authority-synthetic-quality run " +
@@ -130,7 +130,7 @@ export async function runSyntheticMeetingQualityCommandV1(
     const credential = (dependencies.read_credential ?? readPrivateAuthorityCredential)(
       credentialReference,
     );
-    const processorConfig = fixedCleanLlmProcessorConfigV1(
+    const processorConfig = fixedOpenRouterCleanProcessorConfigV1(
       "synthetic-quality-eval",
       credentialReference,
     );
@@ -159,10 +159,11 @@ export async function runSyntheticMeetingQualityCommandV1(
         extraction_expectations: phaseOneSyntheticExtractionExpectationsV1,
         planner: model,
         answerer: model,
-        generation_adapter_id: OPENROUTER_CLEAN_LAYER4_ADAPTER_ID_V1,
-        planner_model: OPENROUTER_CLEAN_LAYER4_MODEL_V1,
-        answer_model: OPENROUTER_CLEAN_LAYER4_MODEL_V1,
-        timeout_ms: OPENROUTER_CLEAN_LAYER4_TIMEOUT_MS_V1,
+        generation_adapter_id:
+          OPENROUTER_CLEAN_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+        planner_model: OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
+        answer_model: OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
+        timeout_ms: OPENROUTER_CLEAN_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
       });
     io.stdout(`${JSON.stringify(result)}\n`);
     return result.passed ? 0 : 1;

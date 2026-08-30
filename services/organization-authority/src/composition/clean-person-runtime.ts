@@ -27,9 +27,9 @@ import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-ru
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import {
   createCleanPersonAnswerRouteV1,
-  type CleanLayer4FailureEventV1,
+  type CleanAnswerCompositionFailureEventV1,
 } from "./clean-person-answer-route.js";
-import type { CleanLayer4RuntimeV1 } from "./clean-layer4-runtime.js";
+import type { CleanAnswerCompositionRuntimeV1 } from "./clean-answer-composition-runtime.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
 import type {
   CleanPersonExternalIdentityRuntimeBundleV1,
@@ -57,9 +57,9 @@ export interface CleanPersonRuntimeDependencies {
   /** Optional external identity provider, omitted until it is configured. */
   readonly external_identity_runtime?: CleanPersonExternalIdentityRuntimeBundleV1;
   /** Present only in the active live runtime; omitted during founder setup. */
-  readonly layer4_runtime?: CleanLayer4RuntimeV1;
+  readonly answer_composition_runtime?: CleanAnswerCompositionRuntimeV1;
   /** Metadata-only Layer 4 failure observer for the live server log. */
-  readonly answer_failure?: (event: CleanLayer4FailureEventV1) => void;
+  readonly answer_failure?: (event: CleanAnswerCompositionFailureEventV1) => void;
   /** Present only when the signed private-approval surface is active. */
   readonly private_approval_interaction_ingress?:
     PrivateApprovalInteractionHttpApplicationV1;
@@ -195,7 +195,7 @@ export async function startCleanPersonRuntime(
         audit: readAudit,
       }),
       person_record_search: recordSearch,
-      ...(dependencies.layer4_runtime === undefined
+      ...(dependencies.answer_composition_runtime === undefined
         ? {}
         : {
             person_answer: createCleanPersonAnswerRouteV1({
@@ -203,8 +203,8 @@ export async function startCleanPersonRuntime(
               organization_id: metadata.organization_id,
               state_lineage_id: lineage.root.state_lineage_id,
               search: recordSearch,
-              model: dependencies.layer4_runtime.structured_output,
-              generation: dependencies.layer4_runtime.generation,
+              model: dependencies.answer_composition_runtime.structured_output,
+              generation: dependencies.answer_composition_runtime.generation,
               audit: new SqliteCleanPersonAnswerCompositionAuditV1(database),
               ...(dependencies.answer_failure === undefined
                 ? {}

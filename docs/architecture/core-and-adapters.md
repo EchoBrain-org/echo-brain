@@ -118,7 +118,7 @@ tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
 ## Current composition
 
-The current founder and CLI product profile concretely selects Granola as the
+The Organization Authority composition root concretely selects Granola as the
 meeting source, OpenRouter with the pinned DeepSeek processing version as the
 decision processor, Slack for approval, interactions, identity, and the
 existing delivery capability, and Authority SQLite state. It separately
@@ -158,7 +158,7 @@ and
 
 ## Known provider-neutrality caveats
 
-- Founder onboarding and the compatibility CLI select the concrete Granola,
+- Initial-owner onboarding and the compatibility CLI select the concrete Granola,
   OpenRouter, and Slack profile; there is no universal source-onboarding flow.
 - The boundary covers external capabilities, not interchangeable SQLite,
   file-key, Node-runtime, or authentication-protocol implementations. The
@@ -169,3 +169,7 @@ and
 - Bundles are trusted static composition, and name/dependency checks cannot
   detect every hidden semantic coupling. Each selected profile still needs
   capability tests and a bounded staging rehearsal.
+- Compatibility-bound `clean-founder-*` commands, manifest kinds, and durable
+  instance IDs describe the V1 initial-owner bootstrap contract. Runtime
+  components must not reuse that cohort name; replacing the persisted/operator
+  vocabulary requires an explicit versioned bootstrap migration.

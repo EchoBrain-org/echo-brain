@@ -11,7 +11,7 @@ import {
 import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../processing/clean-v1/review-lineage-semantics.js";
 import { SqliteCleanLiveOnlySourceStateV1 } from "../processing/clean-v1/sqlite-live-only-source-state.js";
 
-export interface StageStagingSyntheticPrivateDmCanaryV1Input {
+export interface RunStagingSyntheticPrivateDmCanaryV1Input {
   /** Must be the public staging Authority origin, never a production URL. */
   readonly authority_url: string;
   readonly canary: StagingSyntheticMeetingCanaryInputV1;
@@ -21,7 +21,7 @@ export interface StageStagingSyntheticPrivateDmCanaryV1Input {
   readonly signal?: AbortSignal;
 }
 
-export type StageStagingSyntheticPrivateDmCanaryV1Result =
+export type StagingSyntheticPrivateDmCanaryResultV1 =
   | {
       readonly kind: "staged";
       readonly approval_id: string;
@@ -77,9 +77,9 @@ function actionable(
  * existing private-owner Slack approval stager. It never polls or advances the
  * real meeting provider cursor. A stable canary id is an idempotency key.
  */
-export async function stageStagingSyntheticPrivateDmCanaryV1(
-  input: StageStagingSyntheticPrivateDmCanaryV1Input,
-): Promise<StageStagingSyntheticPrivateDmCanaryV1Result> {
+export async function runStagingSyntheticPrivateDmCanaryV1(
+  input: RunStagingSyntheticPrivateDmCanaryV1Input,
+): Promise<StagingSyntheticPrivateDmCanaryResultV1> {
   input.signal?.throwIfAborted();
   assertStagingAuthorityUrl(input.authority_url);
   const meeting = createStagingSyntheticMeetingCanaryV1(input.canary);
@@ -113,7 +113,7 @@ export async function stageStagingSyntheticPrivateDmCanaryV1(
     input.signal?.throwIfAborted();
     assertCanonicalDecisionSet(decisions, meeting, input.processor.identity);
     input.signal?.throwIfAborted();
-    await input.state.stageStagingSyntheticCanaryCandidate(
+    await input.state.stageSyntheticCanaryCandidate(
       {
         admission,
         meeting,

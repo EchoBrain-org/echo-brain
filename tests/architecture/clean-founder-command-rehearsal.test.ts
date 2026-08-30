@@ -25,7 +25,7 @@ import {
   issueCleanPersonInvitation,
 } from "../../services/organization-authority/src/composition/clean-person-onboarding.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
-import { openCleanFounderLiveRuntime } from "../../services/organization-authority/src/composition/open-clean-founder-live-runtime.js";
+import { openCleanOrganizationAuthorityRuntime } from "../../services/organization-authority/src/composition/open-clean-organization-authority-runtime.js";
 import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/clean-slack-person-external-identity-runtime.js";
 import { initializeCleanResetState } from "../../services/organization-authority/src/composition/clean-reset-state.js";
 import type { CleanLiveProcessingCycleV1 } from "../../services/organization-authority/src/composition/clean-live-runtime.js";
@@ -413,7 +413,7 @@ describe("clean founder command rehearsal", () => {
     ).resolves.toBe(0);
     const bootstrapped = oneJson<{ invitation_path: string }>(bootstrap);
 
-    const idle = await openCleanFounderLiveRuntime(
+    const idle = await openCleanOrganizationAuthorityRuntime(
       {
         state_directory: stateDirectory,
         host: "127.0.0.1",
@@ -433,7 +433,7 @@ describe("clean founder command rehearsal", () => {
         ),
         // The provider-free idle branch must not inspect this exact-id input.
         slack_connection_id: "con_not_read",
-        slack_approval_channel_id: "C12345678",
+        slack_identity_link_channel_id: "C12345678",
         granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
         granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
         llm_credential_file: join(stateDirectory, "credentials", "llm-credential"),
@@ -443,7 +443,7 @@ describe("clean founder command rehearsal", () => {
           oidc_provider: new MockOidcProvider(),
           external_identity_runtime:
             createCleanSlackPersonExternalIdentityRuntimeBundleV1({
-              approval_channel_id: "C12345678",
+              identity_link_channel_id: "C12345678",
               provider: fakeSlack,
             }),
         },
@@ -539,7 +539,7 @@ describe("clean founder command rehearsal", () => {
     expect(finalizeStatus, finalized.values.join("")).toBe(0);
     expect(oneJson<{ ok: boolean }>(finalized).ok).toBe(true);
 
-    const active = await openCleanFounderLiveRuntime(
+    const active = await openCleanOrganizationAuthorityRuntime(
       {
         state_directory: stateDirectory,
         host: "127.0.0.1",
@@ -559,7 +559,7 @@ describe("clean founder command rehearsal", () => {
         ),
         // The injected processing seam also remains provider-free.
         slack_connection_id: "con_not_read",
-        slack_approval_channel_id: "C12345678",
+        slack_identity_link_channel_id: "C12345678",
         granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
         granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
         llm_credential_file: join(stateDirectory, "credentials", "llm-credential"),

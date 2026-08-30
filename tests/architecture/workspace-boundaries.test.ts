@@ -959,7 +959,7 @@ describe("workspace source boundaries", () => {
     );
     for (const concreteCompositionModule of [
       "services/organization-authority/src/composition/granola-live-source-boundary-v1.ts",
-      "services/organization-authority/src/composition/open-clean-founder-live-runtime.ts",
+      "services/organization-authority/src/composition/open-clean-organization-authority-runtime.ts",
     ]) {
       expect(existsSync(join(fixture, concreteCompositionModule))).toBe(true);
     }

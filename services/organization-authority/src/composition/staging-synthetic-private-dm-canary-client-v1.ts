@@ -122,7 +122,7 @@ export async function requestStagingSyntheticPrivateDmCanaryV1(
     const client = request(
       {
         socketPath,
-        path: "/v1/stage",
+        path: "/v1/run",
         method: "POST",
         headers: { "content-length": "0" },
       },

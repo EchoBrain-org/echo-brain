@@ -7,9 +7,9 @@ import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
 import type { CleanLiveSourceAdmissionV1 } from "../processing/clean-v1/live-only-source-cycle.js";
 import type { CleanLiveSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
 import {
-  assertCleanLlmProcessorRuntimeCommitmentsV1,
-  fixedCleanLlmProcessorConfigV1,
-} from "./clean-live-llm-processor-config.js";
+  assertOpenRouterCleanProcessorRuntimeCommitmentsV1,
+  fixedOpenRouterCleanProcessorConfigV1,
+} from "./openrouter-clean-processor-config-v1.js";
 import type { CleanLiveProcessorRuntimeBundleV1 } from "./clean-live-processor-runtime.js";
 
 function assertProcessorConfig(
@@ -49,7 +49,7 @@ export function createOpenRouterCleanLiveProcessorRuntimeBundleV1(input: {
           "OpenRouter decision-processor adapter differs from the admitted commitment",
         );
       }
-      assertCleanLlmProcessorRuntimeCommitmentsV1({
+      assertOpenRouterCleanProcessorRuntimeCommitmentsV1({
         configuration_sha256: commitments.processor.configuration_sha256,
         credential_reference_sha256:
           commitments.processor.credential_reference_sha256,
@@ -68,7 +68,7 @@ export function createOpenRouterCleanLiveProcessorRuntimeBundleV1(input: {
           "OpenRouter decision-processor differs from the admitted processor",
         );
       }
-      const config = fixedCleanLlmProcessorConfigV1(
+      const config = fixedOpenRouterCleanProcessorConfigV1(
         admission.processor.instance_id,
         credentialReference,
       );

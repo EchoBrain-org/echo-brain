@@ -142,7 +142,7 @@ describe("resolveCurrentPrivateSlackConnectionV1", () => {
         CONNECTION_ID,
         COORDINATES,
       ),
-    ).toThrow("no current founder Slack connection");
+    ).toThrow("no configured Slack connection");
   });
 
   it.each([

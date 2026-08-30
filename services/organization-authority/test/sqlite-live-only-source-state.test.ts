@@ -7,7 +7,7 @@ import {
 import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1 } from "../src/composition/clean-live-llm-processor-config.js";
+import { OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1 } from "../src/composition/openrouter-clean-processor-config-v1.js";
 import { PrivateApprovalProcessingCoordinatorV1 } from "../src/composition/private-approval-processing-coordinator-v1.js";
 import { SqlitePrivateApprovalAssignmentStateV1 } from "../src/composition/sqlite-private-approval-assignment-state-v1.js";
 import { SqlitePrivateApprovalProcessingAuthorityV1 } from "../src/composition/sqlite-private-approval-processing-authority-v1.js";
@@ -79,7 +79,7 @@ const decisions: DecisionSet = {
     kind: "decision-processor",
     adapter_id: "llm",
     instance_id: "founder-llm",
-    version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
+    version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
   },
   generated_at: ADVANCED_AT,
   signals: [
@@ -141,7 +141,7 @@ function database(): Database.Database {
       SHA,
       sourceCursor,
       ADMITTED_AT,
-      CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
+      OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
       SHA,
       SHA,
       SHA,
@@ -791,7 +791,7 @@ describe("SQLite clean live-only source state", () => {
       source: { cursor: sourceCursor, cutoff_at: ADMITTED_AT },
       processor: {
         instance_id: "founder-llm",
-        version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
+        version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
       },
     });
     expect(

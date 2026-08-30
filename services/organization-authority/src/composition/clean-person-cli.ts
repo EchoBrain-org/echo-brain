@@ -213,7 +213,8 @@ export async function runCleanPersonCli(
     }, {
       external_identity_runtime:
         createCleanSlackPersonExternalIdentityRuntimeBundleV1({
-          approval_channel_id: parsed["--slack-approval-channel-id"],
+          // The public V1 flag keeps its compatibility-bound legacy name.
+          identity_link_channel_id: parsed["--slack-approval-channel-id"],
         }),
     });
     io.stderr(

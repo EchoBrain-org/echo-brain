@@ -51,7 +51,7 @@ function parseCanonical(json: string, label: string): unknown {
 }
 
 /**
- * Resolves exactly the Slack installation pinned in the founder manifest.
+ * Resolves exactly the Slack installation pinned in the onboarding manifest.
  *
  * This is intentionally a read-only startup guard. Missing state and every
  * disagreement are fatal: a live runtime must never discover a replacement
@@ -60,7 +60,7 @@ function parseCanonical(json: string, label: string): unknown {
  */
 export function resolveCurrentPrivateSlackConnectionV1(
   database: Database.Database,
-  manifestConnectionId: string,
+  configuredConnectionId: string,
   coordinates: PrivateSlackConnectionCoordinatesV1,
 ): CurrentPrivateSlackConnectionV1 {
   const row = database
@@ -74,9 +74,9 @@ export function resolveCurrentPrivateSlackConnectionV1(
           AND current_state.connection_contract_sha256 = contract.contract_sha256
         WHERE contract.connection_id = ?`,
     )
-    .get(manifestConnectionId) as ConnectionRow | undefined;
+    .get(configuredConnectionId) as ConnectionRow | undefined;
   if (row === undefined) {
-    throw new Error("private live runtime has no current founder Slack connection");
+    throw new Error("private live runtime has no configured Slack connection");
   }
 
   const contract = validateOrganizationToolConnectionContractV2(
@@ -92,7 +92,7 @@ export function resolveCurrentPrivateSlackConnectionV1(
     row.current_status !== "active" ||
     contractSha !== row.contract_sha256 ||
     stateSha !== row.state_sha256 ||
-    contract.connection_id !== manifestConnectionId ||
+    contract.connection_id !== configuredConnectionId ||
     state.connection_id !== contract.connection_id ||
     state.connection_contract_sha256 !== contractSha ||
     state.connection_status !== "active" ||
@@ -102,7 +102,7 @@ export function resolveCurrentPrivateSlackConnectionV1(
     contract.state_lineage_id !== coordinates.state_lineage_id
   ) {
     throw new Error(
-      "private live runtime founder Slack connection is missing, inactive, or drifted",
+      "private live runtime configured Slack connection is missing, inactive, or drifted",
     );
   }
 

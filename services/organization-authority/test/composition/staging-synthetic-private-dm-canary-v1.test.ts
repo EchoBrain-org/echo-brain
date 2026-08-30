@@ -1,8 +1,8 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../../src/adapters/persistence/sqlite/baseline.js";
-import { stageStagingSyntheticPrivateDmCanaryV1 } from "../../src/composition/staging-synthetic-private-dm-canary-v1.js";
-import { CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1 } from "../../src/composition/clean-live-llm-processor-config.js";
+import { runStagingSyntheticPrivateDmCanaryV1 } from "../../src/composition/staging-synthetic-private-dm-canary-v1.js";
+import { OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1 } from "../../src/composition/openrouter-clean-processor-config-v1.js";
 import { createGranolaLiveOnlyCursor } from "../../src/processing/adapters/meeting-sources/granola/index.js";
 import {
   assertStagingSyntheticMeetingCanaryV1,
@@ -54,7 +54,7 @@ function database(): Database.Database {
        ?, ?, ?, ?)`,
   ).run(
     SHA, NOW, SHA, createGranolaLiveOnlyCursor(NOW), NOW,
-    CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1, SHA, SHA, SHA, NOW,
+    OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1, SHA, SHA, SHA, NOW,
   );
   databases.push(value);
   return value;
@@ -65,7 +65,7 @@ class SyntheticCanaryProcessor implements DecisionProcessorAdapter {
     kind: "decision-processor" as const,
     adapter_id: "llm",
     instance_id: "founder-llm",
-    version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
+    version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
   };
   calls = 0;
   validateConfig() { return { ok: true, errors: [] }; }
@@ -182,10 +182,10 @@ describe("staging synthetic private-DM canary", () => {
       stager,
     } as const;
 
-    await expect(stageStagingSyntheticPrivateDmCanaryV1(input)).resolves.toMatchObject({
+    await expect(runStagingSyntheticPrivateDmCanaryV1(input)).resolves.toMatchObject({
       kind: "staged", reused_frozen_extraction: false,
     });
-    await expect(stageStagingSyntheticPrivateDmCanaryV1(input)).resolves.toMatchObject({
+    await expect(runStagingSyntheticPrivateDmCanaryV1(input)).resolves.toMatchObject({
       kind: "staged", reused_frozen_extraction: true,
     });
 
@@ -214,7 +214,7 @@ describe("staging synthetic private-DM canary", () => {
       () => NOW,
     );
     const processor = new SyntheticCanaryProcessor();
-    await expect(stageStagingSyntheticPrivateDmCanaryV1({
+    await expect(runStagingSyntheticPrivateDmCanaryV1({
       authority_url: "https://authority.echobrain.org",
       canary: { canary_id: "private-dm", owner_email: "founder@example.com", observed_at: NOW },
       state,
@@ -250,7 +250,7 @@ describe("staging synthetic private-DM canary", () => {
       stager,
     } as const;
 
-    await expect(stageStagingSyntheticPrivateDmCanaryV1(input)).resolves.toMatchObject({
+    await expect(runStagingSyntheticPrivateDmCanaryV1(input)).resolves.toMatchObject({
       kind: "not_staged",
     });
     stageCalls = 0;
@@ -258,7 +258,7 @@ describe("staging synthetic private-DM canary", () => {
     controller.abort(new Error("queued canary deadline exceeded"));
 
     await expect(
-      stageStagingSyntheticPrivateDmCanaryV1({ ...input, signal: controller.signal }),
+      runStagingSyntheticPrivateDmCanaryV1({ ...input, signal: controller.signal }),
     ).rejects.toThrow("queued canary deadline exceeded");
     expect(stageCalls).toBe(0);
   });

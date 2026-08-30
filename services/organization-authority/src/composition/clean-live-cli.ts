@@ -1,7 +1,7 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
 import { readCleanFounderOnboardingManifest } from "./clean-founder-cli.js";
-import { openCleanFounderLiveRuntime } from "./open-clean-founder-live-runtime.js";
+import { openCleanOrganizationAuthorityRuntime } from "./open-clean-organization-authority-runtime.js";
 import { readCleanPersonOidcConfiguration } from "./clean-person-cli.js";
 import {
   openStagingSyntheticPrivateDmCanaryControlV1,
@@ -112,9 +112,10 @@ function stagingCanaryReleaseId(argv: readonly string[]): string {
 }
 
 /**
- * Starts from the private, non-secret founder manifest. It deliberately does
+ * Starts from the private, non-secret V1 onboarding manifest. It deliberately does
  * not repeat the Authority URL, OIDC configuration, PKCE key, or Slack
- * channel at the command line. Before `clean-founder finalize`, the same
+ * channel at the command line. Before the compatibility command
+ * `clean-founder finalize`, the same
  * command serves Person onboarding with an inert worker; after a restart it
  * opens the admitted live-only processing chain.
  */
@@ -148,7 +149,7 @@ export async function runCleanLiveCli(
     }
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
-    const runtime = await openCleanFounderLiveRuntime({
+    const runtime = await openCleanOrganizationAuthorityRuntime({
       state_directory: stateDirectory,
       host,
       port: positiveInteger(required(parsed, "--port"), "clean live port"),
@@ -169,7 +170,8 @@ export async function runCleanLiveCli(
         "--slack-signing-secret-file",
       ),
       slack_connection_id: manifest.slack_connection_id,
-      slack_approval_channel_id: manifest.slack_approval_channel_id,
+      // The V1 manifest keeps its compatibility-bound legacy field name.
+      slack_identity_link_channel_id: manifest.slack_approval_channel_id,
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
       llm_credential_file: manifest.llm_credential_file,
@@ -180,7 +182,7 @@ export async function runCleanLiveCli(
         // The lifecycle reporter constructs this closed, content-free schema.
         io.stderr(`${canonicalJson(event as never)}\n`);
       },
-      on_layer4_failure: (event) => {
+      on_answer_composition_failure: (event) => {
         io.stderr(
           `${canonicalJson({
             schema_version: event.schema_version,
@@ -214,7 +216,7 @@ export async function runCleanLiveCli(
     const stagingCanaryControl =
       manifest.authority_url ===
         STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 &&
-      runtime.stage_staging_synthetic_private_dm_canary !== undefined
+      runtime.run_staging_synthetic_private_dm_canary !== undefined
         ? await openStagingSyntheticPrivateDmCanaryControlV1({
             authority_url: manifest.authority_url,
             authority_host: process.env.ECHO_CLEAN_AUTHORITY_HOST ?? "",

@@ -102,14 +102,14 @@ function unavailableSlackIdentityApplication(): PersonExternalIdentityLinkHttpAp
  * never enter the generic Person runtime.
  */
 export function createCleanSlackPersonExternalIdentityRuntimeBundleV1(input: {
-  readonly approval_channel_id?: string;
+  readonly identity_link_channel_id?: string;
   readonly provider?: CleanSlackIdentityProviderV1;
 }): CleanPersonExternalIdentityRuntimeBundleV1 {
   return Object.freeze({
     open(
       runtime: CleanPersonExternalIdentityRuntimeInputV1,
     ): OpenedCleanPersonExternalIdentityRuntimeV1 {
-      if (input.approval_channel_id === undefined) {
+      if (input.identity_link_channel_id === undefined) {
         return Object.freeze({
           application: unavailableSlackIdentityApplication(),
           close: () => undefined,
@@ -125,7 +125,8 @@ export function createCleanSlackPersonExternalIdentityRuntimeBundleV1(input: {
           authority_id: runtime.authority_id,
           organization_id: runtime.organization_id,
           state_lineage_id: runtime.state_lineage_id,
-          approval_channel_id: input.approval_channel_id,
+          // The control-plane V2 contract retains this legacy field name.
+          approval_channel_id: input.identity_link_channel_id,
           authentication: runtime.authentication,
           membership_type: runtime.membership_type,
           slack: input.provider ?? new CleanSlackWebIdentityProviderV1(),

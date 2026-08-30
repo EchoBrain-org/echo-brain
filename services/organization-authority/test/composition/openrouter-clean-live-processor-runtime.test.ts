@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CleanLiveSourceAdmissionV1 } from "../../src/processing/clean-v1/live-only-source-cycle.js";
 import {
-  CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-  cleanLlmProcessorConfigurationSha256V1,
-  cleanLlmProcessorCredentialReferenceSha256V1,
-} from "../../src/composition/clean-live-llm-processor-config.js";
+  OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+  openRouterCleanProcessorConfigurationSha256V1,
+  openRouterCleanProcessorCredentialReferenceSha256V1,
+} from "../../src/composition/openrouter-clean-processor-config-v1.js";
 import { createOpenRouterCleanLiveProcessorRuntimeBundleV1 } from "../../src/composition/openrouter-clean-live-processor-runtime.js";
 
 const directories: string[] = [];
@@ -39,8 +39,8 @@ function admission(): CleanLiveSourceAdmissionV1 {
     processor: {
       adapter_id: "llm",
       instance_id: "fixed-processor",
-      version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-      configuration_sha256: cleanLlmProcessorConfigurationSha256V1(),
+      version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+      configuration_sha256: openRouterCleanProcessorConfigurationSha256V1(),
     },
   };
 }
@@ -62,10 +62,10 @@ describe("OpenRouter clean live processor runtime bundle", () => {
       processor: {
         adapter_id: "llm",
         instance_id: "fixed-processor",
-        version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-        configuration_sha256: cleanLlmProcessorConfigurationSha256V1(),
+        version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+        configuration_sha256: openRouterCleanProcessorConfigurationSha256V1(),
         credential_reference_sha256:
-          cleanLlmProcessorCredentialReferenceSha256V1(
+          openRouterCleanProcessorCredentialReferenceSha256V1(
             `file:${credential_file}`,
           ),
       },
@@ -80,7 +80,7 @@ describe("OpenRouter clean live processor runtime bundle", () => {
       kind: "decision-processor",
       adapter_id: "llm",
       instance_id: "fixed-processor",
-      version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
+      version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
     });
   });
 
@@ -102,10 +102,10 @@ describe("OpenRouter clean live processor runtime bundle", () => {
         processor: {
           adapter_id: "llm",
           instance_id: "fixed-processor",
-          version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-          configuration_sha256: cleanLlmProcessorConfigurationSha256V1(),
+          version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+          configuration_sha256: openRouterCleanProcessorConfigurationSha256V1(),
           credential_reference_sha256:
-            cleanLlmProcessorCredentialReferenceSha256V1(
+            openRouterCleanProcessorCredentialReferenceSha256V1(
               "file:/private/replaced-credential",
             ),
         },

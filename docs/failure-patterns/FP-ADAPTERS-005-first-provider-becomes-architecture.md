@@ -84,6 +84,6 @@ Layer 4 bundles, generic approval and external-identity ingress, approved-record
 policy projection, boundary-manifest rules, negative architecture probes, and
 a synthetic source using the same core port. The pattern remains `mitigating`;
 full provider qualification is still pending, static checks cannot detect every
-semantic leak, and the current founder onboarding and compatibility CLI still
+semantic leak, and initial-owner onboarding plus the compatibility CLI still
 intentionally select the concrete Granola, OpenRouter, and Slack product
 profile.

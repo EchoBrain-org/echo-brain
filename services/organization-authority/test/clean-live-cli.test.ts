@@ -4,13 +4,15 @@ import { AdapterError } from "../src/processing/core/contracts/adapter.js";
 import { CleanLiveWorkerLifecycleV1 } from "../src/processing/clean-v1/clean-live-worker-lifecycle.js";
 
 type WorkerErrorObserver = (error: Error) => void;
-type Layer4FailureObserver = (event: object) => void;
+type AnswerCompositionFailureObserver = (event: object) => void;
 type WorkerTelemetryObserver = (event: object) => void;
 
 const runtimeState = vi.hoisted(() => ({
   worker_error: undefined as WorkerErrorObserver | undefined,
   worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
-  layer4_failure: undefined as Layer4FailureObserver | undefined,
+  answer_composition_failure: undefined as
+    | AnswerCompositionFailureObserver
+    | undefined,
   startup_error: undefined as Error | undefined,
   slack_signing_secret_file: undefined as string | undefined,
   slack_connection_id: undefined as string | undefined,
@@ -39,18 +41,19 @@ vi.mock("../src/composition/clean-person-cli.js", () => ({
   }),
 }));
 
-vi.mock("../src/composition/open-clean-founder-live-runtime.js", () => ({
-  openCleanFounderLiveRuntime: async (config: {
+vi.mock("../src/composition/open-clean-organization-authority-runtime.js", () => ({
+  openCleanOrganizationAuthorityRuntime: async (config: {
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
-    readonly on_layer4_failure?: Layer4FailureObserver;
+    readonly on_answer_composition_failure?: AnswerCompositionFailureObserver;
     readonly slack_signing_secret_file: string;
     readonly slack_connection_id: string;
   }) => {
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
     runtimeState.worker_error = config.on_worker_error;
     runtimeState.worker_telemetry = config.on_worker_telemetry;
-    runtimeState.layer4_failure = config.on_layer4_failure;
+    runtimeState.answer_composition_failure =
+      config.on_answer_composition_failure;
     runtimeState.slack_signing_secret_file = config.slack_signing_secret_file;
     runtimeState.slack_connection_id = config.slack_connection_id;
     return {
@@ -68,7 +71,7 @@ const { runCleanLiveCli } = await import(
 afterEach(() => {
   runtimeState.worker_error = undefined;
   runtimeState.worker_telemetry = undefined;
-  runtimeState.layer4_failure = undefined;
+  runtimeState.answer_composition_failure = undefined;
   runtimeState.startup_error = undefined;
   runtimeState.slack_signing_secret_file = undefined;
   runtimeState.slack_connection_id = undefined;
@@ -230,7 +233,7 @@ describe("clean live CLI runtime events", () => {
           "Authorization: Bearer bearer-sentinel",
       ),
     );
-    runtimeState.layer4_failure!({
+    runtimeState.answer_composition_failure!({
       schema_version: 1,
       kind: "echo-clean-layer4-failure-v1",
       stage: "answer",

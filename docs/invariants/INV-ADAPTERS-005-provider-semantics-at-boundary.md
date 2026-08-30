@@ -98,7 +98,7 @@ The reviewed source is covered by:
 - `services/organization-authority/test/processing/clean-v1/live-only-source-cycle.test.ts`;
 - `services/organization-authority/test/open-clean-live-runtime.test.ts`;
 - `services/organization-authority/test/composition/openrouter-clean-live-processor-runtime.test.ts`;
-- `services/organization-authority/test/composition/openrouter-clean-layer4-runtime.test.ts`;
+- `services/organization-authority/test/composition/openrouter-clean-answer-composition-runtime.test.ts`;
 - `services/organization-record/test/record-log-v4-append.test.ts`; and
 - the synthetic meeting-source adapter and evaluator tests.
 
@@ -110,8 +110,8 @@ atoms. The evaluator no longer silently drops an unknown required atom ID.
 Enforcement remains partial and this record does not claim full provider
 qualification. Static checks catch names and dependency edges but cannot prove
 that a generically named shared abstraction does not encode one provider's
-semantics or that a newly added neutral file was registered. The current
-founder onboarding and compatibility CLI intentionally select a concrete
+semantics or that a newly added neutral file was registered. Initial-owner
+onboarding and the compatibility CLI intentionally select a concrete
 Granola, OpenRouter, and Slack product profile; source admission is supplied by
 that profile rather than one universal onboarding command. Any change that
 moves a provider fact into a neutral layer requires an explicit invariant

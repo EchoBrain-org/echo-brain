@@ -19,9 +19,9 @@ import type {
   CleanPersonAnswerPolicyV1,
   CleanPersonAnswerResponseV1,
 } from "../presentation/clean-person-answer-http-application.js";
-import type { CleanLayer4GenerationProfileV1 } from "./clean-layer4-runtime.js";
+import type { CleanAnswerCompositionGenerationProfileV1 } from "./clean-answer-composition-runtime.js";
 
-export interface CleanLayer4FailureEventV1
+export interface CleanAnswerCompositionFailureEventV1
   extends Layer4FailureDiagnosticV1 {
   readonly failure_id: string;
 }
@@ -32,10 +32,10 @@ export interface CreateCleanPersonAnswerRouteV1Options {
   readonly state_lineage_id: string;
   readonly search: CleanPersonRecordSearchBatchApplicationV1;
   readonly model: Layer4StructuredOutputPort;
-  readonly generation: CleanLayer4GenerationProfileV1;
+  readonly generation: CleanAnswerCompositionGenerationProfileV1;
   readonly audit: SqliteCleanPersonAnswerCompositionAuditV1;
   /** Metadata-only server observer. It never changes the public response. */
-  readonly on_failure?: (event: CleanLayer4FailureEventV1) => void;
+  readonly on_failure?: (event: CleanAnswerCompositionFailureEventV1) => void;
 }
 
 function unavailable(): never {

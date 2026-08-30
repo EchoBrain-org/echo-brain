@@ -72,7 +72,7 @@
       },
       {
         "identifier": "deepseek",
-        "root": "services/organization-authority/src/composition/clean-live-llm-processor-config.ts"
+        "root": "services/organization-authority/src/composition/openrouter-clean-processor-config-v1.ts"
       },
       {
         "identifier": "slack",
@@ -140,7 +140,7 @@
       "services/organization-authority/src/composition/clean-live-runtime.ts",
       "services/organization-authority/src/composition/open-clean-live-runtime.ts",
       "services/organization-authority/src/composition/approval-runtime-bundle-v1.ts",
-      "services/organization-authority/src/composition/clean-layer4-runtime.ts",
+      "services/organization-authority/src/composition/clean-answer-composition-runtime.ts",
       "services/organization-authority/src/composition/clean-live-processor-runtime.ts",
       "services/organization-authority/src/composition/clean-person-answer-route.ts",
       "services/organization-authority/src/composition/clean-person-external-identity-runtime.ts",
@@ -159,7 +159,7 @@
         "identifier": "openrouter",
         "transport_provider": true,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/openrouter-clean-layer4-runtime.ts"
+          "services/organization-authority/src/composition/openrouter-clean-answer-composition-runtime.ts"
         ]
       },
       {
@@ -187,7 +187,7 @@
         "identifier": "deepseek",
         "transport_provider": false,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/clean-live-llm-processor-config.ts"
+          "services/organization-authority/src/composition/openrouter-clean-processor-config-v1.ts"
         ]
       }
     ],

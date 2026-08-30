@@ -46,15 +46,15 @@ import {
   issueCleanPersonInvitation,
 } from "../src/composition/clean-person-onboarding.js";
 import {
-  openCleanFounderLiveRuntime,
-  type OpenCleanFounderLiveRuntimeConfig,
-} from "../src/composition/open-clean-founder-live-runtime.js";
+  openCleanOrganizationAuthorityRuntime,
+  type OpenCleanOrganizationAuthorityRuntimeConfig,
+} from "../src/composition/open-clean-organization-authority-runtime.js";
 import {
   openCleanLiveRuntime,
   type CleanLiveSourceRuntimeBundleV1,
 } from "../src/composition/open-clean-live-runtime.js";
 import type { CleanLiveProcessorRuntimeBundleV1 } from "../src/composition/clean-live-processor-runtime.js";
-import type { CleanLayer4RuntimeBundleV1 } from "../src/composition/clean-layer4-runtime.js";
+import type { CleanAnswerCompositionRuntimeBundleV1 } from "../src/composition/clean-answer-composition-runtime.js";
 import type {
   CleanApprovalRuntimeBundleV1,
   CleanApprovalRuntimeContextV1,
@@ -582,7 +582,7 @@ async function admittedFixture(input: {
   });
   const poster = new FakePrivateApprovalPoster();
   const errors: Error[] = [];
-  const config: OpenCleanFounderLiveRuntimeConfig = {
+  const config: OpenCleanOrganizationAuthorityRuntimeConfig = {
     state_directory: initialized.state_directory,
     host: "127.0.0.1",
     port: await availablePort(),
@@ -593,7 +593,7 @@ async function admittedFixture(input: {
     slack_signing_secret_file,
     slack_connection_id: "con_live_test",
     // Identity-link onboarding still uses this field. Delivery never does.
-    slack_approval_channel_id: "C0123456789",
+    slack_identity_link_channel_id: "C0123456789",
     granola_credential_file,
     granola_owner_email_file,
     llm_credential_file,
@@ -620,7 +620,7 @@ async function activeFixture() {
   const fixture = await admittedFixture({
     seed_private_slack_connection: true,
   });
-  const runtime = await openCleanFounderLiveRuntime(fixture.config, {
+  const runtime = await openCleanOrganizationAuthorityRuntime(fixture.config, {
     live_adapters: {
       source: fixture.source,
       processor: fakeProcessor(fixture.processorIdentity),
@@ -952,7 +952,7 @@ describe("open clean live runtime private approval lane", () => {
     const credentials = initializeCleanPersonCredentials({
       state_directory: initialized.state_directory,
     });
-    const runtime = await openCleanFounderLiveRuntime({
+    const runtime = await openCleanOrganizationAuthorityRuntime({
       state_directory: initialized.state_directory,
       host: "127.0.0.1",
       port: await availablePort(),
@@ -964,7 +964,7 @@ describe("open clean live runtime private approval lane", () => {
       ),
       slack_signing_secret_file: join(parent, "not-read-slack-signing-secret"),
       slack_connection_id: "con_not_read",
-      slack_approval_channel_id: "C0123456789",
+      slack_identity_link_channel_id: "C0123456789",
       granola_credential_file: join(parent, "not-read-granola"),
       granola_owner_email_file: join(parent, "not-read-owner"),
       llm_credential_file: join(parent, "not-read-llm"),
@@ -987,7 +987,7 @@ describe("open clean live runtime private approval lane", () => {
     const fixture = await activeFixture();
     await fixture.runtime.close();
     await expect(
-      openCleanFounderLiveRuntime({
+      openCleanOrganizationAuthorityRuntime({
         ...fixture.config,
         granola_credential_file: join(
           fixture.initialized.state_directory,
@@ -1007,7 +1007,7 @@ describe("open clean live runtime private approval lane", () => {
       "replacement-owner@example.com",
     );
     chmodSync(fixture.config.granola_owner_email_file, 0o600);
-    await expect(openCleanFounderLiveRuntime(fixture.config)).rejects.toThrow(
+    await expect(openCleanOrganizationAuthorityRuntime(fixture.config)).rejects.toThrow(
       /owner differs from the admitted custodian commitment/,
     );
   });
@@ -1016,14 +1016,16 @@ describe("open clean live runtime private approval lane", () => {
     const fixture = await activeFixture();
     await fixture.runtime.close();
     await expect(
-      openCleanFounderLiveRuntime({
+      openCleanOrganizationAuthorityRuntime({
         ...fixture.config,
         llm_credential_file: join(
           fixture.initialized.state_directory,
           "replacement-llm-credential-not-read",
         ),
       }),
-    ).rejects.toThrow(/LLM configuration differs from the admitted processor commitment/);
+    ).rejects.toThrow(
+      /OpenRouter processor configuration differs from the admitted processor commitment/,
+    );
   });
 
   it("composes the generic live runtime with a non-Slack approval surface", async () => {
@@ -1065,7 +1067,7 @@ describe("open clean live runtime private approval lane", () => {
         return fakeProcessor(fixture.processorIdentity);
       },
     };
-    const layer4Runtime: CleanLayer4RuntimeBundleV1 = {
+    const answerCompositionRuntime: CleanAnswerCompositionRuntimeBundleV1 = {
       open() {
         return {
           generation: {
@@ -1119,7 +1121,7 @@ describe("open clean live runtime private approval lane", () => {
       llm_credential_file: _llmCredentialFile,
       slack_signing_secret_file: _slackSigningSecretFile,
       slack_connection_id: _slackConnectionId,
-      slack_approval_channel_id: _slackApprovalChannelId,
+      slack_identity_link_channel_id: _slackIdentityLinkChannelId,
       ...sharedConfig
     } = fixture.config;
     const runtime = await openCleanLiveRuntime(
@@ -1128,7 +1130,7 @@ describe("open clean live runtime private approval lane", () => {
         source_runtime: sourceRuntime,
         processor_runtime: processorRuntime,
         approval_runtime: approvalRuntime,
-        layer4_runtime: layer4Runtime,
+        answer_composition_runtime: answerCompositionRuntime,
         approved_record_policy_projectors:
           createApprovedRecordPolicyProjectorRegistryV1([
             createPersonPolicyFactProjectorV2(),
@@ -1389,7 +1391,7 @@ describe("open clean live runtime private approval lane", () => {
       });
       await fixture.runtime.close();
       const restartedPoster = new FakePrivateApprovalPoster();
-      const restarted = await openCleanFounderLiveRuntime(fixture.config, {
+      const restarted = await openCleanOrganizationAuthorityRuntime(fixture.config, {
         live_adapters: {
           source: fixture.source,
           processor: fakeProcessor(fixture.processorIdentity),
@@ -1449,7 +1451,7 @@ describe("open clean live runtime private approval lane", () => {
         .run(card.approval_id);
 
       await expect(
-        openCleanFounderLiveRuntime(fixture.config, {
+        openCleanOrganizationAuthorityRuntime(fixture.config, {
           live_adapters: {
             source: fixture.source,
             processor: fakeProcessor(fixture.processorIdentity),
@@ -1519,7 +1521,7 @@ describe("open clean live runtime private approval lane", () => {
 
       const replacementPoster = new FakePrivateApprovalPoster();
       await expect(
-        openCleanFounderLiveRuntime(fixture.config, {
+        openCleanOrganizationAuthorityRuntime(fixture.config, {
           live_adapters: {
             source: fixture.source,
             processor: fakeProcessor(fixture.processorIdentity),

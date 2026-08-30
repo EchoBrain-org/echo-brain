@@ -18,7 +18,7 @@ async function withSocket(
   const socketPath = join(directory, "control.sock");
   const server = createServer((request, response) => {
     expect(request.method).toBe("POST");
-    expect(request.url).toBe("/v1/stage");
+    expect(request.url).toBe("/v1/run");
     expect(request.headers["content-length"]).toBe("0");
     request.resume();
     response.writeHead(options.status ?? 200, {

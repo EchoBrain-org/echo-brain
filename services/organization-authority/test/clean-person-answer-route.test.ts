@@ -7,7 +7,7 @@ import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-u
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import {
   createCleanPersonAnswerRouteV1,
-  type CleanLayer4FailureEventV1,
+  type CleanAnswerCompositionFailureEventV1,
 } from "../src/composition/clean-person-answer-route.js";
 import type {
   Layer4StructuredGenerationInput,
@@ -93,7 +93,7 @@ function searchResponse() {
 function setup(input: {
   readonly model?: Layer4StructuredOutputPort;
   readonly revalidate?: () => PersonAccessAuthorization;
-  readonly on_failure?: (event: CleanLayer4FailureEventV1) => void;
+  readonly on_failure?: (event: CleanAnswerCompositionFailureEventV1) => void;
   readonly source_text?: string;
 }) {
   const database = openAuthorityDatabase(":memory:");
@@ -308,7 +308,7 @@ describe("clean Person Layer 4 answer route", () => {
     const providerSecret = "PROVIDER-SECRET-DO-NOT-LOG-79a3067";
     const prompt = "PROMPT-DO-NOT-LOG-79a3067";
     const reasoning = "REASONING-DO-NOT-LOG-79a3067";
-    const failures: CleanLayer4FailureEventV1[] = [];
+    const failures: CleanAnswerCompositionFailureEventV1[] = [];
     const value = setup({
       model: {
         generate: vi

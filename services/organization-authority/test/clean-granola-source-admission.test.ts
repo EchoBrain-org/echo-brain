@@ -22,9 +22,9 @@ import {
   admitCleanGranolaSource,
 } from "../src/composition/clean-granola-source-admission.js";
 import {
-  CLEAN_LLM_PROCESSOR_MODEL_V1,
-  CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-} from "../src/composition/clean-live-llm-processor-config.js";
+  OPENROUTER_CLEAN_PROCESSOR_MODEL_V1,
+  OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+} from "../src/composition/openrouter-clean-processor-config-v1.js";
 import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-clean-processor-admission-commitment.js";
 import { runCleanGranolaSourceCli } from "../src/composition/clean-granola-source-cli.js";
 import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
@@ -292,7 +292,7 @@ describe("clean Granola source admission", () => {
       processor: {
         adapter_id: "llm",
         instance_id: "founder-llm",
-        version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
+        version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
       },
     });
     expect(admitted.source.cursor).toMatch(/^granola:v1:/);
@@ -300,7 +300,7 @@ describe("clean Granola source admission", () => {
     expect(admitted.processor.configuration_sha256).toMatch(/^sha256:/);
     expect(JSON.stringify(admitted)).not.toContain("grn_");
     expect(JSON.stringify(admitted)).not.toContain(
-      CLEAN_LLM_PROCESSOR_MODEL_V1,
+      OPENROUTER_CLEAN_PROCESSOR_MODEL_V1,
     );
 
     const database = new Database(

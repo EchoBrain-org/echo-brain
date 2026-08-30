@@ -318,7 +318,7 @@ exec /bin/cp "$@"
   };
 }
 
-describe("clean founder deployment profile", () => {
+describe("clean-v1 Organization Authority deployment profile", () => {
   it("keeps server onboarding in one resumable wrapper with fixed private inputs", () => {
     const wrapper = resolve(REPO, DEPLOYMENT, "onboard-clean-v1.sh");
     const source = readFileSync(wrapper, "utf8");

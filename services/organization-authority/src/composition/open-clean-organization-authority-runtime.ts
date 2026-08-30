@@ -22,19 +22,19 @@ import {
 } from "./open-clean-live-runtime.js";
 import { granolaLiveSourceBoundaryV1 } from "./granola-live-source-boundary-v1.js";
 import { createOpenRouterCleanLiveProcessorRuntimeBundleV1 } from "./openrouter-clean-live-processor-runtime.js";
-import { createOpenRouterCleanLayer4RuntimeBundleV1 } from "./openrouter-clean-layer4-runtime.js";
-import { createPrivateSlackApprovalRuntimeBundleV1 } from "./open-private-slack-approval-runtime-v1.js";
+import { createOpenRouterCleanAnswerCompositionRuntimeBundleV1 } from "./openrouter-clean-answer-composition-runtime.js";
+import { createPrivateSlackApprovalRuntimeBundleV1 } from "./private-slack-approval-runtime-v1.js";
 import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-slack-person-external-identity-runtime.js";
 import type { PrivateApprovalSlackInteractionRejectionStageV1 } from "./private-approval-slack-interaction-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
 
-export interface OpenCleanFounderLiveRuntimeConfig
+export interface OpenCleanOrganizationAuthorityRuntimeConfig
   extends Omit<
     OpenCleanLiveRuntimeConfig,
     | "source_runtime"
     | "processor_runtime"
     | "approval_runtime"
-    | "layer4_runtime"
+    | "answer_composition_runtime"
     | "approved_record_policy_projectors"
   > {
   readonly granola_credential_file: string;
@@ -42,13 +42,13 @@ export interface OpenCleanFounderLiveRuntimeConfig
   readonly llm_credential_file: string;
   readonly slack_signing_secret_file: string;
   readonly slack_connection_id: string;
-  readonly slack_approval_channel_id: string;
+  readonly slack_identity_link_channel_id: string;
   readonly on_private_approval_slack_rejection?: (event: {
     readonly stage: PrivateApprovalSlackInteractionRejectionStageV1;
   }) => void;
 }
 
-type CleanFounderLiveAdapters = NonNullable<
+type CleanOrganizationAuthorityRuntimeAdapterOverrides = NonNullable<
   OpenCleanLiveRuntimeDependencies["live_adapters"]
 > & {
   readonly private_approval_card_poster?: Pick<
@@ -62,9 +62,9 @@ type CleanFounderLiveAdapters = NonNullable<
   >;
 };
 
-export interface OpenCleanFounderLiveRuntimeDependencies
+export interface OpenCleanOrganizationAuthorityRuntimeDependencies
   extends Omit<OpenCleanLiveRuntimeDependencies, "live_adapters"> {
-  readonly live_adapters?: CleanFounderLiveAdapters;
+  readonly live_adapters?: CleanOrganizationAuthorityRuntimeAdapterOverrides;
 }
 
 function fixedGranolaConfig(
@@ -167,10 +167,14 @@ export function createGranolaLiveSourceRuntimeBundleV1(input: {
   });
 }
 
-/** Opens the current founder product profile's live runtime. */
-export function openCleanFounderLiveRuntime(
-  config: OpenCleanFounderLiveRuntimeConfig,
-  dependencies: OpenCleanFounderLiveRuntimeDependencies = {},
+/**
+ * Opens the deployable Authority runtime with the currently selected Granola,
+ * OpenRouter, and Slack adapters. Provider-neutral orchestration remains in
+ * `openCleanLiveRuntime`.
+ */
+export function openCleanOrganizationAuthorityRuntime(
+  config: OpenCleanOrganizationAuthorityRuntimeConfig,
+  dependencies: OpenCleanOrganizationAuthorityRuntimeDependencies = {},
 ): Promise<OpenedCleanLiveRuntime> {
   const {
     granola_credential_file,
@@ -178,7 +182,7 @@ export function openCleanFounderLiveRuntime(
     llm_credential_file,
     slack_signing_secret_file,
     slack_connection_id,
-    slack_approval_channel_id,
+    slack_identity_link_channel_id,
     on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
@@ -198,7 +202,7 @@ export function openCleanFounderLiveRuntime(
     external_identity_runtime:
       dependencies.person?.external_identity_runtime ??
       createCleanSlackPersonExternalIdentityRuntimeBundleV1({
-        approval_channel_id: slack_approval_channel_id,
+        identity_link_channel_id: slack_identity_link_channel_id,
       }),
   };
   return openCleanLiveRuntime(
@@ -226,9 +230,10 @@ export function openCleanFounderLiveRuntime(
           ? {}
           : { on_rejection: on_private_approval_slack_rejection }),
       }),
-      layer4_runtime: createOpenRouterCleanLayer4RuntimeBundleV1({
+      answer_composition_runtime:
+        createOpenRouterCleanAnswerCompositionRuntimeBundleV1({
         credential_file: llm_credential_file,
-      }),
+        }),
       approved_record_policy_projectors:
         createApprovedRecordPolicyProjectorRegistryV1([
           createPersonPolicyFactProjectorV2(),

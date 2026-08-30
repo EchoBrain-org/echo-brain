@@ -22,7 +22,7 @@ import type {
   CleanApprovalProcessingV1,
   CleanApprovalRuntimeBundleV1,
 } from "./approval-runtime-bundle-v1.js";
-import type { CleanLayer4RuntimeBundleV1 } from "./clean-layer4-runtime.js";
+import type { CleanAnswerCompositionRuntimeBundleV1 } from "./clean-answer-composition-runtime.js";
 import type { CleanLiveProcessorRuntimeBundleV1 } from "./clean-live-processor-runtime.js";
 import {
   startCleanLiveRuntime,
@@ -33,11 +33,11 @@ import { createCleanReadableSearchGenerationReconcilerV1 } from "./clean-readabl
 import type { CleanPersonRuntimeConfig } from "./clean-person-runtime.js";
 import type { CleanPersonRuntimeDependencies } from "./clean-person-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
-import type { CleanLayer4FailureEventV1 } from "./clean-person-answer-route.js";
+import type { CleanAnswerCompositionFailureEventV1 } from "./clean-person-answer-route.js";
 import type { CleanLiveWorkerPhaseRunnerV1 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
 import {
-  stageStagingSyntheticPrivateDmCanaryV1,
-  type StageStagingSyntheticPrivateDmCanaryV1Result,
+  runStagingSyntheticPrivateDmCanaryV1,
+  type StagingSyntheticPrivateDmCanaryResultV1,
 } from "./staging-synthetic-private-dm-canary-v1.js";
 import type { StagingSyntheticMeetingCanaryInputV1 } from "../processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
 
@@ -55,8 +55,8 @@ export interface OpenCleanLiveRuntimeConfig {
   readonly processor_runtime: CleanLiveProcessorRuntimeBundleV1;
   /** Explicit approval/delivery bundle. This generic root does not select one. */
   readonly approval_runtime: CleanApprovalRuntimeBundleV1;
-  /** Explicit answer-generation bundle. This generic root does not select one. */
-  readonly layer4_runtime: CleanLayer4RuntimeBundleV1;
+  /** Explicit answer-composition bundle. This generic root does not select one. */
+  readonly answer_composition_runtime: CleanAnswerCompositionRuntimeBundleV1;
   /** Exact durable approval protocols admitted into append and Layer 1. */
   readonly approved_record_policy_projectors: ApprovedRecordPolicyProjectorRegistryV1;
   readonly worker_interval_ms?: number;
@@ -67,7 +67,9 @@ export interface OpenCleanLiveRuntimeConfig {
     event: import("../processing/clean-v1/clean-live-worker-lifecycle.js").CleanLiveWorkerTelemetryEventV1,
   ) => void;
   /** Observational only: redacted Layer 4 model-stage failures. */
-  readonly on_layer4_failure?: (event: CleanLayer4FailureEventV1) => void;
+  readonly on_answer_composition_failure?: (
+    event: CleanAnswerCompositionFailureEventV1,
+  ) => void;
 }
 
 export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
@@ -77,10 +79,10 @@ export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
    * uses the same admitted processor and private approval stager as production
    * intake; it never touches the provider cursor.
    */
-  readonly stage_staging_synthetic_private_dm_canary?: (
+  readonly run_staging_synthetic_private_dm_canary?: (
     canary: StagingSyntheticMeetingCanaryInputV1,
     options?: Readonly<{ signal?: AbortSignal }>,
-  ) => Promise<StageStagingSyntheticPrivateDmCanaryV1Result>;
+  ) => Promise<StagingSyntheticPrivateDmCanaryResultV1>;
 }
 
 type CleanLiveSourceAdapter = ConstructorParameters<
@@ -321,13 +323,14 @@ export async function openCleanLiveRuntime(
         ),
         person: {
           ...dependencies.person,
-          layer4_runtime:
-            dependencies.person?.layer4_runtime ?? config.layer4_runtime.open(),
+          answer_composition_runtime:
+            dependencies.person?.answer_composition_runtime ??
+            config.answer_composition_runtime.open(),
           ...(dependencies.person?.answer_failure !== undefined
             ? { answer_failure: dependencies.person.answer_failure }
-            : config.on_layer4_failure === undefined
+            : config.on_answer_composition_failure === undefined
               ? {}
-              : { answer_failure: config.on_layer4_failure }),
+              : { answer_failure: config.on_answer_composition_failure }),
           ...(dependencies.person?.private_approval_interaction_ingress !==
           undefined
             ? {}
@@ -346,9 +349,9 @@ export async function openCleanLiveRuntime(
       address: runtime.address,
       processing: "active",
       runExclusive: (operation) => runtime.runExclusive(operation),
-      stage_staging_synthetic_private_dm_canary: (canary, options) =>
+      run_staging_synthetic_private_dm_canary: (canary, options) =>
         runtime.runExclusive((signal) =>
-          stageStagingSyntheticPrivateDmCanaryV1({
+          runStagingSyntheticPrivateDmCanaryV1({
             authority_url: config.authority_url,
             canary,
             state: sourceState,

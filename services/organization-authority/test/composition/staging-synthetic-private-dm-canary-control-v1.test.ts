@@ -13,8 +13,8 @@ import { createStagingSyntheticMeetingCanaryV1 } from "../../src/processing/clea
 const RELEASE_ID = "clean-v1-staging-canary";
 const OWNER_EMAIL = "founder@example.com";
 const directories: string[] = [];
-type CanaryStage = NonNullable<
-  OpenedCleanLiveRuntime["stage_staging_synthetic_private_dm_canary"]
+type CanaryRun = NonNullable<
+  OpenedCleanLiveRuntime["run_staging_synthetic_private_dm_canary"]
 >;
 
 async function socketPath(): Promise<string> {
@@ -25,7 +25,7 @@ async function socketPath(): Promise<string> {
 
 async function post(
   socket_path: string,
-  path = "/v1/stage",
+  path = "/v1/run",
 ): Promise<{
   readonly status: number;
   readonly body: string;
@@ -48,9 +48,9 @@ async function post(
 }
 
 function runtime(
-  stage: CanaryStage,
-): Pick<OpenedCleanLiveRuntime, "stage_staging_synthetic_private_dm_canary"> {
-  return { stage_staging_synthetic_private_dm_canary: stage };
+  runCanary: CanaryRun,
+): Pick<OpenedCleanLiveRuntime, "run_staging_synthetic_private_dm_canary"> {
+  return { run_staging_synthetic_private_dm_canary: runCanary };
 }
 
 afterEach(async () => {
@@ -269,7 +269,7 @@ describe("staging synthetic private-DM canary control", () => {
     const aborted = new Promise<void>((resolve) => {
       observeAbort = resolve;
     });
-    let queuedStage: ReturnType<CanaryStage> | undefined;
+    let queuedRun: ReturnType<CanaryRun> | undefined;
     let sideEffects = 0;
     const control = await openStagingSyntheticPrivateDmCanaryControlV1({
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
@@ -280,7 +280,7 @@ describe("staging synthetic private-DM canary control", () => {
         options?.signal?.addEventListener("abort", observeAbort, {
           once: true,
         });
-        queuedStage = preceding.then(() => {
+        queuedRun = preceding.then(() => {
           options?.signal?.throwIfAborted();
           sideEffects += 1;
           return {
@@ -290,7 +290,7 @@ describe("staging synthetic private-DM canary control", () => {
             reused_frozen_extraction: false,
           };
         });
-        return queuedStage;
+        return queuedRun;
       }),
       socket_path: await socketPath(),
       operation_timeout_ms: 5,
@@ -302,7 +302,7 @@ describe("staging synthetic private-DM canary control", () => {
     expect(sideEffects).toBe(0);
 
     releasePreceding();
-    await expect(queuedStage).rejects.toBeInstanceOf(Error);
+    await expect(queuedRun).rejects.toBeInstanceOf(Error);
     expect(sideEffects).toBe(0);
     await control.close();
   });

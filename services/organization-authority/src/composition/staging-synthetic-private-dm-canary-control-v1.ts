@@ -9,7 +9,7 @@ export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 =
   "https://authority-staging.echobrain.org";
 const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 const STAGING_AUTHORITY_HOST = "authority-staging.echobrain.org";
-const CONTROL_PATH = "/v1/stage";
+const CONTROL_PATH = "/v1/run";
 const OPERATION_TIMEOUT_MS = 110_000;
 
 export interface StagingSyntheticPrivateDmCanaryControlV1 {
@@ -24,7 +24,7 @@ export interface OpenStagingSyntheticPrivateDmCanaryControlV1Input {
   readonly owner_email: string;
   readonly runtime: Pick<
     OpenedCleanLiveRuntime,
-    "stage_staging_synthetic_private_dm_canary"
+    "run_staging_synthetic_private_dm_canary"
   >;
   /** A focused test seam. Production uses the fixed non-mounted runtime path. */
   readonly socket_path?: string;
@@ -56,7 +56,7 @@ function assertStagingControlInput(
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.owner_email)) {
     throw new Error("staging synthetic private-DM control owner is invalid");
   }
-  if (input.runtime.stage_staging_synthetic_private_dm_canary === undefined) {
+  if (input.runtime.run_staging_synthetic_private_dm_canary === undefined) {
     throw new Error(
       "staging synthetic private-DM control requires active processing",
     );
@@ -97,7 +97,7 @@ function receipt(
   result: Awaited<
     ReturnType<
       NonNullable<
-        OpenedCleanLiveRuntime["stage_staging_synthetic_private_dm_canary"]
+        OpenedCleanLiveRuntime["run_staging_synthetic_private_dm_canary"]
       >
     >
   >,
@@ -160,8 +160,8 @@ function close(server: Server): Promise<void> {
   });
 }
 
-function raceStageWithAbort<T>(
-  stage: Promise<T>,
+function raceOperationWithAbort<T>(
+  operation: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
   let removeAbortListener: (() => void) | undefined;
@@ -177,8 +177,10 @@ function raceStageWithAbort<T>(
   });
   // A queued serialized operation can reject after the request has timed out.
   // Keep that eventual rejection observed after the race has already returned.
-  void stage.catch(() => undefined);
-  return Promise.race([stage, aborted]).finally(() => removeAbortListener?.());
+  void operation.catch(() => undefined);
+  return Promise.race([operation, aborted]).finally(() =>
+    removeAbortListener?.(),
+  );
 }
 
 /**
@@ -193,7 +195,7 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
   const socketPath =
     input.socket_path ?? STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1;
   removeStaleSocket(socketPath);
-  const stage = input.runtime.stage_staging_synthetic_private_dm_canary!;
+  const runCanary = input.runtime.run_staging_synthetic_private_dm_canary!;
   const now = input.now ?? (() => new Date().toISOString());
   const operationTimeoutMs = input.operation_timeout_ms ?? OPERATION_TIMEOUT_MS;
   const active = new Set<AbortController>();
@@ -236,8 +238,8 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
     request.once("aborted", abort);
     response.once("close", abortIfUnfinished);
     try {
-      const result = await raceStageWithAbort(
-        stage(
+      const result = await raceOperationWithAbort(
+        runCanary(
           {
             canary_id: input.release_id,
             owner_email: input.owner_email,
