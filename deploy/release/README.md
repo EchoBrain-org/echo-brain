@@ -257,9 +257,12 @@ session. If `Start ECHO.command` sees any existing session, it stops instead of
 silently applying a possibly different person's invitation; use the installed
 client for the current person, or log out before onboarding another person.
 The invitation remains separate because it is employee-bound, short-lived, and
-may need reissue without rebuilding the release kit. The installed client now
-rejects an already-expired invitation before opening Google or contacting the
-Authority, and tells the employee to request a reissued invitation.
+may need reissue without rebuilding the release kit. Authority remains the
+source of truth for invitation validity so modest client clock skew cannot
+reject a valid invitation. If Authority rejects an unused invitation, the
+client makes one bounded existing-identity login attempt without the invitation
+grant; if no identity exists, it stops before opening Google and tells the
+employee to request a reissued invitation.
 
 The first cohort supports macOS arm64 only. A signed and notarized graphical
 installer is a later distribution improvement; it is not required for the
