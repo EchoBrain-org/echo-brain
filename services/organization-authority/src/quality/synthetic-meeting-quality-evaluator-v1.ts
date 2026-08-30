@@ -1,6 +1,6 @@
 import {
   createRetrievalGroundedAnswerComposition,
-  type Layer4StructuredOutputPort,
+  type StructuredGenerationPort,
 } from "../answer-composition/retrieval-grounded-answer-composition.js";
 import {
   assertCanonicalDecisionSet,
@@ -21,9 +21,9 @@ import {
   type SyntheticMeetingQualityCorpusV1,
 } from "./synthetic-meeting-fixture-v1.js";
 import {
-  SyntheticFixtureLayer4BatchReadPortV1,
+  SyntheticFixtureReleasedRetrievalPortV1,
   syntheticFixtureAtomIdV1,
-} from "./synthetic-layer4-fixture-port-v1.js";
+} from "./synthetic-answer-composition-fixture-port-v1.js";
 
 export interface SyntheticExtractionCaseResultV1 {
   readonly fixture_id: string;
@@ -37,14 +37,14 @@ export interface SyntheticExtractionExpectationV1 {
   readonly expected_signals: readonly SyntheticExpectedSignalV1[];
 }
 
-export interface SyntheticLayer4CaseResultV1 {
+export interface SyntheticAnswerCompositionCaseResultV1 {
   readonly case_id: string;
   readonly principal_id: string;
   readonly expected_status: "answered" | "insufficient_evidence";
   readonly actual_status: "answered" | "insufficient_evidence";
   readonly missing_required_citation_atom_ids: readonly string[];
   readonly missing_required_answer_substrings: readonly string[];
-  /** Layer 3 released a withheld fixture atom into the composition context. */
+  /** Released retrieval admitted a withheld fixture atom into composition. */
   readonly withheld_text_released: boolean;
   /** Bounded diagnostic: the evaluator never emits withheld fixture text. */
   readonly withheld_text_detected_in: readonly ("released_context" | "composed_answer")[];
@@ -62,8 +62,9 @@ export interface SyntheticMeetingQualityEvaluationV1 {
     readonly missing_count: number;
     readonly unexpected_count: number;
   };
+  /** Compatibility field retained for existing machine-readable reports. */
   readonly layer4: {
-    readonly cases: readonly SyntheticLayer4CaseResultV1[];
+    readonly cases: readonly SyntheticAnswerCompositionCaseResultV1[];
     readonly status_mismatch_count: number;
     readonly missing_required_citation_count: number;
     readonly missing_required_answer_substring_count: number;
@@ -78,8 +79,8 @@ export interface SyntheticMeetingQualityEvaluatorInputV1 {
   /** Defaults to the in-memory adapter for the supplied corpus. */
   readonly source?: MeetingSourceAdapter;
   readonly processor: DecisionProcessorAdapter;
-  readonly planner: Layer4StructuredOutputPort;
-  readonly answerer: Layer4StructuredOutputPort;
+  readonly planner: StructuredGenerationPort;
+  readonly answerer: StructuredGenerationPort;
   readonly generation_adapter_id: string;
   readonly planner_model: string;
   readonly answer_model: string;
@@ -242,24 +243,24 @@ async function evaluateExtraction(
   });
 }
 
-async function evaluateLayer4(
+async function evaluateAnswerComposition(
   input: Required<Pick<SyntheticMeetingQualityEvaluatorInputV1,
     "planner" | "answerer" | "generation_adapter_id" | "planner_model" | "answer_model">> &
     Pick<SyntheticMeetingQualityEvaluatorInputV1, "timeout_ms"> & {
       readonly corpus: SyntheticMeetingQualityCorpusV1;
     },
 ): Promise<SyntheticMeetingQualityEvaluationV1["layer4"]> {
-  const cases: SyntheticLayer4CaseResultV1[] = [];
+  const cases: SyntheticAnswerCompositionCaseResultV1[] = [];
   const atomsById = new Map(input.corpus.layer4_atoms.map((atom) => [atom.id, atom]));
   for (const qualityCase of input.corpus.layer4_cases) {
-    const layer3 = new SyntheticFixtureLayer4BatchReadPortV1({
+    const releasedRetrieval = new SyntheticFixtureReleasedRetrievalPortV1({
       principal_id: qualityCase.principal_id,
       atoms: input.corpus.layer4_atoms,
     });
     const answer = createRetrievalGroundedAnswerComposition({
       planner: input.planner,
       answerer: input.answerer,
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit: { append: () => undefined },
       generation_adapter_id: input.generation_adapter_id,
       planner_model: input.planner_model,
@@ -271,7 +272,7 @@ async function evaluateLayer4(
     const required = qualityCase.required_citation_atom_ids.map((atomId) => {
       const atom = atomsById.get(atomId);
       if (atom === undefined) {
-        throw new Error(`synthetic Layer 4 required citation atom id is unknown: ${atomId}`);
+        throw new Error(`synthetic answer-composition citation atom id is unknown: ${atomId}`);
       }
       return syntheticFixtureAtomIdV1(atom);
     });
@@ -281,7 +282,7 @@ async function evaluateLayer4(
     // The read port is the authorization boundary. Inspect only the atoms it
     // actually released while composing this in-memory answer.
     const releasedTextSet = new Set(
-      layer3.releases.flatMap((release) =>
+      releasedRetrieval.releases.flatMap((release) =>
         release.released_atoms.map((atom) => atom.text),
       ),
     );
@@ -331,7 +332,7 @@ async function evaluateLayer4(
 /**
  * Runs a no-write synthetic corpus against injected real adapters. The caller
  * owns credentials and model construction; this module owns only invented
- * fixtures, scoring, and the permission-aware Layer 3-to-Layer 4 boundary.
+ * fixtures, scoring, and the permission-aware release-to-composition boundary.
  */
 export async function evaluateSyntheticMeetingQualityV1(
   input: SyntheticMeetingQualityEvaluatorInputV1,
@@ -351,7 +352,7 @@ export async function evaluateSyntheticMeetingQualityV1(
       expected_signals: fixture.expected_signals,
     })),
   );
-  const layer4 = await evaluateLayer4({
+  const answerComposition = await evaluateAnswerComposition({
     planner: input.planner,
     answerer: input.answerer,
     generation_adapter_id: input.generation_adapter_id,
@@ -366,13 +367,13 @@ export async function evaluateSyntheticMeetingQualityV1(
     source_adapter_id: source.identity.adapter_id,
     processor_adapter_id: input.processor.identity.adapter_id,
     extraction,
-    layer4,
+    layer4: answerComposition,
     passed:
       extraction.missing_count === 0 &&
       extraction.unexpected_count === 0 &&
-      layer4.status_mismatch_count === 0 &&
-      layer4.missing_required_citation_count === 0 &&
-      layer4.missing_required_answer_substring_count === 0 &&
-      layer4.withheld_text_detection_count === 0,
+      answerComposition.status_mismatch_count === 0 &&
+      answerComposition.missing_required_citation_count === 0 &&
+      answerComposition.missing_required_answer_substring_count === 0 &&
+      answerComposition.withheld_text_detection_count === 0,
   });
 }

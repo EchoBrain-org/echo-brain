@@ -112,7 +112,7 @@
       },
       {
         "identifier": "synthetic-source",
-        "root": "services/organization-authority/src/quality/synthetic-layer4-fixture-port-v1.ts"
+        "root": "services/organization-authority/src/quality/synthetic-answer-composition-fixture-port-v1.ts"
       },
       {
         "identifier": "synthetic-source",

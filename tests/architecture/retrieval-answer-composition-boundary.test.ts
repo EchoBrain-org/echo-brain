@@ -4,10 +4,10 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
-// These are the actual Layer 1 through Layer 3 read/search modules. Deliberately
-// exclude the Person runtime composition root: it may compose Layer 4, but must
+// These are the actual record/retrieval release modules. Deliberately exclude
+// the Person runtime composition root: it may compose an answer, but must
 // not make the lower-layer read/search closures model-aware.
-const LAYER1_3_READ_SEARCH_ROOTS = [
+const RELEASED_RETRIEVAL_ROOTS = [
   "services/organization-record/src/retrieve",
   "services/organization-retrieval/src",
   "services/organization-authority/src/application/readable-search-authorization-fence.ts",
@@ -33,7 +33,7 @@ const MODEL_IMPORT =
   /(?:anthropic|openai|openrouter|ollama|processing\/adapters\/decision-processors\/llm)/;
 const DIRECT_LOWER_LAYER_IMPORT =
   /(?:@echo-brain\/organization-(?:record|retrieval)|better-sqlite3|(?:^|\/)(?:record|retrieval|storage)(?:\/|$))/;
-const EXCLUDED_LAYER4_PATH =
+const EXCLUDED_ANSWER_COMPOSITION_PATH =
   /(?:^|\/)(?:agents?|tools?|memory|iterations?|vector|hybrid|rerank(?:ing)?|streaming)(?:[\/_\-.]|$)/i;
 
 function files(root: string): string[] {
@@ -151,7 +151,7 @@ function runtimeModuleReferences(
 }
 
 function reachableModelEdges(
-  roots: readonly string[] = LAYER1_3_READ_SEARCH_ROOTS,
+  roots: readonly string[] = RELEASED_RETRIEVAL_ROOTS,
 ): readonly string[] {
   const pending = roots.flatMap((root) =>
     root.endsWith(".ts") ? [root] : files(root),
@@ -165,7 +165,7 @@ function reachableModelEdges(
     for (const { kind, specifier } of runtimeModuleReferences(importer)) {
       if (specifier === undefined) {
         // An opaque runtime loader cannot be bounded to the caller's reviewed
-        // closure, so it is itself a Layer 4 boundary violation.
+        // closure, so it is itself an answer-composition boundary violation.
         edges.push(`${importer} -> non-static ${kind}`);
         continue;
       }
@@ -184,7 +184,7 @@ function reachableModelEdges(
   return edges.sort();
 }
 
-function directLayer4LowerLayerEdges(): readonly string[] {
+function directAnswerCompositionLowerLayerEdges(): readonly string[] {
   return [...filesIfPresent(ANSWER_COMPOSITION_ROOT), ANSWER_COMPOSITION_ROUTE]
     .flatMap((importer) =>
       runtimeModuleReferences(importer).flatMap(({ specifier }) => {
@@ -202,11 +202,11 @@ function directLayer4LowerLayerEdges(): readonly string[] {
 }
 
 describe("retrieval and answer-composition boundaries", () => {
-  it("keeps every Layer 1 through Layer 3 read/search import path independent from LLM processors and model SDKs", () => {
+  it("keeps released retrieval independent from LLM processors and model SDKs", () => {
     expect(reachableModelEdges()).toEqual([]);
   });
 
-  it("follows runtime re-exports, import(), and require() when checking the Layer 3 closure", () => {
+  it("follows runtime re-exports, import(), and require() when checking the retrieval closure", () => {
     expect(
       reachableModelEdges([
         "tests/fixtures/retrieval-answer-composition-boundary/re-export.ts",
@@ -260,19 +260,19 @@ describe("retrieval and answer-composition boundaries", () => {
     );
   });
 
-  it("keeps Layer 4 from directly importing Layer 1, Layer 2, or storage", () => {
-    expect(directLayer4LowerLayerEdges()).toEqual([]);
+  it("keeps answer composition from directly importing records, retrieval, or storage", () => {
+    expect(directAnswerCompositionLowerLayerEdges()).toEqual([]);
   });
 
-  it("keeps excluded agent, tool, memory, iterative retrieval, hybrid retrieval, reranking, and streaming paths absent from Layer 4", () => {
-    const layer4 = filesIfPresent(ANSWER_COMPOSITION_ROOT);
-    expect(layer4.filter((path) => EXCLUDED_LAYER4_PATH.test(path))).toEqual([]);
+  it("keeps excluded agent, tool, memory, iterative retrieval, hybrid retrieval, reranking, and streaming paths absent from answer composition", () => {
+    const answerComposition = filesIfPresent(ANSWER_COMPOSITION_ROOT);
+    expect(answerComposition.filter((path) => EXCLUDED_ANSWER_COMPOSITION_PATH.test(path))).toEqual([]);
     expect(
-      layer4.filter((path) => /(?:ReadableStream|text\/event-stream|stream\s*:\s*true)/.test(source(path))),
+      answerComposition.filter((path) => /(?:ReadableStream|text\/event-stream|stream\s*:\s*true)/.test(source(path))),
     ).toEqual([]);
   });
 
-  it("adds no model or agent dependency to Layer 3 workspaces", () => {
+  it("adds no model or agent dependency to released-retrieval workspaces", () => {
     for (const manifestPath of [
       "services/organization-authority/package.json",
       "services/organization-retrieval/package.json",

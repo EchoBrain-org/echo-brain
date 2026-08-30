@@ -41,12 +41,12 @@ Tokens are never printed by successful commands.
 - deterministic, permission-aware record reads and cited answers.
 
 The server starts only from the seven byte-pinned clean baselines. Historical
-migration runners and compatibility APIs are not shipped. Layer 3 is the sole
-release boundary. The answer-composition runtime (the Layer 4 protocol
-boundary) is one synchronous Person `ask` path: one bounded plan, one Layer 3
-batch, at most one answer call, and
+migration runners and compatibility APIs are not shipped. Released retrieval
+is the sole content-release boundary. The answer-composition runtime is one
+synchronous Person `ask` path: one bounded plan, one released-retrieval batch,
+at most one answer call, and
 citations limited to that request's released atoms. It has no agents, tools,
-memory, streaming, or direct Layer 1/2 access.
+memory, streaming, or direct record or retrieval-store access.
 
 ## Repository layout
 

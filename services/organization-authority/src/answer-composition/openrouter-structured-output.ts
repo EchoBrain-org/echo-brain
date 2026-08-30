@@ -1,7 +1,7 @@
 import {
-  type Layer4JsonSchema,
-  type Layer4StructuredGenerationInput,
-  type Layer4StructuredOutputPort,
+  type StructuredGenerationJsonSchema,
+  type StructuredGenerationInput,
+  type StructuredGenerationPort,
 } from "./retrieval-grounded-answer-composition.js";
 
 export const OPENROUTER_STRUCTURED_OUTPUT_TIMEOUT_MS = 30_000;
@@ -147,14 +147,14 @@ function fail(
 /** A small, credential-contained OpenRouter JSON-schema adapter for answer composition. */
 export function createOpenRouterStructuredOutput(
   options: OpenRouterStructuredOutputOptions,
-): Layer4StructuredOutputPort {
+): StructuredGenerationPort {
   if (!nonEmpty(options.credential_ref)) {
     throw new OpenRouterStructuredOutputError("OpenRouter credential reference is invalid");
   }
   const url = endpoint(options.endpoint);
   const fetchImpl = options.fetch_impl ?? fetch;
   return Object.freeze({
-    async generate(input: Layer4StructuredGenerationInput): Promise<unknown> {
+    async generate(input: StructuredGenerationInput): Promise<unknown> {
       model(input.model);
       boundedInteger(input.timeout_ms, "OpenRouter timeout", OPENROUTER_STRUCTURED_OUTPUT_MAX_TIMEOUT_MS);
       boundedInteger(input.max_output_tokens, "OpenRouter output limit", 4_096);
@@ -304,4 +304,4 @@ export function createOpenRouterStructuredOutput(
   });
 }
 
-export type { Layer4JsonSchema };
+export type { StructuredGenerationJsonSchema };

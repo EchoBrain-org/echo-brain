@@ -3,15 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createRetrievalGroundedAnswerComposition,
   RetrievalGroundedAnswerCompositionError,
-  type Layer4BatchReadPort,
-  type Layer4FailureDiagnosticV1,
-  type Layer4ReleasedBatch,
-  type Layer4StructuredGenerationInput,
+  type AnswerCompositionFailureDiagnosticV1,
+  type ReleasedRetrievalBatch,
+  type ReleasedRetrievalPort,
+  type StructuredGenerationInput,
 } from "../../src/answer-composition/retrieval-grounded-answer-composition.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 
-function release(atoms = true): Layer4ReleasedBatch {
+function release(atoms = true): ReleasedRetrievalBatch {
   return {
     release_id: digest("release"),
     authority_id: "oau_clean",
@@ -43,18 +43,18 @@ function release(atoms = true): Layer4ReleasedBatch {
 }
 
 describe("retrieval-grounded answer composition", () => {
-  it("plans once, reads one Layer 3 batch, verifies citations, revalidates, and audits hashes", async () => {
+  it("plans once, reads one released retrieval batch, verifies citations, revalidates, and audits hashes", async () => {
     const events: string[] = [];
-    let plannerRequest: Layer4StructuredGenerationInput | undefined;
-    let answerRequest: Layer4StructuredGenerationInput | undefined;
+    let plannerRequest: StructuredGenerationInput | undefined;
+    let answerRequest: StructuredGenerationInput | undefined;
     const planner = {
-      generate: vi.fn(async (input: Layer4StructuredGenerationInput) => {
+      generate: vi.fn(async (input: StructuredGenerationInput) => {
         plannerRequest = input;
         return { queries: ["launch date", "product owner"] };
       }),
     };
     const answerer = {
-      generate: vi.fn(async (input: Layer4StructuredGenerationInput) => {
+      generate: vi.fn(async (input: StructuredGenerationInput) => {
         answerRequest = input;
         events.push("answer");
         return { status: "answered", answer: "Tuesday, owned by the product team.", citations: ["a1", "a2"] };
@@ -62,7 +62,7 @@ describe("retrieval-grounded answer composition", () => {
     };
     let retrieveCount = 0;
     let retrievedQueries: readonly string[] | undefined;
-    const layer3: Layer4BatchReadPort = {
+    const releasedRetrieval: ReleasedRetrievalPort = {
       retrieve: async (input) => {
         retrieveCount += 1;
         retrievedQueries = input.queries;
@@ -78,7 +78,7 @@ describe("retrieval-grounded answer composition", () => {
     const answer = createRetrievalGroundedAnswerComposition({
       planner,
       answerer,
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit: { append: (entry) => void auditEntries.push(entry) },
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -114,16 +114,16 @@ describe("retrieval-grounded answer composition", () => {
     expect(plannerRequest).toBeDefined();
     expect(answerRequest).toBeDefined();
     const withoutSignal = (
-      request: Layer4StructuredGenerationInput,
-    ): Omit<Layer4StructuredGenerationInput, "signal"> => {
+      request: StructuredGenerationInput,
+    ): Omit<StructuredGenerationInput, "signal"> => {
       const { signal: _signal, ...audited } = request;
       return audited;
     };
     expect(auditEntry.prompt_sha256).toBe(
       canonicalSha256({
         generation_adapter_id: "openrouter",
-        planner: withoutSignal(plannerRequest as Layer4StructuredGenerationInput),
-        answer: withoutSignal(answerRequest as Layer4StructuredGenerationInput),
+        planner: withoutSignal(plannerRequest as StructuredGenerationInput),
+        answer: withoutSignal(answerRequest as StructuredGenerationInput),
       }),
     );
     expect(JSON.stringify(auditEntries[0])).not.toContain("When is the launch");
@@ -141,7 +141,7 @@ describe("retrieval-grounded answer composition", () => {
           citations: ["a1"],
         })),
       },
-      layer3: {
+      released_retrieval: {
         retrieve: vi.fn(async () => release()),
         revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
       },
@@ -177,7 +177,7 @@ describe("retrieval-grounded answer composition", () => {
       },
     },
   ])("rejects an answer with $name before final revalidation", async ({ response }) => {
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
@@ -185,7 +185,7 @@ describe("retrieval-grounded answer composition", () => {
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: { generate: vi.fn(async () => response) },
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit,
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -195,13 +195,13 @@ describe("retrieval-grounded answer composition", () => {
     await expect(answer.answer({ question: "What is the launch date?" })).rejects.toBeInstanceOf(
       RetrievalGroundedAnswerCompositionError,
     );
-    expect(layer3.revalidate).not.toHaveBeenCalled();
+    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
   });
 
-  it("does not call the answer model when Layer 3 releases no usable atoms, but revalidates and audits", async () => {
+  it("does not call the answer model when released retrieval has no usable atoms, but revalidates and audits", async () => {
     const answerer = { generate: vi.fn(async () => ({ status: "answered", answer: "wrong", citations: ["a1"] })) };
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => release(false)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
@@ -209,7 +209,7 @@ describe("retrieval-grounded answer composition", () => {
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer,
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit,
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -221,13 +221,13 @@ describe("retrieval-grounded answer composition", () => {
       citations: [],
     });
     expect(answerer.generate).not.toHaveBeenCalled();
-    expect(layer3.revalidate).toHaveBeenCalledTimes(1);
+    expect(releasedRetrieval.revalidate).toHaveBeenCalledTimes(1);
     expect(audit.append).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     {
-      name: "contains an invalid Layer 2 query",
+      name: "contains an invalid retrieval query",
       response: { queries: ["   "] },
     },
     {
@@ -235,7 +235,7 @@ describe("retrieval-grounded answer composition", () => {
       response: { queries: [], unexpected: true },
     },
   ])("fails closed before retrieval when planner output $name", async ({ response }) => {
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => release(false)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
@@ -244,7 +244,7 @@ describe("retrieval-grounded answer composition", () => {
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => response) },
       answerer,
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit,
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -253,15 +253,15 @@ describe("retrieval-grounded answer composition", () => {
     await expect(
       answer.answer({ question: "What is the launch date?" }),
     ).rejects.toBeInstanceOf(RetrievalGroundedAnswerCompositionError);
-    expect(layer3.retrieve).not.toHaveBeenCalled();
-    expect(layer3.revalidate).not.toHaveBeenCalled();
+    expect(releasedRetrieval.retrieve).not.toHaveBeenCalled();
+    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
     expect(answerer.generate).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
   });
 
   it("fails closed before retrieval when the planner is unavailable", async () => {
     const plannerFailure = new Error("provider unavailable");
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
@@ -280,7 +280,7 @@ describe("retrieval-grounded answer composition", () => {
         }),
       },
       answerer,
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit,
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -290,16 +290,16 @@ describe("retrieval-grounded answer composition", () => {
     await expect(
       answer.answer({ question: "What is the launch date?" }),
     ).rejects.toBe(plannerFailure);
-    expect(layer3.retrieve).not.toHaveBeenCalled();
-    expect(layer3.revalidate).not.toHaveBeenCalled();
+    expect(releasedRetrieval.retrieve).not.toHaveBeenCalled();
+    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
     expect(answerer.generate).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
   });
 
   it("reports a redacted planner validation failure while releasing nothing", async () => {
-    const diagnostics: Layer4FailureDiagnosticV1[] = [];
+    const diagnostics: AnswerCompositionFailureDiagnosticV1[] = [];
     const question = "Question that must not appear in the diagnostic";
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => ({
         ...release(false),
         released_atoms: [],
@@ -309,7 +309,7 @@ describe("retrieval-grounded answer composition", () => {
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
       answerer: { generate: vi.fn() },
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit: { append: vi.fn() },
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -322,8 +322,8 @@ describe("retrieval-grounded answer composition", () => {
       RetrievalGroundedAnswerCompositionError,
     );
 
-    expect(layer3.retrieve).not.toHaveBeenCalled();
-    expect(layer3.revalidate).not.toHaveBeenCalled();
+    expect(releasedRetrieval.retrieve).not.toHaveBeenCalled();
+    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
     expect(diagnostics).toEqual([
       expect.objectContaining({
         schema_version: 1,
@@ -344,9 +344,9 @@ describe("retrieval-grounded answer composition", () => {
   });
 
   it("reports answer validation failure against the exact released generation", async () => {
-    const diagnostics: Layer4FailureDiagnosticV1[] = [];
+    const diagnostics: AnswerCompositionFailureDiagnosticV1[] = [];
     const released = release();
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => released),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
@@ -359,7 +359,7 @@ describe("retrieval-grounded answer composition", () => {
           citations: ["a1", "a1"],
         })),
       },
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit: { append: vi.fn() },
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -393,7 +393,7 @@ describe("retrieval-grounded answer composition", () => {
   });
 
   it("propagates only safe structural adapter failure metadata into the answer diagnostic", async () => {
-    const diagnostics: Layer4FailureDiagnosticV1[] = [];
+    const diagnostics: AnswerCompositionFailureDiagnosticV1[] = [];
     const question = "Question that must remain absent from adapter diagnostics";
     const released = release();
     const adapterFailure = Object.assign(new Error("Provider failure text is not diagnostic data"), {
@@ -408,7 +408,7 @@ describe("retrieval-grounded answer composition", () => {
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: { generate: vi.fn(async () => { throw adapterFailure; }) },
-      layer3: {
+      released_retrieval: {
         retrieve: vi.fn(async () => released),
         revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
       },
@@ -440,14 +440,14 @@ describe("retrieval-grounded answer composition", () => {
   });
 
   it("does not let a diagnostics observer failure mask planner rejection", async () => {
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
       answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "Tuesday.", citations: ["a1"] })) },
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit: { append: vi.fn() },
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -460,22 +460,22 @@ describe("retrieval-grounded answer composition", () => {
     await expect(
       answer.answer({ question: "What is the launch date?" }),
     ).rejects.toBeInstanceOf(RetrievalGroundedAnswerCompositionError);
-    expect(layer3.retrieve).not.toHaveBeenCalled();
-    expect(layer3.revalidate).not.toHaveBeenCalled();
+    expect(releasedRetrieval.retrieve).not.toHaveBeenCalled();
+    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
   });
 
   it("does not invoke the planner after caller cancellation", async () => {
     const controller = new AbortController();
     controller.abort(new Error("caller cancelled"));
     const planner = { generate: vi.fn() };
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answer = createRetrievalGroundedAnswerComposition({
       planner,
       answerer: { generate: vi.fn() },
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit: { append: vi.fn() },
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -486,11 +486,11 @@ describe("retrieval-grounded answer composition", () => {
       answer.answer({ question: "What is the launch date?", signal: controller.signal }),
     ).rejects.toThrow("caller cancelled");
     expect(planner.generate).not.toHaveBeenCalled();
-    expect(layer3.retrieve).not.toHaveBeenCalled();
+    expect(releasedRetrieval.retrieve).not.toHaveBeenCalled();
   });
 
   it("keeps the original query first and drops exact planner duplicates", async () => {
-    const layer3 = {
+    const releasedRetrieval = {
       retrieve: vi.fn(async () => release(false)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
@@ -502,7 +502,7 @@ describe("retrieval-grounded answer composition", () => {
         })),
       },
       answerer: { generate: vi.fn() },
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit: { append: vi.fn() },
       generation_adapter_id: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
@@ -511,7 +511,7 @@ describe("retrieval-grounded answer composition", () => {
 
     await answer.answer({ question });
 
-    expect(layer3.retrieve).toHaveBeenCalledWith({
+    expect(releasedRetrieval.retrieve).toHaveBeenCalledWith({
       queries: [question, "launch date"],
     });
   });

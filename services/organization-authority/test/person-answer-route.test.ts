@@ -10,8 +10,8 @@ import {
   type AnswerCompositionFailureEventV1,
 } from "../src/composition/person-answer-route.js";
 import type {
-  Layer4StructuredGenerationInput,
-  Layer4StructuredOutputPort,
+  StructuredGenerationInput,
+  StructuredGenerationPort,
 } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
 import type {
   PersonRecordSearchBatchApplicationV1,
@@ -91,7 +91,7 @@ function searchResponse() {
 }
 
 function setup(input: {
-  readonly model?: Layer4StructuredOutputPort;
+  readonly model?: StructuredGenerationPort;
   readonly revalidate?: () => PersonAccessAuthorization;
   readonly on_failure?: (event: AnswerCompositionFailureEventV1) => void;
   readonly source_text?: string;
@@ -130,10 +130,10 @@ function setup(input: {
     events.push("audit");
     return digest(`answer-audit-${entry.checked_at}`);
   });
-  const modelInputs: Layer4StructuredGenerationInput[] = [];
-  const defaultModel: Layer4StructuredOutputPort = {
+  const modelInputs: StructuredGenerationInput[] = [];
+  const defaultModel: StructuredGenerationPort = {
     generate: vi.fn(
-      async (request: Layer4StructuredGenerationInput): Promise<unknown> => {
+      async (request: StructuredGenerationInput): Promise<unknown> => {
         modelInputs.push(request);
         return modelInputs.length === 1
           ? { queries: ["launch date", "launch owner"] }

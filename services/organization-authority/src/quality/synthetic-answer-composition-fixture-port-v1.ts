@@ -3,11 +3,11 @@ import {
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import type {
-  Layer4BatchReadPort,
-  Layer4ReleasedAtom,
-  Layer4ReleasedBatch,
+  ReleasedRetrievalPort,
+  ReleasedRetrievalAtom,
+  ReleasedRetrievalBatch,
 } from "../answer-composition/retrieval-grounded-answer-composition.js";
-import type { SyntheticLayer4AtomV1 } from "./synthetic-meeting-fixture-v1.js";
+import type { SyntheticAnswerCompositionAtomV1 } from "./synthetic-meeting-fixture-v1.js";
 
 const digest = (value: unknown): Sha256Digest => canonicalSha256(value);
 
@@ -19,33 +19,33 @@ function queryTerms(queries: readonly string[]): ReadonlySet<string> {
   );
 }
 
-export function syntheticFixtureAtomIdV1(atom: SyntheticLayer4AtomV1): Sha256Digest {
+export function syntheticFixtureAtomIdV1(atom: SyntheticAnswerCompositionAtomV1): Sha256Digest {
   return digest({ kind: "synthetic-layer4-atom-v1", id: atom.id });
 }
 
 /**
- * An explicit Layer 3 boundary for synthetic evaluation. The evaluator only
- * hands Layer 4 atoms released for the requested fixture principal.
+ * An explicit released-retrieval boundary for synthetic evaluation. The
+ * evaluator hands composition only atoms released for the fixture principal.
  */
-export class SyntheticFixtureLayer4BatchReadPortV1 implements Layer4BatchReadPort {
+export class SyntheticFixtureReleasedRetrievalPortV1 implements ReleasedRetrievalPort {
   readonly queries: Array<readonly string[]> = [];
-  readonly releases: Layer4ReleasedBatch[] = [];
+  readonly releases: ReleasedRetrievalBatch[] = [];
 
   constructor(
     private readonly options: {
       readonly principal_id: string;
-      readonly atoms: readonly SyntheticLayer4AtomV1[];
+      readonly atoms: readonly SyntheticAnswerCompositionAtomV1[];
     },
   ) {}
 
   async retrieve(input: {
     readonly queries: readonly string[];
     readonly signal?: AbortSignal;
-  }): Promise<Layer4ReleasedBatch> {
+  }): Promise<ReleasedRetrievalBatch> {
     input.signal?.throwIfAborted();
     this.queries.push([...input.queries]);
     const terms = queryTerms(input.queries);
-    const released_atoms: readonly Layer4ReleasedAtom[] = this.options.atoms
+    const released_atoms: readonly ReleasedRetrievalAtom[] = this.options.atoms
       .filter(
         (atom) =>
           atom.readable_by_principal_ids.includes(this.options.principal_id) &&
@@ -57,7 +57,7 @@ export class SyntheticFixtureLayer4BatchReadPortV1 implements Layer4BatchReadPor
         policy_id: atom.policy_id,
         text: atom.text,
       }));
-    const release: Layer4ReleasedBatch = {
+    const release: ReleasedRetrievalBatch = {
       release_id: digest({ principal_id: this.options.principal_id, released_atoms }),
       authority_id: "synthetic-quality-authority",
       organization_id: "synthetic-quality-organization",
@@ -78,7 +78,7 @@ export class SyntheticFixtureLayer4BatchReadPortV1 implements Layer4BatchReadPor
   }
 
   async revalidate(input: {
-    readonly release: Layer4ReleasedBatch;
+    readonly release: ReleasedRetrievalBatch;
     readonly signal?: AbortSignal;
   }): Promise<{ readonly checked_at: string }> {
     input.signal?.throwIfAborted();

@@ -1,4 +1,4 @@
-import type { Layer4StructuredOutputPort } from "../answer-composition/retrieval-grounded-answer-composition.js";
+import type { StructuredGenerationPort } from "../answer-composition/retrieval-grounded-answer-composition.js";
 
 /**
  * The complete non-secret selection that binds answer composition to its
@@ -18,7 +18,7 @@ export interface AnswerCompositionGenerationProfileV1 {
  * routes receive only this port and its explicit non-secret generation profile.
  */
 export interface AnswerCompositionRuntimeV1 {
-  readonly structured_output: Layer4StructuredOutputPort;
+  readonly structured_output: StructuredGenerationPort;
   readonly generation: AnswerCompositionGenerationProfileV1;
 }
 

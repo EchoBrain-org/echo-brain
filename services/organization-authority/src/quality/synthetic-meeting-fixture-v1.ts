@@ -34,20 +34,20 @@ export type SyntheticExpectedSignalV1 =
   | (SyntheticExpectedSignalFieldsV1 & { readonly kind: "action" })
   | (SyntheticExpectedSignalFieldsV1 & { readonly kind: "rationale" });
 
-export interface SyntheticLayer4AtomV1 {
+export interface SyntheticAnswerCompositionAtomV1 {
   /** Stable fixture-local handle used by quality expectations. */
   readonly id: string;
   readonly text: string;
   readonly policy_id:
     | "organization-member-readable-person-v2"
     | "restricted-reviewer-person-v2";
-  /** The test harness models Layer 3's authorization result with this list. */
+  /** The test harness models released-retrieval authorization with this list. */
   readonly readable_by_principal_ids: readonly string[];
-  /** Small, explicit fixture search vocabulary. It is never passed to Layer 4. */
+  /** Small, explicit fixture search vocabulary. It is never passed to generation. */
   readonly search_terms: readonly string[];
 }
 
-export interface SyntheticLayer4CaseV1 {
+export interface SyntheticAnswerCompositionCaseV1 {
   readonly id: string;
   readonly principal_id: string;
   readonly question: string;
@@ -74,8 +74,10 @@ export interface SyntheticMeetingQualityCorpusV1 {
   readonly schema_version: 1;
   readonly kind: "echo-synthetic-meeting-quality-corpus-v1";
   readonly fixtures: readonly SyntheticMeetingFixtureV1[];
-  readonly layer4_atoms: readonly SyntheticLayer4AtomV1[];
-  readonly layer4_cases: readonly SyntheticLayer4CaseV1[];
+  /** Compatibility field retained for existing evaluator corpora. */
+  readonly layer4_atoms: readonly SyntheticAnswerCompositionAtomV1[];
+  /** Compatibility field retained for existing evaluator corpora. */
+  readonly layer4_cases: readonly SyntheticAnswerCompositionCaseV1[];
 }
 
 function corpusRecord(value: unknown, label: string): Record<string, unknown> {
@@ -170,39 +172,39 @@ export function validateSyntheticMeetingQualityCorpusV1(
   }
 
   const atoms = corpus.layer4_atoms.map((atom, index) =>
-    corpusRecord(atom, `synthetic Layer 4 atom ${index}`),
+    corpusRecord(atom, `synthetic answer-composition atom ${index}`),
   );
   uniqueNonEmptyStrings(
     atoms.map((atom) => atom.id),
-    "synthetic Layer 4 atom ids",
+    "synthetic answer-composition atom ids",
   );
   const atomById = new Map(atoms.map((atom) => [atom.id as string, atom]));
   for (const atom of atoms) {
     exactKeys(
       atom,
       ["id", "policy_id", "readable_by_principal_ids", "search_terms", "text"],
-      "synthetic Layer 4 atom",
+      "synthetic answer-composition atom",
     );
     if (
       !nonEmpty(atom.text) ||
       (atom.policy_id !== "organization-member-readable-person-v2" &&
         atom.policy_id !== "restricted-reviewer-person-v2")
     ) {
-      throw new Error("synthetic Layer 4 atom is invalid");
+      throw new Error("synthetic answer-composition atom is invalid");
     }
-    uniqueNonEmptyStrings(atom.readable_by_principal_ids, "synthetic Layer 4 atom readable principal ids");
-    uniqueNonEmptyStrings(atom.search_terms, "synthetic Layer 4 atom search terms");
+    uniqueNonEmptyStrings(atom.readable_by_principal_ids, "synthetic answer-composition atom readable principal ids");
+    uniqueNonEmptyStrings(atom.search_terms, "synthetic answer-composition atom search terms");
   }
 
   const cases = corpus.layer4_cases.map((qualityCase, index) =>
-    corpusRecord(qualityCase, `synthetic Layer 4 case ${index}`),
+    corpusRecord(qualityCase, `synthetic answer-composition case ${index}`),
   );
-  uniqueNonEmptyStrings(cases.map((qualityCase) => qualityCase.id), "synthetic Layer 4 case ids");
+  uniqueNonEmptyStrings(cases.map((qualityCase) => qualityCase.id), "synthetic answer-composition case ids");
   for (const qualityCase of cases) {
     exactKeys(
       qualityCase,
       ["expected_status", "id", "principal_id", "question", "required_answer_substrings", "required_citation_atom_ids"],
-      "synthetic Layer 4 case",
+      "synthetic answer-composition case",
     );
     if (
       !nonEmpty(qualityCase.principal_id) ||
@@ -210,34 +212,34 @@ export function validateSyntheticMeetingQualityCorpusV1(
       (qualityCase.expected_status !== "answered" &&
         qualityCase.expected_status !== "insufficient_evidence")
     ) {
-      throw new Error("synthetic Layer 4 case is invalid");
+      throw new Error("synthetic answer-composition case is invalid");
     }
     const citationIds = uniqueNonEmptyStrings(
       qualityCase.required_citation_atom_ids,
-      "synthetic Layer 4 required citation atom ids",
+      "synthetic answer-composition required citation atom ids",
       true,
     );
     uniqueNonEmptyStrings(
       qualityCase.required_answer_substrings,
-      "synthetic Layer 4 required answer substrings",
+      "synthetic answer-composition required answer substrings",
     );
     if (
       qualityCase.expected_status === "answered" && citationIds.length === 0 ||
       qualityCase.expected_status === "insufficient_evidence" && citationIds.length !== 0
     ) {
-      throw new Error("synthetic Layer 4 case has invalid withheld citation expectations");
+      throw new Error("synthetic answer-composition case has invalid withheld citation expectations");
     }
     for (const citationId of citationIds) {
       const atom = atomById.get(citationId);
       if (atom === undefined) {
-        throw new Error(`synthetic Layer 4 required citation atom id does not resolve exactly once: ${citationId}`);
+        throw new Error(`synthetic answer-composition citation atom id does not resolve exactly once: ${citationId}`);
       }
       const readableByPrincipalIds = uniqueNonEmptyStrings(
         atom.readable_by_principal_ids,
-        "synthetic Layer 4 atom readable principal ids",
+        "synthetic answer-composition atom readable principal ids",
       );
       if (!readableByPrincipalIds.includes(qualityCase.principal_id as string)) {
-        throw new Error(`synthetic Layer 4 case requires a withheld citation atom: ${citationId}`);
+        throw new Error(`synthetic answer-composition case requires a withheld citation atom: ${citationId}`);
       }
     }
   }
@@ -301,7 +303,7 @@ export const syntheticMeetingQualityCorpusV1: SyntheticMeetingQualityCorpusV1 =
         expected_signals: [],
       },
     ]),
-    layer4_atoms: Object.freeze<SyntheticLayer4AtomV1[]>([
+    layer4_atoms: Object.freeze<SyntheticAnswerCompositionAtomV1[]>([
       {
         id: "owner-only-approval-default",
         text: "Approval cards default to Only me until the meeting owner chooses a wider policy.",
@@ -317,7 +319,7 @@ export const syntheticMeetingQualityCorpusV1: SyntheticMeetingQualityCorpusV1 =
         search_terms: ["team", "policy", "records", "members", "read"],
       },
     ]),
-    layer4_cases: Object.freeze<SyntheticLayer4CaseV1[]>([
+    layer4_cases: Object.freeze<SyntheticAnswerCompositionCaseV1[]>([
       {
         id: "owner-can-answer-default",
         principal_id: "owner",

@@ -63,7 +63,7 @@ import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjec
 import { readableSearchRuntimeContractV1 } from "../src/composition/readable-search-runtime.js";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
-import type { Layer4StructuredOutputPort } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
+import type { StructuredGenerationPort } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
 import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateSlackApprovalBlockKitActionIdV1,
@@ -865,7 +865,7 @@ function createOwnerAndMemberSearchRoute(input: {
   return route;
 }
 
-function answerModel(): Layer4StructuredOutputPort {
+function answerModel(): StructuredGenerationPort {
   return {
     async generate(input) {
       const properties = input.schema.properties as

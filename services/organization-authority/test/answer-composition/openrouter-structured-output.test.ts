@@ -23,7 +23,7 @@ async function caught(adapter: ReturnType<typeof createOpenRouterStructuredOutpu
   throw new Error("expected OpenRouter adapter to fail");
 }
 
-describe("OpenRouter Layer 4 structured output", () => {
+describe("OpenRouter structured generation", () => {
   it("uses JSON-schema output with the configured bounds", async () => {
     const calls: Array<{ readonly input: RequestInfo | URL; readonly init: RequestInit | undefined }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
