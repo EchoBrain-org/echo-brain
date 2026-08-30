@@ -25,6 +25,10 @@ import type {
   CleanLiveCandidateV1,
   CleanLiveOnlySourceStateV1,
 } from "./live-only-source-cycle.js";
+import {
+  assertStagingSyntheticMeetingCanaryV1,
+  isStagingSyntheticMeetingCanaryV1,
+} from "./staging-synthetic-meeting-canary-v1.js";
 
 interface AdmissionRow {
   readonly source_adapter_id: string;
@@ -718,11 +722,21 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     ) {
       throw new Error("clean frozen candidate snapshot digest is invalid");
     }
+    const syntheticCanary = isStagingSyntheticMeetingCanaryV1(
+      meeting,
+      row.source_cursor,
+    );
     const admission: CleanLiveSourceAdmissionV1 = {
       source: {
-        adapter_id: row.source_adapter_id,
-        instance_id: row.source_instance_id,
-        version: row.source_adapter_version,
+        adapter_id: syntheticCanary
+          ? meeting.provenance.source.adapter_id
+          : row.source_adapter_id,
+        instance_id: syntheticCanary
+          ? meeting.provenance.source.instance_id
+          : row.source_instance_id,
+        version: syntheticCanary
+          ? meeting.provenance.source.version
+          : row.source_adapter_version,
         cursor: row.source_cursor,
         cutoff_at: row.cutoff_at,
       },
@@ -733,17 +747,26 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         configuration_sha256: row.processor_configuration_sha256,
       },
     };
-    assertAdmissionSnapshot(
-      admission,
-      this.sourceBoundary,
-      this.expectedProcessorAdapterId,
-    );
-    assertCanonicalMeetingDocument(meeting, {
-      kind: "meeting-source",
-      adapter_id: admission.source.adapter_id,
-      instance_id: admission.source.instance_id,
-      version: admission.source.version,
-    });
+    if (syntheticCanary) {
+      // This exception is recovery-only. PR98 has no ingress that can create
+      // a synthetic candidate, and a non-exact envelope remains a hard error.
+      assertStagingSyntheticMeetingCanaryV1(meeting);
+      if (admission.processor.adapter_id !== this.expectedProcessorAdapterId) {
+        throw new Error("admission processor differs from its configured processor");
+      }
+    } else {
+      assertAdmissionSnapshot(
+        admission,
+        this.sourceBoundary,
+        this.expectedProcessorAdapterId,
+      );
+      assertCanonicalMeetingDocument(meeting, {
+        kind: "meeting-source",
+        adapter_id: admission.source.adapter_id,
+        instance_id: admission.source.instance_id,
+        version: admission.source.version,
+      });
+    }
     assertCanonicalDecisionSet(decisions, meeting, {
       kind: "decision-processor",
       adapter_id: admission.processor.adapter_id,

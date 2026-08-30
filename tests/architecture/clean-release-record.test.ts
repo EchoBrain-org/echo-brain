@@ -509,6 +509,9 @@ describe("clean-v1 release record", () => {
     const update = readFileSync(UPDATE, "utf8");
     expect(dockerfile).toContain("ARG ECHO_SOURCE_SHA");
     expect(dockerfile).toContain('org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"');
+    expect(dockerfile).toContain(
+      'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"',
+    );
     expect(update).toContain("org.opencontainers.image.revision");
     expect(update).toContain("image_source_matches \"$expected\" \"$expected_source\"");
   });
