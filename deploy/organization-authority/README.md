@@ -80,10 +80,10 @@ state directory, database, or approval binding.
 
 After that setup, the ordinary release updater only replaces artifacts within
 this same lineage: Authority V3, private-approval control-plane V2, and
-record-log V2. It refuses older or mixed persisted state before contacting
-Docker. This is deliberately a replacement boundary, not a hidden migration
-path; use `replace-rehearsal --confirm-no-live-users` for pre-live state that
-does not meet this floor.
+record-log V2. It refuses older or mixed persisted state before runtime,
+configuration, or state mutation. This is deliberately a replacement boundary,
+not a hidden migration path; use `replace-rehearsal --confirm-no-live-users`
+for pre-live state that does not meet this floor.
 
 Complete the bootstrap, founder identity link, credential installation, and
 finalization, then start the active runtime. `resume` stops at this point and
