@@ -6,7 +6,7 @@ import { NodePersonSessionCrypto } from "../adapters/security/node-person-sessio
 import { createPrivateAuthorityCredential } from "../adapters/security/private-file-credentials.js";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
-import { SystemAuthorityClock } from "../adapters/runtime/system-runtime-ports.js";
+import { SystemAuthorityClock } from "../adapters/system/system-authority-clock.js";
 import {
   discardPersonOnboardingInvitation,
   reservePersonOnboardingInvitationTarget,

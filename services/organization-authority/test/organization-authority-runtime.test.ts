@@ -38,9 +38,9 @@ import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlit
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
-import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
-import { admitGranolaMeetingSource } from "../src/composition/granola-meeting-source-admission.js";
-import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-decision-processor-admission-commitment.js";
+import { SystemAuthorityClock } from "../src/adapters/system/system-authority-clock.js";
+import { admitGranolaMeetingSource } from "../src/composition/providers/granola/granola-meeting-source-admission.js";
+import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "../src/composition/providers/openrouter/openrouter-decision-processor-admission-commitment.js";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
@@ -67,7 +67,7 @@ import type { StructuredGenerationPort } from "../src/answer-composition/retriev
 import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateSlackApprovalBlockKitActionIdV1,
-} from "../src/composition/private-slack-approval-block-kit-card-v1.js";
+} from "../src/composition/providers/slack/private-approval/private-slack-approval-block-kit-card-v1.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import type {

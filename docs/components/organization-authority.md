@@ -76,10 +76,10 @@ boundary.
 
 ## Provider identity-link composition
 
-The current Slack Person identity-link capability is intentionally split inside
-Authority composition: `slack-person-identity-link-workflow-v1` owns the
-authenticated challenge and proof workflow, while
-`sqlite-slack-person-identity-link-repository-v1` owns the SQLite-backed
+The current Slack Person identity-link capability is intentionally split at the
+concrete Authority provider edge, `composition/providers/slack/person-identity/`:
+`slack-person-identity-link-workflow-v1` owns the authenticated challenge and
+proof workflow, while `sqlite-slack-person-identity-link-repository-v1` owns the SQLite-backed
 repository and its factory. The workflow remains in composition rather than
 `application/` because it coordinates the Slack provider, organization secret,
 and persistence port; moving those dependencies inward would weaken the

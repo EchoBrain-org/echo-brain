@@ -5,7 +5,7 @@ import {
   PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1,
   type PrivateSlackApprovalInteractionHttpPortV1,
 } from "../../src/presentation/private-slack-approval-interaction-http-port-v1.js";
-import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/composition/private-slack-approval-http-adapter-v1.js";
+import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/composition/providers/slack/private-approval/private-slack-approval-http-adapter-v1.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../../src/presentation/private-approval-interaction-http-application-v1.js";
 import type { PersonExternalIdentityLinkHttpApplicationV1 } from "../../src/presentation/person-external-identity-link-http-application.js";
 import { PERSON_SESSION_OIDC_BEGIN_PATH } from "../../src/presentation/person-identity-session-http-application.js";

@@ -19,8 +19,8 @@ import {
   OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
   OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
   OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "./openrouter-answer-composition-generation-bundle-v1.js";
-import { fixedOpenRouterDecisionProcessorConfigV1 } from "./openrouter-decision-processor-config-v1.js";
+} from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
+import { fixedOpenRouterDecisionProcessorConfigV1 } from "./providers/openrouter/openrouter-decision-processor-config-v1.js";
 
 const USAGE =
   "usage: echo-organization-authority-synthetic-meeting-quality run " +

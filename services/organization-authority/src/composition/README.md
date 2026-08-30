@@ -4,6 +4,14 @@ This directory is the Organization Authority assembly layer. It may select
 concrete adapters and connect them to application ports, but provider-neutral
 runtime components must not import a provider implementation.
 
+Provider-specific composition is kept at the concrete integration edges:
+`providers/granola/`, `providers/openrouter/`,
+`providers/slack/private-approval/`, and
+`providers/slack/person-identity/`. Slack's synthetic private-DM staging
+canary is under `staging/slack-private-approval/`. Generic bundle seams,
+Authority roots and lifecycle, Person routes, and readable search stay at this
+top level.
+
 The service path has three deliberately separate roots:
 
 - `organization-authority-composition-root.ts` is the deployable composition
@@ -16,9 +24,9 @@ The service path has three deliberately separate roots:
 
 `organization-authority-api-runtime.ts` owns API-serving database handles and
 constructs `presentation/organization-authority-http-server.ts`. It does not
-own the background worker. `granola-meeting-source-bundle-v1.ts` contains the
-Granola-specific source bundle; other provider bundles must follow the same
-pattern rather than entering the provider-neutral runtime.
+own the background worker. `providers/granola/granola-meeting-source-bundle-v1.ts`
+contains the Granola-specific source bundle; other provider bundles must follow
+the same pattern rather than entering the provider-neutral runtime.
 
 Stopped-state setup is split by responsibility.
 `organization-authority-state-bootstrap.ts` creates a new absent-state lineage.
@@ -28,9 +36,9 @@ names and versioned `clean-founder` wire values remain compatibility contracts;
 they are not component names and do not constrain the service to a founder.
 
 Private Slack approval has four explicit layers: the pure
-`private-slack-approval-interaction-protocol-v1.ts`, application
-`private-slack-approval-interaction-handler-v1.ts`, HTTP adapter
-`private-slack-approval-http-adapter-v1.ts`, and presentation port
+`providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.ts`, application
+`providers/slack/private-approval/private-slack-approval-interaction-handler-v1.ts`, HTTP adapter
+`providers/slack/private-approval/private-slack-approval-http-adapter-v1.ts`, and presentation port
 `presentation/private-slack-approval-interaction-http-port-v1.ts`.
 
 Secret values enter only through explicit private-file adapters. Composition

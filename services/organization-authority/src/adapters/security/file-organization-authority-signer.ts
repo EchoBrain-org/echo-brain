@@ -29,7 +29,7 @@ import {
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityDescriptor } from "@echo-brain/organization-protocol";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
-import type { OrganizationAuthoritySigner } from "../../application/ports/runtime-ports.js";
+import type { OrganizationAuthoritySigner } from "../../application/ports/organization-authority-signer.js";
 
 export const FILE_ORGANIZATION_AUTHORITY_KEY_FILENAME =
   "authority-development-key.v1.json";

@@ -23,9 +23,12 @@ defines the supported operator and employee flow.
 - `organization-authority-state-bootstrap.ts` bootstraps a new absent-state lineage.
 - `meeting-source-bundle-v1.ts`, `decision-processor-bundle-v1.ts`, and
   `approval-workflow-bundle-v1.ts` define provider-neutral composition seams.
-- `granola-meeting-source-bundle-v1.ts`,
-  `openrouter-decision-processor-bundle-v1.ts`, and
-  `private-slack-approval-workflow-bundle-v1.ts` own the selected providers.
+- `providers/granola/granola-meeting-source-bundle-v1.ts`,
+  `providers/openrouter/openrouter-decision-processor-bundle-v1.ts`, and
+  `providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.ts`
+  own the selected providers. Slack Person identity composition is under
+  `providers/slack/person-identity/`; the Slack private-DM staging canary is
+  under `staging/slack-private-approval/`.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
 

@@ -1,5 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { AuthorityClock } from "./runtime-ports.js";
+import type { AuthorityClock } from "./authority-clock.js";
 
 export type PersonSessionRandomPurpose =
   | "login_grant"

@@ -1051,7 +1051,7 @@ describe("workspace source boundaries", () => {
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
     );
     for (const concreteCompositionModule of [
-      "services/organization-authority/src/composition/granola-admitted-meeting-source-cursor-policy-v1.ts",
+      "services/organization-authority/src/composition/providers/granola/granola-admitted-meeting-source-cursor-policy-v1.ts",
       "services/organization-authority/src/composition/organization-authority-composition-root.ts",
     ]) {
       expect(existsSync(join(fixture, concreteCompositionModule))).toBe(true);
@@ -1300,13 +1300,13 @@ describe("workspace source boundaries", () => {
     const firstBridge = "services/organization-authority/src/composition/bland-bridge-one.ts";
     const secondBridge = "services/organization-authority/src/composition/bland-bridge-two.ts";
     try {
-      writeFileSync(join(fixture, secondBridge), 'import "./private-slack-approval-interaction-protocol-v1.js";\n');
+      writeFileSync(join(fixture, secondBridge), 'import "./providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.js";\n');
       writeFileSync(join(fixture, firstBridge), 'import "./bland-bridge-two.js";\n');
       writeFileSync(neutral, `${original}\nimport "./bland-bridge-one.js";\n`);
       const result = runBoundary(fixture);
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stdout + result.stderr).toContain(
-        `provider-neutral module reaches declared provider/adapter root 'slack': ${neutralPath} -> services/organization-authority/src/composition/private-slack-approval-interaction-protocol-v1.ts`,
+        `provider-neutral module reaches declared provider/adapter root 'slack': ${neutralPath} -> services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.ts`,
       );
     } finally {
       writeFileSync(neutral, original);

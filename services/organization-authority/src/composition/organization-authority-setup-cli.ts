@@ -39,7 +39,7 @@ import {
   bootstrapOrganizationAuthorityState,
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
-import { runGranolaMeetingSourceAdmissionCli } from "./granola-meeting-source-admission-cli.js";
+import { runGranolaMeetingSourceAdmissionCli } from "./providers/granola/granola-meeting-source-admission-cli.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
   assertPersonAuthorityCallback,

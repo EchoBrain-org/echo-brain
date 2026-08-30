@@ -19,14 +19,14 @@ import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
-import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
+import { SystemAuthorityClock } from "../src/adapters/system/system-authority-clock.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
 } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/slack-person-external-identity-runtime-bundle-v1.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
 import type {
   PersonExternalIdentityRuntimeInputV1,
   OpenedPersonExternalIdentityRuntimeV1,
@@ -129,7 +129,7 @@ describe("Organization Authority API runtime", () => {
       },
       {
         oidc_provider: new MockOidcProvider(),
-        external_identity_runtime: {
+        external_identity_runtime_bundle: {
           open(input): OpenedPersonExternalIdentityRuntimeV1 {
             opened.push(input);
             return {
@@ -565,7 +565,7 @@ describe("Organization Authority API runtime", () => {
       },
       {
         oidc_provider: new MockOidcProvider(),
-        external_identity_runtime:
+        external_identity_runtime_bundle:
           createSlackPersonExternalIdentityRuntimeBundleV1({}),
       },
     );

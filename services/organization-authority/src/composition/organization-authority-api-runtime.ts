@@ -15,7 +15,7 @@ import { NodePersonSessionCrypto } from "../adapters/security/node-person-sessio
 import { OpenIdClientPersonSessionProvider } from "../adapters/oidc/openid-client-person-session-provider.js";
 import { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
-import { SystemAuthorityClock } from "../adapters/runtime/system-runtime-ports.js";
+import { SystemAuthorityClock } from "../adapters/system/system-authority-clock.js";
 import { createOrganizationAuthorityHttpServer } from "../presentation/organization-authority-http-server.js";
 import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
 import { LazyPersonSessionOidcProvider } from "./lazy-person-session-oidc-provider.js";
@@ -55,7 +55,7 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
-  readonly external_identity_runtime?: PersonExternalIdentityRuntimeBundleV1;
+  readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
   /** Present only after source admission; omitted during organization setup. */
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
   /** Metadata-only answer-composition failure observer for the live server log. */
@@ -147,7 +147,7 @@ export async function startOrganizationAuthorityApiRuntime(
       },
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
-    externalIdentity = dependencies.external_identity_runtime?.open({
+    externalIdentity = dependencies.external_identity_runtime_bundle?.open({
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
       organization_id: metadata.organization_id,

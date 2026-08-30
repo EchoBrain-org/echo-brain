@@ -6,8 +6,8 @@ import { readPersonOidcConfiguration } from "./organization-authority-person-adm
 import {
   openStagingSyntheticPrivateDmCanaryControlV1,
   STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
-} from "./staging-synthetic-private-dm-canary-control-v1.js";
-import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging-synthetic-private-dm-canary-client-v1.js";
+} from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js";
+import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js";
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +

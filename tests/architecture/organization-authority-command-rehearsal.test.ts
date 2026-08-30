@@ -19,14 +19,14 @@ import {
   runOrganizationAuthoritySetupCli,
   type OrganizationAuthoritySetupCliDependencies,
 } from "../../services/organization-authority/src/composition/organization-authority-setup-cli.js";
-import { runGranolaMeetingSourceAdmissionCli } from "../../services/organization-authority/src/composition/granola-meeting-source-admission-cli.js";
+import { runGranolaMeetingSourceAdmissionCli } from "../../services/organization-authority/src/composition/providers/granola/granola-meeting-source-admission-cli.js";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
 } from "../../services/organization-authority/src/composition/person-onboarding-service.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
 import { openOrganizationAuthorityService } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/slack-person-external-identity-runtime-bundle-v1.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import type { OrganizationAuthorityProcessingCycleV1 } from "../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
 import { runPersonClientCli } from "../../src/product/person-client/commands.js";
@@ -445,7 +445,7 @@ describe("Organization Authority command rehearsal", () => {
       {
         api: {
           oidc_provider: new MockOidcProvider(),
-          external_identity_runtime:
+          external_identity_runtime_bundle:
             createSlackPersonExternalIdentityRuntimeBundleV1({
               identity_link_channel_id: "C12345678",
               provider: fakeSlack,

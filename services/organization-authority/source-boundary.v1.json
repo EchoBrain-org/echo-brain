@@ -121,18 +121,43 @@
         "export": "ApprovalWorkflowBundleV1"
       },
       {
+        "name": "Granola meeting source bundle",
+        "path": "services/organization-authority/src/composition/providers/granola/granola-meeting-source-bundle-v1.ts",
+        "export": "createGranolaMeetingSourceBundleV1"
+      },
+      {
+        "name": "OpenRouter answer-composition generation bundle",
+        "path": "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts",
+        "export": "createOpenRouterAnswerCompositionGenerationBundleV1"
+      },
+      {
+        "name": "OpenRouter decision processor bundle",
+        "path": "services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.ts",
+        "export": "createOpenRouterDecisionProcessorBundleV1"
+      },
+      {
+        "name": "Private Slack approval workflow bundle",
+        "path": "services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.ts",
+        "export": "createPrivateSlackApprovalWorkflowBundleV1"
+      },
+      {
+        "name": "Slack Person external-identity runtime bundle",
+        "path": "services/organization-authority/src/composition/providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
+        "export": "createSlackPersonExternalIdentityRuntimeBundleV1"
+      },
+      {
         "name": "Private Slack approval interaction protocol",
-        "path": "services/organization-authority/src/composition/private-slack-approval-interaction-protocol-v1.ts",
+        "path": "services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.ts",
         "export": "verifyPrivateSlackApprovalRequestV1"
       },
       {
         "name": "Private Slack approval interaction handler",
-        "path": "services/organization-authority/src/composition/private-slack-approval-interaction-handler-v1.ts",
+        "path": "services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-handler-v1.ts",
         "export": "createPrivateSlackApprovalInteractionHandlerV1"
       },
       {
         "name": "Private Slack approval HTTP adapter",
-        "path": "services/organization-authority/src/composition/private-slack-approval-http-adapter-v1.ts",
+        "path": "services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-http-adapter-v1.ts",
         "export": "createPrivateSlackApprovalHttpAdapterV1"
       },
       {
@@ -147,6 +172,36 @@
       }
     ],
     "retired_source_paths": [
+      "services/organization-authority/src/application/ports/runtime-ports.ts",
+      "services/organization-authority/src/adapters/runtime/system-runtime-ports.ts",
+      "services/organization-authority/src/composition/granola-admitted-meeting-source-cursor-policy-v1.ts",
+      "services/organization-authority/src/composition/granola-meeting-source-admission-cli.ts",
+      "services/organization-authority/src/composition/granola-meeting-source-admission.ts",
+      "services/organization-authority/src/composition/granola-meeting-source-bundle-v1.ts",
+      "services/organization-authority/src/composition/openrouter-answer-composition-generation-bundle-v1.ts",
+      "services/organization-authority/src/composition/openrouter-decision-processor-admission-commitment.ts",
+      "services/organization-authority/src/composition/openrouter-decision-processor-bundle-v1.ts",
+      "services/organization-authority/src/composition/openrouter-decision-processor-config-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-block-kit-card-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-http-adapter-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interaction-handler-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interaction-protocol-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-terminal-coordinator-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-workflow-bundle-v1.ts",
+      "services/organization-authority/src/composition/private-slack-dm-approval-stager-v1.ts",
+      "services/organization-authority/src/composition/resolve-current-private-slack-connection-v1.ts",
+      "services/organization-authority/src/composition/resolve-meeting-owner-private-slack-approval-reviewer-v1.ts",
+      "services/organization-authority/src/composition/resolve-private-slack-approval-reviewer-target-v1.ts",
+      "services/organization-authority/src/composition/sqlite-private-slack-approval-assignment-state-v1.ts",
+      "services/organization-authority/src/composition/sqlite-private-slack-approval-terminal-authority-v1.ts",
+      "services/organization-authority/src/composition/sqlite-stable-private-approval-authority-fence-v1.ts",
+      "services/organization-authority/src/composition/slack-person-external-identity-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/slack-person-identity-link-workflow-v1.ts",
+      "services/organization-authority/src/composition/sqlite-slack-person-identity-link-repository-v1.ts",
+      "services/organization-authority/src/composition/staging-synthetic-private-dm-canary-client-v1.ts",
+      "services/organization-authority/src/composition/staging-synthetic-private-dm-canary-control-v1.ts",
+      "services/organization-authority/src/composition/staging-synthetic-private-dm-canary-v1.ts",
+      "services/organization-authority/src/processing/private-approval-records/private-slack-block-v4-record-writer-v1.ts",
       "services/organization-authority/src/composition/open-clean-founder-live-runtime.ts",
       "services/organization-authority/src/composition/open-clean-organization-authority-runtime.ts",
       "services/organization-authority/src/composition/open-clean-live-runtime.ts",
@@ -203,7 +258,7 @@
       {
         "path": "services/organization-authority/src/clean-granola-source-main.ts",
         "targets": [
-          "services/organization-authority/src/composition/granola-meeting-source-admission-cli.ts"
+          "services/organization-authority/src/composition/providers/granola/granola-meeting-source-admission-cli.ts"
         ]
       },
       {
@@ -259,7 +314,7 @@
       "name": "authority-legacy-granola-source-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-granola-source-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/granola-meeting-source-admission-cli.ts"
+        "services/organization-authority/src/composition/providers/granola/granola-meeting-source-admission-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -376,8 +431,8 @@
       ]
     },
     {
-      "name": "authority-runtime-adapters-implement-application-ports",
-      "from": "services/organization-authority/src/adapters/runtime/**",
+      "name": "authority-system-adapters-implement-application-ports",
+      "from": "services/organization-authority/src/adapters/system/**",
       "allowed_imports": [
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
@@ -461,7 +516,7 @@
         "services/organization-authority/src/processing/core/ports/adapters.ts",
         "services/organization-authority/src/processing/core/processing/brief.ts",
         "services/organization-authority/src/processing/admitted-meeting-processing/**",
-        "services/organization-authority/src/processing/private-approval-records/**",
+        "services/organization-authority/src/processing/adapters/approval-resolution/slack/**",
         "services/organization-authority/src/quality/**",
         "services/organization-authority/src/processing/record/**",
         "services/organization-authority/src/processing/storage/**"
@@ -668,11 +723,10 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "private-approval-record-writer-uses-only-record-ports",
-      "from": "services/organization-authority/src/processing/private-approval-records/**",
+      "name": "approval-resolution-slack-record-writer-uses-only-record-ports",
+      "from": "services/organization-authority/src/processing/adapters/approval-resolution/slack/**",
       "allowed_imports": [
-        "services/organization-authority/src/application/ports/runtime-ports.ts",
-        "services/organization-authority/src/processing/private-approval-records/**"
+        "services/organization-authority/src/application/ports/organization-authority-signer.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",

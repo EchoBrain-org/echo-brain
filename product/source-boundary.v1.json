@@ -28,7 +28,7 @@
       },
       {
         "identifier": "granola",
-        "root": "services/organization-authority/src/composition/*granola*.ts"
+        "root": "services/organization-authority/src/composition/providers/granola/"
       },
       {
         "identifier": "granola",
@@ -68,11 +68,11 @@
       },
       {
         "identifier": "openrouter",
-        "root": "services/organization-authority/src/composition/*openrouter*.ts"
+        "root": "services/organization-authority/src/composition/providers/openrouter/"
       },
       {
         "identifier": "deepseek",
-        "root": "services/organization-authority/src/composition/openrouter-decision-processor-config-v1.ts"
+        "root": "services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-config-v1.ts"
       },
       {
         "identifier": "slack",
@@ -80,15 +80,11 @@
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/composition/*slack*.ts"
+        "root": "services/organization-authority/src/composition/providers/slack/"
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/composition/private-slack-dm-approval-stager-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/composition/*private-approval*.ts"
+        "root": "services/organization-authority/src/composition/staging/slack-private-approval/"
       },
       {
         "identifier": "slack",
@@ -104,7 +100,7 @@
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/processing/private-approval-records/private-slack-block-v4-record-writer-v1.ts"
+        "root": "services/organization-authority/src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.ts"
       },
       {
         "identifier": "synthetic-source",
@@ -155,7 +151,7 @@
         "identifier": "openrouter",
         "transport_provider": true,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/openrouter-answer-composition-generation-bundle-v1.ts"
+          "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts"
         ]
       },
       {
@@ -183,7 +179,7 @@
         "identifier": "deepseek",
         "transport_provider": false,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/openrouter-decision-processor-config-v1.ts"
+          "services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-config-v1.ts"
         ]
       }
     ],

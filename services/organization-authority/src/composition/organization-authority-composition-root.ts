@@ -9,12 +9,13 @@ import {
   type OrganizationAuthorityRuntimeDependencies,
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
-import { createGranolaMeetingSourceBundleV1 } from "./granola-meeting-source-bundle-v1.js";
-import { createOpenRouterDecisionProcessorBundleV1 } from "./openrouter-decision-processor-bundle-v1.js";
-import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "./openrouter-answer-composition-generation-bundle-v1.js";
-import { createPrivateSlackApprovalWorkflowBundleV1 } from "./private-slack-approval-workflow-bundle-v1.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime-bundle-v1.js";
-import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-protocol-v1.js";
+import { createGranolaMeetingSourceBundleV1 } from "./providers/granola/granola-meeting-source-bundle-v1.js";
+import { createOpenRouterDecisionProcessorBundleV1 } from "./providers/openrouter/openrouter-decision-processor-bundle-v1.js";
+import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
+import { createPrivateSlackApprovalWorkflowBundleV1 } from "./providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
+import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.js";
+import { runStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 
 export interface OrganizationAuthorityServiceConfig
@@ -87,8 +88,8 @@ export function openOrganizationAuthorityService(
         };
   const apiDependencies = {
     ...dependencies.api,
-    external_identity_runtime:
-      dependencies.api?.external_identity_runtime ??
+    external_identity_runtime_bundle:
+      dependencies.api?.external_identity_runtime_bundle ??
       createSlackPersonExternalIdentityRuntimeBundleV1({
         identity_link_channel_id: slack_identity_link_channel_id,
       }),
@@ -127,6 +128,8 @@ export function openOrganizationAuthorityService(
           createPersonPolicyFactProjectorV2(),
           createPrivateSlackBlockApprovalPolicyProjectorV1(),
         ]),
+      run_staging_synthetic_private_dm_canary: (input) =>
+        runStagingSyntheticPrivateDmCanaryV1(input),
     },
     {
       ...dependencies,

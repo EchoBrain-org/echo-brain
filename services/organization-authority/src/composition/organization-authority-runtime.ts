@@ -33,10 +33,6 @@ import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization
 import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
 import type { MeetingProcessingWorkerPhaseRunnerV1 } from "../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
-import {
-  runStagingSyntheticPrivateDmCanaryV1,
-  type StagingSyntheticPrivateDmCanaryResultV1,
-} from "./staging-synthetic-private-dm-canary-v1.js";
 import type { StagingSyntheticMeetingCanaryInputV1 } from "../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
 
 export interface OrganizationAuthorityRuntimeConfig {
@@ -68,7 +64,24 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly on_answer_composition_failure?: (
     event: AnswerCompositionFailureEventV1,
   ) => void;
+  /** Provider-selected staging runner; the neutral runtime only supplies admitted state. */
+  readonly run_staging_synthetic_private_dm_canary?: (
+    input: {
+      readonly authority_url: string;
+      readonly canary: StagingSyntheticMeetingCanaryInputV1;
+      readonly state: MeetingSourceAdapter;
+      readonly processor: DecisionProcessorAdapter;
+      readonly stager: Awaited<ReturnType<ApprovalWorkflowBundleV1["load"]>>["stager"];
+      readonly signal: AbortSignal;
+    },
+  ) => Promise<StagingSyntheticPrivateDmCanaryResultV1>;
 }
+
+export type StagingSyntheticPrivateDmCanaryResultV1 =
+  | { readonly kind: "staged"; readonly approval_id: string; readonly stage_id: string; readonly reused_frozen_extraction: boolean }
+  | { readonly kind: "delivery_pending"; readonly approval_id: string; readonly reused_frozen_extraction: boolean }
+  | { readonly kind: "not_actionable"; readonly disposition: "coalesced" | "no_signals"; readonly reused_frozen_extraction: boolean }
+  | { readonly kind: "not_staged"; readonly approval_id: string; readonly reason: "revoked" | "state_drift"; readonly reused_frozen_extraction: boolean };
 
 export interface OpenedOrganizationAuthorityRuntime
   extends RunningOrganizationAuthorityServiceLifecycle {
@@ -332,20 +345,24 @@ export async function openOrganizationAuthorityRuntime(
       address: runtime.address,
       processing: "active",
       runExclusive: (operation) => runtime.runExclusive(operation),
-      run_staging_synthetic_private_dm_canary: (canary, options) =>
-        runtime.runExclusive((signal) =>
-          runStagingSyntheticPrivateDmCanaryV1({
-            authority_url: config.authority_url,
-            canary,
-            state: sourceState,
-            processor,
-            stager: approvals.stager,
-            signal:
-              options?.signal === undefined
-                ? signal
-                : AbortSignal.any([signal, options.signal]),
+      ...(config.run_staging_synthetic_private_dm_canary === undefined
+        ? {}
+        : {
+            run_staging_synthetic_private_dm_canary: (canary, options) =>
+              runtime.runExclusive((signal) =>
+                config.run_staging_synthetic_private_dm_canary!({
+                  authority_url: config.authority_url,
+                  canary,
+                  state: sourceState,
+                  processor,
+                  stager: approvals.stager,
+                  signal:
+                    options?.signal === undefined
+                      ? signal
+                      : AbortSignal.any([signal, options.signal]),
+                }),
+              ),
           }),
-        ),
       close: async () => {
         await runtime.close();
         record.close();

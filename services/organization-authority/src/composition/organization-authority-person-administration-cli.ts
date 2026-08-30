@@ -11,7 +11,7 @@ import {
   issuePersonOnboardingInvitation,
 } from "./person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "./organization-authority-api-runtime.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime-bundle-v1.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
 
 const USAGE = `usage:
   echo-organization-authority-person-admin credentials-init --state-dir <absolute-path>
@@ -211,7 +211,7 @@ export async function runOrganizationAuthorityPersonAdministrationCli(
         privateReference(required(parsed, "--pkce-key-file")),
       ),
     }, {
-      external_identity_runtime:
+      external_identity_runtime_bundle:
         createSlackPersonExternalIdentityRuntimeBundleV1({
           // The public V1 flag keeps its compatibility-bound legacy name.
           identity_link_channel_id: parsed["--slack-approval-channel-id"],
