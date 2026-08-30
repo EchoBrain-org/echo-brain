@@ -32,6 +32,8 @@ const NODE22_BUILTINS = new Set([
 
 const WORKSPACE_BOUNDARY_REGISTRY = 'tools/workspace-source-boundaries.v1.json';
 const PRODUCT_BOUNDARY_MANIFEST = 'product/source-boundary.v1.json';
+const LLM_PROVIDER_SOURCE = 'services/organization-authority/src/processing/adapters/decision-processors/llm/llm-provider.ts';
+const LLM_PROVIDER_ROOT = 'services/organization-authority/src/processing/adapters/decision-processors/llm/';
 const BOUNDARY_MANIFEST_RE = /(?:^|\/)source-boundary\.v1\.json$/;
 const SOURCE_FILE_RE = /\.(?:[cm]?[jt]sx?)$/;
 
@@ -152,6 +154,85 @@ function isRepositoryPathPattern(path) {
   return typeof path === 'string' && isRepositoryPath(path.replaceAll('*', 'provider'));
 }
 
+function stringArrayInitializer(sourceFile, name) {
+  let values;
+  const visit = (node) => {
+    if (!ts.isVariableDeclaration(node) || node.name.getText(sourceFile) !== name) {
+      ts.forEachChild(node, visit);
+      return;
+    }
+    const initializer = node.initializer;
+    const array =
+      initializer !== undefined && ts.isCallExpression(initializer) &&
+      ts.isPropertyAccessExpression(initializer.expression) &&
+      initializer.expression.expression.getText(sourceFile) === 'Object' &&
+      initializer.expression.name.getText(sourceFile) === 'freeze'
+        ? initializer.arguments[0]
+        : initializer;
+    if (array === undefined || !ts.isArrayLiteralExpression(array)) return;
+    const literals = array.elements.filter(ts.isStringLiteral);
+    if (literals.length !== array.elements.length) return;
+    values = literals.map((literal) => literal.text);
+  };
+  ts.forEachChild(sourceFile, visit);
+  return values;
+}
+
+function collectLlmProviderSelectors(tree, errors) {
+  const source = textFile(tree, LLM_PROVIDER_SOURCE);
+  if (source === null) {
+    errors.push(`canonical LLM provider source is missing: ${LLM_PROVIDER_SOURCE}`);
+    return new Set();
+  }
+  const sourceFile = ts.createSourceFile(
+    LLM_PROVIDER_SOURCE,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const identifiers = stringArrayInitializer(sourceFile, 'LLM_PROVIDER_IDS');
+  if (identifiers === undefined || identifiers.length === 0 || new Set(identifiers).size !== identifiers.length) {
+    errors.push('LLM_PROVIDER_IDS must be a non-empty unique literal string array');
+    return new Set();
+  }
+  return new Set(identifiers);
+}
+
+function collectLlmDriverSelectors(tree) {
+  const selectors = new Set();
+  for (const [path] of tree) {
+    if (!SOURCE_FILE_RE.test(path) || !path.startsWith(LLM_PROVIDER_ROOT)) continue;
+    const source = textFile(tree, path);
+    const sourceFile = ts.createSourceFile(
+      path,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    const visit = (node) => {
+      // Client declarations are the ownership boundary: a new transport
+      // driver must expose its literal provider identity here and therefore
+      // be listed in the canonical typed provider set.
+      if (
+        ts.isPropertyDeclaration(node) &&
+        node.name.getText(sourceFile) === 'provider' &&
+        node.initializer !== undefined
+      ) {
+        let initializer = node.initializer;
+        while (ts.isAsExpression(initializer) || ts.isParenthesizedExpression(initializer)) {
+          initializer = initializer.expression;
+        }
+        if (ts.isStringLiteral(initializer)) selectors.add(initializer.text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(sourceFile, visit);
+  }
+  return selectors;
+}
+
 function collectRegisteredProviderIdentifiers(tree, adapterArchitecture, errors) {
   const registry = adapterArchitecture?.provider_identifier_registry;
   if (!Array.isArray(registry)) {
@@ -160,12 +241,14 @@ function collectRegisteredProviderIdentifiers(tree, adapterArchitecture, errors)
   }
 
   const identifiers = new Set();
+  const transportIdentifiers = new Set();
   for (const entry of registry) {
     if (
       entry === null ||
       typeof entry !== 'object' ||
       typeof entry.identifier !== 'string' ||
       !/^[a-z][a-z0-9-]*$/.test(entry.identifier) ||
+      (entry.transport_provider !== undefined && typeof entry.transport_provider !== 'boolean') ||
       !isStringArray(entry.source_evidence_paths) ||
       entry.source_evidence_paths.length === 0
     ) {
@@ -177,6 +260,7 @@ function collectRegisteredProviderIdentifiers(tree, adapterArchitecture, errors)
       continue;
     }
     identifiers.add(entry.identifier);
+    if (entry.transport_provider === true) transportIdentifiers.add(entry.identifier);
 
     const evidenceFiles = new Set();
     for (const pattern of entry.source_evidence_paths) {
@@ -208,7 +292,26 @@ function collectRegisteredProviderIdentifiers(tree, adapterArchitecture, errors)
       );
     }
   }
-  return identifiers;
+  const llmProviders = collectLlmProviderSelectors(tree, errors);
+  if (
+    llmProviders.size > 0 &&
+    (llmProviders.size !== transportIdentifiers.size ||
+      [...llmProviders].some((identifier) => !transportIdentifiers.has(identifier)))
+  ) {
+    errors.push(
+      `LLM_PROVIDER_IDS transport providers must exactly match registered transport providers: expected ${[...llmProviders].sort().join(', ')}, registered ${[...transportIdentifiers].sort().join(', ')}`,
+    );
+  }
+  const driverProviders = collectLlmDriverSelectors(tree);
+  if (
+    driverProviders.size !== llmProviders.size ||
+    [...driverProviders].some((identifier) => !llmProviders.has(identifier))
+  ) {
+    errors.push(
+      `LLM provider declarations must exactly match LLM_PROVIDER_IDS: declared ${[...driverProviders].sort().join(', ')}, registered ${[...llmProviders].sort().join(', ')}`,
+    );
+  }
+  return { identifiers, transportIdentifiers };
 }
 
 function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) {
@@ -219,7 +322,6 @@ function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) 
   }
 
   const roots = [];
-  const identifiers = new Set();
   const declaredRoots = new Set();
   for (const entry of declared) {
     if (
@@ -231,10 +333,6 @@ function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) 
       !isRepositoryPath(entry.root)
     ) {
       errors.push('adapter architecture provider_adapter_roots contains an invalid entry');
-      continue;
-    }
-    if (identifiers.has(entry.identifier)) {
-      errors.push(`adapter architecture provider_adapter_roots duplicates identifier '${entry.identifier}'`);
       continue;
     }
     if (declaredRoots.has(entry.root)) {
@@ -250,7 +348,6 @@ function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) 
       );
       continue;
     }
-    identifiers.add(entry.identifier);
     declaredRoots.add(entry.root);
     roots.push({ identifier: entry.identifier, root: entry.root });
   }
@@ -287,7 +384,7 @@ function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) 
       );
     }
   }
-  return { roots, identifiers };
+  return { roots, identifiers: new Set(roots.map((entry) => entry.identifier)) };
 }
 
 function reachableProviderAdapterRoot(tree, start, providerAdapterRoots) {
@@ -792,7 +889,10 @@ function main() {
     }
   }
 
-  const registeredProviderIdentifiers = collectRegisteredProviderIdentifiers(
+  const {
+    identifiers: registeredProviderIdentifiers,
+    transportIdentifiers: registeredTransportProviderIdentifiers,
+  } = collectRegisteredProviderIdentifiers(
     tree,
     adapterArchitecture,
     errors,
@@ -801,6 +901,12 @@ function main() {
     roots: declaredProviderAdapterRoots,
     identifiers: declaredProviderAdapterIdentifiers,
   } = collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors);
+
+  for (const identifier of registeredTransportProviderIdentifiers) {
+    if (!declaredProviderAdapterRoots.some((entry) => entry.identifier === identifier)) {
+      errors.push(`registered transport provider '${identifier}' has no declared implementation root`);
+    }
+  }
 
   if (adapterArchitecture?.forbid_discovered_adapter_ids_in_provider_neutral_paths === true) {
     const neutralPaths = adapterArchitecture.provider_neutral_paths;

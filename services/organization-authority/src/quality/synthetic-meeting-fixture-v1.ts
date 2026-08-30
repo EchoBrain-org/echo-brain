@@ -78,6 +78,138 @@ export interface SyntheticMeetingQualityCorpusV1 {
   readonly layer4_cases: readonly SyntheticLayer4CaseV1[];
 }
 
+function corpusRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function uniqueNonEmptyStrings(
+  value: unknown,
+  label: string,
+  allowEmpty = false,
+): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    (!allowEmpty && value.length === 0) ||
+    !value.every(nonEmpty) ||
+    new Set(value).size !== value.length
+  ) {
+    throw new Error(`${label} must be a ${allowEmpty ? "" : "non-empty "}unique string array`);
+  }
+  return value;
+}
+
+function exactKeys(record: Record<string, unknown>, keys: readonly string[], label: string): void {
+  const actual = Object.keys(record).sort();
+  if (actual.length !== keys.length || actual.some((key, index) => key !== keys[index])) {
+    throw new Error(`${label} has an invalid shape`);
+  }
+}
+
+/** Validates the closed, invented evaluation contract before any adapter runs. */
+export function validateSyntheticMeetingQualityCorpusV1(
+  value: unknown,
+): asserts value is SyntheticMeetingQualityCorpusV1 {
+  const corpus = corpusRecord(value, "synthetic quality corpus");
+  const expectedKeys = ["fixtures", "kind", "layer4_atoms", "layer4_cases", "schema_version"];
+  const actualKeys = Object.keys(corpus).sort();
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, index) => key !== expectedKeys[index]) ||
+    corpus.schema_version !== 1 ||
+    corpus.kind !== "echo-synthetic-meeting-quality-corpus-v1" ||
+    !Array.isArray(corpus.fixtures) ||
+    !Array.isArray(corpus.layer4_atoms) ||
+    !Array.isArray(corpus.layer4_cases)
+  ) {
+    throw new Error("synthetic quality corpus has an invalid top-level shape");
+  }
+
+  uniqueNonEmptyStrings(
+    corpus.fixtures.map((fixture, index) => corpusRecord(fixture, `synthetic fixture ${index}`).id),
+    "synthetic fixture ids",
+  );
+
+  const atoms = corpus.layer4_atoms.map((atom, index) =>
+    corpusRecord(atom, `synthetic Layer 4 atom ${index}`),
+  );
+  uniqueNonEmptyStrings(
+    atoms.map((atom) => atom.id),
+    "synthetic Layer 4 atom ids",
+  );
+  const atomById = new Map(atoms.map((atom) => [atom.id as string, atom]));
+  for (const atom of atoms) {
+    exactKeys(
+      atom,
+      ["id", "policy_id", "readable_by_principal_ids", "search_terms", "text"],
+      "synthetic Layer 4 atom",
+    );
+    if (
+      !nonEmpty(atom.text) ||
+      (atom.policy_id !== "organization-member-readable-person-v2" &&
+        atom.policy_id !== "restricted-reviewer-person-v2")
+    ) {
+      throw new Error("synthetic Layer 4 atom is invalid");
+    }
+    uniqueNonEmptyStrings(atom.readable_by_principal_ids, "synthetic Layer 4 atom readable principal ids");
+    uniqueNonEmptyStrings(atom.search_terms, "synthetic Layer 4 atom search terms");
+  }
+
+  const cases = corpus.layer4_cases.map((qualityCase, index) =>
+    corpusRecord(qualityCase, `synthetic Layer 4 case ${index}`),
+  );
+  uniqueNonEmptyStrings(cases.map((qualityCase) => qualityCase.id), "synthetic Layer 4 case ids");
+  for (const qualityCase of cases) {
+    exactKeys(
+      qualityCase,
+      ["expected_status", "id", "principal_id", "question", "required_answer_substrings", "required_citation_atom_ids"],
+      "synthetic Layer 4 case",
+    );
+    if (
+      !nonEmpty(qualityCase.principal_id) ||
+      !nonEmpty(qualityCase.question) ||
+      (qualityCase.expected_status !== "answered" &&
+        qualityCase.expected_status !== "insufficient_evidence")
+    ) {
+      throw new Error("synthetic Layer 4 case is invalid");
+    }
+    const citationIds = uniqueNonEmptyStrings(
+      qualityCase.required_citation_atom_ids,
+      "synthetic Layer 4 required citation atom ids",
+      true,
+    );
+    uniqueNonEmptyStrings(
+      qualityCase.required_answer_substrings,
+      "synthetic Layer 4 required answer substrings",
+    );
+    if (
+      qualityCase.expected_status === "answered" && citationIds.length === 0 ||
+      qualityCase.expected_status === "insufficient_evidence" && citationIds.length !== 0
+    ) {
+      throw new Error("synthetic Layer 4 case has invalid withheld citation expectations");
+    }
+    for (const citationId of citationIds) {
+      const atom = atomById.get(citationId);
+      if (atom === undefined) {
+        throw new Error(`synthetic Layer 4 required citation atom id does not resolve exactly once: ${citationId}`);
+      }
+      const readableByPrincipalIds = uniqueNonEmptyStrings(
+        atom.readable_by_principal_ids,
+        "synthetic Layer 4 atom readable principal ids",
+      );
+      if (!readableByPrincipalIds.includes(qualityCase.principal_id as string)) {
+        throw new Error(`synthetic Layer 4 case requires a withheld citation atom: ${citationId}`);
+      }
+    }
+  }
+}
+
 export const syntheticMeetingQualityCorpusV1: SyntheticMeetingQualityCorpusV1 =
   Object.freeze({
     schema_version: 1,

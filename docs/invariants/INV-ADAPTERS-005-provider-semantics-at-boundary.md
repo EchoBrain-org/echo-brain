@@ -55,13 +55,18 @@ introduced as a conditional for one vendor.
 
 ## Enforcement and failure behavior
 
-The source-boundary manifest names every active provider/adapter root, including
-the synthetic source. The gate rejects an unlisted adapter implementation or a
-source file under the adapter tree, and rejects a provider-neutral module that
-directly or transitively reaches a declared root. A supplemental, source-backed
-lexical registry covers provider identifiers such as the LLM drivers; stale
-evidence and identifier leaks also fail the gate. Architecture tests cover all
-three checks. The source path stores generic source identity and opaque cursors,
+The source-boundary manifest names every active provider-owned implementation
+root, including selecting composition, ingress, identity, approval/delivery,
+and synthetic-evaluation code as well as processing adapters. One provider may
+own several explicit roots. The gate rejects an unlisted adapter implementation
+or a source file under the adapter tree, and rejects a provider-neutral module
+that directly or transitively reaches any declared root. The typed
+`LLM_PROVIDER_IDS` source is checked against the registered transport-provider
+set; provider-client declarations not represented there fail, while the
+separately registered `deepseek` model namespace remains lexical evidence for
+the fixed OpenRouter model selection. Stale evidence and identifier leaks also
+fail the gate. Architecture tests include a bland three-hop composition bridge.
+The source path stores generic source identity and opaque cursors,
 and the shared runtime receives explicit source, processor, Layer 4, approval,
 and external-identity bundles instead of selecting a provider.
 
@@ -96,6 +101,11 @@ The reviewed source is covered by:
 - `services/organization-authority/test/composition/openrouter-clean-layer4-runtime.test.ts`;
 - `services/organization-record/test/record-log-v4-append.test.ts`; and
 - the synthetic meeting-source adapter and evaluator tests.
+
+Before evaluation, the synthetic corpus validator rejects a non-exact top-level
+shape, duplicate or empty fixture/atom/case IDs, unresolved required citations,
+invalid status or answer expectations, and citation expectations for withheld
+atoms. The evaluator no longer silently drops an unknown required atom ID.
 
 Enforcement remains partial and this record does not claim full provider
 qualification. Static checks catch names and dependency edges but cannot prove

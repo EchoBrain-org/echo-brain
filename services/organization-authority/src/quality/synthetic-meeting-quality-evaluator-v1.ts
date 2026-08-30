@@ -16,6 +16,7 @@ import {
   SyntheticMeetingSourceAdapterV1,
   syntheticMeetingQualityDocumentsV1,
   syntheticMeetingQualityCorpusV1,
+  validateSyntheticMeetingQualityCorpusV1,
   type SyntheticExpectedSignalV1,
   type SyntheticMeetingQualityCorpusV1,
 } from "./synthetic-meeting-fixture-v1.js";
@@ -242,6 +243,7 @@ async function evaluateLayer4(
     },
 ): Promise<SyntheticMeetingQualityEvaluationV1["layer4"]> {
   const cases: SyntheticLayer4CaseResultV1[] = [];
+  const atomsById = new Map(input.corpus.layer4_atoms.map((atom) => [atom.id, atom]));
   for (const qualityCase of input.corpus.layer4_cases) {
     const layer3 = new SyntheticFixtureLayer4BatchReadPortV1({
       principal_id: qualityCase.principal_id,
@@ -259,9 +261,13 @@ async function evaluateLayer4(
     });
     const result = await answer.answer({ question: qualityCase.question });
     const cited = new Set(result.citations.map((citation) => citation.atom_id));
-    const required = input.corpus.layer4_atoms
-      .filter((atom) => qualityCase.required_citation_atom_ids.includes(atom.id))
-      .map(syntheticFixtureAtomIdV1);
+    const required = qualityCase.required_citation_atom_ids.map((atomId) => {
+      const atom = atomsById.get(atomId);
+      if (atom === undefined) {
+        throw new Error(`synthetic Layer 4 required citation atom id is unknown: ${atomId}`);
+      }
+      return syntheticFixtureAtomIdV1(atom);
+    });
     const withheldText = input.corpus.layer4_atoms
       .filter((atom) => !atom.readable_by_principal_ids.includes(qualityCase.principal_id))
       .map((atom) => atom.text);
@@ -313,6 +319,7 @@ export async function evaluateSyntheticMeetingQualityV1(
   input: SyntheticMeetingQualityEvaluatorInputV1,
 ): Promise<SyntheticMeetingQualityEvaluationV1> {
   const corpus = input.corpus ?? syntheticMeetingQualityCorpusV1;
+  validateSyntheticMeetingQualityCorpusV1(corpus);
   const source =
     input.source ??
     new SyntheticMeetingSourceAdapterV1(

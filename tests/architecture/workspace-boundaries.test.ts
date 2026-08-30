@@ -964,6 +964,7 @@ describe("workspace source boundaries", () => {
         provider_neutral_paths: string[];
         provider_identifier_registry: Array<{
           identifier: string;
+          transport_provider?: boolean;
           source_evidence_paths: string[];
         }>;
         provider_adapter_roots: Array<{
@@ -980,12 +981,12 @@ describe("workspace source boundaries", () => {
       product.adapter_architecture.provider_identifier_registry.map(
         ({ identifier }) => identifier,
       ),
-    ).toEqual(["openrouter", "openai", "anthropic", "ollama"]);
+    ).toEqual(["openrouter", "openai", "anthropic", "ollama", "deepseek"]);
     expect(
       product.adapter_architecture
         .forbid_discovered_adapter_ids_in_provider_neutral_paths,
     ).toBe(true);
-    expect(product.adapter_architecture.provider_adapter_roots).toEqual([
+    expect(product.adapter_architecture.provider_adapter_roots).toEqual(expect.arrayContaining([
       {
         identifier: "granola",
         root: "services/organization-authority/src/processing/adapters/meeting-sources/granola/",
@@ -1002,7 +1003,19 @@ describe("workspace source boundaries", () => {
         identifier: "synthetic-source",
         root: "services/organization-authority/src/quality/synthetic-meeting-fixture-v1.ts",
       },
-    ]);
+      {
+        identifier: "openrouter",
+        root: "services/organization-authority/src/composition/*openrouter*.ts",
+      },
+      {
+        identifier: "slack",
+        root: "services/organization-authority/src/composition/*slack*.ts",
+      },
+      {
+        identifier: "synthetic-source",
+        root: "services/organization-authority/src/composition/synthetic-meeting-quality-cli.ts",
+      },
+    ]));
 
     const probePath =
       "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts";
@@ -1091,6 +1104,21 @@ describe("workspace source boundaries", () => {
     } finally {
       writeFileSync(probe, original);
     }
+
+    const newClient = join(
+      fixture,
+      "services/organization-authority/src/processing/adapters/decision-processors/llm/unregistered-client.ts",
+    );
+    try {
+      writeFileSync(newClient, "export class UnregisteredClient { readonly provider = 'unregistered'; }\n");
+      const result = runBoundary(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        "LLM provider declarations must exactly match LLM_PROVIDER_IDS",
+      );
+    } finally {
+      rmSync(newClient, { force: true });
+    }
   });
 
   it("rejects direct and transitive neutral-module reachability into declared provider roots", () => {
@@ -1127,6 +1155,28 @@ describe("workspace source boundaries", () => {
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stdout + result.stderr).toContain(
         `provider-neutral module reaches declared provider/adapter root 'granola': ${neutralPath} -> ${providerPath}`,
+      );
+    } finally {
+      writeFileSync(neutral, original);
+    }
+  });
+
+  it("rejects a bland three-hop bridge from a neutral root into provider composition", () => {
+    const fixture = fixtureRepository();
+    const neutralPath =
+      "services/organization-authority/src/composition/open-clean-live-runtime.ts";
+    const neutral = join(fixture, neutralPath);
+    const original = readFileSync(neutral, "utf8");
+    const firstBridge = "services/organization-authority/src/composition/bland-bridge-one.ts";
+    const secondBridge = "services/organization-authority/src/composition/bland-bridge-two.ts";
+    try {
+      writeFileSync(join(fixture, secondBridge), 'import "./private-approval-slack-interaction-v1.js";\n');
+      writeFileSync(join(fixture, firstBridge), 'import "./bland-bridge-two.js";\n');
+      writeFileSync(neutral, `${original}\nimport "./bland-bridge-one.js";\n`);
+      const result = runBoundary(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        `provider-neutral module reaches declared provider/adapter root 'slack': ${neutralPath} -> services/organization-authority/src/composition/private-approval-slack-interaction-v1.ts`,
       );
     } finally {
       writeFileSync(neutral, original);

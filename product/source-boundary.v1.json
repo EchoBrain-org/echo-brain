@@ -27,16 +27,104 @@
         "root": "services/organization-authority/src/processing/adapters/meeting-sources/granola/"
       },
       {
+        "identifier": "granola",
+        "root": "services/organization-authority/src/composition/*granola*.ts"
+      },
+      {
+        "identifier": "granola",
+        "root": "services/organization-authority/src/clean-granola-source-main.ts"
+      },
+      {
+        "identifier": "granola",
+        "root": "services/organization-authority/src/composition/clean-founder-cli.ts"
+      },
+      {
+        "identifier": "granola",
+        "root": "services/organization-authority/src/composition/clean-live-cli.ts"
+      },
+      {
         "identifier": "llm",
         "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/"
+      },
+      {
+        "identifier": "openai",
+        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/openai-client.ts"
+      },
+      {
+        "identifier": "anthropic",
+        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/anthropic-client.ts"
+      },
+      {
+        "identifier": "ollama",
+        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/ollama-client.ts"
+      },
+      {
+        "identifier": "openrouter",
+        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/openrouter-client.ts"
+      },
+      {
+        "identifier": "openrouter",
+        "root": "services/organization-authority/src/answer-composition/openrouter-structured-output.ts"
+      },
+      {
+        "identifier": "openrouter",
+        "root": "services/organization-authority/src/composition/*openrouter*.ts"
+      },
+      {
+        "identifier": "deepseek",
+        "root": "services/organization-authority/src/composition/clean-live-llm-processor-config.ts"
       },
       {
         "identifier": "slack",
         "root": "services/organization-authority/src/processing/adapters/shared/slack/"
       },
       {
+        "identifier": "slack",
+        "root": "services/organization-authority/src/composition/*slack*.ts"
+      },
+      {
+        "identifier": "slack",
+        "root": "services/organization-authority/src/composition/private-owner-dm-approval-stager-v1.ts"
+      },
+      {
+        "identifier": "slack",
+        "root": "services/organization-authority/src/composition/*private-approval*.ts"
+      },
+      {
+        "identifier": "slack",
+        "root": "services/organization-authority/src/presentation/private-approval-slack-interactions-http-application-v1.ts"
+      },
+      {
+        "identifier": "slack",
+        "root": "services/organization-authority/src/composition/clean-person-cli.ts"
+      },
+      {
+        "identifier": "slack",
+        "root": "services/organization-authority/src/processing/clean-v1/private-slack-approval-card-poster-v1.ts"
+      },
+      {
+        "identifier": "slack",
+        "root": "services/organization-authority/src/processing/clean-v1-record/private-slack-block-v4-record-writer-v1.ts"
+      },
+      {
         "identifier": "synthetic-source",
         "root": "services/organization-authority/src/quality/synthetic-meeting-fixture-v1.ts"
+      },
+      {
+        "identifier": "synthetic-source",
+        "root": "services/organization-authority/src/quality/synthetic-layer4-fixture-port-v1.ts"
+      },
+      {
+        "identifier": "synthetic-source",
+        "root": "services/organization-authority/src/quality/synthetic-meeting-quality-evaluator-v1.ts"
+      },
+      {
+        "identifier": "synthetic-source",
+        "root": "services/organization-authority/src/composition/synthetic-meeting-quality-cli.ts"
+      },
+      {
+        "identifier": "synthetic-source",
+        "root": "services/organization-authority/src/synthetic-meeting-quality-main.ts"
       }
     ],
     "provider_neutral_paths": [
@@ -69,26 +157,37 @@
     "provider_identifier_registry": [
       {
         "identifier": "openrouter",
+        "transport_provider": true,
         "source_evidence_paths": [
           "services/organization-authority/src/composition/openrouter-clean-layer4-runtime.ts"
         ]
       },
       {
         "identifier": "openai",
+        "transport_provider": true,
         "source_evidence_paths": [
           "services/organization-authority/src/processing/adapters/decision-processors/llm/openai-client.ts"
         ]
       },
       {
         "identifier": "anthropic",
+        "transport_provider": true,
         "source_evidence_paths": [
           "services/organization-authority/src/processing/adapters/decision-processors/llm/anthropic-client.ts"
         ]
       },
       {
         "identifier": "ollama",
+        "transport_provider": true,
         "source_evidence_paths": [
           "services/organization-authority/src/processing/adapters/decision-processors/llm/ollama-client.ts"
+        ]
+      },
+      {
+        "identifier": "deepseek",
+        "transport_provider": false,
+        "source_evidence_paths": [
+          "services/organization-authority/src/composition/clean-live-llm-processor-config.ts"
         ]
       }
     ],

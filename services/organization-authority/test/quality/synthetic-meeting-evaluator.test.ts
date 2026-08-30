@@ -286,6 +286,47 @@ describe("synthetic meeting quality support", () => {
     ).rejects.toThrow(/no explicit extraction expectation/);
   });
 
+  it.each([
+    [
+      "an extra top-level field",
+      (corpus: Record<string, unknown>) => { corpus.unexpected = true; },
+      /invalid top-level shape/,
+    ],
+    [
+      "duplicate atom ids",
+      (corpus: Record<string, unknown>) => {
+        const atoms = corpus.layer4_atoms as Array<Record<string, unknown>>;
+        atoms[1]!.id = atoms[0]!.id;
+      },
+      /atom ids/,
+    ],
+    [
+      "an unresolved citation",
+      (corpus: Record<string, unknown>) => {
+        (corpus.layer4_cases as Array<Record<string, unknown>>)[0]!
+          .required_citation_atom_ids = ["missing-atom"];
+      },
+      /does not resolve exactly once: missing-atom/,
+    ],
+    [
+      "a withheld citation expectation",
+      (corpus: Record<string, unknown>) => {
+        const qualityCase = (corpus.layer4_cases as Array<Record<string, unknown>>)[1]!;
+        qualityCase.required_citation_atom_ids = ["owner-only-approval-default"];
+      },
+      /invalid withheld citation expectations/,
+    ],
+  ])("rejects %s before synthetic evaluation", async (_label, mutate, expected) => {
+    const corpus = structuredClone(syntheticMeetingQualityCorpusV1) as unknown as Record<string, unknown>;
+    mutate(corpus);
+    await expect(
+      evaluateSyntheticMeetingQualityV1({
+        ...evaluatorDependencies(new ExpectedSignalProcessor()),
+        corpus: corpus as unknown as typeof syntheticMeetingQualityCorpusV1,
+      }),
+    ).rejects.toThrow(expected);
+  });
+
   it("rejects a malformed source batch cursor before extraction scoring", async () => {
     const source = syntheticSourceWithPull(async () => ({
       meetings: syntheticMeetingQualityDocumentsV1().slice(0, 1),
