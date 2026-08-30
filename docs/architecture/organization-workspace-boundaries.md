@@ -64,7 +64,7 @@ machine product from silently reappearing outside the Person workspace.
 domain        pure organization and access rules
 application   commands, queries, and transaction ports
 adapters      SQLite, signing, credentials, OIDC, private files
-presentation  JSON routes and server-rendered admin console
+presentation  JSON routes and explicit provider ingress
 composition   configuration and concrete wiring
 processing    meeting core, adapters, admitted-meeting cycle, replay, and durability
 ```

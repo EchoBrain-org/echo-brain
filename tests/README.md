@@ -11,7 +11,7 @@ Tests live at the narrowest active boundary they exercise:
 
 Use `npm test` for the complete active suite. Focused commands include
 `npm run test:person`, `npm run test:authority`, `npm run test:protocols`,
-`npm run test:core`, `npm run test:reference-meeting-processing`, and
+`npm run test:meeting-processing-core`, `npm run test:reference-meeting-processing`, and
 `npm run test:architecture`.
 
 Tests for the retired LaunchAgent machine runtime, local product database,

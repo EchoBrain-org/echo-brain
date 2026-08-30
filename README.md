@@ -76,7 +76,7 @@ Useful focused commands:
 npm run test:person
 npm run test:authority
 npm run test:protocols
-npm run test:core
+npm run test:meeting-processing-core
 npm run test:reference-meeting-processing
 npm run test:architecture
 npm run check:architecture-boundaries

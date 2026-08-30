@@ -16,6 +16,6 @@ Tests live beside the narrowest active component they exercise:
 - state-lineage, record, retrieval, and private Slack approval suites cover
   their named cross-component Authority boundaries.
 
-Use `npm run test:authority` for the workspace, `npm run test:core` for the
-provider-neutral core, and `npm run test:reference-meeting-processing` only for
-the reference cycle.
+Use `npm run test:authority` for the workspace,
+`npm run test:meeting-processing-core` for the provider-neutral core, and
+`npm run test:reference-meeting-processing` only for the reference cycle.
