@@ -40,7 +40,7 @@ Tokens are never printed by successful commands.
 - the append-only organization record; and
 - deterministic, permission-aware record reads and cited answers.
 
-The server starts only from the seven byte-pinned clean baselines. Historical
+The server starts only from the seven byte-pinned baseline schemas. Historical
 migration runners and compatibility APIs are not shipped. Released retrieval
 is the sole content-release boundary. The answer-composition generation path is one
 synchronous Person `ask` path: one bounded plan, one released-retrieval batch,
@@ -178,7 +178,7 @@ does not enable meeting ingestion by itself.
 ### AWS staging slot
 
 The staging controller holds one fixed Cloudflare edge and retained EBS data
-volume around a disposable EC2 host. Its first-live onboarding and three
+volume around a disposable EC2 host. Its initial host onboarding and three
 retained-state host-replacement cycles have passed qualification; this does not
 claim a snapshot restore, GAP-01/#20 closure, or GAP-04 closure. The
 [staging sprint specification](docs/product/2026-08-26-disposable-authority-staging-sprint-v1.md)
@@ -291,7 +291,7 @@ slot from different terminals or machines. For failed-create, rollback, mount,
 and recovery procedures, follow the full staging specification rather than
 deleting or renaming the stack.
 
-### First-live onboarding input transfer
+### Initial host onboarding input transfer
 
 Do not SSH, copy credentials into a terminal, or open a root shell. The first
 staging onboarding input moves through one short-lived, KMS-encrypted and
@@ -398,4 +398,4 @@ before a credential transfer.
 
 Typed ADR, RFC, invariant, and qualification evidence remains as design and
 verification history. Historical executable migrations are intentionally not
-part of the clean product.
+part of the current product.

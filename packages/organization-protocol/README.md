@@ -83,4 +83,4 @@ runtime dependency between the two components.
 
 The package depends only on `@echo-brain/federation-protocol`. It owns no
 transport implementation, persistence, hash-chain storage, key provider, or
-approval delivery runtime.
+approval/delivery implementation.
