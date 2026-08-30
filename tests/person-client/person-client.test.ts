@@ -1568,7 +1568,7 @@ describe("Person client", () => {
       expect(status).toBe(0);
       expect(begins).toHaveLength(2);
       expect(stdout).toContain(
-        "A previous invitation sign-in already completed.",
+        "An existing ECHO identity was found.",
       );
       expect(stdout).toContain('"phase":"installed"');
     });

@@ -320,10 +320,10 @@ async function completePersonLogin(input: {
       ...(browserOpened === undefined ? {} : { browser_opened: browserOpened }),
       instruction: recoveredExistingInvitation
         ? browserOpened === undefined
-          ? "A previous invitation sign-in already completed. Open authorization_url to finish sign-in as the existing identity."
+          ? "An existing ECHO identity was found. Open authorization_url to continue sign-in."
           : browserOpened
-            ? "A previous invitation sign-in already completed. Finish sign-in as the existing identity in the opened browser."
-            : "A previous invitation sign-in already completed. Open authorization_url to finish sign-in as the existing identity."
+            ? "An existing ECHO identity was found. Continue sign-in in the opened browser."
+            : "An existing ECHO identity was found. Open authorization_url to continue sign-in."
         : browserOpened === false
           ? "Open authorization_url to complete sign-in in your browser."
           : browserOpened === true

@@ -32,6 +32,7 @@ import type {
   OpenedCleanPersonExternalIdentityRuntimeV1,
 } from "../src/composition/clean-person-external-identity-runtime.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
+import { MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS } from "../src/domain/person-session-rules.js";
 
 const roots: string[] = [];
 
@@ -322,7 +323,6 @@ describe("clean Person runtime", () => {
           hash: crypto,
           pkce_sealer: crypto,
           oidc_provider: {
-            buildAuthorizationUrl: () => "https://issuer.example/authorize",
             async redeemAuthorizationCode() {
               return { kind: "retryable_before_redemption" };
             },
@@ -426,10 +426,18 @@ describe("clean Person runtime", () => {
           random: crypto,
           hash: crypto,
           pkce_sealer: crypto,
-          oidc_provider: { buildAuthorizationUrl: () => "https://issuer.example/authorize" },
+          oidc_provider: {
+            async redeemAuthorizationCode() {
+              return { kind: "retryable_before_redemption" };
+            },
+          },
         },
       );
-      for (let index = 0; index < 32; index += 1) {
+      for (
+        let index = 0;
+        index < MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS;
+        index += 1
+      ) {
         sessions.beginOidcLogin({ kind: "existing_identity_login" });
       }
       let capacityError: unknown;
@@ -444,7 +452,7 @@ describe("clean Person runtime", () => {
           .prepare("SELECT count(*) FROM authority_oidc_login_attempts")
           .pluck()
           .get(),
-      ).toBe(32);
+      ).toBe(MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS);
 
       now = new Date(Date.parse(now) + 11 * 60 * 1000).toISOString();
       expect(
@@ -463,7 +471,7 @@ describe("clean Person runtime", () => {
           .prepare("SELECT count(*) FROM authority_oidc_login_attempts")
           .pluck()
           .get(),
-      ).toBe(33);
+      ).toBe(MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS + 1);
     } finally {
       database.close();
     }

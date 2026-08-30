@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   validateOrganizationPersonOidcBeginRequest,
@@ -39,6 +40,9 @@ import {
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "./private-approval-interaction-http-application-v1.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
+const OIDC_BEGIN_CLIENT_WINDOW_MS = 60 * 1000;
+const OIDC_BEGIN_CLIENT_LIMIT = 4;
+const MAXIMUM_TRACKED_OIDC_BEGIN_CLIENTS = 1024;
 
 /**
  * Provider ingress is selected at composition time, but it must never take
@@ -120,6 +124,52 @@ interface PendingLoopbackHandoff {
   readonly url: string;
   readonly token: string;
   readonly expires_at: string;
+}
+
+interface OidcBeginClientWindow {
+  readonly started_at: number;
+  readonly count: number;
+}
+
+function isLoopbackAddress(value: string | undefined): boolean {
+  return value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1";
+}
+
+function oidcBeginClient(request: IncomingMessage): string {
+  const peer = request.socket.remoteAddress;
+  const forwarded = request.headers["x-echo-client-ip"];
+  // Authority accepts its public traffic only from the local Caddy proxy.
+  // Caddy writes this dedicated header as one IP, so never trust it from a
+  // non-loopback peer or accept a multi-hop value.
+  if (
+    isLoopbackAddress(peer) &&
+    typeof forwarded === "string" &&
+    !forwarded.includes(",") &&
+    isIP(forwarded) !== 0
+  ) {
+    return forwarded;
+  }
+  return peer ?? "unknown";
+}
+
+function admitOidcBeginClient(
+  windows: Map<string, OidcBeginClientWindow>,
+  client: string,
+  now: number,
+): boolean {
+  for (const [candidate, window] of windows) {
+    if (now - window.started_at >= OIDC_BEGIN_CLIENT_WINDOW_MS)
+      windows.delete(candidate);
+  }
+  const current = windows.get(client);
+  if (current === undefined) {
+    if (windows.size >= MAXIMUM_TRACKED_OIDC_BEGIN_CLIENTS) return false;
+    windows.set(client, { started_at: now, count: 1 });
+    return true;
+  }
+  if (current.count >= OIDC_BEGIN_CLIENT_LIMIT) return false;
+  windows.set(client, { started_at: current.started_at, count: current.count + 1 });
+  return true;
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -372,6 +422,7 @@ export function createCleanPersonHttpServer(
 ): Server {
   validateProviderIngressRoutes(options);
   const handoffs = new Map<string, PendingLoopbackHandoff>();
+  const oidcBeginWindows = new Map<string, OidcBeginClientWindow>();
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
@@ -427,6 +478,18 @@ export function createCleanPersonHttpServer(
         const input = validateOrganizationPersonOidcBeginRequest(
           await body(request),
         );
+        if (
+          !admitOidcBeginClient(
+            oidcBeginWindows,
+            oidcBeginClient(request),
+            Date.now(),
+          )
+        ) {
+          throw new AuthorityOperationError(
+            "rate_limited",
+            "person authentication failed",
+          );
+        }
         const begun = options.sessions.beginOidcLogin(
           input.kind === "identity_bootstrap"
             ? { kind: input.kind, login_grant: input.login_grant }

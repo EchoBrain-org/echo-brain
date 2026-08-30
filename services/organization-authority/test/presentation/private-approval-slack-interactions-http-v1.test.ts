@@ -50,6 +50,63 @@ async function start(
 }
 
 describe("private Slack approval interactions HTTP mount V1", () => {
+  it("limits OIDC begins per loopback-proxied client without blocking another client", async () => {
+    const beginOidcLogin = vi.fn(() => ({
+      login_attempt_id: "ola_00000000-0000-4000-8000-000000000001",
+      issuer: "https://issuer.example",
+      client_id: "client",
+      redirect_uri: "https://authority.example/v2/session/oidc/callback",
+      state: "S".repeat(43),
+      nonce: "N".repeat(43),
+      code_challenge: "C".repeat(43),
+      code_challenge_method: "S256" as const,
+      response_type: "code" as const,
+      scope: "openid email" as const,
+      created_at: "2026-08-18T00:00:00.000Z",
+      expires_at: "2026-08-18T00:10:00.000Z",
+    }));
+    const server = createCleanPersonHttpServer({
+      ...serverOptions(),
+      sessions: { beginOidcLogin } as never,
+      oidc_provider: {
+        buildAuthorizationUrl: () => "https://issuer.example/authorize",
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      server.close();
+      throw new Error("clean HTTP server did not bind TCP");
+    }
+    const origin = `http://127.0.0.1:${String(address.port)}`;
+    const begin = (client: string) =>
+      fetch(`${origin}${PERSON_SESSION_OIDC_BEGIN_PATH}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-echo-client-ip": client,
+        },
+        body: JSON.stringify({ kind: "existing_identity_login" }),
+      });
+    try {
+      for (let index = 0; index < 4; index += 1) {
+        expect((await begin("203.0.113.10")).status).toBe(201);
+      }
+      const throttled = await begin("203.0.113.10");
+      expect(throttled.status).toBe(429);
+      await expect(throttled.json()).resolves.toEqual({
+        error: { code: "rate_limited", message: "request failed" },
+      });
+      expect((await begin("198.51.100.8")).status).toBe(201);
+      expect(beginOidcLogin).toHaveBeenCalledTimes(5);
+    } finally {
+      const closed = once(server, "close");
+      server.close();
+      await closed;
+    }
+  });
+
   it("rejects a provider route that would shadow a core Authority route", () => {
     expect(() =>
       createCleanPersonHttpServer(

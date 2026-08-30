@@ -1175,6 +1175,7 @@ describe("clean founder deployment profile", () => {
 
     for (const caddyfile of caddyfiles) {
       expect(caddyfile).toContain("reverse_proxy 127.0.0.1:39479");
+      expect(caddyfile).toContain("header_up X-Echo-Client-IP {remote_host}");
       for (const forbidden of [
         "X-Echo-Proxy-Authorization",
         "X-Echo-Authenticated-Client-Id",

@@ -1,5 +1,7 @@
 {$ECHO_CLEAN_AUTHORITY_HOST} {
 	route {
-		reverse_proxy 127.0.0.1:39479
+		reverse_proxy 127.0.0.1:39479 {
+			header_up X-Echo-Client-IP {remote_host}
+		}
 	}
 }
