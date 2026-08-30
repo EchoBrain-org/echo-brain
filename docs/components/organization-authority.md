@@ -74,6 +74,17 @@ input, or delivery payload until an audited resolution admits it. Central state
 must not accept unrestricted provider payloads or bypass that pending-only
 boundary.
 
+## Provider identity-link composition
+
+The current Slack Person identity-link capability is intentionally split inside
+Authority composition: `slack-person-identity-link-workflow-v1` owns the
+authenticated challenge and proof workflow, while
+`sqlite-slack-person-identity-link-repository-v1` owns the SQLite-backed
+repository and its factory. The workflow remains in composition rather than
+`application/` because it coordinates the Slack provider, organization secret,
+and persistence port; moving those dependencies inward would weaken the
+Authority boundary.
+
 ## Current references
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)

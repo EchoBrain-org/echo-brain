@@ -26,7 +26,7 @@ import {
   organizationControlBaselineSha256V1,
   organizationControlBaselineSha256V2,
 } from "../src/persistence/baseline.js";
-import { openOrganizationControlDatabase } from "../src/persistence/open-unmigrated-database.js";
+import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 import type { CleanSlackConnectionVerifierV1 } from "../src/persistence/sqlite-clean-slack-connection-v1.js";
 import { verifyCleanControlPlaneStateV1 } from "../src/persistence/verified-clean-control-plane-state-v1.js";
 

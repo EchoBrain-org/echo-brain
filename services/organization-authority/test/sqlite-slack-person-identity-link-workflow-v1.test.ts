@@ -3,13 +3,13 @@ import { once } from "node:events";
 import Database from "better-sqlite3";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
-import type { CleanSlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
+import type { SlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOrganizationControlBaselineV1 } from "../../organization-control-plane/src/persistence/baseline.js";
 import { connectCleanSlackV1 } from "../../organization-control-plane/src/persistence/sqlite-clean-slack-connection-v1.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { ReadableSearchAuthorizationFence } from "../src/application/readable-search-authorization-fence.js";
-import { createPersonSlackIdentityLinkServiceV1 } from "../src/composition/person-slack-identity-link-service.js";
+import { createSqliteSlackPersonIdentityLinkWorkflowV1 } from "../src/composition/sqlite-slack-person-identity-link-repository-v1.js";
 import { createSlackExternalIdentityHttpApplicationV1 } from "../src/composition/slack-person-external-identity-runtime.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 
@@ -69,7 +69,7 @@ async function setup(
       NOW,
     );
 
-  const slack: CleanSlackIdentityProviderV1 = {
+  const slack: SlackIdentityProviderV1 = {
     verifyConnection: vi.fn(async () => ({
       team_id: "T12345678",
       enterprise_id: null,
@@ -137,7 +137,7 @@ async function setup(
   return {
     database,
     slack,
-    application: createPersonSlackIdentityLinkServiceV1({
+    application: createSqliteSlackPersonIdentityLinkWorkflowV1({
       database,
       authority_id: AUTHORITY_ID,
       organization_id: ORGANIZATION_ID,

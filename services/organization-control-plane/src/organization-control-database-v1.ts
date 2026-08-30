@@ -8,4 +8,4 @@ export {
   organizationControlBaselineSha256V1,
   organizationControlBaselineSha256V2,
 } from "./persistence/baseline.js";
-export { openOrganizationControlDatabase } from "./persistence/open-unmigrated-database.js";
+export { openOrganizationControlDatabase } from "./persistence/open-organization-control-database.js";

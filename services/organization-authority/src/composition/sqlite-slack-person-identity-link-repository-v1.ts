@@ -22,15 +22,15 @@ import {
   type OrganizationToolConnectionStateV2,
   type PendingPersonSlackIdentityLinkChallenge,
   type PersonSlackIdentityLinkSession,
-  type CleanSlackIdentityProviderV1,
+  type SlackIdentityProviderV1,
 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import type Database from "better-sqlite3";
 import { ReadableSearchAuthorizationFence } from "../application/readable-search-authorization-fence.js";
 import {
-  PersonSlackIdentityLinkService,
-  type PersonSlackIdentityLinkAuthenticationPort,
-  type PersonSlackIdentityLinkRepositoryPort,
-} from "./person-slack-identity-link.js";
+  SlackPersonIdentityLinkWorkflowV1,
+  type SlackPersonIdentityLinkAuthenticationPort,
+  type SlackPersonIdentityLinkRepositoryPort,
+} from "./slack-person-identity-link-workflow-v1.js";
 
 const CHALLENGE_LIFETIME_MS = 15 * 60 * 1000;
 
@@ -49,20 +49,20 @@ export interface SlackBotTokenAccessV1 {
   }): string;
 }
 
-export interface CreatePersonSlackIdentityLinkServiceV1Input {
+export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
   readonly database: Database.Database;
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
   /** Runtime configuration, bound to the stored public configuration digest. */
   readonly approval_channel_id: string;
-  readonly authentication: PersonSlackIdentityLinkAuthenticationPort;
+  readonly authentication: SlackPersonIdentityLinkAuthenticationPort;
   /** Current membership data remains Authority-owned, not copied into D2. */
   readonly membership_type: (input: {
     readonly principal_id: string;
     readonly membership_id: string;
   }) => "employee" | "owner";
-  readonly slack: CleanSlackIdentityProviderV1;
+  readonly slack: SlackIdentityProviderV1;
   readonly slack_token_access: SlackBotTokenAccessV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
   readonly now?: () => string;
@@ -170,13 +170,13 @@ function sameTool(
 }
 
 /**
- * New-lineage repository adapter. It persists only challenge and identity-link
+ * SQLite repository adapter. It persists only challenge and identity-link
  * state in the frozen D2 baseline; authentication and token retrieval remain
  * Authority/runtime ports.
  */
-class PersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLinkRepositoryPort {
+class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLinkRepositoryPort {
   constructor(
-    private readonly options: CreatePersonSlackIdentityLinkServiceV1Input,
+    private readonly options: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input,
   ) {}
 
   activeSlackOrganizationTool(): ActiveSlackOrganizationTool | null {
@@ -822,17 +822,17 @@ class PersonSlackIdentityLinkRepositoryV1 implements PersonSlackIdentityLinkRepo
   }
 }
 
-/** Factory for clean runtime composition; it does not open a listener itself. */
-export function createPersonSlackIdentityLinkServiceV1(
-  input: CreatePersonSlackIdentityLinkServiceV1Input,
-): PersonSlackIdentityLinkService {
-  const repository = new PersonSlackIdentityLinkRepositoryV1(input);
+/** Creates the SQLite-backed workflow for Slack external-identity routes. */
+export function createSqliteSlackPersonIdentityLinkWorkflowV1(
+  input: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input,
+): SlackPersonIdentityLinkWorkflowV1 {
+  const repository = new SqliteSlackPersonIdentityLinkRepositoryV1(input);
   const secrets: Pick<OrganizationSecretStore, "read"> = {
     read(reference) {
       return repository.readSlackToken(reference);
     },
   };
-  return new PersonSlackIdentityLinkService({
+  return new SlackPersonIdentityLinkWorkflowV1({
     authority_id: input.authority_id,
     organization_id: input.organization_id,
     authentication: input.authentication,

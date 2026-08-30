@@ -11,7 +11,7 @@ import {
   organizationControlBaselineSha256V1,
   organizationControlBaselineSqlV1,
 } from "../src/persistence/baseline.js";
-import { openOrganizationControlDatabase } from "../src/persistence/open-unmigrated-database.js";
+import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 
 const directories: string[] = [];
 const TABLE_COLUMNS = {

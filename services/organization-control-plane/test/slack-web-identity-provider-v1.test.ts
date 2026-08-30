@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  CleanSlackWebIdentityProviderV1,
-} from "../src/adapters/slack/clean-slack-web-identity-provider-v1.js";
+  SlackWebIdentityProviderV1,
+} from "../src/adapters/slack/slack-web-identity-provider-v1.js";
 
 const TOKEN = "xoxb-test-token-12345678";
 const CONNECTION = {
@@ -127,9 +127,9 @@ function observedHuman() {
   };
 }
 
-describe("CleanSlackWebIdentityProviderV1", () => {
+describe("SlackWebIdentityProviderV1", () => {
   it("verifies a connected bot and public organization channel", async () => {
-    const provider = new CleanSlackWebIdentityProviderV1({
+    const provider = new SlackWebIdentityProviderV1({
       fetch: slackFetch(CONNECTION, { ok: true, bot: BOT }, { ok: true, channel: CHANNEL }),
     });
 
@@ -162,7 +162,7 @@ describe("CleanSlackWebIdentityProviderV1", () => {
         message: challengeParent(),
       },
     );
-    const provider = new CleanSlackWebIdentityProviderV1({ fetch });
+    const provider = new SlackWebIdentityProviderV1({ fetch });
 
     await expect(
       provider.postIdentityLinkChallenge(TOKEN, CHALLENGE),
@@ -185,7 +185,7 @@ describe("CleanSlackWebIdentityProviderV1", () => {
   });
 
   it("observes exactly one human reply in the bound challenge thread", async () => {
-    const provider = new CleanSlackWebIdentityProviderV1({
+    const provider = new SlackWebIdentityProviderV1({
       fetch: slackFetch(
         CONNECTION,
         { ok: true, bot: BOT },
@@ -216,7 +216,7 @@ describe("CleanSlackWebIdentityProviderV1", () => {
       ),
     ],
   ])("rejects %s", async (_label, thread) => {
-    const provider = new CleanSlackWebIdentityProviderV1({
+    const provider = new SlackWebIdentityProviderV1({
       fetch: slackFetch(CONNECTION, { ok: true, bot: BOT }, thread),
     });
 
@@ -226,7 +226,7 @@ describe("CleanSlackWebIdentityProviderV1", () => {
   });
 
   it("rejects a challenge when its expected connection has changed", async () => {
-    const provider = new CleanSlackWebIdentityProviderV1({
+    const provider = new SlackWebIdentityProviderV1({
       fetch: slackFetch(
         { ...CONNECTION, team_id: "T999OTHER" },
         { ok: true, bot: BOT },

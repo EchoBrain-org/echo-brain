@@ -20,7 +20,7 @@ const CHALLENGE_CODE = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 const MAXIMUM_CHALLENGE_LIFETIME_MS = 15 * 60 * 1_000;
 const MAXIMUM_CHALLENGE_THREAD_MESSAGES = 100;
 
-export type CleanSlackIdentityProviderV1 = Pick<
+export type SlackIdentityProviderV1 = Pick<
   SlackIntegrationProvider,
   | "verifyConnection"
   | "verifyHuman"
@@ -29,14 +29,14 @@ export type CleanSlackIdentityProviderV1 = Pick<
   | "observeIdentityLinkChallenge"
 >;
 
-export class CleanSlackIdentityProviderErrorV1 extends Error {
+export class SlackIdentityProviderErrorV1 extends Error {
   constructor(
     message: string,
     readonly code:
       "unauthorized" | "unavailable" | "invalid_response" | "not_observed",
   ) {
     super(message);
-    this.name = "CleanSlackIdentityProviderErrorV1";
+    this.name = "SlackIdentityProviderErrorV1";
   }
 }
 
@@ -86,7 +86,7 @@ function requiredSlackUserId(value: unknown, label: string): string {
 
 function requiredTimestamp(value: unknown, label: string): number {
   if (typeof value !== "string") {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       `Slack ${label} is invalid`,
       "invalid_response",
     );
@@ -96,7 +96,7 @@ function requiredTimestamp(value: unknown, label: string): number {
     !Number.isSafeInteger(milliseconds) ||
     new Date(milliseconds).toISOString() !== value
   ) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       `Slack ${label} is invalid`,
       "invalid_response",
     );
@@ -106,7 +106,7 @@ function requiredTimestamp(value: unknown, label: string): number {
 
 function slackTimestampMicroseconds(value: unknown, label: string): bigint {
   if (typeof value !== "string" || !SLACK_TIMESTAMP.test(value)) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       `Slack ${label} is invalid`,
       "invalid_response",
     );
@@ -124,13 +124,13 @@ function validateIdentityLinkChallenge(
     (!SLACK_ID.test(input.expected_enterprise_id) ||
       !input.expected_enterprise_id.startsWith("E"))
   ) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack expected enterprise_id is invalid",
       "invalid_response",
     );
   }
   if (!SLACK_USER_ID.test(input.expected_bot_user_id)) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack expected bot user_id is invalid",
       "invalid_response",
     );
@@ -141,14 +141,14 @@ function validateIdentityLinkChallenge(
     (!SLACK_ID.test(input.expected_app_id) ||
       !input.expected_app_id.startsWith("A"))
   ) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack expected app_id is invalid",
       "invalid_response",
     );
   }
   requiredId(input.channel_id, "challenge channel_id", "C");
   if (!CONNECTION_ATTEMPT_ID.test(input.challenge_attempt_id)) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack identity-link challenge attempt is invalid",
       "invalid_response",
     );
@@ -165,7 +165,7 @@ function validateIdentityLinkChallenge(
     expiresMilliseconds <= issuedMilliseconds ||
     expiresMilliseconds - issuedMilliseconds > MAXIMUM_CHALLENGE_LIFETIME_MS
   ) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack identity-link challenge lifetime is invalid",
       "invalid_response",
     );
@@ -194,7 +194,7 @@ function verifyChallengeBlocks(
   text: string,
 ): void {
   if (!Array.isArray(value) || value.length !== 1) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack identity-link challenge marker is unavailable",
       "invalid_response",
     );
@@ -207,7 +207,7 @@ function verifyChallengeBlocks(
     blockText.type !== "mrkdwn" ||
     blockText.text !== text
   ) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack identity-link challenge marker changed",
       "unauthorized",
     );
@@ -233,7 +233,7 @@ async function readBoundedResponseBytes(
   response: Response,
 ): Promise<Uint8Array> {
   if (response.body === null) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack returned an empty verification response",
       "invalid_response",
     );
@@ -247,7 +247,7 @@ async function readBoundedResponseBytes(
       try {
         read = await reader.read();
       } catch {
-        throw new CleanSlackIdentityProviderErrorV1(
+        throw new SlackIdentityProviderErrorV1(
           "Slack integration verification is unavailable",
           "unavailable",
         );
@@ -258,7 +258,7 @@ async function readBoundedResponseBytes(
         try {
           await reader.cancel();
         } catch {}
-        throw new CleanSlackIdentityProviderErrorV1(
+        throw new SlackIdentityProviderErrorV1(
           "Slack returned an oversized verification response",
           "invalid_response",
         );
@@ -269,7 +269,7 @@ async function readBoundedResponseBytes(
     reader.releaseLock();
   }
   if (totalBytes === 0) {
-    throw new CleanSlackIdentityProviderErrorV1(
+    throw new SlackIdentityProviderErrorV1(
       "Slack returned an empty verification response",
       "invalid_response",
     );
@@ -284,10 +284,10 @@ async function readBoundedResponseBytes(
 }
 
 /**
- * Clean founder Slack provider. It deliberately omits reaction verification
- * and therefore never loads the retired installation/lease policy grammars.
+ * Slack web identity provider. It deliberately omits reaction verification
+ * and therefore never loads retained installation/lease policy grammars.
  */
-export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProviderV1 {
+export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
@@ -316,7 +316,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
     signal?: AbortSignal,
   ): Promise<SlackResponse> {
     if (!/^xoxb-[A-Za-z0-9-]{8,}$/.test(token)) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack bot credential is invalid",
         "unauthorized",
       );
@@ -338,7 +338,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
         signal: combined,
       });
     } catch {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack integration verification is unavailable",
         "unavailable",
       );
@@ -349,7 +349,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       (declared !== null &&
         (!/^\d+$/.test(declared) || Number(declared) > MAXIMUM_RESPONSE_BYTES))
     ) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack integration verification failed",
         response.status === 401 ? "unauthorized" : "unavailable",
       );
@@ -361,7 +361,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
         new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       ) as unknown;
     } catch {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack returned invalid JSON",
         "invalid_response",
       );
@@ -383,7 +383,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
         error === "no_permission" ||
         error === "not_in_channel" ||
         error === "team_access_not_granted";
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack rejected the integration verification request",
         unauthorized
           ? "unauthorized"
@@ -405,13 +405,13 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
   ): Promise<VerifiedSlackConnection> {
     const authTest = await this.call(token, "auth.test", {}, signal);
     if (authTest.scopes === null) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack did not report the granted OAuth scopes",
         "invalid_response",
       );
     }
     if (!authTest.scopes.includes("users:read")) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack connection cannot verify its app identity without users:read",
         "unauthorized",
       );
@@ -436,25 +436,25 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       observedBotUserId = requiredSlackUserId(bot.user_id, "bot.user_id");
       appId = requiredId(bot.app_id, "bot.app_id", "A");
     } catch {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack bots.info response does not prove an app identity",
         "invalid_response",
       );
     }
     if (bot.deleted !== false) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack bot is deleted or has an invalid deletion state",
         bot.deleted === true ? "unauthorized" : "invalid_response",
       );
     }
     if (observedBotId !== botId || observedBotUserId !== botUserId) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack bot identity does not match auth.test",
         "unauthorized",
       );
     }
     if (authTestAppId !== null && authTestAppId !== appId) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack app identity does not match auth.test",
         "unauthorized",
       );
@@ -499,7 +499,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       connection.bot_id !== input.expected_bot_id ||
       connection.app_id !== input.expected_app_id
     ) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack connection identity changed",
         "unauthorized",
       );
@@ -541,7 +541,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       channel.is_ext_shared !== false ||
       channel.is_pending_ext_shared !== false
     ) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack channel is not an eligible public organization channel",
         "invalid_response",
       );
@@ -553,7 +553,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       channel.is_read_only === true ||
       channel.is_thread_only === true
     ) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack bot is not an active member of the selected channel",
         "not_observed",
       );
@@ -602,13 +602,13 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       typeof isBot !== "boolean" ||
       typeof isAppUser !== "boolean"
     ) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack reviewer type flags are invalid",
         "invalid_response",
       );
     }
     if (observedUserId !== userId || deleted || isBot) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack reviewer is unavailable or is not a human user",
         "unauthorized",
       );
@@ -670,7 +670,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       (input.expected_app_id !== null &&
         message.app_id !== input.expected_app_id)
     ) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack did not return the exact bot-authored identity-link challenge",
         "invalid_response",
       );
@@ -690,7 +690,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
   ): Promise<ObservedSlackIdentityLinkChallenge> {
     const challenge = validateIdentityLinkChallenge(input);
     if (!CHALLENGE_CODE.test(input.challenge_code)) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack identity-link challenge code is invalid",
         "invalid_response",
       );
@@ -720,14 +720,14 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       messages.length === 0 ||
       messages.length > MAXIMUM_CHALLENGE_THREAD_MESSAGES
     ) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack identity-link challenge thread is invalid",
         "invalid_response",
       );
     }
     const hasMore = response.value.has_more;
     if (hasMore !== undefined && typeof hasMore !== "boolean") {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack identity-link challenge pagination is invalid",
         "invalid_response",
       );
@@ -743,7 +743,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
         metadata.next_cursor !== undefined &&
         typeof metadata.next_cursor !== "string"
       ) {
-        throw new CleanSlackIdentityProviderErrorV1(
+        throw new SlackIdentityProviderErrorV1(
           "Slack identity-link challenge cursor is invalid",
           "invalid_response",
         );
@@ -751,7 +751,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       nextCursor = (metadata.next_cursor as string | undefined) ?? "";
     }
     if (hasMore === true || nextCursor.length > 0) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack identity-link challenge thread exceeds the verification bound",
         "not_observed",
       );
@@ -773,7 +773,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
       (input.expected_app_id !== null &&
         parent.app_id !== input.expected_app_id)
     ) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack identity-link challenge parent changed",
         "unauthorized",
       );
@@ -809,12 +809,12 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
           continue;
         matchingReplies.push({ userId, replyMessageTs });
       } catch (error) {
-        if (error instanceof CleanSlackIdentityProviderErrorV1) continue;
+        if (error instanceof SlackIdentityProviderErrorV1) continue;
         throw error;
       }
     }
     if (matchingReplies.length !== 1 || matchingReplies[0] === undefined) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack did not expose exactly one eligible identity-link reply",
         "not_observed",
       );
@@ -822,7 +822,7 @@ export class CleanSlackWebIdentityProviderV1 implements CleanSlackIdentityProvid
     const match = matchingReplies[0];
     const human = await this.verifyHuman(token, match.userId, signal);
     if (human.team_id !== input.expected_team_id) {
-      throw new CleanSlackIdentityProviderErrorV1(
+      throw new SlackIdentityProviderErrorV1(
         "Slack identity-link reply came from another workspace",
         "unauthorized",
       );

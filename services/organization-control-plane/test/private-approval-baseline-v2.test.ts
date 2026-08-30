@@ -5,7 +5,7 @@ import {
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
   organizationControlBaselineSha256V2,
 } from "../src/persistence/baseline.js";
-import { openOrganizationControlDatabase } from "../src/persistence/open-unmigrated-database.js";
+import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 
 const ORGANIZATION_CONTROL_BASELINE_SHA256_V2 =
   "sha256:477d32c5ffacc8207661498770965e6800bf46990d06ba55518c7c608b267d9d";

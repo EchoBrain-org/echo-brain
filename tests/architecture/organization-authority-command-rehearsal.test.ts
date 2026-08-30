@@ -9,7 +9,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import type { CleanSlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
+import type { SlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { runCleanSlackConnectCli } from "../../services/organization-control-plane/src/composition/clean-slack-connect-cli.js";
 import { verifyCleanControlPlaneStateV1 } from "../../services/organization-control-plane/src/persistence/verified-clean-control-plane-state-v1.js";
 import { afterEach, describe, expect, it } from "vitest";
@@ -113,7 +113,7 @@ class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
   }
 }
 
-const fakeSlack: CleanSlackIdentityProviderV1 = {
+const fakeSlack: SlackIdentityProviderV1 = {
   verifyConnection: async () => ({
     team_id: "T12345678",
     enterprise_id: null,

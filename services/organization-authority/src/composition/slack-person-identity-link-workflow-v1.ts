@@ -21,23 +21,23 @@ import type {
   CompletedPersonSlackIdentityLink,
   OrganizationSecretStore,
   PendingPersonSlackIdentityLinkChallenge,
-  CleanSlackIdentityProviderV1,
+  SlackIdentityProviderV1,
 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import {
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-  CleanSlackIdentityProviderErrorV1,
+  SlackIdentityProviderErrorV1,
 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { ReadableSearchAuthorizationFence } from "../application/readable-search-authorization-fence.js";
 
-export interface PersonSlackIdentityLinkAuthenticationPort {
+export interface SlackPersonIdentityLinkAuthenticationPort {
   authenticateAccess(input: {
     readonly access_token: string;
   }): PersonAccessAuthorization;
 }
 
-export interface PersonSlackIdentityLinkRepositoryPort {
+export interface SlackPersonIdentityLinkRepositoryPort {
   activeSlackOrganizationTool(): ActiveSlackOrganizationTool | null;
   personSlackIdentityLinkBeginReplay?(input: {
     readonly request_id: string;
@@ -88,13 +88,13 @@ export interface PersonSlackIdentityLinkRepositoryPort {
   ): CompletedPersonSlackIdentityLink;
 }
 
-export interface PersonSlackIdentityLinkServiceOptions {
+export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
   readonly authority_id: string;
   readonly organization_id: string;
-  readonly authentication: PersonSlackIdentityLinkAuthenticationPort;
-  readonly repository: PersonSlackIdentityLinkRepositoryPort;
+  readonly authentication: SlackPersonIdentityLinkAuthenticationPort;
+  readonly repository: SlackPersonIdentityLinkRepositoryPort;
   readonly secrets: OrganizationSecretStore;
-  readonly slack: CleanSlackIdentityProviderV1;
+  readonly slack: SlackIdentityProviderV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
   readonly now?: () => string;
 }
@@ -167,9 +167,9 @@ type SlackProviderFailureCode =
 function slackProviderFailureCode(
   error: unknown,
 ): SlackProviderFailureCode | null {
-  if (error instanceof CleanSlackIdentityProviderErrorV1) return error.code;
-  // Legacy composition still supplies the original provider. Preserve its
-  // public error mapping without importing that provider into this clean path.
+  if (error instanceof SlackIdentityProviderErrorV1) return error.code;
+  // A retained compatibility composition can supply the original provider.
+  // Preserve its public error mapping without importing it here.
   const legacy = error as unknown as { readonly code?: unknown };
   if (
     error instanceof Error &&
@@ -227,10 +227,16 @@ function repositoryOperation<T>(operation: () => T): T {
   }
 }
 
-/** Bearer-authenticated Person-to-Slack identity proof; it grants nothing. */
-export class PersonSlackIdentityLinkService {
+/**
+ * Bearer-authenticated Person-to-Slack identity proof; it grants nothing.
+ *
+ * This remains a composition workflow because it coordinates a Slack provider,
+ * an organization secret, and a persistence port. Moving it into
+ * `application/` would weaken the Authority's inward dependency boundary.
+ */
+export class SlackPersonIdentityLinkWorkflowV1 {
   constructor(
-    private readonly options: PersonSlackIdentityLinkServiceOptions,
+    private readonly options: SlackPersonIdentityLinkWorkflowOptionsV1,
   ) {}
 
   async begin(
@@ -333,7 +339,7 @@ export class PersonSlackIdentityLinkService {
     }
 
     let posted: Awaited<
-      ReturnType<CleanSlackIdentityProviderV1["postIdentityLinkChallenge"]>
+      ReturnType<SlackIdentityProviderV1["postIdentityLinkChallenge"]>
     >;
     try {
       posted = await this.options.slack.postIdentityLinkChallenge(
@@ -470,7 +476,7 @@ export class PersonSlackIdentityLinkService {
     );
     const token = this.readToolSecret(activeTool);
     let observed: Awaited<
-      ReturnType<CleanSlackIdentityProviderV1["observeIdentityLinkChallenge"]>
+      ReturnType<SlackIdentityProviderV1["observeIdentityLinkChallenge"]>
     >;
     try {
       observed = await this.options.slack.observeIdentityLinkChallenge(
@@ -495,7 +501,7 @@ export class PersonSlackIdentityLinkService {
     }
 
     let currentChannel: Awaited<
-      ReturnType<CleanSlackIdentityProviderV1["verifyChannel"]>
+      ReturnType<SlackIdentityProviderV1["verifyChannel"]>
     >;
     try {
       currentChannel = await this.options.slack.verifyChannel(
@@ -579,9 +585,9 @@ export class PersonSlackIdentityLinkService {
     signal?: AbortSignal,
   ): Promise<{
     connection: Awaited<
-      ReturnType<CleanSlackIdentityProviderV1["verifyConnection"]>
+      ReturnType<SlackIdentityProviderV1["verifyConnection"]>
     >;
-    channel: Awaited<ReturnType<CleanSlackIdentityProviderV1["verifyChannel"]>>;
+    channel: Awaited<ReturnType<SlackIdentityProviderV1["verifyChannel"]>>;
   }> {
     try {
       const connection = await this.options.slack.verifyConnection(
@@ -612,10 +618,10 @@ export class PersonSlackIdentityLinkService {
     tool: ActiveSlackOrganizationTool,
     verified: {
       connection: Awaited<
-        ReturnType<CleanSlackIdentityProviderV1["verifyConnection"]>
+        ReturnType<SlackIdentityProviderV1["verifyConnection"]>
       >;
       channel: Awaited<
-        ReturnType<CleanSlackIdentityProviderV1["verifyChannel"]>
+        ReturnType<SlackIdentityProviderV1["verifyChannel"]>
       >;
     },
   ): boolean {

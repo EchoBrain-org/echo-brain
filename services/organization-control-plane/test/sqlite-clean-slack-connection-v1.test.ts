@@ -12,7 +12,7 @@ import {
 } from "../src/application/contracts.js";
 import { canonicalSha256 } from "../src/canonical/canonical-json.js";
 import { applyOrganizationControlBaselineV1 } from "../src/persistence/baseline.js";
-import { openOrganizationControlDatabase } from "../src/persistence/open-unmigrated-database.js";
+import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 import {
   CleanSlackConnectionConflictError,
   connectCleanSlackV1,

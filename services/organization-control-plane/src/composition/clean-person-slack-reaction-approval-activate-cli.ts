@@ -8,7 +8,7 @@ import {
 } from "../application/person-slack-reaction-approval-contracts-v2.js";
 import { activatePersonSlackReactionApprovalV2 } from "../application/person-slack-reaction-approval-activation-v2.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
-import { openOrganizationControlDatabase } from "../persistence/open-unmigrated-database.js";
+import { openOrganizationControlDatabase } from "../persistence/open-organization-control-database.js";
 import { CleanStoppedStateAuthorityAdministratorFenceV1 } from "../persistence/clean-stopped-state-authority-administrator-fence-v1.js";
 import {
   selectCurrentOwnerSlackReactionApprovalTargetV1,

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { CleanSlackWebIdentityProviderV1 } from "../adapters/slack/clean-slack-web-identity-provider-v1.js";
+import { SlackWebIdentityProviderV1 } from "../adapters/slack/slack-web-identity-provider-v1.js";
 import { canonicalJson } from "../canonical/canonical-json.js";
-import { openOrganizationControlDatabase } from "../persistence/open-unmigrated-database.js";
+import { openOrganizationControlDatabase } from "../persistence/open-organization-control-database.js";
 import {
   connectCleanSlackV1,
   type CleanSlackConnectionVerifierV1,
@@ -40,7 +40,7 @@ const PROCESS_IO: CleanSlackConnectCliIo = {
 
 const DEFAULT_DEPENDENCIES: CleanSlackConnectCliDependencies = {
   verify_state: verifyCleanControlPlaneStateV1,
-  create_verifier: () => new CleanSlackWebIdentityProviderV1(),
+  create_verifier: () => new SlackWebIdentityProviderV1(),
   now: () => new Date().toISOString(),
 };
 

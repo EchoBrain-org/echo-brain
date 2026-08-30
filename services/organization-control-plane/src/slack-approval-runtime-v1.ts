@@ -3,7 +3,7 @@
  * Authority. This includes the retained reaction approval compatibility path
  * and the current private-DM approval path.
  */
-export { openOrganizationControlDatabase } from "./persistence/open-unmigrated-database.js";
+export { openOrganizationControlDatabase } from "./persistence/open-organization-control-database.js";
 export * from "./record-visibility-policy-contracts-v1.js";
 export {
   validatePersonSlackReactionApprovalBindingContractV2,

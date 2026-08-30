@@ -15,10 +15,10 @@ export {
   type PersonSlackIdentityLinkSession,
 } from "./application/contracts.js";
 export {
-  CleanSlackIdentityProviderErrorV1,
-  CleanSlackWebIdentityProviderV1,
-  type CleanSlackIdentityProviderV1,
-} from "./adapters/slack/clean-slack-web-identity-provider-v1.js";
+  SlackIdentityProviderErrorV1,
+  SlackWebIdentityProviderV1,
+  type SlackIdentityProviderV1,
+} from "./adapters/slack/slack-web-identity-provider-v1.js";
 export { FileOrganizationSecretStore } from "./security/file-secret-store.js";
 export {
   buildExternalHumanIdentityLinkContractV2,

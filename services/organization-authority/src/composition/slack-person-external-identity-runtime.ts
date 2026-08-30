@@ -7,8 +7,8 @@ import {
 } from "@echo-brain/organization-api";
 import {
   FileOrganizationSecretStore,
-  CleanSlackWebIdentityProviderV1,
-  type CleanSlackIdentityProviderV1,
+  SlackWebIdentityProviderV1,
+  type SlackIdentityProviderV1,
 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { ReadableSearchAuthorizationFence } from "../application/readable-search-authorization-fence.js";
@@ -17,7 +17,7 @@ import type {
   PersonExternalIdentityHttpRequestV1,
   PersonExternalIdentityLinkHttpApplicationV1,
 } from "../presentation/person-external-identity-link-http-application.js";
-import { createPersonSlackIdentityLinkServiceV1 } from "./person-slack-identity-link-service.js";
+import { createSqliteSlackPersonIdentityLinkWorkflowV1 } from "./sqlite-slack-person-identity-link-repository-v1.js";
 import type {
   PersonExternalIdentityRuntimeBundleV1,
   PersonExternalIdentityRuntimeInputV1,
@@ -103,7 +103,7 @@ function unavailableSlackIdentityApplication(): PersonExternalIdentityLinkHttpAp
  */
 export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
   readonly identity_link_channel_id?: string;
-  readonly provider?: CleanSlackIdentityProviderV1;
+  readonly provider?: SlackIdentityProviderV1;
 }): PersonExternalIdentityRuntimeBundleV1 {
   return Object.freeze({
     open(
@@ -120,7 +120,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
         { fileMustExist: true },
       );
       try {
-        const application = createPersonSlackIdentityLinkServiceV1({
+        const application = createSqliteSlackPersonIdentityLinkWorkflowV1({
           database,
           authority_id: runtime.authority_id,
           organization_id: runtime.organization_id,
@@ -129,7 +129,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           approval_channel_id: input.identity_link_channel_id,
           authentication: runtime.authentication,
           membership_type: runtime.membership_type,
-          slack: input.provider ?? new CleanSlackWebIdentityProviderV1(),
+          slack: input.provider ?? new SlackWebIdentityProviderV1(),
           slack_token_access: {
             readActiveSlackBotToken: ({ state }) => {
               const secrets = new FileOrganizationSecretStore(

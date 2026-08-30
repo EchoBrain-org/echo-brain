@@ -26,7 +26,7 @@ import {
   applyOrganizationControlBaselineV2,
   organizationControlBaselineSha256V2,
 } from "../src/persistence/baseline.js";
-import { openOrganizationControlDatabase } from "../src/persistence/open-unmigrated-database.js";
+import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 
 const directories: string[] = [];
 const COORDINATES = Object.freeze({
