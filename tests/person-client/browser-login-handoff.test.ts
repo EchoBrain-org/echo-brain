@@ -64,11 +64,38 @@ describe("Person loopback browser handoff", () => {
       });
 
       expect(result.response_headers.connection).toBe("close");
-      await expect(handoff.wait()).resolves.toEqual(session);
+      await expect(handoff.wait()).resolves.toEqual({
+        kind: "session",
+        session,
+      });
       await settlesPromptly(result.connection_closed);
       await handoff.close();
     } finally {
       agent.destroy();
+      await handoff.close();
+    }
+  });
+  it("accepts the Authority's token-authenticated identity-not-bound terminal handoff", async () => {
+    const handoff = await startPersonLoopbackHandoff({});
+    try {
+      const response = await fetch(handoff.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          token: handoff.token,
+          error: "identity_not_bound",
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("Sign-in could not be completed");
+      await expect(handoff.wait()).resolves.toEqual({
+        kind: "error",
+        code: "identity_not_bound",
+      });
+    } finally {
       await handoff.close();
     }
   });

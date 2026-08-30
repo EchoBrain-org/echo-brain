@@ -331,12 +331,23 @@ async function completePersonLogin(input: {
             ? "Complete sign-in in the opened browser."
             : "Open authorization_url to complete sign-in in your browser.",
     });
+    const handoffResult = await handoff.wait();
+    if (handoffResult.kind === "error") {
+      if (handoffResult.code === "identity_not_bound") {
+        throw new Error(
+          input.login_grant === undefined
+            ? "No existing ECHO identity was found. Ask the ECHO owner for an invitation."
+            : "The selected Google account has no active ECHO identity. Select the invited Google account, or ask the ECHO owner to reissue the invitation.",
+        );
+      }
+      throw new Error("Person browser sign-in could not be completed");
+    }
     print(input.stdout, {
       ok: true,
       phase: "installed",
       ...(await input.client.installSession(
         input.authority_url,
-        await handoff.wait(),
+        handoffResult.session,
       )),
     });
   } finally {

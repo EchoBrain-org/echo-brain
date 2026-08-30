@@ -1572,6 +1572,84 @@ describe("Person client", () => {
     });
   });
 
+  it("promptly asks for invitation reissue when recovery finds no bound identity", async () => {
+    await withHome(async (home) => {
+      const invitationPath = join(home, "expired-person-onboarding.json");
+      writeFileSync(
+        invitationPath,
+        `${canonicalJson({
+          schema_version: 1,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: "https://authority.example",
+          login_grant: "G".repeat(43),
+          expires_at: "2026-08-18T00:01:00.000Z",
+        })}\n`,
+        { mode: 0o600 },
+      );
+      chmodSync(invitationPath, 0o600);
+      const begins: Record<string, unknown>[] = [];
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(
+        ["login", "--invitation", invitationPath],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          fetch: async (input, init) => {
+            if (new URL(String(input)).pathname !== "/v2/session/oidc/begin") {
+              throw new Error("unexpected Authority request");
+            }
+            const request = JSON.parse(String(init?.body)) as Record<
+              string,
+              unknown
+            >;
+            begins.push(request);
+            if (begins.length === 1) {
+              return json(
+                { error: { code: "unauthorized", message: "request failed" } },
+                401,
+              );
+            }
+            const handoff = request.loopback_handoff as Record<string, string>;
+            queueMicrotask(() => {
+              void globalThis.fetch(handoff.url, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/x-www-form-urlencoded",
+                },
+                body: new URLSearchParams({
+                  token: handoff.token,
+                  error: "identity_not_bound",
+                }),
+              });
+            });
+            return json(
+              {
+                authorization_url:
+                  "https://identity.example/authorize?state=state",
+                expires_at: "2026-08-18T00:10:00.000Z",
+              },
+              201,
+            );
+          },
+        },
+      );
+
+      expect(status).toBe(1);
+      expect(begins.map((request) => request.kind)).toEqual([
+        "identity_bootstrap",
+        "existing_identity_login",
+      ]);
+      expect(stdout).toContain('"phase":"open-browser"');
+      expect(stdout).not.toContain('"phase":"installed"');
+      expect(stderr).toContain("no active ECHO identity");
+      expect(stderr).toContain("Select the invited Google account");
+      expect(stderr).toContain("reissue the invitation");
+    });
+  });
+
   it("links Slack in one command without asking for opaque challenge handles", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();

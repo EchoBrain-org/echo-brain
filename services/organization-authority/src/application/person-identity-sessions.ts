@@ -219,6 +219,19 @@ class PersonSessionOidcDiagnosticError extends Error {
   }
 }
 
+/**
+ * A terminal, token-protected loopback handoff may tell its initiating client
+ * that the selected identity cannot be bound to the requested Authority
+ * login. This is deliberately narrower than the public callback's ordinary
+ * 401 response.
+ */
+export class PersonOidcIdentityNotBoundError extends AuthorityOperationError {
+  constructor() {
+    super("unauthorized", "person authentication failed");
+    this.name = "PersonOidcIdentityNotBoundError";
+  }
+}
+
 type AccessResolution =
   | { kind: "allowed"; authorization: PersonAccessAuthorization }
   | { kind: "denied" };
@@ -229,8 +242,6 @@ type CallbackWriteResult =
 
 type RefreshWriteResult =
   { kind: "issued"; session: IssuedPersonSession } | { kind: "denied" };
-
-
 function validateHttpsUrl(
   value: string,
   label: string,
@@ -253,8 +264,6 @@ function validateHttpsUrl(
     throw new Error(`${label} must be an absolute HTTPS URL`);
   }
 }
-
-
 function validateText(
   value: string,
   label: string,
@@ -916,11 +925,18 @@ export class PersonIdentitySessionApplication {
           // it if durable terminalization is temporarily unavailable.
         }
       }
-      this.diagnoseOidcFailure(
+      const reason =
         error instanceof PersonSessionOidcDiagnosticError
           ? error.reason
-          : "internal_failure",
-      );
+          : "internal_failure";
+      this.diagnoseOidcFailure(reason);
+      if (
+        reason === "identity_binding_denied" ||
+        reason === "bootstrap_binding_denied" ||
+        reason === "claim_email_invalid"
+      ) {
+        throw new PersonOidcIdentityNotBoundError();
+      }
       throw personSessionUnauthorized();
     }
   }

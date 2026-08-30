@@ -371,6 +371,59 @@ describe("clean Person runtime", () => {
       );
       expect(noSlack.status).toBe(503);
 
+      const unavailableBootstrap = await fetch(
+        `${origin}/v2/session/oidc/begin`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: "identity_bootstrap",
+            login_grant: "G".repeat(43),
+          }),
+        },
+      );
+      expect(unavailableBootstrap.status).toBe(401);
+
+      const recoveryWithoutIdentity = await fetch(
+        `${origin}/v2/session/oidc/begin`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: "existing_identity_login",
+            loopback_handoff: {
+              url: `http://127.0.0.1:39999/${"U".repeat(43)}`,
+              token: "N".repeat(43),
+            },
+          }),
+        },
+      );
+      expect(recoveryWithoutIdentity.status).toBe(201);
+      const recoveryWithoutIdentityState = new URL(
+        (await json(recoveryWithoutIdentity)).authorization_url as string,
+      ).searchParams.get("state");
+      expect(recoveryWithoutIdentityState).not.toBeNull();
+      const identityNotBoundCallback = await fetch(
+        `${origin}/v2/session/oidc/callback?state=${encodeURIComponent(recoveryWithoutIdentityState!)}&code=code-unbound&iss=https%3A%2F%2Fissuer.example`,
+      );
+      expect(identityNotBoundCallback.status).toBe(200);
+      expect(identityNotBoundCallback.headers.get("cache-control")).toBe(
+        "no-store",
+      );
+      const identityNotBoundPage = await identityNotBoundCallback.text();
+      expect(identityNotBoundPage).toContain(
+        `action="http://127.0.0.1:39999/${"U".repeat(43)}"`,
+      );
+      expect(identityNotBoundPage).toContain(
+        'name="token" value="' + "N".repeat(43) + '"',
+      );
+      expect(identityNotBoundPage).toContain(
+        'name="error" value="identity_not_bound"',
+      );
+      expect(identityNotBoundPage).not.toContain('name="session"');
+      expect(identityNotBoundPage).not.toContain("access_token");
+      expect(identityNotBoundPage).not.toContain("refresh_token");
+
       const begun = await fetch(`${origin}/v2/session/oidc/begin`, {
         method: "POST",
         headers: { "content-type": "application/json" },

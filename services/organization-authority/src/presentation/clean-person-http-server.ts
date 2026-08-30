@@ -13,7 +13,10 @@ import {
   PERSON_SESSION_REFRESH_PATH,
   PERSON_SESSION_REVOCATIONS_PATH,
 } from "./person-identity-session-http-application.js";
-import type { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
+import {
+  PersonOidcIdentityNotBoundError,
+  type PersonIdentitySessionApplication,
+} from "../application/person-identity-sessions.js";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import type { PersonExternalIdentityLinkHttpApplicationV1 } from "./person-external-identity-link-http-application.js";
 import {
@@ -166,6 +169,29 @@ function handoffHtml(response: ServerResponse, value: {
 }): void {
   const page = loopbackHandoffPage(value);
   const receiverOrigin = new URL(value.url).origin;
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": String(page.byteLength),
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": `default-src 'none'; base-uri 'none'; form-action ${receiverOrigin}; script-src 'unsafe-inline'`,
+  });
+  response.end(page);
+}
+
+function identityNotBoundHandoffHtml(
+  response: ServerResponse,
+  value: {
+    url: string;
+    token: string;
+  },
+): void {
+  const receiverOrigin = new URL(value.url).origin;
+  const page = Buffer.from(
+    `<!doctype html><meta charset="utf-8"><title>Echo sign-in</title><p>Completing sign-in…</p><form id="handoff" method="post" action="${value.url}"><input type="hidden" name="token" value="${value.token}"><input type="hidden" name="error" value="identity_not_bound"></form><script>document.getElementById("handoff").submit()</script>`,
+    "utf8",
+  );
   response.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
     "content-length": String(page.byteLength),
@@ -442,10 +468,23 @@ export function createCleanPersonHttpServer(
         // Delete before completion: a retry after a delivery or process fault
         // is an explicit fresh login, never a second credential delivery.
         handoffs.delete(state);
-        const completed = await options.sessions.completeOidcLogin({
-          state,
-          authorization_code: code,
-        });
+        let completed;
+        try {
+          completed = await options.sessions.completeOidcLogin({
+            state,
+            authorization_code: code,
+          });
+        } catch (error) {
+          if (
+            handoff !== undefined &&
+            Date.parse(handoff.expires_at) > Date.now() &&
+            error instanceof PersonOidcIdentityNotBoundError
+          ) {
+            identityNotBoundHandoffHtml(response, handoff);
+            return;
+          }
+          throw error;
+        }
         if (handoff === undefined || Date.parse(handoff.expires_at) <= Date.now()) {
           // A callback can still complete the Authority-side state after a
           // process restart, but credential bytes never fall back to JSON.

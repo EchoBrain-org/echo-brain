@@ -10,9 +10,13 @@ const MAXIMUM_SESSION_BYTES = 48 * 1024;
 export interface PersonLoopbackHandoff {
   readonly url: string;
   readonly token: string;
-  wait(): Promise<unknown>;
+  wait(): Promise<PersonLoopbackHandoffResult>;
   close(): Promise<void>;
 }
+
+export type PersonLoopbackHandoffResult =
+  | { readonly kind: "session"; readonly session: unknown }
+  | { readonly kind: "error"; readonly code: "identity_not_bound" };
 
 function randomSecret(randomBytes: (size: number) => Uint8Array): string {
   const value = randomBytes(32);
@@ -24,7 +28,7 @@ function randomSecret(randomBytes: (size: number) => Uint8Array): string {
 
 async function readForm(request: IncomingMessage): Promise<{
   token: string;
-  session: unknown;
+  result: PersonLoopbackHandoffResult;
 }> {
   const contentType = request.headers["content-type"];
   if (
@@ -53,14 +57,23 @@ async function readForm(request: IncomingMessage): Promise<{
     chunks.push(bytes);
   }
   const form = new URLSearchParams(Buffer.concat(chunks, size).toString("utf8"));
-  if (
-    [...form.keys()].sort().join(",") !== "session,token" ||
-    form.getAll("token").length !== 1 ||
-    form.getAll("session").length !== 1
-  ) {
+  const keys = [...form.keys()].sort().join(",");
+  if (form.getAll("token").length !== 1) {
     throw new Error("invalid local handoff form");
   }
   const token = form.get("token")!;
+  if (keys === "error,token") {
+    if (
+      form.getAll("error").length !== 1 ||
+      form.get("error") !== "identity_not_bound"
+    ) {
+      throw new Error("invalid local handoff error");
+    }
+    return { token, result: { kind: "error", code: "identity_not_bound" } };
+  }
+  if (keys !== "session,token" || form.getAll("session").length !== 1) {
+    throw new Error("invalid local handoff form");
+  }
   const encoded = form.get("session")!;
   if (!/^[A-Za-z0-9_-]+$/.test(encoded)) {
     throw new Error("invalid local handoff session");
@@ -80,7 +93,7 @@ async function readForm(request: IncomingMessage): Promise<{
     throw new Error("invalid local handoff session");
   }
   try {
-    return { token, session: JSON.parse(text) as unknown };
+    return { token, result: { kind: "session", session: JSON.parse(text) as unknown } };
   } catch {
     throw new Error("invalid local handoff session");
   }
@@ -118,9 +131,9 @@ export async function startPersonLoopbackHandoff(input: {
   const path = `/${randomSecret(random)}`;
   const token = randomSecret(random);
   let settled = false;
-  let resolveWait: ((value: unknown) => void) | undefined;
+  let resolveWait: ((value: PersonLoopbackHandoffResult) => void) | undefined;
   let rejectWait: ((reason: Error) => void) | undefined;
-  const received = new Promise<unknown>((resolve, reject) => {
+  const received = new Promise<PersonLoopbackHandoffResult>((resolve, reject) => {
     resolveWait = resolve;
     rejectWait = reject;
   });
@@ -141,8 +154,8 @@ export async function startPersonLoopbackHandoff(input: {
         return;
       }
       settled = true;
-      noStoreHtml(response, 200);
-      resolveWait!(form.session);
+      noStoreHtml(response, form.result.kind === "session" ? 200 : 400);
+      resolveWait!(form.result);
     } catch {
       noStoreHtml(response, 400);
     }
