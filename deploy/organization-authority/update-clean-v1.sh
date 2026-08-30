@@ -390,19 +390,31 @@ remove_release_tuple() {
 copy_record() {
   local source="$1" destination="$2" mode="$3"
   python3 - "$source" "$destination" "$mode" <<'PY'
-import os, pathlib, sys, tempfile
+import os, pathlib, stat, sys, tempfile
 source, destination, mode = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+if mode not in {'no-replace', 'replace', 'idempotent-immutable'}:
+    raise SystemExit('unsupported release record copy mode')
 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 os.chmod(destination.parent, 0o700)
 data = source.read_bytes()
 if mode == 'no-replace' and destination.exists():
     raise SystemExit('release record destination already exists')
+if mode == 'idempotent-immutable' and (destination.exists() or destination.is_symlink()):
+    state = destination.lstat()
+    if (
+        stat.S_ISLNK(state.st_mode) or
+        not stat.S_ISREG(state.st_mode) or
+        state.st_mode & 0o077 or
+        destination.read_bytes() != data
+    ):
+        raise SystemExit('existing immutable release record is unsafe or does not match')
+    raise SystemExit(0)
 fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'wb') as output:
         output.write(data); output.flush(); os.fsync(output.fileno())
-    if mode == 'no-replace':
+    if mode in {'no-replace', 'idempotent-immutable'}:
         os.link(temporary, destination)
         os.unlink(temporary)
     else:
@@ -432,8 +444,20 @@ PY
 archive_candidate_as_failed() {
   local id
   id="$(field "$CANDIDATE_RECORD" release-id)"
-  copy_record "$CANDIDATE_RECORD" "$RELEASE_STATE_DIR/failed/$id.json" no-replace || return 1
+  copy_record "$CANDIDATE_RECORD" "$RELEASE_STATE_DIR/failed/$id.json" idempotent-immutable || return 1
   remove_record "$CANDIDATE_RECORD"
+}
+
+service_is_stopped() {
+  local service="$1" id running
+  id="$(compose_clean ps -q "$service")" || return 1
+  [[ -n "$id" ]] || return 0
+  running="$(docker inspect --format '{{.State.Running}}' "$id")" || return 1
+  [[ "$running" != true ]]
+}
+
+candidate_runtime_is_stopped() {
+  service_is_stopped authority && service_is_stopped proxy
 }
 
 release_id_unused() {
@@ -812,7 +836,7 @@ case "$command" in
       fi
       [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
       stored_release_tuple_matches "$CURRENT_RECORD"
-      copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" no-replace
+      copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" idempotent-immutable
       copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" replace
     else
       copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" no-replace || fail 'could not accept first deployment candidate'
@@ -831,8 +855,11 @@ case "$command" in
       active_runtime_profile_matches "$CANDIDATE_RECORD"
       active_materialized_profile_matches
       active_environment_matches "$CANDIDATE_RECORD"
-      running_exact_release "$CANDIDATE_RECORD" || fail 'first deployment candidate is stopped or runtime image drifted; leave it staged and investigate before retrying rollback'
-      compose_clean down || fail 'first deployment abort failed; candidate remains staged and runtime stop is unconfirmed'
+      if running_exact_release "$CANDIDATE_RECORD"; then
+        compose_clean down || fail 'first deployment abort failed; candidate remains staged and runtime stop is unconfirmed'
+      elif ! candidate_runtime_is_stopped; then
+        fail 'first deployment candidate is stopped or runtime image drifted; leave it staged and investigate before retrying rollback'
+      fi
       archive_candidate_as_failed || fail 'first deployment candidate was stopped but could not be marked failed; leave it staged and retry rollback'
       printf '{"ok":true,"stage":"aborted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
       exit 0

@@ -1303,7 +1303,7 @@ fi
     mkdirSync(bin);
     writeFileSync(docker, `#!/usr/bin/env bash
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then [[ -f "${started}" ]] && printf 'authority-container\\n'; exit 0; fi
-if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
+if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then [[ -f "${started}" ]] && printf 'proxy-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${started}"; exit 0; fi
 if [[ "$1" == compose && "$*" == *" down"* ]]; then rm -f "${started}"; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
@@ -1321,6 +1321,15 @@ if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_
     const canary = run("bash", [UPDATE, "canary"], environment);
     expect(canary.status).toBe(1);
     expect(canary.stderr).toContain(expectedFailure);
+    // Simulate an interruption after the runtime stop and immutable failed
+    // record publish, but before the staged candidate was removed.
+    rmSync(started);
+    mkdirSync(join(state, "failed"), { recursive: true });
+    copyFileSync(
+      join(state, "candidate.clean-v1.json"),
+      join(state, "failed", "clean-v1-20260822-005.json"),
+    );
+    chmodSync(join(state, "failed", "clean-v1-20260822-005.json"), 0o600);
     expect(run("bash", [UPDATE, "rollback"], environment).stdout).toContain('"stage":"aborted"');
     expect(existsSync(started)).toBe(false);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
@@ -1585,6 +1594,21 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     expect(refused.stderr).toContain("stored runtime profile is missing or unsafe");
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
     copyFileSync(acceptedProfile, storedAcceptedProfile);
+    // Simulate a promotion interruption after immutable history publication.
+    mkdirSync(join(state, "history"), { recursive: true });
+    writeFileSync(
+      join(state, "history", "clean-v1-20260822-002.json"),
+      "conflicting history record\n",
+      { mode: 0o600 },
+    );
+    const conflicted = run("bash", [UPDATE, "promote", "--release", nextPath, "--canary-passed"], environment);
+    expect(conflicted.status).toBe(1);
+    expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
+    copyFileSync(
+      acceptedPath,
+      join(state, "history", "clean-v1-20260822-002.json"),
+    );
+    chmodSync(join(state, "history", "clean-v1-20260822-002.json"), 0o600);
     const promoted = run("bash", [UPDATE, "promote", "--release", nextPath, "--canary-passed"], environment);
     expect(promoted.status).toBe(0);
     expect(existsSync(join(state, "history", "clean-v1-20260822-002.json"))).toBe(true);
@@ -1869,6 +1893,13 @@ fi
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
     expect(existsSync(join(state, "failed", "clean-v1-20260822-002.json"))).toBe(false);
 
+    // Simulate an interruption after publishing the immutable failed record.
+    mkdirSync(join(state, "failed"), { recursive: true });
+    copyFileSync(
+      join(state, "candidate.clean-v1.json"),
+      join(state, "failed", "clean-v1-20260822-002.json"),
+    );
+    chmodSync(join(state, "failed", "clean-v1-20260822-002.json"), 0o600);
     const retried = run("bash", [UPDATE, "rollback"], environment);
     expect(retried.status).toBe(0);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
