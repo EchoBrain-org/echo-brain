@@ -6,6 +6,7 @@
   "type": "module",
   "bin": {
     "echo-organization-control-plane-connect-slack": "dist/clean-slack-connect-main.js",
+    "echo-organization-control-plane-activate-person-slack-approval": "dist/clean-person-slack-approval-activate-main.js",
     "echo-organization-control-plane-activate-person-slack-reaction-approval": "dist/clean-person-slack-reaction-approval-activate-main.js"
   },
   "exports": {
