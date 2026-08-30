@@ -29,10 +29,10 @@ const WORKSPACE_EXPORTS: ReadonlyMap<string, WorkspaceExport> = new Map([
     },
   ],
   [
-    "@echo-brain/organization-control-plane/slack-approval-runtime-v1",
+    "@echo-brain/organization-control-plane/slack-approval-integration-v1",
     {
       package_path: "services/organization-control-plane/package.json",
-      export_path: "./slack-approval-runtime-v1",
+      export_path: "./slack-approval-integration-v1",
     },
   ],
   [
@@ -57,10 +57,10 @@ const WORKSPACE_EXPORTS: ReadonlyMap<string, WorkspaceExport> = new Map([
     },
   ],
   [
-    "@echo-brain/organization-record/organization-record-service-v1",
+    "@echo-brain/organization-record/organization-record-api-v1",
     {
       package_path: "services/organization-record/package.json",
-      export_path: "./organization-record-service-v1",
+      export_path: "./organization-record-api-v1",
     },
   ],
   [
@@ -236,7 +236,7 @@ describe("Organization Authority executable closure boundaries", () => {
     const compatibilityEntrypoints = [
       [
         "services/organization-record/src/new-lineage-v1.ts",
-        'export * from "./organization-record-service-v1.js";\n',
+        'export * from "./organization-record-api-v1.js";\n',
       ],
       [
         "services/organization-retrieval/src/new-lineage-v1.ts",
@@ -247,7 +247,7 @@ describe("Organization Authority executable closure boundaries", () => {
       expect(readFileSync(join(REPO, path), "utf8")).toBe(
         `/** @deprecated Compatibility entrypoint. Use ${
           path.includes("organization-record")
-            ? "organization-record-service-v1"
+            ? "organization-record-api-v1"
             : "readable-search-engine-v1"
         }. */\n${expected}`,
       );

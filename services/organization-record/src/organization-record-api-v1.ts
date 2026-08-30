@@ -1,4 +1,4 @@
-/** Canonical entrypoint for record storage and retrieval-source composition. */
+/** Public API for record storage and retrieval-source composition. */
 export {
   applyOrganizationRecordDerivedBaselineV1,
   ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,

@@ -71,6 +71,21 @@
         "export": "createOrganizationAuthorityHttpServer"
       },
       {
+        "name": "Organization Authority database",
+        "path": "services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.ts",
+        "export": "openAuthorityDatabase"
+      },
+      {
+        "name": "Authority state-lineage initializer",
+        "path": "services/organization-authority/src/state-lineage/authority-state-lineage-initializer.ts",
+        "export": "initializeAuthorityStateLineageV1"
+      },
+      {
+        "name": "Authority state-lineage verifier",
+        "path": "services/organization-authority/src/composition/verify-authority-state-lineage.ts",
+        "export": "verifyAuthorityStateLineage"
+      },
+      {
         "name": "Admitted meeting-processing cycle",
         "path": "services/organization-authority/src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.ts",
         "export": "AdmittedMeetingProcessingCycleV1"
@@ -86,8 +101,8 @@
         "export": "AnswerCompositionRuntimeBundleV1"
       },
       {
-        "name": "Readable-search runtime",
-        "path": "services/organization-authority/src/composition/readable-search-runtime.ts",
+        "name": "Readable-search generation composition",
+        "path": "services/organization-authority/src/composition/readable-search-generation-composition.ts",
         "export": "createReadableSearchGenerationReconcilerV1"
       }
     ],
@@ -100,12 +115,43 @@
       "services/organization-authority/src/answer-composition/lean-answer-composition.ts",
       "services/organization-authority/src/composition/clean-answer-composition-runtime.ts",
       "services/organization-authority/src/composition/clean-readable-search-runtime.ts",
-      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts"
+      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts",
+      "services/organization-authority/src/adapters/persistence/sqlite/open-unmigrated-database.ts",
+      "services/organization-authority/src/state-lineage/new-lineage-genesis-v1.ts",
+      "services/organization-authority/src/composition/verify-clean-state-lineage.ts",
+      "services/organization-authority/src/presentation/clean-person-http-server.ts",
+      "services/organization-authority/src/composition/readable-search-runtime.ts"
     ],
     "compatibility_entrypoints": [
       {
+        "path": "services/organization-authority/src/clean-reset-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/organization-authority-reset-cli.ts"
+        ]
+      },
+      {
+        "path": "services/organization-authority/src/clean-person-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts"
+        ]
+      },
+      {
+        "path": "services/organization-authority/src/clean-live-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/organization-authority-service-cli.ts"
+        ]
+      },
+      {
+        "path": "services/organization-authority/src/clean-granola-source-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/granola-meeting-source-admission-cli.ts"
+        ]
+      },
+      {
         "path": "services/organization-authority/src/clean-founder-main.ts",
-        "target": "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
+        "targets": [
+          "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
+        ]
       }
     ]
   },

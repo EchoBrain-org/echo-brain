@@ -1,2 +1,2 @@
-/** @deprecated Compatibility entrypoint. Use organization-record-service-v1. */
-export * from "./organization-record-service-v1.js";
+/** @deprecated Compatibility entrypoint. Use organization-record-api-v1. */
+export * from "./organization-record-api-v1.js";

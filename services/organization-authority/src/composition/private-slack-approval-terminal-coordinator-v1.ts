@@ -20,7 +20,7 @@ import {
   type DurablePrivateApprovalTerminalV1,
   type PrivateApprovalDeniedReceiptReasonV1,
   type QueuedPrivateApprovalSignedActionV1,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import type {
   CanonicalPrivateApprovalV4ReceiptV1,
   PrivateApprovalPresentationRecoveryV1,

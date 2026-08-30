@@ -11,7 +11,7 @@ import {
 import {
   applyOrganizationRecordLogBaselineV1,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-service-v1";
+} from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   buildReadableSearchGenerationV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,

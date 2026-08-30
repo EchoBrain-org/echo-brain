@@ -32,6 +32,37 @@
     "util"
   ],
   "runtime_assets": [],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Person client facade",
+        "path": "src/product/person-client/client.ts",
+        "export": "PersonClient"
+      },
+      {
+        "name": "Organization Authority HTTP client",
+        "path": "src/product/person-client/authority-client.ts",
+        "export": "PersonAuthorityClient"
+      },
+      {
+        "name": "Person client CLI",
+        "path": "src/product/person-client/commands.ts",
+        "export": "runPersonClientCli"
+      },
+      {
+        "name": "Person session store",
+        "path": "src/product/person-client/session-store.ts",
+        "export": "PersonSessionStore"
+      },
+      {
+        "name": "Person onboarding invitation I/O",
+        "path": "src/product/person-client/onboarding-invitation.ts",
+        "export": "readPersonOnboardingInvitation"
+      }
+    ],
+    "retired_source_paths": [],
+    "compatibility_entrypoints": []
+  },
   "layer_rules": [
     {
       "name": "person-client-bin-dispatches-only-person-commands",

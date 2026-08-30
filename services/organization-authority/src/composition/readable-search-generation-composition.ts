@@ -15,7 +15,7 @@ import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordPolicyFactProjectorRegistryV1,
   type RecordRetrievalSourceSnapshotV1,
-} from "@echo-brain/organization-record/organization-record-service-v1";
+} from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   buildReadableSearchGenerationV1,
   clearReadableSearchActiveGenerationV1,
@@ -69,7 +69,7 @@ const READABLE_SEARCH_BUILDER_RELEASE_V1 = Object.freeze({
   reader_behavior: READABLE_SEARCH_READER_BEHAVIOR_V1,
 });
 
-export interface ReadableSearchRuntimeContractV1 {
+export interface ReadableSearchGenerationContractV1 {
   readonly retrieval_contract_sha256: Sha256Digest;
   readonly organization_member_policy_contract_sha256: Sha256Digest;
   readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;
@@ -85,7 +85,8 @@ export interface ReadableSearchRuntimeContractV1 {
 }
 
 /** One current-only contract shared by current generation publication and serving. */
-export function readableSearchRuntimeContractV1(): ReadableSearchRuntimeContractV1 {
+export function readableSearchGenerationContractV1():
+  ReadableSearchGenerationContractV1 {
   const organizationMemberPolicy =
     organizationMemberReadablePersonPolicyContractSha256();
   const restrictedReviewerPolicy =
@@ -211,7 +212,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
   readonly policy_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly now?: () => string;
 }): ReadableSearchGenerationReconcilerV1<ReconciliationSnapshotV1> {
-  const contract = readableSearchRuntimeContractV1();
+  const contract = readableSearchGenerationContractV1();
   const descriptor = input.signer.inspectSync();
   const pinnedAuthority = verifyOrganizationAuthorityPin(
     descriptor,

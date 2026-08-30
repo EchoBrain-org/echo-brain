@@ -19,13 +19,13 @@ import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   openOrganizationControlDatabase,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import {
   buildExternalHumanIdentityLinkContractV2,
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
 } from "../../organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.js";
-import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-service-v1";
+import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
   BegunPersonOidcLogin,
@@ -59,8 +59,8 @@ import type {
   ApprovalWorkflowRuntimeBundleV1,
   ApprovalWorkflowRuntimeContextV1,
 } from "../src/composition/approval-runtime-bundle-v1.js";
-import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-service-v1";
-import { readableSearchRuntimeContractV1 } from "../src/composition/readable-search-runtime.js";
+import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import type { StructuredGenerationPort } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
@@ -77,7 +77,7 @@ import type {
   MeetingDocument,
   MeetingSourceAdapter,
 } from "../src/processing/core/index.js";
-import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
+import { createGranolaPostCutoffCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
 import type {
   PrivateSlackApprovalCardPresentationV1,
   PrivateSlackApprovalPostOutcomeV1,
@@ -144,7 +144,7 @@ function privateFile(parent: string, name: string, value: string): string {
   return path;
 }
 
-class FounderOidcProvider implements PersonSessionOidcAuthorizationProvider {
+class TestPersonOidcProvider implements PersonSessionOidcAuthorizationProvider {
   private attempt: BegunPersonOidcLogin | undefined;
   buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
     this.attempt = attempt;
@@ -199,7 +199,7 @@ async function completeFounderReonboarding(input: {
     { fileMustExist: true },
   );
   try {
-    const provider = new FounderOidcProvider();
+    const provider = new TestPersonOidcProvider();
     const crypto = new NodePersonSessionCrypto(
       readPrivateAuthorityPersonSessionPkceKey(
         credentials.pkce_sealing_key_reference,
@@ -390,7 +390,7 @@ function fakeSource(
       return pulls === 1
         ? {
             meetings: [meeting],
-            next_cursor: createGranolaLiveOnlyCursor(
+            next_cursor: createGranolaPostCutoffCursor(
               "2026-08-22T12:00:01.000Z",
             ),
           }
@@ -844,7 +844,7 @@ function createOwnerAndMemberSearchRoute(input: {
     organization_id: input.fixture.initialized.organization_id,
     state_lineage_id: input.fixture.initialized.state_lineage_id,
     retrieval_contract_sha256:
-      readableSearchRuntimeContractV1().retrieval_contract_sha256,
+      readableSearchGenerationContractV1().retrieval_contract_sha256,
     sessions: {
       authenticateAccess: ({ access_token }) => {
         const authorization = byToken.get(access_token);
@@ -1136,7 +1136,7 @@ describe("Organization Authority runtime private approval lane", () => {
             createPersonPolicyFactProjectorV2(),
           ]),
       },
-      { api: { oidc_provider: new FounderOidcProvider() } },
+      { api: { oidc_provider: new TestPersonOidcProvider() } },
     );
     try {
       expect(runtime.processing).toBe("active");

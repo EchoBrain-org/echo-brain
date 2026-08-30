@@ -24,7 +24,7 @@ import {
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
   organizationRecordDerivedBaselineSha256V1,
   organizationRecordLogBaselineSha256V2,
-} from "@echo-brain/organization-record/organization-record-service-v1";
+} from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,

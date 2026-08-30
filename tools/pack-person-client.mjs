@@ -29,7 +29,7 @@ function gitOutput(args) {
   return result.stdout.trim();
 }
 
-function runCleanBuild() {
+function runPersonClientBuild() {
   const result = spawnSync(
     process.execPath,
     [join(repo, 'tools', 'build.mjs'), '--person-client'],
@@ -41,7 +41,7 @@ function runCleanBuild() {
   );
   if (result.status !== 0) {
     throw new Error(
-      result.stderr.trim() || result.stdout.trim() || 'clean build failed',
+      result.stderr.trim() || result.stdout.trim() || 'Person-client build failed',
     );
   }
 }
@@ -98,7 +98,7 @@ function main() {
     throw new Error(`Person-client artifact already exists: ${artifactPath}`);
   }
 
-  runCleanBuild();
+  runPersonClientBuild();
   const identity = readJson(join(clientRoot, 'dist', 'build-identity.v1.json'));
   if (
     identity.kind !== 'echo-packaged-build-identity' ||
@@ -108,7 +108,7 @@ function main() {
     gitOutput(['rev-parse', 'HEAD']).toLowerCase() !== sourceSha ||
     gitOutput(['status', '--porcelain=v1', '--untracked-files=all']) !== ''
   ) {
-    throw new Error('Person-client clean build provenance is invalid');
+    throw new Error('Person-client build provenance is invalid');
   }
 
   const rootManifest = readJson(join(repo, 'package.json'));

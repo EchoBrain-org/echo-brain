@@ -12,7 +12,7 @@ import {
   type PrivateApprovalAssigneeV1,
   type PrivateApprovalResolutionV1,
   type PrivateApprovalSlackIdentityLinkV1,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import type Database from "better-sqlite3";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "./resolve-private-slack-approval-reviewer-target-v1.js";
 

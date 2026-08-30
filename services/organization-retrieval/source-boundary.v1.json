@@ -36,6 +36,26 @@
     "services/organization-record",
     "services/organization-control-plane"
   ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Readable-search engine",
+        "path": "services/organization-retrieval/src/readable-search-engine-v1.ts",
+        "export": "buildReadableSearchGenerationV1"
+      }
+    ],
+    "retired_source_paths": [
+      "services/organization-retrieval/src/readable-search-runtime-v1.ts"
+    ],
+    "compatibility_entrypoints": [
+      {
+        "path": "services/organization-retrieval/src/new-lineage-v1.ts",
+        "targets": [
+          "services/organization-retrieval/src/readable-search-engine-v1.ts"
+        ]
+      }
+    ]
+  },
   "layer_rules": [
     {
       "name": "readable-search-engine-v1-owns-generation-composition",

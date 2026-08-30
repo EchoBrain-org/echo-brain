@@ -29,6 +29,14 @@ it.
   resource and returns its lifecycle handle; `start` begins a long-lived
   service or background activity; `run` executes a bounded command, cycle, or
   evaluation and returns when it is complete.
+- Use architectural nouns consistently. An `adapter` translates an external
+  provider or storage boundary; an `engine` owns a cohesive algorithm such as
+  building and searching an index; a `service` exposes a domain capability; a
+  `workflow` coordinates a bounded use case; a `runtime` owns opened resources
+  and lifecycle; a `bundle` supplies related ports or factories to a runtime;
+  and a `composition root` is the one place that selects concrete providers.
+  Do not call a barrel, algorithm, or data contract a runtime merely because
+  production code imports it.
 - Capability or layer names may supplement a responsibility when they remove
   ambiguity, but must not replace it. Prefer `answer composition` over
   `Layer 4` in navigation; retain the layer number only where it defines a
@@ -36,13 +44,17 @@ it.
 
 ## Guarded component indexes
 
-The Organization Authority source boundary declares a small
-`component_index_contract`: its canonical composition, runtime, lifecycle,
-HTTP, processing-cycle, answer-composition, and readable-search entry points;
-the exact retired paths they replace; and frozen compatibility facades. The
-architecture-boundary check verifies those facts. It deliberately does not ban
-words across the repository: historical and compatibility vocabulary remains
-valid where its contract requires it.
+Every registered workspace source boundary declares a small
+`component_index_contract`. Protocol workspaces anchor their public contract;
+product and service workspaces anchor the few canonical components that a
+person or coding agent should use to enter the architecture. Each contract
+also lists exact retired source paths and any frozen compatibility facades.
+The architecture-boundary check requires the index, verifies its exports and
+facade targets, and rejects a reintroduced retired path.
+
+The index is intentionally selective. It does not enumerate every source file
+or ban vocabulary across the repository. Historical, wire, persisted, and
+compatibility names remain valid where their contract requires them.
 
 ## Compatibility and history
 

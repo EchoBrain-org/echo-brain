@@ -8,8 +8,8 @@ import {
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
 import {
-  createGranolaLiveOnlyCursor,
-  granolaLiveOnlyCutoff,
+  createGranolaPostCutoffCursor,
+  granolaPostCutoffTimestamp,
   observeGranolaRecordOwner,
   type GranolaRecordOwnerObservationClient,
 } from "../processing/adapters/meeting-sources/granola/index.js";
@@ -94,7 +94,7 @@ interface ExistingAdmission {
 function assertCanonicalUtcMillis(value: string): void {
   if (new Date(value).toISOString() !== value) {
     throw new Error(
-      "clean Granola source admission time must be UTC milliseconds",
+      "Granola meeting-source admission time must be UTC milliseconds",
     );
   }
 }
@@ -139,7 +139,7 @@ function result(
 }
 
 /**
- * Creates the one fresh, live-only source pipeline while Authority is stopped.
+ * Creates one fresh, post-cutoff source pipeline while Authority is stopped.
  * It makes one bounded, metadata-only Granola list request before its first
  * admission. Credential bytes are read only to prove their private-file
  * contracts and are never persisted, logged, or returned.
@@ -179,7 +179,7 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
     !INSTANCE_ID.test(input.source_instance_id)
   ) {
     throw new Error(
-      "clean Granola source instance ID is invalid",
+      "Granola meeting-source instance ID is invalid",
     );
   }
 
@@ -294,7 +294,7 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
       if (existing !== undefined) {
         if (existing.semantic_input_sha256 !== semanticInputSha256) {
           throw new Error(
-            "clean Granola source admission semantic input conflicts with the admitted pipeline",
+            "Granola meeting-source admission semantic input conflicts with the admitted pipeline",
           );
         }
         database.exec("COMMIT");
@@ -316,10 +316,10 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
       }
       const ownerObservedAt = (input.now ?? (() => new Date().toISOString()))();
       assertCanonicalUtcMillis(ownerObservedAt);
-      const cursor = createGranolaLiveOnlyCursor(ownerObservedAt);
-      if (granolaLiveOnlyCutoff(cursor) !== ownerObservedAt) {
+      const cursor = createGranolaPostCutoffCursor(ownerObservedAt);
+      if (granolaPostCutoffTimestamp(cursor) !== ownerObservedAt) {
         throw new Error(
-          "clean Granola source admission could not establish its live-only cutoff",
+          "Granola meeting-source admission could not establish its post-cutoff boundary",
         );
       }
       const admission: ExistingAdmission = {

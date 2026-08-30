@@ -14,7 +14,7 @@ import {
   type SlackDmApprovalReviewerTargetCoordinatesV1,
   type StagePrivateApprovalPendingV1,
   type StagedPrivateApprovalPendingV1,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import type Database from "better-sqlite3";
 import { buildPrivateSlackApprovalBlockKitCardV1 } from "./private-slack-approval-block-kit-card-v1.js";
 import {

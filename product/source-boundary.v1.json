@@ -140,7 +140,7 @@
       "services/organization-authority/src/composition/person-answer-route.ts",
       "services/organization-authority/src/composition/person-external-identity-runtime.ts",
       "services/organization-authority/src/composition/organization-authority-api-runtime.ts",
-      "services/organization-authority/src/composition/readable-search-runtime.ts",
+      "services/organization-authority/src/composition/readable-search-generation-composition.ts",
       "services/organization-authority/src/presentation/person-external-identity-link-http-application.ts",
       "services/organization-authority/src/presentation/organization-authority-http-server.ts",
       "services/organization-authority/src/presentation/private-approval-interaction-http-application-v1.ts",

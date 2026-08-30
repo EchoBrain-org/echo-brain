@@ -5,13 +5,13 @@ control-database components. It is linked into the Authority and does not own
 an HTTP listener.
 
 New Authority code uses the responsibility-named surfaces:
-`slack-approval-runtime-v1`, `slack-external-identity-integration-v1`,
+`slack-approval-integration-v1`, `slack-external-identity-integration-v1`,
 `organization-control-database-v1`, `record-visibility-policy-contracts-v1`,
 and `slack-connection-setup-v1`. The
 retained installation-bound reaction activation command is isolated behind
 `legacy-slack-reaction-approval-activation-v1`. Migration-era `clean-*` and
 `new-lineage-*` exports remain compatibility aliases for installed clients.
-The Slack approval runtime keeps both the member-readable and
+The Slack approval integration keeps both the member-readable and
 restricted-reviewer policies and performs permission checks against current
 Authority membership.
 

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
   PersonRecordReaderV1,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-service-v1";
+} from "@echo-brain/organization-record/organization-record-api-v1";
 import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
@@ -23,7 +23,7 @@ import { createPersonRecordReadRouteV1 } from "./person-record-read-route.js";
 import { createPersonRecordSearchRouteV1 } from "./person-record-search-route.js";
 import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
-import { readableSearchRuntimeContractV1 } from "./readable-search-runtime.js";
+import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 import {
   createPersonAnswerRouteV1,
@@ -176,7 +176,7 @@ export async function startOrganizationAuthorityApiRuntime(
       organization_id: metadata.organization_id,
       state_lineage_id: lineage.root.state_lineage_id,
       retrieval_contract_sha256:
-        readableSearchRuntimeContractV1().retrieval_contract_sha256,
+        readableSearchGenerationContractV1().retrieval_contract_sha256,
       sessions,
       authority: database,
       record: recordDatabase,

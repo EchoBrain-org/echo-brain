@@ -4,7 +4,7 @@ import {
   GranolaApiError,
   GranolaMeetingSourceAdapter,
   HttpGranolaApiClient,
-  createGranolaLiveOnlyCursor,
+  createGranolaPostCutoffCursor,
   granolaCursorPhase,
   type GranolaApiClient,
   type GranolaListParams,
@@ -880,9 +880,9 @@ describe("Granola canonical meeting mapping", () => {
     ]);
   });
 
-  it("creates and classifies a live-only cursor without exposing page state", async () => {
+  it("creates and classifies a post-cutoff cursor without exposing page state", async () => {
     const cutoffAt = "2026-07-15T18:00:00.000Z";
-    const cursor = createGranolaLiveOnlyCursor(cutoffAt);
+    const cursor = createGranolaPostCutoffCursor(cutoffAt);
     const initialHistoryCursor = `granola:v1:${Buffer.from(
       JSON.stringify({
         schema_version: 1,
@@ -904,7 +904,7 @@ describe("Granola canonical meeting mapping", () => {
     expect(client.listCalls).toEqual([
       { updated_after: cutoffAt, page_size: 2 },
     ]);
-    expect(() => createGranolaLiveOnlyCursor("2026-07-15T18:00:00Z")).toThrow(
+    expect(() => createGranolaPostCutoffCursor("2026-07-15T18:00:00Z")).toThrow(
       "canonical ISO timestamp",
     );
   });

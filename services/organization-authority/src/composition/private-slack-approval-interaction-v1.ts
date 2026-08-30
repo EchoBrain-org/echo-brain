@@ -4,7 +4,7 @@ import {
   PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonApprovalPolicyId,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateSlackApprovalBlockKitActionIdV1,

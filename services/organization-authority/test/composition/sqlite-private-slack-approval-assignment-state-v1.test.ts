@@ -4,7 +4,7 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PrivateApprovalResolutionV1,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import { describe, expect, it } from "vitest";
 import {
   applyAuthorityBaselineV3,

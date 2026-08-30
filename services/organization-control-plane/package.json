@@ -10,9 +10,9 @@
     "echo-organization-control-plane-activate-person-slack-reaction-approval": "dist/clean-person-slack-reaction-approval-activate-main.js"
   },
   "exports": {
-    "./slack-approval-runtime-v1": {
-      "types": "./dist/slack-approval-runtime-v1.d.ts",
-      "import": "./dist/slack-approval-runtime-v1.js"
+    "./slack-approval-integration-v1": {
+      "types": "./dist/slack-approval-integration-v1.d.ts",
+      "import": "./dist/slack-approval-integration-v1.js"
     },
     "./slack-external-identity-integration-v1": {
       "types": "./dist/slack-external-identity-integration-v1.d.ts",

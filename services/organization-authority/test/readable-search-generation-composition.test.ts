@@ -12,14 +12,14 @@ import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-service-v1";
+} from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   clearReadableSearchActiveGenerationV1,
   searchReadableSearchGenerationV1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
-import { createReadableSearchGenerationReconcilerV1 } from "../src/composition/readable-search-runtime.js";
+import { createReadableSearchGenerationReconcilerV1 } from "../src/composition/readable-search-generation-composition.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
 import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
 
@@ -39,7 +39,7 @@ afterEach(() => {
   }
 });
 
-describe("clean readable-search runtime composition", () => {
+describe("readable-search generation composition", () => {
   it("publishes the zero-head generation once and leaves a restart-verifiable pointer", async () => {
     const parent = root();
     const initialized = initializeAuthorityState({

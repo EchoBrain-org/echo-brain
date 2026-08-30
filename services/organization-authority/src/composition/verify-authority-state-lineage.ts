@@ -9,7 +9,7 @@ import {
   organizationRecordLogBaselineSha256V2,
   ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
-} from "@echo-brain/organization-record/organization-record-service-v1";
+} from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   readableSearchPlaneBaselineSha256V1,
   READABLE_SEARCH_CONTENT_BASELINE_V1,

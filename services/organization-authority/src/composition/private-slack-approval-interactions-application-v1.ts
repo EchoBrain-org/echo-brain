@@ -2,7 +2,7 @@ import { AuthorityOperationError } from "../domain/errors.js";
 import type {
   EnqueuePrivateApprovalInteractionResultV1,
   PrivateApprovalSignedTerminalActionV1,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import type { PrivateSlackApprovalInteractionsHttpApplicationV1 } from "../presentation/private-slack-approval-interactions-http-application-v1.js";
 import {
   PrivateSlackApprovalInteractionError,

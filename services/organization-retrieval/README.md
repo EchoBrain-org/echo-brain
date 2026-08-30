@@ -27,7 +27,7 @@ diagnostic evidence, never a correctness assertion.
 Run the representative combined-shape benchmark with:
 
 ```sh
-npx vitest run --config vitest.config.ts services/organization-authority/test/clean-person-record-search-route.test.ts -t 'releases each policy' --reporter=verbose
+npx vitest run --config vitest.config.ts services/organization-authority/test/person-record-search-route.test.ts -t 'releases each policy' --reporter=verbose
 ```
 
 On 2026-08-26, the 1,000-atom, 16-segment, 15,974-posting fixture measured

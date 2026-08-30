@@ -7,7 +7,7 @@
   "source_root": "services/organization-record/src",
   "package_json": "services/organization-record/package.json",
   "entry_points": [
-    "services/organization-record/src/organization-record-service-v1.ts"
+    "services/organization-record/src/organization-record-api-v1.ts"
   ],
   "owned_source_paths": [
     "services/organization-record/src/**"
@@ -30,6 +30,50 @@
     "services/organization-record/baselines/organization-record-log-baseline-v1.sql",
     "services/organization-record/baselines/organization-record-log-baseline-v2.sql"
   ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Organization Record public API",
+        "path": "services/organization-record/src/organization-record-api-v1.ts",
+        "export": "OrganizationRecordAppenderV4"
+      },
+      {
+        "name": "Organization Record database",
+        "path": "services/organization-record/src/persistence/open-organization-record-database.ts",
+        "export": "openOrganizationRecordDatabase"
+      },
+      {
+        "name": "V4 organization record appender",
+        "path": "services/organization-record/src/log/record-log-v4-append.ts",
+        "export": "OrganizationRecordAppenderV4"
+      },
+      {
+        "name": "Permission-aware Person record reader",
+        "path": "services/organization-record/src/retrieve/person-record-reader-v1.ts",
+        "export": "PersonRecordReaderV1"
+      },
+      {
+        "name": "Record retrieval-source snapshot",
+        "path": "services/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.ts",
+        "export": "RecordRetrievalSourceSnapshotPortV1"
+      }
+    ],
+    "retired_source_paths": [
+      "services/organization-record/src/organization-record-service-v1.ts",
+      "services/organization-record/src/organization-record-runtime-v1.ts",
+      "services/organization-record/src/persistence/open-unmigrated-database.ts",
+      "services/organization-record/src/retrieve/clean-person-record-reader-v1.ts",
+      "services/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts"
+    ],
+    "compatibility_entrypoints": [
+      {
+        "path": "services/organization-record/src/new-lineage-v1.ts",
+        "targets": [
+          "services/organization-record/src/organization-record-api-v1.ts"
+        ]
+      }
+    ]
+  },
   "layer_rules": [
     {
       "name": "record-entrypoint-exports-public-api",

@@ -3,7 +3,7 @@ import {
   FileOrganizationSecretStore,
   SqliteSlackBotTokenReaderV1,
   SqliteSlackDmApprovalPersistenceV1,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import { readPrivateAuthoritySlackSigningSecret } from "../adapters/security/private-file-credentials.js";
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import { createPrivateSlackBlockV4RecordWriterV1 } from "../processing/private-approval-records/private-slack-block-v4-record-writer-v1.js";

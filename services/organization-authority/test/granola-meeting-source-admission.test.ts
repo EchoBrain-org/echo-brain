@@ -34,7 +34,7 @@ import {
 } from "../src/composition/person-onboarding-service.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
-import { granolaLiveOnlyCutoff } from "../src/processing/adapters/meeting-sources/granola/index.js";
+import { granolaPostCutoffTimestamp } from "../src/processing/adapters/meeting-sources/granola/index.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 
 const roots: string[] = [];
@@ -57,7 +57,7 @@ const RECORD_OWNER_CLIENT = {
   },
 };
 
-class FounderOidcProvider implements PersonSessionOidcAuthorizationProvider {
+class TestPersonOidcProvider implements PersonSessionOidcAuthorizationProvider {
   private attempt: BegunPersonOidcLogin | undefined;
 
   buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
@@ -176,7 +176,7 @@ async function bootstrapFounder(
   try {
     const crypto = new NodePersonSessionCrypto(pkce);
     const denied: string[] = [];
-    const provider = new FounderOidcProvider();
+    const provider = new TestPersonOidcProvider();
     const application = new PersonIdentitySessionApplication(
       new SqlitePersonSessionRepository(database),
       OIDC,
@@ -204,7 +204,7 @@ async function bootstrapFounder(
         authorization_code: "founder-code",
       });
     } catch {
-      throw new Error(`founder OIDC bootstrap denied: ${denied.join(",")}`);
+      throw new Error(`Person OIDC bootstrap denied: ${denied.join(",")}`);
     }
   } finally {
     database.close();
@@ -216,7 +216,7 @@ afterEach(() => {
     rmSync(value, { recursive: true, force: true });
 });
 
-describe("clean Granola source admission", () => {
+describe("Granola meeting-source admission", () => {
   it("commits a provider-neutral processor after its own preflight", async () => {
     const input = fixture();
     await bootstrapFounder(input);
@@ -265,7 +265,7 @@ describe("clean Granola source admission", () => {
     }
   });
 
-  it("requires founder OIDC re-onboarding, then admits a fresh live-only source and fixed LLM processing identity", async () => {
+  it("requires initial-owner OIDC re-onboarding, then admits a fresh post-cutoff source and fixed LLM processing identity", async () => {
     const input = fixture();
     await expect(
       admitGranolaMeetingSource({ ...input, now: () => ADMITTED_AT }),
@@ -296,7 +296,7 @@ describe("clean Granola source admission", () => {
       },
     });
     expect(admitted.source.cursor).toMatch(/^granola:v1:/);
-    expect(granolaLiveOnlyCutoff(admitted.source.cursor)).toBe(ADMITTED_AT);
+    expect(granolaPostCutoffTimestamp(admitted.source.cursor)).toBe(ADMITTED_AT);
     expect(admitted.processor.configuration_sha256).toMatch(/^sha256:/);
     expect(JSON.stringify(admitted)).not.toContain("grn_");
     expect(JSON.stringify(admitted)).not.toContain(

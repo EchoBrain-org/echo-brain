@@ -4,7 +4,7 @@ import {
   canonicalSha256,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
-import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../../../src/adapters/persistence/sqlite/baseline.js";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "../../../src/composition/openrouter-decision-processor-config-v1.js";
@@ -15,7 +15,7 @@ import type {
   DecisionSet,
   MeetingDocument,
 } from "../../../src/processing/core/index.js";
-import { createGranolaLiveOnlyCursor } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
+import { createGranolaPostCutoffCursor } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
 import { granolaAdmittedMeetingSourceBoundaryV1 } from "../../../src/composition/granola-admitted-meeting-source-boundary-v1.js";
 import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../../../src/processing/admitted-meeting-processing/review-lineage-semantics.js";
 import type {
@@ -36,8 +36,8 @@ const ADVANCED_AT = "2026-08-22T02:04:04.005Z";
 const NEXT_CUTOFF = "2026-08-22T02:05:04.005Z";
 const SHA: Sha256Digest = `sha256:${"a".repeat(64)}`;
 const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
-const sourceCursor = createGranolaLiveOnlyCursor(ADMITTED_AT);
-const nextCursor = createGranolaLiveOnlyCursor(NEXT_CUTOFF);
+const sourceCursor = createGranolaPostCutoffCursor(ADMITTED_AT);
+const nextCursor = createGranolaPostCutoffCursor(NEXT_CUTOFF);
 const databases: Database.Database[] = [];
 
 function assertActionable(

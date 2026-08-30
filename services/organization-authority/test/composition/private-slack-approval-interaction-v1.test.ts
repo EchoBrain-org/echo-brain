@@ -2,7 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import { describe, expect, it } from "vitest";
 import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,

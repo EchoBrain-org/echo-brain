@@ -205,10 +205,14 @@ function exportedSymbols(tree, path) {
 
 function checkComponentIndexContract(tree, manifest, errors) {
   const contract = manifest.component_index_contract;
-  if (contract === undefined) return;
+  if (contract === undefined) {
+    errors.push(`${manifest.name}: component_index_contract is required`);
+    return;
+  }
   if (
     !isObject(contract) ||
     !Array.isArray(contract.canonical_components) ||
+    contract.canonical_components.length === 0 ||
     !isStringArray(contract.retired_source_paths) ||
     !Array.isArray(contract.compatibility_entrypoints)
   ) {
@@ -271,7 +275,8 @@ function checkComponentIndexContract(tree, manifest, errors) {
     if (
       !isObject(entrypoint) ||
       typeof entrypoint.path !== 'string' ||
-      typeof entrypoint.target !== 'string'
+      !isStringArray(entrypoint.targets) ||
+      entrypoint.targets.length === 0
     ) {
       errors.push(`${manifest.name}: component_index_contract has an invalid compatibility entrypoint`);
       continue;
@@ -284,19 +289,31 @@ function checkComponentIndexContract(tree, manifest, errors) {
       errors.push(`${manifest.name}: compatibility entrypoint path must be exact and inside ${manifest.source_root}: ${entrypoint.path}`);
       continue;
     }
-    if (!isExactSourcePath(entrypoint.target, manifest.source_root)) {
-      errors.push(`${manifest.name}: compatibility entrypoint target must be exact and inside ${manifest.source_root}: ${entrypoint.target}`);
+    const declaredTargets = new Set(entrypoint.targets);
+    if (declaredTargets.size !== entrypoint.targets.length) {
+      errors.push(`${manifest.name}: compatibility entrypoint duplicates a target: ${entrypoint.path}`);
+    }
+    const invalidTarget = entrypoint.targets.find(
+      (target) => !isExactSourcePath(target, manifest.source_root),
+    );
+    if (invalidTarget !== undefined) {
+      errors.push(`${manifest.name}: compatibility entrypoint target must be exact and inside ${manifest.source_root}: ${invalidTarget}`);
       continue;
     }
-    if (!tree.has(entrypoint.path) || !tree.has(entrypoint.target)) {
-      errors.push(`${manifest.name}: compatibility entrypoint or target is missing: ${entrypoint.path} -> ${entrypoint.target}`);
+    const missingTarget = entrypoint.targets.find((target) => !tree.has(target));
+    if (!tree.has(entrypoint.path) || missingTarget !== undefined) {
+      errors.push(`${manifest.name}: compatibility entrypoint or target is missing: ${entrypoint.path} -> ${missingTarget ?? entrypoint.targets.join(', ')}`);
       continue;
     }
     const localImports = moduleReferences(entrypoint.path, textFile(tree, entrypoint.path))
       .filter((reference) => reference.specifier !== null && reference.specifier.startsWith('.'))
       .map((reference) => resolveRelative(tree, entrypoint.path, reference.specifier));
-    if (localImports.length !== 1 || localImports[0] !== entrypoint.target) {
-      errors.push(`${manifest.name}: compatibility entrypoint must import only its declared implementation target: ${entrypoint.path} -> ${entrypoint.target}`);
+    const localTargets = new Set(localImports);
+    if (
+      localTargets.size !== declaredTargets.size ||
+      [...declaredTargets].some((target) => !localTargets.has(target))
+    ) {
+      errors.push(`${manifest.name}: compatibility entrypoint must import only its declared implementation targets: ${entrypoint.path} -> ${entrypoint.targets.join(', ')}`);
     }
   }
 }
@@ -1046,6 +1063,9 @@ function checkWorkspaceBoundaries(tree, errors) {
         name: manifest.name,
         root: manifest.boundary_root,
         entry_points: [...manifest.entry_points].sort(),
+        canonical_components: (manifest.component_index_contract?.canonical_components ?? [])
+          .map((component) => ({ name: component.name, path: component.path }))
+          .sort((left, right) => left.name.localeCompare(right.name)),
         allowed_workspace_packages: [...manifest.allowed_workspace_packages].sort(),
         layer_rules: (manifest.layer_rules ?? []).map((rule) => rule.name).sort(),
       }))

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../../src/adapters/persistence/sqlite/baseline.js";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "../../src/composition/staging-synthetic-private-dm-canary-v1.js";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "../../src/composition/openrouter-decision-processor-config-v1.js";
-import { createGranolaLiveOnlyCursor } from "../../src/processing/adapters/meeting-sources/granola/index.js";
+import { createGranolaPostCutoffCursor } from "../../src/processing/adapters/meeting-sources/granola/index.js";
 import {
   assertStagingSyntheticMeetingCanaryV1,
   createStagingSyntheticMeetingCanaryV1,
@@ -53,7 +53,7 @@ function database(): Database.Database {
        'provider_record_owner_observed', ?, ?, ?, ?, 'llm', 'founder-llm', ?,
        ?, ?, ?, ?)`,
   ).run(
-    SHA, NOW, SHA, createGranolaLiveOnlyCursor(NOW), NOW,
+    SHA, NOW, SHA, createGranolaPostCutoffCursor(NOW), NOW,
     OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1, SHA, SHA, SHA, NOW,
   );
   databases.push(value);
@@ -202,7 +202,7 @@ describe("staging synthetic private-DM canary", () => {
     );
     expect(
       value.prepare("SELECT cursor FROM authority_live_source_progress_v2").pluck().get(),
-    ).toBe(createGranolaLiveOnlyCursor(NOW));
+    ).toBe(createGranolaPostCutoffCursor(NOW));
   });
 
   it("hard-rejects a non-staging Authority before extraction", async () => {

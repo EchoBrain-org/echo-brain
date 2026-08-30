@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { OrganizationAuthoritySigner } from "../application/ports/runtime-ports.js";
-import type { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-service-v1";
+import type { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
 import type { ApprovalWorkflowStagerV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";

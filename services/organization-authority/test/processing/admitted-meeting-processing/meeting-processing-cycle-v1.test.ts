@@ -8,7 +8,7 @@ import {
   type MeetingSourceAdapter,
 } from "../../../src/processing/core/index.js";
 import {
-  createGranolaLiveOnlyCursor,
+  createGranolaPostCutoffCursor,
   granolaCursorPhase,
 } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
 import {
@@ -60,7 +60,7 @@ const admission = (): AdmittedMeetingProcessingAdmissionV1 => ({
     adapter_id: "granola",
     instance_id: SOURCE.instance_id,
     version: SOURCE.version,
-    cursor: createGranolaLiveOnlyCursor(CUT_OFF),
+    cursor: createGranolaPostCutoffCursor(CUT_OFF),
     cutoff_at: CUT_OFF,
   },
   processor: {
@@ -467,7 +467,7 @@ describe("admitted meeting-processing cycle", () => {
     ).toEqual(["source_intake:started", "source_intake:succeeded"]);
   });
 
-  it("polls one admitted live-only Granola cursor, stages durably, then advances", async () => {
+  it("polls one admitted post-cutoff Granola cursor, stages durably, then advances", async () => {
     const current = admission();
     const state = new FakeState(current);
     const downstream = stager({ kind: "staged", stage_id: "stage-1" });

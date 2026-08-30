@@ -16,6 +16,17 @@
   "allowed_external_packages": [],
   "allowed_node_builtins": [],
   "runtime_assets": [],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Organization API public contract",
+        "path": "packages/organization-api/src/index.ts",
+        "export": "validateOrganizationPersonSession"
+      }
+    ],
+    "retired_source_paths": [],
+    "compatibility_entrypoints": []
+  },
   "layer_rules": [
     {
       "name": "organization-api-has-no-implementation-dependencies",

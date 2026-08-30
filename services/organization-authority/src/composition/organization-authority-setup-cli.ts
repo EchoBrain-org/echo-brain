@@ -40,7 +40,7 @@ import {
   type AuthorityStateSeedV1,
 } from "./authority-state-initializer.js";
 import { runGranolaMeetingSourceAdmissionCli } from "./granola-meeting-source-admission-cli.js";
-import { readableSearchRuntimeContractV1 } from "./readable-search-runtime.js";
+import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
   assertPersonAuthorityCallback,
   readPersonOidcConfiguration,
@@ -1269,7 +1269,7 @@ function setupCanaryEvidence(
       manifest.organization_id,
     ) &&
       initialPointer.retrieval_contract_sha256 ===
-        readableSearchRuntimeContractV1().retrieval_contract_sha256;
+        readableSearchGenerationContractV1().retrieval_contract_sha256;
     const ownerLayer1ReadAfterHead =
       activeGenerationCurrent &&
       initialHead.receipt_issued_at !== null &&
@@ -1764,7 +1764,7 @@ async function finalize(
       runtime_observation: "not_observed",
       canary_status: "not_complete",
       next_instruction:
-        "Restart the same echo-organization-authority-clean-live serve command. The clean Granola source begins at its live-only cutoff.",
+        "Restart the same echo-organization-authority-clean-live serve command. The admitted Granola source begins at its post-cutoff boundary.",
     } as never)}\n`,
   );
 }

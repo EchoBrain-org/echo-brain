@@ -2,7 +2,7 @@ import {
   resolveCurrentSlackDmApprovalReviewerTargetV1,
   type CurrentSlackDmApprovalReviewerTargetV1,
   type SlackDmApprovalReviewerTargetCoordinatesV1,
-} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import type Database from "better-sqlite3";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";

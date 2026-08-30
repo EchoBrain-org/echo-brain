@@ -5,7 +5,7 @@ import {
   type RecordPolicyFactProjectorRegistryV1,
   OrganizationRecordAppenderV4,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-service-v1";
+} from "@echo-brain/organization-record/organization-record-api-v1";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
@@ -29,7 +29,7 @@ import {
   type OrganizationAuthorityProcessingCycleV1,
   type RunningOrganizationAuthorityServiceLifecycle,
 } from "./organization-authority-service-lifecycle.js";
-import { createReadableSearchGenerationReconcilerV1 } from "./readable-search-runtime.js";
+import { createReadableSearchGenerationReconcilerV1 } from "./readable-search-generation-composition.js";
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";

@@ -57,7 +57,7 @@ interface BoundaryManifest {
     retired_source_paths: string[];
     compatibility_entrypoints: Array<{
       path: string;
-      target: string;
+      targets: string[];
     }>;
   };
 }
@@ -172,12 +172,28 @@ function runBoundary(fixture: string): {
 }
 
 describe("workspace source boundaries", () => {
-  it("accepts the declared Authority component index", () => {
+  it("accepts the declared workspace component indexes", () => {
     const fixture = fixtureRepository();
 
     const result = runBoundary(fixture);
 
     expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+
+  it("requires a component index for every workspace", () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      "packages/federation-protocol/source-boundary.v1.json";
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    delete manifest.component_index_contract;
+    writeFixtureJson(fixture, manifestPath, manifest);
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "@echo-brain/federation-protocol: component_index_contract is required",
+    );
   });
 
   it("rejects a missing canonical Authority component path", () => {
@@ -224,15 +240,16 @@ describe("workspace source boundaries", () => {
     const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
     const contract = manifest.component_index_contract;
     expect(contract).toBeDefined();
-    contract!.compatibility_entrypoints[0]!.target =
-      "services/organization-authority/src/composition/clean-live-cli.ts";
+    contract!.compatibility_entrypoints[0]!.targets = [
+      "services/organization-authority/src/composition/organization-authority-service-cli.ts",
+    ];
     writeFixtureJson(fixture, manifestPath, manifest);
 
     const result = runBoundary(fixture);
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "compatibility entrypoint must import only its declared implementation target",
+      "compatibility entrypoint must import only its declared implementation targets",
     );
   });
 

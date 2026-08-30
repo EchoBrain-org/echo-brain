@@ -22,7 +22,7 @@ import {
 import { FileOrganizationSecretStore } from "../src/security/file-secret-store.js";
 
 const directories: string[] = [];
-type CleanSlackCoordinates = Readonly<{
+type SlackConnectionCoordinates = Readonly<{
   authority_id: string;
   organization_id: string;
   state_lineage_id: string;
@@ -30,7 +30,7 @@ type CleanSlackCoordinates = Readonly<{
   approval_channel_id: string;
 }>;
 
-const COORDINATES: CleanSlackCoordinates = Object.freeze({
+const COORDINATES: SlackConnectionCoordinates = Object.freeze({
   authority_id: "oau_00000000-0000-4000-8000-000000000001",
   organization_id: "org_00000000-0000-4000-8000-000000000001",
   state_lineage_id: "lineage-00000000-0000-4000-8000-000000000001",
@@ -40,7 +40,7 @@ const COORDINATES: CleanSlackCoordinates = Object.freeze({
 
 function directory(): string {
   const value = realpathSync(
-    mkdtempSync(join(tmpdir(), "echo-clean-slack-connection-")),
+    mkdtempSync(join(tmpdir(), "echo-slack-connection-")),
   );
   directories.push(value);
   return value;

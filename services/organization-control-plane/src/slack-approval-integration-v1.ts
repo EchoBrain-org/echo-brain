@@ -1,7 +1,7 @@
 /**
- * Slack-backed approval contracts and persistence used by Organization
- * Authority. This includes the retained reaction approval compatibility path
- * and the current private-DM approval path.
+ * Public integration surface for Slack-backed approval contracts and
+ * persistence used by Organization Authority. This includes the retained
+ * reaction approval compatibility path and the current private-DM path.
  */
 export { openOrganizationControlDatabase } from "./persistence/open-organization-control-database.js";
 export * from "./record-visibility-policy-contracts-v1.js";
