@@ -52,6 +52,31 @@ describe('serialized Authority meeting worker', () => {
     await worker.close();
   });
 
+  it("serializes bounded operator work with the live cycle", async () => {
+    vi.useFakeTimers();
+    const cycle = deferred();
+    const events: string[] = [];
+    const worker = new SerializedAuthorityMeetingWorker({
+      intervalMs: 1_000,
+      runCycle: async () => {
+        events.push("cycle:start");
+        await cycle.promise;
+        events.push("cycle:end");
+      },
+    });
+
+    const operation = worker.runExclusive(async () => {
+      events.push("operator");
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toEqual(["cycle:start"]);
+
+    cycle.resolve();
+    await operation;
+    expect(events).toEqual(["cycle:start", "cycle:end", "operator"]);
+    await worker.close();
+  });
+
   it('reports a failed cycle once and retries even when the callback throws', async () => {
     vi.useFakeTimers();
     const errors: string[] = [];

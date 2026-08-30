@@ -94,8 +94,11 @@ function buildCardAndSnapshot(
   const payload = Object.freeze({
     brief,
     source: Object.freeze({
-      adapter_id: input.admission.source.adapter_id,
-      instance_id: input.admission.source.instance_id,
+      // The immutable meeting envelope is the provenance authority. This is
+      // normally identical to the admitted live source, but deliberately
+      // remains truthful for a staging-only synthetic canary.
+      adapter_id: input.meeting.provenance.source.adapter_id,
+      instance_id: input.meeting.provenance.source.instance_id,
       external_id: input.meeting.provenance.external_id,
     }),
     alternatives: Object.freeze([]),

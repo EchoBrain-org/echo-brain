@@ -27,6 +27,11 @@ services:
     labels:
       io.echo-brain.release-id: "${ECHO_CLEAN_RELEASE_ID:?set ECHO_CLEAN_RELEASE_ID to the accepted release ID}"
       io.echo-brain.runtime-profile-sha256: "${ECHO_CLEAN_RUNTIME_PROFILE_SHA256:?set ECHO_CLEAN_RUNTIME_PROFILE_SHA256 to the accepted runtime profile SHA-256}"
+    environment:
+      # This is public release identity only. The staging-only private socket
+      # derives its stable canary id from it, never from an operator request.
+      ECHO_CLEAN_RELEASE_ID: "${ECHO_CLEAN_RELEASE_ID:?set ECHO_CLEAN_RELEASE_ID to the accepted release ID}"
+      ECHO_CLEAN_AUTHORITY_HOST: "${ECHO_CLEAN_AUTHORITY_HOST:?set ECHO_CLEAN_AUTHORITY_HOST to the public DNS name}"
     restart: unless-stopped
     stop_grace_period: 45s
     volumes:

@@ -28,6 +28,7 @@ import type {
 import {
   assertStagingSyntheticMeetingCanaryV1,
   isStagingSyntheticMeetingCanaryV1,
+  stagingSyntheticMeetingCanaryCursorV1,
 } from "./staging-synthetic-meeting-canary-v1.js";
 
 interface AdmissionRow {
@@ -248,6 +249,32 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   async stageCandidate(
     input: CleanLiveCandidateSnapshotInputV1,
   ): Promise<CleanLiveCandidateV1> {
+    return this.stageCandidateInternal(input);
+  }
+
+  /**
+   * The only non-provider intake path. It is intentionally a separate,
+   * conspicuously named operation so ordinary source processing cannot ever
+   * submit arbitrary meetings under the staging exception.
+   */
+  async stageStagingSyntheticCanaryCandidate(
+    input: CleanLiveCandidateSnapshotInputV1,
+  ): Promise<CleanLiveCandidateV1> {
+    assertStagingSyntheticMeetingCanaryV1(input.meeting);
+    const canaryId = input.meeting.provenance.metadata?.["canary_id"];
+    if (typeof canaryId !== "string") {
+      throw new Error("staging synthetic canary has no canary id");
+    }
+    return this.stageCandidateInternal(
+      input,
+      stagingSyntheticMeetingCanaryCursorV1(canaryId),
+    );
+  }
+
+  private async stageCandidateInternal(
+    input: CleanLiveCandidateSnapshotInputV1,
+    syntheticCanaryCursor?: string,
+  ): Promise<CleanLiveCandidateV1> {
     return this.database.transaction(() => {
       const admission = this.admission();
       if (admission.membership_status !== "active") {
@@ -277,12 +304,16 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           "clean live candidate differs from the current admitted source state",
         );
       }
-      assertCanonicalMeetingDocument(input.meeting, {
-        kind: "meeting-source",
-        adapter_id: current.source.adapter_id,
-        instance_id: current.source.instance_id,
-        version: current.source.version,
-      });
+      if (syntheticCanaryCursor === undefined) {
+        assertCanonicalMeetingDocument(input.meeting, {
+          kind: "meeting-source",
+          adapter_id: current.source.adapter_id,
+          instance_id: current.source.instance_id,
+          version: current.source.version,
+        });
+      } else {
+        assertStagingSyntheticMeetingCanaryV1(input.meeting);
+      }
       assertCanonicalDecisionSet(input.decisions, input.meeting, {
         kind: "decision-processor",
         adapter_id: current.processor.adapter_id,
@@ -375,7 +406,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           input.review_policy.policy_consequence_text,
           input.review_policy.policy_consequence_sha256,
           disposition,
-          current.source.cursor,
+          syntheticCanaryCursor ?? current.source.cursor,
           canonicalSha256(input.meeting),
           meetingJson,
           canonicalSha256(input.decisions),
@@ -748,8 +779,6 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       },
     };
     if (syntheticCanary) {
-      // This exception is recovery-only. PR98 has no ingress that can create
-      // a synthetic candidate, and a non-exact envelope remains a hard error.
       assertStagingSyntheticMeetingCanaryV1(meeting);
       if (admission.processor.adapter_id !== this.expectedProcessorAdapterId) {
         throw new Error("admission processor differs from its configured processor");

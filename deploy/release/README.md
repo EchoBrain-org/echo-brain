@@ -104,12 +104,20 @@ invitation, Slack, Granola, or model secret.
 
 ## EC2 Authority replacement
 
+Keep the three operator lanes separate:
+
+- A new organization uses `onboard-clean-v1.sh prepare` and `resume` for the
+  one-time founder setup and finalization.
+- An existing organization uses this replacement loop. It preserves identity,
+  Slack, provider credentials, private state, and approved records.
+- A new employee receives the client kit and a fresh invitation; that does not
+  restart founder setup or replace the Authority.
+
 Copy the release validators and operational commands from the exact reviewed
 source checkout into the deployment directory beside the clean Compose files.
 Before copying, compare the SHA-256 of each source file with the private review
-receipt for that source commit. The same `stage` and `promote` commands cover
-first deployment and ordinary replacement; do not pre-install a
-`current.clean-v1.json` record by hand:
+receipt for that source commit. For a normal update, do not edit or pre-install
+`current.clean-v1.json` by hand:
 
 ```sh
 cd /srv/echo-authority-clean-v1
@@ -134,10 +142,6 @@ release rollback does not replace or remove it. Replace or remove it only as a
 separately reviewed host-tooling change, and record the old and new digests in
 the private operator receipt.
 
-For this first stage only, the existing configured image may still be the
-documented local development value. With no accepted record and no running
-Authority, `stage` replaces it with the candidate's immutable digest itself.
-
 For an ordinary baseline-preserving replacement, stage the exact candidate in
 the same way. The command refuses floating images, a reused release ID, a
 baseline mismatch, a stopped accepted runtime, or a runtime image digest that
@@ -150,14 +154,32 @@ status, but does not accept it yet.
   --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
-Perform one bounded post-update Layer 3 canary with the normal product surface:
-create or edit one post-cutoff Granola note, approve one resulting Slack card,
-then list and search that record through the packaged Person client. If it
-passes, make the human confirmation explicit:
+Run the bounded private-DM canary through the selected running release. It
+prefers a staged candidate, otherwise uses the accepted release. It refuses any
+host except Authority staging, verifies the exact running release, and calls
+only the in-container private socket. The printed receipt has only the release
+identity, outcome, and opaque approval identity. A `delivery_pending` outcome
+is safe to retry; every release uses one stable canary and one Slack message.
+Only `staged` succeeds. Other outcomes stop the command without creating
+promotion evidence.
+
+Approve the resulting private card. Then use the packaged Person client to
+search for that exact release ID and ask one cited question before making the
+existing human promotion confirmation explicit:
 
 ```sh
+./update-clean-v1.sh canary
+echo-brain person records --query '<candidate-release-id> private owner approval delivery'
+echo-brain person ask --question 'What did we decide for synthetic staging release <candidate-release-id>?'
 ./update-clean-v1.sh promote --release /absolute/private/candidate-release.json --canary-passed
 ```
+
+The canary command stores a private receipt bound to the exact selected release.
+Every candidate staged by the update tool requires its own `staged` receipt
+before promotion. The `--canary-passed` flag remains the operator's explicit
+confirmation that the card was approved and both permission-aware reads
+succeeded; a receipt from the currently accepted release cannot promote a
+different candidate.
 
 If it fails, restore the prior **same-clean-v1** image, runtime profile, and
 environment tuple and leave the accepted record unchanged:
@@ -173,12 +195,9 @@ The staged candidate record remains the recovery marker: inspect with `status`,
 then run `rollback` to rematerialize and verify the complete accepted tuple
 before retrying. Do not edit individual tuple files to recover.
 
-For first deployment, a stage failure stops the candidate, marks the record
-failed, and accepts nothing. The environment remains pointed at that failed
-candidate; a later first stage replaces it with its own immutable digest. For a later
-replacement, rollback must restart and re-check the prior exact image, profile,
-and public descriptor before claiming recovery; otherwise it reports recovery
-as unconfirmed.
+For a replacement, rollback must restart and re-check the prior exact image,
+profile, and public descriptor before claiming recovery; otherwise it reports
+recovery as unconfirmed.
 
 `./update-clean-v1.sh status` inspects the actual running Authority container
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
@@ -230,7 +249,9 @@ session. If `Start ECHO.command` sees any existing session, it stops instead of
 silently applying a possibly different person's invitation; use the installed
 client for the current person, or log out before onboarding another person.
 The invitation remains separate because it is employee-bound, short-lived, and
-may need reissue without rebuilding the release kit.
+may need reissue without rebuilding the release kit. The installed client now
+rejects an already-expired invitation before opening Google or contacting the
+Authority, and tells the employee to request a reissued invitation.
 
 The first cohort supports macOS arm64 only. A signed and notarized graphical
 installer is a later distribution improvement; it is not required for the

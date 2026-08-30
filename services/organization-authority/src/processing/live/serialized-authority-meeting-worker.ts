@@ -33,6 +33,13 @@ export class SerializedAuthorityMeetingWorker {
   private readonly controller = new AbortController();
   private readonly intervalMs: number;
   private readonly loop: Promise<void>;
+  /**
+   * The worker is also the one in-process exclusion boundary for bounded
+   * operator work. This prevents a rehearsal from racing source polling or
+   * approval observation without creating a second runtime or database owner.
+   */
+  private tail: Promise<void> = Promise.resolve();
+  private exclusiveActive = false;
 
   constructor(
     private readonly options: SerializedAuthorityMeetingWorkerOptions,
@@ -46,16 +53,50 @@ export class SerializedAuthorityMeetingWorker {
   }
 
   /** Aborts the active cycle or delay and resolves only after it has stopped. */
-  close(): Promise<void> {
+  async close(): Promise<void> {
     this.controller.abort();
-    return this.loop;
+    await this.loop;
+    await this.tail;
+  }
+
+  /**
+   * Runs one bounded operation through the same single-file gate as the
+   * periodic worker. The worker abort signal also terminates it during close.
+   */
+  runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const start = (): Promise<T> => {
+      this.controller.signal.throwIfAborted();
+      return operation(this.controller.signal);
+    };
+    let task: Promise<T>;
+    if (this.exclusiveActive) {
+      task = this.tail.then(start);
+    } else {
+      this.exclusiveActive = true;
+      try {
+        task = Promise.resolve(start());
+      } catch (error) {
+        task = Promise.reject(error);
+      }
+    }
+    const completion = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.tail = completion;
+    void completion.then(() => {
+      if (this.tail === completion) this.exclusiveActive = false;
+    });
+    return task;
   }
 
   private async run(): Promise<void> {
     const signal = this.controller.signal;
     while (!signal.aborted) {
       try {
-        await this.options.runCycle(signal);
+        await this.runExclusive((exclusiveSignal) =>
+          this.options.runCycle(exclusiveSignal),
+        );
       } catch (failure) {
         if (!signal.aborted) this.report(failure);
       }
