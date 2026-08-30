@@ -70,7 +70,7 @@ function admitSyntheticSource(
     .run(DIGEST, NOW, DIGEST, NOW, DIGEST, DIGEST, DIGEST, NOW);
 }
 
-describe("Authority provider-neutral live-source baseline v3", () => {
+describe("Authority admitted meeting-source baseline v3", () => {
   it("is a pinned fresh-only provider-neutral schema with stable role headers", () => {
     const database = openedV3Database();
     try {

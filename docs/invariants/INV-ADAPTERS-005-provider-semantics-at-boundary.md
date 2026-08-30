@@ -94,7 +94,7 @@ The reviewed source is covered by:
 - `services/organization-authority/source-boundary.v1.json`;
 - `product/source-boundary.v1.json`;
 - `tests/architecture/workspace-boundaries.test.ts`;
-- `services/organization-authority/test/authority-live-source-baseline-v3.test.ts`;
+- `services/organization-authority/test/admitted-meeting-source-baseline-v3.test.ts`;
 - `services/organization-authority/test/processing/admitted-meeting-processing/meeting-processing-cycle-v1.test.ts`;
 - `services/organization-authority/test/organization-authority-runtime.test.ts`;
 - `services/organization-authority/test/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.test.ts`;
