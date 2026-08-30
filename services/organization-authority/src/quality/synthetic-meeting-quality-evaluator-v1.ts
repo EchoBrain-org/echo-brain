@@ -44,8 +44,10 @@ export interface SyntheticLayer4CaseResultV1 {
   readonly actual_status: "answered" | "insufficient_evidence";
   readonly missing_required_citation_atom_ids: readonly string[];
   readonly missing_required_answer_substrings: readonly string[];
-  /** The answer prompt did not contain any withheld fixture text. */
+  /** Layer 3 released a withheld fixture atom into the composition context. */
   readonly withheld_text_released: boolean;
+  /** Bounded diagnostic: the evaluator never emits withheld fixture text. */
+  readonly withheld_text_detected_in: readonly ("released_context" | "composed_answer")[];
 }
 
 export interface SyntheticMeetingQualityEvaluationV1 {
@@ -66,6 +68,7 @@ export interface SyntheticMeetingQualityEvaluationV1 {
     readonly missing_required_citation_count: number;
     readonly missing_required_answer_substring_count: number;
     readonly withheld_text_release_count: number;
+    readonly withheld_text_detection_count: number;
   };
   /** A single gate for CI or a pre-staging shell wrapper. */
   readonly passed: boolean;
@@ -147,6 +150,10 @@ export const phaseOneSyntheticExtractionExpectationsV1: readonly SyntheticExtrac
 
 function signature(signal: Pick<ExtractedSignal, "kind" | "text" | "subject">): string {
   return JSON.stringify([signal.kind, signal.subject, signal.text]);
+}
+
+function normalizedFixtureText(value: string): string {
+  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
 }
 
 function extractionExpectationIndex(
@@ -278,7 +285,14 @@ async function evaluateLayer4(
         release.released_atoms.map((atom) => atom.text),
       ),
     );
-    const normalizedAnswer = result.answer.toLocaleLowerCase("en-US");
+    const normalizedAnswer = normalizedFixtureText(result.answer);
+    const withheldTextDetectedIn: ("released_context" | "composed_answer")[] = [];
+    if (withheldText.some((text) => releasedTextSet.has(text))) {
+      withheldTextDetectedIn.push("released_context");
+    }
+    if (withheldText.some((text) => normalizedAnswer.includes(normalizedFixtureText(text)))) {
+      withheldTextDetectedIn.push("composed_answer");
+    }
     cases.push(Object.freeze({
       case_id: qualityCase.id,
       principal_id: qualityCase.principal_id,
@@ -292,7 +306,8 @@ async function evaluateLayer4(
           (expected) => !normalizedAnswer.includes(expected.toLocaleLowerCase("en-US")),
         ),
       ),
-      withheld_text_released: withheldText.some((text) => releasedTextSet.has(text)),
+      withheld_text_released: withheldTextDetectedIn.includes("released_context"),
+      withheld_text_detected_in: Object.freeze(withheldTextDetectedIn),
     }));
   }
   return Object.freeze({
@@ -307,6 +322,9 @@ async function evaluateLayer4(
       0,
     ),
     withheld_text_release_count: cases.filter((value) => value.withheld_text_released).length,
+    withheld_text_detection_count: cases.filter(
+      (value) => value.withheld_text_detected_in.length > 0,
+    ).length,
   });
 }
 
@@ -355,6 +373,6 @@ export async function evaluateSyntheticMeetingQualityV1(
       layer4.status_mismatch_count === 0 &&
       layer4.missing_required_citation_count === 0 &&
       layer4.missing_required_answer_substring_count === 0 &&
-      layer4.withheld_text_release_count === 0,
+      layer4.withheld_text_detection_count === 0,
   });
 }

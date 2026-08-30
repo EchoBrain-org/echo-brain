@@ -193,6 +193,32 @@ describe("synthetic meeting quality support", () => {
     expect(result.citations).toHaveLength(1);
   });
 
+  it("fails the synthetic evaluation when an answer repeats withheld fixture text", async () => {
+    const result = await evaluateSyntheticMeetingQualityV1({
+      ...evaluatorDependencies(new ExpectedSignalProcessor()),
+      answerer: {
+        generate: async () => ({
+          status: "answered" as const,
+          answer: "Organization members can read records. Approval cards default to Only me until the meeting owner chooses a wider policy.",
+          citations: ["a1"],
+        }),
+      },
+    });
+
+    const memberCase = result.layer4.cases.find(
+      (qualityCase) => qualityCase.case_id === "member-can-answer-team-policy",
+    );
+    expect(memberCase).toMatchObject({
+      withheld_text_released: false,
+      withheld_text_detected_in: ["composed_answer"],
+    });
+    expect(result.layer4).toMatchObject({
+      withheld_text_release_count: 0,
+      withheld_text_detection_count: 1,
+    });
+    expect(result.passed).toBe(false);
+  });
+
   it("runs the existing Phase 1 replay corpus without provider I/O and emits a machine-readable aggregate", async () => {
     const meetings = await loadSyntheticReplayMeetingsV1(
       new URL("../../../../tests/product/fixtures/phase1-synthetic-replay-corpus.v1.json", import.meta.url).pathname,
@@ -315,6 +341,13 @@ describe("synthetic meeting quality support", () => {
         qualityCase.required_citation_atom_ids = ["owner-only-approval-default"];
       },
       /invalid withheld citation expectations/,
+    ],
+    [
+      "a malformed fixture before any adapter runs",
+      (corpus: Record<string, unknown>) => {
+        (corpus.fixtures as Array<Record<string, unknown>>)[0] = { id: "still-unique" };
+      },
+      /synthetic fixture has an invalid shape/,
     ],
   ])("rejects %s before synthetic evaluation", async (_label, mutate, expected) => {
     const corpus = structuredClone(syntheticMeetingQualityCorpusV1) as unknown as Record<string, unknown>;

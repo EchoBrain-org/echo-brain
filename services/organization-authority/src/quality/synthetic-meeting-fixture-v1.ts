@@ -131,10 +131,43 @@ export function validateSyntheticMeetingQualityCorpusV1(
     throw new Error("synthetic quality corpus has an invalid top-level shape");
   }
 
-  uniqueNonEmptyStrings(
-    corpus.fixtures.map((fixture, index) => corpusRecord(fixture, `synthetic fixture ${index}`).id),
-    "synthetic fixture ids",
+  const fixtures = corpus.fixtures.map((fixture, index) =>
+    corpusRecord(fixture, `synthetic fixture ${index}`),
   );
+  uniqueNonEmptyStrings(fixtures.map((fixture) => fixture.id), "synthetic fixture ids");
+  for (const fixture of fixtures) {
+    exactKeys(fixture, ["blocks", "expected_signals", "id", "owner_email", "title"], "synthetic fixture");
+    if (!nonEmpty(fixture.title) || !nonEmpty(fixture.owner_email)) {
+      throw new Error("synthetic fixture is invalid");
+    }
+    if (!Array.isArray(fixture.blocks) || fixture.blocks.length === 0) {
+      throw new Error("synthetic fixture blocks must be a non-empty array");
+    }
+    const blocks = fixture.blocks.map((block, index) =>
+      corpusRecord(block, `synthetic fixture block ${index}`),
+    );
+    uniqueNonEmptyStrings(blocks.map((block) => block.id), "synthetic fixture block ids");
+    for (const block of blocks) {
+      exactKeys(block, ["id", "kind", "text"], "synthetic fixture block");
+      if (!nonEmpty(block.text) || (block.kind !== "note" && block.kind !== "transcript")) {
+        throw new Error("synthetic fixture block is invalid");
+      }
+    }
+    if (!Array.isArray(fixture.expected_signals)) {
+      throw new Error("synthetic fixture expected signals must be an array");
+    }
+    for (const signal of fixture.expected_signals) {
+      const expected = corpusRecord(signal, "synthetic fixture expected signal");
+      exactKeys(expected, ["kind", "subject", "text"], "synthetic fixture expected signal");
+      if (
+        !nonEmpty(expected.text) ||
+        (expected.subject !== null && !nonEmpty(expected.subject)) ||
+        (expected.kind !== "decision" && expected.kind !== "action" && expected.kind !== "rationale")
+      ) {
+        throw new Error("synthetic fixture expected signal is invalid");
+      }
+    }
+  }
 
   const atoms = corpus.layer4_atoms.map((atom, index) =>
     corpusRecord(atom, `synthetic Layer 4 atom ${index}`),

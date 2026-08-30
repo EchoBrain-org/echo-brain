@@ -199,7 +199,75 @@ function collectLlmProviderSelectors(tree, errors) {
   return new Set(identifiers);
 }
 
-function collectLlmDriverSelectors(tree) {
+function literalString(expression) {
+  let value = expression;
+  while (ts.isAsExpression(value) || ts.isParenthesizedExpression(value)) {
+    value = value.expression;
+  }
+  return ts.isStringLiteral(value) ? value.text : undefined;
+}
+
+function llmProviderClientNames(sourceFile) {
+  const names = new Set(['LlmProviderClient']);
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      !statement.moduleSpecifier.text.endsWith('/llm-provider.js') ||
+      statement.importClause?.namedBindings === undefined ||
+      !ts.isNamedImports(statement.importClause.namedBindings)
+    ) continue;
+    for (const element of statement.importClause.namedBindings.elements) {
+      if ((element.propertyName?.text ?? element.name.text) === 'LlmProviderClient') {
+        names.add(element.name.text);
+      }
+    }
+  }
+  return names;
+}
+
+function classImplementsLlmProviderClient(node, sourceFile, localNames) {
+  return node.heritageClauses?.some(
+    (clause) =>
+      clause.token === ts.SyntaxKind.ImplementsKeyword &&
+      clause.types.some((type) => {
+        const name = type.expression.getText(sourceFile);
+        return localNames.has(name) || name.endsWith('.LlmProviderClient');
+      }),
+  ) ?? false;
+}
+
+function classLooksLikeLlmProviderClient(node, sourceFile) {
+  const members = new Set(
+    node.members
+      .map((member) => member.name?.getText(sourceFile))
+      .filter((name) => name !== undefined),
+  );
+  return (
+    members.has('provider') &&
+    members.has('generateStructured') &&
+    members.has('verifyModel')
+  );
+}
+
+function providerSelector(member, sourceFile) {
+  if (ts.isPropertyDeclaration(member) && member.initializer !== undefined) {
+    return literalString(member.initializer);
+  }
+  if (ts.isGetAccessorDeclaration(member) && member.body !== undefined) {
+    const statements = member.body.statements;
+    if (
+      statements.length === 1 &&
+      ts.isReturnStatement(statements[0]) &&
+      statements[0].expression !== undefined
+    ) {
+      return literalString(statements[0].expression);
+    }
+  }
+  return undefined;
+}
+
+function collectLlmDriverSelectors(tree, errors) {
   const selectors = new Set();
   for (const [path] of tree) {
     if (!SOURCE_FILE_RE.test(path) || !path.startsWith(LLM_PROVIDER_ROOT)) continue;
@@ -211,20 +279,31 @@ function collectLlmDriverSelectors(tree) {
       true,
       ts.ScriptKind.TS,
     );
+    const localNames = llmProviderClientNames(sourceFile);
     const visit = (node) => {
-      // Client declarations are the ownership boundary: a new transport
-      // driver must expose its literal provider identity here and therefore
-      // be listed in the canonical typed provider set.
       if (
-        ts.isPropertyDeclaration(node) &&
-        node.name.getText(sourceFile) === 'provider' &&
-        node.initializer !== undefined
+        ts.isClassDeclaration(node) &&
+        (classImplementsLlmProviderClient(node, sourceFile, localNames) ||
+          classLooksLikeLlmProviderClient(node, sourceFile))
       ) {
-        let initializer = node.initializer;
-        while (ts.isAsExpression(initializer) || ts.isParenthesizedExpression(initializer)) {
-          initializer = initializer.expression;
+        // A transport client is the ownership boundary. Its selector must be
+        // explicit and literal (a property or one-return getter) so the
+        // canonical provider set cannot be bypassed with dynamic code.
+        const providerMembers = node.members.filter(
+          (member) => member.name?.getText(sourceFile) === 'provider',
+        );
+        const selector =
+          providerMembers.length === 1
+            ? providerSelector(providerMembers[0], sourceFile)
+            : undefined;
+        if (selector === undefined) {
+          const name = node.name?.text ?? '<anonymous>';
+          errors.push(
+            `LLM provider client '${name}' in ${path} must expose exactly one literal provider selector`,
+          );
+        } else {
+          selectors.add(selector);
         }
-        if (ts.isStringLiteral(initializer)) selectors.add(initializer.text);
       }
       ts.forEachChild(node, visit);
     };
@@ -302,7 +381,7 @@ function collectRegisteredProviderIdentifiers(tree, adapterArchitecture, errors)
       `LLM_PROVIDER_IDS transport providers must exactly match registered transport providers: expected ${[...llmProviders].sort().join(', ')}, registered ${[...transportIdentifiers].sort().join(', ')}`,
     );
   }
-  const driverProviders = collectLlmDriverSelectors(tree);
+  const driverProviders = collectLlmDriverSelectors(tree, errors);
   if (
     driverProviders.size !== llmProviders.size ||
     [...driverProviders].some((identifier) => !llmProviders.has(identifier))

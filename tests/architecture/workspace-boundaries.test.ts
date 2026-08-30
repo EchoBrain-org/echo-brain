@@ -1110,11 +1110,43 @@ describe("workspace source boundaries", () => {
       "services/organization-authority/src/processing/adapters/decision-processors/llm/unregistered-client.ts",
     );
     try {
-      writeFileSync(newClient, "export class UnregisteredClient { readonly provider = 'unregistered'; }\n");
+      writeFileSync(
+        newClient,
+        [
+          'import type { LlmProviderClient, StructuredGenerationRequest, StructuredGenerationResult } from "./llm-provider.js";',
+          'export class UnregisteredClient {',
+          '  get provider() { return "unregistered" as unknown as LlmProviderClient["provider"]; }',
+          '  async generateStructured(_request: StructuredGenerationRequest): Promise<StructuredGenerationResult> { throw new Error("fixture"); }',
+          '  async verifyModel(_model: string): Promise<void> {}',
+          '}',
+          '',
+        ].join('\n'),
+      );
       const result = runBoundary(fixture);
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stdout + result.stderr).toContain(
         "LLM provider declarations must exactly match LLM_PROVIDER_IDS",
+      );
+    } finally {
+      rmSync(newClient, { force: true });
+    }
+
+    try {
+      writeFileSync(
+        newClient,
+        [
+          'import type { LlmProviderClient as Client, StructuredGenerationRequest, StructuredGenerationResult } from "./llm-provider.js";',
+          'export class UnregisteredClient implements Client {',
+          '  async generateStructured(_request: StructuredGenerationRequest): Promise<StructuredGenerationResult> { throw new Error("fixture"); }',
+          '  async verifyModel(_model: string): Promise<void> {}',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      const result = runBoundary(fixture);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(result.stdout + result.stderr).toContain(
+        "LLM provider client 'UnregisteredClient'",
       );
     } finally {
       rmSync(newClient, { force: true });
