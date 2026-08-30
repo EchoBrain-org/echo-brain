@@ -67,6 +67,8 @@ export interface CleanLiveRuntimeDependencies {
 
 export interface RunningCleanLiveRuntime {
   readonly address: AddressInfo;
+  /** Runs bounded operator work through the same gate as the live worker. */
+  runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
   /** Stops the worker before closing its Person HTTP database handles. */
   close(): Promise<void>;
 }
@@ -172,6 +174,7 @@ export async function startCleanLiveRuntime(
     });
     return {
       address: startedPerson.address,
+      runExclusive: (operation) => worker.runExclusive(operation),
       close: async () => {
         try {
           try {

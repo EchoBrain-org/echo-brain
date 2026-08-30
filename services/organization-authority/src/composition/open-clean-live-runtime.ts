@@ -39,6 +39,11 @@ import type { CleanPersonRuntimeDependencies } from "./clean-person-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import type { CleanLayer4FailureEventV1 } from "./clean-person-answer-route.js";
 import type { CleanLiveWorkerPhaseRunnerV1 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
+import {
+  stageStagingSyntheticPrivateDmCanaryV1,
+  type StageStagingSyntheticPrivateDmCanaryV1Result,
+} from "./staging-synthetic-private-dm-canary-v1.js";
+import type { StagingSyntheticMeetingCanaryInputV1 } from "../processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
 
 export interface OpenCleanLiveRuntimeConfig {
   readonly state_directory: string;
@@ -71,6 +76,14 @@ export interface OpenCleanLiveRuntimeConfig {
 
 export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
   readonly processing: "idle_until_finalize" | "active";
+  /**
+   * A staging-guarded rehearsal hook. It exists only after live admission and
+   * uses the same admitted processor and private approval stager as production
+   * intake; it never touches the provider cursor.
+   */
+  readonly stage_staging_synthetic_private_dm_canary?: (
+    canary: StagingSyntheticMeetingCanaryInputV1,
+  ) => Promise<StageStagingSyntheticPrivateDmCanaryV1Result>;
 }
 
 type CleanLiveSourceAdapter = ConstructorParameters<
@@ -331,6 +344,18 @@ export async function openCleanLiveRuntime(
     return {
       address: runtime.address,
       processing: "active",
+      runExclusive: (operation) => runtime.runExclusive(operation),
+      stage_staging_synthetic_private_dm_canary: (canary) =>
+        runtime.runExclusive((signal) =>
+          stageStagingSyntheticPrivateDmCanaryV1({
+            authority_url: config.authority_url,
+            canary,
+            state: sourceState,
+            processor,
+            stager: approvals.stager,
+            signal,
+          }),
+        ),
       close: async () => {
         await runtime.close();
         record.close();

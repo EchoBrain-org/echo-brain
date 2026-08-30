@@ -8,6 +8,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -157,6 +158,31 @@ function acceptedRuntimeProfile(state: string, releaseId: string): string {
 
 function acceptedRuntimeEnvironment(state: string, releaseId: string): string {
   return join(state, "runtime-environments", `${releaseId}.env`);
+}
+
+function canaryReceiptPath(state: string, releaseId: string): string {
+  return join(state, "canary-receipts", `${releaseId}.json`);
+}
+
+function writeCanaryReceipt(
+  state: string,
+  releaseId: string,
+  outcome: "staged" | "delivery_pending" = "staged",
+): string {
+  const path = canaryReceiptPath(state, releaseId);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    path,
+    `${canonical({
+      schema_version: 1,
+      kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
+      release_id: releaseId,
+      approval_outcome: outcome,
+      approval_id: "approval-canary",
+    })}\n`,
+    { mode: 0o600 },
+  );
+  return path;
 }
 
 function tupleEnvironment(release: ReturnType<typeof record>): string {
@@ -351,11 +377,18 @@ describe("clean-v1 release record", () => {
     expect(readdirSync(target)).toEqual([]);
   });
 
-  it("keeps update promotion explicitly gated on a bounded canary and never names a floating tag", () => {
+  it("keeps the bounded staging canary private, release-bound, and separate from promotion", () => {
     const syntax = run("bash", ["-n", UPDATE]);
     expect(syntax.status).toBe(0);
     const source = readFileSync(UPDATE, "utf8");
     expect(source).toContain("--canary-passed");
+    expect(source).toContain("update-clean-v1.sh canary");
+    expect(source).toContain("run_staging_private_dm_canary");
+    expect(source).toContain("authority-staging.echobrain.org");
+    expect(source).toContain("compose_clean exec -T authority node");
+    expect(source).toContain("staging-private-dm-canary --release-id");
+    expect(source).toContain("validate_staging_canary_receipt");
+    expect(source).not.toContain("onboard-clean-v1.sh resume");
     expect(source).toContain("candidate baseline is not compatible");
     expect(source).toContain("@sha256:");
     expect(source).toContain(".authority-operation-lock");
@@ -1078,10 +1111,15 @@ if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; th
 if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"e".repeat(64)}\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image ]]; then printf '%s\\n' '${candidateRecord.authority_image.reference}'; exit 0; fi
+if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then
+  release_id="$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}")"
+  printf '{"schema_version":1,"kind":"echo-staging-synthetic-private-dm-canary-receipt-v1","release_id":"%s","approval_outcome":"staged","approval_id":"approval-canary"}\\n' "$release_id"
+  exit 0
+fi
 `,
     );
     chmodSync(docker, 0o755);
-    writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority.example.test\n");
+    writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n");
     chmodSync(envFile, 0o600);
 
     const environment = {
@@ -1097,6 +1135,11 @@ if [[ "$1" == image ]]; then printf '%s\\n' '${candidateRecord.authority_image.r
     expect(existsSync(join(state, "current.clean-v1.json"))).toBe(false);
     expect(readFileSync(envFile, "utf8")).toContain(candidateRecord.authority_image.reference);
 
+    const refused = run("bash", [UPDATE, "promote", "--release", candidate, "--canary-passed"], environment);
+    expect(refused.status).toBe(1);
+    expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
+    const canary = run("bash", [UPDATE, "canary"], environment);
+    expect(canary.status).toBe(0);
     const promoted = run("bash", [UPDATE, "promote", "--release", candidate, "--canary-passed"], environment);
     expect(promoted.status).toBe(0);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(false);
@@ -1173,7 +1216,7 @@ if [[ "$1" == compose && "$*" == *" down"* ]]; then exit 0; fi
     );
   });
 
-  it("finalizes a promotion crash window idempotently and permits the next update", () => {
+  it("binds routine promotion to staged canary evidence and recovers a promotion crash", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-promote-retry-"));
     roots.push(root);
     const envFile = join(root, ".env.clean-v1");
@@ -1205,11 +1248,16 @@ if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; th
 if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"f".repeat(64)}\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image ]]; then printf '%s\\n' '${accepted.authority_image.reference}' '${next.authority_image.reference}'; exit 0; fi
+if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then
+  release_id="$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}")"
+  printf '{"schema_version":1,"kind":"echo-staging-synthetic-private-dm-canary-receipt-v1","release_id":"%s","approval_outcome":"staged","approval_id":"approval-canary"}\\n' "$release_id"
+  exit 0
+fi
 `,
     );
     chmodSync(docker, 0o755);
     const acceptedEnvironment = `ECHO_CLEAN_AUTHORITY_IMAGE=${accepted.authority_image.reference}
-ECHO_CLEAN_AUTHORITY_HOST=authority.example.test
+ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org
 ECHO_CLEAN_RELEASE_ID=${accepted.release_id}
 ECHO_CLEAN_RELEASE_SOURCE_SHA=${accepted.source_sha}
 ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${accepted.runtime_profile.artifact_sha256}
@@ -1235,6 +1283,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
       ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
     };
 
+    writeCanaryReceipt(state, String(accepted.release_id));
     const retry = run("bash", [UPDATE, "promote", "--release", acceptedPath, "--canary-passed"], environment);
     expect(retry.status).toBe(0);
     expect(retry.stdout).toContain('"idempotent":true');
@@ -1243,6 +1292,42 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
 
     const staged = run("bash", [UPDATE, "stage", "--release", nextPath, "--runtime-profile", nextProfile], environment);
     expect(staged.status).toBe(0);
+    const refusedWithoutEvidence = run(
+      "bash",
+      [UPDATE, "promote", "--release", nextPath, "--canary-passed"],
+      environment,
+    );
+    expect(refusedWithoutEvidence.status).toBe(1);
+    expect(refusedWithoutEvidence.stderr).toContain(
+      "requires a private-DM canary receipt for the exact staged candidate",
+    );
+    expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
+
+    const pendingReceipt = writeCanaryReceipt(
+      state,
+      String(next.release_id),
+      "delivery_pending",
+    );
+    const refusedPending = run(
+      "bash",
+      [UPDATE, "promote", "--release", nextPath, "--canary-passed"],
+      environment,
+    );
+    expect(refusedPending.status).toBe(1);
+    expect(refusedPending.stderr).toContain(
+      "requires a staged private-DM canary for the exact candidate",
+    );
+    rmSync(pendingReceipt);
+
+    const canary = run("bash", [UPDATE, "canary"], environment);
+    expect(canary.status).toBe(0);
+    expect(canary.stdout).toContain('"approval_outcome":"staged"');
+    const storedReceipt = canaryReceiptPath(state, String(next.release_id));
+    expect(readFileSync(storedReceipt, "utf8")).toContain(
+      `"release_id":"${next.release_id}"`,
+    );
+    expect(statSync(storedReceipt).mode & 0o777).toBe(0o600);
+
     const storedAcceptedProfile = acceptedRuntimeProfile(
       state,
       String(accepted.release_id),

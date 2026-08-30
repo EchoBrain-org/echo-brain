@@ -7,7 +7,10 @@ import { PersonClient } from "./client.js";
 import { PersonAuthorityClientError } from "./authority-client.js";
 import { PersonClientSessionUnavailableError } from "./session-store.js";
 import { startPersonLoopbackHandoff } from "./browser-login-handoff.js";
-import { readPersonOnboardingInvitation } from "./onboarding-invitation.js";
+import {
+  assertPersonOnboardingInvitationReady,
+  readPersonOnboardingInvitation,
+} from "./onboarding-invitation.js";
 import { readPackagedPersonClientBuildIdentity } from "./package-identity.js";
 
 const MAXIMUM_INPUT_BYTES = 64 * 1024;
@@ -414,7 +417,10 @@ export async function runPersonClientCli(
       case "login": {
         const invitation =
           typeof values.invitation === "string"
-            ? readPersonOnboardingInvitation(values.invitation)
+            ? assertPersonOnboardingInvitationReady(
+                readPersonOnboardingInvitation(values.invitation),
+                dependencies.now?.() ?? new Date().toISOString(),
+              )
             : undefined;
         const authorityUrl = invitation?.authority_url ?? requiredText(values, "authority-url");
         await completePersonLogin({
@@ -431,8 +437,9 @@ export async function runPersonClientCli(
         break;
       }
       case "start": {
-        const invitation = readPersonOnboardingInvitation(
-          requiredText(values, "invitation"),
+        const invitation = assertPersonOnboardingInvitationReady(
+          readPersonOnboardingInvitation(requiredText(values, "invitation")),
+          dependencies.now?.() ?? new Date().toISOString(),
         );
         try {
           client.sessionSummary();

@@ -270,9 +270,16 @@ After onboarding, use the exact-record replacement and checksum client reinstall
 procedure in [the clean-v1 release loop](../release/README.md), including
 [update-clean-v1.sh](./update-clean-v1.sh). It supports only
 baseline-preserving `clean-v1` replacements, not schema migrations or automatic
-client updates. The recovery unit is the accepted image, its exact runtime
-profile, and the saved environment tuple; the release wrapper restores those
-together before it claims a recovered public Authority.
+client updates. This routine path preserves the existing Google identity,
+Slack link and configuration, provider credentials, private-DM assignment, and
+Authority data; do not rerun founder onboarding for an ordinary update. Use
+`update-clean-v1.sh canary` to create the release-bound synthetic private-DM
+rehearsal instead of making a new Granola note. A routine promotion is refused
+until that exact candidate has a persisted `staged` receipt and the operator
+confirms the Slack approval plus permission-aware reads. The recovery unit is
+the accepted image, its exact runtime profile, and the saved environment tuple;
+the release wrapper restores those together before it claims a recovered public
+Authority.
 
 ### Current-host recovery floor
 

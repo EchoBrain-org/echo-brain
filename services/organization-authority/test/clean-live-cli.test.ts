@@ -14,11 +14,13 @@ const runtimeState = vi.hoisted(() => ({
   startup_error: undefined as Error | undefined,
   slack_signing_secret_file: undefined as string | undefined,
   slack_connection_id: undefined as string | undefined,
+  authority_url: "https://authority.example",
+  processing: "active" as "active" | "idle_until_finalize",
 }));
 
 vi.mock("../src/composition/clean-founder-cli.js", () => ({
   readCleanFounderOnboardingManifest: () => ({
-    authority_url: "https://authority.example",
+    authority_url: runtimeState.authority_url,
     oidc_config_path: "/private/oidc.json",
     pkce_key_file: "/private/pkce.key",
     slack_connection_id: "con_manifest",
@@ -26,6 +28,7 @@ vi.mock("../src/composition/clean-founder-cli.js", () => ({
     granola_credential_file: "/private/granola.credential",
     granola_owner_email_file: "/private/granola-owner-email",
     llm_credential_file: "/private/llm.credential",
+    owner_email: "founder@example.com",
   }),
 }));
 
@@ -52,7 +55,7 @@ vi.mock("../src/composition/open-clean-granola-live-runtime.js", () => ({
     runtimeState.slack_connection_id = config.slack_connection_id;
     return {
       address: { address: "127.0.0.1", port: 43179 },
-      processing: "active",
+      processing: runtimeState.processing,
       close: async () => undefined,
     };
   },
@@ -69,6 +72,8 @@ afterEach(() => {
   runtimeState.startup_error = undefined;
   runtimeState.slack_signing_secret_file = undefined;
   runtimeState.slack_connection_id = undefined;
+  runtimeState.authority_url = "https://authority.example";
+  runtimeState.processing = "active";
 });
 
 function start(io: { readonly stderr: (value: string) => void }) {
@@ -89,6 +94,23 @@ function start(io: { readonly stderr: (value: string) => void }) {
 }
 
 describe("clean live CLI runtime events", () => {
+  it("keeps founder onboarding live when staging processing is still idle", async () => {
+    const stderr: string[] = [];
+    runtimeState.authority_url = "https://authority-staging.echobrain.org";
+    runtimeState.processing = "idle_until_finalize";
+    const running = start({ stderr: (value) => stderr.push(value) });
+    await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    process.emit("SIGTERM");
+    await expect(running).resolves.toBe(0);
+    expect(stderr).toContain(
+      `${canonicalJson({
+        schema_version: 1,
+        kind: "echo-clean-live-runtime-ready-v1",
+        processing: "idle_until_finalize",
+      } as never)}\n`,
+    );
+  });
+
   it("requires and forwards only the Slack signing-secret file path", async () => {
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) });

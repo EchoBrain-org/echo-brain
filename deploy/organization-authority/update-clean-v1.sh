@@ -18,6 +18,7 @@ CURRENT_RECORD="$RELEASE_STATE_DIR/current.clean-v1.json"
 CANDIDATE_RECORD="$RELEASE_STATE_DIR/candidate.clean-v1.json"
 RUNTIME_PROFILE_STATE_DIR="$RELEASE_STATE_DIR/runtime-profiles"
 ENVIRONMENT_STATE_DIR="$RELEASE_STATE_DIR/runtime-environments"
+CANARY_RECEIPT_DIR="$RELEASE_STATE_DIR/canary-receipts"
 ACTIVE_RUNTIME_PROFILE="$RELEASE_STATE_DIR/runtime-profile.active"
 OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.authority-operation-lock}"
 OPERATION_LOCK_HELD=false
@@ -62,7 +63,7 @@ validate_profile() { python3 "$RUNTIME_PROFILE_TOOL" validate "$1" >/dev/null; }
 
 ensure_state_directories() {
   python3 - "$RELEASE_STATE_DIR" "$RUNTIME_PROFILE_STATE_DIR" "$ENVIRONMENT_STATE_DIR" \
-    "$RELEASE_STATE_DIR/history" "$RELEASE_STATE_DIR/failed" <<'PY'
+    "$RELEASE_STATE_DIR/history" "$RELEASE_STATE_DIR/failed" "$CANARY_RECEIPT_DIR" <<'PY'
 import os, pathlib, stat, sys
 
 for index, raw in enumerate(sys.argv[1:]):
@@ -431,9 +432,8 @@ safe_setup_status() {
     status --state-dir /echo-clean/state
 }
 
-safe_public_descriptor_check() {
-  local host descriptor_url
-  host="$(python3 - "$ENV_FILE" <<'PY'
+authority_host() {
+  python3 - "$ENV_FILE" <<'PY'
 import pathlib, re, stat, sys
 path = pathlib.Path(sys.argv[1])
 state = path.lstat()
@@ -444,7 +444,11 @@ if len(rows) != 1 or not re.fullmatch(r'[a-z0-9][a-z0-9.-]*[a-z0-9]', rows[0].sp
     raise SystemExit('clean Authority environment must contain one valid ECHO_CLEAN_AUTHORITY_HOST')
 print(rows[0].split('=', 1)[1])
 PY
-)"
+}
+
+safe_public_descriptor_check() {
+  local host descriptor_url
+  host="$(authority_host)"
   descriptor_url="https://$host/v1/authority-descriptor"
   compose_clean exec -T authority node -e '
 const url = process.argv[1];
@@ -466,6 +470,162 @@ Promise.all([
   })
   .catch(() => process.exit(1));
 ' "$descriptor_url" >/dev/null 2>&1
+}
+
+validate_staging_canary_receipt() {
+  local expected_release_id="$1" receipt="$2"
+  python3 - "$expected_release_id" "$receipt" <<'PY'
+import json, re, sys
+
+expected_release_id, raw = sys.argv[1:]
+if len(raw.encode("utf-8")) > 1024:
+    raise SystemExit(1)
+try:
+    receipt = json.loads(raw)
+except Exception:
+    raise SystemExit(1)
+if not isinstance(receipt, dict):
+    raise SystemExit(1)
+base = {"schema_version", "kind", "release_id", "approval_outcome"}
+if (
+    receipt.get("schema_version") != 1 or
+    receipt.get("kind") != "echo-staging-synthetic-private-dm-canary-receipt-v1" or
+    receipt.get("release_id") != expected_release_id or
+    receipt.get("approval_outcome") not in {"staged", "delivery_pending", "not_actionable", "not_staged"}
+):
+    raise SystemExit(1)
+if receipt["approval_outcome"] == "not_actionable":
+    if set(receipt) != base:
+        raise SystemExit(1)
+else:
+    if set(receipt) != base | {"approval_id"}:
+        raise SystemExit(1)
+    if not isinstance(receipt["approval_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", receipt["approval_id"]):
+        raise SystemExit(1)
+print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+staging_canary_receipt_path() {
+  printf '%s/%s.json\n' "$CANARY_RECEIPT_DIR" "$1"
+}
+
+persist_staging_canary_receipt() {
+  local release_id="$1" receipt="$2" destination
+  destination="$(staging_canary_receipt_path "$release_id")"
+  python3 - "$destination" "$receipt" <<'PY'
+import os, pathlib, stat, sys, tempfile
+
+destination, receipt = pathlib.Path(sys.argv[1]), (sys.argv[2] + "\n").encode("utf-8")
+parent_state = destination.parent.lstat()
+if stat.S_ISLNK(parent_state.st_mode) or not stat.S_ISDIR(parent_state.st_mode):
+    raise SystemExit("canary receipt directory is unsafe")
+if destination.exists() or destination.is_symlink():
+    state = destination.lstat()
+    if (
+        stat.S_ISLNK(state.st_mode) or
+        not stat.S_ISREG(state.st_mode) or
+        state.st_mode & 0o077 or
+        destination.read_bytes() != receipt
+    ):
+        raise SystemExit("existing canary receipt is unsafe or does not match")
+    raise SystemExit(0)
+fd, temporary = tempfile.mkstemp(prefix="." + destination.name + ".", dir=destination.parent)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        output.write(receipt)
+        output.flush()
+        os.fsync(output.fileno())
+    os.link(temporary, destination)
+    os.unlink(temporary)
+    directory = os.open(destination.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
+require_staged_canary_receipt() {
+  local record="$1" release_id receipt_path receipt normalized outcome
+  release_id="$(field "$record" release-id)"
+  receipt_path="$(staging_canary_receipt_path "$release_id")"
+  receipt="$(python3 - "$receipt_path" <<'PY'
+import pathlib, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+state = path.lstat()
+if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode) or state.st_mode & 0o077:
+    raise SystemExit("candidate canary receipt is unsafe")
+data = path.read_bytes()
+if len(data) > 1025:
+    raise SystemExit("candidate canary receipt is too large")
+try:
+    print(data.decode("utf-8").rstrip("\n"))
+except UnicodeDecodeError:
+    raise SystemExit("candidate canary receipt is not UTF-8")
+PY
+  )" || fail 'routine promotion requires a private-DM canary receipt for the exact staged candidate'
+  normalized="$(validate_staging_canary_receipt "$release_id" "$receipt")" || \
+    fail 'routine promotion requires a valid private-DM canary receipt for the exact staged candidate'
+  outcome="$(python3 - "$normalized" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1])["approval_outcome"])
+PY
+  )"
+  [[ "$outcome" == staged ]] || \
+    fail 'routine promotion requires a staged private-DM canary for the exact candidate'
+}
+
+run_staging_private_dm_canary() {
+  local record release_id host receipt normalized outcome
+  if [[ -f "$CANDIDATE_RECORD" ]]; then
+    record="$CANDIDATE_RECORD"
+  elif [[ -f "$CURRENT_RECORD" ]]; then
+    record="$CURRENT_RECORD"
+  else
+    fail 'staging canary requires a staged candidate or accepted release'
+  fi
+  validate "$record"
+  active_runtime_profile_matches "$record"
+  active_materialized_profile_matches
+  active_environment_matches "$record"
+  running_exact_release "$record" || \
+    fail 'staging canary requires the exact selected release to be running'
+  host="$(authority_host)" || fail 'staging canary could not verify the Authority host'
+  [[ "$host" == "authority-staging.echobrain.org" ]] || \
+    fail 'staging canary is available only on the exact Authority staging host'
+  release_id="$(field "$record" release-id)"
+  receipt="$(compose_clean exec -T authority node \
+    services/organization-authority/dist/clean-live-main.js \
+    staging-private-dm-canary --release-id "$release_id")" || \
+    fail 'staging canary did not return a receipt'
+  normalized="$(validate_staging_canary_receipt "$release_id" "$receipt")" || \
+    fail 'staging canary returned an invalid receipt'
+  outcome="$(python3 - "$normalized" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1])["approval_outcome"])
+PY
+  )"
+  case "$outcome" in
+    staged)
+      persist_staging_canary_receipt "$release_id" "$normalized" || \
+        fail 'staging canary receipt could not be persisted safely'
+      printf '%s\n' "$normalized"
+      ;;
+    delivery_pending)
+      printf '%s\n' "$normalized"
+      fail 'staging canary delivery is still pending; retry the canary command'
+      ;;
+    not_actionable|not_staged)
+      printf '%s\n' "$normalized"
+      fail "staging canary did not stage a private approval card: $outcome"
+      ;;
+  esac
 }
 
 start_and_check() {
@@ -493,6 +653,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   update-clean-v1.sh stage --release <canonical-release.json> --runtime-profile <canonical-profile.json>
+  update-clean-v1.sh canary
   update-clean-v1.sh promote --release <canonical-release.json> --canary-passed
   update-clean-v1.sh rollback
   update-clean-v1.sh status
@@ -552,12 +713,17 @@ case "$command" in
     archive_candidate_as_failed || fail 'candidate recovery was verified but the candidate could not be marked failed; leave it staged and retry rollback'
     fail 'candidate failed health/setup checks; previous accepted release tuple was restored and verified'
     ;;
+  canary)
+    [[ $# -eq 1 ]] || usage
+    run_staging_private_dm_canary
+    ;;
   promote)
     [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--canary-passed' && $# -eq 4 ]] || usage
     candidate="$(cd "$(dirname "$3")" && pwd -P)/$(basename "$3")"
     validate "$candidate"
     [[ -f "$CANDIDATE_RECORD" ]] || fail 'no staged candidate to promote'
     cmp -s "$candidate" "$CANDIDATE_RECORD" || fail 'promotion record does not match the staged candidate'
+    require_staged_canary_receipt "$CANDIDATE_RECORD"
     active_runtime_profile_matches "$CANDIDATE_RECORD"
     active_materialized_profile_matches
     active_environment_matches "$CANDIDATE_RECORD"

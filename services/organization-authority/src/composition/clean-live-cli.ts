@@ -3,12 +3,21 @@ import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/priva
 import { readCleanFounderOnboardingManifest } from "./clean-founder-cli.js";
 import { openCleanGranolaLiveRuntime } from "./open-clean-granola-live-runtime.js";
 import { readCleanPersonOidcConfiguration } from "./clean-person-cli.js";
+import {
+  openStagingSyntheticPrivateDmCanaryControlV1,
+  STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
+} from "./staging-synthetic-private-dm-canary-control-v1.js";
+import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging-synthetic-private-dm-canary-client-v1.js";
 
 const USAGE =
   "usage: echo-organization-authority-clean-live serve " +
   "--state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> " +
   "--slack-signing-secret-file <absolute-path> " +
   "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>]";
+const STAGING_CANARY_USAGE =
+  "usage: echo-organization-authority-clean-live staging-private-dm-canary " +
+  "--release-id <canonical-clean-v1-release-id>";
+const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 
 interface CliIo {
   readonly stdout: (value: string) => void;
@@ -87,6 +96,21 @@ function positiveInteger(value: string, label: string): number {
   return parsed;
 }
 
+function stagingCanaryReleaseId(argv: readonly string[]): string {
+  if (
+    argv.length !== 2 ||
+    argv[0] !== "--release-id" ||
+    argv[1] === undefined ||
+    !RELEASE_ID.test(argv[1])
+  ) {
+    throw new Error(STAGING_CANARY_USAGE);
+  }
+  if (process.env.ECHO_CLEAN_RELEASE_ID !== argv[1]) {
+    throw new Error("staging synthetic canary release does not match runtime");
+  }
+  return argv[1];
+}
+
 /**
  * Starts from the private, non-secret founder manifest. It deliberately does
  * not repeat the Authority URL, OIDC configuration, PKCE key, or Slack
@@ -99,6 +123,13 @@ export async function runCleanLiveCli(
   io: CliIo = PROCESS_IO,
 ): Promise<number> {
   try {
+    if (argv[0] === "staging-private-dm-canary") {
+      const receipt = await requestStagingSyntheticPrivateDmCanaryV1({
+        release_id: stagingCanaryReleaseId(argv.slice(1)),
+      });
+      io.stdout(`${canonicalJson(receipt as never)}\n`);
+      return 0;
+    }
     if (argv[0] !== "serve") throw new Error(USAGE);
     const parsed = flags(argv.slice(1));
     const stateDirectory = required(parsed, "--state-dir");
@@ -180,6 +211,21 @@ export async function runCleanLiveCli(
             ),
           }),
     });
+    const stagingCanaryControl =
+      manifest.authority_url ===
+        STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 &&
+      runtime.stage_staging_synthetic_private_dm_canary !== undefined
+        ? await openStagingSyntheticPrivateDmCanaryControlV1({
+            authority_url: manifest.authority_url,
+            authority_host: process.env.ECHO_CLEAN_AUTHORITY_HOST ?? "",
+            release_id: process.env.ECHO_CLEAN_RELEASE_ID ?? "",
+            owner_email: manifest.owner_email,
+            runtime,
+          }).catch(async (error: unknown) => {
+            await runtime.close();
+            throw error;
+          })
+        : undefined;
     io.stderr(
       `${canonicalJson({
         schema_version: 1,
@@ -188,7 +234,16 @@ export async function runCleanLiveCli(
       } as never)}\n`,
     );
     await new Promise<void>((resolve) => {
-      const close = () => void runtime.close().finally(resolve);
+      const close = (): void => {
+        const shutdown =
+          stagingCanaryControl === undefined
+            ? runtime.close()
+            : stagingCanaryControl
+                .close()
+                .catch(() => undefined)
+                .then(() => runtime.close());
+        void shutdown.finally(resolve);
+      };
       process.once("SIGINT", close);
       process.once("SIGTERM", close);
     });

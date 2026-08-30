@@ -1032,6 +1032,61 @@ describe("Person client", () => {
     });
   });
 
+  it("stops an expired invitation locally before it opens a browser or contacts the Authority", async () => {
+    await withHome(async (home) => {
+      const invitationPath = join(home, "expired-person-onboarding.json");
+      const loginGrant = "G".repeat(43);
+      writeFileSync(
+        invitationPath,
+        `${canonicalJson({
+          schema_version: 1,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: "https://authority.example",
+          login_grant: loginGrant,
+          expires_at: "2026-08-18T00:01:00.000Z",
+        })}\n`,
+        { mode: 0o600 },
+      );
+      chmodSync(invitationPath, 0o600);
+
+      for (const argv of [
+        ["login", "--invitation", invitationPath],
+        ["start", "--invitation", invitationPath],
+      ]) {
+        let stdout = "";
+        let stderr = "";
+        let browserOpened = false;
+        let authorityContacted = false;
+        const status = await runPersonClientCli(argv, {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          open_authorization_url: () => {
+            browserOpened = true;
+            return true;
+          },
+          fetch: async () => {
+            authorityContacted = true;
+            throw new Error("expired invitation must not contact the Authority");
+          },
+        });
+
+        expect(status).toBe(1);
+        expect(stdout).toBe("");
+        expect(browserOpened).toBe(false);
+        expect(authorityContacted).toBe(false);
+        expect(JSON.parse(stderr)).toMatchObject({
+          ok: false,
+          action: argv[0],
+          error: expect.stringContaining("has expired"),
+        });
+        expect(stderr).toContain("reissue");
+        expect(stderr).not.toContain(loginGrant);
+      }
+    });
+  });
+
   it("starts an invited employee, opens the browser, and reports ready only after one authorized read", async () => {
     await withHome(async (home) => {
       const invitationPath = join(home, "person-onboarding.json");
