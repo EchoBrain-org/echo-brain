@@ -3,17 +3,17 @@
   "kind": "echo-workspace-source-boundary",
   "name": "@echo-brain/organization-retrieval",
   "workspace": true,
-  "boundary_root": "services/organization-retrieval",
-  "source_root": "services/organization-retrieval/src",
-  "package_json": "services/organization-retrieval/package.json",
+  "boundary_root": "packages/organization-retrieval",
+  "source_root": "packages/organization-retrieval/src",
+  "package_json": "packages/organization-retrieval/package.json",
   "entry_points": [
-    "services/organization-retrieval/src/readable-search-engine-v1.ts"
+    "packages/organization-retrieval/src/readable-search-engine-v1.ts"
   ],
   "owned_source_paths": [
-    "services/organization-retrieval/src/**"
+    "packages/organization-retrieval/src/**"
   ],
   "allowed_internal_paths": [
-    "services/organization-retrieval/src/**"
+    "packages/organization-retrieval/src/**"
   ],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol"
@@ -27,46 +27,46 @@
     "path"
   ],
   "runtime_assets": [
-    "services/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql",
-    "services/organization-retrieval/baselines/readable-search-lexical-baseline-v1.sql",
-    "services/organization-retrieval/baselines/readable-search-content-baseline-v1.sql"
+    "packages/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql",
+    "packages/organization-retrieval/baselines/readable-search-lexical-baseline-v1.sql",
+    "packages/organization-retrieval/baselines/readable-search-content-baseline-v1.sql"
   ],
   "forbidden_repository_roots": [
     "services/organization-authority",
-    "services/organization-record",
-    "services/organization-control-plane"
+    "packages/organization-record",
+    "packages/organization-control-plane"
   ],
   "component_index_contract": {
     "canonical_components": [
       {
         "name": "Readable-search engine",
-        "path": "services/organization-retrieval/src/readable-search-engine-v1.ts",
+        "path": "packages/organization-retrieval/src/readable-search-engine-v1.ts",
         "export": "buildReadableSearchGenerationV1"
       },
       {
         "name": "Readable-search contracts",
-        "path": "services/organization-retrieval/src/application/readable-search-contracts.ts",
+        "path": "packages/organization-retrieval/src/application/readable-search-contracts.ts",
         "export": "ReadableSearchPlane"
       }
     ],
     "retired_source_paths": [
-      "services/organization-retrieval/src/readable-search-runtime-v1.ts"
+      "packages/organization-retrieval/src/readable-search-runtime-v1.ts"
     ],
     "compatibility_entrypoints": [
       {
-        "path": "services/organization-retrieval/src/new-lineage-v1.ts",
+        "path": "packages/organization-retrieval/src/new-lineage-v1.ts",
         "targets": [
-          "services/organization-retrieval/src/readable-search-engine-v1.ts"
+          "packages/organization-retrieval/src/readable-search-engine-v1.ts"
         ]
       }
     ]
   },
   "layer_rules": [
     {
-      "name": "readable-search-engine-v1-owns-generation-composition",
-      "from": "services/organization-retrieval/src/readable-search-engine-v1.ts",
+      "name": "readable-search-engine-owns-generation-lifecycle-and-query",
+      "from": "packages/organization-retrieval/src/readable-search-engine-v1.ts",
       "allowed_imports": [
-        "services/organization-retrieval/src/**"
+        "packages/organization-retrieval/src/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
@@ -82,9 +82,9 @@
     },
     {
       "name": "retrieval-compatibility-entrypoint-is-thin",
-      "from": "services/organization-retrieval/src/new-lineage-v1.ts",
+      "from": "packages/organization-retrieval/src/new-lineage-v1.ts",
       "allowed_imports": [
-        "services/organization-retrieval/src/readable-search-engine-v1.ts"
+        "packages/organization-retrieval/src/readable-search-engine-v1.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -92,9 +92,9 @@
     },
     {
       "name": "retrieval-application-is-pure",
-      "from": "services/organization-retrieval/src/application/**",
+      "from": "packages/organization-retrieval/src/application/**",
       "allowed_imports": [
-        "services/organization-retrieval/src/application/**"
+        "packages/organization-retrieval/src/application/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
@@ -104,10 +104,10 @@
     },
     {
       "name": "retrieval-persistence-owns-sqlite",
-      "from": "services/organization-retrieval/src/persistence/**",
+      "from": "packages/organization-retrieval/src/persistence/**",
       "allowed_imports": [
-        "services/organization-retrieval/src/application/**",
-        "services/organization-retrieval/src/persistence/**"
+        "packages/organization-retrieval/src/application/**",
+        "packages/organization-retrieval/src/persistence/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"

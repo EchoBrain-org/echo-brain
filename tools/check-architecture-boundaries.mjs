@@ -9,7 +9,8 @@
 // closure to resolve locally and enforces product-wide and per-layer package
 // and Node-builtin allowlists.
 //
-import { dirname, posix } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, join, posix } from 'node:path';
 import process from 'node:process';
 import ts from 'typescript';
 import { collectModuleReferences } from './lib/module-references.mjs';
@@ -657,13 +658,31 @@ function checkWorkspaceBoundaries(tree, errors) {
   if (
     registry.registry_version !== 1 ||
     registry.kind !== 'echo-workspace-source-boundary-registry' ||
-    !Array.isArray(registry.manifests)
+    !Array.isArray(registry.manifests) ||
+    !isStringArray(registry.retired_workspace_roots)
   ) {
     errors.push(`invalid workspace boundary registry: ${WORKSPACE_BOUNDARY_REGISTRY}`);
     return { report: [], productWorkspaceSourceRoots: [] };
   }
   if (new Set(registry.manifests).size !== registry.manifests.length) {
     errors.push(`workspace boundary registry contains duplicate manifest paths`);
+  }
+  if (
+    new Set(registry.retired_workspace_roots).size !==
+    registry.retired_workspace_roots.length
+  ) {
+    errors.push(`workspace boundary registry contains duplicate retired workspace roots`);
+  }
+  for (const retiredRoot of registry.retired_workspace_roots) {
+    if (!isRepositoryPath(retiredRoot)) {
+      errors.push(
+        `workspace boundary registry contains a non-normalized retired workspace root: ${retiredRoot}`,
+      );
+      continue;
+    }
+    if (existsSync(join(REPO, retiredRoot))) {
+      errors.push(`retired workspace root remains: ${retiredRoot}`);
+    }
   }
 
   // A manifest nobody enumerates is inert: it declares a boundary the gate

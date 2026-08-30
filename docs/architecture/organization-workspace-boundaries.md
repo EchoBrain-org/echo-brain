@@ -6,6 +6,12 @@ The repository contains eight workspaces. The root package is private
 workspace orchestration only: it has no executable, runtime export, product
 database, or packable application.
 
+`services/` is reserved for independently deployable processes and lifecycle
+owners. `packages/` contains linked reusable/server modules and shared
+contracts. `src/product/` contains shipped machine product. Therefore the
+control plane, record, and retrieval workspaces are packages linked into the
+Authority process rather than deployable services.
+
 ## Workspace graph
 
 ```text

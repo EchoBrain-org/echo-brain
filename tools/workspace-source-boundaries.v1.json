@@ -1,14 +1,19 @@
 {
   "registry_version": 1,
   "kind": "echo-workspace-source-boundary-registry",
+  "retired_workspace_roots": [
+    "services/organization-control-plane",
+    "services/organization-record",
+    "services/organization-retrieval"
+  ],
   "manifests": [
     "packages/federation-protocol/source-boundary.v1.json",
     "packages/organization-protocol/source-boundary.v1.json",
     "packages/organization-api/source-boundary.v1.json",
     "services/organization-authority/source-boundary.v1.json",
-    "services/organization-control-plane/source-boundary.v1.json",
-    "services/organization-record/source-boundary.v1.json",
-    "services/organization-retrieval/source-boundary.v1.json",
+    "packages/organization-control-plane/source-boundary.v1.json",
+    "packages/organization-record/source-boundary.v1.json",
+    "packages/organization-retrieval/source-boundary.v1.json",
     "src/product/person-client/source-boundary.v1.json"
   ]
 }

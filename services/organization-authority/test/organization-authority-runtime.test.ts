@@ -24,7 +24,7 @@ import {
   buildExternalHumanIdentityLinkContractV2,
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
-} from "../../organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.js";
+} from "../../../packages/organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.js";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import type {

@@ -14,9 +14,9 @@
         "packages/organization-api",
         "src/product/person-client",
         "services/organization-authority",
-        "services/organization-control-plane",
-        "services/organization-record",
-        "services/organization-retrieval"
+        "packages/organization-control-plane",
+        "packages/organization-record",
+        "packages/organization-retrieval"
       ],
       "devDependencies": {
         "@types/better-sqlite3": "7.6.11",
@@ -45,7 +45,7 @@
       "link": true
     },
     "node_modules/@echo-brain/organization-control-plane": {
-      "resolved": "services/organization-control-plane",
+      "resolved": "packages/organization-control-plane",
       "link": true
     },
     "node_modules/@echo-brain/organization-protocol": {
@@ -53,11 +53,11 @@
       "link": true
     },
     "node_modules/@echo-brain/organization-record": {
-      "resolved": "services/organization-record",
+      "resolved": "packages/organization-record",
       "link": true
     },
     "node_modules/@echo-brain/organization-retrieval": {
-      "resolved": "services/organization-retrieval",
+      "resolved": "packages/organization-retrieval",
       "link": true
     },
     "node_modules/@echo-brain/person-client": {
@@ -3630,7 +3630,7 @@
         "npm": "10.9.4"
       }
     },
-    "services/organization-control-plane": {
+    "packages/organization-control-plane": {
       "name": "@echo-brain/organization-control-plane",
       "version": "0.0.0-dev.0",
       "license": "MIT",
@@ -3642,7 +3642,7 @@
         "npm": "10.9.4"
       }
     },
-    "services/organization-record": {
+    "packages/organization-record": {
       "name": "@echo-brain/organization-record",
       "version": "0.0.0-dev.0",
       "license": "MIT",
@@ -3655,7 +3655,7 @@
         "npm": "10.9.4"
       }
     },
-    "services/organization-retrieval": {
+    "packages/organization-retrieval": {
       "name": "@echo-brain/organization-retrieval",
       "version": "0.0.0-dev.0",
       "license": "MIT",

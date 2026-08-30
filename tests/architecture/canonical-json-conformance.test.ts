@@ -10,7 +10,7 @@ import {
   CanonicalJsonError as ControlPlaneCanonicalJsonError,
   canonicalJson as controlPlaneCanonicalJson,
   canonicalSha256 as controlPlaneCanonicalSha256,
-} from '../../services/organization-control-plane/src/canonical/canonical-json.js';
+} from '../../packages/organization-control-plane/src/canonical/canonical-json.js';
 
 /**
  * The control plane deliberately keeps its own canonicalizer: its boundary
@@ -133,7 +133,7 @@ describe('canonical JSON conformance across independent implementations', () => 
       readFileSync(
         resolve(
           import.meta.dirname,
-          '../../services/organization-control-plane/source-boundary.v1.json',
+          '../../packages/organization-control-plane/source-boundary.v1.json',
         ),
         'utf8',
       ),

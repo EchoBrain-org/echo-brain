@@ -9,7 +9,7 @@ describe('retrieval workspace boundary', () => {
     const manifest = readFileSync(resolve(root, 'source-boundary.v1.json'), 'utf8');
     const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
     expect(manifest).toContain('services/organization-authority');
-    expect(manifest).toContain('services/organization-record');
+    expect(manifest).toContain('packages/organization-record');
     expect(packageJson).not.toContain('organization-authority');
     expect(packageJson).not.toContain('organization-record');
     expect(packageJson).not.toContain('organization-control-plane');

@@ -3,17 +3,17 @@
   "kind": "echo-workspace-source-boundary",
   "name": "@echo-brain/organization-record",
   "workspace": true,
-  "boundary_root": "services/organization-record",
-  "source_root": "services/organization-record/src",
-  "package_json": "services/organization-record/package.json",
+  "boundary_root": "packages/organization-record",
+  "source_root": "packages/organization-record/src",
+  "package_json": "packages/organization-record/package.json",
   "entry_points": [
-    "services/organization-record/src/organization-record-api-v1.ts"
+    "packages/organization-record/src/organization-record-api-v1.ts"
   ],
   "owned_source_paths": [
-    "services/organization-record/src/**"
+    "packages/organization-record/src/**"
   ],
   "allowed_internal_paths": [
-    "services/organization-record/src/**"
+    "packages/organization-record/src/**"
   ],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol"
@@ -26,55 +26,55 @@
     "path"
   ],
   "runtime_assets": [
-    "services/organization-record/baselines/organization-record-derived-baseline-v1.sql",
-    "services/organization-record/baselines/organization-record-log-baseline-v1.sql",
-    "services/organization-record/baselines/organization-record-log-baseline-v2.sql"
+    "packages/organization-record/baselines/organization-record-derived-baseline-v1.sql",
+    "packages/organization-record/baselines/organization-record-log-baseline-v1.sql",
+    "packages/organization-record/baselines/organization-record-log-baseline-v2.sql"
   ],
   "component_index_contract": {
     "canonical_components": [
       {
         "name": "Organization Record public API",
-        "path": "services/organization-record/src/organization-record-api-v1.ts",
+        "path": "packages/organization-record/src/organization-record-api-v1.ts",
         "export": "OrganizationRecordAppenderV4"
       },
       {
         "name": "Organization Record database",
-        "path": "services/organization-record/src/persistence/open-organization-record-database.ts",
+        "path": "packages/organization-record/src/persistence/open-organization-record-database.ts",
         "export": "openOrganizationRecordDatabase"
       },
       {
         "name": "V4 organization record appender",
-        "path": "services/organization-record/src/log/record-log-v4-append.ts",
+        "path": "packages/organization-record/src/log/record-log-v4-append.ts",
         "export": "OrganizationRecordAppenderV4"
       },
       {
         "name": "Permission-aware Person record reader",
-        "path": "services/organization-record/src/retrieve/person-record-reader-v1.ts",
+        "path": "packages/organization-record/src/retrieve/person-record-reader-v1.ts",
         "export": "PersonRecordReaderV1"
       },
       {
         "name": "Record retrieval-source snapshot",
-        "path": "services/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.ts",
+        "path": "packages/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.ts",
         "export": "RecordRetrievalSourceSnapshotPortV1"
       },
       {
         "name": "Private Slack Block approval policy projector",
-        "path": "services/organization-record/src/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
+        "path": "packages/organization-record/src/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
         "export": "createPrivateSlackBlockApprovalPolicyProjectorV1"
       }
     ],
     "retired_source_paths": [
-      "services/organization-record/src/organization-record-service-v1.ts",
-      "services/organization-record/src/organization-record-runtime-v1.ts",
-      "services/organization-record/src/persistence/open-unmigrated-database.ts",
-      "services/organization-record/src/retrieve/clean-person-record-reader-v1.ts",
-      "services/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts"
+      "packages/organization-record/src/organization-record-service-v1.ts",
+      "packages/organization-record/src/organization-record-runtime-v1.ts",
+      "packages/organization-record/src/persistence/open-unmigrated-database.ts",
+      "packages/organization-record/src/retrieve/clean-person-record-reader-v1.ts",
+      "packages/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts"
     ],
     "compatibility_entrypoints": [
       {
-        "path": "services/organization-record/src/new-lineage-v1.ts",
+        "path": "packages/organization-record/src/new-lineage-v1.ts",
         "targets": [
-          "services/organization-record/src/organization-record-api-v1.ts"
+          "packages/organization-record/src/organization-record-api-v1.ts"
         ]
       }
     ]
@@ -82,9 +82,9 @@
   "layer_rules": [
     {
       "name": "record-entrypoint-exports-public-api",
-      "from": "services/organization-record/src/*.ts",
+      "from": "packages/organization-record/src/*.ts",
       "allowed_imports": [
-        "services/organization-record/src/**"
+        "packages/organization-record/src/**"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -92,9 +92,9 @@
     },
     {
       "name": "record-application-is-pure",
-      "from": "services/organization-record/src/application/**",
+      "from": "packages/organization-record/src/application/**",
       "allowed_imports": [
-        "services/organization-record/src/application/**"
+        "packages/organization-record/src/application/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
@@ -104,9 +104,9 @@
     },
     {
       "name": "record-persistence-owns-sqlite",
-      "from": "services/organization-record/src/persistence/**",
+      "from": "packages/organization-record/src/persistence/**",
       "allowed_imports": [
-        "services/organization-record/src/persistence/**"
+        "packages/organization-record/src/persistence/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
@@ -121,11 +121,11 @@
     },
     {
       "name": "record-log-appends-through-application-contracts",
-      "from": "services/organization-record/src/log/**",
+      "from": "packages/organization-record/src/log/**",
       "allowed_imports": [
-        "services/organization-record/src/application/**",
-        "services/organization-record/src/log/**",
-        "services/organization-record/src/persistence/**"
+        "packages/organization-record/src/application/**",
+        "packages/organization-record/src/log/**",
+        "packages/organization-record/src/persistence/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
@@ -137,10 +137,10 @@
     },
     {
       "name": "record-retrieval-readers-use-only-v4-facts",
-      "from": "services/organization-record/src/retrieve/**",
+      "from": "packages/organization-record/src/retrieve/**",
       "allowed_imports": [
-        "services/organization-record/src/application/**",
-        "services/organization-record/src/retrieve/**"
+        "packages/organization-record/src/application/**",
+        "packages/organization-record/src/retrieve/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
@@ -152,10 +152,10 @@
     },
     {
       "name": "record-adapters-implement-provider-specific-projectors",
-      "from": "services/organization-record/src/adapters/**",
+      "from": "packages/organization-record/src/adapters/**",
       "allowed_imports": [
-        "services/organization-record/src/adapters/**",
-        "services/organization-record/src/application/**"
+        "packages/organization-record/src/adapters/**",
+        "packages/organization-record/src/application/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"

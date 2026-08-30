@@ -51,11 +51,11 @@ memory, streaming, or direct record or retrieval-store access.
 ## Repository layout
 
 ```text
-packages/                         Shared protocol and HTTP contracts
+packages/                         Linked reusable modules and shared contracts
 services/organization-authority/ Deployable Authority and processing service
-services/organization-control-plane/
-services/organization-record/
-services/organization-retrieval/
+packages/organization-control-plane/ Linked Authority control-plane module
+packages/organization-record/        Linked Authority record module
+packages/organization-retrieval/     Linked Authority retrieval module
 src/product/person-client/       Standalone Person CLI package
 deploy/organization-authority/   Container and EC2 deployment assets
 tests/                            Cross-workspace architecture and Person tests

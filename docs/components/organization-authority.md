@@ -91,9 +91,9 @@ Authority boundary.
 - [Organization control plane](../architecture/organization-control-plane.md)
 - [Permission release-boundary invariant](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
 - [`services/organization-authority/`](../../services/organization-authority)
-- [`services/organization-control-plane/`](../../services/organization-control-plane)
-- [`services/organization-record/`](../../services/organization-record)
-- [`services/organization-retrieval/`](../../services/organization-retrieval)
+- [`packages/organization-control-plane/`](../../packages/organization-control-plane)
+- [`packages/organization-record/`](../../packages/organization-record)
+- [`packages/organization-retrieval/`](../../packages/organization-retrieval)
 
 Deployment, backup, migration, and rollback must treat the Authority image and
 its complete compatible state generation as one qualification boundary.

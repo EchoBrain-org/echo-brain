@@ -42,6 +42,23 @@ it.
   `Layer 4` in navigation; retain the layer number only where it defines a
   protocol or invariant.
 
+## Workspace taxonomy
+
+- `services/` contains independently deployable processes and the source that
+  owns their lifecycle. A service is an operational artifact, not a convenient
+  container for every server-side module.
+- `packages/` contains linked reusable modules, server libraries, and shared
+  contracts. A package may be part of an Authority image without becoming an
+  independently deployable service.
+- `src/product/` contains shipped machine product. Its workspaces are the
+  installable end-user artifacts and remain separate from server libraries and
+  service lifecycle ownership.
+
+Accordingly, `organization-control-plane`, `organization-record`, and
+`organization-retrieval` are linked packages. The Organization Authority is
+the process that composes and deploys them; the Person client is the shipped
+machine product.
+
 ## Guarded component indexes
 
 Every registered workspace source boundary declares a small

@@ -26,6 +26,7 @@ afterAll(() =>
 interface Registry {
   registry_version: number;
   kind: string;
+  retired_workspace_roots: string[];
   manifests: string[];
 }
 
@@ -180,6 +181,20 @@ describe("workspace source boundaries", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
   });
 
+  it("rejects a reintroduced retired workspace root", () => {
+    const fixture = fixtureRepository();
+    const registry = readFixtureJson<Registry>(fixture, REGISTRY);
+    const retiredRoot = registry.retired_workspace_roots[0]!;
+    mkdirSync(join(fixture, retiredRoot), { recursive: true });
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      `retired workspace root remains: ${retiredRoot}`,
+    );
+  });
+
   it("requires a component index for every workspace", () => {
     const fixture = fixtureRepository();
     const manifestPath =
@@ -268,6 +283,11 @@ describe("workspace source boundaries", () => {
       registry_version: 1,
       kind: "echo-workspace-source-boundary-registry",
     });
+    expect(registry.retired_workspace_roots).toEqual([
+      "services/organization-control-plane",
+      "services/organization-record",
+      "services/organization-retrieval",
+    ]);
     expect(workspaceRoots).toEqual([...rootPackage.workspaces].sort());
     expect(new Set(manifests.map((manifest) => manifest.name)).size).toBe(
       manifests.length,
@@ -423,16 +443,16 @@ describe("workspace source boundaries", () => {
         "services/organization-authority/source-boundary.v1.json",
       ],
       [
-        "services/organization-control-plane",
-        "services/organization-control-plane/source-boundary.v1.json",
+        "packages/organization-control-plane",
+        "packages/organization-control-plane/source-boundary.v1.json",
       ],
       [
-        "services/organization-record",
-        "services/organization-record/source-boundary.v1.json",
+        "packages/organization-record",
+        "packages/organization-record/source-boundary.v1.json",
       ],
       [
-        "services/organization-retrieval",
-        "services/organization-retrieval/source-boundary.v1.json",
+        "packages/organization-retrieval",
+        "packages/organization-retrieval/source-boundary.v1.json",
       ],
     ]) {
       const packageManifest = readJson<PackageManifest>(`${root}/package.json`);
@@ -459,16 +479,16 @@ describe("workspace source boundaries", () => {
         "authority-live-source-v3.sql",
         "authority-private-approval-v2.sql",
       ],
-      "services/organization-control-plane": [
+      "packages/organization-control-plane": [
         "organization-control-plane-baseline-v1.sql",
         "organization-control-plane-private-approval-v2.sql",
       ],
-      "services/organization-record": [
+      "packages/organization-record": [
         "organization-record-derived-baseline-v1.sql",
         "organization-record-log-baseline-v1.sql",
         "organization-record-log-baseline-v2.sql",
       ],
-      "services/organization-retrieval": [
+      "packages/organization-retrieval": [
         "readable-search-content-baseline-v1.sql",
         "readable-search-facts-baseline-v1.sql",
         "readable-search-lexical-baseline-v1.sql",

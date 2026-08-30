@@ -12,8 +12,8 @@
     { "path": "../../packages/federation-protocol" },
     { "path": "../../packages/organization-protocol" },
     { "path": "../../packages/organization-api" },
-    { "path": "../organization-control-plane" },
-    { "path": "../organization-record" },
-    { "path": "../organization-retrieval" }
+    { "path": "../../packages/organization-control-plane" },
+    { "path": "../../packages/organization-record" },
+    { "path": "../../packages/organization-retrieval" }
   ]
 }

@@ -99,7 +99,7 @@ The reviewed source is covered by:
 - `services/organization-authority/test/organization-authority-runtime.test.ts`;
 - `services/organization-authority/test/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.test.ts`;
 - `services/organization-authority/test/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.test.ts`;
-- `services/organization-record/test/record-log-v4-append.test.ts`; and
+- `packages/organization-record/test/record-log-v4-append.test.ts`; and
 - the synthetic meeting-source adapter and evaluator tests.
 
 Before evaluation, the synthetic corpus validator rejects a non-exact top-level

@@ -132,7 +132,7 @@ function setupState(includeLink = true): string {
       readFileSync(
         resolve(
           import.meta.dirname,
-          "../../organization-authority/baselines/authority-baseline-v1.sql",
+          "../../../services/organization-authority/baselines/authority-baseline-v1.sql",
         ),
         "utf8",
       ),

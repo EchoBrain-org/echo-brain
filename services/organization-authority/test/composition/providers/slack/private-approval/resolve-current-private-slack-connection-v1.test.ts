@@ -6,8 +6,8 @@ import {
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
   type ApprovalContractSha256,
-} from "../../../../../../organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.js";
-import { applyOrganizationControlBaselineV1 } from "../../../../../../organization-control-plane/src/persistence/baseline.js";
+} from "../../../../../../../packages/organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.js";
+import { applyOrganizationControlBaselineV1 } from "../../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import {
   resolveCurrentPrivateSlackConnectionV1,
   type PrivateSlackConnectionCoordinatesV1,

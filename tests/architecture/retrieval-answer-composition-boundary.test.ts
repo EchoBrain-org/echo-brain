@@ -8,8 +8,8 @@ const REPO = resolve(import.meta.dirname, "../..");
 // the Person runtime composition root: it may compose an answer, but must
 // not make the lower-layer read/search closures model-aware.
 const RELEASED_RETRIEVAL_ROOTS = [
-  "services/organization-record/src/retrieve",
-  "services/organization-retrieval/src",
+  "packages/organization-record/src/retrieve",
+  "packages/organization-retrieval/src",
   "services/organization-authority/src/application/readable-search-authorization-fence.ts",
   "services/organization-authority/src/composition/person-record-read-route.ts",
   "services/organization-authority/src/composition/person-record-search-route.ts",
@@ -235,9 +235,9 @@ describe("retrieval and answer-composition boundaries", () => {
   it("keeps answer composition confined to its component, audit writer, and declared runtime wiring", () => {
     const production = [
       "services/organization-authority/src",
-      "services/organization-control-plane/src",
-      "services/organization-record/src",
-      "services/organization-retrieval/src",
+      "packages/organization-control-plane/src",
+      "packages/organization-record/src",
+      "packages/organization-retrieval/src",
       "packages/federation-protocol/src",
       "packages/organization-api/src",
       "packages/organization-protocol/src",
@@ -275,7 +275,7 @@ describe("retrieval and answer-composition boundaries", () => {
   it("adds no model or agent dependency to released-retrieval workspaces", () => {
     for (const manifestPath of [
       "services/organization-authority/package.json",
-      "services/organization-retrieval/package.json",
+      "packages/organization-retrieval/package.json",
     ]) {
       const manifest = JSON.parse(source(manifestPath)) as {
         dependencies?: Record<string, string>;

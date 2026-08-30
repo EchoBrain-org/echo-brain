@@ -496,7 +496,7 @@
       ]
     },
     {
-      "name": "authority-composition-may-wire-pre-processing-layers",
+      "name": "authority-composition-selects-concrete-implementations",
       "from": "services/organization-authority/src/composition/**",
       "allowed_imports": [
         "services/organization-authority/src/adapters/**",
@@ -507,19 +507,15 @@
         "services/organization-authority/src/presentation/**",
         "services/organization-authority/src/state-lineage/**",
         "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
-        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
         "services/organization-authority/src/processing/adapters/approval-delivery/slack/**",
         "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
-        "services/organization-authority/src/processing/authorization/**",
         "services/organization-authority/src/processing/core/contracts/adapter.ts",
         "services/organization-authority/src/processing/core/contracts/**",
         "services/organization-authority/src/processing/core/ports/adapters.ts",
         "services/organization-authority/src/processing/core/processing/brief.ts",
         "services/organization-authority/src/processing/admitted-meeting-processing/**",
         "services/organization-authority/src/processing/adapters/approval-resolution/slack/**",
-        "services/organization-authority/src/quality/**",
-        "services/organization-authority/src/processing/record/**",
-        "services/organization-authority/src/processing/storage/**"
+        "services/organization-authority/src/quality/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -582,9 +578,37 @@
     },
     {
       "name": "state-lineage-guard-is-read-only",
-      "from": "services/organization-authority/src/state-lineage/**",
+      "from": "services/organization-authority/src/state-lineage/state-lineage-preopen-guard.ts",
       "allowed_imports": [
-        "services/organization-authority/src/state-lineage/**"
+        "services/organization-authority/src/state-lineage/state-lineage-manifest-v1.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "fs",
+        "path"
+      ]
+    },
+    {
+      "name": "state-lineage-manifest-contracts-are-pure",
+      "from": "services/organization-authority/src/state-lineage/state-lineage-manifest-v1.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-state-lineage-initializer-is-write-scoped",
+      "from": "services/organization-authority/src/state-lineage/authority-state-lineage-initializer.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/state-lineage/state-lineage-manifest-v1.ts",
+        "services/organization-authority/src/state-lineage/state-lineage-preopen-guard.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"

@@ -10,9 +10,9 @@ const CLEAN_ENTRIES = [
   "services/organization-authority/src/clean-live-main.ts",
   "services/organization-authority/src/clean-granola-source-main.ts",
   "services/organization-authority/src/clean-founder-main.ts",
-  "services/organization-control-plane/src/clean-slack-connect-main.ts",
-  "services/organization-control-plane/src/clean-person-slack-approval-activate-main.ts",
-  "services/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts",
+  "packages/organization-control-plane/src/clean-slack-connect-main.ts",
+  "packages/organization-control-plane/src/clean-person-slack-approval-activate-main.ts",
+  "packages/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts",
 ] as const;
 
 interface WorkspaceExport {
@@ -24,63 +24,63 @@ const WORKSPACE_EXPORTS: ReadonlyMap<string, WorkspaceExport> = new Map([
   [
     "@echo-brain/organization-control-plane/organization-control-database-v1",
     {
-      package_path: "services/organization-control-plane/package.json",
+      package_path: "packages/organization-control-plane/package.json",
       export_path: "./organization-control-database-v1",
     },
   ],
   [
     "@echo-brain/organization-control-plane/slack-approval-integration-v1",
     {
-      package_path: "services/organization-control-plane/package.json",
+      package_path: "packages/organization-control-plane/package.json",
       export_path: "./slack-approval-integration-v1",
     },
   ],
   [
     "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1",
     {
-      package_path: "services/organization-control-plane/package.json",
+      package_path: "packages/organization-control-plane/package.json",
       export_path: "./record-visibility-policy-contracts-v1",
     },
   ],
   [
     "@echo-brain/organization-control-plane/slack-external-identity-integration-v1",
     {
-      package_path: "services/organization-control-plane/package.json",
+      package_path: "packages/organization-control-plane/package.json",
       export_path: "./slack-external-identity-integration-v1",
     },
   ],
   [
     "@echo-brain/organization-control-plane/slack-connection-setup-v1",
     {
-      package_path: "services/organization-control-plane/package.json",
+      package_path: "packages/organization-control-plane/package.json",
       export_path: "./slack-connection-setup-v1",
     },
   ],
   [
     "@echo-brain/organization-record/organization-record-api-v1",
     {
-      package_path: "services/organization-record/package.json",
+      package_path: "packages/organization-record/package.json",
       export_path: "./organization-record-api-v1",
     },
   ],
   [
     "@echo-brain/organization-record/new-lineage-v1",
     {
-      package_path: "services/organization-record/package.json",
+      package_path: "packages/organization-record/package.json",
       export_path: "./new-lineage-v1",
     },
   ],
   [
     "@echo-brain/organization-retrieval/readable-search-engine-v1",
     {
-      package_path: "services/organization-retrieval/package.json",
+      package_path: "packages/organization-retrieval/package.json",
       export_path: "./readable-search-engine-v1",
     },
   ],
   [
     "@echo-brain/organization-retrieval/new-lineage-v1",
     {
-      package_path: "services/organization-retrieval/package.json",
+      package_path: "packages/organization-retrieval/package.json",
       export_path: "./new-lineage-v1",
     },
   ],
@@ -235,11 +235,11 @@ describe("Organization Authority executable closure boundaries", () => {
   it("uses responsibility-named record and retrieval runtimes with thin legacy shims", () => {
     const compatibilityEntrypoints = [
       [
-        "services/organization-record/src/new-lineage-v1.ts",
+        "packages/organization-record/src/new-lineage-v1.ts",
         'export * from "./organization-record-api-v1.js";\n',
       ],
       [
-        "services/organization-retrieval/src/new-lineage-v1.ts",
+        "packages/organization-retrieval/src/new-lineage-v1.ts",
         'export * from "./readable-search-engine-v1.js";\n',
       ],
     ] as const;

@@ -7,18 +7,18 @@ COPY packages/organization-protocol/package.json ./packages/organization-protoco
 COPY packages/organization-api/package.json ./packages/organization-api/package.json
 COPY src/product/person-client/package.json ./src/product/person-client/package.json
 COPY services/organization-authority/package.json ./services/organization-authority/package.json
-COPY services/organization-control-plane/package.json ./services/organization-control-plane/package.json
-COPY services/organization-record/package.json ./services/organization-record/package.json
-COPY services/organization-retrieval/package.json ./services/organization-retrieval/package.json
+COPY packages/organization-control-plane/package.json ./packages/organization-control-plane/package.json
+COPY packages/organization-record/package.json ./packages/organization-record/package.json
+COPY packages/organization-retrieval/package.json ./packages/organization-retrieval/package.json
 # Keep dependency installation independent of application source.  BuildKit can
 # reuse this layer when a source-only change is rebuilt in CI.
 RUN npm ci
 COPY tsconfig*.json ./
 COPY packages ./packages
 COPY services/organization-authority ./services/organization-authority
-COPY services/organization-control-plane ./services/organization-control-plane
-COPY services/organization-record ./services/organization-record
-COPY services/organization-retrieval ./services/organization-retrieval
+COPY packages/organization-control-plane ./packages/organization-control-plane
+COPY packages/organization-record ./packages/organization-record
+COPY packages/organization-retrieval ./packages/organization-retrieval
 RUN npm run build --workspace @echo-brain/organization-authority \
   && npm ci --omit=dev --workspace @echo-brain/organization-authority --include-workspace-root=false
 RUN find packages services -type f \( -name '*.d.ts' -o -name '*.tsbuildinfo' \) -delete
@@ -43,15 +43,15 @@ COPY --from=build /app/packages/organization-api/dist ./packages/organization-ap
 COPY --from=build /app/services/organization-authority/package.json ./services/organization-authority/package.json
 COPY --from=build /app/services/organization-authority/dist ./services/organization-authority/dist
 COPY --from=build /app/services/organization-authority/baselines ./services/organization-authority/baselines
-COPY --from=build /app/services/organization-control-plane/package.json ./services/organization-control-plane/package.json
-COPY --from=build /app/services/organization-control-plane/dist ./services/organization-control-plane/dist
-COPY --from=build /app/services/organization-control-plane/baselines ./services/organization-control-plane/baselines
-COPY --from=build /app/services/organization-record/package.json ./services/organization-record/package.json
-COPY --from=build /app/services/organization-record/dist ./services/organization-record/dist
-COPY --from=build /app/services/organization-record/baselines ./services/organization-record/baselines
-COPY --from=build /app/services/organization-retrieval/package.json ./services/organization-retrieval/package.json
-COPY --from=build /app/services/organization-retrieval/dist ./services/organization-retrieval/dist
-COPY --from=build /app/services/organization-retrieval/baselines ./services/organization-retrieval/baselines
+COPY --from=build /app/packages/organization-control-plane/package.json ./packages/organization-control-plane/package.json
+COPY --from=build /app/packages/organization-control-plane/dist ./packages/organization-control-plane/dist
+COPY --from=build /app/packages/organization-control-plane/baselines ./packages/organization-control-plane/baselines
+COPY --from=build /app/packages/organization-record/package.json ./packages/organization-record/package.json
+COPY --from=build /app/packages/organization-record/dist ./packages/organization-record/dist
+COPY --from=build /app/packages/organization-record/baselines ./packages/organization-record/baselines
+COPY --from=build /app/packages/organization-retrieval/package.json ./packages/organization-retrieval/package.json
+COPY --from=build /app/packages/organization-retrieval/dist ./packages/organization-retrieval/dist
+COPY --from=build /app/packages/organization-retrieval/baselines ./packages/organization-retrieval/baselines
 RUN install -d -m 1777 /echo-runtime
 USER node
 ENTRYPOINT ["node", "services/organization-authority/dist/clean-live-main.js"]

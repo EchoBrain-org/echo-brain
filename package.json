@@ -10,9 +10,9 @@
     "packages/organization-api",
     "src/product/person-client",
     "services/organization-authority",
-    "services/organization-control-plane",
-    "services/organization-record",
-    "services/organization-retrieval"
+    "packages/organization-control-plane",
+    "packages/organization-record",
+    "packages/organization-retrieval"
   ],
   "license": "MIT",
   "type": "module",
