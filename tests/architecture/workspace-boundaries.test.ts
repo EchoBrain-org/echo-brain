@@ -915,8 +915,13 @@ describe("workspace source boundaries", () => {
       discovered_adapter_ids: string[];
     };
     expect(report.discovered_adapter_ids).toEqual([
+      "anthropic",
+      "deepseek",
       "granola",
       "llm",
+      "ollama",
+      "openai",
+      "openrouter",
       "slack",
       "synthetic-source",
     ]);
