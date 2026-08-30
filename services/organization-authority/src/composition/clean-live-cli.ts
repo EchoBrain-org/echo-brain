@@ -234,15 +234,16 @@ export async function runCleanLiveCli(
       } as never)}\n`,
     );
     await new Promise<void>((resolve) => {
+      let closing: Promise<void> | undefined;
       const close = (): void => {
-        const shutdown =
+        closing ??=
           stagingCanaryControl === undefined
             ? runtime.close()
-            : stagingCanaryControl
-                .close()
-                .catch(() => undefined)
-                .then(() => runtime.close());
-        void shutdown.finally(resolve);
+            : Promise.all([
+                stagingCanaryControl.close().catch(() => undefined),
+                runtime.close(),
+              ]).then(() => undefined);
+        void closing.finally(resolve);
       };
       process.once("SIGINT", close);
       process.once("SIGTERM", close);

@@ -1,16 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import {
-  openOrganizationControlDatabase,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import {
   type ApprovedRecordPolicyProjectorRegistryV1,
   OrganizationRecordV4AppendApplication,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/new-lineage-v1";
-import {
-  readPrivateAuthorityPersonSessionPkceKey,
-} from "../adapters/security/private-file-credentials.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
 import { DevelopmentFileOrganizationAuthoritySigner } from "../adapters/security/development-file-authority-signer.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
@@ -83,6 +79,7 @@ export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
    */
   readonly stage_staging_synthetic_private_dm_canary?: (
     canary: StagingSyntheticMeetingCanaryInputV1,
+    options?: Readonly<{ signal?: AbortSignal }>,
   ) => Promise<StageStagingSyntheticPrivateDmCanaryV1Result>;
 }
 
@@ -284,9 +281,13 @@ export async function openCleanLiveRuntime(
       state: sourceState,
       authority_database: authority,
       control_plane_database: control,
-      record_append: new OrganizationRecordV4AppendApplication(record, {
-        ...coordinates,
-      }, config.approved_record_policy_projectors),
+      record_append: new OrganizationRecordV4AppendApplication(
+        record,
+        {
+          ...coordinates,
+        },
+        config.approved_record_policy_projectors,
+      ),
       signer,
       coordinates,
       next_envelope_id: () => `env_${randomUUID()}`,
@@ -345,7 +346,7 @@ export async function openCleanLiveRuntime(
       address: runtime.address,
       processing: "active",
       runExclusive: (operation) => runtime.runExclusive(operation),
-      stage_staging_synthetic_private_dm_canary: (canary) =>
+      stage_staging_synthetic_private_dm_canary: (canary, options) =>
         runtime.runExclusive((signal) =>
           stageStagingSyntheticPrivateDmCanaryV1({
             authority_url: config.authority_url,
@@ -353,7 +354,10 @@ export async function openCleanLiveRuntime(
             state: sourceState,
             processor,
             stager: approvals.stager,
-            signal,
+            signal:
+              options?.signal === undefined
+                ? signal
+                : AbortSignal.any([signal, options.signal]),
           }),
         ),
       close: async () => {

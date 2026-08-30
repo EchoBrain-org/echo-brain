@@ -36,34 +36,41 @@ async function withSocket(
 
 afterEach(async () => {
   await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) =>
-          server.close((error) =>
-            error === undefined ? resolve() : reject(error),
+    servers
+      .splice(0)
+      .map(
+        (server) =>
+          new Promise<void>((resolve, reject) =>
+            server.close((error) =>
+              error === undefined ? resolve() : reject(error),
+            ),
           ),
-        ),
-    ),
+      ),
   );
   await Promise.all(
-    directories.splice(0).map((directory) =>
-      rm(directory, { recursive: true, force: true }),
-    ),
+    directories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
 describe("staging synthetic private-DM canary client", () => {
   it("uses only the private socket and returns a bounded staged receipt", async () => {
-    const socket_path = await withSocket(JSON.stringify({
-      schema_version: 1,
-      kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
-      release_id: RELEASE_ID,
-      approval_outcome: "staged",
-      approval_id: "apr_private",
-    }));
+    const socket_path = await withSocket(
+      JSON.stringify({
+        schema_version: 1,
+        kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
+        release_id: RELEASE_ID,
+        approval_outcome: "staged",
+        approval_id: "apr_private",
+      }),
+    );
 
     await expect(
-      requestStagingSyntheticPrivateDmCanaryV1({ release_id: RELEASE_ID, socket_path }),
+      requestStagingSyntheticPrivateDmCanaryV1({
+        release_id: RELEASE_ID,
+        socket_path,
+      }),
     ).resolves.toEqual({
       schema_version: 1,
       kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
@@ -74,12 +81,14 @@ describe("staging synthetic private-DM canary client", () => {
   });
 
   it("refuses a receipt for another release or a non-success socket response", async () => {
-    const wrong_release_socket = await withSocket(JSON.stringify({
-      schema_version: 1,
-      kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
-      release_id: "clean-v1-other-release",
-      approval_outcome: "not_actionable",
-    }));
+    const wrong_release_socket = await withSocket(
+      JSON.stringify({
+        schema_version: 1,
+        kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
+        release_id: "clean-v1-other-release",
+        approval_outcome: "not_actionable",
+      }),
+    );
     await expect(
       requestStagingSyntheticPrivateDmCanaryV1({
         release_id: RELEASE_ID,
@@ -92,6 +101,16 @@ describe("staging synthetic private-DM canary client", () => {
       requestStagingSyntheticPrivateDmCanaryV1({
         release_id: RELEASE_ID,
         socket_path: failure_socket,
+      }),
+    ).rejects.toThrow("receipt is invalid");
+  });
+
+  it("rejects an oversized private-socket response without waiting for timeout", async () => {
+    const oversized_socket = await withSocket("x".repeat(1_025));
+    await expect(
+      requestStagingSyntheticPrivateDmCanaryV1({
+        release_id: RELEASE_ID,
+        socket_path: oversized_socket,
       }),
     ).rejects.toThrow("receipt is invalid");
   });

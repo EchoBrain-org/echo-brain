@@ -199,4 +199,64 @@ describe("staging synthetic private-DM canary control", () => {
     await control.close();
     await expect(lstat(socket_path)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("aborts a canary that exceeds the control request deadline", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
+      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
+      authority_host: "authority-staging.echobrain.org",
+      release_id: RELEASE_ID,
+      owner_email: OWNER_EMAIL,
+      runtime: runtime(async (_input, options) => {
+        observedSignal = options?.signal;
+        return await new Promise((_, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            {
+              once: true,
+            },
+          );
+        });
+      }),
+      socket_path: await socketPath(),
+      operation_timeout_ms: 5,
+    });
+
+    expect((await post(control.socket_path)).status).toBe(500);
+    expect(observedSignal?.aborted).toBe(true);
+    await control.close();
+  });
+
+  it("aborts in-flight canary work before closing its socket", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => (markStarted = resolve));
+    const control = await openStagingSyntheticPrivateDmCanaryControlV1({
+      authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
+      authority_host: "authority-staging.echobrain.org",
+      release_id: RELEASE_ID,
+      owner_email: OWNER_EMAIL,
+      runtime: runtime(async (_input, options) => {
+        observedSignal = options?.signal;
+        markStarted();
+        return await new Promise((_, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            {
+              once: true,
+            },
+          );
+        });
+      }),
+      socket_path: await socketPath(),
+    });
+
+    const pending = post(control.socket_path).catch(() => undefined);
+    await started;
+    await control.close();
+    expect(observedSignal?.aborted).toBe(true);
+    await pending;
+  });
 });

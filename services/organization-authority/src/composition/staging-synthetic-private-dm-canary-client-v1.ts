@@ -1,7 +1,5 @@
 import { request } from "node:http";
-import {
-  STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1,
-} from "./staging-synthetic-private-dm-canary-control-v1.js";
+import { STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1 } from "./staging-synthetic-private-dm-canary-control-v1.js";
 
 const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 const APPROVAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -99,9 +97,7 @@ function parseReceipt(
     kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
     release_id: expectedReleaseId,
     approval_outcome: receipt.approval_outcome as
-      | "staged"
-      | "delivery_pending"
-      | "not_staged",
+      "staged" | "delivery_pending" | "not_staged",
     approval_id: receipt.approval_id,
   });
 }
@@ -111,11 +107,13 @@ function parseReceipt(
  * Authority runtime nor reads its databases; the long-lived runtime owns both
  * and derives the canary identity from its accepted release environment.
  */
-export async function requestStagingSyntheticPrivateDmCanaryV1(input: Readonly<{
-  release_id: string;
-  /** Test seam. Production always uses the fixed unmounted socket path. */
-  socket_path?: string;
-}>): Promise<StagingSyntheticPrivateDmCanaryReceiptV1> {
+export async function requestStagingSyntheticPrivateDmCanaryV1(
+  input: Readonly<{
+    release_id: string;
+    /** Test seam. Production always uses the fixed unmounted socket path. */
+    socket_path?: string;
+  }>,
+): Promise<StagingSyntheticPrivateDmCanaryReceiptV1> {
   if (!RELEASE_ID.test(input.release_id))
     throw new Error("staging synthetic canary release id is invalid");
   const socketPath =
@@ -135,12 +133,16 @@ export async function requestStagingSyntheticPrivateDmCanaryV1(input: Readonly<{
         response.on("data", (chunk: string) => {
           bytes += Buffer.byteLength(chunk, "utf8");
           if (bytes > MAX_RECEIPT_BYTES) {
+            reject(new Error("staging synthetic canary receipt is invalid"));
+            response.destroy();
             client.destroy();
             return;
           }
           body += chunk;
         });
-        response.once("error", () => reject(new Error("staging synthetic canary unavailable")));
+        response.once("error", () =>
+          reject(new Error("staging synthetic canary unavailable")),
+        );
         response.once("end", () => {
           try {
             if (
@@ -161,7 +163,9 @@ export async function requestStagingSyntheticPrivateDmCanaryV1(input: Readonly<{
     client.setTimeout(REQUEST_TIMEOUT_MS, () =>
       client.destroy(new Error("staging synthetic canary timed out")),
     );
-    client.once("error", () => reject(new Error("staging synthetic canary unavailable")));
+    client.once("error", () =>
+      reject(new Error("staging synthetic canary unavailable")),
+    );
     client.end();
   });
 }

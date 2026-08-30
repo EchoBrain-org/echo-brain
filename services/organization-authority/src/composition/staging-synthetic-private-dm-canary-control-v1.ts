@@ -10,6 +10,7 @@ export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 =
 const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 const STAGING_AUTHORITY_HOST = "authority-staging.echobrain.org";
 const CONTROL_PATH = "/v1/stage";
+const OPERATION_TIMEOUT_MS = 110_000;
 
 export interface StagingSyntheticPrivateDmCanaryControlV1 {
   readonly socket_path: string;
@@ -28,6 +29,8 @@ export interface OpenStagingSyntheticPrivateDmCanaryControlV1Input {
   /** A focused test seam. Production uses the fixed non-mounted runtime path. */
   readonly socket_path?: string;
   readonly now?: () => string;
+  /** Focused timeout seam; production stays below the client deadline. */
+  readonly operation_timeout_ms?: number;
 }
 
 type ApprovalOutcome =
@@ -57,6 +60,14 @@ function assertStagingControlInput(
     throw new Error(
       "staging synthetic private-DM control requires active processing",
     );
+  }
+  if (
+    input.operation_timeout_ms !== undefined &&
+    (!Number.isSafeInteger(input.operation_timeout_ms) ||
+      input.operation_timeout_ms < 1 ||
+      input.operation_timeout_ms > OPERATION_TIMEOUT_MS)
+  ) {
+    throw new Error("staging synthetic private-DM control timeout is invalid");
   }
 }
 
@@ -163,6 +174,8 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
   removeStaleSocket(socketPath);
   const stage = input.runtime.stage_staging_synthetic_private_dm_canary!;
   const now = input.now ?? (() => new Date().toISOString());
+  const operationTimeoutMs = input.operation_timeout_ms ?? OPERATION_TIMEOUT_MS;
+  const active = new Set<AbortController>();
   const server = createServer(async (request, response) => {
     const method = request.method ?? "";
     const path = new URL(request.url ?? "/", "http://localhost");
@@ -188,15 +201,36 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
       }
     }
     request.resume();
+    const controller = new AbortController();
+    active.add(controller);
+    const abort = (): void => {
+      controller.abort(
+        new Error("staging synthetic private-DM control request ended"),
+      );
+    };
+    const abortIfUnfinished = (): void => {
+      if (!response.writableEnded) abort();
+    };
+    const timer = setTimeout(abort, operationTimeoutMs);
+    request.once("aborted", abort);
+    response.once("close", abortIfUnfinished);
     try {
-      const result = await stage({
-        canary_id: input.release_id,
-        owner_email: input.owner_email,
-        observed_at: now(),
-      });
-      receipt(response, input.release_id, result);
+      const result = await stage(
+        {
+          canary_id: input.release_id,
+          owner_email: input.owner_email,
+          observed_at: now(),
+        },
+        { signal: controller.signal },
+      );
+      if (!response.destroyed) receipt(response, input.release_id, result);
     } catch {
-      internalError(response);
+      if (!response.destroyed) internalError(response);
+    } finally {
+      clearTimeout(timer);
+      request.off("aborted", abort);
+      response.off("close", abortIfUnfinished);
+      active.delete(controller);
     }
   });
   try {
@@ -214,7 +248,14 @@ export async function openStagingSyntheticPrivateDmCanaryControlV1(
   return Object.freeze({
     socket_path: socketPath,
     close: async () => {
-      await close(server);
+      for (const controller of active) {
+        controller.abort(
+          new Error("staging synthetic private-DM control is closing"),
+        );
+      }
+      const closed = close(server);
+      server.closeAllConnections();
+      await closed;
       removeStaleSocket(socketPath);
     },
   });
