@@ -1,6 +1,6 @@
 # Organization retrieval
 
-`readable-search-runtime-v1` is the canonical package entrypoint. The retained
+`readable-search-engine-v1` is the canonical package entrypoint. The retained
 `new-lineage-v1` path is a thin compatibility re-export.
 
 ## Clean readable-search lean V1 budget

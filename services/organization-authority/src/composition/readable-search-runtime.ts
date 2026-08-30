@@ -15,12 +15,12 @@ import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordPolicyFactProjectorRegistryV1,
   type RecordRetrievalSourceSnapshotV1,
-} from "@echo-brain/organization-record/organization-record-runtime-v1";
+} from "@echo-brain/organization-record/organization-record-service-v1";
 import {
   buildReadableSearchGenerationV1,
   clearReadableSearchActiveGenerationV1,
-  CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
-  CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1,
+  READABLE_SEARCH_ADMISSION_BUDGET_V1,
+  READABLE_SEARCH_READER_BEHAVIOR_V1,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
@@ -29,7 +29,7 @@ import {
   warmReadableSearchActiveGenerationV1,
   type ReadableSearchAtomV1,
   type ReadableSearchLineagePlaneV1,
-} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
+} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import {
@@ -65,8 +65,8 @@ const READABLE_SEARCH_BUILDER_RELEASE_V1 = Object.freeze({
   source_revision: READABLE_SEARCH_SOURCE_REVISION_V1,
   input: "verified-organization-record-envelope-v4-layer1-snapshot",
   output: "immutable-baseline-only-three-plane-generation-v1",
-  admission_budget: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
-  reader_behavior: CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1,
+  admission_budget: READABLE_SEARCH_ADMISSION_BUDGET_V1,
+  reader_behavior: READABLE_SEARCH_READER_BEHAVIOR_V1,
 });
 
 export interface ReadableSearchRuntimeContractV1 {
@@ -132,8 +132,8 @@ export function readableSearchRuntimeContractV1(): ReadableSearchRuntimeContract
         ],
         maximum_items: 10,
       },
-      admission_budget: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
-      reader_behavior: CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1,
+      admission_budget: READABLE_SEARCH_ADMISSION_BUDGET_V1,
+      reader_behavior: READABLE_SEARCH_READER_BEHAVIOR_V1,
     }),
     organization_member_policy_contract_sha256: organizationMemberPolicy,
     restricted_reviewer_policy_contract_sha256: restrictedReviewerPolicy,

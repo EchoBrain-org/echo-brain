@@ -2,7 +2,7 @@ import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
   createPrivateSlackBlockApprovalPolicyProjectorV1,
-} from "@echo-brain/organization-record/organization-record-runtime-v1";
+} from "@echo-brain/organization-record/organization-record-service-v1";
 import {
   openOrganizationAuthorityRuntime,
   type OrganizationAuthorityRuntimeConfig,

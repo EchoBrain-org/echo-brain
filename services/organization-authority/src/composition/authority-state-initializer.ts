@@ -24,14 +24,14 @@ import {
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
   organizationRecordDerivedBaselineSha256V1,
   organizationRecordLogBaselineSha256V2,
-} from "@echo-brain/organization-record/organization-record-runtime-v1";
+} from "@echo-brain/organization-record/organization-record-service-v1";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   readableSearchPlaneBaselineSha256V1,
-} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
+} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
   applyAuthorityBaselineV3,
   AUTHORITY_BASELINE_SCHEMA_VERSION_V3,

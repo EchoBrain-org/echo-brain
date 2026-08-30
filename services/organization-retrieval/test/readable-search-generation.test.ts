@@ -6,7 +6,7 @@ import { canonicalJson, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   buildReadableSearchGenerationV1,
-  CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1,
+  READABLE_SEARCH_ADMISSION_BUDGET_V1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
@@ -17,7 +17,7 @@ import {
   warmReadableSearchActiveGenerationV1,
   type BuildReadableSearchGenerationV1Input,
   type ReadableSearchAtomV1,
-} from "../src/readable-search-runtime-v1.js";
+} from "../src/readable-search-engine-v1.js";
 
 const digest = (value: string): `sha256:${string}` => sha256Digest(value);
 
@@ -150,7 +150,7 @@ describe("clean immutable readable-search generation v1", () => {
       "maximum_atoms",
       () =>
         Array.from(
-          { length: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms + 1 },
+          { length: READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms + 1 },
           (_, index) => atomWith(`atom-limit-${index}`),
         ),
     ],
@@ -158,7 +158,7 @@ describe("clean immutable readable-search generation v1", () => {
       "maximum_segments",
       () =>
         Array.from(
-          { length: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_segments },
+          { length: READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_segments },
           (_, index) =>
             atomWith(`segment-limit-${index}`, {
               policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
@@ -175,7 +175,7 @@ describe("clean immutable readable-search generation v1", () => {
       () => [
         atomWith("text-limit", {
           text: "é".repeat(
-            CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atom_text_utf8_bytes /
+            READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atom_text_utf8_bytes /
               2 +
               1,
           ),
@@ -186,7 +186,7 @@ describe("clean immutable readable-search generation v1", () => {
       "maximum_postings",
       () =>
         Array.from(
-          { length: CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms },
+          { length: READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms },
           (_, index) =>
             atomWith(`posting-limit-${index}`, {
               text: Array.from(

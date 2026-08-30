@@ -52,14 +52,14 @@ type SegmentKind = "organization-member" | "reviewer";
  * approved signal atoms while bounding every collection traversed by the
  * synchronous reader. Validation happens before retrieval staging is touched.
  */
-export const CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
+export const READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
   maximum_atoms: 1_024,
   maximum_segments: 32,
   maximum_atom_text_utf8_bytes: 4_096,
   maximum_postings: 16_384,
 });
 
-export const CLEAN_READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
+export const READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
   active_generation_cache_entries: 1,
   cache_miss: "bounded-unavailable",
   request_segments: "member-plus-exact-reviewer-tuple",
@@ -696,7 +696,7 @@ function inputRoot(
 function assertWithinAdmissionBudget(
   input: BuildReadableSearchGenerationV1Input,
 ): void {
-  const budget = CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1;
+  const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
   if (input.atoms.length > budget.maximum_atoms)
     throw new Error("clean retrieval generation exceeds maximum_atoms");
   const segments = new Set<string>();
@@ -1023,7 +1023,7 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly limit?: number;
 }
 
-interface CleanFactRow {
+interface ReadableSearchFactRow {
   readonly atom_id: Sha256Digest;
   readonly authority_id: string;
   readonly organization_id: string;
@@ -1048,7 +1048,7 @@ interface CleanFactRow {
   readonly provenance_binding_sha256: Sha256Digest;
 }
 
-interface CleanContentRow {
+interface ReadableSearchContentRow {
   readonly atom_id: Sha256Digest;
   readonly log_position: number;
   readonly record_hash: Sha256Digest;
@@ -1060,30 +1060,30 @@ interface CleanContentRow {
   readonly provenance_binding_sha256: Sha256Digest;
 }
 
-interface CleanLexicalDocumentRow {
+interface ReadableSearchLexicalDocumentRow {
   readonly atom_id: Sha256Digest;
   readonly log_position: number;
   readonly atom_order: number;
   readonly content_binding_sha256: Sha256Digest;
 }
 
-interface CleanTermPostingRow {
+interface ReadableSearchTermPostingRow {
   readonly term: string;
   readonly atom_id: Sha256Digest;
   readonly term_frequency: number;
 }
 
-interface CleanSegmentRows {
+interface ReadableSearchSegmentRows {
   readonly manifest: ReadableSearchSegmentManifestV1;
-  readonly facts: readonly CleanFactRow[];
-  readonly content_by_atom: ReadonlyMap<Sha256Digest, CleanContentRow>;
-  readonly postings: readonly CleanTermPostingRow[];
+  readonly facts: readonly ReadableSearchFactRow[];
+  readonly content_by_atom: ReadonlyMap<Sha256Digest, ReadableSearchContentRow>;
+  readonly postings: readonly ReadableSearchTermPostingRow[];
 }
 
 interface ValidatedActiveGenerationHandleV1 {
   readonly key: string;
   readonly manifest: ReadableSearchGenerationManifestV1;
-  readonly segments: readonly CleanSegmentRows[];
+  readonly segments: readonly ReadableSearchSegmentRows[];
 }
 
 let validatedActiveGenerationHandleV1: ValidatedActiveGenerationHandleV1 | null =
@@ -1165,7 +1165,7 @@ function sameExactHead(
   );
 }
 
-function assertCleanGenerationManifest(
+function assertReadableSearchGenerationManifest(
   value: unknown,
 ): asserts value is ReadableSearchGenerationManifestV1 {
   const manifest = value as Partial<ReadableSearchGenerationManifestV1>;
@@ -1281,8 +1281,8 @@ function rootForRead(
   return canonicalSha256({ schema_version: 1, kind, segment_id, rows: values });
 }
 
-function cleanContentBindingFromRows(
-  fact: CleanFactRow,
+function readableSearchContentBindingFromRows(
+  fact: ReadableSearchFactRow,
   text_sha256: Sha256Digest,
 ): Sha256Digest {
   return canonicalSha256({
@@ -1303,7 +1303,7 @@ function cleanContentBindingFromRows(
   });
 }
 
-function cleanProvenanceBindingFromFact(fact: CleanFactRow): Sha256Digest {
+function readableSearchProvenanceBindingFromFact(fact: ReadableSearchFactRow): Sha256Digest {
   return canonicalSha256({
     schema_version: 1,
     kind: "clean-readable-search-provenance-binding-v1",
@@ -1326,7 +1326,7 @@ function cleanProvenanceBindingFromFact(fact: CleanFactRow): Sha256Digest {
   });
 }
 
-function validateCleanPlaneLineage(
+function validateReadableSearchPlaneLineage(
   database: Database.Database,
   plane: Plane,
   manifest: ReadableSearchGenerationManifestV1,
@@ -1402,7 +1402,7 @@ function validateCleanPlaneLineage(
     throw new Error(`clean retrieval ${plane} plane metadata is invalid`);
 }
 
-function openCleanReadonlyPlane(
+function openReadableSearchReadonlyPlane(
   path: string,
   label: string,
 ): Database.Database {
@@ -1418,11 +1418,11 @@ function openCleanReadonlyPlane(
   }
 }
 
-function readAndValidateCleanSegment(
+function readAndValidateReadableSearchSegment(
   generationDirectory: string,
   generation: ReadableSearchGenerationManifestV1,
   entry: ReadableSearchGenerationManifestV1["segments"][number],
-): CleanSegmentRows {
+): ReadableSearchSegmentRows {
   validDigest(entry.segment_id, "generation segment_id");
   validDigest(entry.segment_manifest_sha256, "generation segment manifest");
   validDigest(entry.facts_root, "generation segment facts root");
@@ -1495,29 +1495,29 @@ function readAndValidateCleanSegment(
   const databases = new Map<Plane, Database.Database>();
   try {
     for (const plane of PLANES) {
-      const database = openCleanReadonlyPlane(
+      const database = openReadableSearchReadonlyPlane(
         join(directory, `${plane}.sqlite`),
         `clean retrieval ${plane} plane`,
       );
       databases.set(plane, database);
-      validateCleanPlaneLineage(database, plane, generation, segment);
+      validateReadableSearchPlaneLineage(database, plane, generation, segment);
     }
     const facts = rows(
       databases.get("facts")!,
       "SELECT * FROM retrieval_permission_fact ORDER BY log_position, atom_order, atom_id",
-    ) as unknown as readonly CleanFactRow[];
+    ) as unknown as readonly ReadableSearchFactRow[];
     const content = rows(
       databases.get("content")!,
       "SELECT * FROM retrieval_content_atom ORDER BY log_position, atom_order, atom_id",
-    ) as unknown as readonly CleanContentRow[];
+    ) as unknown as readonly ReadableSearchContentRow[];
     const documents = rows(
       databases.get("lexical")!,
       "SELECT * FROM retrieval_lexical_document ORDER BY log_position, atom_order, atom_id",
-    ) as unknown as readonly CleanLexicalDocumentRow[];
+    ) as unknown as readonly ReadableSearchLexicalDocumentRow[];
     const postings = rows(
       databases.get("lexical")!,
       "SELECT * FROM retrieval_term_posting ORDER BY CAST(term AS BLOB), atom_id",
-    ) as unknown as readonly CleanTermPostingRow[];
+    ) as unknown as readonly ReadableSearchTermPostingRow[];
     if (
       facts.length !== segment.fact_count ||
       content.length !== segment.content_count ||
@@ -1574,9 +1574,9 @@ function readAndValidateCleanSegment(
         item.content_binding_sha256 !== fact.content_binding_sha256 ||
         item.provenance_binding_sha256 !== fact.provenance_binding_sha256 ||
         document.content_binding_sha256 !== fact.content_binding_sha256 ||
-        cleanContentBindingFromRows(fact, item.text_sha256) !==
+        readableSearchContentBindingFromRows(fact, item.text_sha256) !==
           fact.content_binding_sha256 ||
-        cleanProvenanceBindingFromFact(fact) !== fact.provenance_binding_sha256
+        readableSearchProvenanceBindingFromFact(fact) !== fact.provenance_binding_sha256
       )
         throw new Error(
           "clean retrieval fact/content/lexical binding is invalid",
@@ -1646,7 +1646,7 @@ function validateAndWarmReadableSearchGenerationV1(
     join(generationDirectory, "manifest.json"),
     "active clean retrieval manifest",
   );
-  assertCleanGenerationManifest(manifestValue);
+  assertReadableSearchGenerationManifest(manifestValue);
   const manifest = manifestValue;
   if (
     digest(manifestSource) !== active.manifest_sha256 ||
@@ -1698,13 +1698,13 @@ function validateAndWarmReadableSearchGenerationV1(
     throw new Error("clean retrieval generation roots are invalid");
   const seenSegments = new Set<string>();
   const seenAtoms = new Set<string>();
-  const validatedSegments: CleanSegmentRows[] = [];
-  const admitted: CleanSegmentRows[] = [];
+  const validatedSegments: ReadableSearchSegmentRows[] = [];
+  const admitted: ReadableSearchSegmentRows[] = [];
   for (const entry of manifest.segments) {
     if (seenSegments.has(entry.segment_id))
       throw new Error("clean retrieval generation repeats a segment");
     seenSegments.add(entry.segment_id);
-    const segment = readAndValidateCleanSegment(
+    const segment = readAndValidateReadableSearchSegment(
       generationDirectory,
       manifest,
       entry,
@@ -1739,7 +1739,7 @@ function validateAndWarmReadableSearchGenerationV1(
   });
   if (!seenSegments.has(memberSegmentId))
     throw new Error("clean retrieval generation omits its member segment");
-  const budget = CLEAN_READABLE_SEARCH_ADMISSION_BUDGET_V1;
+  const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
   const postingCount = validatedSegments.reduce(
     (sum, segment) => sum + segment.postings.length,
     0,
@@ -1766,8 +1766,8 @@ function validateAndWarmReadableSearchGenerationV1(
     segments: Object.freeze(validatedSegments),
   });
   const candidates: Array<{
-    readonly fact: CleanFactRow;
-    readonly content: CleanContentRow;
+    readonly fact: ReadableSearchFactRow;
+    readonly content: ReadableSearchContentRow;
     readonly score: number;
   }> = [];
   for (const segment of admitted) {
@@ -1861,8 +1861,8 @@ export function searchReadableSearchGenerationV1(
         segment.manifest.reviewer_membership_id === input.reader.membership_id),
   );
   const candidates: Array<{
-    readonly fact: CleanFactRow;
-    readonly content: CleanContentRow;
+    readonly fact: ReadableSearchFactRow;
+    readonly content: ReadableSearchContentRow;
     readonly score: number;
   }> = [];
   for (const segment of admitted) {

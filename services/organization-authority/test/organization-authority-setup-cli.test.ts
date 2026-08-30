@@ -21,7 +21,7 @@ import {
   READABLE_SEARCH_FACTS_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   readableSearchPlaneBaselineSha256V1,
-} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
+} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {

@@ -14,7 +14,7 @@ import {
   type OrganizationAuthorityApiRuntimeDependencies,
   type RunningOrganizationAuthorityApiRuntime,
 } from "./organization-authority-api-runtime.js";
-import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
+import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 
 /**
  * The narrow durable-work seam for the Organization Authority's admitted

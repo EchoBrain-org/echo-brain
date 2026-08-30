@@ -11,7 +11,7 @@ import {
 import {
   applyOrganizationRecordLogBaselineV1,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-runtime-v1";
+} from "@echo-brain/organization-record/organization-record-service-v1";
 import {
   buildReadableSearchGenerationV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
@@ -23,7 +23,7 @@ import {
   warmReadableSearchActiveGenerationV1,
   type BuildReadableSearchGenerationV1Input,
   type ReadableSearchAtomV1,
-} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
+} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";

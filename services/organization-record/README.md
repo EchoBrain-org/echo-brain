@@ -1,7 +1,7 @@
 # Organization record
 
 This library owns the append-only organization record. The retained
-`organization-record-runtime-v1` is the canonical package entrypoint. The
+`organization-record-service-v1` is the canonical package entrypoint. The
 retained `new-lineage-v1` path is a thin compatibility re-export, not a
 component name. The runtime exposes the V4 record appender, the
 permission-aware person reader, and the record retrieval-source snapshot port.

@@ -6,7 +6,7 @@ import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonReadableRecordV1,
   PersonRecordReaderV1Input,
-} from "@echo-brain/organization-record/organization-record-runtime-v1";
+} from "@echo-brain/organization-record/organization-record-service-v1";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";

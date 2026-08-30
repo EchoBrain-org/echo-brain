@@ -27,7 +27,7 @@ import {
   type V4ReceiptFactory,
   type V4RecordEnvelopeFactory,
   type V4RecordEnvelopeView,
-} from "@echo-brain/organization-record/organization-record-runtime-v1";
+} from "@echo-brain/organization-record/organization-record-service-v1";
 import type { OrganizationAuthoritySigner } from "../../application/ports/runtime-ports.js";
 
 /** Authority-owned frozen candidate, re-read before a terminal V4 append. */

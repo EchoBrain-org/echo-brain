@@ -9,16 +9,14 @@ import {
 } from './database-definition.js';
 
 /**
- * New-lineage baseline v1 for the three readable-search plane database roles.
+ * State-lineage baseline v1 for the three readable-search plane database roles.
  *
  * One exact baseline per plane replaces the historical migration chain: the
  * applier stamps the plane's role application ID and `user_version = 1` on an
  * empty database and the committed SQL file creates the complete behavior
- * schema. The legacy migration-ledger objects are deliberately absent;
- * new-lineage schema identity is carried by the state-lineage manifest digest
- * and the pre-open guard's exact-version check. This module is private and
- * unwired: the new-lineage generation builder that composes it is later
- * Phase 3 work, and no current runtime path may create new-lineage state.
+ * schema. The legacy migration-ledger objects are deliberately absent. The
+ * state-lineage manifest digest and pre-open guard bind each plane to its
+ * readable-search runtime generation before it is opened.
  */
 export const READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1 = 1;
 

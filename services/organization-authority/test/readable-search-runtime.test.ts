@@ -12,11 +12,11 @@ import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
   openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-runtime-v1";
+} from "@echo-brain/organization-record/organization-record-service-v1";
 import {
   clearReadableSearchActiveGenerationV1,
   searchReadableSearchGenerationV1,
-} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
+} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../src/composition/readable-search-runtime.js";

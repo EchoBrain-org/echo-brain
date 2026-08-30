@@ -1,11 +1,11 @@
--- New-lineage baseline v1 for the readable-search facts plane database role.
+-- State-lineage baseline v1 for the readable-search facts plane database role.
 -- One exact baseline replaces the historical migration chain: the applier
 -- stamps application_id and user_version = 1 on an empty database and this
 -- file creates the complete behavior schema. The legacy migration-ledger
--- objects are deliberately absent; new-lineage schema identity is carried by
--- the state-lineage manifest digest and the pre-open guard's exact-version
--- check. Never edit this file in place; a schema change is a new dated
--- baseline or a new-lineage migration with its own disposition.
+-- objects are deliberately absent. The state-lineage manifest digest and
+-- pre-open guard bind this plane to its readable-search runtime generation.
+-- Never edit this file in place; a schema change requires a new dated baseline
+-- with its own disposition.
 
 CREATE TABLE retrieval_plane_metadata (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

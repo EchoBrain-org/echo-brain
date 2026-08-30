@@ -4,7 +4,7 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
   projectPrivateSlackBlockApprovalPolicyFactsV1,
-} from "../src/organization-record-runtime-v1.js";
+} from "../src/organization-record-service-v1.js";
 import type { PersonPolicyIdV2 } from "../src/application/person-policy-facts-v2.js";
 
 const digest = (letter: string): `sha256:${string}` => `sha256:${letter.repeat(64)}`;

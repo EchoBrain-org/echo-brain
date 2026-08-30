@@ -7,7 +7,7 @@ import {
   clearReadableSearchActiveGenerationV1,
   searchReadableSearchGenerationV1,
   type ReadableSearchResultItemV1,
-} from "@echo-brain/organization-retrieval/readable-search-runtime-v1";
+} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
