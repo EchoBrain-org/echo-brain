@@ -51,7 +51,7 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonHumanActActionV2,
   type PersonPolicyIdV2,
-  type ReprovedPersonPolicyAuthorizationWitnessV2,
+  type RevalidatedPersonPolicyAuthorizationWitnessV2,
 } from "../src/application/person-policy-facts-v2.js";
 import {
   OrganizationRecordAppenderV4,
@@ -70,7 +70,7 @@ import {
 } from "../src/application/person-policy-facts-v2.js";
 import {
   createPrivateSlackBlockApprovalPolicyProjectorV1,
-  type ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1,
+  type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1,
 } from "../src/application/private-slack-block-approval-policy-facts-v1.js";
 import { PersonRecordReaderV1 } from "../src/retrieve/person-record-reader-v1.js";
 import {
@@ -338,7 +338,7 @@ function humanAct(
 
 function authorizationWitness(
   human: ReturnType<typeof humanAct>,
-): ReprovedPersonPolicyAuthorizationWitnessV2 {
+): RevalidatedPersonPolicyAuthorizationWitnessV2 {
   const ref = human.human_act_resolution_ref;
   return {
     authorization_allow: {
@@ -437,7 +437,7 @@ function privateSlackBlockHumanAct(
 
 function privateSlackBlockAuthorizationWitness(
   human: ReturnType<typeof privateSlackBlockHumanAct>,
-): ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1 {
+): RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1 {
   const ref = human.private_slack_block_approval_resolution_ref;
   return {
     authorization_allow: {

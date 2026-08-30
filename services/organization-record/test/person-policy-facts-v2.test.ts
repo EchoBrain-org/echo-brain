@@ -15,7 +15,7 @@ import {
   type PersonPolicyFactItemKindV2,
   type PersonPolicyIdV2,
   type ProjectPersonPolicyFactsV2Input,
-  type ReprovedPersonPolicyAuthorizationWitnessV2,
+  type RevalidatedPersonPolicyAuthorizationWitnessV2,
   type StructurallyVerifiedPersonPolicyRecordV4View,
 } from '../src/application/person-policy-facts-v2.js';
 
@@ -69,7 +69,7 @@ function reference(
 
 function witness(
   ref: PersonHumanActResolutionRefV1View,
-): ReprovedPersonPolicyAuthorizationWitnessV2 {
+): RevalidatedPersonPolicyAuthorizationWitnessV2 {
   return {
     authorization_allow: {
       authority_id: ref.authority_id,
@@ -684,7 +684,7 @@ describe('private Person-v2 policy fact projector', () => {
     const extraWitness = clonedFixture();
     mutableRecord(extraWitness.witness).kind = 'invented-witness-kind';
     expect(() => projectPersonPolicyFactsV2(extraWitness)).toThrow(
-      /D2 reproof witness has an unexpected shape/,
+      /D2 revalidation witness has an unexpected shape/,
     );
 
     const accessorInput = clonedFixture();

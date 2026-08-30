@@ -62,7 +62,7 @@ function digest(value: unknown): value is ApprovalContractSha256 {
 
 /**
  * Opens an IMMEDIATE Authority transaction, preventing a candidate head,
- * outbox or membership change between the reproof and the caller's terminal
+ * outbox or membership change between the revalidation and the caller's terminal
  * Control Plane commit. The callback receives only read-only proof methods.
  */
 export class SqliteStablePrivateApprovalAuthorityFenceV1
@@ -82,12 +82,12 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
         currentMembership: (
           input: Parameters<PrivateApprovalAuthorityFenceV1["currentMembership"]>[0],
         ) => this.currentMembership(input),
-        reprovePrivateApprovalAuthorization: (
+        revalidatePrivateApprovalAuthorization: (
           input: Parameters<
-            PrivateApprovalAuthorityFenceV1["reprovePrivateApprovalAuthorization"]
+            PrivateApprovalAuthorityFenceV1["revalidatePrivateApprovalAuthorization"]
           >[0],
         ) =>
-          this.reprovePrivateApprovalAuthorization(input),
+          this.revalidatePrivateApprovalAuthorization(input),
       }));
       if (
         result !== null &&
@@ -147,13 +147,13 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
         });
   }
 
-  private reprovePrivateApprovalAuthorization(input: {
+  private revalidatePrivateApprovalAuthorization(input: {
     readonly pending: PendingPrivateApprovalV1;
     readonly card_binding: PrivateApprovalSlackCardBindingV1;
     readonly lookup: unknown;
   }): PrivateApprovalAuthorizationAllowV1 | undefined {
     // Provider lookup values are intentionally unused here. They are only
-    // independently reproved by the Control Plane's Slack presentation fence.
+    // independently revalidated by the Control Plane's Slack presentation fence.
     void input.lookup;
     let pending: PendingPrivateApprovalV1;
     let card: PrivateApprovalSlackCardBindingV1;

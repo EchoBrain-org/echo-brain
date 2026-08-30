@@ -237,7 +237,7 @@ afterEach(() => {
 });
 
 describe("private SQLite Person Slack reaction approval activation v2", () => {
-  it("reproves current rows and saves one binding, four capabilities, resource, and receipts atomically", async () => {
+  it("revalidates current rows and saves one binding, four capabilities, resource, and receipts atomically", async () => {
     const database = openOrganizationControlDatabase(path());
     applyOrganizationControlBaselineV1(database);
     seed(database);

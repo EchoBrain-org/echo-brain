@@ -42,7 +42,7 @@ import type {
 const PROVIDER_EXPECTATION_KIND =
   "echo-person-slack-provider-expectation-v2" as const;
 
-export interface ReprovedFrozenPersonSlackReactionApprovalV2 {
+export interface RevalidatedFrozenPersonSlackReactionApprovalV2 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -197,9 +197,9 @@ export interface PersonSlackReactionApprovalFinalizationTransactionV2 {
 }
 
 export interface PersonSlackReactionApprovalFinalizationFenceV2 {
-  reprovedFrozenApprovalById(
+  revalidatedFrozenApprovalById(
     approvalId: string,
-  ): ReprovedFrozenPersonSlackReactionApprovalV2 | undefined;
+  ): RevalidatedFrozenPersonSlackReactionApprovalV2 | undefined;
   /**
    * Authority-owned lineage fence. A pending approval is actionable only
    * while it remains the current review round for its source lineage.
@@ -309,14 +309,14 @@ function sha256(value: unknown): ApprovalContractSha256 {
 
 function sameCoordinates(
   value: { readonly authority_id: string; readonly organization_id: string; readonly state_lineage_id: string },
-  expected: ReprovedFrozenPersonSlackReactionApprovalV2,
+  expected: RevalidatedFrozenPersonSlackReactionApprovalV2,
 ): boolean {
   return value.authority_id === expected.authority_id &&
     value.organization_id === expected.organization_id &&
     value.state_lineage_id === expected.state_lineage_id;
 }
 
-function reprove<T>(
+function revalidate<T>(
   stored: FrozenApprovalContractV2<T> | undefined,
   codec: PersonSlackReactionApprovalFinalizationCodecV2,
   validate: (value: unknown) => T,
@@ -334,7 +334,7 @@ function reprove<T>(
   }
 }
 
-function frozenApproval(value: unknown): ReprovedFrozenPersonSlackReactionApprovalV2 {
+function frozenApproval(value: unknown): RevalidatedFrozenPersonSlackReactionApprovalV2 {
   const row = exact(value, FROZEN_APPROVAL_KEYS);
   if (row.status !== "pending") return denied();
   for (const field of [
@@ -364,11 +364,11 @@ function frozenApproval(value: unknown): ReprovedFrozenPersonSlackReactionApprov
     row.policy_contract_sha256 !== exactPolicy[0] ||
     row.policy_consequence_sha256 !== exactPolicy[1]
   ) return denied();
-  return Object.freeze(row) as unknown as ReprovedFrozenPersonSlackReactionApprovalV2;
+  return Object.freeze(row) as unknown as RevalidatedFrozenPersonSlackReactionApprovalV2;
 }
 
 interface PreparedAction {
-  readonly approval: ReprovedFrozenPersonSlackReactionApprovalV2;
+  readonly approval: RevalidatedFrozenPersonSlackReactionApprovalV2;
   readonly approval_sha256: ApprovalContractSha256;
   readonly connection: FrozenApprovalContractV2<OrganizationToolConnectionContractV2>;
   readonly connection_state: FrozenApprovalContractV2<OrganizationToolConnectionStateV2>;
@@ -382,20 +382,20 @@ function prepare(
   approvalId: string,
   codec: PersonSlackReactionApprovalFinalizationCodecV2,
 ): PreparedAction {
-  const approval = frozenApproval(fence.reprovedFrozenApprovalById(approvalId));
-  const connectionStored = reprove(
+  const approval = frozenApproval(fence.revalidatedFrozenApprovalById(approvalId));
+  const connectionStored = revalidate(
     fence.transaction.connectionById(approval.connection_id),
     codec,
     validateOrganizationToolConnectionContractV2,
   );
   const connection = connectionStored.body;
-  const stateStored = reprove(
+  const stateStored = revalidate(
     fence.transaction.connectionStateById(approval.connection_id),
     codec,
     validateOrganizationToolConnectionStateV2,
   );
   const state = stateStored.body;
-  const bindingStored = reprove(
+  const bindingStored = revalidate(
     fence.transaction.approvalBindingById(approval.approval_binding_id),
     codec,
     validatePersonSlackReactionApprovalBindingContractV2,
@@ -482,7 +482,7 @@ function prepare(
   };
 }
 
-function reproveStoredUnchecked(
+function revalidateStoredUnchecked(
   stored: StoredProviderHumanActionV2,
   codec: PersonSlackReactionApprovalFinalizationCodecV2,
 ): { readonly result: ProviderHumanActionDurableResult; readonly set: ProviderHumanActionContractSetV2 } {
@@ -542,12 +542,12 @@ function reproveStoredUnchecked(
   return { result: derived, set };
 }
 
-function reproveStored(
+function revalidateStored(
   stored: StoredProviderHumanActionV2,
   codec: PersonSlackReactionApprovalFinalizationCodecV2,
 ): { readonly result: ProviderHumanActionDurableResult; readonly set: ProviderHumanActionContractSetV2 } {
   try {
-    return reproveStoredUnchecked(stored, codec);
+    return revalidateStoredUnchecked(stored, codec);
   } catch (error) {
     if (error instanceof PersonSlackReactionApprovalFinalizationDeniedError) throw error;
     return denied();
@@ -625,7 +625,7 @@ function recoverStoredForApproval(
   transaction: PersonSlackReactionApprovalFinalizationTransactionV2,
   codec: PersonSlackReactionApprovalFinalizationCodecV2,
 ): { readonly result: ProviderHumanActionDurableResult; readonly set: ProviderHumanActionContractSetV2 } {
-  const recovered = reproveStored(stored, codec);
+  const recovered = revalidateStored(stored, codec);
   const semantic = buildProviderHumanSemanticActionInputV1(recovered.set);
   const audit = recovered.set.audit_entry;
   if (
@@ -981,7 +981,7 @@ export async function finalizePersonSlackReactionApprovalV2(input: {
     }
     const current = prepare(fence, approvalId, input.codec);
     samePrepared(current, first.value);
-    const linkStored = reprove(
+    const linkStored = revalidate(
       fence.transaction.externalHumanLinkByProviderActor({
         provider_issuer: current.expectation.provider_issuer,
         provider_tenant_kind: current.expectation.provider_tenant_kind,
@@ -1007,7 +1007,7 @@ export async function finalizePersonSlackReactionApprovalV2(input: {
       fence.currentMembership({ principal_id: link.principal_id, membership_id: link.membership_id }),
       link,
     );
-    const capabilityStored = reprove(
+    const capabilityStored = revalidate(
       fence.transaction.actionCapability({
         approval_binding_id: current.expectation.approval_binding_id,
         external_identity_link_id: link.external_identity_link_id,
@@ -1049,7 +1049,7 @@ export async function finalizePersonSlackReactionApprovalV2(input: {
       committed_at: input.now(),
       codec: input.codec,
     });
-    reproveStored(stored, input.codec);
+    revalidateStored(stored, input.codec);
     input.signal?.throwIfAborted();
     fence.transaction.saveHumanAction(stored);
     return { kind: "resolved", value: stored.result } as const;

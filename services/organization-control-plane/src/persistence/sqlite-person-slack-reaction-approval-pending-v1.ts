@@ -6,7 +6,7 @@ import {
   type ApprovalContractSha256,
   type PersonApprovalPolicyId,
 } from "../application/person-slack-reaction-approval-contracts-v2.js";
-import type { ReprovedFrozenPersonSlackReactionApprovalV2 } from "../application/person-slack-reaction-approval-finalization-v2.js";
+import type { RevalidatedFrozenPersonSlackReactionApprovalV2 } from "../application/person-slack-reaction-approval-finalization-v2.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import type Database from "better-sqlite3";
 
@@ -17,13 +17,13 @@ const COMMAND_ID = /^pas_[A-Za-z0-9][A-Za-z0-9_-]{0,123}$/;
 
 export interface StagePersonSlackReactionApprovalPendingCommandV1 {
   readonly command_id: string;
-  readonly approval: ReprovedFrozenPersonSlackReactionApprovalV2;
+  readonly approval: RevalidatedFrozenPersonSlackReactionApprovalV2;
 }
 
 export interface StagedPersonSlackReactionApprovalPendingV1 {
   readonly command_id: string;
   readonly command_semantic_sha256: ApprovalContractSha256;
-  readonly approval: ReprovedFrozenPersonSlackReactionApprovalV2;
+  readonly approval: RevalidatedFrozenPersonSlackReactionApprovalV2;
   readonly approval_sha256: ApprovalContractSha256;
   readonly idempotent: boolean;
 }
@@ -93,9 +93,9 @@ function policyCommitment(
 }
 
 /** Validates only the frozen tuple consumed by the finalization primitive. */
-export function validateReprovedPersonSlackPendingApprovalV1(
+export function validateRevalidatedPersonSlackPendingApprovalV1(
   value: unknown,
-): ReprovedFrozenPersonSlackReactionApprovalV2 {
+): RevalidatedFrozenPersonSlackReactionApprovalV2 {
   const record = exact(value, [
     "authority_id",
     "organization_id",
@@ -157,11 +157,11 @@ export function validateReprovedPersonSlackPendingApprovalV1(
   }
   return Object.freeze({
     ...record,
-  }) as unknown as ReprovedFrozenPersonSlackReactionApprovalV2;
+  }) as unknown as RevalidatedFrozenPersonSlackReactionApprovalV2;
 }
 
 function commandSemantic(
-  approval: ReprovedFrozenPersonSlackReactionApprovalV2,
+  approval: RevalidatedFrozenPersonSlackReactionApprovalV2,
 ): ApprovalContractSha256 {
   return canonicalSha256({ kind: COMMAND_KIND, approval });
 }
@@ -169,7 +169,7 @@ function commandSemantic(
 function result(
   commandId: string,
   semantic: ApprovalContractSha256,
-  approval: ReprovedFrozenPersonSlackReactionApprovalV2,
+  approval: RevalidatedFrozenPersonSlackReactionApprovalV2,
   approvalSha256: ApprovalContractSha256,
   idempotent: boolean,
 ): StagedPersonSlackReactionApprovalPendingV1 {
@@ -186,7 +186,7 @@ function storedApproval(row: {
   approval_json: string;
   approval_sha256: string;
 }): {
-  approval: ReprovedFrozenPersonSlackReactionApprovalV2;
+  approval: RevalidatedFrozenPersonSlackReactionApprovalV2;
   sha256: ApprovalContractSha256;
 } {
   const parsed = JSON.parse(row.approval_json) as unknown;
@@ -197,7 +197,7 @@ function storedApproval(row: {
     throw new Error("stored pending Person Slack reaction approval digest is invalid");
   }
   return {
-    approval: validateReprovedPersonSlackPendingApprovalV1(parsed),
+    approval: validateRevalidatedPersonSlackPendingApprovalV1(parsed),
     sha256: row.approval_sha256 as ApprovalContractSha256,
   };
 }
@@ -214,7 +214,7 @@ export function stagePersonSlackReactionApprovalPendingV1(input: {
   if (!COMMAND_ID.test(input.command.command_id)) {
     throw new Error("pending Person Slack reaction approval command_id is invalid");
   }
-  const approval = validateReprovedPersonSlackPendingApprovalV1(
+  const approval = validateRevalidatedPersonSlackPendingApprovalV1(
     input.command.approval,
   );
   const semantic = commandSemantic(approval);

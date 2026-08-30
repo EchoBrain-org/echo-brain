@@ -4,7 +4,7 @@
  * This module owns neither delivery nor persistence. Its authorization input
  * is a transaction-produced D2 allow result, never a network-deserialized
  * payload. The persistence boundary must fence a new resolution by command_id
- * in the same transaction that reproves that allow.
+ * in the same transaction that revalidates that allow.
  */
 
 import {
@@ -61,7 +61,7 @@ export interface PendingPrivateApprovalV1 {
 
 /**
  * Raw human command. It intentionally carries no actor identity or authority
- * claim: those arrive only through the server-reproved authorization allow.
+ * claim: those arrive only through the server-revalidated authorization allow.
  */
 export interface PrivateApprovalResolutionCommandV1 {
   readonly schema_version: 1;
@@ -75,7 +75,7 @@ export interface PrivateApprovalResolutionCommandV1 {
 
 /**
  * Transaction-produced authorization allow. Never deserialize this from a
- * Slack/UI request; it must be reproved inside the authority transaction.
+ * Slack/UI request; it must be revalidated inside the authority transaction.
  */
 export interface PrivateApprovalAuthorizationAllowV1 {
   readonly schema_version: 1;
@@ -685,7 +685,7 @@ export function validatePrivateApprovalAuthorizationAllowV1(
 /**
  * Resolve one explicit approval or rejection. Exact durable retries are
  * returned before consulting current state; otherwise the current pending
- * owner and server-reproved authorization allow must match exactly.
+ * owner and server-revalidated authorization allow must match exactly.
  */
 export function resolvePrivateApprovalPolicyV1(
   input: ResolvePrivateApprovalPolicyInputV1,

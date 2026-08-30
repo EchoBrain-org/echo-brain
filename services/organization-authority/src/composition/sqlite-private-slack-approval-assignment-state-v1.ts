@@ -516,7 +516,7 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
       });
       const existing = this.rowByApprovalId(commitment.approval_id);
       if (existing !== undefined) {
-        const stored = this.reproveRow(existing, commitment, organizationId);
+        const stored = this.revalidateRow(existing, commitment, organizationId);
         const candidateExpected = { ...expected, created_at: stored.created_at };
         if (!sameAssignment(stored, candidateExpected)) {
           fail("stage conflicts with the immutable assignment");
@@ -558,15 +558,15 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
       const row = this.rowByApprovalId(commitment.approval_id);
       if (row === undefined) fail("stage insert is absent");
       return Object.freeze({
-        assignment: this.reproveRow(row, commitment, organizationId),
+        assignment: this.revalidateRow(row, commitment, organizationId),
         created: true,
       });
     })();
   }
 
   /**
-   * Reproves the assignment against the current source candidate. Slack
-   * ingress must separately reprove the connection/link/message presentation
+   * Revalidates the assignment against the current source candidate. Slack
+   * ingress must separately revalidate the connection/link/message presentation
    * commitments from the Control Plane; this method exposes no such authority.
    */
   readCurrent(
@@ -579,7 +579,7 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
         return undefined;
       }
       if (currentCandidate(this.database, commitment) === undefined) return undefined;
-      return this.reproveRow(
+      return this.revalidateRow(
         row,
         commitment,
         metadataOrganizationId(this.database),
@@ -616,7 +616,7 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
         fail("presentation provider message timestamp is invalid");
       }
       return Object.freeze({
-        assignment: this.reproveRow(
+        assignment: this.revalidateRow(
           row,
           commitment,
           metadataOrganizationId(this.database),
@@ -655,7 +655,7 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
         assignmentRow,
         resolution,
       );
-      const staged = this.reproveRow(
+      const staged = this.revalidateRow(
         assignmentRow,
         candidateCommitment,
         organizationId,
@@ -703,10 +703,10 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
        * Finalization itself is current-only under the Authority fence. Once
        * Control Plane has committed that terminal, however, recovery must
        * complete it even if a newer meeting revision supersedes this outbox
-       * before the V4 receipt can be recorded. Reprove the immutable frozen
+       * before the V4 receipt can be recorded. Revalidate the immutable frozen
        * presentation tuple instead of requiring the lineage head to remain
        * current. This cannot authorize a new action: it is reachable only
-       * after the durable CP terminal above has been independently reproved.
+       * after the durable CP terminal above has been independently revalidated.
        */
       const presentation = this.presentationCandidate(assignmentRow);
       if (
@@ -840,7 +840,7 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
     return commitment;
   }
 
-  private reproveRow(
+  private revalidateRow(
     row: AssignmentRow,
     commitment: PrivateApprovalCandidateCommitmentV1,
     organizationId: string,

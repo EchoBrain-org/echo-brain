@@ -10,7 +10,7 @@ import type {
  * Private D3-3 structural views for append-atomic Person-v2 policy facts.
  *
  * Protocol owns the complete durable v4 envelope. Authority composition must
- * first validate that envelope and independently reprove its immutable D2
+ * first validate that envelope and independently revalidate its immutable D2
  * authorization/audit bodies, then adapt only the fields read here. These
  * deliberately reduced views are not another durable document contract: they
  * have no schema or kind, are not exported from the workspace entry point,
@@ -92,7 +92,7 @@ export interface StructurallyVerifiedPersonPolicyRecordV4View {
  * Minimum fields read from the independently revalidated D2 allow body.
  * `authorization_proof_sha256` below is its recomputed canonical digest.
  */
-export interface ReprovedPersonPolicyAuthorizationAllowV2View {
+export interface RevalidatedPersonPolicyAuthorizationAllowV2View {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -110,7 +110,7 @@ export interface ReprovedPersonPolicyAuthorizationAllowV2View {
  * Minimum identity and chain coordinates read from the independently
  * revalidated immutable D2 integration-audit entry.
  */
-export interface ReprovedPersonPolicyAuditEntryV2View {
+export interface RevalidatedPersonPolicyAuditEntryV2View {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -127,15 +127,15 @@ export interface ReprovedPersonPolicyAuditEntryV2View {
 }
 
 /**
- * Ephemeral, already-reproved D2 evidence. It is a structural injection seam,
+ * Ephemeral, already-revalidated D2 evidence. It is a structural injection seam,
  * never a caller-signed or stored document.
  */
-export interface ReprovedPersonPolicyAuthorizationWitnessV2 {
-  readonly authorization_allow: ReprovedPersonPolicyAuthorizationAllowV2View;
+export interface RevalidatedPersonPolicyAuthorizationWitnessV2 {
+  readonly authorization_allow: RevalidatedPersonPolicyAuthorizationAllowV2View;
   readonly authorization_proof_sha256: Sha256Digest;
   readonly provider_action_kind: 'echo-provider-human-action-v2';
   readonly provider_action_schema_version: 2;
-  readonly audit_entry: ReprovedPersonPolicyAuditEntryV2View;
+  readonly audit_entry: RevalidatedPersonPolicyAuditEntryV2View;
   readonly audit_entry_sha256: Sha256Digest;
 }
 
@@ -191,7 +191,7 @@ export interface PersonPolicyFactProjectionV2 {
 export interface ProjectPersonPolicyFactsV2Input {
   readonly envelope: StructurallyVerifiedPersonPolicyRecordV4View;
   readonly record_position: number;
-  readonly witness: ReprovedPersonPolicyAuthorizationWitnessV2;
+  readonly witness: RevalidatedPersonPolicyAuthorizationWitnessV2;
 }
 
 export class PersonPolicyFactProjectionV2Error extends Error {
@@ -558,7 +558,7 @@ function authorizationWitness(value: unknown): ValidatedAuthorizationWitness {
   const record = exactRecord(
     value,
     WITNESS_KEYS,
-    'Person policy D2 reproof witness',
+    'Person policy D2 revalidation witness',
   );
   return Object.freeze({
     authorization_allow: authorizationAllow(record.authorization_allow),
@@ -953,7 +953,7 @@ export function createPersonPolicyFactProjectorV2(): RecordPolicyFactProjectorV1
       projectPersonPolicyFactsV2({
         envelope: personPolicyEnvelope(envelope),
         record_position,
-        witness: witness as ReprovedPersonPolicyAuthorizationWitnessV2,
+        witness: witness as RevalidatedPersonPolicyAuthorizationWitnessV2,
     }),
     policyBinding: (envelope: RecordPolicyFactEnvelopeV1) => {
       const reference = resolutionRef(

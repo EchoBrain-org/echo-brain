@@ -30,8 +30,8 @@ export interface PrivateSlackBlockApprovalPolicyFactsInputV1 {
   readonly witness: unknown;
 }
 
-/** D2 reproof shape for the signed private Slack Block Kit action. */
-export interface ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1 {
+/** D2 revalidation shape for the signed private Slack Block Kit action. */
+export interface RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1 {
   readonly authorization_allow: {
     readonly authority_id: string;
     readonly organization_id: string;

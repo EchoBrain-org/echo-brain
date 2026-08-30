@@ -121,7 +121,7 @@ function harness(input = sourceCandidate()) {
 }
 
 describe("sqlite private approval processing Authority V1", () => {
-  it("reproves the frozen staged tuple and produces exact writer provenance", async () => {
+  it("revalidates the frozen staged tuple and produces exact writer provenance", async () => {
     const { adapter, source, assignments } = harness();
 
     await expect(adapter.readFrozenCandidateForApproval(APPROVAL_ID)).resolves.toMatchObject({

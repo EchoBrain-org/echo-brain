@@ -24,7 +24,7 @@ import type {
   StoredProviderHumanActionV2,
 } from "../application/person-slack-reaction-approval-finalization-v2.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
-import { validateReprovedPersonSlackPendingApprovalV1 } from "./sqlite-person-slack-reaction-approval-pending-v1.js";
+import { validateRevalidatedPersonSlackPendingApprovalV1 } from "./sqlite-person-slack-reaction-approval-pending-v1.js";
 import type Database from "better-sqlite3";
 
 export interface StableAuthorityPersonSlackReactionApprovalFenceV2 {
@@ -32,7 +32,7 @@ export interface StableAuthorityPersonSlackReactionApprovalFenceV2 {
     commit: (
       fence: Omit<
         PersonSlackReactionApprovalFinalizationFenceV2,
-        "transaction" | "reprovedFrozenApprovalById"
+        "transaction" | "revalidatedFrozenApprovalById"
       >,
     ) => T,
   ): Promise<T>;
@@ -532,7 +532,7 @@ export class SqlitePersonSlackReactionApprovalFinalizationCoordinatorV2 implemen
           );
           const result = commit({
             ...authority,
-            reprovedFrozenApprovalById: (approvalId) => {
+            revalidatedFrozenApprovalById: (approvalId) => {
               const row = this.input.database
                 .prepare(
                   `SELECT approval_json, approval_sha256
@@ -548,7 +548,7 @@ export class SqlitePersonSlackReactionApprovalFinalizationCoordinatorV2 implemen
                   "stored pending Person Slack reaction approval digest is invalid",
                 );
               }
-              return validateReprovedPersonSlackPendingApprovalV1(parsed);
+              return validateRevalidatedPersonSlackPendingApprovalV1(parsed);
             },
             transaction,
           });

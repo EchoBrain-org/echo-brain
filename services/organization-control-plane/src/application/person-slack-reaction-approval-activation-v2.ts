@@ -323,7 +323,7 @@ function sameCoordinates(
   );
 }
 
-function reprove<T>(
+function revalidate<T>(
   stored: FrozenApprovalContractV2<T> | undefined,
   codec: PersonSlackReactionApprovalActivationCodecV2,
   validate: (value: unknown) => T,
@@ -390,7 +390,7 @@ function semanticResource(
   });
 }
 
-function reproveArtifacts(
+function revalidateArtifacts(
   stored: PersonSlackReactionApprovalActivationResultV2,
   resourceSha256: ApprovalContractSha256,
   command: PersonSlackReactionApprovalActivationCommandV2,
@@ -417,7 +417,7 @@ function reproveArtifacts(
     return denied();
   }
   const storedAdministrator = validateAdministrator(stored.activated_by);
-  const binding = reprove(
+  const binding = revalidate(
     stored.approval_binding,
     codec,
     validatePersonSlackReactionApprovalBindingContractV2,
@@ -425,12 +425,12 @@ function reproveArtifacts(
   const connectionStored = transaction.connectionById(
     command.provider_connection_id,
   );
-  const connection = reprove(
+  const connection = revalidate(
     connectionStored,
     codec,
     validateOrganizationToolConnectionContractV2,
   );
-  const link = reprove(
+  const link = revalidate(
     transaction.externalHumanLinkById(command.target_external_identity_link_id),
     codec,
     validateExternalHumanIdentityLinkContractV2,
@@ -455,7 +455,7 @@ function reproveArtifacts(
     return denied();
   }
   for (const [index, [policy, action]] of CAPABILITY_ORDER.entries()) {
-    const capability = reprove(
+    const capability = revalidate(
       stored.action_capabilities[index],
       codec,
       validatePersonSlackReactionApprovalActionCapabilityV2,
@@ -490,7 +490,7 @@ function reproveArtifacts(
   };
 }
 
-function reproveResult(
+function revalidateResult(
   stored: PersonSlackReactionApprovalActivationResultV2,
   expectedCommandId: string,
   expectedSemanticSha256: ApprovalContractSha256,
@@ -513,7 +513,7 @@ function reproveResult(
   ) {
     return denied();
   }
-  reproveArtifacts(
+  revalidateArtifacts(
     stored,
     resourceSha256,
     command,
@@ -553,7 +553,7 @@ export async function activatePersonSlackReactionApprovalV2(input: {
       digest(resourceSha256);
       const prior = fence.transaction.activationByCommandId(command.command_id);
       if (prior !== undefined) {
-        return reproveResult(
+        return revalidateResult(
           prior,
           command.command_id,
           semanticSha256,
@@ -568,12 +568,12 @@ export async function activatePersonSlackReactionApprovalV2(input: {
       const connectionStored = fence.transaction.connectionById(
         command.provider_connection_id,
       );
-      const connection = reprove(
+      const connection = revalidate(
         connectionStored,
         input.codec,
         validateOrganizationToolConnectionContractV2,
       );
-      const connectionState = reprove(
+      const connectionState = revalidate(
         fence.transaction.connectionStateById(command.provider_connection_id),
         input.codec,
         validateOrganizationToolConnectionStateV2,
@@ -581,7 +581,7 @@ export async function activatePersonSlackReactionApprovalV2(input: {
       const linkStored = fence.transaction.externalHumanLinkById(
         command.target_external_identity_link_id,
       );
-      const link = reprove(
+      const link = revalidate(
         linkStored,
         input.codec,
         validateExternalHumanIdentityLinkContractV2,
@@ -632,7 +632,7 @@ export async function activatePersonSlackReactionApprovalV2(input: {
       const existingResource =
         fence.transaction.activationByResourceSha256(resourceSha256);
       if (existingResource !== undefined) {
-        const artifacts = reproveArtifacts(
+        const artifacts = revalidateArtifacts(
           existingResource,
           resourceSha256,
           command,

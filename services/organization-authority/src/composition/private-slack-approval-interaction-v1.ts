@@ -527,7 +527,7 @@ function providerActionKey(input: {
 /**
  * Parses a Slack `block_actions` form only after signature verification.
  * Provider identity, message and container values stay lookup hints. The
- * later durable boundary must reprove the app installation, DM, message,
+ * later durable boundary must revalidate the app installation, DM, message,
  * active assignment, and external-person link before it can resolve anything.
  */
 export function parseVerifiedPrivateSlackApprovalInteractionV1(

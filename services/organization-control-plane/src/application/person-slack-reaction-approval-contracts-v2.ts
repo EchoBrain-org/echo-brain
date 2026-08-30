@@ -57,7 +57,7 @@ export const PERSON_CONTENT_POLICY_READABLE_ITEM_KINDS = Object.freeze([
 /**
  * Approval contracts admit exactly the verified organization connection scope
  * set. Keep this alias rather than a second literal so onboarding, persisted
- * contracts, and action-time reproof cannot silently diverge.
+ * contracts, and action-time revalidation cannot silently diverge.
  */
 export const SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES =
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES;
@@ -1450,7 +1450,7 @@ export function validateProviderHumanSemanticActionInputV1(
 }
 
 /**
- * Plain D2 durable locator. D3 may later wrap and reprove this information in
+ * Plain D2 durable locator. D3 may later wrap and revalidate this information in
  * its own accepted contract; this value deliberately has no kind or version.
  */
 export interface ProviderHumanActionRecoveryKey {

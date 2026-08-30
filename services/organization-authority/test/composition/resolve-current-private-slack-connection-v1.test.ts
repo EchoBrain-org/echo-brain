@@ -109,7 +109,7 @@ afterEach(() => {
 });
 
 describe("resolveCurrentPrivateSlackConnectionV1", () => {
-  it("reproves precisely the manifest-pinned active Slack installation without a shared approval binding", () => {
+  it("revalidates precisely the manifest-pinned active Slack installation without a shared approval binding", () => {
     const database = seed();
 
     const actual = resolveCurrentPrivateSlackConnectionV1(

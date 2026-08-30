@@ -117,7 +117,7 @@ describe("private Slack DM approval stager V1", () => {
     expect(stage).toHaveBeenCalledOnce();
   });
 
-  it("reproves the owner after CP staging before publishing the full card", async () => {
+  it("revalidates the owner after CP staging before publishing the full card", async () => {
     let current = outbox();
     let ownerIsCurrent = true;
     const assignment = {

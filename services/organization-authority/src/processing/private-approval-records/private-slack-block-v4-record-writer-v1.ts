@@ -23,7 +23,7 @@ import type {
 import {
   OrganizationRecordAppenderV4,
   type AppendedV4Record,
-  type ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1,
+  type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1,
   type V4ReceiptFactory,
   type V4RecordEnvelopeFactory,
   type V4RecordEnvelopeView,
@@ -207,7 +207,7 @@ export class PrivateSlackBlockV4RecordWriterV1 {
         policy_consequence_sha256: policy.policy_consequence_sha256,
       },
     });
-    const authorizationWitness: ReprovedPrivateSlackBlockApprovalAuthorizationWitnessV1 = {
+    const authorizationWitness: RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1 = {
       authorization_allow: {
         authority_id: candidate.authority_id,
         organization_id: candidate.organization_id,

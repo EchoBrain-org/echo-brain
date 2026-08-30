@@ -29,7 +29,7 @@ import {
   type PersonSlackReactionApprovalFinalizationTransactionV2,
   type PersonSlackReactionApprovalProviderExpectationV2,
   type PersonSlackReactionApprovalProviderResultV2,
-  type ReprovedFrozenPersonSlackReactionApprovalV2,
+  type RevalidatedFrozenPersonSlackReactionApprovalV2,
   type StoredProviderHumanActionV2,
 } from "../src/application/person-slack-reaction-approval-finalization-v2.js";
 import type {
@@ -91,7 +91,7 @@ class FakeCoordinator implements PersonSlackReactionApprovalFinalizationCoordina
   connectionState;
   readonly binding;
   readonly link;
-  approval: ReprovedFrozenPersonSlackReactionApprovalV2;
+  approval: RevalidatedFrozenPersonSlackReactionApprovalV2;
   approvalCurrent = true;
   bindingCurrent = true;
   surfaceEligible = true;
@@ -339,7 +339,7 @@ class FakeCoordinator implements PersonSlackReactionApprovalFinalizationCoordina
     };
     try {
       const result = commit({
-        reprovedFrozenApprovalById: (approvalId) =>
+        revalidatedFrozenApprovalById: (approvalId) =>
           approvalId === this.approval.approval_id ? this.approval : undefined,
         approvalIsCurrent: (approvalId) =>
           this.approvalCurrent && approvalId === this.approval.approval_id,

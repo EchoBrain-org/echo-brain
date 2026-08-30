@@ -39,7 +39,7 @@ function slackConnectionConfigurationSha256(approvalChannelId: string) {
   });
 }
 
-/** Reproves the exact current owner link against the one active clean tool. */
+/** Revalidates the exact current owner link against the one active clean tool. */
 export function selectCurrentOwnerSlackReactionApprovalTargetV1(
   database: Database.Database,
   state: VerifiedOrganizationControlStateV1,

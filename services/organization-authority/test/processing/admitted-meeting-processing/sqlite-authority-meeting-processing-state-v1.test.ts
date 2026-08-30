@@ -156,7 +156,7 @@ afterEach(() => {
 });
 
 describe("SQLite admitted meeting-processing state", () => {
-  it("reproves, recovers, and finalizes an exact durable staging canary without opening synthetic ingress", async () => {
+  it("revalidates, recovers, and finalizes an exact durable staging canary without opening synthetic ingress", async () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
@@ -1306,7 +1306,7 @@ describe("SQLite admitted meeting-processing state", () => {
     ).toEqual(meeting);
   });
 
-  it("records no-signals revisions, supersedes unresolved work, and reproves the exact revision", async () => {
+  it("records no-signals revisions, supersedes unresolved work, and revalidates the exact revision", async () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,

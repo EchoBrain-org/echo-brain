@@ -149,7 +149,7 @@ describe("private Slack approval terminal coordinator v1", () => {
             // typed CP disposition says state drift.
             throw new PrivateApprovalFinalizationDeniedError(
               "state_drift",
-              "authorization cannot be reproved",
+              "authorization cannot be revalidated",
             );
           }
           throw new PrivateApprovalFinalizationConflictError();

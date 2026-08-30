@@ -92,7 +92,7 @@ function setup() {
   const persistence = new SqliteSlackDmApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({
     approvalIsCurrent: () => true,
     currentMembership: (input) => input.principal_id === pending.assigned_owner.principal_id && input.membership_id === pending.assigned_owner.membership_id ? pending.assigned_owner : undefined,
-    reprovePrivateApprovalAuthorization: () => ({
+    revalidatePrivateApprovalAuthorization: () => ({
       schema_version: 1,
       kind: "echo-private-approval-authorization-allow-v1",
       approval_id: pending.approval_id,
@@ -133,15 +133,15 @@ describe("private approval provider identity fence", () => {
 
   it("requires both app claims, bot, and bot-user to match the current connection", () => {
     const { pending, card, receipt, persistence } = setup();
-    const reprove = (persistence as unknown as { reproveControlPlaneSlackState(a: PendingPrivateApprovalV1, b: PrivateApprovalSlackCardBindingV1, c: PrivateApprovalSignedTerminalActionV1): void }).reproveControlPlaneSlackState.bind(persistence);
-    expect(() => reprove(pending, card, receipt)).not.toThrow();
+    const revalidate = (persistence as unknown as { revalidateControlPlaneSlackState(a: PendingPrivateApprovalV1, b: PrivateApprovalSlackCardBindingV1, c: PrivateApprovalSignedTerminalActionV1): void }).revalidateControlPlaneSlackState.bind(persistence);
+    expect(() => revalidate(pending, card, receipt)).not.toThrow();
     for (const lookup of [
       { ...receipt.lookup, api_app_id: "A09999999" },
       { ...receipt.lookup, message_app_id: "A09999999" },
       { ...receipt.lookup, message_bot_id: "B09999999" },
       { ...receipt.lookup, message_user_id: "U09999999" },
     ]) {
-      expect(() => reprove(pending, card, { ...receipt, lookup })).toThrow(
+      expect(() => revalidate(pending, card, { ...receipt, lookup })).toThrow(
         PrivateApprovalFinalizationDeniedError,
       );
     }

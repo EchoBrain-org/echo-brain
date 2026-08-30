@@ -527,7 +527,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   }
 
   /**
-   * Reproves every current, actionable approval that still needs presentation
+   * Revalidates every current, actionable approval that still needs presentation
    * delivery. The query deliberately selects the lineage head first; the
    * frozen reader then verifies the immutable meeting, decisions, and any
    * frozen card snapshot before exposing it to a delivery worker.
@@ -625,7 +625,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     readonly next_cursor: string;
   }): Promise<"advanced" | "state_drift" | "revoked"> {
     // `advanceCursor` is public and can be called by a resumed worker before
-    // it has re-read the admission. Reprove the persisted adapter identities
+    // it has re-read the admission. Revalidate the persisted adapter identities
     // before it mutates the checkpoint.
     const admission = this.admission();
     assertAdmissionAdapterIdentity(
@@ -807,7 +807,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     return { ...candidate, admission, meeting, decisions } as FrozenMeetingProcessingCandidateSnapshotV1;
   }
 
-  /** Reproves the exact Authority snapshot which a D2 approval resolved. */
+  /** Revalidates the exact Authority snapshot which a D2 approval resolved. */
   readFrozenCandidateForApproval(
     approvalId: string,
   ): FrozenMeetingProcessingCandidateForApprovalV1 | undefined {

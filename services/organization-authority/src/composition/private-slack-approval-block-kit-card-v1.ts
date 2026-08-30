@@ -11,7 +11,7 @@ import {
  *
  * This module intentionally does not open a Slack DM, persist an assignment,
  * or interpret an interaction payload. Its button values identify the card
- * only. The inbound boundary must reprove the current
+ * only. The inbound boundary must revalidate the current
  * Slack identity and assignee before it creates a
  * policy-resolution command.
  */

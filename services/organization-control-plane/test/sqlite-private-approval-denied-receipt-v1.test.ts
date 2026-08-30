@@ -48,7 +48,7 @@ function seed(database: Database.Database) {
 }
 
 function persistence(database: Database.Database) {
-  return new SqliteSlackDmApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({ approvalIsCurrent: () => false, currentMembership: () => undefined, reprovePrivateApprovalAuthorization: () => undefined }); } } });
+  return new SqliteSlackDmApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({ approvalIsCurrent: () => false, currentMembership: () => undefined, revalidatePrivateApprovalAuthorization: () => undefined }); } } });
 }
 
 afterEach(() => directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })));

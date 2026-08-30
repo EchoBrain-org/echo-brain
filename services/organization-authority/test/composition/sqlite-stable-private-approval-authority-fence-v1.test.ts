@@ -203,7 +203,7 @@ function lookup() {
 }
 
 describe("SQLite stable private approval Authority fence v1", () => {
-  it("reproves all Authority-owned commitments under one stable transaction", async () => {
+  it("revalidates all Authority-owned commitments under one stable transaction", async () => {
     const { database, pending, card } = fixture();
     try {
       const fence = new SqliteStablePrivateApprovalAuthorityFenceV1(database);
@@ -221,7 +221,7 @@ describe("SQLite stable private approval Authority fence v1", () => {
         });
         // Deliberately mismatched provider hints cannot introduce an Authority
         // actor. They are checked only by the Control Plane presentation fence.
-        return stable.reprovePrivateApprovalAuthorization({
+        return stable.revalidatePrivateApprovalAuthorization({
           pending,
           card_binding: card,
           lookup: lookup(),
@@ -235,7 +235,7 @@ describe("SQLite stable private approval Authority fence v1", () => {
         current_slack_identity_link: pending.assigned_owner_slack_identity_link,
       });
       const second = await fence.withStablePrivateApprovalFence((stable) =>
-        stable.reprovePrivateApprovalAuthorization({
+        stable.revalidatePrivateApprovalAuthorization({
           pending,
           card_binding: card,
           lookup: lookup(),
@@ -266,7 +266,7 @@ describe("SQLite stable private approval Authority fence v1", () => {
         ).toBe(false);
         expect(stable.currentMembership({ principal_id: "prn_owner", membership_id: "mem_other" })).toBeUndefined();
         expect(
-          stable.reprovePrivateApprovalAuthorization({
+          stable.revalidatePrivateApprovalAuthorization({
             pending,
             card_binding: { ...card, dm_channel_id: "DDIFFERENT" },
             lookup: lookup(),
@@ -282,7 +282,7 @@ describe("SQLite stable private approval Authority fence v1", () => {
         .run(NOW);
       await expect(
         fence.withStablePrivateApprovalFence((stable) =>
-          stable.reprovePrivateApprovalAuthorization({
+          stable.revalidatePrivateApprovalAuthorization({
             pending,
             card_binding: card,
             lookup: lookup(),

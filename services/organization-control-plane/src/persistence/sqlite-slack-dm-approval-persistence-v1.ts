@@ -2,8 +2,8 @@
  * Durable Control Plane boundary for the private-owner approval path.
  *
  * Slack values in a signed receipt are deliberately only lookup hints.  The
- * finalization fence reproves Authority state and this module separately
- * reproves the current Slack installation/link plus the delivered DM/card
+ * finalization fence revalidates Authority state and this module separately
+ * revalidates the current Slack installation/link plus the delivered DM/card
  * binding before a policy can be bound.
  */
 import {
@@ -187,22 +187,22 @@ export interface StablePrivateApprovalAuthorityFenceV1 {
 }
 
 export interface PrivateApprovalAuthorityFenceV1 {
-  /** Reproves that the source candidate is still this approval's current round. */
+  /** Revalidates that the source candidate is still this approval's current round. */
   approvalIsCurrent(input: {
     readonly approval_id: string;
     readonly candidate_sha256: ApprovalContractSha256;
   }): boolean;
-  /** Reproves the exact active membership, rather than trusting the card. */
+  /** Revalidates the exact active membership, rather than trusting the card. */
   currentMembership(input: {
     readonly principal_id: string;
     readonly membership_id: string;
   }): { readonly principal_id: string; readonly membership_id: string } | undefined;
   /**
-   * Reproves current candidate, assignment capability and Authority-owned
+   * Revalidates current candidate, assignment capability and Authority-owned
    * Slack identity commitment. `lookup` stays a hint for its independent
    * provider re-observation; it cannot introduce an actor.
    */
-  reprovePrivateApprovalAuthorization(input: {
+  revalidatePrivateApprovalAuthorization(input: {
     readonly pending: PendingPrivateApprovalV1;
     readonly card_binding: PrivateApprovalSlackCardBindingV1;
     readonly lookup: PrivateApprovalSlackLookupHintsForReceiptV1;
@@ -549,12 +549,12 @@ export class SqliteSlackDmApprovalPersistenceV1 {
         if (stagedRow === undefined) throw new PrivateApprovalFinalizationDeniedError("state_drift", "pending approval is absent");
         const pending = storedPending(stagedRow);
         const card = storedCard(stagedRow);
-        this.reproveControlPlaneSlackState(pending, card, queued.receipt);
+        this.revalidateControlPlaneSlackState(pending, card, queued.receipt);
         if (!authority.approvalIsCurrent({ approval_id: pending.approval_id, candidate_sha256: pending.candidate_sha256 })) throw new PrivateApprovalFinalizationDeniedError("state_drift", "approval is no longer current");
         const member = authority.currentMembership(pending.assigned_owner);
         if (member === undefined || member.principal_id !== pending.assigned_owner.principal_id || member.membership_id !== pending.assigned_owner.membership_id) throw new PrivateApprovalFinalizationDeniedError("authorization_denied", "assignee membership is no longer current");
-        const rawAllow = authority.reprovePrivateApprovalAuthorization({ pending, card_binding: card, lookup: queued.receipt.lookup });
-        if (rawAllow === undefined) throw new PrivateApprovalFinalizationDeniedError("authorization_denied", "authorization cannot be reproved");
+        const rawAllow = authority.revalidatePrivateApprovalAuthorization({ pending, card_binding: card, lookup: queued.receipt.lookup });
+        if (rawAllow === undefined) throw new PrivateApprovalFinalizationDeniedError("authorization_denied", "authorization cannot be revalidated");
         const allow = validatePrivateApprovalAuthorizationAllowV1(rawAllow);
         const resolution = resolvePrivateApprovalPolicyV1({ pending, command, authorization_allow: allow });
         const audit = this.nextAudit(resolution);
@@ -568,7 +568,7 @@ export class SqliteSlackDmApprovalPersistenceV1 {
     });
   }
 
-  private reproveControlPlaneSlackState(pending: PendingPrivateApprovalV1, card: PrivateApprovalSlackCardBindingV1, receipt: PrivateApprovalSignedTerminalActionV1): void {
+  private revalidateControlPlaneSlackState(pending: PendingPrivateApprovalV1, card: PrivateApprovalSlackCardBindingV1, receipt: PrivateApprovalSignedTerminalActionV1): void {
     if (card.approval_id !== pending.approval_id || card.card_sha256 !== pending.frozen_card_sha256 || card.slack_subject_id !== pending.assigned_owner_slack_identity_link.provider_subject_id) throw new PrivateApprovalFinalizationDeniedError("state_drift", "card binding is stale");
     const hint = receipt.lookup;
     if (receipt.approval_id !== pending.approval_id || hint.workspace_id !== card.slack_workspace_id || hint.enterprise_id !== card.slack_enterprise_id || hint.slack_user_id !== card.slack_subject_id || hint.channel_id !== card.dm_channel_id || hint.message_ts !== card.provider_message_ts) throw new PrivateApprovalFinalizationDeniedError("state_drift", "provider hints do not name the delivered private card");
