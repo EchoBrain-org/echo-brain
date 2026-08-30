@@ -3,15 +3,15 @@ import {
   canonicalSha256,
 } from "@echo-brain/federation-protocol";
 import {
-  organizationSlackLinkChallengeCodeSha256,
-  validateOrganizationPersonSlackLinkBeginRequest,
-  validateOrganizationPersonSlackLinkBeginResponse,
-  validateOrganizationPersonSlackLinkCompleteRequest,
-  validateOrganizationPersonSlackLinkResult,
-  type OrganizationPersonSlackLinkBeginRequestV2,
-  type OrganizationPersonSlackLinkBeginResponseV2,
-  type OrganizationPersonSlackLinkCompleteRequestV2,
-  type OrganizationPersonSlackLinkResultV2,
+  organizationPersonSlackIdentityLinkChallengeCodeSha256,
+  validateOrganizationPersonSlackIdentityLinkBeginRequest,
+  validateOrganizationPersonSlackIdentityLinkBeginResponse,
+  validateOrganizationPersonSlackIdentityLinkCompleteRequest,
+  validateOrganizationPersonSlackIdentityLinkResult,
+  type OrganizationPersonSlackIdentityLinkBeginRequestV2,
+  type OrganizationPersonSlackIdentityLinkBeginResponseV2,
+  type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
+  type OrganizationPersonSlackIdentityLinkResultV2,
 } from "@echo-brain/organization-api";
 import type {
   ActiveSlackOrganizationTool,
@@ -120,14 +120,14 @@ function personSession(
   });
 }
 
-function personSlackLinkRequestSha256(
+function personSlackIdentityLinkRequestSha256(
   kind:
     | "echo-person-slack-link-begin-request-binding-v1"
     | "echo-person-slack-link-complete-request-binding-v1",
   session: ReturnType<typeof personSession>,
   request:
-    | OrganizationPersonSlackLinkBeginRequestV2
-    | OrganizationPersonSlackLinkCompleteRequestV2,
+    | OrganizationPersonSlackIdentityLinkBeginRequestV2
+    | OrganizationPersonSlackIdentityLinkCompleteRequestV2,
 ) {
   return canonicalSha256({
     schema_version: 1,
@@ -243,10 +243,10 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     input: unknown,
     accessToken: string,
     signal?: AbortSignal,
-  ): Promise<OrganizationPersonSlackLinkBeginResponseV2> {
-    let request: OrganizationPersonSlackLinkBeginRequestV2;
+  ): Promise<OrganizationPersonSlackIdentityLinkBeginResponseV2> {
+    let request: OrganizationPersonSlackIdentityLinkBeginRequestV2;
     try {
-      request = validateOrganizationPersonSlackLinkBeginRequest(input);
+      request = validateOrganizationPersonSlackIdentityLinkBeginRequest(input);
     } catch {
       throw new AuthorityOperationError(
         "invalid_request",
@@ -267,7 +267,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         () =>
           this.options.repository.personSlackIdentityLinkBeginReplay?.({
             request_id: request.request_id,
-            request_sha256: personSlackLinkRequestSha256(
+            request_sha256: personSlackIdentityLinkRequestSha256(
               "echo-person-slack-link-begin-request-binding-v1",
               personSession(current, this.options.authority_id),
               request,
@@ -278,7 +278,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       );
     });
     if (earlyReplay !== null) {
-      return validateOrganizationPersonSlackLinkBeginResponse({
+      return validateOrganizationPersonSlackIdentityLinkBeginResponse({
         schema_version: 2,
         kind: "echo-organization-person-slack-link-begin-response",
         challenge_attempt_id: earlyReplay.challenge_attempt_id,
@@ -310,7 +310,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       return repositoryOperation(() =>
         this.options.repository.beginPersonSlackIdentityLinkChallenge({
           request_id: request.request_id,
-          request_sha256: personSlackLinkRequestSha256(
+          request_sha256: personSlackIdentityLinkRequestSha256(
             "echo-person-slack-link-begin-request-binding-v1",
             currentSession,
             request,
@@ -326,7 +326,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     });
 
     if (begun.replayed === true && begun.challenge_message_ts !== undefined) {
-      return validateOrganizationPersonSlackLinkBeginResponse({
+      return validateOrganizationPersonSlackIdentityLinkBeginResponse({
         schema_version: 2,
         kind: "echo-organization-person-slack-link-begin-response",
         challenge_attempt_id: begun.challenge_attempt_id,
@@ -403,7 +403,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       );
     });
 
-    return validateOrganizationPersonSlackLinkBeginResponse({
+    return validateOrganizationPersonSlackIdentityLinkBeginResponse({
       schema_version: 2,
       kind: "echo-organization-person-slack-link-begin-response",
       challenge_attempt_id: begun.challenge_attempt_id,
@@ -419,10 +419,10 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     input: unknown,
     accessToken: string,
     signal?: AbortSignal,
-  ): Promise<OrganizationPersonSlackLinkResultV2> {
-    let request: OrganizationPersonSlackLinkCompleteRequestV2;
+  ): Promise<OrganizationPersonSlackIdentityLinkResultV2> {
+    let request: OrganizationPersonSlackIdentityLinkCompleteRequestV2;
     try {
-      request = validateOrganizationPersonSlackLinkCompleteRequest(input);
+      request = validateOrganizationPersonSlackIdentityLinkCompleteRequest(input);
     } catch {
       throw new AuthorityOperationError(
         "invalid_request",
@@ -431,7 +431,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     }
     const before = this.authenticate(accessToken);
     const session = personSession(before, this.options.authority_id);
-    const commandSha256 = personSlackLinkRequestSha256(
+    const commandSha256 = personSlackIdentityLinkRequestSha256(
       "echo-person-slack-link-complete-request-binding-v1",
       session,
       request,
@@ -443,11 +443,11 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       ),
     );
     if (commandReplay !== null) {
-      return validateOrganizationPersonSlackLinkResult(commandReplay);
+      return validateOrganizationPersonSlackIdentityLinkResult(commandReplay);
     }
 
     const activeTool = this.requireActiveTool();
-    const codeSha256 = organizationSlackLinkChallengeCodeSha256(
+    const codeSha256 = organizationPersonSlackIdentityLinkChallengeCodeSha256(
       request.challenge_code,
     );
     const replayInput = {
@@ -463,7 +463,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       ),
     );
     if (challengeReplay !== null) {
-      return validateOrganizationPersonSlackLinkResult(challengeReplay);
+      return validateOrganizationPersonSlackIdentityLinkResult(challengeReplay);
     }
     const challenge = repositoryOperation(() =>
       this.options.repository.personSlackIdentityLinkChallenge({
@@ -528,7 +528,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
           "Person or Slack state changed during the identity proof",
         );
       }
-      return validateOrganizationPersonSlackLinkResult(
+      return validateOrganizationPersonSlackIdentityLinkResult(
         repositoryOperation(() =>
           this.options.repository.completePersonSlackIdentityLinkChallenge({
             command_id: request.request_id,

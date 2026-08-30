@@ -4,10 +4,10 @@ import {
   type Sha256Digest,
 } from '@echo-brain/federation-protocol';
 import type {
-  OrganizationPersonSlackLinkBeginRequestV2,
-  OrganizationPersonSlackLinkBeginResponseV2,
-  OrganizationPersonSlackLinkCompleteRequestV2,
-  OrganizationPersonSlackLinkResultV2,
+  OrganizationPersonSlackIdentityLinkBeginRequestV2,
+  OrganizationPersonSlackIdentityLinkBeginResponseV2,
+  OrganizationPersonSlackIdentityLinkCompleteRequestV2,
+  OrganizationPersonSlackIdentityLinkResultV2,
 } from './contracts.js';
 import {
   asRecord,
@@ -31,12 +31,12 @@ function isCanonicalChallengeCode(value: unknown): value is string {
   );
 }
 
-/** Hashes the decoded 32-byte Person Slack-link challenge. */
-export function organizationSlackLinkChallengeCodeSha256(
+/** Hashes the decoded 32-byte Person Slack identity-link challenge. */
+export function organizationPersonSlackIdentityLinkChallengeCodeSha256(
   code: string,
 ): Sha256Digest {
   if (!isCanonicalChallengeCode(code)) {
-    fail('Person Slack link challenge_code must be canonical unpadded base64url for exactly 32 bytes');
+    fail('Person Slack identity link challenge_code must be canonical unpadded base64url for exactly 32 bytes');
   }
   const output = new Uint8Array(32);
   let accumulator = 0;
@@ -53,7 +53,7 @@ export function organizationSlackLinkChallengeCodeSha256(
   }
   if (outputIndex !== output.byteLength) {
     output.fill(0);
-    fail('Person Slack link challenge_code must be canonical unpadded base64url for exactly 32 bytes');
+    fail('Person Slack identity link challenge_code must be canonical unpadded base64url for exactly 32 bytes');
   }
   try {
     return sha256Digest(output as unknown as Parameters<typeof sha256Digest>[0]);
@@ -62,21 +62,21 @@ export function organizationSlackLinkChallengeCodeSha256(
   }
 }
 
-export function validateOrganizationPersonSlackLinkBeginRequest(
+export function validateOrganizationPersonSlackIdentityLinkBeginRequest(
   value: unknown,
-): OrganizationPersonSlackLinkBeginRequestV2 {
-  const label = 'Person Slack link begin request';
+): OrganizationPersonSlackIdentityLinkBeginRequestV2 {
+  const label = 'Person Slack identity link begin request';
   const record = asRecord(value, label);
   assertExactKeys(record, ['request_id', 'challenge_code_sha256'], label);
   assertId(record.request_id, 'psb', `${label} request_id`);
   assertDigest(record.challenge_code_sha256, `${label} challenge_code_sha256`);
-  return record as unknown as OrganizationPersonSlackLinkBeginRequestV2;
+  return record as unknown as OrganizationPersonSlackIdentityLinkBeginRequestV2;
 }
 
-export function validateOrganizationPersonSlackLinkCompleteRequest(
+export function validateOrganizationPersonSlackIdentityLinkCompleteRequest(
   value: unknown,
-): OrganizationPersonSlackLinkCompleteRequestV2 {
-  const label = 'Person Slack link complete request';
+): OrganizationPersonSlackIdentityLinkCompleteRequestV2 {
+  const label = 'Person Slack identity link complete request';
   const record = asRecord(value, label);
   assertExactKeys(
     record,
@@ -99,13 +99,13 @@ export function validateOrganizationPersonSlackLinkCompleteRequest(
   if (!isCanonicalChallengeCode(record.challenge_code)) {
     fail(`${label} challenge_code must be canonical unpadded base64url for exactly 32 bytes`);
   }
-  return record as unknown as OrganizationPersonSlackLinkCompleteRequestV2;
+  return record as unknown as OrganizationPersonSlackIdentityLinkCompleteRequestV2;
 }
 
-export function validateOrganizationPersonSlackLinkBeginResponse(
+export function validateOrganizationPersonSlackIdentityLinkBeginResponse(
   value: unknown,
-): OrganizationPersonSlackLinkBeginResponseV2 {
-  const label = 'Person Slack link begin response';
+): OrganizationPersonSlackIdentityLinkBeginResponseV2 {
+  const label = 'Person Slack identity link begin response';
   const record = asRecord(value, label);
   assertExactKeys(
     record,
@@ -133,13 +133,13 @@ export function validateOrganizationPersonSlackLinkBeginResponse(
   assertPatternString(record.channel_id, `${label} channel_id`, 128, /^C[A-Z0-9]{2,}$/);
   assertPatternString(record.challenge_message_ts, `${label} challenge_message_ts`, 64, /^\d{1,16}\.\d{1,16}$/);
   assertTimestamp(record.expires_at, `${label} expires_at`);
-  return record as unknown as OrganizationPersonSlackLinkBeginResponseV2;
+  return record as unknown as OrganizationPersonSlackIdentityLinkBeginResponseV2;
 }
 
-export function validateOrganizationPersonSlackLinkResult(
+export function validateOrganizationPersonSlackIdentityLinkResult(
   value: unknown,
-): OrganizationPersonSlackLinkResultV2 {
-  const label = 'Person Slack link result';
+): OrganizationPersonSlackIdentityLinkResultV2 {
+  const label = 'Person Slack identity link result';
   const record = asRecord(value, label);
   assertExactKeys(
     record,
@@ -179,17 +179,21 @@ export function validateOrganizationPersonSlackLinkResult(
   if (typeof record.identity_link_created !== 'boolean') {
     fail(`${label} identity_link_created must be a boolean`);
   }
-  return record as unknown as OrganizationPersonSlackLinkResultV2;
+  return record as unknown as OrganizationPersonSlackIdentityLinkResultV2;
 }
 
-export function canonicalOrganizationPersonSlackLinkBeginRequestBytes(
+export function canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes(
   value: unknown,
 ): Uint8Array {
-  return canonicalJsonBytes(validateOrganizationPersonSlackLinkBeginRequest(value));
+  return canonicalJsonBytes(
+    validateOrganizationPersonSlackIdentityLinkBeginRequest(value),
+  );
 }
 
-export function canonicalOrganizationPersonSlackLinkCompleteRequestBytes(
+export function canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes(
   value: unknown,
 ): Uint8Array {
-  return canonicalJsonBytes(validateOrganizationPersonSlackLinkCompleteRequest(value));
+  return canonicalJsonBytes(
+    validateOrganizationPersonSlackIdentityLinkCompleteRequest(value),
+  );
 }

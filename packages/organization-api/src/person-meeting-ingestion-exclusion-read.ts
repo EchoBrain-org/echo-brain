@@ -3,14 +3,14 @@ import {
   canonicalJsonBytes,
 } from '@echo-brain/federation-protocol';
 import type {
-  OrganizationAdminMemberExclusionBreakGlassReadRequestV2,
-  OrganizationMemberExclusionListResponseV2,
-  OrganizationPersonMemberExclusionListRequestV2,
-  OrganizationPersonMemberExclusionSelectorV2,
+  OrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestV2,
+  OrganizationMeetingIngestionExclusionListResponseV2,
+  OrganizationPersonMeetingIngestionExclusionListRequestV2,
+  OrganizationPersonMeetingIngestionExclusionSelectorV2,
 } from './contracts.js';
 import {
-  ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH,
-  ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
+  ORGANIZATION_API_ADMIN_MEETING_INGESTION_EXCLUSION_BREAK_GLASS_PATH,
+  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
 } from './http.js';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
@@ -93,7 +93,7 @@ function assertSource(value: Record<string, unknown>, label: string): void {
 function validateSelector(
   value: unknown,
   label: string,
-): OrganizationPersonMemberExclusionSelectorV2 {
+): OrganizationPersonMeetingIngestionExclusionSelectorV2 {
   const selector = asRecord(value, label);
   if (selector.scope === 'source') {
     assertExactKeys(selector, SOURCE_SELECTOR_KEYS, label);
@@ -111,20 +111,21 @@ function validateSelector(
     fail(`${label} scope is unsupported`);
   }
   assertSource(selector, label);
-  return selector as unknown as OrganizationPersonMemberExclusionSelectorV2;
+  return selector as unknown as OrganizationPersonMeetingIngestionExclusionSelectorV2;
 }
 
-export function validateOrganizationPersonMemberExclusionListRequest(
+export function validateOrganizationPersonMeetingIngestionExclusionListRequest(
   value: unknown,
-): OrganizationPersonMemberExclusionListRequestV2 {
-  const label = 'organization Person member exclusion list request';
+): OrganizationPersonMeetingIngestionExclusionListRequestV2 {
+  const label = 'organization Person meeting-ingestion exclusion list request';
   const record = asRecord(canonicalSnapshot(value, label), label);
   assertExactKeys(record, PERSON_REQUEST_KEYS, label);
   if (
     record.schema_version !== 2 ||
     record.kind !== 'echo-organization-person-member-exclusion-list-request' ||
     record.http_method !== 'POST' ||
-    record.http_path !== ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH
+    record.http_path !==
+      ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH
   ) {
     fail(`${label} version, kind, or HTTP operation is unsupported`);
   }
@@ -133,21 +134,22 @@ export function validateOrganizationPersonMemberExclusionListRequest(
   assertId(record.organization_id, 'org', `${label} organization_id`);
   assertId(record.subject_principal_id, 'prn', `${label} subject_principal_id`);
   assertSource(record, label);
-  return record as unknown as OrganizationPersonMemberExclusionListRequestV2;
+  return record as unknown as OrganizationPersonMeetingIngestionExclusionListRequestV2;
 }
 
-export function canonicalOrganizationPersonMemberExclusionListRequestBytes(
+export function canonicalOrganizationPersonMeetingIngestionExclusionListRequestBytes(
   value: unknown,
 ): Uint8Array {
   return canonicalJsonBytes(
-    validateOrganizationPersonMemberExclusionListRequest(value),
+    validateOrganizationPersonMeetingIngestionExclusionListRequest(value),
   );
 }
 
-export function validateOrganizationAdminMemberExclusionBreakGlassReadRequest(
+export function validateOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequest(
   value: unknown,
-): OrganizationAdminMemberExclusionBreakGlassReadRequestV2 {
-  const label = 'organization admin member exclusion break-glass read request';
+): OrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestV2 {
+  const label =
+    'organization admin meeting-ingestion exclusion break-glass read request';
   const record = asRecord(canonicalSnapshot(value, label), label);
   assertExactKeys(record, ADMIN_REQUEST_KEYS, label);
   if (
@@ -156,7 +158,7 @@ export function validateOrganizationAdminMemberExclusionBreakGlassReadRequest(
       'echo-organization-admin-member-exclusion-break-glass-read-request' ||
     record.http_method !== 'POST' ||
     record.http_path !==
-      ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH
+      ORGANIZATION_API_ADMIN_MEETING_INGESTION_EXCLUSION_BREAK_GLASS_PATH
   ) {
     fail(`${label} version, kind, or HTTP operation is unsupported`);
   }
@@ -166,21 +168,23 @@ export function validateOrganizationAdminMemberExclusionBreakGlassReadRequest(
   assertId(record.target_principal_id, 'prn', `${label} target_principal_id`);
   assertId(record.target_membership_id, 'mem', `${label} target_membership_id`);
   assertSource(record, label);
-  return record as unknown as OrganizationAdminMemberExclusionBreakGlassReadRequestV2;
+  return record as unknown as OrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestV2;
 }
 
-export function canonicalOrganizationAdminMemberExclusionBreakGlassReadRequestBytes(
+export function canonicalOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestBytes(
   value: unknown,
 ): Uint8Array {
   return canonicalJsonBytes(
-    validateOrganizationAdminMemberExclusionBreakGlassReadRequest(value),
+    validateOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequest(
+      value,
+    ),
   );
 }
 
-export function validateOrganizationMemberExclusionListResponse(
+export function validateOrganizationMeetingIngestionExclusionListResponse(
   value: unknown,
-): OrganizationMemberExclusionListResponseV2 {
-  const label = 'organization member exclusion list response';
+): OrganizationMeetingIngestionExclusionListResponseV2 {
+  const label = 'organization meeting-ingestion exclusion list response';
   const record = asRecord(canonicalSnapshot(value, label), label);
   assertExactKeys(record, RESPONSE_KEYS, label);
   if (
@@ -213,11 +217,13 @@ export function validateOrganizationMemberExclusionListResponse(
   return {
     ...record,
     exclusions,
-  } as unknown as OrganizationMemberExclusionListResponseV2;
+  } as unknown as OrganizationMeetingIngestionExclusionListResponseV2;
 }
 
-export function canonicalOrganizationMemberExclusionListResponseBytes(
+export function canonicalOrganizationMeetingIngestionExclusionListResponseBytes(
   value: unknown,
 ): Uint8Array {
-  return canonicalJsonBytes(validateOrganizationMemberExclusionListResponse(value));
+  return canonicalJsonBytes(
+    validateOrganizationMeetingIngestionExclusionListResponse(value),
+  );
 }

@@ -376,7 +376,7 @@ describe("workspace source boundaries", () => {
 
     // npm's workspace links resolve into these runtime directories. Every
     // reachable workspace therefore needs its package exports and compiled
-    // code, and service packages that ship new-lineage baselines need those
+    // code, and service packages that ship Authority state baselines need those
     // immutable filesystem assets beside dist.
     for (const workspace of [...runtimeClosure].sort()) {
       const manifest = readJson<PackageManifest>(`${workspace}/package.json`);
@@ -452,7 +452,7 @@ describe("workspace source boundaries", () => {
       .not.toContain("/migrations");
   });
 
-  it("declares and ships all new-lineage baseline SQL assets", () => {
+  it("declares and ships all Authority state baseline SQL assets", () => {
     const expectedByRoot: Record<string, string[]> = {
       "services/organization-authority": [
         "authority-baseline-v1.sql",

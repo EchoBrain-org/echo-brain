@@ -2,39 +2,39 @@ import { Buffer } from "node:buffer";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
-  ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
-  ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
+  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
+  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH,
   ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
+  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
   isOrganizationApiValidationError,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
-  validateOrganizationPersonMemberExclusionChangeRequest,
-  validateOrganizationMemberExclusionListResponse,
-  validateOrganizationPersonMemberExclusionListRequest,
+  validateOrganizationPersonMeetingIngestionExclusionChangeRequest,
+  validateOrganizationMeetingIngestionExclusionListResponse,
+  validateOrganizationPersonMeetingIngestionExclusionListRequest,
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse,
   validateOrganizationPersonSession,
   validateOrganizationPersonSessionRefreshRequest,
-  validateOrganizationPersonSlackLinkBeginRequest,
-  validateOrganizationPersonSlackLinkBeginResponse,
-  validateOrganizationPersonSlackLinkCompleteRequest,
-  validateOrganizationPersonSlackLinkResult,
-  type OrganizationPersonMemberExclusionChangeRequestV2,
-  type OrganizationMemberExclusionListResponseV2,
-  type OrganizationPersonMemberExclusionListRequestV2,
+  validateOrganizationPersonSlackIdentityLinkBeginRequest,
+  validateOrganizationPersonSlackIdentityLinkBeginResponse,
+  validateOrganizationPersonSlackIdentityLinkCompleteRequest,
+  validateOrganizationPersonSlackIdentityLinkResult,
+  type OrganizationPersonMeetingIngestionExclusionChangeRequestV2,
+  type OrganizationMeetingIngestionExclusionListResponseV2,
+  type OrganizationPersonMeetingIngestionExclusionListRequestV2,
   type OrganizationAuthorityDescriptorResponseV1,
   type OrganizationPersonOidcBeginRequestV2,
   type OrganizationPersonOidcBeginResponseV2,
   type OrganizationPersonSessionV2,
-  type OrganizationPersonSlackLinkBeginRequestV2,
-  type OrganizationPersonSlackLinkBeginResponseV2,
-  type OrganizationPersonSlackLinkCompleteRequestV2,
-  type OrganizationPersonSlackLinkResultV2,
+  type OrganizationPersonSlackIdentityLinkBeginRequestV2,
+  type OrganizationPersonSlackIdentityLinkBeginResponseV2,
+  type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
+  type OrganizationPersonSlackIdentityLinkResultV2,
 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -970,55 +970,55 @@ export class PersonAuthorityClient {
     });
   }
 
-  changeExclusion(
-    request: OrganizationPersonMemberExclusionChangeRequestV2,
+  changeMeetingIngestionExclusion(
+    request: OrganizationPersonMeetingIngestionExclusionChangeRequestV2,
     accessToken: string,
   ): Promise<void> {
     return this.noContent({
-      path: ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
+      path: ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
       body: request,
-      validate_request: validateOrganizationPersonMemberExclusionChangeRequest,
+      validate_request: validateOrganizationPersonMeetingIngestionExclusionChangeRequest,
       access_token: accessToken,
     });
   }
 
-  exclusions(
-    request: OrganizationPersonMemberExclusionListRequestV2,
+  meetingIngestionExclusions(
+    request: OrganizationPersonMeetingIngestionExclusionListRequestV2,
     accessToken: string,
-  ): Promise<OrganizationMemberExclusionListResponseV2> {
+  ): Promise<OrganizationMeetingIngestionExclusionListResponseV2> {
     return this.json({
-      path: ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
+      path: ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
       body: request,
-      validate_request: validateOrganizationPersonMemberExclusionListRequest,
-      validate_response: validateOrganizationMemberExclusionListResponse,
+      validate_request: validateOrganizationPersonMeetingIngestionExclusionListRequest,
+      validate_response: validateOrganizationMeetingIngestionExclusionListResponse,
       access_token: accessToken,
       require_canonical_response: true,
     });
   }
 
-  beginSlackLink(
-    request: OrganizationPersonSlackLinkBeginRequestV2,
+  beginSlackIdentityLink(
+    request: OrganizationPersonSlackIdentityLinkBeginRequestV2,
     accessToken: string,
-  ): Promise<OrganizationPersonSlackLinkBeginResponseV2> {
+  ): Promise<OrganizationPersonSlackIdentityLinkBeginResponseV2> {
     return this.json({
-      path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
+      path: ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
       body: request,
-      validate_request: validateOrganizationPersonSlackLinkBeginRequest,
-      validate_response: validateOrganizationPersonSlackLinkBeginResponse,
+      validate_request: validateOrganizationPersonSlackIdentityLinkBeginRequest,
+      validate_response: validateOrganizationPersonSlackIdentityLinkBeginResponse,
       access_token: accessToken,
       timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
     });
   }
 
-  completeSlackLink(
-    request: OrganizationPersonSlackLinkCompleteRequestV2,
+  completeSlackIdentityLink(
+    request: OrganizationPersonSlackIdentityLinkCompleteRequestV2,
     accessToken: string,
-  ): Promise<OrganizationPersonSlackLinkResultV2> {
+  ): Promise<OrganizationPersonSlackIdentityLinkResultV2> {
     return this.json({
-      path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
+      path: ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
       body: request,
-      validate_request: validateOrganizationPersonSlackLinkCompleteRequest,
-      validate_response: validateOrganizationPersonSlackLinkResult,
+      validate_request: validateOrganizationPersonSlackIdentityLinkCompleteRequest,
+      validate_response: validateOrganizationPersonSlackIdentityLinkResult,
       access_token: accessToken,
       timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
     });

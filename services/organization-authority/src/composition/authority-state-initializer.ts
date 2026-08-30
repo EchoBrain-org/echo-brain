@@ -51,7 +51,7 @@ import {
 } from "../state-lineage/state-lineage-manifest-v1.js";
 
 /**
- * Explicit, absent-state initializer. It creates a new lineage only; it does
+ * Explicit, absent-state initializer. It creates fresh Authority state only;
  * not write operator configuration, credentials, listener state, provider
  * configuration, installation state, enrollment state, or leases.
  */

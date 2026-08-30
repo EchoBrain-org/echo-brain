@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
+import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -590,7 +590,7 @@ describe("Person client", () => {
     });
   });
 
-  it("sends Slack link replay input without caller or route assertions", async () => {
+  it("sends Slack identity-link replay input without caller or route assertions", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       const challengeCode = "A".repeat(43);
@@ -651,9 +651,9 @@ describe("Person client", () => {
       });
 
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      const begun = await client.beginSlackLink();
+      const begun = await client.beginSlackIdentityLink();
       expect(begun.challenge_code).toBe(challengeCode);
-      await client.completeSlackLink({
+      await client.completeSlackIdentityLink({
         challenge_attempt_id: begun.challenge_attempt_id,
         challenge_message_ts: begun.challenge_message_ts,
         challenge_code: begun.challenge_code,
@@ -664,7 +664,7 @@ describe("Person client", () => {
           path: "/v2/integration-links/slack/challenges",
           body: {
             challenge_code_sha256:
-              organizationSlackLinkChallengeCodeSha256(challengeCode),
+              organizationPersonSlackIdentityLinkChallengeCodeSha256(challengeCode),
             request_id: "psb_00000000-0000-4000-8000-000000000113",
           },
         },
@@ -1772,7 +1772,7 @@ describe("Person client", () => {
 
       await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(
-        client.exclusions("granola", "founder-feed"),
+        client.meetingIngestionExclusions("granola", "founder-feed"),
       ).resolves.toMatchObject({
         subject_principal_id: SESSION.principal_id,
         exclusions: [{ scope: "source" }],

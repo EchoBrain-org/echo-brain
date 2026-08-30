@@ -19,10 +19,10 @@ export {
   type PersonClientCliDependencies,
 } from "./commands.js";
 export {
-  createPersonMemberExclusionChangeRequest,
-  createPersonMemberExclusionListRequest,
-  createPersonSlackLinkBeginRequest,
-  createPersonSlackLinkCompleteRequest,
+  createPersonMeetingIngestionExclusionChangeRequest,
+  createPersonMeetingIngestionExclusionListRequest,
+  createPersonSlackIdentityLinkBeginRequest,
+  createPersonSlackIdentityLinkCompleteRequest,
   type PersonRequestIdentity,
 } from "./requests.js";
 export {

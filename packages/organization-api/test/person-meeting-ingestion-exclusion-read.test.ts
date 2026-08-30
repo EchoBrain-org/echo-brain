@@ -2,14 +2,14 @@ import { Buffer } from 'node:buffer';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH,
-  ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
-  canonicalOrganizationAdminMemberExclusionBreakGlassReadRequestBytes,
-  canonicalOrganizationMemberExclusionListResponseBytes,
-  canonicalOrganizationPersonMemberExclusionListRequestBytes,
-  validateOrganizationAdminMemberExclusionBreakGlassReadRequest,
-  validateOrganizationMemberExclusionListResponse,
-  validateOrganizationPersonMemberExclusionListRequest,
+  ORGANIZATION_API_ADMIN_MEETING_INGESTION_EXCLUSION_BREAK_GLASS_PATH,
+  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
+  canonicalOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestBytes,
+  canonicalOrganizationMeetingIngestionExclusionListResponseBytes,
+  canonicalOrganizationPersonMeetingIngestionExclusionListRequestBytes,
+  validateOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequest,
+  validateOrganizationMeetingIngestionExclusionListResponse,
+  validateOrganizationPersonMeetingIngestionExclusionListRequest,
 } from '../src/index.js';
 
 const IDS = {
@@ -27,7 +27,7 @@ const personRequest = {
   organization_id: IDS.organization,
   subject_principal_id: IDS.principal,
   http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
+  http_path: ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
   source_adapter_id: 'granola',
   source_instance_id: 'primary',
 } as const;
@@ -41,7 +41,7 @@ const adminRequest = {
   target_principal_id: IDS.principal,
   target_membership_id: IDS.membership,
   http_method: 'POST',
-  http_path: ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH,
+  http_path: ORGANIZATION_API_ADMIN_MEETING_INGESTION_EXCLUSION_BREAK_GLASS_PATH,
   source_adapter_id: 'granola',
   source_instance_id: 'primary',
 } as const;
@@ -70,40 +70,40 @@ const response = {
   ],
 } as const;
 
-describe('organization member exclusion reads', () => {
+describe('organization meeting-ingestion exclusion reads', () => {
   it('keeps Person and admin break-glass requests exact and distinct', () => {
-    expect(validateOrganizationPersonMemberExclusionListRequest(personRequest))
+    expect(validateOrganizationPersonMeetingIngestionExclusionListRequest(personRequest))
       .toEqual(personRequest);
     expect(
-      validateOrganizationAdminMemberExclusionBreakGlassReadRequest(adminRequest),
+      validateOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequest(adminRequest),
     ).toEqual(adminRequest);
     expect(() =>
-      validateOrganizationPersonMemberExclusionListRequest(adminRequest),
+      validateOrganizationPersonMeetingIngestionExclusionListRequest(adminRequest),
     ).toThrow('unexpected shape');
     expect(() =>
-      validateOrganizationAdminMemberExclusionBreakGlassReadRequest(personRequest),
+      validateOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequest(personRequest),
     ).toThrow('unexpected shape');
   });
 
   it('emits canonical request and response bytes', () => {
     expect(
       Buffer.from(
-        canonicalOrganizationPersonMemberExclusionListRequestBytes(personRequest),
+        canonicalOrganizationPersonMeetingIngestionExclusionListRequestBytes(personRequest),
       ).toString('utf8'),
     ).toBe(canonicalJson(personRequest));
     expect(
       Buffer.from(
-        canonicalOrganizationAdminMemberExclusionBreakGlassReadRequestBytes(
+        canonicalOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestBytes(
           adminRequest,
         ),
       ).toString('utf8'),
     ).toBe(canonicalJson(adminRequest));
-    expect(validateOrganizationMemberExclusionListResponse(response)).toEqual(
+    expect(validateOrganizationMeetingIngestionExclusionListResponse(response)).toEqual(
       response,
     );
     expect(
       Buffer.from(
-        canonicalOrganizationMemberExclusionListResponseBytes(response),
+        canonicalOrganizationMeetingIngestionExclusionListResponseBytes(response),
       ).toString('utf8'),
     ).toBe(canonicalJson(response));
   });
@@ -116,14 +116,14 @@ describe('organization member exclusion reads', () => {
       { include_history: true },
     ]) {
       expect(() =>
-        validateOrganizationAdminMemberExclusionBreakGlassReadRequest({
+        validateOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequest({
           ...adminRequest,
           ...forbidden,
         }),
       ).toThrow('unexpected shape');
     }
     expect(() =>
-      validateOrganizationMemberExclusionListResponse({
+      validateOrganizationMeetingIngestionExclusionListResponse({
         ...response,
         exclusions: [
           {
@@ -136,7 +136,7 @@ describe('organization member exclusion reads', () => {
       }),
     ).toThrow('belongs to another source');
     expect(() =>
-      validateOrganizationMemberExclusionListResponse({
+      validateOrganizationMeetingIngestionExclusionListResponse({
         ...response,
         exclusions: [response.exclusions[0], response.exclusions[0]],
       }),

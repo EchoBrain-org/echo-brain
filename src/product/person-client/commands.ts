@@ -580,7 +580,7 @@ export async function runPersonClientCli(
       case "exclusions":
         print(stdout, {
           ok: true,
-          result: await client.exclusions(
+          result: await client.meetingIngestionExclusions(
             requiredText(values, "source-adapter-id"),
             requiredText(values, "source-instance-id"),
           ),
@@ -591,7 +591,7 @@ export async function runPersonClientCli(
         const sourceAdapterId = requiredText(values, "source-adapter-id");
         const sourceInstanceId = requiredText(values, "source-instance-id");
         const externalId = values["meeting-external-id"];
-        await client.changeExclusion(
+        await client.changeMeetingIngestionExclusion(
           action === "exclude",
           typeof externalId === "string"
             ? {
@@ -610,10 +610,10 @@ export async function runPersonClientCli(
         break;
       }
       case "slack-link-begin":
-        print(stdout, { ok: true, ...(await client.beginSlackLink()) });
+        print(stdout, { ok: true, ...(await client.beginSlackIdentityLink()) });
         break;
       case "slack-link": {
-        const begun = await client.beginSlackLink();
+        const begun = await client.beginSlackIdentityLink();
         // Retain the code and opaque challenge handles in memory. The person
         // copies the code into Slack, then confirms with one empty line.
         print(stdout, {
@@ -627,13 +627,13 @@ export async function runPersonClientCli(
         const acknowledgement = await readInteractiveLine();
         if (acknowledgement.trim().length !== 0) {
           throw new Error(
-            "Person Slack link confirmation must be an empty Enter acknowledgement",
+            "Person Slack identity-link confirmation must be an empty Enter acknowledgement",
           );
         }
         print(stdout, {
           ok: true,
           phase: "linked",
-          result: await client.completeSlackLink({
+          result: await client.completeSlackIdentityLink({
             challenge_attempt_id: begun.challenge_attempt_id,
             challenge_message_ts: begun.challenge_message_ts,
             challenge_code: begun.challenge_code,
@@ -644,7 +644,7 @@ export async function runPersonClientCli(
       case "slack-link-complete":
         print(stdout, {
           ok: true,
-          result: await client.completeSlackLink({
+          result: await client.completeSlackIdentityLink({
             challenge_attempt_id: requiredText(values, "challenge-attempt"),
             challenge_message_ts: requiredText(values, "challenge-message-ts"),
             challenge_code: (await readInput()).trim(),

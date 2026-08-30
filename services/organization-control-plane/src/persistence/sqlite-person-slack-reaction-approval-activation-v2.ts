@@ -354,7 +354,7 @@ class SqliteActivationTransaction implements PersonSlackReactionApprovalActivati
   }
 }
 
-/** Private persistence coordinator for the isolated new-lineage path. */
+/** Persists one isolated Person Slack-reaction approval activation. */
 export class SqlitePersonSlackReactionApprovalActivationCoordinatorV2 implements PersonSlackReactionApprovalActivationCoordinatorV2 {
   constructor(
     private readonly input: SqlitePersonSlackReactionApprovalActivationCoordinatorV2Input,

@@ -2,9 +2,9 @@ import { Buffer } from 'node:buffer';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
-  canonicalOrganizationPersonMemberExclusionChangeRequestBytes,
-  validateOrganizationPersonMemberExclusionChangeRequest,
+  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
+  canonicalOrganizationPersonMeetingIngestionExclusionChangeRequestBytes,
+  validateOrganizationPersonMeetingIngestionExclusionChangeRequest,
 } from '../src/index.js';
 
 const BASE_REQUEST = {
@@ -15,7 +15,7 @@ const BASE_REQUEST = {
   organization_id: 'org_00000000-0000-4000-8000-000000000001',
   subject_principal_id: 'prn_00000000-0000-4000-8000-000000000001',
   http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
+  http_path: ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
   excluded: true,
 } as const;
 
@@ -39,26 +39,26 @@ const MEETING_REQUEST = {
   },
 } as const;
 
-describe('organization Person member exclusion change request', () => {
+describe('organization Person meeting-ingestion exclusion change request', () => {
   it('validates the exact source and meeting desired-state shapes', () => {
     expect(
-      validateOrganizationPersonMemberExclusionChangeRequest(SOURCE_REQUEST),
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest(SOURCE_REQUEST),
     ).toEqual(SOURCE_REQUEST);
     expect(
-      validateOrganizationPersonMemberExclusionChangeRequest(MEETING_REQUEST),
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest(MEETING_REQUEST),
     ).toEqual(MEETING_REQUEST);
   });
 
   it('emits canonical bytes only after validation', () => {
     expect(
       Buffer.from(
-        canonicalOrganizationPersonMemberExclusionChangeRequestBytes(
+        canonicalOrganizationPersonMeetingIngestionExclusionChangeRequestBytes(
           MEETING_REQUEST,
         ),
       ).toString('utf8'),
     ).toBe(canonicalJson(MEETING_REQUEST));
     expect(() =>
-      canonicalOrganizationPersonMemberExclusionChangeRequestBytes({
+      canonicalOrganizationPersonMeetingIngestionExclusionChangeRequestBytes({
         ...SOURCE_REQUEST,
         excluded: 'true',
       }),
@@ -72,7 +72,7 @@ describe('organization Person member exclusion change request', () => {
     ['requested_at', '2026-08-18T12:00:00.000Z'],
   ])('rejects unexpected top-level field %s', (field, value) => {
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...SOURCE_REQUEST,
         [field]: value,
       }),
@@ -81,7 +81,7 @@ describe('organization Person member exclusion change request', () => {
 
   it('keeps the two selector variants closed', () => {
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...SOURCE_REQUEST,
         selector: {
           ...SOURCE_REQUEST.selector,
@@ -90,7 +90,7 @@ describe('organization Person member exclusion change request', () => {
       }),
     ).toThrow('unexpected shape');
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...MEETING_REQUEST,
         selector: {
           scope: 'meeting',
@@ -100,7 +100,7 @@ describe('organization Person member exclusion change request', () => {
       }),
     ).toThrow('unexpected shape');
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...SOURCE_REQUEST,
         selector: { ...SOURCE_REQUEST.selector, scope: 'all' },
       }),
@@ -117,7 +117,7 @@ describe('organization Person member exclusion change request', () => {
       { http_path: '/v2/member-exclusion' },
     ]) {
       expect(() =>
-        validateOrganizationPersonMemberExclusionChangeRequest({
+        validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
           ...SOURCE_REQUEST,
           ...change,
         }),
@@ -127,7 +127,7 @@ describe('organization Person member exclusion change request', () => {
 
   it('matches the durable identifier bounds', () => {
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...SOURCE_REQUEST,
         selector: {
           ...SOURCE_REQUEST.selector,
@@ -137,7 +137,7 @@ describe('organization Person member exclusion change request', () => {
       }),
     ).not.toThrow();
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...SOURCE_REQUEST,
         selector: {
           ...SOURCE_REQUEST.selector,
@@ -146,7 +146,7 @@ describe('organization Person member exclusion change request', () => {
       }),
     ).toThrow('source_adapter_id is invalid');
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...MEETING_REQUEST,
         selector: {
           ...MEETING_REQUEST.selector,
@@ -155,7 +155,7 @@ describe('organization Person member exclusion change request', () => {
       }),
     ).not.toThrow();
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...MEETING_REQUEST,
         selector: {
           ...MEETING_REQUEST.selector,
@@ -171,17 +171,17 @@ describe('organization Person member exclusion change request', () => {
       ...MEETING_REQUEST,
       selector: { ...MEETING_REQUEST.selector, external_id: externalId },
     };
-    const validated = validateOrganizationPersonMemberExclusionChangeRequest(
+    const validated = validateOrganizationPersonMeetingIngestionExclusionChangeRequest(
       request,
     );
     expect(validated.selector).toMatchObject({ external_id: externalId });
     expect(
       Buffer.from(
-        canonicalOrganizationPersonMemberExclusionChangeRequestBytes(request),
+        canonicalOrganizationPersonMeetingIngestionExclusionChangeRequestBytes(request),
       ).toString('utf8'),
     ).toBe(canonicalJson(request));
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...MEETING_REQUEST,
         selector: {
           ...MEETING_REQUEST.selector,
@@ -198,7 +198,7 @@ describe('organization Person member exclusion change request', () => {
       enumerable: false,
     });
     expect(() =>
-      validateOrganizationPersonMemberExclusionChangeRequest({
+      validateOrganizationPersonMeetingIngestionExclusionChangeRequest({
         ...MEETING_REQUEST,
         selector,
       }),

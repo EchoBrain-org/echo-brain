@@ -285,7 +285,7 @@ afterEach(() => {
   }
 });
 
-describe("organization control new-lineage baseline v1", () => {
+describe("organization control state baseline v1", () => {
   const RETIRED_IDENTITY = /enrollment|installation|(?<!re)lease/i;
 
   it("freezes a migration-ledger-free ECOP schema without retired identity objects", () => {

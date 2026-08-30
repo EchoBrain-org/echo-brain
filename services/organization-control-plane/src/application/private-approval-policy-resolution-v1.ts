@@ -288,7 +288,7 @@ function slackLink(
   });
 }
 
-function sameSlackLink(
+function sameSlackIdentityLink(
   left: PrivateApprovalSlackIdentityLinkV1,
   right: PrivateApprovalSlackIdentityLinkV1,
 ): boolean {
@@ -442,7 +442,7 @@ function authorizationMatches(
     allow.frozen_card_sha256 === current.frozen_card_sha256 &&
     allow.approved_snapshot_sha256 === current.approved_snapshot_sha256 &&
     sameAssignee(allow.authorized_assignee, current.assigned_owner) &&
-    sameSlackLink(
+    sameSlackIdentityLink(
       allow.current_slack_identity_link,
       current.assigned_owner_slack_identity_link,
     )

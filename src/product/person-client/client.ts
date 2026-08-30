@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   validateOrganizationPersonSession,
-  type OrganizationPersonMemberExclusionSelectorV2,
+  type OrganizationPersonMeetingIngestionExclusionSelectorV2,
   type OrganizationPersonSessionV2,
 } from "@echo-brain/organization-api";
 import {
@@ -14,10 +14,10 @@ import {
   type PersonRecordSearchV1,
 } from "./authority-client.js";
 import {
-  createPersonMemberExclusionChangeRequest,
-  createPersonMemberExclusionListRequest,
-  createPersonSlackLinkBeginRequest,
-  createPersonSlackLinkCompleteRequest,
+  createPersonMeetingIngestionExclusionChangeRequest,
+  createPersonMeetingIngestionExclusionListRequest,
+  createPersonSlackIdentityLinkBeginRequest,
+  createPersonSlackIdentityLinkCompleteRequest,
 } from "./requests.js";
 import {
   PersonClientSessionUnavailableError,
@@ -254,13 +254,13 @@ export class PersonClient {
     );
   }
 
-  async changeExclusion(
+  async changeMeetingIngestionExclusion(
     excluded: boolean,
-    selector: OrganizationPersonMemberExclusionSelectorV2,
+    selector: OrganizationPersonMeetingIngestionExclusionSelectorV2,
   ): Promise<void> {
     const stored = await this.accessSession();
-    await this.authority(stored.authority_origin).changeExclusion(
-      createPersonMemberExclusionChangeRequest(
+    await this.authority(stored.authority_origin).changeMeetingIngestionExclusion(
+      createPersonMeetingIngestionExclusionChangeRequest(
         stored,
         this.requestId("mex"),
         excluded,
@@ -270,10 +270,15 @@ export class PersonClient {
     );
   }
 
-  async exclusions(sourceAdapterId: string, sourceInstanceId: string) {
+  async meetingIngestionExclusions(
+    sourceAdapterId: string,
+    sourceInstanceId: string,
+  ) {
     const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).exclusions(
-      createPersonMemberExclusionListRequest(
+    return await this.authority(
+      stored.authority_origin,
+    ).meetingIngestionExclusions(
+      createPersonMeetingIngestionExclusionListRequest(
         stored,
         this.requestId("mex"),
         sourceAdapterId,
@@ -283,7 +288,7 @@ export class PersonClient {
     );
   }
 
-  async beginSlackLink() {
+  async beginSlackIdentityLink() {
     const stored = await this.accessSession();
     const challengeBytes = this.randomBytes(32);
     if (challengeBytes.byteLength !== 32) {
@@ -295,8 +300,8 @@ export class PersonClient {
     try {
       const response = await this.authority(
         stored.authority_origin,
-      ).beginSlackLink(
-        createPersonSlackLinkBeginRequest(this.requestId("psb"), challengeCode),
+      ).beginSlackIdentityLink(
+        createPersonSlackIdentityLinkBeginRequest(this.requestId("psb"), challengeCode),
         stored.session.access_token,
       );
       return { ...response, challenge_code: challengeCode };
@@ -305,14 +310,14 @@ export class PersonClient {
     }
   }
 
-  async completeSlackLink(input: {
+  async completeSlackIdentityLink(input: {
     readonly challenge_attempt_id: string;
     readonly challenge_message_ts: string;
     readonly challenge_code: string;
   }) {
     const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).completeSlackLink(
-      createPersonSlackLinkCompleteRequest(this.requestId("psc"), input),
+    return await this.authority(stored.authority_origin).completeSlackIdentityLink(
+      createPersonSlackIdentityLinkCompleteRequest(this.requestId("psc"), input),
       stored.session.access_token,
     );
   }

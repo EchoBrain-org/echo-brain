@@ -2,14 +2,14 @@ import { Buffer } from 'node:buffer';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
-  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
-  canonicalOrganizationPersonSlackLinkBeginRequestBytes,
-  canonicalOrganizationPersonSlackLinkCompleteRequestBytes,
-  validateOrganizationPersonSlackLinkBeginRequest,
-  validateOrganizationPersonSlackLinkBeginResponse,
-  validateOrganizationPersonSlackLinkCompleteRequest,
-  validateOrganizationPersonSlackLinkResult,
+  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
+  canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes,
+  canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes,
+  validateOrganizationPersonSlackIdentityLinkBeginRequest,
+  validateOrganizationPersonSlackIdentityLinkBeginResponse,
+  validateOrganizationPersonSlackIdentityLinkCompleteRequest,
+  validateOrganizationPersonSlackIdentityLinkResult,
 } from '../src/index.js';
 
 const AUTHORITY_ID = 'oau_00000000-0000-4000-8000-000000000001';
@@ -36,27 +36,27 @@ const OLD_BEGIN_ENVELOPE = {
   organization_id: ORGANIZATION_ID,
   subject_principal_id: PRINCIPAL_ID,
   http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
+  http_path: ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
 } as const;
 
 const OLD_COMPLETE_ENVELOPE = {
   ...OLD_BEGIN_ENVELOPE,
   kind: 'echo-organization-person-slack-link-complete-request',
-  http_path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
+  http_path: ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
 } as const;
 
 describe('organization Person Slack identity link', () => {
   it('validates distinct canonical Person begin and complete requests', () => {
-    expect(validateOrganizationPersonSlackLinkBeginRequest(BEGIN)).toEqual(BEGIN);
-    expect(validateOrganizationPersonSlackLinkCompleteRequest(COMPLETE)).toEqual(
+    expect(validateOrganizationPersonSlackIdentityLinkBeginRequest(BEGIN)).toEqual(BEGIN);
+    expect(validateOrganizationPersonSlackIdentityLinkCompleteRequest(COMPLETE)).toEqual(
       COMPLETE,
     );
     expect(
-      Buffer.from(canonicalOrganizationPersonSlackLinkBeginRequestBytes(BEGIN)).toString(),
+      Buffer.from(canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes(BEGIN)).toString(),
     ).toBe(canonicalJson(BEGIN));
     expect(
       Buffer.from(
-        canonicalOrganizationPersonSlackLinkCompleteRequestBytes(COMPLETE),
+        canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes(COMPLETE),
       ).toString(),
     ).toBe(canonicalJson(COMPLETE));
   });
@@ -64,7 +64,7 @@ describe('organization Person Slack identity link', () => {
   it('rejects every removed identity and route envelope field', () => {
     for (const [key, value] of Object.entries(OLD_BEGIN_ENVELOPE)) {
       expect(() =>
-        validateOrganizationPersonSlackLinkBeginRequest({
+        validateOrganizationPersonSlackIdentityLinkBeginRequest({
           ...BEGIN,
           [key]: value,
         }),
@@ -72,7 +72,7 @@ describe('organization Person Slack identity link', () => {
     }
     for (const [key, value] of Object.entries(OLD_COMPLETE_ENVELOPE)) {
       expect(() =>
-        validateOrganizationPersonSlackLinkCompleteRequest({
+        validateOrganizationPersonSlackIdentityLinkCompleteRequest({
           ...COMPLETE,
           [key]: value,
         }),
@@ -88,7 +88,7 @@ describe('organization Person Slack identity link', () => {
       { slack_bot_token: 'secret' },
     ]) {
       expect(() =>
-        validateOrganizationPersonSlackLinkCompleteRequest({
+        validateOrganizationPersonSlackIdentityLinkCompleteRequest({
           ...COMPLETE,
           ...extra,
         }),
@@ -98,13 +98,13 @@ describe('organization Person Slack identity link', () => {
 
   it('refuses malformed request IDs and challenge input', () => {
     expect(() =>
-      validateOrganizationPersonSlackLinkCompleteRequest({
+      validateOrganizationPersonSlackIdentityLinkCompleteRequest({
         ...COMPLETE,
         request_id: 'slc_00000000-0000-4000-8000-000000000001',
       }),
     ).toThrow('request_id');
     expect(() =>
-      validateOrganizationPersonSlackLinkCompleteRequest({
+      validateOrganizationPersonSlackIdentityLinkCompleteRequest({
         ...COMPLETE,
         challenge_code: `${COMPLETE.challenge_code}=`,
       }),
@@ -122,7 +122,7 @@ describe('organization Person Slack identity link', () => {
       challenge_message_ts: COMPLETE.challenge_message_ts,
       expires_at: '2026-08-18T12:15:00.000Z',
     } as const;
-    expect(validateOrganizationPersonSlackLinkBeginResponse(begun)).toEqual(begun);
+    expect(validateOrganizationPersonSlackIdentityLinkBeginResponse(begun)).toEqual(begun);
 
     const result = {
       schema_version: 2,
@@ -139,9 +139,9 @@ describe('organization Person Slack identity link', () => {
       linked_at: '2026-08-18T12:02:00.000Z',
       identity_link_created: true,
     } as const;
-    expect(validateOrganizationPersonSlackLinkResult(result)).toEqual(result);
+    expect(validateOrganizationPersonSlackIdentityLinkResult(result)).toEqual(result);
     expect(() =>
-      validateOrganizationPersonSlackLinkResult({
+      validateOrganizationPersonSlackIdentityLinkResult({
         ...result,
         adapter_binding_id: 'bnd_00000000-0000-4000-8000-000000000001',
       }),

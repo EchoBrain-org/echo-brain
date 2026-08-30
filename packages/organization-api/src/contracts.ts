@@ -12,9 +12,9 @@ export type OrganizationApiSha256Digest = Sha256Digest;
 export type OrganizationApiSignedIntegrityV1 = SignedIntegrity;
 export type OrganizationApiPageCursorV1 = string;
 
-export type OrganizationPermissionActionV1 = 'approve' | 'reject';
+export type OrganizationSlackReactionApprovalActionV1 = 'approve' | 'reject';
 
-export interface OrganizationPermissionCheckRequestPayloadV1 {
+export interface OrganizationSlackReactionApprovalPermissionCheckRequestPayloadV1 {
   schema_version: 1;
   kind: 'echo-organization-permission-check-request';
   request_id: string;
@@ -38,7 +38,7 @@ export interface OrganizationPermissionCheckRequestPayloadV1 {
   adapter_id: string;
   adapter_instance_id: string;
   adapter_version: string;
-  action: OrganizationPermissionActionV1;
+  action: OrganizationSlackReactionApprovalActionV1;
   approval_id: string;
   channel_id: string;
   message_ts: string;
@@ -48,24 +48,27 @@ export interface OrganizationPermissionCheckRequestPayloadV1 {
 }
 
 /**
- * A fresh permission query authenticated by the exact enrolled installation.
- * It is an API command, not a reusable authorization receipt.
+ * A fresh Slack-reaction approval permission query authenticated by the exact
+ * enrolled installation. It is an API command, not a reusable authorization
+ * receipt.
  */
-export interface OrganizationPermissionCheckRequestV1 extends OrganizationPermissionCheckRequestPayloadV1 {
+export interface OrganizationSlackReactionApprovalPermissionCheckRequestV1
+  extends OrganizationSlackReactionApprovalPermissionCheckRequestPayloadV1 {
   integrity: OrganizationApiSignedIntegrityV1;
 }
 
 /**
- * The Authority's answer to one permission check. The decision itself is not
- * signed. The request is installation-signed, and `request_sha256` plus
- * `provider_event_sha256` bind the response to that exact request -- they do
+ * The Authority's answer to one Slack-reaction approval permission check. The
+ * decision itself is not signed. The request is installation-signed, and
+ * `request_sha256` plus `provider_event_sha256` bind the response to that exact
+ * request -- they do
  * not authenticate it. Authenticity comes from the transport: the response
  * arrives over the configured HTTPS origin associated with the pinned Authority
  * descriptor. Callers must still compare both digests against the request they
  * sent; anything else is a mismatch and fails closed. It is a decision for that
  * one request, never a reusable or transferable authorization receipt.
  */
-export interface OrganizationPermissionCheckDecisionV1 {
+export interface OrganizationSlackReactionApprovalPermissionCheckDecisionV1 {
   schema_version: 1;
   kind: 'echo-organization-permission-check-decision';
   request_sha256: OrganizationApiSha256Digest;
@@ -80,11 +83,11 @@ export interface OrganizationPermissionCheckDecisionV1 {
 }
 
 /**
- * The closed reviewer approval request. It carries content commitments, never
- * content: no draft, title, item text, raw signal id, meeting id, or
- * processing key crosses this wire.
+ * The restricted-reviewer Slack-reaction approval request carries content
+ * commitments, never content: no draft, title, item text, raw signal id,
+ * meeting id, or processing key crosses this wire.
  */
-export interface OrganizationReviewerPermissionCheckRequestPayloadV2 {
+export interface OrganizationRestrictedReviewerSlackReactionApprovalPermissionCheckRequestPayloadV2 {
   schema_version: 2;
   kind: 'echo-organization-permission-check-request';
   request_id: string;
@@ -124,17 +127,17 @@ export interface OrganizationReviewerPermissionCheckRequestPayloadV2 {
   http_path: '/v1/permission-checks';
 }
 
-export interface OrganizationReviewerPermissionCheckRequestV2
-  extends OrganizationReviewerPermissionCheckRequestPayloadV2 {
+export interface OrganizationRestrictedReviewerSlackReactionApprovalPermissionCheckRequestV2
+  extends OrganizationRestrictedReviewerSlackReactionApprovalPermissionCheckRequestPayloadV2 {
   integrity: OrganizationApiSignedIntegrityV1;
 }
 
 /**
- * The closed reviewer decision. An allow carries all six proof fields and the
- * four actor/binding/grant identifiers; a denial nulls every one of them and
- * names one closed reason.
+ * The restricted-reviewer Slack-reaction approval decision. An allow carries
+ * all six proof fields and the four actor/binding/grant identifiers; a denial
+ * nulls every one of them and names one closed reason.
  */
-export interface OrganizationReviewerPermissionCheckDecisionV2 {
+export interface OrganizationRestrictedReviewerSlackReactionApprovalPermissionCheckDecisionV2 {
   schema_version: 2;
   kind: 'echo-organization-permission-check-decision';
   request_sha256: OrganizationApiSha256Digest;
@@ -154,7 +157,7 @@ export interface OrganizationReviewerPermissionCheckDecisionV2 {
   message_presentation_sha256: OrganizationApiSha256Digest | null;
 }
 
-export interface OrganizationMemberReadablePermissionCheckRequestPayloadV3 {
+export interface OrganizationMemberReadableSlackReactionApprovalPermissionCheckRequestPayloadV3 {
   schema_version: 3;
   kind: 'echo-organization-permission-check-request';
   request_id: string; authority_id: string; authority_key_id: OrganizationApiSha256Digest;
@@ -166,39 +169,39 @@ export interface OrganizationMemberReadablePermissionCheckRequestPayloadV3 {
   policy_id: 'organization-member-readable-v1'; policy_contract_sha256: OrganizationApiSha256Digest; release_draft_sha256: OrganizationApiSha256Digest; approval_presentation_sha256: OrganizationApiSha256Digest;
   provider_event_sha256: OrganizationApiSha256Digest; requested_at: string; http_method: 'POST'; http_path: '/v1/permission-checks';
 }
-export interface OrganizationMemberReadablePermissionCheckRequestV3 extends OrganizationMemberReadablePermissionCheckRequestPayloadV3 { integrity: OrganizationApiSignedIntegrityV1 }
-export interface OrganizationMemberReadablePermissionCheckDecisionV3 {
+export interface OrganizationMemberReadableSlackReactionApprovalPermissionCheckRequestV3 extends OrganizationMemberReadableSlackReactionApprovalPermissionCheckRequestPayloadV3 { integrity: OrganizationApiSignedIntegrityV1 }
+export interface OrganizationMemberReadableSlackReactionApprovalPermissionCheckDecisionV3 {
   schema_version: 3; kind: 'echo-organization-permission-check-decision'; request_sha256: OrganizationApiSha256Digest; provider_event_sha256: OrganizationApiSha256Digest; allowed: boolean; reason_code: string;
   policy_id: 'organization-member-readable-v1'; policy_contract_sha256: OrganizationApiSha256Digest;
   principal_id: string | null; membership_id: string | null; adapter_binding_id: string | null; permission_grant_id: string | null; evaluated_at: string;
   authorization_audit_event_id: string | null; authorization_audit_entry_sha256: OrganizationApiSha256Digest | null; release_draft_sha256: OrganizationApiSha256Digest | null; approval_presentation_sha256: OrganizationApiSha256Digest | null; semantic_intent_sha256: OrganizationApiSha256Digest | null; message_presentation_sha256: OrganizationApiSha256Digest | null;
 }
 
-/** Exact, whole-source member valve selector. */
-export interface OrganizationPersonMemberExclusionSourceSelectorV2 {
+/** Excludes one whole meeting source from ingestion for the Person. */
+export interface OrganizationPersonMeetingIngestionExclusionSourceSelectorV2 {
   scope: 'source';
   source_adapter_id: string;
   source_instance_id: string;
 }
 
-/** Exact, one-meeting member valve selector. */
-export interface OrganizationPersonMemberExclusionMeetingSelectorV2 {
+/** Excludes one provider-owned meeting from ingestion for the Person. */
+export interface OrganizationPersonMeetingIngestionExclusionMeetingSelectorV2 {
   scope: 'meeting';
   source_adapter_id: string;
   source_instance_id: string;
   external_id: string;
 }
 
-export type OrganizationPersonMemberExclusionSelectorV2 =
-  | OrganizationPersonMemberExclusionSourceSelectorV2
-  | OrganizationPersonMemberExclusionMeetingSelectorV2;
+export type OrganizationPersonMeetingIngestionExclusionSelectorV2 =
+  | OrganizationPersonMeetingIngestionExclusionSourceSelectorV2
+  | OrganizationPersonMeetingIngestionExclusionMeetingSelectorV2;
 
 /**
  * Idempotent desired-state change for the authenticated Person's own
- * pre-record exclusion. `excluded: true` adds the exact row and `false`
- * removes it; neither operation implies erasure of an already-admitted row.
+ * meeting-ingestion exclusion. `excluded: true` adds the exact row and
+ * `false` removes it; neither operation erases an already-admitted meeting.
  */
-export interface OrganizationPersonMemberExclusionChangeRequestV2 {
+export interface OrganizationPersonMeetingIngestionExclusionChangeRequestV2 {
   schema_version: 2;
   kind: 'echo-organization-person-member-exclusion-change-request';
   request_id: string;
@@ -208,11 +211,11 @@ export interface OrganizationPersonMemberExclusionChangeRequestV2 {
   http_method: 'POST';
   http_path: '/v2/member-exclusions';
   excluded: boolean;
-  selector: OrganizationPersonMemberExclusionSelectorV2;
+  selector: OrganizationPersonMeetingIngestionExclusionSelectorV2;
 }
 
-/** Exact-source list for the authenticated Person who owns that source. */
-export interface OrganizationPersonMemberExclusionListRequestV2 {
+/** Exact-source exclusion list for the authenticated Person who owns it. */
+export interface OrganizationPersonMeetingIngestionExclusionListRequestV2 {
   schema_version: 2;
   kind: 'echo-organization-person-member-exclusion-list-request';
   request_id: string;
@@ -226,7 +229,7 @@ export interface OrganizationPersonMemberExclusionListRequestV2 {
 }
 
 /** One explicit, exact-target administrator break-glass read. */
-export interface OrganizationAdminMemberExclusionBreakGlassReadRequestV2 {
+export interface OrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestV2 {
   schema_version: 2;
   kind: 'echo-organization-admin-member-exclusion-break-glass-read-request';
   request_id: string;
@@ -241,7 +244,7 @@ export interface OrganizationAdminMemberExclusionBreakGlassReadRequestV2 {
 }
 
 /** The shared exact response; no generic administrator surface returns it. */
-export interface OrganizationMemberExclusionListResponseV2 {
+export interface OrganizationMeetingIngestionExclusionListResponseV2 {
   schema_version: 2;
   kind: 'echo-organization-member-exclusion-list-response';
   authority_id: string;
@@ -250,7 +253,7 @@ export interface OrganizationMemberExclusionListResponseV2 {
   membership_id: string;
   source_adapter_id: string;
   source_instance_id: string;
-  exclusions: readonly OrganizationPersonMemberExclusionSelectorV2[];
+  exclusions: readonly OrganizationPersonMeetingIngestionExclusionSelectorV2[];
 }
 
 export type OrganizationPersonOidcBeginRequestV2 =
@@ -303,24 +306,24 @@ export interface OrganizationPersonSessionRefreshRequestV2 {
  * A Person-authenticated request to post one Slack identity challenge.
  * Identity and route context come from the bearer credential and matched route.
  */
-export interface OrganizationPersonSlackLinkBeginRequestV2 {
+export interface OrganizationPersonSlackIdentityLinkBeginRequestV2 {
   request_id: string;
   challenge_code_sha256: OrganizationApiSha256Digest;
 }
 
 /**
  * A Person-authenticated request to prove the exact reply to that challenge.
- * The request ID and message timestamp remain transitional replay inputs until
- * new-lineage challenge state owns the provider coordinate.
+ * The request ID and message timestamp remain replay inputs until persisted
+ * challenge state owns the provider coordinate.
  */
-export interface OrganizationPersonSlackLinkCompleteRequestV2 {
+export interface OrganizationPersonSlackIdentityLinkCompleteRequestV2 {
   request_id: string;
   challenge_attempt_id: string;
   challenge_message_ts: string;
   challenge_code: string;
 }
 
-export interface OrganizationPersonSlackLinkBeginResponseV2 {
+export interface OrganizationPersonSlackIdentityLinkBeginResponseV2 {
   schema_version: 2;
   kind: 'echo-organization-person-slack-link-begin-response';
   challenge_attempt_id: string;
@@ -332,7 +335,7 @@ export interface OrganizationPersonSlackLinkBeginResponseV2 {
 }
 
 /** Person linking proves identity only; adapter bindings and grants are absent. */
-export interface OrganizationPersonSlackLinkResultV2 {
+export interface OrganizationPersonSlackIdentityLinkResultV2 {
   schema_version: 2;
   kind: 'echo-organization-person-slack-link-result';
   identity_link_id: string;
@@ -348,7 +351,7 @@ export interface OrganizationPersonSlackLinkResultV2 {
   identity_link_created: boolean;
 }
 
-export interface OrganizationSlackLinkBeginRequestPayloadV1 {
+export interface OrganizationInstallationSlackIdentityLinkBeginRequestPayloadV1 {
   schema_version: 1;
   kind: 'echo-organization-slack-link-begin-request';
   request_id: string;
@@ -366,11 +369,12 @@ export interface OrganizationSlackLinkBeginRequestPayloadV1 {
  * A fresh command from one enrolled installation to begin proving control of
  * its employee's Slack identity. It does not grant any adapter permission.
  */
-export interface OrganizationSlackLinkBeginRequestV1 extends OrganizationSlackLinkBeginRequestPayloadV1 {
+export interface OrganizationInstallationSlackIdentityLinkBeginRequestV1
+  extends OrganizationInstallationSlackIdentityLinkBeginRequestPayloadV1 {
   integrity: OrganizationApiSignedIntegrityV1;
 }
 
-export interface OrganizationSlackLinkCompleteRequestPayloadV1 {
+export interface OrganizationInstallationSlackIdentityLinkCompleteRequestPayloadV1 {
   schema_version: 1;
   kind: 'echo-organization-slack-link-complete-request';
   request_id: string;
@@ -394,11 +398,12 @@ export interface OrganizationSlackLinkCompleteRequestPayloadV1 {
  * A fresh command that submits the exact Slack challenge observation for the
  * enrolled installation. The Authority derives the Slack human from Slack.
  */
-export interface OrganizationSlackLinkCompleteRequestV1 extends OrganizationSlackLinkCompleteRequestPayloadV1 {
+export interface OrganizationInstallationSlackIdentityLinkCompleteRequestV1
+  extends OrganizationInstallationSlackIdentityLinkCompleteRequestPayloadV1 {
   integrity: OrganizationApiSignedIntegrityV1;
 }
 
-export interface OrganizationSlackLinkBeginResponseV1 {
+export interface OrganizationInstallationSlackIdentityLinkBeginResponseV1 {
   schema_version: 1;
   kind: 'echo-organization-slack-link-begin-response';
   challenge_attempt_id: string;
@@ -409,7 +414,7 @@ export interface OrganizationSlackLinkBeginResponseV1 {
   expires_at: string;
 }
 
-export interface OrganizationSlackLinkResultV1 {
+export interface OrganizationInstallationSlackIdentityLinkResultV1 {
   schema_version: 1;
   kind: 'echo-organization-slack-link-result';
   identity_link_id: string;
@@ -505,7 +510,7 @@ export interface OrganizationAuditPageV1 {
   next_cursor: OrganizationApiPageCursorV1 | null;
 }
 
-export interface RevokeOrganizationSubjectRequestV1 {
+export interface RevokeOrganizationMembershipRequestV1 {
   reason: string;
 }
 

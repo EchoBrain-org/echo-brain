@@ -1,9 +1,9 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
-  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
-  validateOrganizationPersonSlackLinkBeginRequest,
-  validateOrganizationPersonSlackLinkCompleteRequest,
+  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
+  validateOrganizationPersonSlackIdentityLinkBeginRequest,
+  validateOrganizationPersonSlackIdentityLinkCompleteRequest,
 } from "@echo-brain/organization-api";
 import {
   FileOrganizationSecretStore,
@@ -28,12 +28,12 @@ const SLACK_IDENTITY_ROUTES_V1 = Object.freeze([
   Object.freeze({
     route_id: "slack-begin",
     method: "POST" as const,
-    path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
+    path: ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
   }),
   Object.freeze({
     route_id: "slack-complete",
     method: "POST" as const,
-    path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
+    path: ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
   }),
 ]);
 
@@ -68,7 +68,7 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
         return Object.freeze({
           status: 201 as const,
           body: await input.service.begin(
-            validateOrganizationPersonSlackLinkBeginRequest(body),
+            validateOrganizationPersonSlackIdentityLinkBeginRequest(body),
             token,
           ),
         });
@@ -77,7 +77,7 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
         return Object.freeze({
           status: 200 as const,
           body: await input.service.complete(
-            validateOrganizationPersonSlackLinkCompleteRequest(body),
+            validateOrganizationPersonSlackIdentityLinkCompleteRequest(body),
             token,
           ),
         });

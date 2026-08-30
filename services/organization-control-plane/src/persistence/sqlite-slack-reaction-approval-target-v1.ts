@@ -126,7 +126,9 @@ export function selectCurrentOwnerSlackReactionApprovalTargetV1(
     link.provider_tenant_id !== connection.provider_tenant_id ||
     link.provider_enterprise_id !== connection.provider_enterprise_id
   ) {
-    throw new Error("clean reaction approval activation owner Slack link is invalid");
+    throw new Error(
+      "Slack-reaction approval activation owner Slack identity link is invalid",
+    );
   }
   return Object.freeze({
     connection_id: connection.connection_id,

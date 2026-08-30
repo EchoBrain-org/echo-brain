@@ -1403,7 +1403,7 @@ function initialOwnerSetupStatus(
       fileMustExist: true,
     });
     try {
-      const initialOwnerSlackLinkActive = control.prepare(
+      const initialOwnerSlackIdentityLinkActive = control.prepare(
         `SELECT 1 FROM organization_external_human_link_current AS link
           JOIN organization_tool_connection_contracts AS connection
             ON connection.connection_id = ?
@@ -1487,7 +1487,7 @@ function initialOwnerSetupStatus(
           : undefined;
       return Object.freeze({
         founder_oidc_bound: initialOwnerOidcBound,
-        founder_slack_link_active: initialOwnerSlackLinkActive,
+        founder_slack_link_active: initialOwnerSlackIdentityLinkActive,
         granola_credentials_valid: granolaCredentialsValid,
         granola_admission_present: granolaAdmissionProof !== undefined,
         ...(slackVerification === undefined ? {} : { slack_verification: slackVerification }),
@@ -1741,7 +1741,7 @@ async function finalize(
   const full = readInitialOwnerSetupStatus(manifest, dependencies);
   const missing = [
     !full.founder_oidc_bound && "initial-owner OIDC binding",
-    !full.founder_slack_link_active && "initial-owner Slack link",
+    !full.founder_slack_link_active && "initial-owner Slack identity link",
     !full.granola_credentials_valid && "provider credentials",
   ].filter((value): value is string => typeof value === "string");
   if (missing.length > 0) {

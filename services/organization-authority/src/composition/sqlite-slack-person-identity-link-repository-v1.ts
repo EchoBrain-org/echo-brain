@@ -264,7 +264,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       }
     ).request_id;
     if (requestId === undefined) {
-      throw new Error("clean Person Slack begin requires a request ID");
+      throw new Error("Person Slack identity-link begin requires a request ID");
     }
     return this.transaction(() => {
       const replay = this.personSlackIdentityLinkBeginReplay({

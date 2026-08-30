@@ -15,7 +15,7 @@ import type {
   OrganizationMembershipSummaryV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
-  RevokeOrganizationSubjectRequestV1,
+  RevokeOrganizationMembershipRequestV1,
 } from './contracts.js';
 
 export const MAX_ORGANIZATION_API_BODY_BYTES = 16 * 1024;
@@ -369,9 +369,9 @@ function validateMembershipType(value: unknown, label: string): void {
   }
 }
 
-export function validateIntegrity(
+export function validateSignedRequestIntegrity(
   value: unknown,
-  documentLabel = 'access lease request',
+  documentLabel = 'signed request',
 ): OrganizationApiSignedIntegrityV1 {
   const label = `${documentLabel} integrity`;
   const record = asRecord(value, label);
@@ -425,13 +425,13 @@ export function validateProvisionOrganizationMembershipRequest(
   return record as unknown as ProvisionOrganizationMembershipRequestV1;
 }
 
-export function validateRevokeOrganizationSubjectRequest(
+export function validateRevokeOrganizationMembershipRequest(
   value: unknown,
-): RevokeOrganizationSubjectRequestV1 {
-  const record = asRecord(value, 'revocation request');
-  assertExactKeys(record, ['reason'], 'revocation request');
-  assertString(record.reason, 'revocation reason', 500);
-  return record as unknown as RevokeOrganizationSubjectRequestV1;
+): RevokeOrganizationMembershipRequestV1 {
+  const record = asRecord(value, 'membership revocation request');
+  assertExactKeys(record, ['reason'], 'membership revocation request');
+  assertString(record.reason, 'membership revocation reason', 500);
+  return record as unknown as RevokeOrganizationMembershipRequestV1;
 }
 
 export function validateOrganizationAuthorityDescriptorResponse(

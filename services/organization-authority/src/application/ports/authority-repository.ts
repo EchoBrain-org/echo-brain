@@ -450,7 +450,7 @@ export interface StoredPersonReadDecisionAudit {
   authenticated: PersonReadAuthenticatedEvidence | null;
 }
 
-export interface MemberExclusionOwnerSource {
+export interface MeetingIngestionExclusionOwnerSource {
   organization_id: string;
   principal_id: string;
   membership_id: string;
@@ -459,7 +459,7 @@ export interface MemberExclusionOwnerSource {
   source_instance_id: string;
 }
 
-export type StoredMemberExclusionSelector =
+export type StoredMeetingIngestionExclusionSelector =
   | {
       scope: 'source';
       source_adapter_id: string;
@@ -472,28 +472,28 @@ export type StoredMemberExclusionSelector =
       external_id: string;
     };
 
-interface MemberExclusionReadAuditInputBase {
+interface MeetingIngestionExclusionReadAuditInputBase {
   request_sha256: Sha256Digest;
   response_bytes: Uint8Array;
   result_count: number;
 }
 
-export type MemberExclusionReadAuditEntry =
-  | (MemberExclusionReadAuditInputBase & {
+export type MeetingIngestionExclusionReadAuditEntry =
+  | (MeetingIngestionExclusionReadAuditInputBase & {
       actor_kind: 'person';
       asserted_subject_principal_id: string;
       decision: 'allow';
       reason_code: 'active_person_session';
       authenticated: PersonReadAuthenticatedEvidence;
     })
-  | (MemberExclusionReadAuditInputBase & {
+  | (MeetingIngestionExclusionReadAuditInputBase & {
       actor_kind: 'person';
       asserted_subject_principal_id: string;
       decision: 'deny';
       reason_code: 'person_or_session_inactive';
       authenticated: PersonReadAuthenticatedEvidence | null;
     })
-  | (MemberExclusionReadAuditInputBase & {
+  | (MeetingIngestionExclusionReadAuditInputBase & {
       actor_kind: 'person';
       asserted_subject_principal_id: string;
       decision: 'deny';
@@ -503,13 +503,13 @@ export type MemberExclusionReadAuditEntry =
         | 'operation_not_permitted';
       authenticated: PersonReadAuthenticatedEvidence;
     })
-  | (MemberExclusionReadAuditInputBase & {
+  | (MeetingIngestionExclusionReadAuditInputBase & {
       actor_kind: 'admin_break_glass';
       actor_binding_sha256: Sha256Digest;
       decision: 'allow';
       reason_code: 'break_glass_authorized';
     })
-  | (MemberExclusionReadAuditInputBase & {
+  | (MeetingIngestionExclusionReadAuditInputBase & {
       actor_kind: 'admin_break_glass';
       actor_binding_sha256: Sha256Digest;
       decision: 'deny';
@@ -552,9 +552,9 @@ export interface AuthorityReadTransaction {
     sessionFamilyId: string,
   ): StoredPersonSessionCredential[];
   /** Returns `undefined` unless this exact source has this active owner. */
-  memberExclusionsForOwnerSource(
-    source: MemberExclusionOwnerSource,
-  ): readonly StoredMemberExclusionSelector[] | undefined;
+  meetingIngestionExclusionsForOwnerSource(
+    source: MeetingIngestionExclusionOwnerSource,
+  ): readonly StoredMeetingIngestionExclusionSelector[] | undefined;
   /** `null` is the clean, never-built state; corruption throws. */
   activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null;
 }
@@ -620,9 +620,9 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
    * `false` is the opaque unavailable-source result; `true` means the desired
    * state already held or was applied.
    */
-  setMemberExclusionForOwner(
-    source: MemberExclusionOwnerSource,
-    selector: StoredMemberExclusionSelector,
+  setMeetingIngestionExclusionForOwner(
+    source: MeetingIngestionExclusionOwnerSource,
+    selector: StoredMeetingIngestionExclusionSelector,
     excluded: boolean,
   ): boolean;
   /** Appends one isolated V2 Person read decision at the transaction time. */
@@ -630,7 +630,9 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
     entry: PersonReadDecisionAuditEntry,
   ): StoredPersonReadDecisionAudit;
   /** Appends minimized INV-10 evidence; exclusion coordinates are never stored. */
-  appendMemberExclusionReadAudit(entry: MemberExclusionReadAuditEntry): void;
+  appendMeetingIngestionExclusionReadAudit(
+    entry: MeetingIngestionExclusionReadAuditEntry,
+  ): void;
   appendAudit(entry: AuthorityAuditEntry): void;
   /**
    * Appends one reviewer query decision at this transaction's own final time.

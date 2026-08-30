@@ -141,7 +141,7 @@ const fakeSlack: SlackIdentityProviderV1 = {
     verification_evidence_sha256: canonicalSha256("rehearsal-slack-channel"),
   }),
   verifyHuman: async () => {
-    throw new Error("clean Person Slack linking observes a thread instead");
+    throw new Error("Person Slack identity linking observes a thread instead");
   },
   postIdentityLinkChallenge: async (_token, input) => ({
     team_id: "T12345678",
@@ -370,7 +370,7 @@ describe("Organization Authority command rehearsal", () => {
     });
   });
 
-  it("runs bootstrap, idle live login and Slack link, stopped finalize, then active live restart", async () => {
+  it("runs bootstrap, idle live login and Slack identity link, stopped finalize, then active live restart", async () => {
     const root = directory();
     const stateDirectory = join(root, "state");
     const oidcConfigPath = join(root, "oidc.json");

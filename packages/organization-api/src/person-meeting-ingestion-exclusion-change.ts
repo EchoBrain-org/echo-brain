@@ -3,10 +3,10 @@ import {
   canonicalJsonBytes,
 } from '@echo-brain/federation-protocol';
 import type {
-  OrganizationPersonMemberExclusionChangeRequestV2,
-  OrganizationPersonMemberExclusionSelectorV2,
+  OrganizationPersonMeetingIngestionExclusionChangeRequestV2,
+  OrganizationPersonMeetingIngestionExclusionSelectorV2,
 } from './contracts.js';
-import { ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH } from './http.js';
+import { ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH } from './http.js';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   asRecord,
@@ -77,7 +77,7 @@ function assertOpaqueExternalId(value: unknown, label: string): asserts value is
 function validateSelector(
   value: unknown,
   label: string,
-): OrganizationPersonMemberExclusionSelectorV2 {
+): OrganizationPersonMeetingIngestionExclusionSelectorV2 {
   const selector = asRecord(value, label);
   if (selector.scope === 'source') {
     assertExactKeys(selector, SOURCE_SELECTOR_KEYS, label);
@@ -89,13 +89,13 @@ function validateSelector(
   }
   assertString(selector.source_adapter_id, `${label} source_adapter_id`, 128);
   assertString(selector.source_instance_id, `${label} source_instance_id`, 128);
-  return selector as unknown as OrganizationPersonMemberExclusionSelectorV2;
+  return selector as unknown as OrganizationPersonMeetingIngestionExclusionSelectorV2;
 }
 
-export function validateOrganizationPersonMemberExclusionChangeRequest(
+export function validateOrganizationPersonMeetingIngestionExclusionChangeRequest(
   value: unknown,
-): OrganizationPersonMemberExclusionChangeRequestV2 {
-  const label = 'organization Person member exclusion change request';
+): OrganizationPersonMeetingIngestionExclusionChangeRequestV2 {
+  const label = 'organization Person meeting-ingestion exclusion change request';
   const record = asRecord(canonicalSnapshot(value, label), label);
   assertExactKeys(record, REQUEST_KEYS, label);
   if (
@@ -106,7 +106,8 @@ export function validateOrganizationPersonMemberExclusionChangeRequest(
   }
   if (
     record.http_method !== 'POST' ||
-    record.http_path !== ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH
+    record.http_path !==
+      ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH
   ) {
     fail(`${label} HTTP operation is unsupported`);
   }
@@ -125,13 +126,13 @@ export function validateOrganizationPersonMemberExclusionChangeRequest(
   return {
     ...record,
     selector,
-  } as unknown as OrganizationPersonMemberExclusionChangeRequestV2;
+  } as unknown as OrganizationPersonMeetingIngestionExclusionChangeRequestV2;
 }
 
-export function canonicalOrganizationPersonMemberExclusionChangeRequestBytes(
+export function canonicalOrganizationPersonMeetingIngestionExclusionChangeRequestBytes(
   value: unknown,
 ): Uint8Array {
   return canonicalJsonBytes(
-    validateOrganizationPersonMemberExclusionChangeRequest(value),
+    validateOrganizationPersonMeetingIngestionExclusionChangeRequest(value),
   );
 }

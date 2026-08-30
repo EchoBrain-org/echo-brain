@@ -679,7 +679,7 @@ describe("Organization Authority setup coordinator", () => {
 
     expect(result).toBe(1);
     expect(stderr).toContain("initial-owner OIDC binding");
-    expect(stderr).toContain("initial-owner Slack link");
+    expect(stderr).toContain("initial-owner Slack identity link");
     expect(stderr).toContain("provider credentials");
     expect(order).toEqual([]);
   });
@@ -712,7 +712,7 @@ describe("Organization Authority setup coordinator", () => {
     );
 
     expect(result).toBe(1);
-    expect(stderr).toContain("valid clean state-lineage root manifest");
+    expect(stderr).toContain("valid state-lineage root manifest");
     expect(order).toEqual([]);
   });
 

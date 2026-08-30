@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { once } from "node:events";
 import Database from "better-sqlite3";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
+import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
 import type { SlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOrganizationControlBaselineV1 } from "../../organization-control-plane/src/persistence/baseline.js";
@@ -44,7 +44,7 @@ const databases: Database.Database[] = [];
 function beginRequest(requestId = "psb_00000000-0000-4000-8000-000000000001") {
   return {
     request_id: requestId,
-    challenge_code_sha256: organizationSlackLinkChallengeCodeSha256(CODE),
+    challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(CODE),
   };
 }
 
@@ -159,7 +159,7 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-describe("clean Person Slack identity-link service", () => {
+describe("Person Slack identity-link workflow", () => {
   it("posts a challenge, completes the exact proof, and replays completion without re-observing Slack", async () => {
     const context = await setup();
     const begun = await context.application.begin(beginRequest(), "bearer");

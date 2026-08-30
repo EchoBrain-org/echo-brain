@@ -4,7 +4,9 @@ import {
   validateOrganizationAuditPage,
   validateOrganizationMembershipPage,
   validateProvisionOrganizationMembershipRequest,
+  validateRevokeOrganizationMembershipRequest,
 } from "../src/index.js";
+import { validateSignedRequestIntegrity } from "../src/validation.js";
 
 const ids = {
   authority: "oau_00000000-0000-4000-8000-000000000001",
@@ -40,6 +42,34 @@ describe("current administration contracts", () => {
         next_cursor: null,
       }),
     ).toMatchObject({ next_cursor: null });
+  });
+
+  it("validates an exact membership revocation request", () => {
+    expect(
+      validateRevokeOrganizationMembershipRequest({
+        reason: "employee left the organization",
+      }),
+    ).toEqual({ reason: "employee left the organization" });
+    expect(() =>
+      validateRevokeOrganizationMembershipRequest({
+        reason: "employee left the organization",
+        principal_id: ids.principal,
+      }),
+    ).toThrow("membership revocation request has an unexpected shape");
+  });
+
+  it("labels generic signed-request integrity failures accurately", () => {
+    expect(() =>
+      validateSignedRequestIntegrity({
+        canonicalization: "unsupported",
+        payload_sha256:
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        signature_algorithm: "ecdsa-p256-sha256-der-low-s",
+        key_id:
+          "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        signature_base64: "AAAAAAAA",
+      }),
+    ).toThrow("signed request canonicalization is unsupported");
   });
 
   it("validates the current admin overview and audit page", () => {
