@@ -3,7 +3,7 @@ import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type ApprovalContractSha256,
-} from "../src/application/person-slack-approval-contracts-v2.js";
+} from "../src/application/person-slack-reaction-approval-contracts-v2.js";
 import {
   PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND,
   PRIVATE_APPROVAL_PENDING_KIND,

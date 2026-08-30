@@ -183,7 +183,7 @@ separation. It does not claim approval binding, action-time authorization, or
 runtime cutover proof.
 
 **D2-1 contract-only slice (2026-08-20):**
-`services/organization-control-plane/test/person-slack-approval-contracts-v2.test.ts`
+`services/organization-control-plane/test/person-slack-reaction-approval-contracts-v2.test.ts`
 freezes the exact private connection/current-state, link, approval binding,
 capability, provider observation/message/action, authorization, integration
 audit, semantic retry, and durable-result shapes. It mutates every identity
@@ -194,7 +194,7 @@ remain D2-2 evidence. No application ID, baseline SQL, lineage genesis, or
 SQLite opener is introduced before Phase 3.
 
 **D2-2A offline activation slice (2026-08-20):**
-`services/organization-control-plane/test/person-slack-approval-activation-v2.test.ts`
+`services/organization-control-plane/test/person-slack-reaction-approval-activation-v2.test.ts`
 proves that an abstract Authority administrator credential, never an owner or
 employee Person session, activates one installation-free Slack approval
 binding and four ordered policy/action capabilities for an exact current
@@ -207,7 +207,7 @@ audit-result recovery, public export, or live runtime selection. Those remain
 D2-2B and Phase 3 evidence.
 
 **D2-2B offline finalization slice (2026-08-20):**
-`services/organization-control-plane/test/person-slack-approval-finalization-v2.test.ts`
+`services/organization-control-plane/test/person-slack-reaction-approval-finalization-v2.test.ts`
 proves the private `{approval_id}` state machine around an abstract stable
 Authority/control-plane fence and an independently observing Slack provider
 port. It performs pre-call connection, current-state, binding, policy, and

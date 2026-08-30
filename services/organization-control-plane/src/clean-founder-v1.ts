@@ -8,8 +8,8 @@ export {
   type CleanSlackConnectCliIo,
 } from "./composition/clean-slack-connect-cli.js";
 export {
-  runCleanPersonSlackApprovalActivateCli,
-  type CleanPersonSlackApprovalActivateCliDependencies,
-  type CleanPersonSlackApprovalActivateCliIo,
-} from "./composition/clean-person-slack-approval-activate-cli.js";
+  runCleanPersonSlackReactionApprovalActivateCli,
+  type CleanPersonSlackReactionApprovalActivateCliDependencies,
+  type CleanPersonSlackReactionApprovalActivateCliIo,
+} from "./composition/clean-person-slack-reaction-approval-activate-cli.js";
 export { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "./application/contracts.js";

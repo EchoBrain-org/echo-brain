@@ -25,7 +25,7 @@ import { createOpenRouterCleanLiveProcessorRuntimeBundleV1 } from "./openrouter-
 import { createOpenRouterCleanAnswerCompositionRuntimeBundleV1 } from "./openrouter-clean-answer-composition-runtime.js";
 import { createPrivateSlackApprovalRuntimeBundleV1 } from "./private-slack-approval-runtime-v1.js";
 import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-slack-person-external-identity-runtime.js";
-import type { PrivateApprovalSlackInteractionRejectionStageV1 } from "./private-approval-slack-interaction-v1.js";
+import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
 
 export interface OpenCleanOrganizationAuthorityRuntimeConfig
@@ -44,7 +44,7 @@ export interface OpenCleanOrganizationAuthorityRuntimeConfig
   readonly slack_connection_id: string;
   readonly slack_identity_link_channel_id: string;
   readonly on_private_approval_slack_rejection?: (event: {
-    readonly stage: PrivateApprovalSlackInteractionRejectionStageV1;
+    readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
   }) => void;
 }
 

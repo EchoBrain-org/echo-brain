@@ -2,10 +2,10 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
   CurrentAuthorityMembershipV2,
-  PersonSlackApprovalActivationFenceV2,
-} from "../application/person-slack-approval-activation-v2.js";
+  PersonSlackReactionApprovalActivationFenceV2,
+} from "../application/person-slack-reaction-approval-activation-v2.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
-import type { StableAuthorityAdministratorFenceV2 } from "./sqlite-person-slack-approval-activation-v2.js";
+import type { StableAuthorityAdministratorFenceV2 } from "./sqlite-person-slack-reaction-approval-activation-v2.js";
 import Database from "better-sqlite3";
 
 const AUTHORITY_APPLICATION_ID_V1 = 0x45434155;
@@ -24,7 +24,7 @@ export interface CleanStoppedStateAuthorityAdministratorFenceV1Input extends Cle
 }
 
 type AdministratorFence = Omit<
-  PersonSlackApprovalActivationFenceV2,
+  PersonSlackReactionApprovalActivationFenceV2,
   "transaction"
 >;
 

@@ -62,7 +62,7 @@ export interface VerifySlackReactionInput {
    * `null` preserves the pre-pilot approval path without making it eligible
    * for the pilot read policy.
    */
-  expected_presentation: SlackApprovalPresentationExpectation | null;
+  expected_presentation: SlackReactionApprovalPresentationExpectation | null;
   /**
    * The closed reviewer expectation, or `null` for every non-reviewer card.
    * The pilot and reviewer expectations are mutually exclusive: a request that
@@ -91,7 +91,7 @@ export interface VerifySlackReactionInput {
   parse_organization_member_card_reactions?: boolean;
 }
 
-export interface SlackApprovalPresentationExpectation {
+export interface SlackReactionApprovalPresentationExpectation {
   presentation_policy_id: "pilot-two-person-audience-v1";
   audience_notice_sha256: `sha256:${string}`;
   notice_text: string;
@@ -399,7 +399,7 @@ export interface CompletedPersonSlackIdentityLink {
   identity_link_created: boolean;
 }
 
-export interface ActivateExistingSlackApprovalInput {
+export interface ActivateExistingSlackReactionApprovalInput {
   command_id: string;
   command_sha256: `sha256:${string}`;
   organization_id: string;
@@ -415,7 +415,7 @@ export interface ActivateExistingSlackApprovalInput {
   now: string;
 }
 
-export interface ActivateExistingSlackApprovalResult {
+export interface ActivateExistingSlackReactionApprovalResult {
   identity_link_id: string;
   adapter_binding_id: string;
   approve_permission_grant_id: string;
@@ -452,7 +452,7 @@ export interface OnboardSlackOrganizationToolResult {
   activated_at: string;
 }
 
-export interface SlackApprovalPermissionLookup {
+export interface SlackReactionApprovalPermissionLookup {
   organization_id: string;
   installation_id: string;
   installation_key_id: `sha256:${string}`;
@@ -470,7 +470,7 @@ export interface SlackApprovalPermissionLookup {
   action: "approve" | "reject";
 }
 
-export interface SlackApprovalPermissionCandidate {
+export interface SlackReactionApprovalPermissionCandidate {
   identity_link_id: string;
   principal_id: string;
   membership_id: string;
@@ -493,7 +493,7 @@ export interface SlackApprovalPermissionCandidate {
  * grants and the exact linked human must already exist before this view is
  * returned.
  */
-export interface ActiveSlackApprovalRuntimeBinding {
+export interface ActiveSlackReactionApprovalRuntimeBinding {
   organization_tool: ActiveSlackOrganizationTool;
   identity_link_id: string;
   principal_id: string;

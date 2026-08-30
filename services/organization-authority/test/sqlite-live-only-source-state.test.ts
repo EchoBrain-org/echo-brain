@@ -8,9 +8,9 @@ import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1 } from "../src/composition/openrouter-clean-processor-config-v1.js";
-import { PrivateApprovalProcessingCoordinatorV1 } from "../src/composition/private-approval-processing-coordinator-v1.js";
-import { SqlitePrivateApprovalAssignmentStateV1 } from "../src/composition/sqlite-private-approval-assignment-state-v1.js";
-import { SqlitePrivateApprovalProcessingAuthorityV1 } from "../src/composition/sqlite-private-approval-processing-authority-v1.js";
+import { PrivateSlackApprovalTerminalCoordinatorV1 } from "../src/composition/private-slack-approval-terminal-coordinator-v1.js";
+import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "../src/composition/sqlite-private-slack-approval-assignment-state-v1.js";
+import { SqlitePrivateSlackApprovalTerminalAuthorityV1 } from "../src/composition/sqlite-private-slack-approval-terminal-authority-v1.js";
 import type {
   DecisionSet,
   MeetingDocument,
@@ -306,11 +306,11 @@ describe("SQLite clean live-only source state", () => {
       decisions: canaryDecisions,
     });
 
-    const assignments = new SqlitePrivateApprovalAssignmentStateV1(
+    const assignments = new SqlitePrivateSlackApprovalAssignmentStateV1(
       value,
       () => ADVANCED_AT,
     );
-    const authority = new SqlitePrivateApprovalProcessingAuthorityV1({
+    const authority = new SqlitePrivateSlackApprovalTerminalAuthorityV1({
       source: state,
       assignments,
       coordinates: {
@@ -355,7 +355,7 @@ describe("SQLite clean live-only source state", () => {
         occurred_at: ADVANCED_AT,
       },
     };
-    const coordinator = new PrivateApprovalProcessingCoordinatorV1({
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => [],
         listTerminals: () => [terminal],

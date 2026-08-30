@@ -84,7 +84,7 @@
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/composition/private-owner-dm-approval-stager-v1.ts"
+        "root": "services/organization-authority/src/composition/private-slack-dm-approval-stager-v1.ts"
       },
       {
         "identifier": "slack",
@@ -92,7 +92,7 @@
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/presentation/private-approval-slack-interactions-http-application-v1.ts"
+        "root": "services/organization-authority/src/presentation/private-slack-approval-interactions-http-application-v1.ts"
       },
       {
         "identifier": "slack",

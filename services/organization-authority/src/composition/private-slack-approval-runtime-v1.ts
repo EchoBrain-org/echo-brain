@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import {
   FileOrganizationSecretStore,
-  SqliteCleanSlackApprovalTokenReaderV1,
-  SqlitePrivateApprovalPersistenceV1,
+  SqliteCleanSlackBotTokenReaderV1,
+  SqliteSlackDmApprovalPersistenceV1,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { readPrivateAuthoritySlackSigningSecret } from "../adapters/security/private-file-credentials.js";
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
@@ -11,18 +11,18 @@ import type {
   CleanApprovalRuntimeBundleV1,
   CleanApprovalRuntimeContextV1,
 } from "./approval-runtime-bundle-v1.js";
-import { createPrivateApprovalSlackInteractionHttpIngressV1 } from "./private-approval-slack-interaction-http-ingress-v1.js";
-import { PrivateOwnerDmApprovalStagerV1 } from "./private-owner-dm-approval-stager-v1.js";
-import { PrivateApprovalProcessingCoordinatorV1 } from "./private-approval-processing-coordinator-v1.js";
-import { createPrivateApprovalSlackInteractionsApplicationV1 } from "./private-approval-slack-interactions-application-v1.js";
-import type { PrivateApprovalSlackInteractionRejectionStageV1 } from "./private-approval-slack-interaction-v1.js";
-import { resolveCanonicalMeetingOwnerPrivateApprovalTargetV1 } from "./resolve-canonical-meeting-owner-private-approval-target-v1.js";
+import { createPrivateSlackApprovalInteractionHttpIngressV1 } from "./private-slack-approval-interaction-http-ingress-v1.js";
+import { PrivateSlackDmApprovalStagerV1 } from "./private-slack-dm-approval-stager-v1.js";
+import { PrivateSlackApprovalTerminalCoordinatorV1 } from "./private-slack-approval-terminal-coordinator-v1.js";
+import { createPrivateSlackApprovalInteractionsApplicationV1 } from "./private-slack-approval-interactions-application-v1.js";
+import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-v1.js";
+import { resolveMeetingOwnerPrivateSlackApprovalReviewerV1 } from "./resolve-meeting-owner-private-slack-approval-reviewer-v1.js";
 import {
   resolveCurrentPrivateSlackConnectionV1,
   type CurrentPrivateSlackConnectionV1,
 } from "./resolve-current-private-slack-connection-v1.js";
-import { SqlitePrivateApprovalAssignmentStateV1 } from "./sqlite-private-approval-assignment-state-v1.js";
-import { SqlitePrivateApprovalProcessingAuthorityV1 } from "./sqlite-private-approval-processing-authority-v1.js";
+import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
+import { SqlitePrivateSlackApprovalTerminalAuthorityV1 } from "./sqlite-private-slack-approval-terminal-authority-v1.js";
 import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "./sqlite-stable-private-approval-authority-fence-v1.js";
 
 export interface PrivateSlackApprovalRuntimeConfigV1 {
@@ -42,7 +42,7 @@ export interface PrivateSlackApprovalRuntimeConfigV1 {
   >;
   /** Content-free diagnostic emitted only after Slack HMAC verification. */
   readonly on_rejection?: (event: {
-    readonly stage: PrivateApprovalSlackInteractionRejectionStageV1;
+    readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
   }) => void;
 }
 
@@ -132,27 +132,27 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
       const poster =
         config.poster ??
         new PrivateSlackApprovalCardPosterV1(
-          new SqliteCleanSlackApprovalTokenReaderV1(
+          new SqliteCleanSlackBotTokenReaderV1(
             context.control_plane_database,
             new FileOrganizationSecretStore(
               join(config.state_directory, "secrets"),
             ),
-          ).readApprovalToken({
+          ).readBotToken({
             connection_id: slack.connection_id,
             connection_state_sha256: slack.connection_state_sha256,
           }),
         );
-      const assignments = new SqlitePrivateApprovalAssignmentStateV1(
+      const assignments = new SqlitePrivateSlackApprovalAssignmentStateV1(
         context.authority_database,
       );
-      const controlPlane = new SqlitePrivateApprovalPersistenceV1({
+      const controlPlane = new SqliteSlackDmApprovalPersistenceV1({
         database: context.control_plane_database,
         authority_fence: new SqliteStablePrivateApprovalAuthorityFenceV1(
           context.authority_database,
         ),
         now: () => new Date().toISOString(),
       });
-      const stager = new PrivateOwnerDmApprovalStagerV1({
+      const stager = new PrivateSlackDmApprovalStagerV1({
         authority: context.state,
         authority_database: context.authority_database,
         control_plane_database: context.control_plane_database,
@@ -161,7 +161,7 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
         assignments,
         control_plane: controlPlane,
         poster,
-        resolve_target: resolveCanonicalMeetingOwnerPrivateApprovalTargetV1,
+        resolve_reviewer_target: resolveMeetingOwnerPrivateSlackApprovalReviewerV1,
       });
       const recordWriter = await createPrivateSlackBlockV4RecordWriterV1({
         append: context.record_append,
@@ -169,9 +169,9 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
         state_lineage_id: context.coordinates.state_lineage_id,
         next_envelope_id: context.next_envelope_id,
       });
-      const processing = new PrivateApprovalProcessingCoordinatorV1({
+      const processing = new PrivateSlackApprovalTerminalCoordinatorV1({
         control_plane: controlPlane,
-        authority: new SqlitePrivateApprovalProcessingAuthorityV1({
+        authority: new SqlitePrivateSlackApprovalTerminalAuthorityV1({
           source: context.state,
           assignments,
           coordinates: context.coordinates,
@@ -179,7 +179,7 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
         record_writer: recordWriter,
         poster,
       });
-      const interactions = createPrivateApprovalSlackInteractionsApplicationV1({
+      const interactions = createPrivateSlackApprovalInteractionsApplicationV1({
         signing_secret: readPrivateAuthoritySlackSigningSecret(
           `file:${config.signing_secret_file}`,
         ),
@@ -190,7 +190,7 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
         stager,
         processing,
         interaction_ingress:
-          createPrivateApprovalSlackInteractionHttpIngressV1(interactions),
+          createPrivateSlackApprovalInteractionHttpIngressV1(interactions),
       });
     },
   });

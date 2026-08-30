@@ -11,7 +11,7 @@ const CLEAN_ENTRIES = [
   "services/organization-authority/src/clean-granola-source-main.ts",
   "services/organization-authority/src/clean-founder-main.ts",
   "services/organization-control-plane/src/clean-slack-connect-main.ts",
-  "services/organization-control-plane/src/clean-person-slack-approval-activate-main.ts",
+  "services/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts",
 ] as const;
 
 interface WorkspaceExport {

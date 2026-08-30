@@ -7,11 +7,11 @@ import {
 import { describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-unmigrated-database.js";
-import type { PrivateApprovalTargetV1 } from "../../src/composition/resolve-private-approval-target-v1.js";
+import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/composition/resolve-private-slack-approval-reviewer-target-v1.js";
 import {
-  SqlitePrivateApprovalAssignmentStateV1,
+  SqlitePrivateSlackApprovalAssignmentStateV1,
   type PrivateApprovalCandidateCommitmentV1,
-} from "../../src/composition/sqlite-private-approval-assignment-state-v1.js";
+} from "../../src/composition/sqlite-private-slack-approval-assignment-state-v1.js";
 import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "../../src/composition/sqlite-stable-private-approval-authority-fence-v1.js";
 
 const NOW = "2026-08-28T00:00:00.000Z";
@@ -109,11 +109,11 @@ function fixture(): {
        VALUES (?, ?, 'pas_private', 'queued', ?)`,
     )
     .run(CANDIDATE_ID, APPROVAL_ID, NOW);
-  const assignments = new SqlitePrivateApprovalAssignmentStateV1(database, () => NOW);
+  const assignments = new SqlitePrivateSlackApprovalAssignmentStateV1(database, () => NOW);
   const staged = assignments.stage({
     candidate: candidate(),
-    owner_target: {
-      assignee: {
+    reviewer_target: {
+      reviewer: {
         principal_id: "prn_owner",
         membership_id: "mem_owner",
         membership_type: "owner",
@@ -136,7 +136,7 @@ function fixture(): {
           provider_subject_id: "UOWNER",
         },
       },
-    } as unknown as PrivateApprovalTargetV1,
+    } as unknown as PrivateSlackApprovalReviewerTargetV1,
     dm_channel: {
       workspace_id: "TPRIVATE",
       enterprise_id: null,

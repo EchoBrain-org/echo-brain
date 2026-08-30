@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
-  SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
-} from "../src/application/person-slack-approval-contracts-v2.js";
+  SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+} from "../src/application/person-slack-reaction-approval-contracts-v2.js";
 import {
   PRIVATE_APPROVAL_PENDING_KIND,
   type PendingPrivateApprovalV1,
@@ -13,11 +13,11 @@ import { canonicalJson, canonicalSha256 } from "../src/canonical/canonical-json.
 import {
   PrivateApprovalFinalizationConflictError,
   PrivateApprovalFinalizationDeniedError,
-  SqlitePrivateApprovalPersistenceV1,
+  SqliteSlackDmApprovalPersistenceV1,
   type StagePrivateApprovalPendingV1,
   type PrivateApprovalSignedTerminalActionV1,
   type PrivateApprovalSlackCardBindingV1,
-} from "../src/persistence/sqlite-private-approval-persistence-v1.js";
+} from "../src/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 
 const databases: Database.Database[] = [];
 const sha = (letter: string) => `sha256:${letter.repeat(64)}` as const;
@@ -64,11 +64,11 @@ function setup() {
     assigned_owner_slack_identity_link: { provider: "slack", external_identity_link_id: "clm_00000000-0000-4000-8000-000000000001", external_identity_link_contract_sha256: sha("d"), provider_subject_id: "U01234567" },
   };
   const connection = buildOrganizationToolConnectionContractV2({
-    authority_id: "oau_00000000-0000-4000-8000-000000000001", organization_id: pending.organization_id, state_lineage_id: "lineage-1", connection_id: "con_00000000-0000-4000-8000-000000000001", provider_issuer: "https://slack.com", provider_tenant_kind: "workspace", provider_tenant_id: "T01234567", provider_enterprise_id: null, tool_kind: "slack", provider_app_id: "A01234567", provider_bot_id: "B01234567", provider_bot_user_id: "U09876543", required_provider_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES, public_connection_configuration_sha256: sha("f"),
+    authority_id: "oau_00000000-0000-4000-8000-000000000001", organization_id: pending.organization_id, state_lineage_id: "lineage-1", connection_id: "con_00000000-0000-4000-8000-000000000001", provider_issuer: "https://slack.com", provider_tenant_kind: "workspace", provider_tenant_id: "T01234567", provider_enterprise_id: null, tool_kind: "slack", provider_app_id: "A01234567", provider_bot_id: "B01234567", provider_bot_user_id: "U09876543", required_provider_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES, public_connection_configuration_sha256: sha("f"),
   });
   const connectionSha = canonicalSha256(connection);
   const state = buildOrganizationToolConnectionStateV2({
-    connection_id: connection.connection_id, connection_contract_sha256: connectionSha, connection_status: "active", credential_reference_sha256: sha("0"), observed_granted_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES, verification_event_id: "evt_00000000-0000-4000-8000-000000000001", verification_evidence_sha256: sha("1"), verification_revision: 1, verified_at: now(),
+    connection_id: connection.connection_id, connection_contract_sha256: connectionSha, connection_status: "active", credential_reference_sha256: sha("0"), observed_granted_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES, verification_event_id: "evt_00000000-0000-4000-8000-000000000001", verification_evidence_sha256: sha("1"), verification_revision: 1, verified_at: now(),
   });
   const stateSha = canonicalSha256(state);
   const card: PrivateApprovalSlackCardBindingV1 = { schema_version: 1, kind: "echo-private-approval-slack-card-binding-v1", approval_id: pending.approval_id, connection_id: connection.connection_id, connection_contract_sha256: connectionSha, connection_state_sha256: stateSha, slack_workspace_id: connection.provider_tenant_id, slack_enterprise_id: connection.provider_enterprise_id, slack_subject_id: pending.assigned_owner_slack_identity_link.provider_subject_id, dm_channel_id: "D01234567", provider_message_ts: "1712345678.123456", card_sha256: pending.frozen_card_sha256 };
@@ -89,7 +89,7 @@ function setup() {
     received_at: now(),
     verified_at: now(),
   };
-  const persistence = new SqlitePrivateApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({
+  const persistence = new SqliteSlackDmApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({
     approvalIsCurrent: () => true,
     currentMembership: (input) => input.principal_id === pending.assigned_owner.principal_id && input.membership_id === pending.assigned_owner.membership_id ? pending.assigned_owner : undefined,
     reprovePrivateApprovalAuthorization: () => ({

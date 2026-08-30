@@ -1,9 +1,9 @@
-import { type ApprovalContractSha256 } from "../../application/person-slack-approval-contracts-v2.js";
+import { type ApprovalContractSha256 } from "../../application/person-slack-reaction-approval-contracts-v2.js";
 import type {
-  PersonSlackApprovalObserverV2,
-  PersonSlackApprovalProviderExpectationV2,
-  PersonSlackApprovalProviderResultV2,
-} from "../../application/person-slack-approval-finalization-v2.js";
+  PersonSlackReactionApprovalObserverV2,
+  PersonSlackReactionApprovalProviderExpectationV2,
+  PersonSlackReactionApprovalProviderResultV2,
+} from "../../application/person-slack-reaction-approval-finalization-v2.js";
 import { canonicalSha256 } from "../../canonical/canonical-json.js";
 
 const API_URL = "https://slack.com/api/reactions.get";
@@ -17,7 +17,7 @@ export interface CleanSlackReactionObserverFetchV1 {
 
 export interface CleanSlackReactionObserverV1Input {
   readonly token_reader: {
-    readApprovalToken(input: {
+    readBotToken(input: {
       readonly connection_id: string;
       readonly connection_state_sha256: ApprovalContractSha256;
     }): string;
@@ -66,7 +66,7 @@ async function boundedJson(response: Response): Promise<unknown> {
   }
 }
 
-function expected(input: PersonSlackApprovalProviderExpectationV2): void {
+function expected(input: PersonSlackReactionApprovalProviderExpectationV2): void {
   if (
     input.provider_issuer !== "https://slack.com" ||
     input.provider_tenant_kind !== "workspace" ||
@@ -80,10 +80,10 @@ function expected(input: PersonSlackApprovalProviderExpectationV2): void {
 
 function observation(
   response: unknown,
-  expectation: PersonSlackApprovalProviderExpectationV2,
+  expectation: PersonSlackReactionApprovalProviderExpectationV2,
   expectationSha256: ApprovalContractSha256,
   observedAt: string,
-): PersonSlackApprovalProviderResultV2 {
+): PersonSlackReactionApprovalProviderResultV2 {
   const body = record(response, "approval observation");
   if (body.ok !== true) {
     throw new Error("Slack approval observation was rejected");
@@ -172,7 +172,7 @@ function observation(
  * Small live-only observer for the clean connection. It reads one matching
  * opaque credential from the file-secret seam and observes only one message.
  */
-export class CleanSlackReactionObserverV1 implements PersonSlackApprovalObserverV2 {
+export class CleanSlackReactionObserverV1 implements PersonSlackReactionApprovalObserverV2 {
   private readonly fetch: CleanSlackReactionObserverFetchV1;
 
   constructor(private readonly input: CleanSlackReactionObserverV1Input) {
@@ -180,13 +180,13 @@ export class CleanSlackReactionObserverV1 implements PersonSlackApprovalObserver
   }
 
   async observeApprovalReaction(
-    expectationValue: PersonSlackApprovalProviderExpectationV2,
+    expectationValue: PersonSlackReactionApprovalProviderExpectationV2,
     expectationSha256: ApprovalContractSha256,
     signal?: AbortSignal,
-  ): Promise<PersonSlackApprovalProviderResultV2> {
+  ): Promise<PersonSlackReactionApprovalProviderResultV2> {
     expected(expectationValue);
     signal?.throwIfAborted();
-    const token = this.input.token_reader.readApprovalToken({
+    const token = this.input.token_reader.readBotToken({
       connection_id: expectationValue.connection_id,
       connection_state_sha256: expectationValue.connection_state_sha256,
     });

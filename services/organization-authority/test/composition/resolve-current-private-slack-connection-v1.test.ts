@@ -2,11 +2,11 @@ import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol"
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+  SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
   type ApprovalContractSha256,
-} from "../../../organization-control-plane/src/application/person-slack-approval-contracts-v2.js";
+} from "../../../organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.js";
 import { applyOrganizationControlBaselineV1 } from "../../../organization-control-plane/src/persistence/baseline.js";
 import {
   resolveCurrentPrivateSlackConnectionV1,
@@ -59,7 +59,7 @@ function seed(
     provider_app_id: "A01",
     provider_bot_id: "B01",
     provider_bot_user_id: "U01BOT",
-    required_provider_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+    required_provider_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
     public_connection_configuration_sha256: publicConfigurationSha256(),
   });
   const contractSha = canonicalSha256(connection);
@@ -69,7 +69,7 @@ function seed(
       input.state_contract_sha256 ?? contractSha,
     connection_status: input.state_status ?? "active",
     credential_reference_sha256: canonicalSha256({ credential: "opaque" }),
-    observed_granted_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+    observed_granted_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
     verification_event_id: "verify_connection_01",
     verification_evidence_sha256: canonicalSha256({ connection: "ok" }),
     verification_revision: 1,

@@ -13,7 +13,7 @@ export {
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  validatePersonSlackApprovalBindingContractV2,
+  validatePersonSlackReactionApprovalBindingContractV2,
   buildProviderHumanActionDurableResult,
   buildProviderHumanSemanticActionInputV1,
   validateProviderHumanActionDurableResult,
@@ -26,23 +26,23 @@ export {
   type PersonApprovalPolicyId,
   validateOrganizationToolConnectionContractV2,
   validateOrganizationToolConnectionStateV2,
-} from "./application/person-slack-approval-contracts-v2.js";
+} from "./application/person-slack-reaction-approval-contracts-v2.js";
 export { FileOrganizationSecretStore } from "./security/file-secret-store.js";
 export {
-  stagePersonSlackPendingApprovalV1,
-  type StagePersonSlackPendingApprovalCommandV1,
-} from "./persistence/sqlite-person-slack-pending-approval-v1.js";
-export { SqliteCleanSlackApprovalTokenReaderV1 } from "./persistence/clean-slack-approval-token-reader-v1.js";
+  stagePersonSlackReactionApprovalPendingV1,
+  type StagePersonSlackReactionApprovalPendingCommandV1,
+} from "./persistence/sqlite-person-slack-reaction-approval-pending-v1.js";
+export { SqliteCleanSlackBotTokenReaderV1 } from "./persistence/clean-slack-bot-token-reader-v1.js";
 export { CleanSlackReactionObserverV1 } from "./adapters/slack/clean-slack-reaction-observer-v1.js";
-export { SqlitePersonSlackApprovalFinalizationCoordinatorV2 } from "./persistence/sqlite-person-slack-approval-finalization-v2.js";
+export { SqlitePersonSlackReactionApprovalFinalizationCoordinatorV2 } from "./persistence/sqlite-person-slack-reaction-approval-finalization-v2.js";
 export {
-  finalizePersonSlackApprovalV2,
-  type PersonSlackApprovalFinalizationCodecV2,
-  type PersonSlackApprovalFinalizationCoordinatorV2,
-  type PersonSlackApprovalFinalizationIdFactoryV2,
-  type PersonSlackApprovalObserverV2,
+  finalizePersonSlackReactionApprovalV2,
+  type PersonSlackReactionApprovalFinalizationCodecV2,
+  type PersonSlackReactionApprovalFinalizationCoordinatorV2,
+  type PersonSlackReactionApprovalFinalizationIdFactoryV2,
+  type PersonSlackReactionApprovalObserverV2,
   type StoredProviderHumanActionV2,
-} from "./application/person-slack-approval-finalization-v2.js";
+} from "./application/person-slack-reaction-approval-finalization-v2.js";
 export {
   PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND,
   PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
@@ -65,16 +65,16 @@ export {
   type ResolvePrivateApprovalPolicyInputV1,
 } from "./application/private-approval-policy-resolution-v1.js";
 export {
-  PRIVATE_APPROVAL_SLACK_DM_REQUIRED_SCOPES,
-  resolveCurrentPrivateApprovalSlackTargetV1,
-  type CurrentPrivateApprovalAssigneeV1,
-  type CurrentPrivateApprovalSlackTargetV1,
-  type PrivateApprovalSlackTargetCoordinatesV1,
-} from "./persistence/sqlite-private-approval-slack-target-v1.js";
+  SLACK_DM_APPROVAL_REQUIRED_SCOPES,
+  resolveCurrentSlackDmApprovalReviewerTargetV1,
+  type CurrentSlackDmApprovalReviewerV1,
+  type CurrentSlackDmApprovalReviewerTargetV1,
+  type SlackDmApprovalReviewerTargetCoordinatesV1,
+} from "./persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
 export {
   PrivateApprovalFinalizationConflictError,
   PrivateApprovalFinalizationDeniedError,
-  SqlitePrivateApprovalPersistenceV1,
+  SqliteSlackDmApprovalPersistenceV1,
   validatePrivateApprovalSlackCardBindingV1,
   type DeniedPrivateApprovalSignedActionV1,
   type DurablePrivateApprovalTerminalV1,
@@ -89,4 +89,4 @@ export {
   type StablePrivateApprovalAuthorityFenceV1,
   type StagePrivateApprovalPendingV1,
   type StagedPrivateApprovalPendingV1,
-} from "./persistence/sqlite-private-approval-persistence-v1.js";
+} from "./persistence/sqlite-slack-dm-approval-persistence-v1.js";

@@ -24,7 +24,7 @@ import {
   buildExternalHumanIdentityLinkContractV2,
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
-} from "../../organization-control-plane/src/application/person-slack-approval-contracts-v2.js";
+} from "../../organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.js";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/new-lineage-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
@@ -65,9 +65,9 @@ import { createCleanPersonAnswerRouteV1 } from "../src/composition/clean-person-
 import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
 import type { Layer4StructuredOutputPort } from "../src/answer-composition/lean-answer-composition.js";
 import {
-  PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1,
-  privateApprovalBlockKitActionIdV1,
-} from "../src/composition/private-approval-block-kit-card-v1.js";
+  PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
+  privateSlackApprovalBlockKitActionIdV1,
+} from "../src/composition/private-slack-approval-block-kit-card-v1.js";
 import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import type {
@@ -655,17 +655,17 @@ function cardParts(card: PublishedCard["card"]) {
   const approve = elements.find(
     (element) =>
       element.action_id ===
-      privateApprovalBlockKitActionIdV1(
+      privateSlackApprovalBlockKitActionIdV1(
         identity,
-        PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
+        PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
       ),
   );
   const reject = elements.find(
     (element) =>
       element.action_id ===
-      privateApprovalBlockKitActionIdV1(
+      privateSlackApprovalBlockKitActionIdV1(
         identity,
-        PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject,
+        PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject,
       ),
   );
   if (approve === undefined || reject === undefined)

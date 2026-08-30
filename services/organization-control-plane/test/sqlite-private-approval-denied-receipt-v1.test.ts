@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { canonicalJson, canonicalSha256 } from "../src/canonical/canonical-json.js";
 import {
   PrivateApprovalDeniedReceiptConflictError,
-  SqlitePrivateApprovalPersistenceV1,
+  SqliteSlackDmApprovalPersistenceV1,
   type PrivateApprovalSignedTerminalActionV1,
-} from "../src/persistence/sqlite-private-approval-persistence-v1.js";
+} from "../src/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 
 const directories: string[] = [];
 const now = () => "2026-08-28T00:00:00.000Z";
@@ -48,7 +48,7 @@ function seed(database: Database.Database) {
 }
 
 function persistence(database: Database.Database) {
-  return new SqlitePrivateApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({ approvalIsCurrent: () => false, currentMembership: () => undefined, reprovePrivateApprovalAuthorization: () => undefined }); } } });
+  return new SqliteSlackDmApprovalPersistenceV1({ database, now, authority_fence: { async withStablePrivateApprovalFence(commit) { return commit({ approvalIsCurrent: () => false, currentMembership: () => undefined, reprovePrivateApprovalAuthorization: () => undefined }); } } });
 }
 
 afterEach(() => directories.splice(0).forEach((directory) => rmSync(directory, { recursive: true, force: true })));

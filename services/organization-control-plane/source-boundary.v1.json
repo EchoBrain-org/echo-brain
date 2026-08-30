@@ -12,7 +12,7 @@
     "services/organization-control-plane/src/clean-slack-identity-v1.ts",
     "services/organization-control-plane/src/new-lineage-genesis-v1.ts",
     "services/organization-control-plane/src/clean-slack-connect-main.ts",
-    "services/organization-control-plane/src/clean-person-slack-approval-activate-main.ts"
+    "services/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts"
   ],
   "owned_source_paths": [
     "services/organization-control-plane/src/**"
