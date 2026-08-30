@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/clean-runtime-v1";
+import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   type RecordPolicyFactProjectorRegistryV1,
   OrganizationRecordAppenderV4,

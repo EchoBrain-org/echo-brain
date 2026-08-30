@@ -7,6 +7,12 @@
   "source_root": "services/organization-control-plane/src",
   "package_json": "services/organization-control-plane/package.json",
   "entry_points": [
+    "services/organization-control-plane/src/slack-approval-runtime-v1.ts",
+    "services/organization-control-plane/src/slack-external-identity-integration-v1.ts",
+    "services/organization-control-plane/src/organization-control-database-v1.ts",
+    "services/organization-control-plane/src/record-visibility-policy-contracts-v1.ts",
+    "services/organization-control-plane/src/slack-connection-setup-v1.ts",
+    "services/organization-control-plane/src/legacy-slack-reaction-approval-activation-v1.ts",
     "services/organization-control-plane/src/clean-runtime-v1.ts",
     "services/organization-control-plane/src/clean-founder-v1.ts",
     "services/organization-control-plane/src/clean-slack-identity-v1.ts",
@@ -46,7 +52,7 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "control-plane-clean-command-composes-stopped-state-seams",
+      "name": "control-plane-commands-compose-runtime-seams",
       "from": "services/organization-control-plane/src/composition/**",
       "allowed_imports": [
         "services/organization-control-plane/src/adapters/**",

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateSlackApprovalBlockKitActionIdV1,

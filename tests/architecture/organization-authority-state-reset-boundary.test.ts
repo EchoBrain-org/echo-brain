@@ -22,31 +22,38 @@ interface WorkspaceExport {
 
 const WORKSPACE_EXPORTS: ReadonlyMap<string, WorkspaceExport> = new Map([
   [
-    "@echo-brain/organization-control-plane/new-lineage-genesis-v1",
+    "@echo-brain/organization-control-plane/organization-control-database-v1",
     {
       package_path: "services/organization-control-plane/package.json",
-      export_path: "./new-lineage-genesis-v1",
+      export_path: "./organization-control-database-v1",
     },
   ],
   [
-    "@echo-brain/organization-control-plane/clean-runtime-v1",
+    "@echo-brain/organization-control-plane/slack-approval-runtime-v1",
     {
       package_path: "services/organization-control-plane/package.json",
-      export_path: "./clean-runtime-v1",
+      export_path: "./slack-approval-runtime-v1",
     },
   ],
   [
-    "@echo-brain/organization-control-plane/clean-slack-identity-v1",
+    "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1",
     {
       package_path: "services/organization-control-plane/package.json",
-      export_path: "./clean-slack-identity-v1",
+      export_path: "./record-visibility-policy-contracts-v1",
     },
   ],
   [
-    "@echo-brain/organization-control-plane/clean-founder-v1",
+    "@echo-brain/organization-control-plane/slack-external-identity-integration-v1",
     {
       package_path: "services/organization-control-plane/package.json",
-      export_path: "./clean-founder-v1",
+      export_path: "./slack-external-identity-integration-v1",
+    },
+  ],
+  [
+    "@echo-brain/organization-control-plane/slack-connection-setup-v1",
+    {
+      package_path: "services/organization-control-plane/package.json",
+      export_path: "./slack-connection-setup-v1",
     },
   ],
   [

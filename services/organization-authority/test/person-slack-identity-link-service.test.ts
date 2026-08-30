@@ -3,7 +3,7 @@ import { once } from "node:events";
 import Database from "better-sqlite3";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
-import type { CleanSlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
+import type { CleanSlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOrganizationControlBaselineV1 } from "../../organization-control-plane/src/persistence/baseline.js";
 import { connectCleanSlackV1 } from "../../organization-control-plane/src/persistence/sqlite-clean-slack-connection-v1.js";

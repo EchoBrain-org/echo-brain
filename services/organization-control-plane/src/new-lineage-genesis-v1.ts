@@ -1,14 +1,2 @@
-/**
- * Private workspace entrypoint for fresh-lineage genesis and verification.
- * It deliberately excludes Slack adapters and legacy control-plane surfaces.
- */
-export {
-  applyOrganizationControlBaselineV1,
-  applyOrganizationControlBaselineV2,
-  ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-  organizationControlBaselineSha256V1,
-  organizationControlBaselineSha256V2,
-} from "./persistence/baseline.js";
-export { openOrganizationControlDatabase } from "./persistence/open-unmigrated-database.js";
+/** @deprecated Use `organization-control-database-v1` in new code. */
+export * from "./organization-control-database-v1.js";

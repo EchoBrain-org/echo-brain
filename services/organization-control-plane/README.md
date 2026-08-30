@@ -1,13 +1,19 @@
 # Organization control plane
 
-This library contains the clean V1 organization control-plane facades. It is
-linked into the Authority and does not own an HTTP listener.
+This library contains Organization Authority's provider-integration and
+control-database components. It is linked into the Authority and does not own
+an HTTP listener.
 
-The supported surface is `clean-founder-v1`, `clean-runtime-v1`,
-`clean-slack-identity-v1`, and `new-lineage-genesis-v1`, plus the two clean
-Slack connection and approval-activation commands. The runtime keeps both the
-member-readable and restricted-reviewer policies and performs permission
-checks against current Authority membership.
+New Authority code uses the responsibility-named surfaces:
+`slack-approval-runtime-v1`, `slack-external-identity-integration-v1`,
+`organization-control-database-v1`, `record-visibility-policy-contracts-v1`,
+and `slack-connection-setup-v1`. The
+retained installation-bound reaction activation command is isolated behind
+`legacy-slack-reaction-approval-activation-v1`. Migration-era `clean-*` and
+`new-lineage-*` exports remain compatibility aliases for installed clients.
+The Slack approval runtime keeps both the member-readable and
+restricted-reviewer policies and performs permission checks against current
+Authority membership.
 
 Private-approval fresh state is initialized from the composed V2 baseline:
 the retained `baselines/organization-control-plane-baseline-v1.sql` plus

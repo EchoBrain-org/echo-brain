@@ -2,7 +2,7 @@ import {
   validateOrganizationToolConnectionContractV2,
   validateOrganizationToolConnectionStateV2,
   type ApprovalContractSha256,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 

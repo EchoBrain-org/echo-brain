@@ -17,7 +17,7 @@ import {
   type PrivateApprovalAuthorizationAllowV1,
   type PrivateApprovalSlackCardBindingV1,
   type StablePrivateApprovalAuthorityFenceV1,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import type Database from "better-sqlite3";
 
 const AUTHORIZATION_PROOF_KIND =

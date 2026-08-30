@@ -1,5 +1,5 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import type { StagedPrivateApprovalPendingV1 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
+import type { StagedPrivateApprovalPendingV1 } from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import { describe, expect, it, vi } from "vitest";
 import { PrivateSlackDmApprovalStagerV1 } from "../../src/composition/private-slack-dm-approval-stager-v1.js";
 import type { ApprovalWorkflowStageInputV1 } from "../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";

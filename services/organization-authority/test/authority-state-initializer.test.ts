@@ -12,7 +12,7 @@ import {
   openOrganizationControlDatabase,
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
   organizationControlBaselineSha256V2,
-} from "@echo-brain/organization-control-plane/new-lineage-genesis-v1";
+} from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   applyOrganizationRecordDerivedBaselineV1,
   applyOrganizationRecordLogBaselineV1,

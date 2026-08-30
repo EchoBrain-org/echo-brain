@@ -23,7 +23,7 @@ import {
   type PendingPersonSlackIdentityLinkChallenge,
   type PersonSlackIdentityLinkSession,
   type CleanSlackIdentityProviderV1,
-} from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
+} from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import type Database from "better-sqlite3";
 import { ReadableSearchAuthorizationFence } from "../application/readable-search-authorization-fence.js";
 import {

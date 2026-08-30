@@ -19,7 +19,7 @@ import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   openOrganizationControlDatabase,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import {
   buildExternalHumanIdentityLinkContractV2,
   buildOrganizationToolConnectionContractV2,

@@ -5,13 +5,13 @@ import {
 import type {
   ApprovalContractSha256,
   PersonApprovalPolicyId,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1";
 import {
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256,
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1";
 import type {
   DecisionSet,
   ExtractedSignal,

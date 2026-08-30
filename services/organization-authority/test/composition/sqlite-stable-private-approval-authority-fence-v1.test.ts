@@ -3,7 +3,7 @@ import {
   PRIVATE_APPROVAL_PENDING_KIND,
   type PendingPrivateApprovalV1,
   type PrivateApprovalSlackCardBindingV1,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import { describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-authority-database.js";

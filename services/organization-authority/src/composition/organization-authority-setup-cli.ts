@@ -26,7 +26,7 @@ import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-ap
 import {
   runCleanSlackConnectCli,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-} from "@echo-brain/organization-control-plane/clean-founder-v1";
+} from "@echo-brain/organization-control-plane/slack-connection-setup-v1";
 import { assertDisplayName } from "../domain/rules.js";
 import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";

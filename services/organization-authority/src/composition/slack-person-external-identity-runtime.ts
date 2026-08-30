@@ -9,8 +9,8 @@ import {
   FileOrganizationSecretStore,
   CleanSlackWebIdentityProviderV1,
   type CleanSlackIdentityProviderV1,
-} from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
-import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/new-lineage-genesis-v1";
+} from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
+import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { ReadableSearchAuthorizationFence } from "../application/readable-search-authorization-fence.js";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type {

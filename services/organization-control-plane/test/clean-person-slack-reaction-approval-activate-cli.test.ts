@@ -412,6 +412,6 @@ describe("clean stopped-state Person Slack reaction approval activation command"
         "--approval-channel-id",
         APPROVAL_CHANNEL_ID,
       ]),
-    ).rejects.toThrow("one current founder Slack identity link");
+    ).rejects.toThrow("one current owner Slack identity link");
   });
 });

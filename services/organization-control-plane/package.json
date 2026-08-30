@@ -10,6 +10,30 @@
     "echo-organization-control-plane-activate-person-slack-reaction-approval": "dist/clean-person-slack-reaction-approval-activate-main.js"
   },
   "exports": {
+    "./slack-approval-runtime-v1": {
+      "types": "./dist/slack-approval-runtime-v1.d.ts",
+      "import": "./dist/slack-approval-runtime-v1.js"
+    },
+    "./slack-external-identity-integration-v1": {
+      "types": "./dist/slack-external-identity-integration-v1.d.ts",
+      "import": "./dist/slack-external-identity-integration-v1.js"
+    },
+    "./organization-control-database-v1": {
+      "types": "./dist/organization-control-database-v1.d.ts",
+      "import": "./dist/organization-control-database-v1.js"
+    },
+    "./record-visibility-policy-contracts-v1": {
+      "types": "./dist/record-visibility-policy-contracts-v1.d.ts",
+      "import": "./dist/record-visibility-policy-contracts-v1.js"
+    },
+    "./slack-connection-setup-v1": {
+      "types": "./dist/slack-connection-setup-v1.d.ts",
+      "import": "./dist/slack-connection-setup-v1.js"
+    },
+    "./legacy-slack-reaction-approval-activation-v1": {
+      "types": "./dist/legacy-slack-reaction-approval-activation-v1.d.ts",
+      "import": "./dist/legacy-slack-reaction-approval-activation-v1.js"
+    },
     "./clean-runtime-v1": {
       "types": "./dist/clean-runtime-v1.d.ts",
       "import": "./dist/clean-runtime-v1.js"

@@ -13,7 +13,7 @@ import {
   type DecisionProcessorProvenanceV1,
   type MeetingSourceProvenanceV1,
 } from "@echo-brain/organization-protocol";
-import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
+import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import {
   type PrivateSlackApprovalTerminalAuthorityV1,
   type PrivateSlackApprovalTerminalFrozenCandidateV1,

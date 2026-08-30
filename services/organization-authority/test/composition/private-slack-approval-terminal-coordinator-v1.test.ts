@@ -6,7 +6,7 @@ import {
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type DurablePrivateApprovalTerminalV1,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import { describe, expect, it } from "vitest";
 import {
   PrivateSlackApprovalTerminalCoordinatorV1,

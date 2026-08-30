@@ -22,11 +22,11 @@ import type {
   OrganizationSecretStore,
   PendingPersonSlackIdentityLinkChallenge,
   CleanSlackIdentityProviderV1,
-} from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
+} from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import {
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
   CleanSlackIdentityProviderErrorV1,
-} from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
+} from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { ReadableSearchAuthorizationFence } from "../application/readable-search-authorization-fence.js";

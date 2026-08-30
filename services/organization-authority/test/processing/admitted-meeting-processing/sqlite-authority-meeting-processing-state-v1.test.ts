@@ -4,7 +4,7 @@ import {
   canonicalSha256,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
-import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
+import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../../../src/adapters/persistence/sqlite/baseline.js";
 import { OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1 } from "../../../src/composition/openrouter-clean-processor-config-v1.js";

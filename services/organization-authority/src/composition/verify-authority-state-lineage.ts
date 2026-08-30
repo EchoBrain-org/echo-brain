@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   organizationControlBaselineSha256V2,
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-} from "@echo-brain/organization-control-plane/new-lineage-genesis-v1";
+} from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   organizationRecordDerivedBaselineSha256V1,
   organizationRecordLogBaselineSha256V2,

@@ -9,7 +9,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import type { CleanSlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
+import type { CleanSlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
 import { runCleanSlackConnectCli } from "../../services/organization-control-plane/src/composition/clean-slack-connect-cli.js";
 import { verifyCleanControlPlaneStateV1 } from "../../services/organization-control-plane/src/persistence/verified-clean-control-plane-state-v1.js";
 import { afterEach, describe, expect, it } from "vitest";

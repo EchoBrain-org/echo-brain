@@ -8,7 +8,7 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type DurablePrivateApprovalTerminalV1,
-} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+} from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import {
   PrivateSlackBlockV4RecordWriterV1,
   type FrozenPrivateSlackApprovalCandidateV1,
