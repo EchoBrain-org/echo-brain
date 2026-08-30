@@ -255,7 +255,7 @@ describe("retrieval and answer-composition boundaries", () => {
 
   it("keeps the persisted answer_composition audit kind in the audit writer", () => {
     expect(source(ANSWER_COMPOSITION_AUDIT_WRITER)).toContain(
-      'operation: "answer_composition"',
+      'context_kind: "answer_composition"',
     );
   });
 
