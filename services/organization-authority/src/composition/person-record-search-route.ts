@@ -328,7 +328,7 @@ export function createPersonRecordSearchRouteV1(
       if (
         error instanceof Error &&
         error.message ===
-          "clean retrieval active-generation handle is unavailable"
+          "retrieval active-generation handle is unavailable"
       )
         unavailable();
       throw error;

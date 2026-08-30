@@ -49,7 +49,7 @@ const granolaAdmittedMeetingSourceCursorPolicyV1 = {
   assert_live_cursor(cursor: string): void {
     if (!cursor.startsWith("granola:v1:") || granolaCursorPhase(cursor) !== "live") {
       throw new Error(
-        "admitted meeting-processing cursor must be a Granola v1 live cursor",
+        "admitted meeting-processing cursor must be a Granola v1 incremental cursor",
       );
     }
   },
@@ -950,7 +950,7 @@ describe("admitted meeting-processing cycle", () => {
       stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(historyCycle.runOnce()).rejects.toThrow(
-      "Granola v1 live cursor",
+      "Granola v1 incremental cursor",
     );
 
     const pageCycle = liveCycle({

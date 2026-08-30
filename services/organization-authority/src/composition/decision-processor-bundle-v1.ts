@@ -4,7 +4,7 @@ import type { AdmittedMeetingProcessingCommitmentsV1 } from "../processing/admit
 
 /**
  * Provider-neutral construction boundary for the decision processor selected
- * by a live-source admission. The shared runtime knows only this committed
+ * by a source admission. The shared runtime knows only this committed
  * adapter identity and the canonical decision-processor port.
  */
 export interface DecisionProcessorBundleV1 {

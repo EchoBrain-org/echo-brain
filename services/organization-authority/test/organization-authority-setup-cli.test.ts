@@ -550,7 +550,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(existsSync(`${state}.clean-founder-setup-plan-v1.json`)).toBe(false);
   });
 
-  it("rejects a legacy founder manifest shape instead of treating it as compatible", async () => {
+  it("rejects a legacy onboarding manifest shape instead of treating it as compatible", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     await runOrganizationAuthoritySetupCli(
@@ -651,7 +651,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(stdout).toContain("post-cutoff boundary");
   });
 
-  it("refuses finalize before every founder prerequisite without publishing anything", async () => {
+  it("refuses finalize before every initial-owner prerequisite without publishing anything", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
@@ -753,7 +753,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(order.filter((entry) => entry.startsWith("admit:"))).toHaveLength(2);
   });
 
-  it("reports the actual post-bootstrap action instead of sending a bound founder to login", async () => {
+  it("reports the actual post-bootstrap action instead of sending a bound initial owner to login", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const completedStage = {

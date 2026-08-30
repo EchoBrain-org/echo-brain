@@ -22,7 +22,7 @@ export interface AnswerCompositionGenerationBindingV1 {
   readonly generation: AnswerCompositionGenerationProfileV1;
 }
 
-/** Defers provider access until the admitted live runtime loads its generation binding. */
+/** Defers provider access until the admitted runtime loads its generation binding. */
 export interface AnswerCompositionGenerationBundleV1 {
   load(): AnswerCompositionGenerationBindingV1;
 }

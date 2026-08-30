@@ -58,7 +58,7 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
   /** Present only after source admission; omitted during organization setup. */
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
-  /** Metadata-only answer-composition failure observer for the live server log. */
+  /** Metadata-only answer-composition failure observer for the API server log. */
   readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
   /** Present only when the signed private-approval surface is active. */
   readonly private_approval_interaction_ingress?:
@@ -96,11 +96,11 @@ export async function startOrganizationAuthorityApiRuntime(
     `${config.authority_url}/v2/session/oidc/callback`
   ) {
     throw new Error(
-      "clean Person OIDC redirect URI must match the public Authority callback",
+      "Person OIDC redirect URI must match the public Authority callback",
     );
   }
   const lineage = verifyOrganizationAuthorityApiLineage(config.state_directory);
-  // Do not contact an OIDC provider merely to bind the clean local runtime.
+  // Do not contact an OIDC provider merely to bind the local API runtime.
   // Discovery is deferred until the initial owner begins an OIDC login.
   const provider =
     dependencies.oidc_provider ??

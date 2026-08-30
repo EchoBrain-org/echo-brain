@@ -555,7 +555,7 @@ export interface AuthorityReadTransaction {
   meetingIngestionExclusionsForOwnerSource(
     source: MeetingIngestionExclusionOwnerSource,
   ): readonly StoredMeetingIngestionExclusionSelector[] | undefined;
-  /** `null` is the clean, never-built state; corruption throws. */
+  /** `null` is the never-built state; corruption throws. */
   activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null;
 }
 
@@ -585,7 +585,7 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
   ): StoredOidcLoginAttempt | undefined;
   /** Scrubs at most `limit` pending attempts whose exact expiry has passed. */
   expireOidcLoginAttempts(limit: number): number;
-  /** Permanently retires one still-live grant when its sole attempt expires. */
+  /** Permanently retires one active grant when its sole attempt expires. */
   invalidatePersonLoginGrant(
     loginGrantSha256: Sha256Digest,
   ): StoredPersonLoginGrant | undefined;

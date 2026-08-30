@@ -271,7 +271,7 @@ function setup(pointer = true) {
   return { authority, record, state_directory: root() };
 }
 
-describe("clean Person Layer 2 route", () => {
+describe("Person Layer 2 route", () => {
   it("uses only the bearer-derived reader tuple and writes one compact Layer 2 audit", () => {
     const value = setup();
     const search = vi.fn(() => ({

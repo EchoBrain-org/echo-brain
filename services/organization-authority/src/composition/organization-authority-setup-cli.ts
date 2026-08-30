@@ -267,14 +267,14 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       "verified_at",
     ] as const) {
       if (typeof result[field] !== "string") {
-        throw new Error("clean Slack connection did not return safe verification details");
+        throw new Error("Slack connection did not return safe verification details");
       }
     }
     if (
       result.provider_enterprise_id !== null &&
       typeof result.provider_enterprise_id !== "string"
     ) {
-      throw new Error("clean Slack connection did not return safe verification details");
+      throw new Error("Slack connection did not return safe verification details");
     }
     if (
       !Array.isArray(result.required_scopes) ||
@@ -287,7 +287,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       result.bot_membership_verified !== true ||
       result.bot_access_verified !== true
     ) {
-      throw new Error("clean Slack connection did not return complete channel verification");
+      throw new Error("Slack connection did not return complete channel verification");
     }
     if (input.connection_id === undefined) {
       throw new Error(
@@ -1564,7 +1564,7 @@ async function bootstrap(
   }
   const invitationPath = manifest.invitation_path;
   if (slack.connection_id !== manifest.slack_connection_id) {
-    throw new Error("clean Slack connection did not retain the setup ID");
+    throw new Error("Slack connection did not retain the setup ID");
   }
   const full = readInitialOwnerSetupStatus(manifest, dependencies);
   const initialOwnerAlreadyBound = full.founder_oidc_bound;

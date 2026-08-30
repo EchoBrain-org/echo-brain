@@ -208,7 +208,7 @@ describe("Person Slack identity-link workflow", () => {
     ).rejects.toMatchObject({ code: "conflict" });
   });
 
-  it("dispatches an authenticated begin through the configured clean HTTP server", async () => {
+  it("dispatches an authenticated begin through the configured Person HTTP server", async () => {
     const context = await setup();
     const server = createOrganizationAuthorityHttpServer({
       descriptor: {} as never,
@@ -225,7 +225,7 @@ describe("Person Slack identity-link workflow", () => {
     const address = server.address();
     if (address === null || typeof address === "string") {
       server.close();
-      throw new Error("clean HTTP server did not bind TCP");
+      throw new Error("test HTTP server did not bind TCP");
     }
     try {
       const response = await fetch(

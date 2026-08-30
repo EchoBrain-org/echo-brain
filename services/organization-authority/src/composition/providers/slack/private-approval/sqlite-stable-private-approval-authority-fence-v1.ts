@@ -2,7 +2,7 @@
  * Authority-side, stable read fence for a private Slack Block Kit approval.
  *
  * This adapter has no Slack transport and treats provider lookup values as
- * opaque hints. Control Plane proves the live provider presentation; this
+ * opaque hints. Control Plane proves the active provider presentation; this
  * fence proves only the server-owned Authority commitments in one SQLite
  * transaction before policy resolution is allowed.
  */

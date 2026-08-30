@@ -6,7 +6,7 @@ import {
 import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
-/** The three immutable coordinates that bind a live runtime to one lineage. */
+/** The three immutable coordinates that bind an admitted runtime to one lineage. */
 export interface PrivateSlackConnectionCoordinatesV1 {
   readonly authority_id: string;
   readonly organization_id: string;
@@ -54,7 +54,7 @@ function parseCanonical(json: string, label: string): unknown {
  * Resolves exactly the Slack installation pinned in the onboarding manifest.
  *
  * This is intentionally a read-only startup guard. Missing state and every
- * disagreement are fatal: a live runtime must never discover a replacement
+ * disagreement are fatal: an admitted runtime must never discover a replacement
  * connection, infer one by tenant, or fall back to the retired shared-channel
  * approval surface.
  */
@@ -76,7 +76,7 @@ export function resolveCurrentPrivateSlackConnectionV1(
     )
     .get(configuredConnectionId) as ConnectionRow | undefined;
   if (row === undefined) {
-    throw new Error("private live runtime has no configured Slack connection");
+    throw new Error("private approval runtime has no configured Slack connection");
   }
 
   const contract = validateOrganizationToolConnectionContractV2(
@@ -102,7 +102,7 @@ export function resolveCurrentPrivateSlackConnectionV1(
     contract.state_lineage_id !== coordinates.state_lineage_id
   ) {
     throw new Error(
-      "private live runtime configured Slack connection is missing, inactive, or drifted",
+      "private approval runtime configured Slack connection is missing, inactive, or drifted",
     );
   }
 

@@ -32,10 +32,10 @@ export class SqlitePersonRecordReadAuditV1 {
       entry.result_count < 0 ||
       entry.result_count > 100
     ) {
-      throw new Error("clean Person record read result count is invalid");
+      throw new Error("Person record read result count is invalid");
     }
     if (new Date(entry.checked_at).toISOString() !== entry.checked_at) {
-      throw new Error("clean Person record read audit time must be canonical UTC");
+      throw new Error("Person record read audit time must be canonical UTC");
     }
     const body = {
       schema_version: 1,

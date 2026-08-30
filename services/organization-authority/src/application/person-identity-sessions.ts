@@ -174,7 +174,7 @@ export interface PersonAuthenticatedWritePort {
 }
 
 /**
- * A deliberately separate authenticated transaction for clean employee
+ * A deliberately separate authenticated transaction for employee
  * lifecycle mutations. It cannot reach the legacy Authority transaction.
  */
 export interface PersonAuthenticatedMembershipWritePort {
@@ -427,7 +427,7 @@ export class PersonIdentitySessionApplication {
     );
   }
 
-  /** Used only by the clean employee lifecycle inside its owner-authenticated transaction. */
+  /** Used only by the employee lifecycle inside its owner-authenticated transaction. */
   issueEmployeeBootstrapLoginGrantAt(
     transaction: PersonSessionWriteTransaction,
     issuedAt: string,
@@ -461,7 +461,7 @@ export class PersonIdentitySessionApplication {
     ) => SynchronousResult<T>;
   }): SynchronousResult<T> {
     if (!isPersonMembershipWriteRepository(this.repository)) {
-      throw new Error("clean Person membership write transaction is unavailable");
+      throw new Error("Person membership write transaction is unavailable");
     }
     let tokenSha256: Sha256Digest;
     try {
@@ -1058,7 +1058,7 @@ export class PersonIdentitySessionApplication {
       this.repository.supports_full_person_authorization_transactions === false
     ) {
       throw new Error(
-        "clean Person session runtime does not expose full Authority write transactions",
+        "Person session runtime does not expose full Authority write transactions",
       );
     }
     let tokenSha256: Sha256Digest;
@@ -1224,7 +1224,7 @@ export class PersonIdentitySessionApplication {
       this.repository.supports_full_person_authorization_transactions === false
     ) {
       throw new Error(
-        "clean Person session runtime does not expose Person read authorization",
+        "Person session runtime does not expose Person read authorization",
       );
     }
     return {

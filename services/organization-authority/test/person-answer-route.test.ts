@@ -428,7 +428,7 @@ async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
   const address = server.address();
   if (address === null || typeof address === "string") {
     server.close();
-    throw new Error("clean HTTP server did not bind TCP");
+    throw new Error("test HTTP server did not bind TCP");
   }
   return {
     url: `http://127.0.0.1:${String(address.port)}`,
@@ -440,7 +440,7 @@ async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
   };
 }
 
-describe("clean Person answer HTTP mount", () => {
+describe("Person answer HTTP mount", () => {
   it("mounts POST /v1/person/ask as a bearer-only application call", async () => {
     const ask = vi.fn(
       async (): Promise<PersonAnswerResponseV1> => ({

@@ -550,7 +550,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     return approvals.map(({ approval_id }) => {
       const candidate = this.readFrozenCandidateForApproval(approval_id);
       if (candidate === undefined) {
-        throw new Error("clean pending approval delivery is absent");
+        throw new Error("pending approval delivery is absent");
       }
       return candidate;
     });
@@ -600,7 +600,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         current.presentation_external_id !== input.presentation_external_id
       ) {
         throw new Error(
-          "clean superseded presentation retirement lacks its durable identity",
+          "superseded presentation retirement lacks its durable identity",
         );
       }
       if (current.tombstoned_at !== null) return;
@@ -615,7 +615,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         )
         .run(now, now, input.approval_id, input.presentation_external_id);
       if (update.changes !== 1) {
-        throw new Error("clean superseded presentation retirement state drifted");
+        throw new Error("superseded presentation retirement state drifted");
       }
     })();
   }
@@ -743,7 +743,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     if (row === undefined) return undefined;
     const candidate = this.candidate(row.candidate_semantic_sha256);
     if (candidate === undefined) {
-      throw new Error("clean frozen candidate is absent");
+      throw new Error("frozen candidate is absent");
     }
     const meeting = JSON.parse(row.meeting_json) as MeetingDocument;
     const decisions = JSON.parse(row.decisions_json) as DecisionSet;
@@ -753,7 +753,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       canonicalJson(decisions) !== row.decisions_json ||
       canonicalSha256(decisions) !== row.decisions_sha256
     ) {
-      throw new Error("clean frozen candidate snapshot digest is invalid");
+      throw new Error("frozen candidate snapshot digest is invalid");
     }
     const syntheticCanary = isStagingSyntheticMeetingCanaryV1(
       meeting,
@@ -816,7 +816,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       if (outbox === undefined) return undefined;
       const frozen = this.readFrozenCandidateById(outbox.candidate_id);
       if (frozen === undefined || frozen.disposition !== "actionable") {
-        throw new Error("clean D2 approval has no frozen actionable candidate");
+        throw new Error("D2 approval has no frozen actionable candidate");
       }
       const approvedSnapshot =
         outbox.approved_snapshot_json === null
@@ -832,7 +832,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
             canonicalSha256(approvedSnapshot) !==
               outbox.approved_snapshot_sha256))
       ) {
-        throw new Error("clean frozen approved snapshot digest is invalid");
+        throw new Error("frozen approved snapshot digest is invalid");
       }
       return {
         ...frozen,
@@ -940,7 +940,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           .run(now, input.candidate_id, input.post_started_at);
         if (updated.changes !== 1) {
           throw new Error(
-            "clean superseded approval post attempt state drifted",
+            "superseded approval post attempt state drifted",
           );
         }
         return this.outbox(input.candidate_id);
@@ -1067,7 +1067,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           current.approved_snapshot_sha256 === null
         ) {
           throw new Error(
-            "clean superseded D2 approval has no frozen posted card",
+            "superseded D2 approval has no frozen posted card",
           );
         }
         const now = this.now();

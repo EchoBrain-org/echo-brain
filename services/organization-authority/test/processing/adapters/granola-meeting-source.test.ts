@@ -576,7 +576,7 @@ describe("Granola canonical meeting mapping", () => {
     });
   });
 
-  it("normalizes the live Granola calendar shape and links its people to transcript turns", async () => {
+  it("normalizes the incremental Granola calendar shape and links its people to transcript turns", async () => {
     const client = new FakeClient(
       [
         {
@@ -852,7 +852,7 @@ describe("Granola canonical meeting mapping", () => {
     ]);
   });
 
-  it("keeps the update filter when continuing a live page", async () => {
+  it("keeps the update filter when continuing an incremental page", async () => {
     const client = new FakeClient([
       { notes: [], hasMore: false, cursor: null },
     ]);

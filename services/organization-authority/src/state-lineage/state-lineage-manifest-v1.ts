@@ -21,7 +21,7 @@ import type {
  * exist in any current schema: no migration in this repository creates it, and
  * this module deliberately adds none. Like the Authority initialization
  * manifest, these contracts are composition-owned migration mechanics, not
- * Authority protocol surface, so they live here rather than in a package
+ * Authority protocol surface, so they reside here rather than in a package
  * export.
  */
 

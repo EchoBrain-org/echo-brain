@@ -58,7 +58,7 @@ function assertExpectedOrganization(
   organizationId: string,
 ): void {
   if (authorization.organization_id !== organizationId) {
-    throw new Error("clean Person session belongs to another organization");
+    throw new Error("Person session belongs to another organization");
   }
 }
 
@@ -82,7 +82,7 @@ function asResponse(
 }
 
 /**
- * Returns the route seam mounted by the clean Person HTTP server. The only
+ * Returns the route seam mounted by the Person HTTP server. The only
  * caller-owned value is the bearer: principal and membership are resolved
  * afresh from it immediately before the immutable V4 response is released.
  */

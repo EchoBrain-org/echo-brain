@@ -68,7 +68,7 @@ export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
   readonly now?: () => string;
 }
 
-interface ActiveCleanConnection {
+interface ActiveSlackConnection {
   readonly connection: OrganizationToolConnectionContractV2;
   readonly state: OrganizationToolConnectionStateV2;
   readonly tool: ActiveSlackOrganizationTool;
@@ -93,7 +93,7 @@ interface ChallengeRow {
 function parseCanonical(value: string): unknown {
   const parsed = JSON.parse(value) as unknown;
   if (canonicalJson(parsed) !== value) {
-    throw new Error("stored clean Slack contract is not canonical");
+    throw new Error("stored Slack contract is not canonical");
   }
   return parsed;
 }
@@ -198,7 +198,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       !sameTool(input.organization_tool, this.activeSlackOrganizationTool())
     ) {
       throw new PersonSlackIdentityLinkConflictError(
-        "active clean Slack connection changed",
+        "active Slack connection changed",
       );
     }
     const row = this.options.database
@@ -638,7 +638,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       reference.secret_backend_id !== AUTHORITY_FILE_SECRET_BACKEND ||
       reference.secret_handle_id !== active.connection.connection_id
     ) {
-      throw new Error("active clean Slack credential is unavailable");
+      throw new Error("active Slack credential is unavailable");
     }
     return this.options.slack_token_access.readActiveSlackBotToken({
       connection: active.connection,
@@ -730,17 +730,17 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
 
   private requireSameActiveTool(
     tool: ActiveSlackOrganizationTool,
-  ): ActiveCleanConnection {
+  ): ActiveSlackConnection {
     const active = this.activeConnection();
     if (active === null || !sameTool(tool, active.tool)) {
       throw new PersonSlackIdentityLinkConflictError(
-        "active clean Slack connection changed",
+        "active Slack connection changed",
       );
     }
     return active;
   }
 
-  private activeConnection(): ActiveCleanConnection | null {
+  private activeConnection(): ActiveSlackConnection | null {
     const row = this.options.database
       .prepare(
         `SELECT contract.contract_json, contract.contract_sha256, current_state.state_json, current_state.state_sha256
@@ -782,7 +782,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
           reject_reaction: "x",
         })
     ) {
-      throw new Error("stored clean Slack connection is inconsistent");
+      throw new Error("stored Slack connection is inconsistent");
     }
     return Object.freeze({
       connection,

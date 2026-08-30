@@ -5,6 +5,6 @@
  */
 export interface AdmittedMeetingSourceCursorPolicyV1 {
   readonly source_adapter_id: string;
-  /** Rejects cursors that are not safe for this provider's live-only stream. */
+  /** Rejects cursors that are not safe for this provider's admitted stream. */
   assert_live_cursor(cursor: string): void;
 }

@@ -95,7 +95,7 @@ function buildCardAndSnapshot(
     brief,
     source: Object.freeze({
       // The immutable meeting envelope is the provenance authority. This is
-      // normally identical to the admitted live source, but deliberately
+      // normally identical to the admitted source, but deliberately
       // remains truthful for a staging-only synthetic canary.
       adapter_id: input.meeting.provenance.source.adapter_id,
       instance_id: input.meeting.provenance.source.instance_id,

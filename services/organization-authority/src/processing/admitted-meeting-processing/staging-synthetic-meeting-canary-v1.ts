@@ -49,7 +49,7 @@ export function stagingSyntheticMeetingCanaryCursorV1(
 }
 
 /**
- * Builds the one compact meeting used to prove the live private-DM approval
+ * Builds the one compact meeting used to prove the admitted private-DM approval
  * path. The wording and provenance are intentionally conspicuous so an
  * approval can never be mistaken for a real meeting.
  */

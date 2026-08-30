@@ -74,7 +74,7 @@ function setup(
   };
 }
 
-describe("clean Person V4 record read route", () => {
+describe("Person V4 record read route", () => {
   it("derives the V4 reader tuple from the bearer, rechecks it at release, and commits one minimized audit", () => {
     const value = setup();
     try {

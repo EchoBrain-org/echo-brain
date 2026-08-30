@@ -41,7 +41,7 @@ afterEach(() => {
   for (const value of databases.splice(0)) value.close();
 });
 
-describe("clean readable-search generation reconciliation", () => {
+describe("readable-search generation reconciliation", () => {
   it("publishes a missing exact-head generation and then no-ops", async () => {
     const authority = database();
     const current = head(2);

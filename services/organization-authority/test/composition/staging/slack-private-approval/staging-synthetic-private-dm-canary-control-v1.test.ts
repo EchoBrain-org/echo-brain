@@ -133,7 +133,7 @@ describe("staging synthetic private-DM canary control", () => {
     ).not.toThrow();
   });
 
-  it("derives its stable canary id and owner from live startup state, not the request", async () => {
+  it("derives its stable canary id and owner from admitted startup state, not the request", async () => {
     const calls: unknown[] = [];
     const control = await openStagingSyntheticPrivateDmCanaryControlV1({
       authority_url: STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,

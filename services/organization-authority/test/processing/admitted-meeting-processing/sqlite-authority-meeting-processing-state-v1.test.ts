@@ -984,7 +984,7 @@ describe("SQLite admitted meeting-processing state", () => {
         },
       }),
     ).rejects.toThrow(
-      "clean live V1 review policy must equal the fixed restricted default",
+      "admitted V1 review policy must equal the fixed restricted default",
     );
   });
 

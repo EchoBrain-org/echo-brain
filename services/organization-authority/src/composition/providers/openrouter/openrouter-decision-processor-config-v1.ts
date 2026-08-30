@@ -40,7 +40,7 @@ export const OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 =
     fixedOpenRouterDecisionProcessorConfigV1("clean-fixed-llm"),
   );
 
-/** Immutable configuration identity committed at live-source admission. */
+/** Immutable configuration identity committed at source admission. */
 export function openRouterDecisionProcessorConfigurationSha256V1(): Sha256Digest {
   return canonicalSha256({
     schema_version: 1,

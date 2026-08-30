@@ -107,14 +107,14 @@ function pointerHead(
       position: pointer.record_head_position,
       record_sha256: pointer.record_head_hash,
     },
-    "clean readable-search pointer head",
+    "readable-search pointer head",
   );
 }
 
 /**
- * One single-flight exact-head reconciler for clean live V1.
+ * One single-flight exact-head reconciler for the admitted-search V1 flow.
  *
- * The serialized live worker is the only V4 writer and invokes this after its
+ * The serialized processing worker is the only V4 writer and invokes this after its
  * coalesced append phase. The snapshot closes before generation IO begins. A
  * final head comparison prevents an obsolete completed generation from being
  * published if that ownership rule is widened later.
@@ -128,11 +128,11 @@ export class ReadableSearchGenerationReconcilerV1<
     private readonly options: ReadableSearchGenerationReconcilerV1Options<Snapshot>,
   ) {
     if (options.organization_id.length === 0) {
-      throw new Error("clean readable-search organization_id is empty");
+      throw new Error("readable-search organization_id is empty");
     }
     digest(
       options.retrieval_contract_sha256,
-      "clean readable-search retrieval contract",
+      "readable-search retrieval contract",
     );
     this.now = options.now ?? (() => new Date().toISOString());
   }
@@ -143,7 +143,7 @@ export class ReadableSearchGenerationReconcilerV1<
     signal.throwIfAborted();
     const observedHead = head(
       this.options.read_record_head(),
-      "clean readable-search observed record head",
+      "readable-search observed record head",
     );
     const active = this.activeGeneration();
     if (
@@ -151,7 +151,7 @@ export class ReadableSearchGenerationReconcilerV1<
       active.organization_id !== this.options.organization_id
     ) {
       throw new Error(
-        "clean readable-search pointer belongs to another organization",
+        "readable-search pointer belongs to another organization",
       );
     }
     if (
@@ -172,11 +172,11 @@ export class ReadableSearchGenerationReconcilerV1<
     const snapshot = this.options.capture_snapshot();
     const capturedHead = head(
       snapshot.record_head,
-      "clean readable-search captured record head",
+      "readable-search captured record head",
     );
     if (!sameHead(capturedHead, observedHead)) {
       throw new Error(
-        "clean readable-search snapshot did not capture the observed record head",
+        "readable-search snapshot did not capture the observed record head",
       );
     }
     signal.throwIfAborted();
@@ -184,7 +184,7 @@ export class ReadableSearchGenerationReconcilerV1<
     const built = this.options.build_generation(snapshot);
     const builtHead = head(
       built.record_head,
-      "clean readable-search built record head",
+      "readable-search built record head",
     );
     if (
       !sameHead(builtHead, capturedHead) ||
@@ -192,17 +192,17 @@ export class ReadableSearchGenerationReconcilerV1<
         this.options.retrieval_contract_sha256
     ) {
       throw new Error(
-        "clean readable-search generation does not match its captured input",
+        "readable-search generation does not match its captured input",
       );
     }
-    digest(built.generation_id, "clean readable-search generation_id");
-    digest(built.manifest_sha256, "clean readable-search manifest");
+    digest(built.generation_id, "readable-search generation_id");
+    digest(built.manifest_sha256, "readable-search manifest");
     this.options.prepare_generation?.(built);
     signal.throwIfAborted();
 
     const currentHead = head(
       this.options.read_record_head(),
-      "clean readable-search publish record head",
+      "readable-search publish record head",
     );
     if (!sameHead(currentHead, capturedHead)) {
       this.options.invalidate_generation?.();
@@ -216,7 +216,7 @@ export class ReadableSearchGenerationReconcilerV1<
     const publishedAt = this.now();
     if (new Date(publishedAt).toISOString() !== publishedAt) {
       throw new Error(
-        "clean readable-search publication time is not a canonical UTC timestamp",
+        "readable-search publication time is not a canonical UTC timestamp",
       );
     }
     this.options.authority.transaction(() => {
@@ -265,11 +265,11 @@ export class ReadableSearchGenerationReconcilerV1<
       )
       .get() as StoredActiveGeneration | undefined;
     if (row === undefined) return null;
-    digest(row.generation_id, "clean readable-search active generation_id");
-    digest(row.manifest_sha256, "clean readable-search active manifest");
+    digest(row.generation_id, "readable-search active generation_id");
+    digest(row.manifest_sha256, "readable-search active manifest");
     digest(
       row.retrieval_contract_sha256,
-      "clean readable-search active retrieval contract",
+      "readable-search active retrieval contract",
     );
     pointerHead(row);
     return Object.freeze({ ...row });

@@ -46,7 +46,7 @@ export interface FrozenPrivateSlackApprovalCandidateV1 {
 
 /**
  * Authority-local structural view of the durable CP terminal. Keeping this
- * leaf independent of the CP package preserves the clean record-writer
+ * leaf independent of the CP package preserves the record-writer
  * boundary; composition is responsible for adapting the validated CP body.
  */
 export interface PrivateSlackBlockApprovalTerminalV1 {

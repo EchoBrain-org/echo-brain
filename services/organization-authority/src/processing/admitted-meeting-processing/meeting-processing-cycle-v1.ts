@@ -26,7 +26,7 @@ export interface AdmittedMeetingProcessingAdmissionV1 {
     readonly adapter_id: string;
     readonly instance_id: string;
     readonly version: string;
-    /** The current cursor, initially the admitted live-only cutoff cursor. */
+    /** The current cursor, initially the admitted source cutoff cursor. */
     readonly cursor: string;
     /** The immutable stopped-time boundary, retained after cursor advances. */
     readonly cutoff_at: string;
@@ -247,7 +247,7 @@ function assertAdmissionMatchesAdapters(
     new Date(admission.source.cutoff_at).toISOString() !==
       admission.source.cutoff_at
   ) {
-    throw new Error("admitted meeting-processing admission has an invalid live-only cutoff");
+    throw new Error("admitted meeting-processing admission has an invalid source cutoff");
   }
   sourceCursorPolicy.assert_live_cursor(admission.source.cursor);
 }
@@ -330,7 +330,7 @@ function rebindDecisionsToRevision(
 
 /**
  * Performs exactly one serialized source poll. It never imports history: its
- * only cursor comes from a previously admitted live-only source, and
+ * only cursor comes from a previously admitted source, and
  * it advances that cursor only after either a verified empty provider page or
  * the downstream staging port reports a durable acknowledgement.
  */

@@ -11,7 +11,7 @@ export const granolaAdmittedMeetingSourceCursorPolicyV1: AdmittedMeetingSourceCu
         granolaCursorPhase(cursor) !== "live"
       ) {
         throw new Error(
-          "admitted meeting-processing cursor must be a Granola v1 live cursor",
+          "admitted meeting-processing cursor must be a Granola v1 incremental cursor",
         );
       }
     },

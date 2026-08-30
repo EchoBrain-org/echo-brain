@@ -27,7 +27,7 @@ import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "./sqlite-stable-pri
 
 export interface PrivateSlackApprovalWorkflowBundleConfigV1 {
   readonly state_directory: string;
-  /** Path only. The secret is read only after live-source admission. */
+  /** Path only. The secret is read only after source admission. */
   readonly signing_secret_file: string;
   readonly connection_id: string;
   /** Provider-specific test seam; production reads the admitted Slack token. */
@@ -104,7 +104,7 @@ function assertPrivateSlackApprovalPresentationOwnershipV1(
 /**
  * The current Slack private-DM approval lane behind the provider-neutral
  * approval-workflow seam. Its ordering and all durable Slack behavior are
- * deliberately unchanged from the V1 live composition.
+ * deliberately unchanged from the V1 admitted composition.
  */
 export function createPrivateSlackApprovalWorkflowBundleV1(
   config: PrivateSlackApprovalWorkflowBundleConfigV1,

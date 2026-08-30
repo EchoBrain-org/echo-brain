@@ -356,7 +356,7 @@ class Transaction implements PersonSessionWriteTransaction {
       );
     const stored = this.membership(input.membership_id);
     if (stored === undefined)
-      throw new Error("clean employee membership insert did not persist");
+      throw new Error("employee membership insert did not persist");
     return stored;
   }
 
@@ -441,7 +441,7 @@ class Transaction implements PersonSessionWriteTransaction {
 
   hasOidcLoginAttemptCapacity(limit: number): boolean {
     if (!Number.isSafeInteger(limit) || limit < 1)
-      throw new Error("clean OIDC attempt capacity is invalid");
+      throw new Error("OIDC attempt capacity is invalid");
     return (
       this.database
         .prepare(
@@ -526,7 +526,7 @@ class Transaction implements PersonSessionWriteTransaction {
       );
     const stored = this.oidcIdentityBindingById(value.identity_binding_id);
     if (stored === undefined)
-      throw new Error("clean OIDC identity binding insert did not persist");
+      throw new Error("OIDC identity binding insert did not persist");
     return stored;
   }
 
@@ -554,7 +554,7 @@ class Transaction implements PersonSessionWriteTransaction {
       );
     const stored = this.oidcLoginAttempt(value.state_sha256);
     if (stored === undefined)
-      throw new Error("clean OIDC login attempt insert did not persist");
+      throw new Error("OIDC login attempt insert did not persist");
     return stored;
   }
 
@@ -609,7 +609,7 @@ class Transaction implements PersonSessionWriteTransaction {
 
   expireOidcLoginAttempts(limit: number): number {
     if (!Number.isSafeInteger(limit) || limit <= 0)
-      throw new Error("clean OIDC expiry limit is invalid");
+      throw new Error("OIDC expiry limit is invalid");
     const now = this.writeTime();
     const rows = this.database
       .prepare(

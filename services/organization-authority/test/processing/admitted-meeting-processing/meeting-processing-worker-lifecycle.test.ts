@@ -5,7 +5,7 @@ import {
 } from "../../../src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 import { AdapterError } from "../../../src/processing/core/contracts/adapter.js";
 
-describe("clean live worker lifecycle", () => {
+describe("admitted processing worker lifecycle", () => {
   it("emits only closed lifecycle fields and keeps failure contents out", async () => {
     const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
     let now = 1_000;

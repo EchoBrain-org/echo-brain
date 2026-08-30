@@ -369,7 +369,7 @@ function fakeSource(
       {
         id: "note-live-test",
         kind: "note",
-        text: "Ship the clean live migration.",
+        text: "Ship the source-admission migration.",
       },
     ],
     artifacts: [],
@@ -418,7 +418,7 @@ function fakeProcessor(
           id: "decision-live-test",
           kind: "decision",
           status: "decided",
-          text: meeting.content[0]?.text ?? "Ship the clean live migration.",
+          text: meeting.content[0]?.text ?? "Ship the source-admission migration.",
           subject: null,
           confidence: 1,
           evidence: [
@@ -876,7 +876,7 @@ function answerModel(): StructuredGenerationPort {
       }
       return {
         status: "answered",
-        answer: "Ship the clean live migration.",
+        answer: "Ship the source-admission migration.",
         citations: ["a1"],
       };
     },
@@ -1028,7 +1028,7 @@ describe("Organization Authority runtime private approval lane", () => {
     );
   });
 
-  it("composes the generic live runtime with a non-Slack approval surface", async () => {
+  it("composes the generic admitted runtime with a non-Slack approval surface", async () => {
     const fixture = await admittedFixture();
     const staged: string[] = [];
     let ingressCalls = 0;
@@ -1290,13 +1290,13 @@ describe("Organization Authority runtime private approval lane", () => {
         record,
       });
       expect(teamAnswers.owner).toMatchObject({
-        answer: "Ship the clean live migration.",
+        answer: "Ship the source-admission migration.",
         citations: [
           { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
         ],
       });
       expect(teamAnswers.member).toMatchObject({
-        answer: "Ship the clean live migration.",
+        answer: "Ship the source-admission migration.",
         citations: [
           { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
         ],
@@ -1410,7 +1410,7 @@ describe("Organization Authority runtime private approval lane", () => {
           record,
         });
         expect(recoveredOnlyMeAnswer).toMatchObject({
-          answer: "Ship the clean live migration.",
+          answer: "Ship the source-admission migration.",
           citations: [{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }],
         });
       } finally {

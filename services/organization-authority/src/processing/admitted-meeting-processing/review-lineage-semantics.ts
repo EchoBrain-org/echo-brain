@@ -57,7 +57,7 @@ export function assertLegacyReviewPolicySnapshotV1(
     actual.policy_consequence_sha256 !== expected.policy_consequence_sha256
   ) {
     throw new Error(
-      "clean live V1 review policy must equal the fixed restricted default",
+      "admitted V1 review policy must equal the fixed restricted default",
     );
   }
 }

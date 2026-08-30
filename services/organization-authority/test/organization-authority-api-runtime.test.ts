@@ -477,7 +477,7 @@ describe("Organization Authority API runtime", () => {
     }
   });
 
-  it("runs fresh genesis through founder grant, OIDC bootstrap, refresh, and logout without legacy state", async () => {
+  it("runs fresh genesis through initial-owner grant, OIDC bootstrap, refresh, and logout without legacy state", async () => {
     const parent = root();
     const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
@@ -540,13 +540,13 @@ describe("Organization Authority API runtime", () => {
       );
       expect(() =>
         cleanOnlySessions.createPersonReadAuthorizationPort(),
-      ).toThrow("clean Person session runtime");
+      ).toThrow("Person session runtime");
       expect(() =>
         cleanOnlySessions.withAuthenticatedWrite({
           access_token: "unreachable",
           commit: () => undefined,
         }),
-      ).toThrow("clean Person session runtime");
+      ).toThrow("Person session runtime");
     } finally {
       boundaryDatabase.close();
     }

@@ -4,7 +4,7 @@ const INSTANCE_ID = /^[a-z][a-z0-9-]{0,127}$/;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
 /**
- * Provider-neutral processor fact bundle frozen with a live source admission.
+ * Provider-neutral processor fact bundle frozen with a source admission.
  * The preflight is intentionally capability-shaped: it may prove local
  * credentials/configuration are usable, but never exposes credential bytes to
  * the source-admission flow.

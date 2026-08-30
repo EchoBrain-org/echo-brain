@@ -285,7 +285,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
           const envelopeSha256 = envelopeByPosition.get(atom.record_position);
           if (envelopeSha256 === undefined) {
             throw new Error(
-              "clean readable-search atom has no verified V4 envelope",
+              "readable-search atom has no verified V4 envelope",
             );
           }
           return Object.freeze({

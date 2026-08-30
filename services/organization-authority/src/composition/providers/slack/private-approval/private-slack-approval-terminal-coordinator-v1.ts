@@ -89,7 +89,7 @@ export interface PrivateSlackApprovalTerminalCoordinatorV1Options {
 }
 
 /**
- * Strictly serial use is supplied by the live worker. The operations remain
+ * Strictly serial use is supplied by the processing worker. The operations remain
  * replay-safe across process crashes and a second runner nonetheless: V4 has
  * its semantic idempotency key, Authority terminal receipts are immutable,
  * and Slack terminal rendering is a replacement update.

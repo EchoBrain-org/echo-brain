@@ -9,7 +9,7 @@ type MeetingSourceAdapter = ConstructorParameters<
 
 /**
  * Provider-neutral construction boundary for the meeting source selected by a
- * live-source admission. The shared runtime knows only this committed source
+ * source admission. The shared runtime knows only this committed source
  * identity and the canonical meeting-source port.
  */
 export interface MeetingSourceBundleV1 {

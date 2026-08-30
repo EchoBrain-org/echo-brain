@@ -115,9 +115,9 @@ function stagingCanaryReleaseId(argv: readonly string[]): string {
  * Starts from the private, non-secret V1 onboarding manifest. It deliberately does
  * not repeat the Authority URL, OIDC configuration, PKCE key, or Slack
  * channel at the command line. Before the legacy compatibility command
- * `clean-founder finalize`, the same
+ * legacy `clean-founder finalize` command, the same
  * command serves Person onboarding with an inert worker; after a restart it
- * opens the admitted live-only processing chain.
+ * opens the admitted source-processing chain.
  */
 export async function runOrganizationAuthorityServiceCli(
   argv: readonly string[],

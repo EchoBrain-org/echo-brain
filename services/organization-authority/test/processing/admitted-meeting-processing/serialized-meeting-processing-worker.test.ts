@@ -52,7 +52,7 @@ describe('serialized meeting-processing worker', () => {
     await worker.close();
   });
 
-  it("serializes bounded operator work with the live cycle", async () => {
+  it("serializes bounded operator work with the processing cycle", async () => {
     vi.useFakeTimers();
     const cycle = deferred();
     const events: string[] = [];

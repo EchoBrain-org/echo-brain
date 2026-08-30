@@ -143,7 +143,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
                     state.credential_reference_sha256,
                 );
               if (matches.length !== 1) {
-                throw new Error("active clean Slack credential is unavailable");
+                throw new Error("active Slack credential is unavailable");
               }
               return secrets.read(matches[0]!);
             },

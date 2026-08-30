@@ -94,7 +94,7 @@ afterEach(() => {
   for (const value of roots.splice(0)) rmSync(value, { recursive: true, force: true });
 });
 
-describe("clean Person employee lifecycle", () => {
+describe("Person employee lifecycle", () => {
   it("keeps employee lifecycle owner-only, invalidates reissued grants, revokes reads, and permits a new tenure", async () => {
     const parent = root();
     const initialized = bootstrapOrganizationAuthorityState({

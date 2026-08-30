@@ -100,7 +100,7 @@ function rationale(
   };
 }
 
-describe("clean review lineage semantics", () => {
+describe("admitted review lineage semantics", () => {
   it("reuses the input hash when only source block IDs churn", () => {
     const first = meeting();
     const blockIdOnlyRevision = meeting({

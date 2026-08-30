@@ -27,7 +27,7 @@ import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-
 export interface OrganizationAuthorityProcessingCycleV1 {
   /** Replays finalized control-plane actions that were not appended to V4. */
   recoverV4Appends(signal: AbortSignal): Promise<void>;
-  /** Polls the admitted live-only source cursor and durably stages one card. */
+  /** Polls the admitted source cursor and durably stages one card. */
   pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void>;
   /** Observes one staged approval and commits its approve or reject result. */
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
@@ -36,7 +36,7 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   /**
    * Reconciles the immutable permission-aware search generation with the V4
    * record head after the complete append phase. Implementations may no-op
-   * while the live process is waiting for its activation prerequisites.
+   * while the processing service is waiting for its activation prerequisites.
    */
   reconcileReadableSearchGeneration(signal: AbortSignal): Promise<void>;
   /** Optional composition seam for source/extraction/staging phase telemetry. */
@@ -68,7 +68,7 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
 
 export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
-  /** Runs bounded operator work through the same gate as the live worker. */
+  /** Runs bounded operator work through the same gate as the processing worker. */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
   /** Stops the worker before closing the Authority API database handles. */
   close(): Promise<void>;

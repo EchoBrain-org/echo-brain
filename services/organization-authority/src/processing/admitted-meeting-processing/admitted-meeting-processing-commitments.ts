@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 
 /**
- * Immutable admission facts used only while constructing a live runtime.
+ * Immutable admission facts used only while constructing an admitted runtime.
  * They deliberately sit outside the polling-cycle contract: a source adapter
  * must prove that its current local configuration still names this admitted
  * source before any provider credential is read.
@@ -54,7 +54,7 @@ export function readAdmittedMeetingProcessingCommitmentsV1(
     )
     .get() as CommitmentRow | undefined;
   if (row === undefined) {
-    throw new Error("clean live-only source has not been admitted");
+    throw new Error("admitted-source processing has no source admission");
   }
   return Object.freeze({
     source: Object.freeze({

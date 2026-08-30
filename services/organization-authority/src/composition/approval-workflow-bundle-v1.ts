@@ -5,7 +5,7 @@ import type { ApprovalWorkflowStagerV1 } from "../processing/admitted-meeting-pr
 import type { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
 
-/** The approval-only phases used by the shared live processing lifecycle. */
+/** The approval-only phases used by the shared admitted-processing lifecycle. */
 export interface ApprovalWorkflowProcessingV1 {
   recoverV4Appends(signal: AbortSignal): Promise<void>;
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;

@@ -100,8 +100,8 @@ function start(io: { readonly stderr: (value: string) => void }) {
   );
 }
 
-describe("clean live CLI runtime events", () => {
-  it("keeps founder onboarding live when staging processing is still idle", async () => {
+describe("admitted runtime CLI events", () => {
+  it("keeps owner onboarding available when staging processing is still idle", async () => {
     const stderr: string[] = [];
     runtimeState.authority_url = "https://authority-staging.echobrain.org";
     runtimeState.processing = "idle_until_finalize";
@@ -208,7 +208,7 @@ describe("clean live CLI runtime events", () => {
     expect(output).toContain('"failure_class":"authorization"');
   });
 
-  it("does not disclose startup failure contents to the live server log", async () => {
+  it("does not disclose startup failure contents to the API server log", async () => {
     const stderr: string[] = [];
     runtimeState.startup_error = new Error(
       "credential=credential-sentinel Authorization: Bearer bearer-sentinel",
@@ -228,7 +228,7 @@ describe("clean live CLI runtime events", () => {
     ]);
   });
 
-  it("does not disclose worker failure contents to the live server log", async () => {
+  it("does not disclose worker failure contents to the API server log", async () => {
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) });
     await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());

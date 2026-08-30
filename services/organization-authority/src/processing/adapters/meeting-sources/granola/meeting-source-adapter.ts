@@ -251,7 +251,7 @@ function decodeCursor(cursor: string | undefined): GranolaCursorState {
 /**
  * Classifies a persisted cursor without returning its provider pagination
  * token. A watermark is the durable boundary between the one-time history
- * walk and normal live polling.
+ * walk and normal incremental polling.
  */
 export function granolaCursorPhase(
   cursor: string | undefined,

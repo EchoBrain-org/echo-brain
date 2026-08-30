@@ -15,7 +15,7 @@ export const AUTHORITY_BASELINE_SCHEMA_VERSION_V2 = 2;
 export const AUTHORITY_BASELINE_APPLICATION_ID_V2 =
   AUTHORITY_BASELINE_APPLICATION_ID_V1;
 /**
- * Fresh provider-neutral live-source lineage.  It is deliberately a new
+ * Fresh provider-neutral source-admission lineage. It is deliberately a new
  * empty-database baseline, never an upgrade of V1 or V2 state.
  */
 export const AUTHORITY_BASELINE_SCHEMA_VERSION_V3 = 3;
@@ -60,7 +60,7 @@ export function authorityBaselineSha256V2(): Sha256Digest {
 
 /**
  * Provider-neutral V3 companion SQL. It replaces only the legacy
- * provider-specific live-source table family while retaining the frozen V1
+ * provider-specific source-admission table family while retaining the frozen V1
  * Authority identity/session foundation byte-for-byte.
  */
 export function authorityLiveSourceSqlV3(): string {

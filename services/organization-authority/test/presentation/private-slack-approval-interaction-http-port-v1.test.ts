@@ -39,7 +39,7 @@ async function start(
   const address = server.address();
   if (address === null || typeof address === "string") {
     server.close();
-    throw new Error("clean HTTP server did not bind TCP");
+    throw new Error("test HTTP server did not bind TCP");
   }
   return {
     url: `http://127.0.0.1:${String(address.port)}`,
@@ -79,7 +79,7 @@ describe("private Slack approval interactions HTTP mount V1", () => {
     const address = server.address();
     if (address === null || typeof address === "string") {
       server.close();
-      throw new Error("clean HTTP server did not bind TCP");
+      throw new Error("test HTTP server did not bind TCP");
     }
     const origin = `http://127.0.0.1:${String(address.port)}`;
     const begin = (client: string) =>

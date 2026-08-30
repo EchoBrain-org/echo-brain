@@ -287,7 +287,7 @@ function writeRootManifest(
 
 /**
  * Creates and validates an isolated v1 state lineage. This does not make that
- * lineage live: the caller receives only read-only verification evidence.
+ * lineage current: the caller receives only read-only verification evidence.
  */
 export function initializeAuthorityStateLineageV1(
   input: InitializeAuthorityStateLineageV1Input,
