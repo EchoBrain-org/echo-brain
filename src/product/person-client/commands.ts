@@ -8,7 +8,6 @@ import { PersonAuthorityClientError } from "./authority-client.js";
 import { PersonClientSessionUnavailableError } from "./session-store.js";
 import { startPersonLoopbackHandoff } from "./browser-login-handoff.js";
 import {
-  assertPersonOnboardingInvitationReady,
   readPersonOnboardingInvitation,
 } from "./onboarding-invitation.js";
 import { readPackagedPersonClientBuildIdentity } from "./package-identity.js";
@@ -287,11 +286,24 @@ async function completePersonLogin(input: {
         error.code === "unauthorized" &&
         error.status === 401
       ) {
-        begun = await input.client.beginLogin(
-          input.authority_url,
-          undefined,
-          { url: handoff.url, token: handoff.token },
-        );
+        try {
+          begun = await input.client.beginLogin(
+            input.authority_url,
+            undefined,
+            { url: handoff.url, token: handoff.token },
+          );
+        } catch (recoveryError) {
+          if (
+            recoveryError instanceof PersonAuthorityClientError &&
+            recoveryError.code === "unauthorized" &&
+            recoveryError.status === 401
+          ) {
+            throw new Error(
+              "This ECHO invitation can no longer be used and no existing ECHO identity was found. Ask the ECHO owner to reissue an invitation.",
+            );
+          }
+          throw recoveryError;
+        }
         recoveredConsumedInvitation = true;
       } else {
         throw error;
@@ -417,10 +429,7 @@ export async function runPersonClientCli(
       case "login": {
         const invitation =
           typeof values.invitation === "string"
-            ? assertPersonOnboardingInvitationReady(
-                readPersonOnboardingInvitation(values.invitation),
-                dependencies.now?.() ?? new Date().toISOString(),
-              )
+            ? readPersonOnboardingInvitation(values.invitation)
             : undefined;
         const authorityUrl = invitation?.authority_url ?? requiredText(values, "authority-url");
         await completePersonLogin({
@@ -437,9 +446,8 @@ export async function runPersonClientCli(
         break;
       }
       case "start": {
-        const invitation = assertPersonOnboardingInvitationReady(
-          readPersonOnboardingInvitation(requiredText(values, "invitation")),
-          dependencies.now?.() ?? new Date().toISOString(),
+        const invitation = readPersonOnboardingInvitation(
+          requiredText(values, "invitation"),
         );
         try {
           client.sessionSummary();

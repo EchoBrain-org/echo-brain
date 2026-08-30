@@ -1032,7 +1032,7 @@ describe("Person client", () => {
     });
   });
 
-  it("stops an expired invitation locally before it opens a browser or contacts the Authority", async () => {
+  it("lets the Authority distinguish expired unused invitations from existing identities", async () => {
     await withHome(async (home) => {
       const invitationPath = join(home, "expired-person-onboarding.json");
       const loginGrant = "G".repeat(43);
@@ -1056,7 +1056,8 @@ describe("Person client", () => {
         let stdout = "";
         let stderr = "";
         let browserOpened = false;
-        let authorityContacted = false;
+        let authorityRequests = 0;
+        const begins: Record<string, unknown>[] = [];
         const status = await runPersonClientCli(argv, {
           stdout: { write: (value) => ((stdout += String(value)), true) },
           stderr: { write: (value) => ((stderr += String(value)), true) },
@@ -1066,20 +1067,28 @@ describe("Person client", () => {
             browserOpened = true;
             return true;
           },
-          fetch: async () => {
-            authorityContacted = true;
-            throw new Error("expired invitation must not contact the Authority");
+          fetch: async (input, init) => {
+            expect(new URL(String(input)).pathname).toBe("/v2/session/oidc/begin");
+            authorityRequests += 1;
+            begins.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+            return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
           },
         });
 
         expect(status).toBe(1);
         expect(stdout).toBe("");
         expect(browserOpened).toBe(false);
-        expect(authorityContacted).toBe(false);
+        expect(authorityRequests).toBe(2);
+        expect(begins[0]).toMatchObject({
+          kind: "identity_bootstrap",
+          login_grant: loginGrant,
+        });
+        expect(begins[1]).toMatchObject({ kind: "existing_identity_login" });
+        expect(begins[1]).not.toHaveProperty("login_grant");
         expect(JSON.parse(stderr)).toMatchObject({
           ok: false,
           action: argv[0],
-          error: expect.stringContaining("has expired"),
+          error: expect.stringContaining("no existing ECHO identity was found"),
         });
         expect(stderr).toContain("reissue");
         expect(stderr).not.toContain(loginGrant);
@@ -1087,7 +1096,7 @@ describe("Person client", () => {
     });
   });
 
-  it("starts an invited employee, opens the browser, and reports ready only after one authorized read", async () => {
+  it("lets the Authority accept an invitation despite modest client clock skew", async () => {
     await withHome(async (home) => {
       const invitationPath = join(home, "person-onboarding.json");
       const loginGrant = "G".repeat(43);
@@ -1098,7 +1107,7 @@ describe("Person client", () => {
           kind: "echo-person-onboarding-invitation",
           authority_url: "https://authority.example",
           login_grant: loginGrant,
-          expires_at: "2026-08-18T00:15:00.000Z",
+          expires_at: "2026-08-18T00:01:00.000Z",
         })}\n`,
         { mode: 0o600 },
       );
@@ -1501,7 +1510,7 @@ describe("Person client", () => {
     });
   });
 
-  it("recovers a consumed invitation once through existing-identity login", async () => {
+  it("recovers an expired consumed invitation through existing-identity login", async () => {
     await withHome(async (home) => {
       const invitationPath = join(home, "person-onboarding.json");
       writeFileSync(
@@ -1511,7 +1520,7 @@ describe("Person client", () => {
           kind: "echo-person-onboarding-invitation",
           authority_url: "https://authority.example",
           login_grant: "G".repeat(43),
-          expires_at: "2026-08-18T00:15:00.000Z",
+          expires_at: "2026-08-18T00:01:00.000Z",
         })}\n`,
         { mode: 0o600 },
       );

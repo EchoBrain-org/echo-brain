@@ -25,28 +25,6 @@ export interface PersonOnboardingInvitationV1 {
   readonly expires_at: string;
 }
 
-/**
- * Fails locally before the client starts an OIDC handoff for an invitation
- * that cannot still be used. This deliberately only uses the signed
- * invitation fields: whether an unexpired one has been redeemed or revoked
- * remains an Authority decision and is never guessed or retried locally.
- */
-export function assertPersonOnboardingInvitationReady(
-  invitation: PersonOnboardingInvitationV1,
-  now: string,
-): PersonOnboardingInvitationV1 {
-  const currentTime = Date.parse(now);
-  if (!Number.isFinite(currentTime)) {
-    throw new Error("Person client clock is invalid");
-  }
-  if (Date.parse(invitation.expires_at) <= currentTime) {
-    throw new Error(
-      "Your ECHO invitation has expired. Ask the ECHO owner to reissue an invitation, then sign in with the new invitation file.",
-    );
-  }
-  return invitation;
-}
-
 function invitationPath(value: string): string {
   if (
     typeof value !== "string" ||

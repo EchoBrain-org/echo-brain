@@ -26,7 +26,6 @@ export {
   type PersonRequestIdentity,
 } from "./requests.js";
 export {
-  assertPersonOnboardingInvitationReady,
   readPersonOnboardingInvitation,
   writePersonOnboardingInvitation,
   type PersonOnboardingInvitationV1,
