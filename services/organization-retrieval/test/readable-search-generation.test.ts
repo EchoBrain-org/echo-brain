@@ -25,9 +25,9 @@ function input(
   directory: string,
   atoms: readonly ReadableSearchAtomV1[] = [],
 ): BuildReadableSearchGenerationV1Input {
-  const authority_id = "auth_clean";
-  const organization_id = "org_clean";
-  const state_lineage_id = "lineage_clean";
+  const authority_id = "auth_test";
+  const organization_id = "org_test";
+  const state_lineage_id = "lineage_test";
   const exactHeadAtom = atoms.find((atom) => atom.record_position === 2);
   const plane = (role: string, schema_sha256: `sha256:${string}`) => {
     const manifest_json = canonicalJson({
@@ -110,9 +110,9 @@ function atom(
 ): ReadableSearchAtomV1 {
   const reviewer = policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
   return {
-    authority_id: "auth_clean",
-    organization_id: "org_clean",
-    state_lineage_id: "lineage_clean",
+    authority_id: "auth_test",
+    organization_id: "org_test",
+    state_lineage_id: "lineage_test",
     record_position: reviewer ? 2 : 1,
     record_sha256: digest(`record-${id}`),
     envelope_sha256: digest(`envelope-${id}`),
@@ -144,7 +144,7 @@ function atomWith(
   return { ...value, text_sha256: digest(value.text) };
 }
 
-describe("clean immutable readable-search generation v1", () => {
+describe("immutable readable-search generation v1", () => {
   it.each([
     [
       "maximum_atoms",
@@ -197,7 +197,7 @@ describe("clean immutable readable-search generation v1", () => {
         ),
     ],
   ])("rejects %s before staging", (dimension, atoms) => {
-    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {
       expect(() =>
         buildReadableSearchGenerationV1(input(directory, atoms())),
@@ -208,7 +208,7 @@ describe("clean immutable readable-search generation v1", () => {
     }
   });
   it("builds an empty member generation from the exact head", () => {
-    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {
       const built = buildReadableSearchGenerationV1(input(directory));
       expect(built.manifest.segments).toHaveLength(1);
@@ -222,7 +222,7 @@ describe("clean immutable readable-search generation v1", () => {
   });
 
   it("separates member and exact reviewer tuples into immutable segments", () => {
-    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {
       const built = buildReadableSearchGenerationV1(
         input(directory, [
@@ -244,7 +244,7 @@ describe("clean immutable readable-search generation v1", () => {
   });
 
   it("stamps every plane manifest and never creates a migration ledger", () => {
-    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {
       const built = buildReadableSearchGenerationV1(
         input(directory, [
@@ -287,7 +287,7 @@ describe("clean immutable readable-search generation v1", () => {
   });
 
   it("reuses the exact completed generation without rewriting it", () => {
-    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {
       const source = input(directory, [
         atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
@@ -302,7 +302,7 @@ describe("clean immutable readable-search generation v1", () => {
   });
 
   it("searches only the member segment and the reader's exact reviewer tuple", () => {
-    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {
       const built = buildReadableSearchGenerationV1(
         input(directory, [
@@ -348,7 +348,7 @@ describe("clean immutable readable-search generation v1", () => {
   });
 
   it("fails closed when the active pointer does not bind the immutable manifest", () => {
-    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {
       const built = buildReadableSearchGenerationV1(input(directory));
       expect(() =>
@@ -370,7 +370,7 @@ describe("clean immutable readable-search generation v1", () => {
   });
 
   it("does not create a missing state directory while serving", () => {
-    const directory = mkdtempSync(join(tmpdir(), "echo-clean-retrieval-"));
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     const missing = join(directory, "missing");
     try {
       expect(() =>
@@ -381,9 +381,9 @@ describe("clean immutable readable-search generation v1", () => {
             manifest_sha256: digest("manifest"),
             retrieval_contract_sha256: digest("contract"),
             exact_head: {
-              authority_id: "auth_clean",
-              organization_id: "org_clean",
-              state_lineage_id: "lineage_clean",
+              authority_id: "auth_test",
+              organization_id: "org_test",
+              state_lineage_id: "lineage_test",
               position: 0,
               record_sha256: null,
             },

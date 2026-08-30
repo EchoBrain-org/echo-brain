@@ -261,7 +261,7 @@ describe("Person client", () => {
     });
   });
 
-  it("lists clean records for the installed Person without an identity input", async () => {
+  it("lists Person records for the installed Person without an identity input", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       const client = new PersonClient({
@@ -308,7 +308,7 @@ describe("Person client", () => {
     });
   });
 
-  it("uses the same records command for a clean Layer 2 query", async () => {
+  it("uses the same records command for a readable-search query", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       let searchCalls = 0;
@@ -542,7 +542,7 @@ describe("Person client", () => {
     });
   });
 
-  it("rejects malformed clean record responses and invalid CLI limits", async () => {
+  it("rejects malformed Person record responses and invalid CLI limits", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       const client = new PersonClient({
@@ -1741,7 +1741,7 @@ describe("Person client", () => {
         expect(request).toMatchObject({
           subject_principal_id: SESSION.principal_id,
           source_adapter_id: "granola",
-          source_instance_id: "founder-feed",
+          source_instance_id: "test-meeting-source",
         });
         expect(request).not.toHaveProperty("target_principal_id");
         expect(request).not.toHaveProperty("target_membership_id");
@@ -1753,12 +1753,12 @@ describe("Person client", () => {
           subject_principal_id: SESSION.principal_id,
           membership_id: SESSION.membership_id,
           source_adapter_id: "granola",
-          source_instance_id: "founder-feed",
+          source_instance_id: "test-meeting-source",
           exclusions: [
             {
               scope: "source",
               source_adapter_id: "granola",
-              source_instance_id: "founder-feed",
+              source_instance_id: "test-meeting-source",
             },
           ],
         });
@@ -1772,7 +1772,7 @@ describe("Person client", () => {
 
       await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(
-        client.meetingIngestionExclusions("granola", "founder-feed"),
+        client.meetingIngestionExclusions("granola", "test-meeting-source"),
       ).resolves.toMatchObject({
         subject_principal_id: SESSION.principal_id,
         exclusions: [{ scope: "source" }],

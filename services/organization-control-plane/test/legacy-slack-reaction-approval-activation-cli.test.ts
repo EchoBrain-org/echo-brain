@@ -100,7 +100,7 @@ function rootManifest() {
   };
 }
 
-function cleanConnectionConfigurationSha256() {
+function slackConnectionConfigurationSha256() {
   return canonicalSha256({
     approval_adapter_id: "slack-reactions",
     approval_channel_id: APPROVAL_CHANNEL_ID,
@@ -112,7 +112,7 @@ function cleanConnectionConfigurationSha256() {
 
 function stateDirectory(): string {
   const directory = realpathSync(
-    mkdtempSync(join(tmpdir(), "echo-clean-approval-activate-")),
+    mkdtempSync(join(tmpdir(), "echo-slack-approval-activate-")),
   );
   chmodSync(directory, 0o700);
   directories.push(directory);
@@ -171,7 +171,7 @@ function setupState(includeLink = true): string {
         `INSERT INTO authority_metadata
          (singleton, authority_id, organization_id, organization_display_name,
           descriptor_json, created_at, last_observed_at)
-         VALUES (1, ?, ?, 'Founder org', '{}', ?, ?)`,
+         VALUES (1, ?, ?, 'Test organization', '{}', ?, ?)`,
       )
       .run(
         COORDINATES.authority_id,
@@ -183,7 +183,7 @@ function setupState(includeLink = true): string {
       .prepare(
         `INSERT INTO authority_principals
          (principal_id, organization_id, display_name, provisioned_at)
-         VALUES (?, ?, 'Founder', ?)`,
+         VALUES (?, ?, 'Test owner', ?)`,
       )
       .run(
         OWNER.principal_id,
@@ -263,7 +263,7 @@ function setupState(includeLink = true): string {
       provider_bot_user_id: "U_BOT",
       required_provider_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
       public_connection_configuration_sha256:
-        cleanConnectionConfigurationSha256(),
+        slackConnectionConfigurationSha256(),
     });
     const connectionSha = canonicalSha256(connection);
     const connectionState = buildOrganizationToolConnectionStateV2({
@@ -272,7 +272,7 @@ function setupState(includeLink = true): string {
       connection_status: "active",
       credential_reference_sha256: canonicalSha256({ secret: "opaque" }),
       observed_granted_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
-      verification_event_id: "verify_clean_connection",
+      verification_event_id: "verify_test_connection",
       verification_evidence_sha256: canonicalSha256({ verified: true }),
       verification_revision: 1,
       verified_at: "2026-08-22T00:00:00.000Z",
@@ -306,10 +306,10 @@ function setupState(includeLink = true): string {
         provider_tenant_kind: "workspace",
         provider_tenant_id: "T01",
         provider_enterprise_id: null,
-        provider_subject_id: "U_FOUNDER",
+        provider_subject_id: "U_TEST",
         ...OWNER,
         membership_type: "owner",
-        verification_event_id: "verify_clean_founder_link",
+        verification_event_id: "verify_test_link",
         verification_evidence_sha256: canonicalSha256({ linked: true }),
         verified_at: "2026-08-22T00:00:00.000Z",
       });
@@ -353,8 +353,8 @@ afterEach(() => {
   }
 });
 
-describe("clean stopped-state Person Slack reaction approval activation command", () => {
-  it("activates the current founder link on the verified clean connection and is replay-safe", async () => {
+describe("stopped-state Person Slack reaction approval activation command", () => {
+  it("activates the current owner link on the verified Slack connection and is replay-safe", async () => {
     const directory = setupState();
     const output: string[] = [];
     let identifiers = 0;
@@ -401,7 +401,7 @@ describe("clean stopped-state Person Slack reaction approval activation command"
     expect(output[1]).toBe(output[0]);
   });
 
-  it("requires the current founder Slack identity link", async () => {
+  it("requires the current owner Slack identity link", async () => {
     const directory = setupState(false);
     await expect(
       runLegacySlackReactionApprovalActivationCli([

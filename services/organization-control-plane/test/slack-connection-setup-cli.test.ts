@@ -39,7 +39,7 @@ const COORDINATES = Object.freeze({
 
 function stateDirectory(): string {
   const directory = realpathSync(
-    mkdtempSync(join(tmpdir(), "echo-clean-slack-cli-")),
+    mkdtempSync(join(tmpdir(), "echo-slack-setup-cli-")),
   );
   chmodSync(directory, 0o700);
   directories.push(directory);
@@ -105,7 +105,7 @@ function rootManifest() {
   };
 }
 
-function setupCleanState(baseline: "v1" | "v2" = "v2"): string {
+function setupOrganizationControlState(baseline: "v1" | "v2" = "v2"): string {
   const directory = stateDirectory();
   writeFileSync(
     join(directory, "state-lineage-root.v1.json"),
@@ -200,15 +200,15 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-describe("clean Slack connect founder command", () => {
+describe("Slack connection setup command", () => {
   it("refuses a V1 control-plane lineage before a stopped-state command can open it", () => {
-    expect(() => verifyOrganizationControlStateV1(setupCleanState("v1"))).toThrow(
+    expect(() => verifyOrganizationControlStateV1(setupOrganizationControlState("v1"))).toThrow(
       "wrong baseline identity",
     );
   });
 
-  it("derives clean coordinates, reads one injected stdin token, and prints only public fields", async () => {
-    const directory = setupCleanState();
+  it("derives control coordinates, reads one injected stdin token, and prints only public fields", async () => {
+    const directory = setupOrganizationControlState();
     const slack = verifier();
     const output: string[] = [];
     const token = "xoxb-cli-test-token";
@@ -252,7 +252,7 @@ describe("clean Slack connect founder command", () => {
   });
 
   it("refuses multiple stdin tokens before selecting a provider", async () => {
-    const directory = setupCleanState();
+    const directory = setupOrganizationControlState();
     const createVerifier = vi.fn(() => verifier());
     await expect(
       runSlackConnectionSetupCli(

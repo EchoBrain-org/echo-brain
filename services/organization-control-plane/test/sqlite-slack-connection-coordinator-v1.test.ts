@@ -139,7 +139,7 @@ afterEach(() => {
     rmSync(value, { recursive: true, force: true });
 });
 
-describe("clean stopped-state Slack connection v1", () => {
+describe("stopped-state Slack connection v1", () => {
   it("persists one verified active D2 connection and only a credential-reference digest", async () => {
     const state = setup();
     const secrets = new FileOrganizationSecretStore(
@@ -226,7 +226,7 @@ describe("clean stopped-state Slack connection v1", () => {
     expect(readSlackBotToken).toHaveBeenCalledOnce();
   });
 
-  it("rejects a different public command once a clean connection is active", async () => {
+  it("rejects a different public command once a Slack connection is active", async () => {
     const state = setup();
     const secrets = new FileOrganizationSecretStore(
       join(state.directory, "secrets"),

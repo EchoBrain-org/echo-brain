@@ -23,7 +23,7 @@ function parseCanonical(json: string): unknown {
   const value = JSON.parse(json) as unknown;
   if (canonicalJson(value) !== json) {
     throw new Error(
-      "clean approval activation found non-canonical stored state",
+      "approval activation found non-canonical stored state",
     );
   }
   return value;
@@ -39,7 +39,7 @@ function slackConnectionConfigurationSha256(approvalChannelId: string) {
   });
 }
 
-/** Revalidates the exact current owner link against the one active clean tool. */
+/** Revalidates the exact current owner link against the one active Slack connection. */
 export function selectCurrentOwnerSlackReactionApprovalTargetV1(
   database: Database.Database,
   state: VerifiedOrganizationControlStateV1,
@@ -60,7 +60,7 @@ export function selectCurrentOwnerSlackReactionApprovalTargetV1(
     | undefined;
   if (connectionRow === undefined) {
     throw new Error(
-      "clean approval activation requires the active clean Slack connection",
+      "approval activation requires the active Slack connection",
     );
   }
   const connection = validateOrganizationToolConnectionContractV2(
@@ -77,7 +77,7 @@ export function selectCurrentOwnerSlackReactionApprovalTargetV1(
       slackConnectionConfigurationSha256(flags.approval_channel_id)
   ) {
     throw new Error(
-      "clean approval activation connection is not the selected clean Slack surface",
+      "approval activation connection is not the selected Slack surface",
     );
   }
   const links = database
@@ -109,7 +109,7 @@ export function selectCurrentOwnerSlackReactionApprovalTargetV1(
   }>;
   if (links.length !== 1 || links[0] === undefined) {
     throw new Error(
-      "clean reaction approval activation requires one current owner Slack identity link",
+      "reaction approval activation requires one current owner Slack identity link",
     );
   }
   const link = validateExternalHumanIdentityLinkContractV2(

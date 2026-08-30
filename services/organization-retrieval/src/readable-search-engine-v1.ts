@@ -36,7 +36,7 @@ import {
 } from "./persistence/baseline.js";
 import { openReadableSearchPlane } from "./persistence/open-readable-search-plane.js";
 
-/** The only policies accepted by the clean multi-person retrieval lineage. */
+/** The only policies accepted by the readable-search generation lineage. */
 export const ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 =
   "organization-member-readable-person-v2" as const;
 export const RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 =
@@ -90,7 +90,7 @@ export interface ReadableSearchExactHeadV1 {
   readonly position: number;
   readonly record_sha256: Sha256Digest | null;
 }
-/** Fully materialized Layer 1 item. This package never opens Authority or record state. */
+/** Fully materialized upstream fact item. This package never opens Authority or record state. */
 export interface ReadableSearchAtomV1 {
   readonly authority_id: string;
   readonly organization_id: string;
@@ -293,7 +293,7 @@ function policyBranch(atom: ReadableSearchAtomV1): SegmentKind {
     text(atom.reviewer_membership_id, "reviewer_membership_id");
     return "reviewer";
   }
-  throw new Error("clean retrieval atom policy is unsupported");
+  throw new Error("readable-search engine atom policy is unsupported");
 }
 function assertAtom(
   atom: ReadableSearchAtomV1,
@@ -305,16 +305,16 @@ function assertAtom(
     atom.state_lineage_id !== input.lineage.state_lineage_id
   )
     throw new Error(
-      "clean retrieval atom lineage disagrees with generation lineage",
+      "readable-search engine atom lineage disagrees with generation lineage",
     );
   positive(atom.record_position, "record_position");
   if (atom.record_position > input.exact_head.position)
-    throw new Error("clean retrieval atom is beyond exact head");
+    throw new Error("readable-search engine atom is beyond exact head");
   if (
     atom.record_position === input.exact_head.position &&
     atom.record_sha256 !== input.exact_head.record_sha256
   ) {
-    throw new Error("clean retrieval atom disagrees with exact head record");
+    throw new Error("readable-search engine atom disagrees with exact head record");
   }
   nonNegative(atom.atom_order, "atom_order");
   positive(atom.authorization_audit_sequence, "authorization_audit_sequence");
@@ -333,7 +333,7 @@ function assertAtom(
   ] as const)
     validDigest(value, label);
   if (digest(atom.text) !== atom.text_sha256)
-    throw new Error("clean retrieval atom text does not bind text_sha256");
+    throw new Error("readable-search engine atom text does not bind text_sha256");
   const branch = policyBranch(atom);
   const expected =
     branch === "organization-member"
@@ -341,7 +341,7 @@ function assertAtom(
       : input.restricted_reviewer_policy_contract_sha256;
   if (atom.policy_contract_sha256 !== expected)
     throw new Error(
-      "clean retrieval atom policy contract disagrees with current policy",
+      "readable-search engine atom policy contract disagrees with current policy",
     );
 }
 function segmentIdentity(
@@ -424,7 +424,7 @@ function stampLineageManifest(
     readableSearchPlaneBaselineSha256V1(baselineFor(plane))
   )
     throw new Error(
-      `${plane} lineage schema digest does not match clean baseline`,
+      `${plane} lineage schema digest does not match frozen baseline`,
     );
   if (
     digest(metadata.manifest_json) !== metadata.manifest_sha256 ||
@@ -511,7 +511,7 @@ function buildSegment(
     reviewer_membership_id,
   );
   const directory = join(staging, SEGMENTS_DIRECTORY, identity.segment_id);
-  ensurePrivateDirectory(directory, "clean retrieval segment directory");
+  ensurePrivateDirectory(directory, "readable-search engine segment directory");
   const databases = new Map<Plane, Database.Database>();
   try {
     for (const plane of PLANES) {
@@ -698,7 +698,7 @@ function assertWithinAdmissionBudget(
 ): void {
   const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
   if (input.atoms.length > budget.maximum_atoms)
-    throw new Error("clean retrieval generation exceeds maximum_atoms");
+    throw new Error("readable-search generation exceeds maximum_atoms");
   const segments = new Set<string>();
   segments.add(
     segmentIdentity(
@@ -716,7 +716,7 @@ function assertWithinAdmissionBudget(
       budget.maximum_atom_text_utf8_bytes
     )
       throw new Error(
-        "clean retrieval generation exceeds maximum_atom_text_utf8_bytes",
+        "readable-search generation exceeds maximum_atom_text_utf8_bytes",
       );
     segments.add(
       segmentIdentity(
@@ -729,13 +729,13 @@ function assertWithinAdmissionBudget(
     );
     postings += analyzeReadableSearchDocument(atom.text).size;
     if (postings > budget.maximum_postings)
-      throw new Error("clean retrieval generation exceeds maximum_postings");
+      throw new Error("readable-search generation exceeds maximum_postings");
   }
   if (segments.size > budget.maximum_segments)
-    throw new Error("clean retrieval generation exceeds maximum_segments");
+    throw new Error("readable-search generation exceeds maximum_segments");
 }
 
-/** Builds one immutable Layer 2 generation solely from an exact materialized Layer 1 head. */
+/** Builds one immutable readable-search generation solely from an exact materialized upstream fact head. */
 export function buildReadableSearchGenerationV1(
   input: BuildReadableSearchGenerationV1Input,
 ): BuiltReadableSearchGenerationV1 {
@@ -744,7 +744,7 @@ export function buildReadableSearchGenerationV1(
     resolve(input.state_directory) !== input.state_directory
   )
     throw new Error(
-      "clean retrieval state_directory must be canonical absolute path",
+      "readable-search engine state_directory must be canonical absolute path",
     );
   text(input.lineage.authority_id, "authority_id");
   text(input.lineage.organization_id, "organization_id");
@@ -783,7 +783,7 @@ export function buildReadableSearchGenerationV1(
   for (const atom of input.atoms) {
     assertAtom(atom, input);
     if (seen.has(atom.atom_id))
-      throw new Error("duplicate clean retrieval atom identity");
+      throw new Error("duplicate readable-search engine atom identity");
     seen.add(atom.atom_id);
   }
   assertWithinAdmissionBudget(input);
@@ -791,15 +791,15 @@ export function buildReadableSearchGenerationV1(
   const generations = join(root, GENERATIONS_DIRECTORY);
   ensurePrivateDirectory(
     input.state_directory,
-    "clean retrieval state directory",
+    "readable-search engine state directory",
   );
-  ensurePrivateDirectory(root, "clean retrieval root");
-  ensurePrivateDirectory(generations, "clean retrieval generations directory");
+  ensurePrivateDirectory(root, "readable-search engine root");
+  ensurePrivateDirectory(generations, "readable-search generations directory");
   for (const name of readdirSync(generations))
     if (STAGING_DIRECTORY.test(name)) {
       const orphan = join(generations, name);
-      assertWithin(orphan, generations, "clean retrieval staging");
-      ensurePrivateDirectory(orphan, "clean retrieval staging");
+      assertWithin(orphan, generations, "readable-search engine staging");
+      ensurePrivateDirectory(orphan, "readable-search engine staging");
       rmSync(orphan, { recursive: true, force: false });
     }
   const staging = join(
@@ -810,7 +810,7 @@ export function buildReadableSearchGenerationV1(
   try {
     ensurePrivateDirectory(
       join(staging, SEGMENTS_DIRECTORY),
-      "clean retrieval staging segments directory",
+      "readable-search engine staging segments directory",
     );
     const groups = new Map<
       string,
@@ -953,17 +953,17 @@ export function buildReadableSearchGenerationV1(
       assertWithin(
         finalDirectory,
         generations,
-        "existing clean retrieval generation",
+        "existing readable-search generation",
       );
       ensurePrivateDirectory(
         finalDirectory,
-        "existing clean retrieval generation",
+        "existing readable-search generation",
       );
       const manifestPath = join(finalDirectory, "manifest.json");
-      assertPrivateFile(manifestPath, "existing clean retrieval manifest");
+      assertPrivateFile(manifestPath, "existing readable-search engine manifest");
       if (readFileSync(manifestPath, "utf8") !== canonicalJson(manifest))
         throw new Error(
-          "existing clean retrieval generation differs under the same identity",
+          "existing readable-search generation differs under the same identity",
         );
       rmSync(staging, { recursive: true, force: true });
       return {
@@ -1173,7 +1173,7 @@ function assertReadableSearchGenerationManifest(
     manifest.schema_version !== 1 ||
     manifest.kind !== "clean-readable-search-generation-manifest-v1"
   )
-    throw new Error("clean retrieval generation manifest kind is invalid");
+    throw new Error("readable-search generation manifest kind is invalid");
   validDigest(manifest.generation_id, "generation_id");
   text(manifest.authority_id, "generation authority_id");
   text(manifest.organization_id, "generation organization_id");
@@ -1186,13 +1186,13 @@ function assertReadableSearchGenerationManifest(
   validDigest(manifest.input_root, "generation input_root");
   validDigest(manifest.builder_artifact_sha256, "builder_artifact_sha256");
   if (!Array.isArray(manifest.policies) || manifest.policies.length !== 2)
-    throw new Error("clean retrieval generation policies are invalid");
+    throw new Error("readable-search generation policies are invalid");
   const [member, reviewer] = manifest.policies;
   if (
     member?.policy_id !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
     reviewer?.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
   )
-    throw new Error("clean retrieval generation policy order is invalid");
+    throw new Error("readable-search generation policy order is invalid");
   validDigest(member.policy_contract_sha256, "member policy contract");
   validDigest(reviewer.policy_contract_sha256, "reviewer policy contract");
   if (
@@ -1200,7 +1200,7 @@ function assertReadableSearchGenerationManifest(
     manifest.analyzer.analyzer_contract_sha256 === undefined ||
     manifest.analyzer.analyzer_source_sha256 === undefined
   )
-    throw new Error("clean retrieval generation analyzer is missing");
+    throw new Error("readable-search generation analyzer is missing");
   validDigest(
     manifest.analyzer.analyzer_contract_sha256,
     "generation analyzer contract",
@@ -1213,7 +1213,7 @@ function assertReadableSearchGenerationManifest(
     manifest.index?.format_version !== 1 ||
     typeof manifest.index.sqlite_version !== "string"
   )
-    throw new Error("clean retrieval generation index is invalid");
+    throw new Error("readable-search generation index is invalid");
   for (const [label, value] of Object.entries(manifest.roots ?? {}))
     validDigest(value, `generation ${label}`);
   if (
@@ -1223,7 +1223,7 @@ function assertReadableSearchGenerationManifest(
     !Array.isArray(manifest.segments) ||
     manifest.segments.length === 0
   )
-    throw new Error("clean retrieval generation roots or segments are missing");
+    throw new Error("readable-search generation roots or segments are missing");
   const { generation_id: _generationId, ...withoutIdentity } = manifest;
   if (
     canonicalSha256({
@@ -1231,7 +1231,7 @@ function assertReadableSearchGenerationManifest(
       kind: "clean-readable-search-generation-identity-v1",
     }) !== manifest.generation_id
   )
-    throw new Error("clean retrieval generation identity is invalid");
+    throw new Error("readable-search generation identity is invalid");
 }
 
 function assertSegmentManifest(
@@ -1246,7 +1246,7 @@ function assertSegmentManifest(
     (manifest.policy_id !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 &&
       manifest.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)
   )
-    throw new Error("clean retrieval segment manifest is invalid");
+    throw new Error("readable-search engine segment manifest is invalid");
   validDigest(manifest.segment_id, "segment_id");
   validDigest(manifest.policy_contract_sha256, "segment policy contract");
   validDigest(manifest.facts_root, "segment facts root");
@@ -1270,7 +1270,7 @@ function assertSegmentManifest(
         typeof manifest.reviewer_principal_id !== "string" ||
         typeof manifest.reviewer_membership_id !== "string"))
   )
-    throw new Error("clean retrieval segment policy and tuple disagree");
+    throw new Error("readable-search engine segment policy and tuple disagree");
 }
 
 function rootForRead(
@@ -1339,7 +1339,7 @@ function validateReadableSearchPlaneLineage(
     database.pragma("user_version", { simple: true }) !== 1
   )
     throw new Error(
-      `clean retrieval ${plane} plane baseline identity is invalid`,
+      `readable-search engine ${plane} plane baseline identity is invalid`,
     );
   if (
     database
@@ -1348,7 +1348,7 @@ function validateReadableSearchPlaneLineage(
       )
       .get() !== undefined
   )
-    throw new Error("clean retrieval plane must not have a migration ledger");
+    throw new Error("readable-search engine plane must not have a migration ledger");
   const lineage = database
     .prepare(
       `SELECT manifest_json, manifest_sha256 FROM ${MANIFEST_TABLE} WHERE singleton = 1`,
@@ -1362,7 +1362,7 @@ function validateReadableSearchPlaneLineage(
       lineage.manifest_json
   )
     throw new Error(
-      `clean retrieval ${plane} plane lineage manifest is invalid`,
+      `readable-search engine ${plane} plane lineage manifest is invalid`,
     );
   const lineageBody = JSON.parse(lineage.manifest_json) as Record<
     string,
@@ -1377,7 +1377,7 @@ function validateReadableSearchPlaneLineage(
     lineageBody.schema_sha256 !== readableSearchPlaneBaselineSha256V1(baseline)
   )
     throw new Error(
-      `clean retrieval ${plane} plane lineage is not generation-bound`,
+      `readable-search engine ${plane} plane lineage is not generation-bound`,
     );
   const metadata = database
     .prepare(
@@ -1399,7 +1399,7 @@ function validateReadableSearchPlaneLineage(
       manifest.analyzer.analyzer_contract_sha256 ||
     metadata.finalized !== 1
   )
-    throw new Error(`clean retrieval ${plane} plane metadata is invalid`);
+    throw new Error(`readable-search engine ${plane} plane metadata is invalid`);
 }
 
 function openReadableSearchReadonlyPlane(
@@ -1438,7 +1438,7 @@ function readAndValidateReadableSearchSegment(
     join(generationDirectory, SEGMENTS_DIRECTORY),
     "segment",
   );
-  assertPrivateDirectory(directory, "clean retrieval segment directory");
+  assertPrivateDirectory(directory, "readable-search engine segment directory");
   const names = readdirSync(directory).sort();
   if (
     canonicalJson(names) !==
@@ -1449,14 +1449,14 @@ function readAndValidateReadableSearchSegment(
       "segment-manifest.json",
     ])
   )
-    throw new Error("clean retrieval segment has undeclared entries");
+    throw new Error("readable-search engine segment has undeclared entries");
   const segmentSource = readFileSync(
     join(directory, "segment-manifest.json"),
     "utf8",
   );
   const segmentValue = readCanonicalPrivateJson(
     join(directory, "segment-manifest.json"),
-    "clean retrieval segment manifest",
+    "readable-search engine segment manifest",
   );
   assertSegmentManifest(segmentValue);
   const segment = segmentValue;
@@ -1468,7 +1468,7 @@ function readAndValidateReadableSearchSegment(
     segment.lexical_root !== entry.lexical_root
   )
     throw new Error(
-      "clean retrieval segment manifest does not match generation",
+      "readable-search engine segment manifest does not match generation",
     );
   const policy = generation.policies.find(
     (value) => value.policy_id === segment.policy_id,
@@ -1477,7 +1477,7 @@ function readAndValidateReadableSearchSegment(
     policy === undefined ||
     policy.policy_contract_sha256 !== segment.policy_contract_sha256
   )
-    throw new Error("clean retrieval segment policy is not generation-bound");
+    throw new Error("readable-search engine segment policy is not generation-bound");
   const expectedSegmentId = canonicalSha256({
     schema_version: 1,
     kind: "clean-readable-search-segment-identity-v1",
@@ -1491,13 +1491,13 @@ function readAndValidateReadableSearchSegment(
     reviewer_membership_id: segment.reviewer_membership_id,
   });
   if (expectedSegmentId !== segment.segment_id)
-    throw new Error("clean retrieval segment identity is invalid");
+    throw new Error("readable-search engine segment identity is invalid");
   const databases = new Map<Plane, Database.Database>();
   try {
     for (const plane of PLANES) {
       const database = openReadableSearchReadonlyPlane(
         join(directory, `${plane}.sqlite`),
-        `clean retrieval ${plane} plane`,
+        `readable-search engine ${plane} plane`,
       );
       databases.set(plane, database);
       validateReadableSearchPlaneLineage(database, plane, generation, segment);
@@ -1541,7 +1541,7 @@ function readAndValidateReadableSearchSegment(
         postings,
       }) !== segment.lexical_root
     )
-      throw new Error("clean retrieval segment plane roots are invalid");
+      throw new Error("readable-search engine segment plane roots are invalid");
     const contentByAtom = new Map(content.map((item) => [item.atom_id, item]));
     const documentByAtom = new Map(
       documents.map((item) => [item.atom_id, item]),
@@ -1550,7 +1550,7 @@ function readAndValidateReadableSearchSegment(
       contentByAtom.size !== facts.length ||
       documentByAtom.size !== facts.length
     )
-      throw new Error("clean retrieval segment has unbound rows");
+      throw new Error("readable-search engine segment has unbound rows");
     for (const fact of facts) {
       const item = contentByAtom.get(fact.atom_id);
       const document = documentByAtom.get(fact.atom_id);
@@ -1579,7 +1579,7 @@ function readAndValidateReadableSearchSegment(
         readableSearchProvenanceBindingFromFact(fact) !== fact.provenance_binding_sha256
       )
         throw new Error(
-          "clean retrieval fact/content/lexical binding is invalid",
+          "readable-search engine fact/content/lexical binding is invalid",
         );
     }
     return {
@@ -1594,7 +1594,7 @@ function readAndValidateReadableSearchSegment(
 }
 
 /**
- * Reads one active, immutable Layer 2 generation. It does not open Authority,
+ * Reads one active, immutable readable-search generation. It does not open Authority,
  * record, or a migration ledger, and it never creates or modifies state.
  */
 function validateAndWarmReadableSearchGenerationV1(
@@ -1602,7 +1602,7 @@ function validateAndWarmReadableSearchGenerationV1(
 ): ReadableSearchResultV1 {
   assertCanonicalAbsoluteDirectory(
     input.state_directory,
-    "clean retrieval state directory",
+    "readable-search engine state directory",
   );
   const active = input.active_generation;
   validDigest(active.generation_id, "active generation_id");
@@ -1614,7 +1614,7 @@ function validateAndWarmReadableSearchGenerationV1(
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
     throw new Error(
-      "clean retrieval limit must be a safe integer from one through ten",
+      "readable-search engine limit must be a safe integer from one through ten",
     );
   const terms = analyzeReadableSearchQuery(input.query);
   const generations = join(
@@ -1624,27 +1624,27 @@ function validateAndWarmReadableSearchGenerationV1(
   );
   assertCanonicalAbsoluteDirectory(
     generations,
-    "clean retrieval generations directory",
+    "readable-search generations directory",
   );
   const generationDirectory = join(generations, active.generation_id);
   assertWithin(generationDirectory, generations, "active generation");
   assertPrivateDirectory(
     generationDirectory,
-    "active clean retrieval generation",
+    "active readable-search generation",
   );
   const entries = readdirSync(generationDirectory).sort();
   if (
     canonicalJson(entries) !==
     canonicalJson(["manifest.json", SEGMENTS_DIRECTORY])
   )
-    throw new Error("active clean retrieval generation has undeclared entries");
+    throw new Error("active readable-search generation has undeclared entries");
   const manifestSource = readFileSync(
     join(generationDirectory, "manifest.json"),
     "utf8",
   );
   const manifestValue = readCanonicalPrivateJson(
     join(generationDirectory, "manifest.json"),
-    "active clean retrieval manifest",
+    "active readable-search engine manifest",
   );
   assertReadableSearchGenerationManifest(manifestValue);
   const manifest = manifestValue;
@@ -1655,14 +1655,14 @@ function validateAndWarmReadableSearchGenerationV1(
     !sameExactHead(manifest.exact_head, active.exact_head)
   )
     throw new Error(
-      "active clean retrieval pointer does not bind this generation",
+      "active readable-search engine pointer does not bind this generation",
     );
   if (resolve(generationDirectory) !== generationDirectory)
-    throw new Error("active clean retrieval generation is not canonical");
+    throw new Error("active readable-search generation is not canonical");
   const segmentDirectory = join(generationDirectory, SEGMENTS_DIRECTORY);
   assertPrivateDirectory(
     segmentDirectory,
-    "clean retrieval segments directory",
+    "readable-search engine segments directory",
   );
   const names = readdirSync(segmentDirectory).sort();
   const declared = manifest.segments
@@ -1672,7 +1672,7 @@ function validateAndWarmReadableSearchGenerationV1(
     names.length !== declared.length ||
     names.some((name, index) => name !== declared[index])
   )
-    throw new Error("active clean retrieval generation has mixed segments");
+    throw new Error("active readable-search generation has mixed segments");
   const expectedRoots = {
     facts_root: canonicalSha256({
       schema_version: 1,
@@ -1695,14 +1695,14 @@ function validateAndWarmReadableSearchGenerationV1(
     expectedRoots.content_root !== manifest.roots.content_root ||
     expectedRoots.lexical_root !== manifest.roots.lexical_root
   )
-    throw new Error("clean retrieval generation roots are invalid");
+    throw new Error("readable-search generation roots are invalid");
   const seenSegments = new Set<string>();
   const seenAtoms = new Set<string>();
   const validatedSegments: ReadableSearchSegmentRows[] = [];
   const admitted: ReadableSearchSegmentRows[] = [];
   for (const entry of manifest.segments) {
     if (seenSegments.has(entry.segment_id))
-      throw new Error("clean retrieval generation repeats a segment");
+      throw new Error("readable-search generation repeats a segment");
     seenSegments.add(entry.segment_id);
     const segment = readAndValidateReadableSearchSegment(
       generationDirectory,
@@ -1712,7 +1712,7 @@ function validateAndWarmReadableSearchGenerationV1(
     validatedSegments.push(segment);
     for (const fact of segment.facts) {
       if (seenAtoms.has(fact.atom_id))
-        throw new Error("clean retrieval generation repeats an atom");
+        throw new Error("readable-search generation repeats an atom");
       seenAtoms.add(fact.atom_id);
     }
     if (
@@ -1738,7 +1738,7 @@ function validateAndWarmReadableSearchGenerationV1(
     reviewer_membership_id: null,
   });
   if (!seenSegments.has(memberSegmentId))
-    throw new Error("clean retrieval generation omits its member segment");
+    throw new Error("readable-search generation omits its member segment");
   const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
   const postingCount = validatedSegments.reduce(
     (sum, segment) => sum + segment.postings.length,
@@ -1756,7 +1756,7 @@ function validateAndWarmReadableSearchGenerationV1(
       ),
     )
   )
-    throw new Error("clean retrieval generation exceeds current admission budget");
+    throw new Error("readable-search generation exceeds current admission budget");
   // Replacement is deliberately one-for-one. No generation survives beside
   // the newly validated immutable rows.
   validatedActiveGenerationHandleV1 = null;
@@ -1843,14 +1843,14 @@ export function searchReadableSearchGenerationV1(
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
     throw new Error(
-      "clean retrieval limit must be a safe integer from one through ten",
+      "readable-search engine limit must be a safe integer from one through ten",
     );
   const handle = validatedActiveGenerationHandleV1;
   if (
     handle === null ||
     handle.key !== activeGenerationKey(input.active_generation)
   )
-    throw new Error("clean retrieval active-generation handle is unavailable");
+    throw new Error("readable-search engine active-generation handle is unavailable");
   const terms = analyzeReadableSearchQuery(input.query);
   const admitted = handle.segments.filter(
     (segment) =>

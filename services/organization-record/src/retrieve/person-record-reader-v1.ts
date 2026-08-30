@@ -55,18 +55,18 @@ export class PersonRecordReaderV1 {
   list(
     input: PersonRecordReaderV1Input,
   ): readonly PersonReadableRecordV1[] {
-    requiredText(input.authority_id, "clean Person record authority_id");
-    requiredText(input.organization_id, "clean Person record organization_id");
+    requiredText(input.authority_id, "Person record authority_id");
+    requiredText(input.organization_id, "Person record organization_id");
     requiredText(
       input.state_lineage_id,
-      "clean Person record state_lineage_id",
+      "Person record state_lineage_id",
     );
-    requiredText(input.principal_id, "clean Person record principal_id");
-    requiredText(input.membership_id, "clean Person record membership_id");
+    requiredText(input.principal_id, "Person record principal_id");
+    requiredText(input.membership_id, "Person record membership_id");
     const limit = input.limit ?? DEFAULT_LIMIT;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
       throw new Error(
-        `clean Person record limit must be an integer from 1 to ${MAX_LIMIT}`,
+        `Person record limit must be an integer from 1 to ${MAX_LIMIT}`,
       );
     }
 
@@ -121,11 +121,11 @@ export class PersonRecordReaderV1 {
     return Object.freeze(
       rows.map((row) => {
         if (!Number.isSafeInteger(row.position) || row.position < 1) {
-          throw new Error("clean Person readable record position is invalid");
+          throw new Error("Person readable record position is invalid");
         }
         requiredText(
           row.approval_id,
-          "clean Person readable record approval_id",
+          "Person readable record approval_id",
         );
         return Object.freeze({
           position: row.position,
@@ -133,7 +133,7 @@ export class PersonRecordReaderV1 {
           record_sha256: row.record_sha256,
           envelope: asObject(
             parseCanonicalJson(row.canonical_envelope),
-            "clean Person readable V4 envelope",
+            "Person readable V4 envelope",
           ),
         });
       }),

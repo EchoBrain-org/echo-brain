@@ -25,14 +25,14 @@ export interface SlackBotTokenReaderV1 {
 function parseCanonical(json: string): unknown {
   const value = JSON.parse(json) as unknown;
   if (canonicalJson(value) !== json) {
-    throw new Error("stored clean Slack state is not canonical");
+    throw new Error("stored Slack state is not canonical");
   }
   return value;
 }
 
 /**
  * Resolves the one opaque file-secret reference whose digest is committed by
- * the active clean Slack state. No secret reference or token is persisted in
+ * the active Slack state. No secret reference or token is persisted in
  * the control database, returned by this seam, or placed in the observer API.
  */
 export class SqliteSlackBotTokenReaderV1 implements SlackBotTokenReaderV1 {
@@ -59,7 +59,7 @@ export class SqliteSlackBotTokenReaderV1 implements SlackBotTokenReaderV1 {
       row.current_status !== "active" ||
       row.state_sha256 !== input.connection_state_sha256
     ) {
-      throw new Error("clean Slack bot connection state is not active");
+      throw new Error("Slack bot connection state is not active");
     }
     const state = validateOrganizationToolConnectionStateV2(
       parseCanonical(row.state_json),
@@ -69,7 +69,7 @@ export class SqliteSlackBotTokenReaderV1 implements SlackBotTokenReaderV1 {
       state.connection_status !== "active"
     ) {
       throw new Error(
-        "clean Slack bot connection state digest is invalid",
+        "Slack bot connection state digest is invalid",
       );
     }
     const references = this.secrets
@@ -80,7 +80,7 @@ export class SqliteSlackBotTokenReaderV1 implements SlackBotTokenReaderV1 {
       );
     if (references.length !== 1 || references[0] === undefined) {
       throw new Error(
-        "clean Slack bot credential reference is unavailable",
+        "Slack bot credential reference is unavailable",
       );
     }
     return this.secrets.read(references[0]);

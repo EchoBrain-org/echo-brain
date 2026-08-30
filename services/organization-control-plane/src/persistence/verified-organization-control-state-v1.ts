@@ -103,19 +103,19 @@ interface OrganizationControlRootBinding {
 }
 
 function parseRootManifest(path: string): OrganizationControlRootBinding {
-  assertPrivateFile(path, "clean state root manifest");
+  assertPrivateFile(path, "organization control state root manifest");
   const raw = readFileSync(path, "utf8");
   if (Buffer.byteLength(raw, "utf8") > 16 * 1024) {
-    throw new Error("clean state root manifest exceeds the size limit");
+    throw new Error("organization control state root manifest exceeds the size limit");
   }
   let root: unknown;
   try {
     root = JSON.parse(raw) as unknown;
   } catch {
-    throw new Error("clean state root manifest is not JSON");
+    throw new Error("organization control state root manifest is not JSON");
   }
   if (canonicalJson(root) !== raw) {
-    throw new Error("clean state root manifest is not canonical");
+    throw new Error("organization control state root manifest is not canonical");
   }
   const body = exactObject(
     root,
@@ -129,7 +129,7 @@ function parseRootManifest(path: string): OrganizationControlRootBinding {
       "created_at",
       "creating_artifact_revision",
     ],
-    "clean state root manifest",
+    "organization control state root manifest",
   );
   if (
     body.schema_version !== 1 ||
@@ -137,7 +137,7 @@ function parseRootManifest(path: string): OrganizationControlRootBinding {
     !Array.isArray(body.databases) ||
     body.databases.length !== REQUIRED_ROLES.length
   ) {
-    throw new Error("clean state root manifest is not v1");
+    throw new Error("organization control state root manifest is not v1");
   }
   const roles = new Set<string>();
   let controlPlane = false;
@@ -145,18 +145,18 @@ function parseRootManifest(path: string): OrganizationControlRootBinding {
     const value = exactObject(
       slot,
       ["role", "location", "application_id"],
-      "clean state database slot",
+      "organization control state database slot",
     );
-    const role = text(value.role, "clean state database slot role");
+    const role = text(value.role, "organization control state database slot role");
     if (!REQUIRED_ROLES.includes(role as (typeof REQUIRED_ROLES)[number])) {
-      throw new Error("clean state root manifest has an unsupported role");
+      throw new Error("organization control state root manifest has an unsupported role");
     }
     roles.add(role);
     if (role === "control-plane") {
       const location = exactObject(
         value.location,
         ["kind", "filename"],
-        "clean control-plane location",
+        "control-plane location",
       );
       if (
         location.kind !== "state_file" ||
@@ -164,7 +164,7 @@ function parseRootManifest(path: string): OrganizationControlRootBinding {
         value.application_id !== ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID
       ) {
         throw new Error(
-          "clean state root manifest has an invalid control-plane slot",
+          "organization control state root manifest has an invalid control-plane slot",
         );
       }
       controlPlane = true;
@@ -172,21 +172,21 @@ function parseRootManifest(path: string): OrganizationControlRootBinding {
   }
   if (roles.size !== REQUIRED_ROLES.length || !controlPlane) {
     throw new Error(
-      "clean state root manifest does not cover the clean v1 roles",
+      "organization control state root manifest does not cover the v1 roles",
     );
   }
   return Object.freeze({
-    authority_id: text(body.authority_id, "clean state authority_id"),
-    organization_id: text(body.organization_id, "clean state organization_id"),
+    authority_id: text(body.authority_id, "organization control state authority_id"),
+    organization_id: text(body.organization_id, "organization control state organization_id"),
     state_lineage_id: text(
       body.state_lineage_id,
-      "clean state state_lineage_id",
+      "organization control state state_lineage_id",
     ),
   });
 }
 
 function verifyControlDatabase(path: string, binding: OrganizationControlRootBinding): void {
-  assertPrivateFile(path, "clean integrations database");
+  assertPrivateFile(path, "integrations database");
   const database = new Database(path, { readonly: true, fileMustExist: true });
   try {
     if (
@@ -196,7 +196,7 @@ function verifyControlDatabase(path: string, binding: OrganizationControlRootBin
         ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2
     ) {
       throw new Error(
-        "clean integrations database has the wrong baseline identity",
+        "integrations database has the wrong baseline identity",
       );
     }
     const metadata = database
@@ -211,7 +211,7 @@ function verifyControlDatabase(path: string, binding: OrganizationControlRootBin
       metadata.organization_id !== binding.organization_id
     ) {
       throw new Error(
-        "clean integrations metadata does not match its root manifest",
+        "integrations metadata does not match its root manifest",
       );
     }
     const manifest = database
@@ -221,19 +221,19 @@ function verifyControlDatabase(path: string, binding: OrganizationControlRootBin
       )
       .get() as { manifest_json: string; manifest_sha256: string } | undefined;
     if (manifest === undefined || !DIGEST.test(manifest.manifest_sha256)) {
-      throw new Error("clean integrations database has no lineage manifest");
+      throw new Error("integrations database has no lineage manifest");
     }
     let body: unknown;
     try {
       body = JSON.parse(manifest.manifest_json) as unknown;
     } catch {
-      throw new Error("clean integrations lineage manifest is not JSON");
+      throw new Error("integrations lineage manifest is not JSON");
     }
     if (
       canonicalJson(body) !== manifest.manifest_json ||
       canonicalSha256(body) !== manifest.manifest_sha256
     ) {
-      throw new Error("clean integrations lineage manifest digest is invalid");
+      throw new Error("integrations lineage manifest digest is invalid");
     }
     const record = exactObject(
       body,
@@ -249,7 +249,7 @@ function verifyControlDatabase(path: string, binding: OrganizationControlRootBin
         "created_at",
         "creating_artifact_revision",
       ],
-      "clean integrations lineage manifest",
+      "integrations lineage manifest",
     );
     if (
       record.schema_version !== 1 ||
@@ -263,7 +263,7 @@ function verifyControlDatabase(path: string, binding: OrganizationControlRootBin
       record.schema_sha256 !== organizationControlBaselineSha256V2()
     ) {
       throw new Error(
-        "clean integrations lineage manifest does not match private-approval baseline v2",
+        "integrations lineage manifest does not match private-approval baseline v2",
       );
     }
   } finally {
@@ -287,10 +287,10 @@ export function verifyOrganizationControlStateV1(
     !existsSync(stateDirectory)
   ) {
     throw new Error(
-      "clean state directory must be an existing normalized absolute path",
+      "organization control state directory must be an existing normalized absolute path",
     );
   }
-  assertPrivateDirectory(stateDirectory, "clean state directory");
+  assertPrivateDirectory(stateDirectory, "organization control state directory");
   const binding = parseRootManifest(join(stateDirectory, ROOT_MANIFEST_FILE));
   const integrationsDatabasePath = join(stateDirectory, "integrations.sqlite");
   verifyControlDatabase(integrationsDatabasePath, binding);

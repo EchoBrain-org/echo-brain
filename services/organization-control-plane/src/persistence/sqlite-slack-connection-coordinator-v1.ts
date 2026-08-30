@@ -88,7 +88,7 @@ interface StoredActiveConnection {
 function parseCanonical(json: string): unknown {
   const value = JSON.parse(json) as unknown;
   if (canonicalJson(value) !== json) {
-    throw new Error("stored clean Slack connection body is not canonical");
+    throw new Error("stored Slack connection body is not canonical");
   }
   return value;
 }
@@ -139,7 +139,7 @@ function activeConnection(
     state.connection_contract_sha256 !== row.contract_sha256 ||
     state.connection_status !== "active"
   ) {
-    throw new Error("stored clean Slack connection digest chain is invalid");
+    throw new Error("stored Slack connection digest chain is invalid");
   }
   return Object.freeze({ connection, state });
 }
@@ -166,7 +166,7 @@ function existingResult(
   if (existing === undefined) return undefined;
   if (!samePublicConnection(existing, input)) {
     throw new SlackConnectionConflictError(
-      "a different clean Slack organization connection is already active",
+      "a different Slack organization connection is already active",
     );
   }
   return Object.freeze({
@@ -198,7 +198,7 @@ function assertMetadata(
     metadata.organization_id !== input.organization_id
   ) {
     throw new Error(
-      "clean Slack connection coordinates do not match control metadata",
+      "Slack connection coordinates do not match control metadata",
     );
   }
 }
@@ -222,7 +222,7 @@ function normalizedScopes(
 }
 
 /**
- * Persists the first clean Slack connection after provider verification. It is
+ * Persists the first Slack connection after provider verification. It is
  * intentionally a stopped-state seam: it neither opens a listener nor reads
  * an installation, enrollment, or lease.
  */
@@ -355,7 +355,7 @@ export async function connectSlackConnectionV1(
   }
 }
 
-/** A stopped-state `clean slack connect` command seam for a future CLI. */
+/** A stopped-state `slack connect` command seam for a future CLI. */
 export async function runSlackConnectionSetupCommandV1(
   input: RunSlackConnectionSetupCommandV1Input,
 ): Promise<ConnectedSlackConnectionV1> {

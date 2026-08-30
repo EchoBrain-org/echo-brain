@@ -514,7 +514,7 @@ class SqliteFinalizationTransaction implements PersonSlackReactionApprovalFinali
   }
 }
 
-/** Clean SQLite coordinator: Authority supplies membership stability only. */
+/** SQLite coordinator: Authority supplies membership stability only. */
 export class SqlitePersonSlackReactionApprovalFinalizationCoordinatorV2 implements PersonSlackReactionApprovalFinalizationCoordinatorV2 {
   constructor(
     private readonly input: SqlitePersonSlackReactionApprovalFinalizationCoordinatorV2Input,

@@ -41,13 +41,13 @@ function verifyAuthorityLineageManifest(
     | { readonly manifest_json: string; readonly manifest_sha256: string }
     | undefined;
   if (row === undefined) {
-    throw new Error("clean Authority database has no lineage manifest");
+    throw new Error("Authority database has no lineage manifest");
   }
   let manifest: unknown;
   try {
     manifest = JSON.parse(row.manifest_json) as unknown;
   } catch {
-    throw new Error("clean Authority lineage manifest is not JSON");
+    throw new Error("Authority lineage manifest is not JSON");
   }
   if (
     canonicalJson(manifest) !== row.manifest_json ||
@@ -56,7 +56,7 @@ function verifyAuthorityLineageManifest(
     typeof manifest !== "object" ||
     Array.isArray(manifest)
   ) {
-    throw new Error("clean Authority lineage manifest is invalid");
+    throw new Error("Authority lineage manifest is invalid");
   }
   const record = manifest as Record<string, unknown>;
   if (
@@ -69,13 +69,13 @@ function verifyAuthorityLineageManifest(
     record.database_schema_version !== AUTHORITY_SCHEMA_VERSION_V1 ||
     record.schema_sha256 !== AUTHORITY_BASELINE_SHA256_V1
   ) {
-    throw new Error("clean Authority lineage manifest does not match state");
+    throw new Error("Authority lineage manifest does not match state");
   }
 }
 
 function assertPrivateAuthorityDatabase(path: string): void {
   if (!existsSync(path)) {
-    throw new Error("clean Authority database is unavailable");
+    throw new Error("Authority database is unavailable");
   }
   const directory = lstatSync(dirname(path));
   const file = lstatSync(path);
@@ -93,7 +93,7 @@ function assertPrivateAuthorityDatabase(path: string): void {
     (file.mode & 0o777) !== 0o600
   ) {
     throw new Error(
-      "clean Authority database must be a current-user canonical private file",
+      "Authority database must be a current-user canonical private file",
     );
   }
 }
@@ -108,7 +108,7 @@ function readExactActiveOwner(
     database.pragma("user_version", { simple: true }) !==
       AUTHORITY_SCHEMA_VERSION_V1
   ) {
-    throw new Error("clean Authority database has the wrong baseline identity");
+    throw new Error("Authority database has the wrong baseline identity");
   }
   verifyAuthorityLineageManifest(database, expected);
   const metadata = database
@@ -125,7 +125,7 @@ function readExactActiveOwner(
     metadata.organization_id !== expected.organization_id
   ) {
     throw new Error(
-      "clean Authority metadata does not match the verified lineage",
+      "Authority metadata does not match the verified lineage",
     );
   }
   const owners = database
@@ -148,7 +148,7 @@ function readExactActiveOwner(
   }>;
   if (owners.length !== 1 || owners[0] === undefined) {
     throw new Error(
-      "clean stopped-state approval activation requires one active owner",
+      "stopped-state approval activation requires one active owner",
     );
   }
   const owner = owners[0];

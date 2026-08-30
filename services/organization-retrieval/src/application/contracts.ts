@@ -159,7 +159,7 @@ export interface ReadableSearchPlaneMetadata extends ReadableSearchSegmentIdenti
 
 /**
  * The retrieval build's only input row. Its producer has already admitted and
- * frozen the Layer 1 facts; this workspace neither opens nor imports Layer 1.
+ * frozen the upstream facts; this workspace neither opens nor imports them.
  */
 export interface ReadableSearchAdmittedAtom {
   readonly fact: RetrievalPermissionFact;
@@ -173,7 +173,7 @@ export type ReadableSearchUpstreamRowClassification =
   | 'organization-member-readable-v3-admitted';
 
 /**
- * The dense, text-free Layer 1 projection committed by upstream_input_root.
+ * The dense, text-free upstream projection committed by upstream_input_root.
  * The builder requires this preimage so the text-bearing atoms cannot be
  * supplied independently from the exact permission facts claimed by the root.
  */

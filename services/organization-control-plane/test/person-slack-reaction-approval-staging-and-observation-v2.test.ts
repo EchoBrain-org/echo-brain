@@ -34,9 +34,9 @@ import {
 } from "../src/persistence/sqlite-person-slack-reaction-approval-pending-v1.js";
 
 const COORDINATES = {
-  authority_id: "oau_founder",
-  organization_id: "org_founder",
-  state_lineage_id: "lin_founder",
+  authority_id: "oau_test",
+  organization_id: "org_test",
+  state_lineage_id: "lin_test",
 } as const;
 const NOW = "2026-08-22T12:00:00.000Z";
 const OBSERVED = "2026-08-22T12:01:00.000Z";
@@ -53,14 +53,14 @@ function setup(action: PersonApprovalAction) {
   applyOrganizationControlBaselineV1(database);
   const connection = buildOrganizationToolConnectionContractV2({
     ...COORDINATES,
-    connection_id: "con_founder",
+    connection_id: "con_test",
     provider_issuer: "https://slack.com",
     provider_tenant_kind: "workspace",
-    provider_tenant_id: "T_FOUND",
+    provider_tenant_id: "T_TEST",
     provider_enterprise_id: null,
     tool_kind: "slack",
-    provider_app_id: "A_FOUND",
-    provider_bot_id: "B_FOUND",
+    provider_app_id: "A_TEST",
+    provider_bot_id: "B_TEST",
     provider_bot_user_id: "U_BOT",
     required_provider_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
     public_connection_configuration_sha256: digest("configuration"),
@@ -72,7 +72,7 @@ function setup(action: PersonApprovalAction) {
     connection_status: "active",
     credential_reference_sha256: digest("credential"),
     observed_granted_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
-    verification_event_id: "verify_founder",
+    verification_event_id: "verify_test",
     verification_evidence_sha256: digest("verification"),
     verification_revision: 1,
     verified_at: NOW,
@@ -105,14 +105,14 @@ function setup(action: PersonApprovalAction) {
 
   const link = buildExternalHumanIdentityLinkContractV2({
     ...COORDINATES,
-    external_identity_link_id: "clm_founder",
+    external_identity_link_id: "clm_test",
     provider_issuer: "https://slack.com",
     provider_tenant_kind: "workspace",
-    provider_tenant_id: "T_FOUND",
+    provider_tenant_id: "T_TEST",
     provider_enterprise_id: null,
-    provider_subject_id: "UFOUNDER",
-    principal_id: "prn_founder",
-    membership_id: "mem_founder",
+    provider_subject_id: "UTEST",
+    principal_id: "prn_test",
+    membership_id: "mem_test",
     membership_type: "owner",
     verification_event_id: "verify_link",
     verification_evidence_sha256: digest("link"),
@@ -148,12 +148,12 @@ function setup(action: PersonApprovalAction) {
 
   const binding = buildPersonSlackReactionApprovalBindingContractV2({
     ...COORDINATES,
-    approval_binding_id: "bnd_founder",
+    approval_binding_id: "bnd_test",
     connection_id: connection.connection_id,
     connection_contract_sha256: connectionSha,
     approval_adapter_kind: "approval-surface",
     approval_adapter_id: "slack-reactions",
-    approval_adapter_instance_id: "founder-approval",
+    approval_adapter_instance_id: "test-approval",
     approval_adapter_version: "1.0.0",
     approval_channel_id: "C_FOUND",
     approve_reaction: "white_check_mark",
@@ -197,7 +197,7 @@ function setup(action: PersonApprovalAction) {
   for (const candidateAction of ["approve", "reject"] as const) {
     const capability = buildPersonSlackReactionApprovalActionCapabilityV2({
       ...COORDINATES,
-      action_capability_id: `cap_founder_${candidateAction}`,
+      action_capability_id: `cap_test_${candidateAction}`,
       approval_binding_id: binding.approval_binding_id,
       approval_binding_contract_sha256: bindingSha,
       external_identity_link_id: link.external_identity_link_id,
@@ -237,10 +237,10 @@ function setup(action: PersonApprovalAction) {
   }
 
   const command: StagePersonSlackReactionApprovalPendingCommandV1 = {
-    command_id: "pas_founder",
+    command_id: "pas_test",
     approval: {
       ...COORDINATES,
-      approval_id: "apr_founder",
+      approval_id: "apr_test",
       status: "pending",
       connection_id: connection.connection_id,
       connection_contract_sha256: connectionSha,
@@ -287,7 +287,7 @@ function setup(action: PersonApprovalAction) {
       return {
         kind: "observed",
         expectation_sha256: expectationSha256,
-        provider_actor_subject: "UFOUNDER",
+        provider_actor_subject: "UTEST",
         observed_reaction:
           action === "approve"
             ? expectation.approve_reaction
@@ -307,7 +307,7 @@ afterEach(() => {
 
 describe("Person Slack reaction approval staging", () => {
   it.each(["approve", "reject"] as const)(
-    "commits and exactly replays a founder %s reaction",
+    "commits and exactly replays a test %s reaction",
     async (action) => {
       const fixture = setup(action);
       const ids = { value: 0 };
@@ -380,23 +380,23 @@ describe("Slack reaction approval observer", () => {
     schema_version: 2,
     kind: "echo-person-slack-provider-expectation-v2",
     ...COORDINATES,
-    approval_id: "apr_founder",
-    connection_id: "con_founder",
+    approval_id: "apr_test",
+    connection_id: "con_test",
     connection_contract_sha256: digest("connection"),
     connection_state_sha256: digest("state"),
     provider_issuer: "https://slack.com",
     provider_tenant_kind: "workspace",
-    provider_tenant_id: "T_FOUND",
+    provider_tenant_id: "T_TEST",
     provider_enterprise_id: null,
     tool_kind: "slack",
-    provider_app_id: "A_FOUND",
-    provider_bot_id: "B_FOUND",
+    provider_app_id: "A_TEST",
+    provider_bot_id: "B_TEST",
     provider_bot_user_id: "U_BOT",
-    approval_binding_id: "bnd_founder",
+    approval_binding_id: "bnd_test",
     approval_binding_contract_sha256: digest("binding"),
     approval_adapter_kind: "approval-surface",
     approval_adapter_id: "slack-reactions",
-    approval_adapter_instance_id: "founder-approval",
+    approval_adapter_instance_id: "test-approval",
     approval_adapter_version: "1.0.0",
     approval_channel_id: "C_FOUND",
     provider_message_ts: "1724112000.000100",
@@ -425,7 +425,7 @@ describe("Slack reaction approval observer", () => {
             ok: true,
             message: {
               ts: expectation.provider_message_ts,
-              reactions: [{ name: "white_check_mark", users: ["UFOUNDER"] }],
+              reactions: [{ name: "white_check_mark", users: ["UTEST"] }],
             },
           }),
         );
@@ -436,7 +436,7 @@ describe("Slack reaction approval observer", () => {
     ).resolves.toMatchObject({
       kind: "observed",
       observed_action: "approve",
-      provider_actor_subject: "UFOUNDER",
+      provider_actor_subject: "UTEST",
     });
     expect(authorization).toBe("Bearer private-token");
   });
@@ -452,8 +452,8 @@ describe("Slack reaction approval observer", () => {
             message: {
               ts: expectation.provider_message_ts,
               reactions: [
-                { name: "white_check_mark", users: ["UFOUNDER"] },
-                { name: "x", users: ["UFOUNDER"] },
+                { name: "white_check_mark", users: ["UTEST"] },
+                { name: "x", users: ["UTEST"] },
               ],
             },
           }),

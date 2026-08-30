@@ -33,21 +33,21 @@ const OWNER = Object.freeze({
 const NOW = "2026-08-28T00:00:00.000Z";
 const databases: Database.Database[] = [];
 
-function cleanState(): SlackDmApprovalReviewerTargetCoordinatesV1 {
+function currentReviewerState(): SlackDmApprovalReviewerTargetCoordinatesV1 {
   return Object.freeze({
     ...COORDINATES,
   });
 }
 
-function legacyFounderState() {
+function legacyState() {
   return Object.freeze({
-    state_directory: "/test/clean-state",
-    integrations_database_path: "/test/clean-state/integrations.sqlite",
+    state_directory: "/test/control-state",
+    integrations_database_path: "/test/control-state/integrations.sqlite",
     ...COORDINATES,
   });
 }
 
-function cleanConnectionConfigurationSha256() {
+function slackConnectionConfigurationSha256() {
   return canonicalSha256({
     approval_adapter_id: "slack-reactions",
     approval_channel_id: APPROVAL_CHANNEL_ID,
@@ -164,7 +164,7 @@ function seed(
     provider_bot_user_id: "U_BOT",
     required_provider_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
     public_connection_configuration_sha256:
-      cleanConnectionConfigurationSha256(),
+      slackConnectionConfigurationSha256(),
   });
   const connectionSha = canonicalSha256(connection);
   const connectionState = buildOrganizationToolConnectionStateV2({
@@ -210,7 +210,7 @@ function resolve(
 ) {
   return resolveCurrentSlackDmApprovalReviewerTargetV1(
     database,
-    cleanState(),
+    currentReviewerState(),
     CONNECTION_ID,
     reviewer,
   );
@@ -318,7 +318,7 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
       provider_bot_user_id: "U_BOT",
       required_provider_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
       public_connection_configuration_sha256:
-        cleanConnectionConfigurationSha256(),
+        slackConnectionConfigurationSha256(),
     });
     const foreignConnectionSha = canonicalSha256(foreignConnection);
     const foreignState = buildOrganizationToolConnectionStateV2({
@@ -414,14 +414,14 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
     );
   });
 
-  it("does not alter the existing public-channel founder selector", () => {
+  it("does not alter the existing public-channel owner selector", () => {
     const database = seed({ observed_scope_without: "im:write" });
 
     expect(resolve(database)).toBeUndefined();
     expect(
       selectCurrentOwnerSlackReactionApprovalTargetV1(
         database,
-        legacyFounderState(),
+        legacyState(),
         { connection_id: CONNECTION_ID, approval_channel_id: APPROVAL_CHANNEL_ID },
         OWNER,
       ),

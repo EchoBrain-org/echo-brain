@@ -50,7 +50,7 @@ const DEFAULT_DEPENDENCIES: LegacySlackReactionApprovalActivationCliDependencies
 
 const USAGE =
   "usage: echo-organization-control-plane-activate-person-slack-reaction-approval " +
-  "--state-dir <absolute-path> --connection-id <clean-slack-connection-id> " +
+  "--state-dir <absolute-path> --connection-id <slack-connection-id> " +
   "--approval-channel-id <slack-channel-id>";
 
 interface ParsedFlags {

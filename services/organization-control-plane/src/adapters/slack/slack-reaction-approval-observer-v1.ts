@@ -74,7 +74,7 @@ function expected(input: PersonSlackReactionApprovalProviderExpectationV2): void
     !SLACK_TIMESTAMP.test(input.provider_message_ts) ||
     input.approve_reaction === input.reject_reaction
   ) {
-    throw new Error("clean Slack approval expectation is invalid");
+    throw new Error("Slack approval expectation is invalid");
   }
 }
 
