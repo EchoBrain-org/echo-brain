@@ -1285,6 +1285,7 @@ fi
     const envFile = join(root, ".env.clean-v1");
     const state = join(root, "release-state");
     const started = join(root, "started");
+    const mismatchedRuntime = join(root, "mismatched-runtime");
     const bin = join(root, "bin");
     const docker = join(bin, "docker");
     const firstProfile = writeRuntimeProfile();
@@ -1302,12 +1303,13 @@ fi
     const runtimeConfig = prepareRuntimeConfig(root, firstProfile);
     mkdirSync(bin);
     writeFileSync(docker, `#!/usr/bin/env bash
+if [[ "$1" == compose ]] && grep -q 'interrupted activation' "${runtimeConfig}/compose.clean-v1.yaml"; then exit 44; fi
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then [[ -f "${started}" ]] && printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then [[ -f "${started}" ]] && printf 'proxy-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${started}"; exit 0; fi
 if [[ "$1" == compose && "$*" == *" down"* ]]; then rm -f "${started}"; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
-if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then [[ -f "${mismatchedRuntime}" ]] && { printf 'wrong-release\\n'; exit 0; }; sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"f".repeat(64)}\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
@@ -1323,15 +1325,12 @@ if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_
     expect(canary.stderr).toContain(expectedFailure);
     // A running runtime that no longer proves the staged tuple must not be
     // treated as safely stopped or archived.
-    writeFileSync(
-      envFile,
-      "ECHO_CLEAN_AUTHORITY_IMAGE=wrong-image\nECHO_CLEAN_RELEASE_ID=wrong-release\n",
-      { mode: 0o600 },
-    );
+    writeFileSync(mismatchedRuntime, "yes\n");
     const refused = run("bash", [UPDATE, "rollback"], environment);
     expect(refused.status).toBe(1);
     expect(existsSync(join(state, "candidate.clean-v1.json"))).toBe(true);
     expect(existsSync(join(state, "failed", "clean-v1-20260822-005.json"))).toBe(false);
+    rmSync(mismatchedRuntime);
     // Simulate an interruption after the runtime stop and immutable failed
     // record publish, but before the staged candidate was removed. The active
     // environment, profile, and one materialized file are also incomplete.
@@ -1342,6 +1341,10 @@ if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_
     });
     writeFileSync(
       join(runtimeConfig, "Caddyfile.clean-v1"),
+      "interrupted activation\n",
+    );
+    writeFileSync(
+      join(runtimeConfig, "compose.clean-v1.yaml"),
       "interrupted activation\n",
     );
     mkdirSync(join(state, "failed"), { recursive: true });

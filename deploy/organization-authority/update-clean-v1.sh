@@ -462,9 +462,10 @@ candidate_runtime_is_stopped() {
 
 abort_first_deploy_candidate() {
   # The persisted candidate tuple, rather than the active cache, is the only
-  # durable source of truth after an interrupted first activation. A running
-  # runtime must still prove its exact tuple before it can be stopped.
+  # durable source of truth after an interrupted first activation. Restore it
+  # before Compose is consulted, then require any running runtime to prove it.
   stored_release_tuple_matches "$CANDIDATE_RECORD"
+  activate_release_tuple "$CANDIDATE_RECORD" || return 1
   if running_exact_release "$CANDIDATE_RECORD"; then
     compose_clean down || return 1
   elif ! candidate_runtime_is_stopped; then
