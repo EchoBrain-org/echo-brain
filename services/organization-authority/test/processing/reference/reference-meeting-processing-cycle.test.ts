@@ -3,7 +3,6 @@ import {
   AdapterError,
   assertCanonicalApprovalDecision,
   type AdapterOperationContext,
-  runCoreCycle,
   type AdapterConfig,
   type AdapterConfigValidation,
   type AdapterHealth,
@@ -22,8 +21,11 @@ import {
   type MeetingPullRequest,
   type MeetingSourceAdapter,
   type ResolvedActWriter,
-  meetingProcessingKey,
 } from '../../../src/processing/core/index.js';
+import {
+  referenceMeetingProcessingKey,
+  runReferenceMeetingProcessingCycle,
+} from '../../../src/processing/reference/reference-meeting-processing-cycle.js';
 
 function canonicalJsonRoundTrip<T>(value: T): T {
   function sortObjectKeys(current: unknown): unknown {
@@ -459,8 +461,8 @@ class StateFake implements CoreStateStore {
 }
 
 function cycleInput(
-  overrides: Partial<Parameters<typeof runCoreCycle>[0]> = {},
-): Parameters<typeof runCoreCycle>[0] {
+  overrides: Partial<Parameters<typeof runReferenceMeetingProcessingCycle>[0]> = {},
+): Parameters<typeof runReferenceMeetingProcessingCycle>[0] {
   return {
     meetingSource: new SourceFake(),
     decisionProcessor: new ProcessorFake(),
@@ -475,7 +477,7 @@ function cycleInput(
 describe('tool-agnostic core cycle', () => {
   it('does not resume across source, normalizer, or source-revision identity changes', () => {
     const processor = new ProcessorFake();
-    const baseline = meetingProcessingKey(meeting, processor);
+    const baseline = referenceMeetingProcessingKey(meeting, processor);
     const variants: MeetingDocument[] = [
       {
         ...meeting,
@@ -494,14 +496,14 @@ describe('tool-agnostic core cycle', () => {
       },
     ];
     for (const variant of variants) {
-      expect(meetingProcessingKey(variant, processor)).not.toBe(baseline);
+      expect(referenceMeetingProcessingKey(variant, processor)).not.toBe(baseline);
     }
   });
 
   it('rejects a malformed source batch before writing core state', async () => {
     const state = new StateFake();
     await expect(
-      runCoreCycle(cycleInput({
+      runReferenceMeetingProcessingCycle(cycleInput({
         meetingSource: new InvalidCursorSource(),
         state,
       })),
@@ -517,7 +519,7 @@ describe('tool-agnostic core cycle', () => {
     const gate = new GateFake('approved');
     const state = new StateFake();
 
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
@@ -550,7 +552,7 @@ describe('tool-agnostic core cycle', () => {
     const state = new StateFake();
     state.meetingAdmission = 'excluded';
 
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       decisionProcessor: processor,
       approvalGate: gate,
       deliverySurfaces: [surface],
@@ -581,9 +583,9 @@ describe('tool-agnostic core cycle', () => {
     const gate = new GateFake('approved');
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
-    state.processed.add(meetingProcessingKey(meeting, processor));
+    state.processed.add(referenceMeetingProcessingKey(meeting, processor));
 
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       decisionProcessor: processor,
       approvalGate: gate,
       deliverySurfaces: [surface],
@@ -609,7 +611,7 @@ describe('tool-agnostic core cycle', () => {
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
 
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       decisionProcessor: processor,
       approvalGate: gate,
       deliverySurfaces: [surface],
@@ -639,7 +641,7 @@ describe('tool-agnostic core cycle', () => {
     const processor = new ProcessorFake();
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
@@ -685,7 +687,7 @@ describe('tool-agnostic core cycle', () => {
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
     const writer = new ResolvedActWriterFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: new GateFake('rejected'),
       state,
@@ -719,7 +721,7 @@ describe('tool-agnostic core cycle', () => {
       events.push('second');
       return await originalSecond(envelope);
     };
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [first, second],
       resolvedActWriter: writer,
     }));
@@ -733,7 +735,7 @@ describe('tool-agnostic core cycle', () => {
     const surface = new DeliverySurfaceFake();
     const writer = new ResolvedActWriterFake();
     writer.error = new Error('record append unavailable');
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       state,
       deliverySurfaces: [surface],
       resolvedActWriter: writer,
@@ -748,7 +750,7 @@ describe('tool-agnostic core cycle', () => {
   it('keeps the source cursor pinned while manual approval is pending', async () => {
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: new PendingGateFake(),
       state,
@@ -771,14 +773,14 @@ describe('tool-agnostic core cycle', () => {
     const processor = new ProcessorFake();
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
-    await runCoreCycle(cycleInput({
+    await runReferenceMeetingProcessingCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
       approvalGate: new PendingGateFake(),
       state,
     }));
-    const resumed = await runCoreCycle(cycleInput({
+    const resumed = await runReferenceMeetingProcessingCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
@@ -807,7 +809,7 @@ describe('tool-agnostic core cycle', () => {
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
     const gate = new PendingGateFake();
-    await runCoreCycle(cycleInput({
+    await runReferenceMeetingProcessingCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
@@ -847,11 +849,11 @@ describe('tool-agnostic core cycle', () => {
       },
     }, validationContext)).toThrow(/meeting snapshot/);
     state.approvalsByKey.set(
-      meetingProcessingKey(sourceMeeting, processor),
+      referenceMeetingProcessingKey(sourceMeeting, processor),
       approval,
     );
 
-    const resumed = await runCoreCycle(cycleInput({
+    const resumed = await runReferenceMeetingProcessingCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
@@ -872,7 +874,7 @@ describe('tool-agnostic core cycle', () => {
     const surface = new DeliverySurfaceFake();
     surface.nextStatus = 'unknown';
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       state,
     }));
@@ -888,7 +890,7 @@ describe('tool-agnostic core cycle', () => {
 
   it('rejects processor evidence that cannot be resolved to the canonical meeting', async () => {
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       decisionProcessor: new InvalidEvidenceProcessor(),
       state,
     }));
@@ -903,7 +905,7 @@ describe('tool-agnostic core cycle', () => {
 
   it('fails closed on a logically invalid delivered receipt', async () => {
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [new InvalidReceiptDeliverySurface()],
       state,
     }));
@@ -918,7 +920,7 @@ describe('tool-agnostic core cycle', () => {
 
   it('does not mark a revision from a malformed rejected approval', async () => {
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       approvalGate: new InvalidRejectedGate(),
       state,
     }));
@@ -933,7 +935,7 @@ describe('tool-agnostic core cycle', () => {
   it('does not publish a malformed approved brief', async () => {
     const state = new StateFake();
     const surface = new DeliverySurfaceFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: new InvalidApprovedBriefGate(),
       state,
@@ -949,7 +951,7 @@ describe('tool-agnostic core cycle', () => {
 
   it('pins auth and configuration errors instead of misclassifying them as dead letters', async () => {
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [new UnauthorizedDeliverySurface()],
       state,
     }));
@@ -966,7 +968,7 @@ describe('tool-agnostic core cycle', () => {
   it('bounds a non-settling delivery-surface operation and aborts its adapter context', async () => {
     const surface = new HangingDeliverySurface();
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       state,
       deadlines: { publishMs: 5 },
@@ -981,7 +983,7 @@ describe('tool-agnostic core cycle', () => {
   it('propagates host cancellation into an active adapter operation', async () => {
     const surface = new HangingDeliverySurface();
     const controller = new AbortController();
-    const cycle = runCoreCycle(cycleInput({
+    const cycle = runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       state: new StateFake(),
       signal: controller.signal,
@@ -1000,13 +1002,13 @@ describe('tool-agnostic core cycle', () => {
     const gate = new GateFake('approved');
     const state = new StateFake();
     surface.nextStatus = 'unknown';
-    await runCoreCycle(cycleInput({
+    await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: gate,
       state,
     }));
     surface.nextStatus = 'delivered';
-    const resumed = await runCoreCycle(cycleInput({
+    const resumed = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: gate,
       state,
@@ -1026,7 +1028,7 @@ describe('tool-agnostic core cycle', () => {
     surface.nextStatus = 'rejected';
     surface.nextRetryable = false;
     const state = new StateFake();
-    const result = await runCoreCycle(cycleInput({
+    const result = await runReferenceMeetingProcessingCycle(cycleInput({
       deliverySurfaces: [surface],
       state,
     }));

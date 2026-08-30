@@ -95,9 +95,9 @@ The reviewed source is covered by:
 - `product/source-boundary.v1.json`;
 - `tests/architecture/workspace-boundaries.test.ts`;
 - `services/organization-authority/test/authority-live-source-baseline-v3.test.ts`;
-- `services/organization-authority/test/processing/clean-v1/live-only-source-cycle.test.ts`;
+- `services/organization-authority/test/processing/admitted-meeting-processing/meeting-processing-cycle-v1.test.ts`;
 - `services/organization-authority/test/organization-authority-runtime.test.ts`;
-- `services/organization-authority/test/composition/openrouter-clean-live-processor-runtime.test.ts`;
+- `services/organization-authority/test/composition/openrouter-decision-processor-runtime-bundle-v1.test.ts`;
 - `services/organization-authority/test/composition/openrouter-answer-composition-runtime.test.ts`;
 - `services/organization-record/test/record-log-v4-append.test.ts`; and
 - the synthetic meeting-source adapter and evaluator tests.

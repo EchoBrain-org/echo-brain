@@ -10,7 +10,7 @@ import {
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
 import { createGranolaMeetingSourceRuntimeBundleV1 } from "./granola-meeting-source-runtime-v1.js";
-import { createOpenRouterCleanLiveProcessorRuntimeBundleV1 } from "./openrouter-clean-live-processor-runtime.js";
+import { createOpenRouterDecisionProcessorRuntimeBundleV1 } from "./openrouter-decision-processor-runtime-bundle-v1.js";
 import { createOpenRouterAnswerCompositionRuntimeBundleV1 } from "./openrouter-answer-composition-runtime-v1.js";
 import { createPrivateSlackApprovalRuntimeBundleV1 } from "./private-slack-approval-runtime-v1.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime.js";
@@ -100,7 +100,7 @@ export function openOrganizationAuthorityService(
         granola_credential_file,
         granola_owner_email_file,
       }),
-      processor_runtime: createOpenRouterCleanLiveProcessorRuntimeBundleV1({
+      processor_runtime: createOpenRouterDecisionProcessorRuntimeBundleV1({
         credential_file: openrouter_credential_file,
       }),
       approval_runtime: createPrivateSlackApprovalRuntimeBundleV1({

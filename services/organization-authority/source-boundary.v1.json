@@ -294,7 +294,7 @@
         "services/organization-authority/src/processing/core/contracts/**",
         "services/organization-authority/src/processing/core/ports/adapters.ts",
         "services/organization-authority/src/processing/core/processing/brief.ts",
-        "services/organization-authority/src/processing/core/processing/run-core-cycle.ts",
+        "services/organization-authority/src/processing/admitted-meeting-processing/**",
         "services/organization-authority/src/processing/clean-v1/**",
         "services/organization-authority/src/processing/clean-v1-d2-d3/**",
         "services/organization-authority/src/processing/clean-v1-record/**",
@@ -369,7 +369,7 @@
       ]
     },
     {
-      "name": "live-source-processing-is-provider-neutral",
+      "name": "clean-v1-release-compatibility-processing-is-provider-neutral",
       "from": "services/organization-authority/src/processing/clean-v1/**",
       "allowed_imports": [
         "services/organization-authority/src/processing/clean-v1/**",
@@ -384,6 +384,36 @@
         "better-sqlite3"
       ],
       "allowed_node_builtins": []
+    },
+    {
+      "name": "admitted-meeting-processing-is-provider-neutral",
+      "from": "services/organization-authority/src/processing/admitted-meeting-processing/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/admitted-meeting-processing/**",
+        "services/organization-authority/src/processing/clean-v1/**",
+        "services/organization-authority/src/processing/core/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-control-plane"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "reference-meeting-processing-is-not-production-core",
+      "from": "services/organization-authority/src/processing/reference/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/reference/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "crypto"
+      ]
     },
     {
       "name": "processing-core-is-tool-agnostic",

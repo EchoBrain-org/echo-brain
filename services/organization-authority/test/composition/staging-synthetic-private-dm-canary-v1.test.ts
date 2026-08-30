@@ -8,12 +8,12 @@ import {
   assertStagingSyntheticMeetingCanaryV1,
   createStagingSyntheticMeetingCanaryV1,
 } from "../../src/processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
-import { granolaLiveSourceBoundaryV1 } from "../../src/composition/granola-live-source-boundary-v1.js";
+import { granolaAdmittedMeetingSourceBoundaryV1 } from "../../src/composition/granola-admitted-meeting-source-boundary-v1.js";
 import type {
-  CleanApprovalStageInputV1,
-  CleanApprovalStagerV1,
-} from "../../src/processing/clean-v1/live-only-source-cycle.js";
-import { SqliteCleanLiveOnlySourceStateV1 } from "../../src/processing/clean-v1/sqlite-live-only-source-state.js";
+  ApprovalWorkflowStageInputV1,
+  ApprovalWorkflowStagerV1,
+} from "../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import { SqliteAuthorityMeetingProcessingStateV1 } from "../../src/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type {
   DecisionProcessorAdapter,
   DecisionSet,
@@ -91,10 +91,10 @@ class SyntheticCanaryProcessor implements DecisionProcessorAdapter {
   }
 }
 
-class RecordingStager implements CleanApprovalStagerV1 {
-  readonly inputs: CleanApprovalStageInputV1[] = [];
-  constructor(private readonly state: SqliteCleanLiveOnlySourceStateV1) {}
-  async stage(input: CleanApprovalStageInputV1) {
+class RecordingStager implements ApprovalWorkflowStagerV1 {
+  readonly inputs: ApprovalWorkflowStageInputV1[] = [];
+  constructor(private readonly state: SqliteAuthorityMeetingProcessingStateV1) {}
+  async stage(input: ApprovalWorkflowStageInputV1) {
     this.inputs.push(input);
     const approved_snapshot = Object.freeze({ schema_version: 1 });
     const prepared = this.state.prepareApprovalPost({
@@ -162,9 +162,9 @@ describe("staging synthetic private-DM canary", () => {
 
   it("uses the admitted LLM and existing approval stager without advancing Granola", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => NOW,
     );
@@ -207,9 +207,9 @@ describe("staging synthetic private-DM canary", () => {
 
   it("hard-rejects a non-staging Authority before extraction", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => NOW,
     );
@@ -226,15 +226,15 @@ describe("staging synthetic private-DM canary", () => {
 
   it("does not invoke the stager for an already-aborted frozen candidate", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => NOW,
     );
     const processor = new SyntheticCanaryProcessor();
     let stageCalls = 0;
-    const stager: CleanApprovalStagerV1 = {
+    const stager: ApprovalWorkflowStagerV1 = {
       async stage() {
         stageCalls += 1;
         return { kind: "revoked" };

@@ -7,7 +7,7 @@ import type { Sha256Digest } from "@echo-brain/federation-protocol";
  * must prove that its current local configuration still names this admitted
  * source before any provider credential is read.
  */
-export interface CleanLiveSourceRuntimeCommitmentsV1 {
+export interface AdmittedMeetingSourceRuntimeCommitmentsV1 {
   readonly source: {
     readonly adapter_id: string;
     readonly instance_id: string;
@@ -38,9 +38,9 @@ interface CommitmentRow {
 }
 
 /** Reads no private file and exposes no private value. */
-export function readCleanLiveSourceRuntimeCommitmentsV1(
+export function readAdmittedMeetingSourceRuntimeCommitmentsV1(
   database: Database.Database,
-): CleanLiveSourceRuntimeCommitmentsV1 {
+): AdmittedMeetingSourceRuntimeCommitmentsV1 {
   const row = database
     .prepare(
       `SELECT source_adapter_id, source_adapter_instance_id,

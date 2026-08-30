@@ -6,30 +6,30 @@ import {
 } from "@echo-brain/federation-protocol";
 import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV3 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1 } from "../src/composition/openrouter-clean-processor-config-v1.js";
-import { PrivateSlackApprovalTerminalCoordinatorV1 } from "../src/composition/private-slack-approval-terminal-coordinator-v1.js";
-import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "../src/composition/sqlite-private-slack-approval-assignment-state-v1.js";
-import { SqlitePrivateSlackApprovalTerminalAuthorityV1 } from "../src/composition/sqlite-private-slack-approval-terminal-authority-v1.js";
+import { applyAuthorityBaselineV3 } from "../../../src/adapters/persistence/sqlite/baseline.js";
+import { OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1 } from "../../../src/composition/openrouter-clean-processor-config-v1.js";
+import { PrivateSlackApprovalTerminalCoordinatorV1 } from "../../../src/composition/private-slack-approval-terminal-coordinator-v1.js";
+import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "../../../src/composition/sqlite-private-slack-approval-assignment-state-v1.js";
+import { SqlitePrivateSlackApprovalTerminalAuthorityV1 } from "../../../src/composition/sqlite-private-slack-approval-terminal-authority-v1.js";
 import type {
   DecisionSet,
   MeetingDocument,
-} from "../src/processing/core/index.js";
-import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
-import { granolaLiveSourceBoundaryV1 } from "../src/composition/granola-live-source-boundary-v1.js";
-import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../src/processing/clean-v1/review-lineage-semantics.js";
+} from "../../../src/processing/core/index.js";
+import { createGranolaLiveOnlyCursor } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
+import { granolaAdmittedMeetingSourceBoundaryV1 } from "../../../src/composition/granola-admitted-meeting-source-boundary-v1.js";
+import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../../../src/processing/clean-v1/review-lineage-semantics.js";
 import type {
-  CleanActionableLiveCandidateV1,
-  CleanLiveCandidateV1,
-} from "../src/processing/clean-v1/live-only-source-cycle.js";
+  ActionableMeetingProcessingCandidateV1,
+  MeetingProcessingCandidateV1,
+} from "../../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
-  CleanLiveOnlySourceRevokedError,
-  SqliteCleanLiveOnlySourceStateV1,
-} from "../src/processing/clean-v1/sqlite-live-only-source-state.js";
+  AuthorityMeetingProcessingRevokedError,
+  SqliteAuthorityMeetingProcessingStateV1,
+} from "../../../src/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import {
   createStagingSyntheticMeetingCanaryV1,
   stagingSyntheticMeetingCanaryCursorV1,
-} from "../src/processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
+} from "../../../src/processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
 
 const ADMITTED_AT = "2026-08-22T02:03:04.005Z";
 const ADVANCED_AT = "2026-08-22T02:04:04.005Z";
@@ -41,8 +41,8 @@ const nextCursor = createGranolaLiveOnlyCursor(NEXT_CUTOFF);
 const databases: Database.Database[] = [];
 
 function assertActionable(
-  candidate: CleanLiveCandidateV1,
-): asserts candidate is CleanActionableLiveCandidateV1 {
+  candidate: MeetingProcessingCandidateV1,
+): asserts candidate is ActionableMeetingProcessingCandidateV1 {
   if (candidate.disposition !== "actionable") {
     throw new Error("test expected an actionable candidate");
   }
@@ -155,12 +155,12 @@ afterEach(() => {
   for (const value of databases.splice(0)) value.close();
 });
 
-describe("SQLite clean live-only source state", () => {
+describe("SQLite admitted meeting-processing state", () => {
   it("reproves, recovers, and finalizes an exact durable staging canary without opening synthetic ingress", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -381,9 +381,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("rejects an admitted source whose persisted adapter differs from the configured boundary", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(value, {
+    const state = new SqliteAuthorityMeetingProcessingStateV1(value, {
       source_adapter_id: "synthetic-fixture",
-      assert_live_cursor: granolaLiveSourceBoundaryV1.assert_live_cursor,
+      assert_live_cursor: granolaAdmittedMeetingSourceBoundaryV1.assert_live_cursor,
     }, "llm");
 
     await expect(state.readAdmission()).rejects.toThrow(
@@ -393,9 +393,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("rejects an admitted source whose persisted processor differs from the configured processor", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "synthetic-processor",
     );
 
@@ -406,9 +406,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("rejects foreign admission identity and malformed canonical payloads before persistence", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -425,7 +425,7 @@ describe("SQLite clean live-only source state", () => {
         review_policy: REVIEW_POLICY,
       }),
     ).rejects.toThrow(
-      "clean live candidate differs from the current admitted source state",
+      "meeting-processing candidate differs from the current admitted source state",
     );
 
     const malformedMeeting = {
@@ -452,9 +452,9 @@ describe("SQLite clean live-only source state", () => {
     "keeps a completed %s private approval terminal when a later revision arrives",
     async (outcome) => {
       const value = database();
-      const state = new SqliteCleanLiveOnlySourceStateV1(
+      const state = new SqliteAuthorityMeetingProcessingStateV1(
         value,
-        granolaLiveSourceBoundaryV1,
+        granolaAdmittedMeetingSourceBoundaryV1,
         "llm",
         () => ADVANCED_AT,
       );
@@ -537,9 +537,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("freezes exactly one durable post intent", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -601,9 +601,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("lists only current actionable approvals that still need delivery", async () => {
     let tick = 0;
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       database(),
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => new Date(Date.parse(ADVANCED_AT) + tick++ * 1_000).toISOString(),
     );
@@ -656,7 +656,7 @@ describe("SQLite clean live-only source state", () => {
 
     let providerMessage = 5;
     const stageOut = (
-      candidate: CleanActionableLiveCandidateV1,
+      candidate: ActionableMeetingProcessingCandidateV1,
       token: string,
     ) => {
       const frozen_card_sha256 = `sha256:${token.repeat(64)}`;
@@ -780,9 +780,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("materializes one progress row from the immutable admission and advances it by CAS", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -836,9 +836,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("will not initialize or advance a source after its owner is revoked", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -858,15 +858,15 @@ describe("SQLite clean live-only source state", () => {
       }),
     ).resolves.toBe("revoked");
     await expect(state.readAdmission()).rejects.toBeInstanceOf(
-      CleanLiveOnlySourceRevokedError,
+      AuthorityMeetingProcessingRevokedError,
     );
   });
 
   it("keeps the progress row narrowly mutable", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -888,9 +888,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("freezes one candidate before the post-once Slack/D2 handoff", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -965,9 +965,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("rejects a candidate policy that differs from the provider-neutral default", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -990,9 +990,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("deduplicates retries by admitted configuration and source revision while preserving the first audit snapshot", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1123,9 +1123,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("records a folder-only provider revision without creating another review round", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1182,9 +1182,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("coalesces a meeting-time-only revision into the existing review round", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1231,9 +1231,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("opens a new immutable review round for a semantic change", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1308,9 +1308,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("records no-signals revisions, supersedes unresolved work, and reproves the exact revision", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1362,9 +1362,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("retains a Slack post that returns after its queued candidate was superseded", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1446,9 +1446,9 @@ describe("SQLite clean live-only source state", () => {
   });
 
   it("releases a superseded post attempt after a definitive provider rejection", async () => {
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       database(),
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1516,9 +1516,9 @@ describe("SQLite clean live-only source state", () => {
   });
 
   it("releases only the exact unresolved delivery attempt", async () => {
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       database(),
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1566,9 +1566,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("rejects a late post result after the same approval starts a new attempt", async () => {
     let now = ADVANCED_AT;
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       database(),
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => now,
     );
@@ -1622,9 +1622,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("retains every stale posted card through an A-to-B-to-C no-signals lineage", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1734,9 +1734,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("rejects impossible supersession evidence transitions", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );
@@ -1830,9 +1830,9 @@ describe("SQLite clean live-only source state", () => {
 
   it("keeps separate source meetings on independent review lineages", async () => {
     const value = database();
-    const state = new SqliteCleanLiveOnlySourceStateV1(
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
-      granolaLiveSourceBoundaryV1,
+      granolaAdmittedMeetingSourceBoundaryV1,
       "llm",
       () => ADVANCED_AT,
     );

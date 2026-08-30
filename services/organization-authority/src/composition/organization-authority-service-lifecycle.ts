@@ -17,7 +17,8 @@ import {
 import { clearCleanReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 
 /**
- * The narrow durable-work seam for the Organization Authority service. The concrete
+ * The narrow durable-work seam for the Organization Authority's admitted
+ * meeting-processing cycle. The concrete
  * adapters own their respective stores: source cursor and staged approvals in
  * Authority/control, then the V4 record append outbox. Keeping those writes
  * behind this seam makes the process lifecycle independent of old runtime

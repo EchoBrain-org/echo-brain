@@ -10,18 +10,18 @@ import {
 import type {
   CleanLiveWorkerPhaseRunnerV1,
   CleanLiveWorkerPhaseV1,
-} from "./clean-live-worker-lifecycle.js";
-import type { CleanLiveSourceBoundaryV1 } from "./live-source-boundary.js";
+} from "../clean-v1/clean-live-worker-lifecycle.js";
+import type { AdmittedMeetingSourceBoundaryV1 } from "./admitted-meeting-source-boundary-v1.js";
 import {
   cleanReviewInputSha256V1,
   cleanReviewLineageIdV1,
   legacyRestrictedReviewerReviewPolicySnapshotV1,
   type CleanReviewPolicySnapshotV1,
-} from "./review-lineage-semantics.js";
+} from "../clean-v1/review-lineage-semantics.js";
 
 const MAXIMUM_PULL_LIMIT = 1;
 
-export interface CleanLiveSourceAdmissionV1 {
+export interface AdmittedMeetingProcessingAdmissionV1 {
   readonly source: {
     readonly adapter_id: string;
     readonly instance_id: string;
@@ -44,35 +44,35 @@ export interface CleanLiveSourceAdmissionV1 {
  * supplied cursor with the durable current cursor, so a stale runner can never
  * overwrite a newer checkpoint.
  */
-export interface CleanLiveOnlySourceStateV1 {
-  readAdmission(): Promise<CleanLiveSourceAdmissionV1>;
+export interface AuthorityMeetingProcessingStateV1 {
+  readAdmission(): Promise<AdmittedMeetingProcessingAdmissionV1>;
   /** Returns the original frozen snapshot for an admitted source revision. */
   readFrozenCandidateForSourceRevision(input: {
     readonly external_id: string;
     readonly canonical_revision: string;
-  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined>;
+  }): Promise<FrozenMeetingProcessingCandidateSnapshotV1 | undefined>;
   /** Finds a prior frozen extraction whose bounded review input is identical. */
   readFrozenCandidateForReviewInput(input: {
     readonly review_lineage_id: string;
     readonly review_input_sha256: string;
-  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined>;
+  }): Promise<FrozenMeetingProcessingCandidateSnapshotV1 | undefined>;
   stageCandidate(
-    input: CleanLiveCandidateSnapshotInputV1,
-  ): Promise<CleanLiveCandidateV1>;
+    input: MeetingProcessingCandidateSnapshotInputV1,
+  ): Promise<MeetingProcessingCandidateV1>;
   advanceCursor(input: {
     readonly expected_cursor: string;
     readonly next_cursor: string;
   }): Promise<"advanced" | "state_drift" | "revoked">;
 }
 
-export interface CleanLiveCandidateSnapshotInputV1 {
-  readonly admission: CleanLiveSourceAdmissionV1;
+export interface MeetingProcessingCandidateSnapshotInputV1 {
+  readonly admission: AdmittedMeetingProcessingAdmissionV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
   readonly review_policy: CleanReviewPolicySnapshotV1;
 }
 
-interface CleanLiveCandidateBaseV1 {
+interface MeetingProcessingCandidateBaseV1 {
   readonly candidate_id: string;
   readonly candidate_semantic_sha256: string;
   readonly review_lineage_id: string;
@@ -85,8 +85,8 @@ interface CleanLiveCandidateBaseV1 {
 }
 
 /** A durable Authority candidate with a deterministic D2 handoff. */
-export interface CleanActionableLiveCandidateV1
-  extends CleanLiveCandidateBaseV1 {
+export interface ActionableMeetingProcessingCandidateV1
+  extends MeetingProcessingCandidateBaseV1 {
   readonly disposition: "actionable";
   readonly approval_id: string;
   readonly stage_command_id: string;
@@ -94,28 +94,28 @@ export interface CleanActionableLiveCandidateV1
 }
 
 /** An immutable source revision that intentionally creates no approval card. */
-export interface CleanNonActionableLiveCandidateV1
-  extends CleanLiveCandidateBaseV1 {
+export interface NonActionableMeetingProcessingCandidateV1
+  extends MeetingProcessingCandidateBaseV1 {
   readonly disposition: "coalesced" | "no_signals";
   readonly approval_id: null;
   readonly stage_command_id: null;
   readonly state: "coalesced" | "no_signals";
 }
 
-export type CleanLiveCandidateV1 =
-  | CleanActionableLiveCandidateV1
-  | CleanNonActionableLiveCandidateV1;
+export type MeetingProcessingCandidateV1 =
+  | ActionableMeetingProcessingCandidateV1
+  | NonActionableMeetingProcessingCandidateV1;
 
 /** The immutable Authority snapshot associated with a durable candidate. */
-export type CleanFrozenCandidateSnapshotV1 = CleanLiveCandidateV1 & {
-  readonly admission: CleanLiveSourceAdmissionV1;
+export type FrozenMeetingProcessingCandidateSnapshotV1 = MeetingProcessingCandidateV1 & {
+  readonly admission: AdmittedMeetingProcessingAdmissionV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
 };
 
-export interface CleanApprovalStageInputV1 {
-  readonly admission: CleanLiveSourceAdmissionV1;
-  readonly candidate: CleanActionableLiveCandidateV1;
+export interface ApprovalWorkflowStageInputV1 {
+  readonly admission: AdmittedMeetingProcessingAdmissionV1;
+  readonly candidate: ActionableMeetingProcessingCandidateV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
 }
@@ -125,9 +125,9 @@ export interface CleanApprovalStageInputV1 {
  * owns the durable approval card and returns `staged` only once it is
  * committed. A known revoked or drifted control-plane state is a safe no-op.
  */
-export interface CleanApprovalStagerV1 {
+export interface ApprovalWorkflowStagerV1 {
   stage(
-    input: CleanApprovalStageInputV1,
+    input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<
     | { readonly kind: "staged"; readonly stage_id: string }
@@ -148,7 +148,7 @@ export interface CleanApprovalStagerV1 {
   ): Promise<void>;
 }
 
-export type CleanLiveOnlySourceCycleResultV1 =
+export type AdmittedMeetingProcessingCycleResultV1 =
   | {
       readonly kind: "empty";
       readonly cursor_advanced: false;
@@ -210,20 +210,20 @@ export type CleanLiveOnlySourceCycleResultV1 =
       readonly cursor_advanced: false;
     };
 
-export interface CleanLiveOnlySourceCycleV1Options {
+export interface AdmittedMeetingProcessingCycleV1Options {
   readonly source: MeetingSourceAdapter;
   readonly processor: DecisionProcessorAdapter;
-  readonly state: CleanLiveOnlySourceStateV1;
-  readonly stager: CleanApprovalStagerV1;
+  readonly state: AuthorityMeetingProcessingStateV1;
+  readonly stager: ApprovalWorkflowStagerV1;
   /** Provider-owned cursor and source-metadata validation. */
-  readonly source_boundary: CleanLiveSourceBoundaryV1;
+  readonly source_boundary: AdmittedMeetingSourceBoundaryV1;
 }
 
 function assertAdmissionMatchesAdapters(
-  admission: CleanLiveSourceAdmissionV1,
+  admission: AdmittedMeetingProcessingAdmissionV1,
   source: MeetingSourceAdapter,
   processor: DecisionProcessorAdapter,
-  sourceBoundary: CleanLiveSourceBoundaryV1,
+  sourceBoundary: AdmittedMeetingSourceBoundaryV1,
 ): void {
   if (
     source.identity.adapter_id !== admission.source.adapter_id ||
@@ -231,7 +231,7 @@ function assertAdmissionMatchesAdapters(
     source.identity.version !== admission.source.version
   ) {
     throw new Error(
-      "clean source adapter differs from the admitted source",
+      "admitted meeting source adapter differs from the admitted source",
     );
   }
   if (
@@ -240,14 +240,14 @@ function assertAdmissionMatchesAdapters(
     processor.identity.version !== admission.processor.version
   ) {
     throw new Error(
-      "clean processor adapter differs from the admitted decision processor",
+      "admitted decision processor adapter differs from the admitted decision processor",
     );
   }
   if (
     new Date(admission.source.cutoff_at).toISOString() !==
       admission.source.cutoff_at
   ) {
-    throw new Error("clean source admission has an invalid live-only cutoff");
+    throw new Error("admitted meeting-processing admission has an invalid live-only cutoff");
   }
   sourceBoundary.assert_live_cursor(admission.source.cursor);
 }
@@ -334,17 +334,17 @@ function rebindDecisionsToRevision(
  * it advances that cursor only after either a verified empty provider page or
  * the downstream staging port reports a durable acknowledgement.
  */
-export class CleanLiveOnlySourceCycleV1 {
-  private running: Promise<CleanLiveOnlySourceCycleResultV1> | undefined;
+export class AdmittedMeetingProcessingCycleV1 {
+  private running: Promise<AdmittedMeetingProcessingCycleResultV1> | undefined;
   private workerLifecycle: CleanLiveWorkerPhaseRunnerV1 | undefined;
 
-  constructor(private readonly options: CleanLiveOnlySourceCycleV1Options) {}
+  constructor(private readonly options: AdmittedMeetingProcessingCycleV1Options) {}
 
   setWorkerLifecycle(lifecycle: CleanLiveWorkerPhaseRunnerV1): void {
     this.workerLifecycle = lifecycle;
   }
 
-  runOnce(signal?: AbortSignal): Promise<CleanLiveOnlySourceCycleResultV1> {
+  runOnce(signal?: AbortSignal): Promise<AdmittedMeetingProcessingCycleResultV1> {
     if (this.running !== undefined) return this.running;
     const run = this.run(signal);
     this.running = run;
@@ -361,11 +361,11 @@ export class CleanLiveOnlySourceCycleV1 {
 
   private async run(
     signal: AbortSignal | undefined,
-  ): Promise<CleanLiveOnlySourceCycleResultV1> {
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     if (signal?.aborted === true) {
       throw signal.reason instanceof Error
         ? signal.reason
-        : new Error("clean live-only source cycle was cancelled");
+        : new Error("admitted meeting-processing cycle was cancelled");
     }
     const intake = await this.phase("source_intake", async () => {
       const admission = await this.options.state.readAdmission();
@@ -388,7 +388,7 @@ export class CleanLiveOnlySourceCycleV1 {
       assertCanonicalMeetingBatch(batch);
       if (batch.meetings.length > MAXIMUM_PULL_LIMIT) {
         throw new Error(
-          "clean live-only source cycle accepts at most one meeting per poll",
+          "admitted meeting-processing cycle accepts at most one meeting per poll",
         );
       }
       const meeting = batch.meetings[0];
@@ -557,13 +557,13 @@ export class CleanLiveOnlySourceCycleV1 {
   }
 
   private async stageAndAdvance(
-    candidate: CleanActionableLiveCandidateV1,
-    admission: CleanLiveSourceAdmissionV1,
+    candidate: ActionableMeetingProcessingCandidateV1,
+    admission: AdmittedMeetingProcessingAdmissionV1,
     meeting: MeetingDocument,
     decisions: DecisionSet,
     nextCursor: string | undefined,
     signal: AbortSignal | undefined,
-  ): Promise<CleanLiveOnlySourceCycleResultV1> {
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     const staged = await this.options.stager.stage(
       { admission, candidate, meeting, decisions },
       signal === undefined ? undefined : { signal },
@@ -604,9 +604,9 @@ export class CleanLiveOnlySourceCycleV1 {
   }
 
   private async advanceAfterPendingDelivery(
-    admission: CleanLiveSourceAdmissionV1,
+    admission: AdmittedMeetingProcessingAdmissionV1,
     nextCursor: string | undefined,
-  ): Promise<CleanLiveOnlySourceCycleResultV1> {
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     if (nextCursor === undefined || nextCursor === admission.source.cursor) {
       return { kind: "delivery_pending", cursor_advanced: false };
     }
@@ -625,9 +625,9 @@ export class CleanLiveOnlySourceCycleV1 {
 
   private async finishWithoutStage(
     kind: "no_signals" | "already_processed",
-    admission: CleanLiveSourceAdmissionV1,
+    admission: AdmittedMeetingProcessingAdmissionV1,
     nextCursor: string | undefined,
-  ): Promise<CleanLiveOnlySourceCycleResultV1> {
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     if (nextCursor === undefined || nextCursor === admission.source.cursor) {
       return { kind, cursor_advanced: false };
     }

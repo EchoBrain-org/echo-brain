@@ -2,13 +2,13 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CleanLiveSourceAdmissionV1 } from "../../src/processing/clean-v1/live-only-source-cycle.js";
+import type { AdmittedMeetingProcessingAdmissionV1 } from "../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
   OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
   openRouterCleanProcessorConfigurationSha256V1,
   openRouterCleanProcessorCredentialReferenceSha256V1,
 } from "../../src/composition/openrouter-clean-processor-config-v1.js";
-import { createOpenRouterCleanLiveProcessorRuntimeBundleV1 } from "../../src/composition/openrouter-clean-live-processor-runtime.js";
+import { createOpenRouterDecisionProcessorRuntimeBundleV1 } from "../../src/composition/openrouter-decision-processor-runtime-bundle-v1.js";
 
 const directories: string[] = [];
 
@@ -27,7 +27,7 @@ function credentialFile(): string {
   return path;
 }
 
-function admission(): CleanLiveSourceAdmissionV1 {
+function admission(): AdmittedMeetingProcessingAdmissionV1 {
   return {
     source: {
       adapter_id: "synthetic-source",
@@ -48,7 +48,7 @@ function admission(): CleanLiveSourceAdmissionV1 {
 describe("OpenRouter clean live processor runtime bundle", () => {
   it("validates the immutable commitment before reading its credential and constructs the admitted processor", () => {
     const credential_file = credentialFile();
-    const bundle = createOpenRouterCleanLiveProcessorRuntimeBundleV1({
+    const bundle = createOpenRouterDecisionProcessorRuntimeBundleV1({
       credential_file,
     });
     const commitment = {
@@ -86,7 +86,7 @@ describe("OpenRouter clean live processor runtime bundle", () => {
 
   it("rejects an uncommitted processor credential reference before it reads the credential", () => {
     const credential_file = credentialFile();
-    const bundle = createOpenRouterCleanLiveProcessorRuntimeBundleV1({
+    const bundle = createOpenRouterDecisionProcessorRuntimeBundleV1({
       credential_file,
     });
 

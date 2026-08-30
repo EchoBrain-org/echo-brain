@@ -1,27 +1,27 @@
 import { randomUUID } from 'node:crypto';
-import type { ApprovalGate } from '../approval/approval-gate.js';
-import type { MeetingDocument, MeetingPullRequest } from '../contracts/meeting.js';
+import type { ApprovalGate } from '../core/approval/approval-gate.js';
+import type { MeetingDocument, MeetingPullRequest } from '../core/contracts/meeting.js';
 import {
   assertCanonicalApprovalDecision,
   assertCanonicalDecisionBrief,
   assertCanonicalDecisionSet,
   assertCanonicalMeetingDocument,
   assertCanonicalMeetingBatch,
-} from '../contracts/validation.js';
+} from '../core/contracts/validation.js';
 import {
   assertDeliveryReceipt,
   createDeliveryEnvelope,
-} from '../delivery/envelope.js';
+} from '../core/delivery/envelope.js';
 import type {
   DeliverySurfaceAdapter,
   DecisionProcessorAdapter,
   MeetingSourceAdapter,
   ResolvedActWriter,
-} from '../ports/adapters.js';
-import type { CoreStateStore } from '../storage/core-state-store.js';
-import { compileDecisionBrief } from './brief.js';
+} from '../core/ports/adapters.js';
+import type { CoreStateStore } from '../core/storage/core-state-store.js';
+import { compileDecisionBrief } from '../core/processing/brief.js';
 
-export interface CoreCycleDependencies {
+export interface ReferenceMeetingProcessingCycleDependencies {
   meetingSource: MeetingSourceAdapter;
   decisionProcessor: DecisionProcessorAdapter;
   deliverySurfaces: readonly DeliverySurfaceAdapter[];
@@ -31,10 +31,10 @@ export interface CoreCycleDependencies {
   now?: () => string;
   createId?: () => string;
   signal?: AbortSignal;
-  deadlines?: Partial<CoreCycleDeadlines>;
+  deadlines?: Partial<ReferenceMeetingProcessingCycleDeadlines>;
 }
 
-export interface CoreCycleDeadlines {
+export interface ReferenceMeetingProcessingCycleDeadlines {
   pullMs: number;
   extractMs: number;
   approvalMs: number;
@@ -42,7 +42,7 @@ export interface CoreCycleDeadlines {
   publishMs: number;
 }
 
-const DEFAULT_CORE_CYCLE_DEADLINES: CoreCycleDeadlines = {
+const DEFAULT_REFERENCE_MEETING_PROCESSING_CYCLE_DEADLINES: ReferenceMeetingProcessingCycleDeadlines = {
   pullMs: 30_000,
   extractMs: 60_000,
   approvalMs: 30_000,
@@ -85,20 +85,20 @@ async function runBounded<T>(
   }
 }
 
-export interface CoreCycleFailure {
+export interface ReferenceMeetingProcessingCycleFailure {
   meeting_id: string;
   stage: 'processing' | 'approval' | 'record' | 'delivery';
   message: string;
 }
 
-export interface CoreCycleDeadLetter {
+export interface ReferenceMeetingProcessingCycleDeadLetter {
   meeting_id: string;
   delivery_surface_adapter_id: string;
   delivery_surface_instance_id: string;
   message: string;
 }
 
-export interface CoreCycleResult {
+export interface ReferenceMeetingProcessingCycleResult {
   ok: boolean;
   meetings_seen: number;
   meetings_processed: number;
@@ -109,11 +109,11 @@ export interface CoreCycleResult {
   meetings_dead_lettered: number;
   deliveries: number;
   cursor_advanced: boolean;
-  failures: readonly CoreCycleFailure[];
-  dead_letters: readonly CoreCycleDeadLetter[];
+  failures: readonly ReferenceMeetingProcessingCycleFailure[];
+  dead_letters: readonly ReferenceMeetingProcessingCycleDeadLetter[];
 }
 
-export function meetingProcessingKey(
+export function referenceMeetingProcessingKey(
   meeting: MeetingDocument,
   processor: DecisionProcessorAdapter,
 ): string {
@@ -148,17 +148,17 @@ function assertProcessorResult(
   assertCanonicalDecisionSet(result, meeting, processor.identity);
 }
 
-export async function runCoreCycle(
-  dependencies: CoreCycleDependencies,
+export async function runReferenceMeetingProcessingCycle(
+  dependencies: ReferenceMeetingProcessingCycleDependencies,
   request: MeetingPullRequest = {},
-): Promise<CoreCycleResult> {
+): Promise<ReferenceMeetingProcessingCycleResult> {
   if (dependencies.deliverySurfaces.length === 0) {
     throw new Error('at least one delivery-surface adapter is required');
   }
   const now = dependencies.now ?? (() => new Date().toISOString());
   const createId = dependencies.createId ?? randomUUID;
   const deadlines = {
-    ...DEFAULT_CORE_CYCLE_DEADLINES,
+    ...DEFAULT_REFERENCE_MEETING_PROCESSING_CYCLE_DEADLINES,
     ...dependencies.deadlines,
   };
   if (
@@ -183,8 +183,8 @@ export async function runCoreCycle(
       ),
   );
   assertCanonicalMeetingBatch(batch);
-  const failures: CoreCycleFailure[] = [];
-  const deadLetters: CoreCycleDeadLetter[] = [];
+  const failures: ReferenceMeetingProcessingCycleFailure[] = [];
+  const deadLetters: ReferenceMeetingProcessingCycleDeadLetter[] = [];
   let meetingsProcessed = 0;
   let meetingsSkipped = 0;
   let meetingsNoSignals = 0;
@@ -194,12 +194,12 @@ export async function runCoreCycle(
   let deliveries = 0;
 
   for (const meeting of batch.meetings) {
-    const processingKey = meetingProcessingKey(meeting, dependencies.decisionProcessor);
+    const processingKey = referenceMeetingProcessingKey(meeting, dependencies.decisionProcessor);
     if (await dependencies.state.hasProcessed(processingKey)) {
       meetingsSkipped += 1;
       continue;
     }
-    let stage: CoreCycleFailure['stage'] = 'processing';
+    let stage: ReferenceMeetingProcessingCycleFailure['stage'] = 'processing';
     try {
       assertMeetingSource(meeting, dependencies.meetingSource);
       if (

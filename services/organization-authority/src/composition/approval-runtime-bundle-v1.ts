@@ -1,20 +1,20 @@
 import type Database from "better-sqlite3";
 import type { OrganizationAuthoritySigner } from "../application/ports/runtime-ports.js";
 import type { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/new-lineage-v1";
-import type { CleanApprovalStagerV1 } from "../processing/clean-v1/live-only-source-cycle.js";
-import type { SqliteCleanLiveOnlySourceStateV1 } from "../processing/clean-v1/sqlite-live-only-source-state.js";
+import type { ApprovalWorkflowStagerV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import type { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
 
 /** The approval-only phases used by the shared live processing lifecycle. */
-export interface CleanApprovalProcessingV1 {
+export interface ApprovalWorkflowProcessingV1 {
   recoverV4Appends(signal: AbortSignal): Promise<void>;
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void>;
 }
 
 /** Generic Authority resources made available to the selected approval surface. */
-export interface CleanApprovalRuntimeContextV1 {
-  readonly state: SqliteCleanLiveOnlySourceStateV1;
+export interface ApprovalWorkflowRuntimeContextV1 {
+  readonly state: SqliteAuthorityMeetingProcessingStateV1;
   readonly authority_database: Database.Database;
   readonly control_plane_database: Database.Database;
   readonly record_append: OrganizationRecordAppenderV4;
@@ -27,9 +27,9 @@ export interface CleanApprovalRuntimeContextV1 {
   readonly next_envelope_id: () => string;
 }
 
-export interface OpenedCleanApprovalRuntimeV1 {
-  readonly stager: CleanApprovalStagerV1;
-  readonly processing: CleanApprovalProcessingV1;
+export interface OpenedApprovalWorkflowRuntimeV1 {
+  readonly stager: ApprovalWorkflowStagerV1;
+  readonly processing: ApprovalWorkflowProcessingV1;
   /** Omitted only for an approval surface with no inbound interaction route. */
   readonly interaction_ingress?: PrivateApprovalInteractionHttpApplicationV1;
 }
@@ -38,7 +38,7 @@ export interface OpenedCleanApprovalRuntimeV1 {
  * The active approval surface is selected in composition. Source intake and
  * the shared worker only consume the provider-neutral values returned here.
  */
-export interface CleanApprovalRuntimeBundleV1 {
+export interface ApprovalWorkflowRuntimeBundleV1 {
   /**
    * Fail closed before the worker starts if this surface cannot recover every
    * outstanding external presentation it may need to reconcile, update, or
@@ -52,10 +52,10 @@ export interface CleanApprovalRuntimeBundleV1 {
    * appended before a surface is replaced.
    */
   assert_existing_presentations_owned(
-    context: CleanApprovalRuntimeContextV1,
+    context: ApprovalWorkflowRuntimeContextV1,
   ): Promise<void>;
 
   open(
-    context: CleanApprovalRuntimeContextV1,
-  ): Promise<OpenedCleanApprovalRuntimeV1>;
+    context: ApprovalWorkflowRuntimeContextV1,
+  ): Promise<OpenedApprovalWorkflowRuntimeV1>;
 }

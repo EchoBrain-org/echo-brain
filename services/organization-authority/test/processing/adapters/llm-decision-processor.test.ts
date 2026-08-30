@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   AdapterError,
   assertCanonicalDecisionSet,
-  meetingProcessingKey,
   type AdapterConfig,
   type MeetingDocument,
 } from '../../../src/processing/core/index.js';
+import { referenceMeetingProcessingKey } from '../../../src/processing/reference/reference-meeting-processing-cycle.js';
 import {
   LlmDecisionProcessor,
   llmProcessingVersion,
@@ -532,8 +532,8 @@ describe('llm decision processor configuration', () => {
     expect(hostedProcessor.identity.version).not.toBe(
       localProcessor.identity.version,
     );
-    expect(meetingProcessingKey(meeting, hostedProcessor)).not.toBe(
-      meetingProcessingKey(meeting, localProcessor),
+    expect(referenceMeetingProcessingKey(meeting, hostedProcessor)).not.toBe(
+      referenceMeetingProcessingKey(meeting, localProcessor),
     );
   });
 

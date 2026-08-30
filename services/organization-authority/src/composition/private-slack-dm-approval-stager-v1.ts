@@ -1,5 +1,5 @@
 /**
- * Private Slack DM delivery for the clean live source.
+ * Private Slack DM delivery for admitted meeting-processing candidates.
  *
  * The legacy reaction stager deliberately has no part in this path.  In
  * particular, a candidate's extraction-time `review_policy_*` fields remain
@@ -31,16 +31,16 @@ import {
   PrivateSlackApprovalCardPosterV1,
   type PrivateSlackApprovalCardPresentationV1,
 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
-import type { CleanApprovalStageInputV1, CleanApprovalStagerV1 } from "../processing/clean-v1/live-only-source-cycle.js";
+import type { ApprovalWorkflowStageInputV1, ApprovalWorkflowStagerV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
-  SqliteCleanLiveOnlySourceStateV1,
-  type CleanLiveApprovalOutboxV1,
-} from "../processing/clean-v1/sqlite-live-only-source-state.js";
+  SqliteAuthorityMeetingProcessingStateV1,
+  type ApprovalWorkflowOutboxV1,
+} from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
 type Digest = ApprovalContractSha256;
 
 export interface PrivateSlackDmApprovalStagerV1Options {
-  readonly authority: SqliteCleanLiveOnlySourceStateV1;
+  readonly authority: SqliteAuthorityMeetingProcessingStateV1;
   readonly authority_database: Database.Database;
   readonly control_plane_database: Database.Database;
   readonly coordinates: SlackDmApprovalReviewerTargetCoordinatesV1;
@@ -83,7 +83,7 @@ function displayText(value: unknown, fallback: string, maximum: number): string 
 }
 
 function buildCardAndSnapshot(
-  input: CleanApprovalStageInputV1,
+  input: ApprovalWorkflowStageInputV1,
   sha256: (value: unknown) => Digest,
 ): PrivateCardAndSnapshotV1 {
   const brief = compileDecisionBrief(
@@ -142,7 +142,7 @@ function buildCardAndSnapshot(
 }
 
 function candidateCommitment(
-  outbox: CleanLiveApprovalOutboxV1,
+  outbox: ApprovalWorkflowOutboxV1,
   card: PrivateCardAndSnapshotV1,
 ) {
   return Object.freeze({
@@ -180,7 +180,7 @@ function assignmentMatchesCurrentTarget(
  * marker -> durable CP pending/card binding -> clickable card -> Authority
  * staged acknowledgement.
  */
-export class PrivateSlackDmApprovalStagerV1 implements CleanApprovalStagerV1 {
+export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 {
   private readonly now: () => string;
   private readonly sha256: (value: unknown) => Digest;
   private readonly resolveReviewerTarget: PrivateSlackApprovalReviewerTargetResolverV1;
@@ -246,7 +246,7 @@ export class PrivateSlackDmApprovalStagerV1 implements CleanApprovalStagerV1 {
   }
 
   async stage(
-    input: CleanApprovalStageInputV1,
+    input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<
     | { readonly kind: "staged"; readonly stage_id: string }
@@ -420,7 +420,7 @@ export class PrivateSlackDmApprovalStagerV1 implements CleanApprovalStagerV1 {
   }
 
   private async tombstoneKnown(
-    outbox: CleanLiveApprovalOutboxV1,
+    outbox: ApprovalWorkflowOutboxV1,
     assignment: PrivateApprovalAssignmentStateV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<void> {

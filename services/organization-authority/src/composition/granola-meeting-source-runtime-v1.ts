@@ -6,9 +6,9 @@ import {
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import { createGranolaMeetingSourceAdapter } from "../processing/adapters/meeting-sources/granola/index.js";
 import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
-import type { CleanLiveSourceAdmissionV1 } from "../processing/clean-v1/live-only-source-cycle.js";
+import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { CleanLiveSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
-import { granolaLiveSourceBoundaryV1 } from "./granola-live-source-boundary-v1.js";
+import { granolaAdmittedMeetingSourceBoundaryV1 } from "./granola-admitted-meeting-source-boundary-v1.js";
 import type { MeetingSourceRuntimeBundleV1 } from "./organization-authority-runtime.js";
 
 function fixedGranolaConfig(
@@ -57,7 +57,7 @@ export function createGranolaMeetingSourceRuntimeBundleV1(input: {
   const credentialReference = `file:${input.granola_credential_file}`;
   let committedOwnerEmail: string | undefined;
   return Object.freeze({
-    create_source(admission: CleanLiveSourceAdmissionV1) {
+    create_source(admission: AdmittedMeetingProcessingAdmissionV1) {
       const ownerEmail = committedOwnerEmail;
       if (ownerEmail === undefined) {
         throw new Error(
@@ -104,6 +104,6 @@ export function createGranolaMeetingSourceRuntimeBundleV1(input: {
       }
       committedOwnerEmail = ownerEmail;
     },
-    source_boundary: granolaLiveSourceBoundaryV1,
+    source_boundary: granolaAdmittedMeetingSourceBoundaryV1,
   });
 }

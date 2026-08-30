@@ -12,14 +12,14 @@ import {
   granolaCursorPhase,
 } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
 import {
-  CleanLiveOnlySourceCycleV1,
-  type CleanApprovalStagerV1,
-  type CleanLiveCandidateSnapshotInputV1,
-  type CleanLiveCandidateV1,
-  type CleanFrozenCandidateSnapshotV1,
-  type CleanLiveSourceAdmissionV1,
-  type CleanLiveOnlySourceStateV1,
-} from "../../../src/processing/clean-v1/live-only-source-cycle.js";
+  AdmittedMeetingProcessingCycleV1,
+  type ApprovalWorkflowStagerV1,
+  type MeetingProcessingCandidateSnapshotInputV1,
+  type MeetingProcessingCandidateV1,
+  type FrozenMeetingProcessingCandidateSnapshotV1,
+  type AdmittedMeetingProcessingAdmissionV1,
+  type AuthorityMeetingProcessingStateV1,
+} from "../../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
   CleanLiveWorkerLifecycleV1,
   type CleanLiveWorkerTelemetryEventV1,
@@ -44,18 +44,18 @@ const PROCESSOR = {
   version: "1.3.0",
 };
 const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
-const granolaLiveSourceBoundaryV1 = {
+const granolaAdmittedMeetingSourceBoundaryV1 = {
   source_adapter_id: "granola",
   assert_live_cursor(cursor: string): void {
     if (!cursor.startsWith("granola:v1:") || granolaCursorPhase(cursor) !== "live") {
       throw new Error(
-        "clean live-only source cursor must be a Granola v1 live cursor",
+        "admitted meeting-processing cursor must be a Granola v1 live cursor",
       );
     }
   },
 };
 
-const admission = (): CleanLiveSourceAdmissionV1 => ({
+const admission = (): AdmittedMeetingProcessingAdmissionV1 => ({
   source: {
     adapter_id: "granola",
     instance_id: SOURCE.instance_id,
@@ -122,29 +122,29 @@ const healthy = (): AdapterHealth => ({
   checked_at: "2026-08-22T02:05:04.005Z",
 });
 
-class FakeState implements CleanLiveOnlySourceStateV1 {
+class FakeState implements AuthorityMeetingProcessingStateV1 {
   readonly advances: Array<{ expected_cursor: string; next_cursor: string }> =
     [];
-  readonly candidates: CleanLiveCandidateSnapshotInputV1[] = [];
+  readonly candidates: MeetingProcessingCandidateSnapshotInputV1[] = [];
   private readonly sourceRevisions = new Map<
     string,
-    CleanFrozenCandidateSnapshotV1
+    FrozenMeetingProcessingCandidateSnapshotV1
   >();
 
   constructor(
-    private readonly value: CleanLiveSourceAdmissionV1,
+    private readonly value: AdmittedMeetingProcessingAdmissionV1,
     private readonly advanceResult:
       "advanced" | "state_drift" | "revoked" = "advanced",
   ) {}
 
-  async readAdmission(): Promise<CleanLiveSourceAdmissionV1> {
+  async readAdmission(): Promise<AdmittedMeetingProcessingAdmissionV1> {
     return this.value;
   }
 
   async readFrozenCandidateForSourceRevision(input: {
     readonly external_id: string;
     readonly canonical_revision: string;
-  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
+  }): Promise<FrozenMeetingProcessingCandidateSnapshotV1 | undefined> {
     return this.sourceRevisions.get(
       `${input.external_id}:${input.canonical_revision}`,
     );
@@ -153,7 +153,7 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
   async readFrozenCandidateForReviewInput(input: {
     readonly review_lineage_id: string;
     readonly review_input_sha256: string;
-  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
+  }): Promise<FrozenMeetingProcessingCandidateSnapshotV1 | undefined> {
     return [...this.sourceRevisions.values()].find(
       (candidate) =>
         candidate.review_lineage_id === input.review_lineage_id &&
@@ -162,8 +162,8 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
   }
 
   async stageCandidate(
-    input: CleanLiveCandidateSnapshotInputV1,
-  ): Promise<CleanLiveCandidateV1> {
+    input: MeetingProcessingCandidateSnapshotInputV1,
+  ): Promise<MeetingProcessingCandidateV1> {
     this.candidates.push(input);
     const reviewInputSha256 = cleanReviewInputSha256V1({
       meeting: input.meeting,
@@ -190,7 +190,7 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
       review_policy_consequence_sha256:
         input.review_policy.policy_consequence_sha256,
     };
-    const candidate: CleanLiveCandidateV1 = reusable !== undefined
+    const candidate: MeetingProcessingCandidateV1 = reusable !== undefined
       ? {
           ...reviewPolicyFields,
           candidate_id: "cnd_test_coalesced",
@@ -235,7 +235,7 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
     return candidate;
   }
 
-  seedFrozenCandidate(input: CleanFrozenCandidateSnapshotV1): void {
+  seedFrozenCandidate(input: FrozenMeetingProcessingCandidateSnapshotV1): void {
     this.sourceRevisions.set(
       `${input.meeting.provenance.external_id}:${input.meeting.provenance.canonical_revision}`,
       input,
@@ -284,8 +284,8 @@ function processor(
 }
 
 function stager(
-  result: Awaited<ReturnType<CleanApprovalStagerV1["stage"]>>,
-): CleanApprovalStagerV1 & { readonly calls: number } {
+  result: Awaited<ReturnType<ApprovalWorkflowStagerV1["stage"]>>,
+): ApprovalWorkflowStagerV1 & { readonly calls: number } {
   let calls = 0;
   return {
     get calls() {
@@ -302,19 +302,19 @@ function stager(
 
 function liveCycle(
   options: Omit<
-    ConstructorParameters<typeof CleanLiveOnlySourceCycleV1>[0],
+    ConstructorParameters<typeof AdmittedMeetingProcessingCycleV1>[0],
     "source_boundary"
   > &
-    Partial<Pick<ConstructorParameters<typeof CleanLiveOnlySourceCycleV1>[0], "source_boundary">>,
-): CleanLiveOnlySourceCycleV1 {
-  return new CleanLiveOnlySourceCycleV1({
+    Partial<Pick<ConstructorParameters<typeof AdmittedMeetingProcessingCycleV1>[0], "source_boundary">>,
+): AdmittedMeetingProcessingCycleV1 {
+  return new AdmittedMeetingProcessingCycleV1({
     ...options,
     source_boundary:
-      options.source_boundary ?? granolaLiveSourceBoundaryV1,
+      options.source_boundary ?? granolaAdmittedMeetingSourceBoundaryV1,
   });
 }
 
-describe("clean live-only source cycle", () => {
+describe("admitted meeting-processing cycle", () => {
   it("reports source intake, extraction, and approval staging without meeting data", async () => {
     const events: CleanLiveWorkerTelemetryEventV1[] = [];
     const observedMeeting = meeting();
@@ -761,8 +761,8 @@ describe("clean live-only source cycle", () => {
         decisions: originalDecisions,
       });
       let extracts = 0;
-      let retried: Parameters<CleanApprovalStagerV1["stage"]>[0] | undefined;
-      const downstream: CleanApprovalStagerV1 = {
+      let retried: Parameters<ApprovalWorkflowStagerV1["stage"]>[0] | undefined;
+      const downstream: ApprovalWorkflowStagerV1 = {
         stage: async (input) => {
           retried = input;
           return { kind: "staged", stage_id: "stage-1" };
@@ -841,7 +841,7 @@ describe("clean live-only source cycle", () => {
       extracts += 1;
       return decisions(value);
     });
-    const downstream: CleanApprovalStagerV1 = {
+    const downstream: ApprovalWorkflowStagerV1 = {
       stage: async () => {
         stages += 1;
         return { kind: "staged", stage_id: "stage-1" };
@@ -939,7 +939,7 @@ describe("clean live-only source cycle", () => {
     expect(emptyState.advances).toEqual([]);
 
     const admitted = admission();
-    const historical: CleanLiveSourceAdmissionV1 = {
+    const historical: AdmittedMeetingProcessingAdmissionV1 = {
       ...admitted,
       source: { ...admitted.source, cursor: "2020-01-01T00:00:00.000Z" },
     };

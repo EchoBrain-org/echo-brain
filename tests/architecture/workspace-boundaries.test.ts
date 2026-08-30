@@ -944,11 +944,11 @@ describe("workspace source boundaries", () => {
       fixture,
       "services/organization-authority/source-boundary.v1.json",
     );
-    const cleanRuntimeRule = manifest.layer_rules.find(
-      (rule) => rule.name === "live-source-processing-is-provider-neutral",
+    const admittedMeetingProcessingRule = manifest.layer_rules.find(
+      (rule) => rule.name === "admitted-meeting-processing-is-provider-neutral",
     );
-    expect(cleanRuntimeRule).toBeDefined();
-    expect(cleanRuntimeRule?.allowed_imports).not.toContain(
+    expect(admittedMeetingProcessingRule).toBeDefined();
+    expect(admittedMeetingProcessingRule?.allowed_imports).not.toContain(
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
     );
     const compositionRule = manifest.layer_rules.find(
@@ -958,7 +958,7 @@ describe("workspace source boundaries", () => {
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
     );
     for (const concreteCompositionModule of [
-      "services/organization-authority/src/composition/granola-live-source-boundary-v1.ts",
+      "services/organization-authority/src/composition/granola-admitted-meeting-source-boundary-v1.ts",
       "services/organization-authority/src/composition/organization-authority-composition-root.ts",
     ]) {
       expect(existsSync(join(fixture, concreteCompositionModule))).toBe(true);
@@ -980,7 +980,7 @@ describe("workspace source boundaries", () => {
       };
     }>(fixture, "product/source-boundary.v1.json");
     expect(product.adapter_architecture.provider_neutral_paths).toContain(
-      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts",
+      "services/organization-authority/src/processing/admitted-meeting-processing/**",
     );
     expect(
       product.adapter_architecture.provider_identifier_registry.map(
@@ -1023,7 +1023,7 @@ describe("workspace source boundaries", () => {
     ]));
 
     const probePath =
-      "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts";
+      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-source-boundary-v1.ts";
     const probe = join(fixture, probePath);
     const original = readFileSync(probe, "utf8");
     for (const providerIdentifier of [

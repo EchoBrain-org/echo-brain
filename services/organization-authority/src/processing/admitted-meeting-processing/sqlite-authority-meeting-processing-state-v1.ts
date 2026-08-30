@@ -9,28 +9,28 @@ import {
   type DecisionSet,
   type MeetingDocument,
 } from "../core/index.js";
-import type { CleanLiveSourceBoundaryV1 } from "./live-source-boundary.js";
+import type { AdmittedMeetingSourceBoundaryV1 } from "./admitted-meeting-source-boundary-v1.js";
 import {
   assertLegacyReviewPolicySnapshotV1,
   cleanReviewInputSha256V1,
   cleanReviewLineageIdV1,
   cleanReviewSemanticSha256V1,
   type CleanReviewPolicySnapshotV1,
-} from "./review-lineage-semantics.js";
+} from "../clean-v1/review-lineage-semantics.js";
 import type {
-  CleanLiveSourceAdmissionV1,
-  CleanActionableLiveCandidateV1,
-  CleanFrozenCandidateSnapshotV1,
-  CleanLiveCandidateSnapshotInputV1,
-  CleanLiveCandidateV1,
-  CleanLiveOnlySourceStateV1,
-} from "./live-only-source-cycle.js";
+  AdmittedMeetingProcessingAdmissionV1,
+  ActionableMeetingProcessingCandidateV1,
+  FrozenMeetingProcessingCandidateSnapshotV1,
+  MeetingProcessingCandidateSnapshotInputV1,
+  MeetingProcessingCandidateV1,
+  AuthorityMeetingProcessingStateV1,
+} from "./meeting-processing-cycle-v1.js";
 import {
   assertStagingSyntheticMeetingCanaryV1,
   isStagingSyntheticMeetingCanaryV1,
   stagingSyntheticMeetingCanaryCursorV1,
   type StagingSyntheticMeetingCanaryInputV1,
-} from "./staging-synthetic-meeting-canary-v1.js";
+} from "../clean-v1/staging-synthetic-meeting-canary-v1.js";
 
 interface AdmissionRow {
   readonly source_adapter_id: string;
@@ -99,12 +99,12 @@ export interface CleanPostedApprovalCardV1 {
 }
 
 export interface CleanPreparedApprovalPostV1 {
-  readonly outbox: CleanLiveApprovalOutboxV1;
+  readonly outbox: ApprovalWorkflowOutboxV1;
   /** True only for the transaction that froze the durable post intent. */
   readonly created: boolean;
 }
 
-export type CleanLiveApprovalOutboxV1 = CleanActionableLiveCandidateV1 & {
+export type ApprovalWorkflowOutboxV1 = ActionableMeetingProcessingCandidateV1 & {
   readonly presentation_external_id: string | null;
   readonly frozen_card_sha256: string | null;
   readonly approved_snapshot_json: string | null;
@@ -124,24 +124,24 @@ export interface CleanSupersededApprovalCardV1 {
   readonly post_started_at: string;
 }
 
-export type CleanFrozenCandidateForApprovalV1 = CleanLiveApprovalOutboxV1 & {
-  readonly admission: CleanLiveSourceAdmissionV1;
+export type FrozenMeetingProcessingCandidateForApprovalV1 = ApprovalWorkflowOutboxV1 & {
+  readonly admission: AdmittedMeetingProcessingAdmissionV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
   readonly approved_snapshot: Readonly<Record<string, unknown>> | null;
 };
 
-export class CleanLiveOnlySourceRevokedError extends Error {
+export class AuthorityMeetingProcessingRevokedError extends Error {
   constructor() {
-    super("clean live-only source owner membership is revoked");
-    this.name = "CleanLiveOnlySourceRevokedError";
+    super("admitted meeting-processing owner membership is revoked");
+    this.name = "AuthorityMeetingProcessingRevokedError";
   }
 }
 
 function assertCanonicalUtcMillis(value: string): void {
   if (new Date(value).toISOString() !== value) {
     throw new Error(
-      "clean live-only source timestamp must be UTC milliseconds",
+      "admitted meeting-processing timestamp must be UTC milliseconds",
     );
   }
 }
@@ -149,9 +149,9 @@ function assertCanonicalUtcMillis(value: string): void {
 function admissionFrom(
   row: AdmissionRow,
   progress: ProgressRow,
-  sourceBoundary: CleanLiveSourceBoundaryV1,
+  sourceBoundary: AdmittedMeetingSourceBoundaryV1,
   expectedProcessorAdapterId: string,
-): CleanLiveSourceAdmissionV1 {
+): AdmittedMeetingProcessingAdmissionV1 {
   assertAdmissionAdapterIdentity(
     row,
     sourceBoundary,
@@ -177,18 +177,18 @@ function admissionFrom(
 }
 
 /**
- * The concrete Authority cursor store for the clean source. Its first read
+ * The concrete Authority cursor store for the the admitted meeting source. Its first read
  * materializes a one-row progress checkpoint from the already immutable
  * admission. Subsequent advances compare the expected persisted cursor inside
  * one SQLite transaction, so no runner can overwrite a newer checkpoint.
  */
-export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStateV1 {
+export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeetingProcessingStateV1 {
   private readonly expectedProcessorAdapterId: string;
   private readonly now: () => string;
 
   constructor(
     private readonly database: Database.Database,
-    private readonly sourceBoundary: CleanLiveSourceBoundaryV1,
+    private readonly sourceBoundary: AdmittedMeetingSourceBoundaryV1,
     /**
      * The caller must name the processor adapter selected by its runtime
      * bundle. An admitted source cannot be reopened through a different
@@ -199,18 +199,18 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   ) {
     if (expectedProcessorAdapterId.trim().length === 0) {
       throw new Error(
-        "clean live-only source expected processor adapter identity is invalid",
+        "admitted meeting-processing expected processor adapter identity is invalid",
       );
     }
     this.expectedProcessorAdapterId = expectedProcessorAdapterId;
     this.now = now;
   }
 
-  async readAdmission(): Promise<CleanLiveSourceAdmissionV1> {
+  async readAdmission(): Promise<AdmittedMeetingProcessingAdmissionV1> {
     return this.database.transaction(() => {
       const admission = this.admission();
       if (admission.membership_status !== "active") {
-        throw new CleanLiveOnlySourceRevokedError();
+        throw new AuthorityMeetingProcessingRevokedError();
       }
       this.database
         .prepare(
@@ -235,7 +235,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         .get(admission.semantic_input_sha256) as ProgressRow | undefined;
       if (progress === undefined) {
         throw new Error(
-          "clean live-only source progress conflicts with its admission",
+          "admitted meeting-processing progress conflicts with its admission",
         );
       }
       return admissionFrom(
@@ -248,8 +248,8 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   }
 
   async stageCandidate(
-    input: CleanLiveCandidateSnapshotInputV1,
-  ): Promise<CleanLiveCandidateV1> {
+    input: MeetingProcessingCandidateSnapshotInputV1,
+  ): Promise<MeetingProcessingCandidateV1> {
     return this.stageCandidateInternal(input);
   }
 
@@ -259,9 +259,9 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
    * submit arbitrary meetings under the staging exception.
    */
   async stageSyntheticCanaryCandidate(
-    input: CleanLiveCandidateSnapshotInputV1,
+    input: MeetingProcessingCandidateSnapshotInputV1,
     canary: StagingSyntheticMeetingCanaryInputV1,
-  ): Promise<CleanLiveCandidateV1> {
+  ): Promise<MeetingProcessingCandidateV1> {
     assertStagingSyntheticMeetingCanaryV1(input.meeting, canary);
     const canaryId = input.meeting.provenance.metadata?.["canary_id"];
     if (typeof canaryId !== "string") {
@@ -274,13 +274,13 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   }
 
   private async stageCandidateInternal(
-    input: CleanLiveCandidateSnapshotInputV1,
+    input: MeetingProcessingCandidateSnapshotInputV1,
     syntheticCanaryCursor?: string,
-  ): Promise<CleanLiveCandidateV1> {
+  ): Promise<MeetingProcessingCandidateV1> {
     return this.database.transaction(() => {
       const admission = this.admission();
       if (admission.membership_status !== "active") {
-        throw new CleanLiveOnlySourceRevokedError();
+        throw new AuthorityMeetingProcessingRevokedError();
       }
       const progress = this.progress(admission.semantic_input_sha256);
       const current = admissionFrom(
@@ -303,7 +303,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           current.processor.configuration_sha256
       ) {
         throw new Error(
-          "clean live candidate differs from the current admitted source state",
+          "meeting-processing candidate differs from the current admitted source state",
         );
       }
       if (syntheticCanaryCursor === undefined) {
@@ -337,7 +337,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       });
       const candidateId = `cnd_${candidateSemanticSha256.slice("sha256:".length)}`;
       const existing = this.candidate(candidateSemanticSha256);
-      if (existing !== undefined) return existing as CleanLiveCandidateV1;
+      if (existing !== undefined) return existing as MeetingProcessingCandidateV1;
 
       assertLegacyReviewPolicySnapshotV1(input.review_policy);
 
@@ -447,18 +447,18 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
             now,
           );
       }
-      return this.candidate(candidateSemanticSha256) as CleanLiveCandidateV1;
+      return this.candidate(candidateSemanticSha256) as MeetingProcessingCandidateV1;
     })();
   }
 
   async readFrozenCandidateForSourceRevision(input: {
     readonly external_id: string;
     readonly canonical_revision: string;
-  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
+  }): Promise<FrozenMeetingProcessingCandidateSnapshotV1 | undefined> {
     return this.database.transaction(() => {
       const admission = this.admission();
       if (admission.membership_status !== "active") {
-        throw new CleanLiveOnlySourceRevokedError();
+        throw new AuthorityMeetingProcessingRevokedError();
       }
       assertAdmissionAdapterIdentity(
         admission,
@@ -481,11 +481,11 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   async readFrozenCandidateForReviewInput(input: {
     readonly review_lineage_id: string;
     readonly review_input_sha256: string;
-  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
+  }): Promise<FrozenMeetingProcessingCandidateSnapshotV1 | undefined> {
     return this.database.transaction(() => {
       const admission = this.admission();
       if (admission.membership_status !== "active") {
-        throw new CleanLiveOnlySourceRevokedError();
+        throw new AuthorityMeetingProcessingRevokedError();
       }
       assertAdmissionAdapterIdentity(
         admission,
@@ -532,7 +532,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
    * frozen reader then verifies the immutable meeting, decisions, and any
    * frozen card snapshot before exposing it to a delivery worker.
    */
-  listPendingApprovalDeliveries(): readonly CleanFrozenCandidateForApprovalV1[] {
+  listPendingApprovalDeliveries(): readonly FrozenMeetingProcessingCandidateForApprovalV1[] {
     const approvals = this.database
       .prepare(
         `SELECT outbox.approval_id
@@ -637,7 +637,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     this.sourceBoundary.assert_live_cursor(input.next_cursor);
     if (input.next_cursor === input.expected_cursor) {
       throw new Error(
-        "clean live-only source cursor advance must change the cursor",
+        "admitted meeting-processing cursor advance must change the cursor",
       );
     }
     const updatedAt = this.now();
@@ -674,7 +674,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
 
   readCandidateByApprovalId(
     approvalId: string,
-  ): CleanLiveApprovalOutboxV1 | undefined {
+  ): ApprovalWorkflowOutboxV1 | undefined {
     return this.database
       .prepare(
           `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
@@ -698,12 +698,12 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
              ON outbox.candidate_id = candidate.candidate_id
           WHERE outbox.approval_id = ?`,
       )
-      .get(approvalId) as CleanLiveApprovalOutboxV1 | undefined;
+      .get(approvalId) as ApprovalWorkflowOutboxV1 | undefined;
   }
 
   private readFrozenCandidateById(
     candidateId: string,
-  ): CleanFrozenCandidateSnapshotV1 | undefined {
+  ): FrozenMeetingProcessingCandidateSnapshotV1 | undefined {
     const row = this.database
       .prepare(
         `SELECT candidate.candidate_semantic_sha256,
@@ -759,7 +759,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       meeting,
       row.source_cursor,
     );
-    const admission: CleanLiveSourceAdmissionV1 = {
+    const admission: AdmittedMeetingProcessingAdmissionV1 = {
       source: {
         adapter_id: syntheticCanary
           ? meeting.provenance.source.adapter_id
@@ -804,13 +804,13 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       instance_id: admission.processor.instance_id,
       version: admission.processor.version,
     });
-    return { ...candidate, admission, meeting, decisions } as CleanFrozenCandidateSnapshotV1;
+    return { ...candidate, admission, meeting, decisions } as FrozenMeetingProcessingCandidateSnapshotV1;
   }
 
   /** Reproves the exact Authority snapshot which a D2 approval resolved. */
   readFrozenCandidateForApproval(
     approvalId: string,
-  ): CleanFrozenCandidateForApprovalV1 | undefined {
+  ): FrozenMeetingProcessingCandidateForApprovalV1 | undefined {
     return this.database.transaction(() => {
       const outbox = this.readCandidateByApprovalId(approvalId);
       if (outbox === undefined) return undefined;
@@ -875,7 +875,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
             input.candidate_id,
           );
         if (updated.changes !== 1) {
-          throw new Error("clean live approval post intent state drifted");
+          throw new Error("approval workflow post intent state drifted");
         }
         return { outbox: this.outbox(input.candidate_id), created: true };
       }
@@ -884,7 +884,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         current.approved_snapshot_json !== snapshotJson ||
         current.approved_snapshot_sha256 !== snapshotSha256
       ) {
-        throw new Error("clean live approval post intent conflicts with its durable outbox");
+        throw new Error("approval workflow post intent conflicts with its durable outbox");
       }
       return { outbox: current, created: false };
     })();
@@ -899,7 +899,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   releaseApprovalPostAttempt(input: {
     readonly candidate_id: string;
     readonly post_started_at: string;
-  }): CleanLiveApprovalOutboxV1 {
+  }): ApprovalWorkflowOutboxV1 {
     return this.database.transaction(() => {
       assertCanonicalUtcMillis(input.post_started_at);
       const current = this.outbox(input.candidate_id);
@@ -913,11 +913,11 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       if (current.presentation_external_id !== null) {
         throw new Error(
-          "clean live approval post attempt is externally visible",
+          "approval workflow post attempt is externally visible",
         );
       }
       if (current.post_started_at !== input.post_started_at) {
-        throw new Error("clean live approval post attempt is stale");
+        throw new Error("approval workflow post attempt is stale");
       }
       if (
         current.state === "superseded" &&
@@ -947,7 +947,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       if (current.state !== "posting") {
         throw new Error(
-          "clean live approval post attempt lacks a releasable unresolved delivery",
+          "approval workflow post attempt lacks a releasable unresolved delivery",
         );
       }
       const now = this.now();
@@ -965,7 +965,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         )
         .run(now, input.candidate_id, input.post_started_at);
       if (updated.changes !== 1) {
-        throw new Error("clean live approval post attempt state drifted");
+        throw new Error("approval workflow post attempt state drifted");
       }
       return this.outbox(input.candidate_id);
     })();
@@ -973,7 +973,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
 
   recordPostedApprovalCard(
     input: CleanPostedApprovalCardV1,
-  ): CleanLiveApprovalOutboxV1 {
+  ): ApprovalWorkflowOutboxV1 {
     return this.database.transaction(() => {
       assertCanonicalUtcMillis(input.post_started_at);
       const current = this.outbox(input.candidate_id);
@@ -1017,7 +1017,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           return this.outbox(input.candidate_id);
         }
         throw new Error(
-          "clean live approval card conflicts with its durable outbox",
+          "approval workflow card conflicts with its durable outbox",
         );
       }
       const now = this.now();
@@ -1037,7 +1037,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           input.post_started_at,
         );
       if (updated.changes !== 1) {
-        throw new Error("clean live approval post result is stale");
+        throw new Error("approval workflow post result is stale");
       }
       return this.outbox(input.candidate_id);
     })();
@@ -1046,7 +1046,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   markControlPlaneStaged(input: {
     readonly candidate_id: string;
     readonly control_approval_sha256: string;
-  }): CleanLiveApprovalOutboxV1 {
+  }): ApprovalWorkflowOutboxV1 {
     return this.database.transaction(() => {
       const current = this.outbox(input.candidate_id);
       if (
@@ -1057,7 +1057,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           return current;
         }
         throw new Error(
-          "clean live control approval conflicts with its durable outbox",
+          "approval-workflow control approval conflicts with its durable outbox",
         );
       }
       if (current.state === "superseded") {
@@ -1084,7 +1084,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       if (current.state !== "posted") {
         throw new Error(
-          "clean live approval card must be posted before control staging",
+          "approval workflow card must be posted before control staging",
         );
       }
       const now = this.now();
@@ -1121,7 +1121,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       )
       .get() as AdmissionRow | undefined;
     if (admission === undefined) {
-      throw new Error("clean live-only source has not been admitted");
+      throw new Error("admitted meeting-processing has not been admitted");
     }
     return admission;
   }
@@ -1136,7 +1136,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       .get(admissionSemanticSha256) as ProgressRow | undefined;
     if (progress === undefined) {
       throw new Error(
-        "clean live-only source progress has not been initialized",
+        "admitted meeting-processing progress has not been initialized",
       );
     }
     return progress;
@@ -1201,7 +1201,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       .run(successorCandidateId, supersededAt, supersededAt, reviewLineageId);
   }
 
-  private outbox(candidateId: string): CleanLiveApprovalOutboxV1 {
+  private outbox(candidateId: string): ApprovalWorkflowOutboxV1 {
     const outbox = this.database
       .prepare(
           `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
@@ -1225,26 +1225,26 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
              ON outbox.candidate_id = candidate.candidate_id
           WHERE candidate.candidate_id = ?`,
       )
-      .get(candidateId) as CleanLiveApprovalOutboxV1 | undefined;
+      .get(candidateId) as ApprovalWorkflowOutboxV1 | undefined;
     if (outbox === undefined)
-      throw new Error("clean live approval outbox is absent");
+      throw new Error("approval workflow outbox is absent");
     return outbox;
   }
 }
 
 function assertAdmissionSnapshot(
-  admission: CleanLiveSourceAdmissionV1,
-  sourceBoundary: CleanLiveSourceBoundaryV1,
+  admission: AdmittedMeetingProcessingAdmissionV1,
+  sourceBoundary: AdmittedMeetingSourceBoundaryV1,
   expectedProcessorAdapterId: string,
 ): void {
   if (admission.source.adapter_id !== sourceBoundary.source_adapter_id) {
     throw new Error(
-      "clean live-only source admission adapter differs from its configured boundary",
+      "admitted meeting-processing admission adapter differs from its configured boundary",
     );
   }
   if (admission.processor.adapter_id !== expectedProcessorAdapterId) {
     throw new Error(
-      "clean live-only source admission processor differs from its configured processor",
+      "admitted meeting-processing admission processor differs from its configured processor",
     );
   }
   assertCanonicalUtcMillis(admission.source.cutoff_at);
@@ -1253,17 +1253,17 @@ function assertAdmissionSnapshot(
 
 function assertAdmissionAdapterIdentity(
   row: AdmissionRow,
-  sourceBoundary: CleanLiveSourceBoundaryV1,
+  sourceBoundary: AdmittedMeetingSourceBoundaryV1,
   expectedProcessorAdapterId: string,
 ): void {
   if (row.source_adapter_id !== sourceBoundary.source_adapter_id) {
     throw new Error(
-      "clean live-only source admission adapter differs from its configured boundary",
+      "admitted meeting-processing admission adapter differs from its configured boundary",
     );
   }
   if (row.processor_adapter_id !== expectedProcessorAdapterId) {
     throw new Error(
-      "clean live-only source admission processor differs from its configured processor",
+      "admitted meeting-processing admission processor differs from its configured processor",
     );
   }
 }

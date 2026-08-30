@@ -53,11 +53,11 @@ import {
   openOrganizationAuthorityRuntime,
   type MeetingSourceRuntimeBundleV1,
 } from "../src/composition/organization-authority-runtime.js";
-import type { CleanLiveProcessorRuntimeBundleV1 } from "../src/composition/clean-live-processor-runtime.js";
 import type { AnswerCompositionRuntimeBundleV1 } from "../src/composition/answer-composition-runtime.js";
+import type { DecisionProcessorRuntimeBundleV1 } from "../src/composition/decision-processor-runtime-bundle-v1.js";
 import type {
-  CleanApprovalRuntimeBundleV1,
-  CleanApprovalRuntimeContextV1,
+  ApprovalWorkflowRuntimeBundleV1,
+  ApprovalWorkflowRuntimeContextV1,
 } from "../src/composition/approval-runtime-bundle-v1.js";
 import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/new-lineage-v1";
 import { readableSearchRuntimeContractV1 } from "../src/composition/readable-search-runtime.js";
@@ -1032,8 +1032,8 @@ describe("Organization Authority runtime private approval lane", () => {
     const fixture = await admittedFixture();
     const staged: string[] = [];
     let ingressCalls = 0;
-    const ownershipContexts: CleanApprovalRuntimeContextV1[] = [];
-    const openedContexts: CleanApprovalRuntimeContextV1[] = [];
+    const ownershipContexts: ApprovalWorkflowRuntimeContextV1[] = [];
+    const openedContexts: ApprovalWorkflowRuntimeContextV1[] = [];
     const sourceRuntime: MeetingSourceRuntimeBundleV1 = {
       source_boundary: {
         source_adapter_id: fixture.source.identity.adapter_id,
@@ -1053,7 +1053,7 @@ describe("Organization Authority runtime private approval lane", () => {
         return fixture.source;
       },
     };
-    const processorRuntime: CleanLiveProcessorRuntimeBundleV1 = {
+    const processorRuntime: DecisionProcessorRuntimeBundleV1 = {
       processor_adapter_id: fixture.processorIdentity.adapter_id,
       assert_runtime_commitments(commitments) {
         expect(commitments.processor.adapter_id).toBe(
@@ -1084,7 +1084,7 @@ describe("Organization Authority runtime private approval lane", () => {
         };
       },
     };
-    const approvalRuntime: CleanApprovalRuntimeBundleV1 = {
+    const approvalRuntime: ApprovalWorkflowRuntimeBundleV1 = {
       async assert_existing_presentations_owned(context) {
         ownershipContexts.push(context);
       },

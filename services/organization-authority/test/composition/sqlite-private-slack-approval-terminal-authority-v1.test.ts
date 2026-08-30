@@ -4,7 +4,7 @@ import {
   SqlitePrivateSlackApprovalTerminalAuthorityV1,
 } from "../../src/composition/sqlite-private-slack-approval-terminal-authority-v1.js";
 import type { SqlitePrivateSlackApprovalAssignmentStateV1 } from "../../src/composition/sqlite-private-slack-approval-assignment-state-v1.js";
-import type { SqliteCleanLiveOnlySourceStateV1 } from "../../src/processing/clean-v1/sqlite-live-only-source-state.js";
+import type { SqliteAuthorityMeetingProcessingStateV1 } from "../../src/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
 const NOW = "2026-08-28T00:00:00.000Z";
 const APPROVAL_ID = "apr_private";
@@ -109,7 +109,7 @@ function harness(input = sourceCandidate()) {
     markTerminalCardRendered: vi.fn(),
   };
   const adapter = new SqlitePrivateSlackApprovalTerminalAuthorityV1({
-    source: source as unknown as SqliteCleanLiveOnlySourceStateV1,
+    source: source as unknown as SqliteAuthorityMeetingProcessingStateV1,
     assignments: assignments as unknown as SqlitePrivateSlackApprovalAssignmentStateV1,
     coordinates: {
       authority_id: "authority_private",

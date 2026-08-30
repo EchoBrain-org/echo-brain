@@ -2,8 +2,8 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { StagedPrivateApprovalPendingV1 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { describe, expect, it, vi } from "vitest";
 import { PrivateSlackDmApprovalStagerV1 } from "../../src/composition/private-slack-dm-approval-stager-v1.js";
-import type { CleanApprovalStageInputV1 } from "../../src/processing/clean-v1/live-only-source-cycle.js";
-import type { SqliteCleanLiveOnlySourceStateV1 } from "../../src/processing/clean-v1/sqlite-live-only-source-state.js";
+import type { ApprovalWorkflowStageInputV1 } from "../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import type { SqliteAuthorityMeetingProcessingStateV1 } from "../../src/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
 const DIGEST = (character: string) => `sha256:${character.repeat(64)}` as `sha256:${string}`;
 type Sha256 = `sha256:${string}`;
@@ -24,7 +24,7 @@ const input = {
     provenance: { external_id: "note-1", canonical_revision: "rev-1", source: { kind: "meeting-source", adapter_id: "granola", instance_id: "granola-1", version: "1" }, observed_at: NOW, normalizer_version: "1" }, extensions: {}, schema_version: 1,
   },
   decisions: { schema_version: 1, meeting_id: "meeting-1", meeting_revision: "rev-1", generated_at: NOW, processor: { kind: "decision-processor", adapter_id: "llm", instance_id: "llm-1", version: "1" }, signals: [] },
-} as unknown as CleanApprovalStageInputV1;
+} as unknown as ApprovalWorkflowStageInputV1;
 
 function outbox(state: "queued" | "posting" | "posted" | "staged" = "queued") {
   return {
@@ -80,7 +80,7 @@ describe("private Slack DM approval stager V1", () => {
       return { pending_sha256: DIGEST("3") } as StagedPrivateApprovalPendingV1;
     });
     const stager = new PrivateSlackDmApprovalStagerV1({
-      authority: authority as unknown as SqliteCleanLiveOnlySourceStateV1,
+      authority: authority as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
       coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
       assignments: {
@@ -160,7 +160,7 @@ describe("private Slack DM approval stager V1", () => {
         },
         markControlPlaneStaged,
         releaseApprovalPostAttempt: vi.fn(), recordSupersededApprovalCardTombstoned: vi.fn(),
-      } as unknown as SqliteCleanLiveOnlySourceStateV1,
+      } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
       coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
       assignments: { readCurrent: () => undefined, stage: () => ({ assignment, created: true }) } as never,
@@ -186,7 +186,7 @@ describe("private Slack DM approval stager V1", () => {
     const openDirectMessage = vi.fn();
     const authority = { readCandidateByApprovalId: () => outbox(), prepareApprovalPost: () => ({ outbox: outbox("posting"), created: true }) };
     const stager = new PrivateSlackDmApprovalStagerV1({
-      authority: authority as unknown as SqliteCleanLiveOnlySourceStateV1,
+      authority: authority as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
       coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
       assignments: {} as never, control_plane: {} as never,
@@ -204,7 +204,7 @@ describe("private Slack DM approval stager V1", () => {
       authority: {
         readCandidateByApprovalId: () => outbox(),
         prepareApprovalPost: () => ({ outbox: outbox("posting"), created: true }),
-      } as unknown as SqliteCleanLiveOnlySourceStateV1,
+      } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
       coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
       assignments: { readCurrent: () => undefined, stage: assignmentStage } as never,
@@ -248,7 +248,7 @@ describe("private Slack DM approval stager V1", () => {
           superseded_by_candidate_id: "cnd_new", presentation_external_id: "123.000001", post_started_at: NOW,
         }],
         recordSupersededApprovalCardTombstoned: recorded,
-      } as unknown as SqliteCleanLiveOnlySourceStateV1,
+      } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
       coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
       assignments: { readForPresentation: () => recovery } as never,
@@ -272,7 +272,7 @@ describe("private Slack DM approval stager V1", () => {
           superseded_by_candidate_id: "cnd_new", presentation_external_id: null, post_started_at: NOW,
         }],
         recordSupersededApprovalCardTombstoned: vi.fn(),
-      } as unknown as SqliteCleanLiveOnlySourceStateV1,
+      } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
       coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
       assignments: { readForPresentation: () => undefined } as never,

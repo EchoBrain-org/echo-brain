@@ -10,20 +10,20 @@ import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/p
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
-import { CleanLiveOnlySourceCycleV1 } from "../processing/clean-v1/live-only-source-cycle.js";
-import type { CleanLiveSourceAdmissionV1 } from "../processing/clean-v1/live-only-source-cycle.js";
-import type { CleanLiveSourceBoundaryV1 } from "../processing/clean-v1/live-source-boundary.js";
+import { AdmittedMeetingProcessingCycleV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import type { AdmittedMeetingSourceBoundaryV1 } from "../processing/admitted-meeting-processing/admitted-meeting-source-boundary-v1.js";
 import {
-  readCleanLiveSourceRuntimeCommitmentsV1,
-  type CleanLiveSourceRuntimeCommitmentsV1,
+  readAdmittedMeetingSourceRuntimeCommitmentsV1,
+  type AdmittedMeetingSourceRuntimeCommitmentsV1,
 } from "../processing/clean-v1/live-source-runtime-commitments.js";
-import { SqliteCleanLiveOnlySourceStateV1 } from "../processing/clean-v1/sqlite-live-only-source-state.js";
+import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type {
-  CleanApprovalProcessingV1,
-  CleanApprovalRuntimeBundleV1,
+  ApprovalWorkflowProcessingV1,
+  ApprovalWorkflowRuntimeBundleV1,
 } from "./approval-runtime-bundle-v1.js";
 import type { AnswerCompositionRuntimeBundleV1 } from "./answer-composition-runtime.js";
-import type { CleanLiveProcessorRuntimeBundleV1 } from "./clean-live-processor-runtime.js";
+import type { DecisionProcessorRuntimeBundleV1 } from "./decision-processor-runtime-bundle-v1.js";
 import {
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
@@ -52,9 +52,9 @@ export interface OrganizationAuthorityRuntimeConfig {
   /** Explicit provider/source bundle. This generic root does not select one. */
   readonly source_runtime: MeetingSourceRuntimeBundleV1;
   /** Explicit decision-processor bundle. This generic root does not select one. */
-  readonly processor_runtime: CleanLiveProcessorRuntimeBundleV1;
+  readonly processor_runtime: DecisionProcessorRuntimeBundleV1;
   /** Explicit approval/delivery bundle. This generic root does not select one. */
-  readonly approval_runtime: CleanApprovalRuntimeBundleV1;
+  readonly approval_runtime: ApprovalWorkflowRuntimeBundleV1;
   /** Explicit answer-composition bundle. This generic root does not select one. */
   readonly answer_composition_runtime: AnswerCompositionRuntimeBundleV1;
   /** Exact durable record-resolution protocols admitted into append and retrieval. */
@@ -87,10 +87,10 @@ export interface OpenedOrganizationAuthorityRuntime
 }
 
 type MeetingSourceAdapter = ConstructorParameters<
-  typeof CleanLiveOnlySourceCycleV1
+  typeof AdmittedMeetingProcessingCycleV1
 >[0]["source"];
 type DecisionProcessorAdapter = ConstructorParameters<
-  typeof CleanLiveOnlySourceCycleV1
+  typeof AdmittedMeetingProcessingCycleV1
 >[0]["processor"];
 /**
  * All provider-specific live-source facts are constructed outside this
@@ -98,16 +98,16 @@ type DecisionProcessorAdapter = ConstructorParameters<
  */
 export interface MeetingSourceRuntimeBundleV1 {
   /** Creates the one source adapter for the admitted source identity. */
-  create_source(admission: CleanLiveSourceAdmissionV1): MeetingSourceAdapter;
+  create_source(admission: AdmittedMeetingProcessingAdmissionV1): MeetingSourceAdapter;
   /**
    * Proves this provider's current local source configuration still matches
    * its immutable admission before the provider credential is read.
    */
   assert_runtime_commitments(
-    commitments: CleanLiveSourceRuntimeCommitmentsV1,
+    commitments: AdmittedMeetingSourceRuntimeCommitmentsV1,
   ): void;
   /** Owns provider cursor and metadata validation. */
-  readonly source_boundary: CleanLiveSourceBoundaryV1;
+  readonly source_boundary: AdmittedMeetingSourceBoundaryV1;
 }
 
 /**
@@ -146,8 +146,8 @@ class OrganizationAuthorityProcessingCoordinator
   implements OrganizationAuthorityProcessingCycleV1 {
   readonly hasFineGrainedSourceLifecycle = true;
   constructor(
-    private readonly source: CleanLiveOnlySourceCycleV1,
-    private readonly approvals: CleanApprovalProcessingV1,
+    private readonly source: AdmittedMeetingProcessingCycleV1,
+    private readonly approvals: ApprovalWorkflowProcessingV1,
     private readonly readableSearch: ReadableSearchReconcilerV1,
   ) {}
 
@@ -245,12 +245,12 @@ export async function openOrganizationAuthorityRuntime(
     { fileMustExist: true },
   );
   try {
-    const sourceState = new SqliteCleanLiveOnlySourceStateV1(
+    const sourceState = new SqliteAuthorityMeetingProcessingStateV1(
       authority,
       config.source_runtime.source_boundary,
       config.processor_runtime.processor_adapter_id,
     );
-    const commitments = readCleanLiveSourceRuntimeCommitmentsV1(authority);
+    const commitments = readAdmittedMeetingSourceRuntimeCommitmentsV1(authority);
     config.source_runtime.assert_runtime_commitments(commitments);
     config.processor_runtime.assert_runtime_commitments(commitments);
     const admission = await sourceState.readAdmission();
@@ -301,7 +301,7 @@ export async function openOrganizationAuthorityRuntime(
       approvalContext,
     );
     const approvals = await config.approval_runtime.open(approvalContext);
-    const sourceCycle = new CleanLiveOnlySourceCycleV1({
+    const sourceCycle = new AdmittedMeetingProcessingCycleV1({
       source,
       processor,
       state: sourceState,

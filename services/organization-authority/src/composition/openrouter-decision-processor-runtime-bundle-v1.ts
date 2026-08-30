@@ -4,13 +4,13 @@ import {
   llmProcessingVersion,
 } from "../processing/adapters/decision-processors/llm/llm-decision-processor.js";
 import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
-import type { CleanLiveSourceAdmissionV1 } from "../processing/clean-v1/live-only-source-cycle.js";
-import type { CleanLiveSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
+import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
 import {
   assertOpenRouterCleanProcessorRuntimeCommitmentsV1,
   fixedOpenRouterCleanProcessorConfigV1,
 } from "./openrouter-clean-processor-config-v1.js";
-import type { CleanLiveProcessorRuntimeBundleV1 } from "./clean-live-processor-runtime.js";
+import type { DecisionProcessorRuntimeBundleV1 } from "./decision-processor-runtime-bundle-v1.js";
 
 function assertProcessorConfig(
   adapter: {
@@ -34,15 +34,15 @@ function assertProcessorConfig(
  * never reads this credential, selects this provider, or knows its model
  * configuration.
  */
-export function createOpenRouterCleanLiveProcessorRuntimeBundleV1(input: {
+export function createOpenRouterDecisionProcessorRuntimeBundleV1(input: {
   readonly credential_file: string;
-}): CleanLiveProcessorRuntimeBundleV1 {
+}): DecisionProcessorRuntimeBundleV1 {
   const credentialReference = `file:${input.credential_file}`;
   let commitmentsChecked = false;
   return Object.freeze({
     processor_adapter_id: "llm",
     assert_runtime_commitments(
-      commitments: CleanLiveSourceRuntimeCommitmentsV1,
+      commitments: AdmittedMeetingSourceRuntimeCommitmentsV1,
     ): void {
       if (commitments.processor.adapter_id !== "llm") {
         throw new Error(
@@ -57,7 +57,7 @@ export function createOpenRouterCleanLiveProcessorRuntimeBundleV1(input: {
       });
       commitmentsChecked = true;
     },
-    create_processor(admission: CleanLiveSourceAdmissionV1) {
+    create_processor(admission: AdmittedMeetingProcessingAdmissionV1) {
       if (!commitmentsChecked) {
         throw new Error(
           "OpenRouter decision-processor runtime commitments were not checked",

@@ -1,13 +1,13 @@
 import type { DecisionProcessorAdapter } from "../processing/core/ports/adapters.js";
-import type { CleanLiveSourceAdmissionV1 } from "../processing/clean-v1/live-only-source-cycle.js";
-import type { CleanLiveSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
+import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
 
 /**
  * Provider-neutral construction boundary for the decision processor selected
  * by a live-source admission. The shared runtime knows only this committed
  * adapter identity and the canonical decision-processor port.
  */
-export interface CleanLiveProcessorRuntimeBundleV1 {
+export interface DecisionProcessorRuntimeBundleV1 {
   /** The only decision-processor adapter identity this bundle can construct. */
   readonly processor_adapter_id: string;
   /**
@@ -15,10 +15,10 @@ export interface CleanLiveProcessorRuntimeBundleV1 {
    * admission before the bundle reads any private credential.
    */
   assert_runtime_commitments(
-    commitments: CleanLiveSourceRuntimeCommitmentsV1,
+    commitments: AdmittedMeetingSourceRuntimeCommitmentsV1,
   ): void;
   /** Creates and validates the admitted decision processor. */
   create_processor(
-    admission: CleanLiveSourceAdmissionV1,
+    admission: AdmittedMeetingProcessingAdmissionV1,
   ): DecisionProcessorAdapter;
 }

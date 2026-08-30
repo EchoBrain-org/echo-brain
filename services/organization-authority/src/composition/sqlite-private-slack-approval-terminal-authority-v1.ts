@@ -25,9 +25,9 @@ import {
   type RecordPrivateApprovalTerminalReceiptInputV1,
 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
 import {
-  SqliteCleanLiveOnlySourceStateV1,
-  type CleanFrozenCandidateForApprovalV1,
-} from "../processing/clean-v1/sqlite-live-only-source-state.js";
+  SqliteAuthorityMeetingProcessingStateV1,
+  type FrozenMeetingProcessingCandidateForApprovalV1,
+} from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
 /** The immutable root that every generated record provenance must carry. */
 export interface PrivateSlackApprovalTerminalAuthorityCoordinatesV1 {
@@ -37,7 +37,7 @@ export interface PrivateSlackApprovalTerminalAuthorityCoordinatesV1 {
 }
 
 export interface SqlitePrivateSlackApprovalTerminalAuthorityV1Options {
-  readonly source: SqliteCleanLiveOnlySourceStateV1;
+  readonly source: SqliteAuthorityMeetingProcessingStateV1;
   readonly assignments: SqlitePrivateSlackApprovalAssignmentStateV1;
   readonly coordinates: PrivateSlackApprovalTerminalAuthorityCoordinatesV1;
 }
@@ -60,7 +60,7 @@ function exactCoordinates(
 }
 
 function sourceProvenance(
-  candidate: CleanFrozenCandidateForApprovalV1,
+  candidate: FrozenMeetingProcessingCandidateForApprovalV1,
   coordinates: PrivateSlackApprovalTerminalAuthorityCoordinatesV1,
 ): MeetingSourceProvenanceV1 {
   const source = candidate.meeting.provenance.source;
@@ -82,7 +82,7 @@ function sourceProvenance(
 }
 
 function processorProvenance(
-  candidate: CleanFrozenCandidateForApprovalV1,
+  candidate: FrozenMeetingProcessingCandidateForApprovalV1,
   coordinates: PrivateSlackApprovalTerminalAuthorityCoordinatesV1,
 ): DecisionProcessorProvenanceV1 {
   const processor = candidate.decisions.processor;
@@ -112,7 +112,7 @@ function processorProvenance(
 export class SqlitePrivateSlackApprovalTerminalAuthorityV1
   implements PrivateSlackApprovalTerminalAuthorityV1
 {
-  private readonly source: SqliteCleanLiveOnlySourceStateV1;
+  private readonly source: SqliteAuthorityMeetingProcessingStateV1;
   private readonly assignments: SqlitePrivateSlackApprovalAssignmentStateV1;
   private readonly coordinates: PrivateSlackApprovalTerminalAuthorityCoordinatesV1;
 

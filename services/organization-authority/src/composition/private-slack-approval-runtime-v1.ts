@@ -8,8 +8,8 @@ import { readPrivateAuthoritySlackSigningSecret } from "../adapters/security/pri
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
 import { createPrivateSlackBlockV4RecordWriterV1 } from "../processing/clean-v1-record/private-slack-block-v4-record-writer-v1.js";
 import type {
-  CleanApprovalRuntimeBundleV1,
-  CleanApprovalRuntimeContextV1,
+  ApprovalWorkflowRuntimeBundleV1,
+  ApprovalWorkflowRuntimeContextV1,
 } from "./approval-runtime-bundle-v1.js";
 import { createPrivateSlackApprovalInteractionHttpIngressV1 } from "./private-slack-approval-interaction-http-ingress-v1.js";
 import { PrivateSlackDmApprovalStagerV1 } from "./private-slack-dm-approval-stager-v1.js";
@@ -62,7 +62,7 @@ interface UnownedApprovalPresentationRowV1 {
  * no message timestamp was durably recovered.
  */
 function assertPrivateSlackApprovalPresentationOwnershipV1(
-  context: CleanApprovalRuntimeContextV1,
+  context: ApprovalWorkflowRuntimeContextV1,
   connection: CurrentPrivateSlackConnectionV1,
 ): void {
   const unowned = context.authority_database
@@ -108,10 +108,10 @@ function assertPrivateSlackApprovalPresentationOwnershipV1(
  */
 export function createPrivateSlackApprovalRuntimeBundleV1(
   config: PrivateSlackApprovalRuntimeConfigV1,
-): CleanApprovalRuntimeBundleV1 {
+): ApprovalWorkflowRuntimeBundleV1 {
   return Object.freeze({
     async assert_existing_presentations_owned(
-      context: CleanApprovalRuntimeContextV1,
+      context: ApprovalWorkflowRuntimeContextV1,
     ): Promise<void> {
       const slack = resolveCurrentPrivateSlackConnectionV1(
         context.control_plane_database,
@@ -123,7 +123,7 @@ export function createPrivateSlackApprovalRuntimeBundleV1(
         slack,
       );
     },
-    async open(context: CleanApprovalRuntimeContextV1) {
+    async open(context: ApprovalWorkflowRuntimeContextV1) {
       const slack = resolveCurrentPrivateSlackConnectionV1(
         context.control_plane_database,
         config.connection_id,

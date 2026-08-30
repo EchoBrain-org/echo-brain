@@ -1,23 +1,23 @@
 import { assertCanonicalDecisionSet } from "../processing/core/contracts/validation.js";
 import type { DecisionProcessorAdapter } from "../processing/core/ports/adapters.js";
 import {
-  type CleanActionableLiveCandidateV1,
-  type CleanApprovalStagerV1,
-} from "../processing/clean-v1/live-only-source-cycle.js";
+  type ActionableMeetingProcessingCandidateV1,
+  type ApprovalWorkflowStagerV1,
+} from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
   createStagingSyntheticMeetingCanaryV1,
   type StagingSyntheticMeetingCanaryInputV1,
 } from "../processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
 import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../processing/clean-v1/review-lineage-semantics.js";
-import { SqliteCleanLiveOnlySourceStateV1 } from "../processing/clean-v1/sqlite-live-only-source-state.js";
+import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
 export interface RunStagingSyntheticPrivateDmCanaryV1Input {
   /** Must be the public staging Authority origin, never a production URL. */
   readonly authority_url: string;
   readonly canary: StagingSyntheticMeetingCanaryInputV1;
-  readonly state: SqliteCleanLiveOnlySourceStateV1;
+  readonly state: SqliteAuthorityMeetingProcessingStateV1;
   readonly processor: DecisionProcessorAdapter;
-  readonly stager: CleanApprovalStagerV1;
+  readonly stager: ApprovalWorkflowStagerV1;
   readonly signal?: AbortSignal;
 }
 
@@ -64,7 +64,7 @@ function assertStagingAuthorityUrl(authorityUrl: string): void {
 }
 
 function actionable(
-  value: Awaited<ReturnType<SqliteCleanLiveOnlySourceStateV1["readFrozenCandidateForSourceRevision"]>>,
+  value: Awaited<ReturnType<SqliteAuthorityMeetingProcessingStateV1["readFrozenCandidateForSourceRevision"]>>,
 ): value is Exclude<typeof value, undefined> & {
   readonly disposition: "actionable";
   readonly approval_id: string;
@@ -156,7 +156,7 @@ export async function runStagingSyntheticPrivateDmCanaryV1(
   const staged = await input.stager.stage(
     {
       admission: frozen.admission,
-      candidate: frozen as CleanActionableLiveCandidateV1,
+      candidate: frozen as ActionableMeetingProcessingCandidateV1,
       meeting: frozen.meeting,
       decisions: frozen.decisions,
     },
