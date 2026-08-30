@@ -154,6 +154,153 @@ function isRepositoryPathPattern(path) {
   return typeof path === 'string' && isRepositoryPath(path.replaceAll('*', 'provider'));
 }
 
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isExactSourcePath(path, sourceRoot) {
+  return (
+    typeof path === 'string' &&
+    !path.includes('*') &&
+    isRepositoryPath(path) &&
+    isWithin(path, sourceRoot) &&
+    SOURCE_FILE_RE.test(path)
+  );
+}
+
+function exportedSymbols(tree, path) {
+  const source = textFile(tree, path);
+  if (source === null) return new Set();
+  const sourceFile = ts.createSourceFile(
+    path,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    path.endsWith('.tsx') || path.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const symbols = new Set();
+  const hasExportModifier = (statement) =>
+    statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportDeclaration(statement)) {
+      if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
+        for (const element of statement.exportClause.elements) symbols.add(element.name.text);
+      }
+      continue;
+    }
+    if (!hasExportModifier(statement)) continue;
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) symbols.add(declaration.name.text);
+      }
+      continue;
+    }
+    if ('name' in statement && statement.name !== undefined && ts.isIdentifier(statement.name)) {
+      symbols.add(statement.name.text);
+    }
+  }
+  return symbols;
+}
+
+function checkComponentIndexContract(tree, manifest, errors) {
+  const contract = manifest.component_index_contract;
+  if (contract === undefined) return;
+  if (
+    !isObject(contract) ||
+    !Array.isArray(contract.canonical_components) ||
+    !isStringArray(contract.retired_source_paths) ||
+    !Array.isArray(contract.compatibility_entrypoints)
+  ) {
+    errors.push(`${manifest.name}: component_index_contract is invalid`);
+    return;
+  }
+
+  const canonicalPaths = new Set();
+  const canonicalNames = new Set();
+  for (const component of contract.canonical_components) {
+    if (
+      !isObject(component) ||
+      typeof component.name !== 'string' ||
+      component.name === '' ||
+      typeof component.path !== 'string' ||
+      typeof component.export !== 'string' ||
+      component.export === ''
+    ) {
+      errors.push(`${manifest.name}: component_index_contract has an invalid canonical component`);
+      continue;
+    }
+    if (canonicalNames.has(component.name)) {
+      errors.push(`${manifest.name}: component index duplicates canonical component name: ${component.name}`);
+    }
+    canonicalNames.add(component.name);
+    if (canonicalPaths.has(component.path)) {
+      errors.push(`${manifest.name}: component index duplicates canonical component path: ${component.path}`);
+    }
+    canonicalPaths.add(component.path);
+    if (!isExactSourcePath(component.path, manifest.source_root)) {
+      errors.push(`${manifest.name}: canonical component '${component.name}' path must be an exact source path inside ${manifest.source_root}: ${component.path}`);
+      continue;
+    }
+    if (!tree.has(component.path)) {
+      errors.push(`${manifest.name}: canonical component '${component.name}' path is missing: ${component.path}`);
+      continue;
+    }
+    if (!exportedSymbols(tree, component.path).has(component.export)) {
+      errors.push(`${manifest.name}: canonical component '${component.name}' does not export '${component.export}' from ${component.path}`);
+    }
+  }
+
+  const retiredPaths = new Set();
+  for (const path of contract.retired_source_paths) {
+    if (retiredPaths.has(path)) {
+      errors.push(`${manifest.name}: component index duplicates retired source path: ${path}`);
+    }
+    retiredPaths.add(path);
+    if (!isExactSourcePath(path, manifest.source_root)) {
+      errors.push(`${manifest.name}: retired component source path must be exact and inside ${manifest.source_root}: ${path}`);
+      continue;
+    }
+    if (tree.has(path)) {
+      errors.push(`${manifest.name}: retired component source path remains: ${path}`);
+    }
+  }
+
+  const compatibilityPaths = new Set();
+  for (const entrypoint of contract.compatibility_entrypoints) {
+    if (
+      !isObject(entrypoint) ||
+      typeof entrypoint.path !== 'string' ||
+      typeof entrypoint.target !== 'string'
+    ) {
+      errors.push(`${manifest.name}: component_index_contract has an invalid compatibility entrypoint`);
+      continue;
+    }
+    if (compatibilityPaths.has(entrypoint.path)) {
+      errors.push(`${manifest.name}: component index duplicates compatibility entrypoint: ${entrypoint.path}`);
+    }
+    compatibilityPaths.add(entrypoint.path);
+    if (!isExactSourcePath(entrypoint.path, manifest.source_root)) {
+      errors.push(`${manifest.name}: compatibility entrypoint path must be exact and inside ${manifest.source_root}: ${entrypoint.path}`);
+      continue;
+    }
+    if (!isExactSourcePath(entrypoint.target, manifest.source_root)) {
+      errors.push(`${manifest.name}: compatibility entrypoint target must be exact and inside ${manifest.source_root}: ${entrypoint.target}`);
+      continue;
+    }
+    if (!tree.has(entrypoint.path) || !tree.has(entrypoint.target)) {
+      errors.push(`${manifest.name}: compatibility entrypoint or target is missing: ${entrypoint.path} -> ${entrypoint.target}`);
+      continue;
+    }
+    const localImports = moduleReferences(entrypoint.path, textFile(tree, entrypoint.path))
+      .filter((reference) => reference.specifier !== null && reference.specifier.startsWith('.'))
+      .map((reference) => resolveRelative(tree, entrypoint.path, reference.specifier));
+    if (localImports.length !== 1 || localImports[0] !== entrypoint.target) {
+      errors.push(`${manifest.name}: compatibility entrypoint must import only its declared implementation target: ${entrypoint.path} -> ${entrypoint.target}`);
+    }
+  }
+}
+
 function stringArrayInitializer(sourceFile, name) {
   let values;
   const visit = (node) => {
@@ -616,6 +763,7 @@ function checkWorkspaceBoundaries(tree, errors) {
       }
     }
     if (!layerRulesAreValid) continue;
+    checkComponentIndexContract(tree, manifest, errors);
     boundaries.push({ manifestPath, manifest });
   }
 

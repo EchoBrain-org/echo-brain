@@ -48,6 +48,18 @@ interface BoundaryManifest {
   forbidden_repository_roots?: string[];
   runtime_assets?: string[];
   layer_rules: LayerRule[];
+  component_index_contract?: {
+    canonical_components: Array<{
+      name: string;
+      path: string;
+      export: string;
+    }>;
+    retired_source_paths: string[];
+    compatibility_entrypoints: Array<{
+      path: string;
+      target: string;
+    }>;
+  };
 }
 
 interface PackageManifest {
@@ -160,6 +172,70 @@ function runBoundary(fixture: string): {
 }
 
 describe("workspace source boundaries", () => {
+  it("accepts the declared Authority component index", () => {
+    const fixture = fixtureRepository();
+
+    const result = runBoundary(fixture);
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+
+  it("rejects a missing canonical Authority component path", () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      "services/organization-authority/source-boundary.v1.json";
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    const contract = manifest.component_index_contract;
+    expect(contract).toBeDefined();
+    contract!.canonical_components[0]!.path =
+      "services/organization-authority/src/composition/missing-organization-authority-composition-root.ts";
+    writeFixtureJson(fixture, manifestPath, manifest);
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "canonical component 'Organization Authority composition root' path is missing",
+    );
+  });
+
+  it("rejects a reintroduced retired Authority component path", () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      "services/organization-authority/source-boundary.v1.json";
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    const contract = manifest.component_index_contract;
+    expect(contract).toBeDefined();
+    const retiredPath = contract!.retired_source_paths[0]!;
+    writeFileSync(join(fixture, retiredPath), "export {};\n");
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      `retired component source path remains: ${retiredPath}`,
+    );
+  });
+
+  it("rejects a compatibility facade that targets the wrong implementation", () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      "services/organization-authority/source-boundary.v1.json";
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    const contract = manifest.component_index_contract;
+    expect(contract).toBeDefined();
+    contract!.compatibility_entrypoints[0]!.target =
+      "services/organization-authority/src/composition/clean-live-cli.ts";
+    writeFixtureJson(fixture, manifestPath, manifest);
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "compatibility entrypoint must import only its declared implementation target",
+    );
+  });
+
   it("matches every declared workspace to one checked boundary", () => {
     const rootPackage = readJson<{ workspaces: string[] }>("package.json");
     const registry = readJson<Registry>(REGISTRY);

@@ -34,6 +34,16 @@ it.
   `Layer 4` in navigation; retain the layer number only where it defines a
   protocol or invariant.
 
+## Guarded component indexes
+
+The Organization Authority source boundary declares a small
+`component_index_contract`: its canonical composition, runtime, lifecycle,
+HTTP, processing-cycle, answer-composition, and readable-search entry points;
+the exact retired paths they replace; and frozen compatibility facades. The
+architecture-boundary check verifies those facts. It deliberately does not ban
+words across the repository: historical and compatibility vocabulary remains
+valid where its contract requires it.
+
 ## Compatibility and history
 
 Persisted schema kinds, wire fields, event names, database values, release

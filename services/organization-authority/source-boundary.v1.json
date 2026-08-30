@@ -48,6 +48,67 @@
     "services/organization-authority/baselines/authority-live-source-v3.sql",
     "services/organization-authority/baselines/authority-private-approval-v2.sql"
   ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Organization Authority composition root",
+        "path": "services/organization-authority/src/composition/organization-authority-composition-root.ts",
+        "export": "openOrganizationAuthorityService"
+      },
+      {
+        "name": "Organization Authority runtime",
+        "path": "services/organization-authority/src/composition/organization-authority-runtime.ts",
+        "export": "openOrganizationAuthorityRuntime"
+      },
+      {
+        "name": "Organization Authority service lifecycle",
+        "path": "services/organization-authority/src/composition/organization-authority-service-lifecycle.ts",
+        "export": "startOrganizationAuthorityServiceLifecycle"
+      },
+      {
+        "name": "Organization Authority HTTP server",
+        "path": "services/organization-authority/src/presentation/organization-authority-http-server.ts",
+        "export": "createOrganizationAuthorityHttpServer"
+      },
+      {
+        "name": "Admitted meeting-processing cycle",
+        "path": "services/organization-authority/src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.ts",
+        "export": "AdmittedMeetingProcessingCycleV1"
+      },
+      {
+        "name": "Reference meeting-processing cycle",
+        "path": "services/organization-authority/src/processing/reference/reference-meeting-processing-cycle.ts",
+        "export": "runReferenceMeetingProcessingCycle"
+      },
+      {
+        "name": "Answer-composition runtime",
+        "path": "services/organization-authority/src/composition/answer-composition-runtime.ts",
+        "export": "AnswerCompositionRuntimeBundleV1"
+      },
+      {
+        "name": "Readable-search runtime",
+        "path": "services/organization-authority/src/composition/readable-search-runtime.ts",
+        "export": "createReadableSearchGenerationReconcilerV1"
+      }
+    ],
+    "retired_source_paths": [
+      "services/organization-authority/src/composition/open-clean-founder-live-runtime.ts",
+      "services/organization-authority/src/composition/open-clean-organization-authority-runtime.ts",
+      "services/organization-authority/src/composition/open-clean-live-runtime.ts",
+      "services/organization-authority/src/composition/clean-live-runtime.ts",
+      "services/organization-authority/src/processing/core/processing/run-core-cycle.ts",
+      "services/organization-authority/src/answer-composition/lean-answer-composition.ts",
+      "services/organization-authority/src/composition/clean-answer-composition-runtime.ts",
+      "services/organization-authority/src/composition/clean-readable-search-runtime.ts",
+      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts"
+    ],
+    "compatibility_entrypoints": [
+      {
+        "path": "services/organization-authority/src/clean-founder-main.ts",
+        "target": "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
+      }
+    ]
+  },
   "layer_rules": [
     {
       "name": "authority-legacy-reset-entrypoint-calls-composition",
