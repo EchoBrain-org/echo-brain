@@ -49,8 +49,8 @@ acquire_operation_lock() {
 [[ -x /usr/bin/python3 || -x "$(command -v python3)" ]] || fail 'python3 is required'
 [[ -f "$RELEASE_TOOL" ]] || fail 'clean-v1 release validator is missing'
 [[ -f "$RUNTIME_PROFILE_TOOL" ]] || fail 'clean-v1 runtime profile validator is missing'
-[[ -d "$RUNTIME_CONFIG_DIR" && ! -L "$RUNTIME_CONFIG_DIR" ]] || fail 'clean Authority runtime configuration directory is missing or unsafe'
-[[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Authority environment file is missing or unsafe'
+[[ -d "$RUNTIME_CONFIG_DIR" && ! -L "$RUNTIME_CONFIG_DIR" ]] || fail 'Authority runtime configuration directory is missing or unsafe'
+[[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'Authority deployment environment file is missing or unsafe'
 
 compose_clean() {
   docker compose --env-file "$ENV_FILE" \
@@ -114,12 +114,12 @@ import pathlib, re, stat, sys
 path = pathlib.Path(sys.argv[1])
 state = path.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 values = {}
 for name in ('ECHO_CLEAN_AUTHORITY_UID', 'ECHO_CLEAN_AUTHORITY_GID'):
     rows = [line.split('=', 1)[1] for line in path.read_text(encoding='utf-8').splitlines() if line.startswith(name + '=')]
     if len(rows) != 1 or not re.fullmatch(r'[1-9][0-9]{0,9}', rows[0]) or int(rows[0]) > 4294967295:
-        raise SystemExit('clean Authority environment must contain one validated non-root ' + name)
+        raise SystemExit('Authority deployment environment must contain one validated non-root ' + name)
     values[name] = rows[0]
 print(values['ECHO_CLEAN_AUTHORITY_UID'] + ':' + values['ECHO_CLEAN_AUTHORITY_GID'])
 PY
@@ -149,13 +149,13 @@ import pathlib, re, stat, sys
 path = pathlib.Path(sys.argv[1])
 state = path.lstat()
 if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode) or state.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 rows = [line for line in path.read_text(encoding='utf-8').splitlines() if line.startswith('ECHO_CLEAN_AUTHORITY_IMAGE=')]
 if len(rows) != 1:
-    raise SystemExit('clean Authority environment must contain exactly one ECHO_CLEAN_AUTHORITY_IMAGE')
+    raise SystemExit('Authority deployment environment must contain exactly one ECHO_CLEAN_AUTHORITY_IMAGE')
 value = rows[0].split('=', 1)[1]
 if not re.fullmatch(r'[a-z0-9][a-z0-9.-]*(?:/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}', value):
-    raise SystemExit('clean Authority image is not an immutable digest reference')
+    raise SystemExit('Authority image is not an immutable digest reference')
 print(value)
 PY
 }
@@ -206,7 +206,7 @@ source, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 image, release_id, source_sha, profile_sha, profile_version = sys.argv[3:]
 state = source.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 lines = source.read_text(encoding='utf-8').splitlines()
 names = {
     'ECHO_CLEAN_AUTHORITY_IMAGE': image,
@@ -217,7 +217,7 @@ names = {
 }
 for name in names:
     if sum(line.startswith(name + '=') for line in lines) > 1:
-        raise SystemExit('clean Authority environment has duplicate ' + name)
+        raise SystemExit('Authority deployment environment has duplicate ' + name)
 payload = [line for line in lines if not any(line.startswith(name + '=') for name in names)]
 payload.extend(name + '=' + value for name, value in names.items())
 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -544,10 +544,10 @@ import pathlib, re, stat, sys
 path = pathlib.Path(sys.argv[1])
 state = path.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 rows = [line for line in path.read_text(encoding='utf-8').splitlines() if line.startswith('ECHO_CLEAN_AUTHORITY_HOST=')]
 if len(rows) != 1 or not re.fullmatch(r'[a-z0-9][a-z0-9.-]*[a-z0-9]', rows[0].split('=', 1)[1]):
-    raise SystemExit('clean Authority environment must contain one valid ECHO_CLEAN_AUTHORITY_HOST')
+    raise SystemExit('Authority deployment environment must contain one valid ECHO_CLEAN_AUTHORITY_HOST')
 print(rows[0].split('=', 1)[1])
 PY
 }
@@ -778,7 +778,7 @@ trap 'release_operation_lock' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-ensure_state_directories || fail 'clean Authority release-state directories are missing or unsafe'
+ensure_state_directories || fail 'Authority release-state directories are missing or unsafe'
 case "$command" in
   stage)
     [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--runtime-profile' && -n "${5:-}" && $# -eq 5 ]] || usage

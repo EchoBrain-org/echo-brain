@@ -113,9 +113,9 @@ echo-brain person <command> [options]
 ## Authority deployment
 
 Build the production container from `deploy/organization-authority/Dockerfile`.
-Clean operation uses `compose.clean-v1.yaml` locally and
-`compose.clean-v1.ec2.yaml` for the EC2 host shape. The accepted release and
-update workflows are documented under `deploy/release/`.
+The current `clean-v1` compatibility profile uses `compose.clean-v1.yaml`
+locally and `compose.clean-v1.ec2.yaml` for the EC2 host shape. The accepted
+release and update workflows are documented under `deploy/release/`.
 
 ### Local Authority exercise
 

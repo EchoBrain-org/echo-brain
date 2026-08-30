@@ -31,7 +31,7 @@ and qualification proof.
 | [Processing adapters](processing-adapters.md) | `services/organization-authority/src/processing/adapters/` | Provider-specific sources, processors, approvals, and delivery |
 | [Person client](person-client.md) | `src/product/person-client/` | Thin Person CLI and private session state |
 | [Identity and access](identity-access.md) | Person client plus Authority | Person sessions, membership, compatibility enrollment, and revocation state |
-| [Organization Authority](organization-authority.md) | `services/organization-*` | Organization identity, policy, record, retrieval, and API authority |
+| [Organization Authority](organization-authority.md) | `services/organization-authority/`; `packages/organization-{control-plane,record,retrieval}/` | Organization identity, policy, record, retrieval, and API authority |
 | [Permissions](permissions.md) | cross-cutting | Approval, admission, visibility, and read authorization |
 | [Protocols and cryptography](protocols-crypto.md) | `packages/*` | Signed documents, canonicalization, identifiers, and HTTP contracts |
 | [Operations and release](operations-release.md) | `deploy/`, `tools/`, `.github/` | Build, qualification, deployment, backup, restore, and release |

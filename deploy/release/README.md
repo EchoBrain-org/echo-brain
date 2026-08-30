@@ -52,7 +52,7 @@ operator publishes or transfers it alongside the release record; CI never
 pushes it or an image to a registry.
 
 ```sh
-npm run profile:clean-v1-runtime -- \
+npm run profile:authority-deployment -- \
   deploy/organization-authority \
   /absolute/private/release-artifacts/runtime-profile.json
 node tools/clean-v1-runtime-profile.mjs validate \
@@ -107,11 +107,11 @@ invitation, Slack, Granola, or model secret.
 Keep the three operator lanes separate:
 
 - A new organization uses `onboard-clean-v1.sh prepare` and `resume` for the
-  one-time founder setup and finalization.
+  one-time initial-owner setup and finalization.
 - An existing organization uses this replacement loop. It preserves identity,
   Slack, provider credentials, private state, and approved records.
 - A new employee receives the client kit and a fresh invitation; that does not
-  restart founder setup or replace the Authority.
+  restart initial-owner setup or replace the Authority.
 
 Copy the release validators and operational commands from the exact reviewed
 source checkout into the deployment directory beside the clean Compose files.
@@ -263,7 +263,7 @@ Authority, and tells the employee to request a reissued invitation.
 
 The first cohort supports macOS arm64 only. A signed and notarized graphical
 installer is a later distribution improvement; it is not required for the
-founder-assisted cohort.
+operator-assisted cohort.
 
 ## Advanced client-only install or reinstall
 

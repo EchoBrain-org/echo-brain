@@ -25,7 +25,7 @@ observability stack changes. The outcome is one small, verified loop:
 
 The operator owns the procedure. Before changing the Authority host, IAM role,
 alert destination, or retention policy, or whenever a step would expose
-organization content, escalate to the ECHO founder for a default-hosted
+organization content, escalate to the authorized ECHO service owner for a default-hosted
 Authority or to the organization's account administrator for an
 organization-controlled account.
 
@@ -68,7 +68,7 @@ From the repository root, choose non-sensitive operator-local values:
 ```sh
 observability_region=us-west-2
 observability_stack=echo-authority-observability-v1
-observability_change=founder-rehearsal
+observability_change=operator-rehearsal
 observability_change_type=CREATE
 observability_waiter=stack-create-complete
 authority_host=authority.example.com
@@ -170,13 +170,13 @@ aws cloudwatch set-alarm-state \
   --region "$observability_region" \
   --alarm-name "$availability_alarm" \
   --state-value ALARM \
-  --state-reason 'Founder observability rehearsal'
+  --state-reason 'Authority observability rehearsal'
 
 aws cloudwatch set-alarm-state \
   --region "$observability_region" \
   --alarm-name "$availability_alarm" \
   --state-value OK \
-  --state-reason 'Founder observability recovery rehearsal'
+  --state-reason 'Authority observability recovery rehearsal'
 ```
 
 Expected evidence is one alarm email and one recovery email. The scheduled
@@ -232,7 +232,7 @@ authority_log_group=$(aws cloudformation describe-stacks \
   --stack-name "$observability_stack" \
   --query "Stacks[0].Outputs[?OutputKey=='DockerRuntimeLogGroupName'].OutputValue | [0]" \
   --output text)
-rehearsal_stream=founder-observability-rehearsal-$(date -u +%Y%m%dT%H%M%SZ)
+rehearsal_stream=authority-observability-rehearsal-$(date -u +%Y%m%dT%H%M%SZ)
 rehearsal_epoch_ms=$(( $(date +%s) * 1000 ))
 
 aws logs create-log-stream \

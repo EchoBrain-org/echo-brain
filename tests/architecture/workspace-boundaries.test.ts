@@ -476,7 +476,7 @@ describe("workspace source boundaries", () => {
     const expectedByRoot: Record<string, string[]> = {
       "services/organization-authority": [
         "authority-baseline-v1.sql",
-        "authority-live-source-v3.sql",
+        "authority-meeting-processing-v3.sql",
         "authority-private-approval-v2.sql",
       ],
       "packages/organization-control-plane": [
@@ -1065,7 +1065,7 @@ describe("workspace source boundaries", () => {
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
     );
     const compositionRule = manifest.layer_rules.find(
-      (rule) => rule.name === "authority-composition-may-wire-pre-processing-layers",
+      (rule) => rule.name === "authority-composition-selects-concrete-implementations",
     );
     expect(compositionRule?.allowed_imports).toContain(
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
@@ -1348,7 +1348,7 @@ describe("workspace source boundaries", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/organization-authority-setup-cli.ts -> services/organization-authority/src/processing/core/index.ts",
+      "@echo-brain/organization-authority: layer rule 'authority-composition-selects-concrete-implementations' rejects edge: services/organization-authority/src/composition/organization-authority-setup-cli.ts -> services/organization-authority/src/processing/core/index.ts",
     );
   });
 

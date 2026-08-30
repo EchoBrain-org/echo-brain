@@ -96,7 +96,7 @@ The reviewed source is covered by:
 - `tests/architecture/workspace-boundaries.test.ts`;
 - `services/organization-authority/test/admitted-meeting-source-baseline-v3.test.ts`;
 - `services/organization-authority/test/processing/admitted-meeting-processing/meeting-processing-cycle-v1.test.ts`;
-- `services/organization-authority/test/organization-authority-runtime.test.ts`;
+- `services/organization-authority/test/organization-authority-private-approval-runtime.test.ts`;
 - `services/organization-authority/test/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.test.ts`;
 - `services/organization-authority/test/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.test.ts`;
 - `packages/organization-record/test/record-log-v4-append.test.ts`; and

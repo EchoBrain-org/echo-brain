@@ -20,7 +20,7 @@ failure_pattern_ids:
 ## Statement
 
 Every packaging command MUST run with its process working directory and Git
-identity bound to the exact clean source worktree. Before install,
+identity bound to the exact unchanged source worktree. Before install,
 qualification, or publication, the artifact's embedded source identity MUST
 match the external build claim.
 
@@ -32,6 +32,6 @@ qualification.
 
 ## Enforcement and verification
 
-Founder-live operation detected and quarantined a wrong-worktree archive, then
+Internal-dogfood operation detected and quarantined a wrong-worktree archive, then
 rebuilt correctly. The repository build tooling still needs a systemic guard
 against inherited Git environment and working-directory mistakes.

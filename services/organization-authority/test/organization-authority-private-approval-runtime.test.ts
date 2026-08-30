@@ -813,7 +813,8 @@ function readerAuthorization(input: {
 
 /**
  * Exercise the composed Person retrieval route against the generation the
- * live runtime actually published. The tokens are only a test seam: the
+ * Organization Authority runtime published for this private-approval scenario.
+ * The tokens are only a test seam: the
  * reader tuples are still derived by the route's sessions port, never passed
  * into the retrieval API itself.
  */

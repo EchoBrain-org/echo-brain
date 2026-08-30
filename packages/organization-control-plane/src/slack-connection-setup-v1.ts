@@ -1,4 +1,4 @@
-/** Current owner-operated Slack connection setup command surface. */
+/** Organization Slack connection setup command surface. */
 export {
   runSlackConnectionSetupCli,
   type SlackConnectionSetupCliDependencies,

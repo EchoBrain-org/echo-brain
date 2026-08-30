@@ -226,11 +226,11 @@ path = pathlib.Path(sys.argv[1])
 name = sys.argv[2]
 status = path.lstat()
 if stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode) or status.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 values = [line.split('=', 1)[1] for line in path.read_text(encoding='utf-8').splitlines()
           if line.startswith(name + '=')]
 if len(values) != 1 or not values[0] or '\n' in values[0] or '\r' in values[0]:
-    raise SystemExit('clean Authority environment must contain exactly one ' + name)
+    raise SystemExit('Authority deployment environment must contain exactly one ' + name)
 print(values[0])
 PY
 }
@@ -255,7 +255,7 @@ stored_release_tuple_matches() {
   verify_runtime_profile "$profile"
   require_regular_file "$snapshot" 'release environment snapshot' true
   cmp -s "$ENV_FILE" "$snapshot" || \
-    fail 'clean Authority environment drifted from the accepted release snapshot'
+    fail 'Authority deployment environment drifted from the accepted release snapshot'
 }
 
 active_materialized_profile_matches() {
@@ -281,7 +281,7 @@ verify_preconditions() {
   command -v python3 >/dev/null 2>&1 || fail 'python3 is required'
   [[ -f "$RELEASE_TOOL" && ! -L "$RELEASE_TOOL" ]] || fail 'clean-v1 release validator is missing or unsafe'
   [[ -f "$RUNTIME_PROFILE_TOOL" && ! -L "$RUNTIME_PROFILE_TOOL" ]] || fail 'clean-v1 runtime profile validator is missing or unsafe'
-  require_regular_file "$ENV_FILE" 'clean Authority environment' true
+  require_regular_file "$ENV_FILE" 'Authority deployment environment' true
   require_regular_file "$DEPLOY_DIR/compose.clean-v1.yaml" 'base Compose profile'
   require_regular_file "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" 'EC2 Compose profile'
   require_regular_file "$CURRENT_RECORD" 'accepted release record' true
@@ -357,7 +357,7 @@ fetch("http://127.0.0.1:39479/v1/authority-descriptor", { signal: AbortSignal.ti
 safe_public_descriptor_check() {
   local host descriptor_url
   host="$(env_value ECHO_CLEAN_AUTHORITY_HOST)"
-  [[ "$host" =~ ^[a-z0-9][a-z0-9.-]*[a-z0-9]$ ]] || fail 'clean Authority host is invalid'
+  [[ "$host" =~ ^[a-z0-9][a-z0-9.-]*[a-z0-9]$ ]] || fail 'Authority host is invalid'
   descriptor_url="https://$host/v1/authority-descriptor"
   compose_clean exec -T authority node -e '
 const url = process.argv[1];

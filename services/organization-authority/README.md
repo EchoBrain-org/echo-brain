@@ -93,7 +93,7 @@ Bootstrap and finalization are stopped-state operations. The path is:
 2. Start the Organization Authority service, complete the initial owner's browser OIDC sign-in, and link the
    signed-in person to Slack.
 3. Stop the Organization Authority service, install the three provider credentials, then finalize.
-4. Restart the Organization Authority service and complete the live-only canary.
+4. Restart the Organization Authority service and complete the post-admission canary.
 
 The OIDC JSON must be readable JSON with exactly `issuer`, `client_id`,
 `redirect_uri`, `tenant`, `id_token_algorithms`, and `client_authentication`.
@@ -285,10 +285,10 @@ Credential installation validates all three inputs before replacing any fixed
 destination. Finalization requires the clean genesis, an exact active Slack
 connection, the initial owner's active OIDC binding and Slack identity link, and
 valid provider credentials. It creates no shared-channel/reaction approval
-binding; it only admits Granola at a fresh live-only cutoff. Existing notes are
-not imported.
+binding; it admits only Granola notes created after a fresh cutoff. Existing
+notes are not imported.
 
-### 4. Restart live runtime and canary
+### 4. Restart the Authority service and run the canary
 
 Restart the same `clean-live serve` compatibility command. Optional
 `--worker-interval-ms <positive-integer>` changes the worker interval. At
@@ -349,7 +349,7 @@ are documented in the [product onboarding flow](../../docs/product/2026-08-22-or
 Clean V1 is a new lineage, not an upgrade mechanism. Reset creates the state
 directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
-version, and baseline digest before opening the live runtime.
+version, and baseline digest before opening the Authority runtime.
 
 The provider-neutral fresh lineage uses schema version 3 for Authority.
 Control-plane and record-log remain at schema version 2, while record-derived
@@ -358,11 +358,11 @@ schema version 1. Each baseline
 applies only to a completely empty database. A V1 Authority, control-plane, or
 record-log lineage is refused rather than upgraded in place. Do not modify
 SQLite files, copy one state directory into another, or introduce a schema
-migration under this runbook. After the first live-user release, use only
+migration under this runbook. After the first user release, use only
 baseline-preserving image replacements through the
 [release procedure](../../deploy/release/README.md).
 
-The pre-live roster candidate changes the Authority baseline bytes and replaces
+The initial-roster candidate changes the Authority baseline bytes and replaces
 earlier rehearsal state through clean re-onboarding. It is not a compatible
 image update for that discarded rehearsal lineage.
 

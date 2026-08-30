@@ -3,8 +3,8 @@
   "aws_region": "us-west-2",
   "kind": "echo-clean-v1-onboarding-input-v1",
   "organization_name": "Example Organization",
-  "owner_display_name": "Founder Name",
-  "owner_email": "founder@example.com",
+  "owner_display_name": "Owner Name",
+  "owner_email": "owner@example.com",
   "runtime_user": "echo-authority",
   "schema_version": 1,
   "slack_approval_channel_id": "C0123456789"

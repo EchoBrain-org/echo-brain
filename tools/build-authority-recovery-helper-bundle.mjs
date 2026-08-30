@@ -79,7 +79,7 @@ function parseArguments(argv) {
     argv[2] !== "--output"
   ) {
     fail(
-      "usage: build-authority-recovery-helper-bundle.mjs --source-root <clean-repository-root> --output <new-bundle.tar.gz>",
+      "usage: build-authority-recovery-helper-bundle.mjs --source-root <unchanged-repository-root> --output <new-bundle.tar.gz>",
     );
   }
   const sourceRoot = resolve(argv[1]);

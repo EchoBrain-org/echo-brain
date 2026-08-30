@@ -31,8 +31,8 @@ const PRIVATE_APPROVAL_SQL_V2_URL = new URL(
   "../../../../baselines/authority-private-approval-v2.sql",
   import.meta.url,
 );
-const LIVE_SOURCE_SQL_V3_URL = new URL(
-  "../../../../baselines/authority-live-source-v3.sql",
+const MEETING_PROCESSING_SQL_V3_URL = new URL(
+  "../../../../baselines/authority-meeting-processing-v3.sql",
   import.meta.url,
 );
 
@@ -63,8 +63,8 @@ export function authorityBaselineSha256V2(): Sha256Digest {
  * provider-specific source-admission table family while retaining the frozen V1
  * Authority identity/session foundation byte-for-byte.
  */
-export function authorityLiveSourceSqlV3(): string {
-  return readFileSync(LIVE_SOURCE_SQL_V3_URL, "utf8");
+export function authorityMeetingProcessingSqlV3(): string {
+  return readFileSync(MEETING_PROCESSING_SQL_V3_URL, "utf8");
 }
 
 /**
@@ -73,7 +73,7 @@ export function authorityLiveSourceSqlV3(): string {
  * source/approval state and its dependent private-approval tables.
  */
 export function authorityBaselineSqlV3(): string {
-  return `${authorityBaselineSqlV1()}\n${authorityLiveSourceSqlV3()}`;
+  return `${authorityBaselineSqlV1()}\n${authorityMeetingProcessingSqlV3()}`;
 }
 
 export function authorityBaselineSha256V3(): Sha256Digest {

@@ -383,8 +383,8 @@ doctor() {
   if ! safe_directory_target "$DATA_DIR"; then doctor_json false clean_data_path_invalid 'Remove or repair the unsafe clean-data path before preparing.'; return; fi
   if ! safe_directory_target "$PRIVATE_DIR"; then doctor_json false clean_private_path_invalid 'Remove or repair the unsafe clean private-input path before preparing.'; return; fi
   if ! safe_directory_target "$RELEASE_DIR"; then doctor_json false clean_release_path_invalid 'Remove or repair the unsafe clean release path before preparing.'; return; fi
-  if ! safe_directory_target "$RUNTIME_PROFILES_DIR"; then doctor_json false clean_runtime_profiles_path_invalid 'Remove or repair the unsafe clean runtime-profiles path before preparing.'; return; fi
-  if ! safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR"; then doctor_json false clean_runtime_environments_path_invalid 'Remove or repair the unsafe clean runtime-environments path before preparing.'; return; fi
+  if ! safe_directory_target "$RUNTIME_PROFILES_DIR"; then doctor_json false clean_runtime_profiles_path_invalid 'Remove or repair the unsafe deployment runtime-profiles path before preparing.'; return; fi
+  if ! safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR"; then doctor_json false clean_runtime_environments_path_invalid 'Remove or repair the unsafe deployment runtime-environments path before preparing.'; return; fi
   doctor_json true ready 'Run prepare with the same input directory.'
 }
 
@@ -803,8 +803,8 @@ prepare() {
   require_safe_directory_target "$DATA_DIR" 'clean data path'
   require_safe_directory_target "$PRIVATE_DIR" 'clean private-input path'
   require_safe_directory_target "$RELEASE_DIR" 'clean release path'
-  require_safe_directory_target "$RUNTIME_PROFILES_DIR" 'clean runtime-profiles path'
-  require_safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR" 'clean runtime-environments path'
+  require_safe_directory_target "$RUNTIME_PROFILES_DIR" 'deployment runtime-profiles path'
+  require_safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR" 'deployment runtime-environments path'
   install -d -m 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR" \
     "$RUNTIME_PROFILES_DIR" "$RUNTIME_ENVIRONMENTS_DIR"
   chmod 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR" \

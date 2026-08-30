@@ -169,7 +169,7 @@ function observation(
 }
 
 /**
- * Small live-only observer for the active Slack connection. It reads one matching
+ * Bounded observer for the active Slack connection. It reads one matching
  * opaque credential from the file-secret seam and observes only one message.
  */
 export class SlackReactionApprovalObserverV1 implements PersonSlackReactionApprovalObserverV2 {

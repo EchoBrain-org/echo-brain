@@ -200,6 +200,24 @@ afterEach(() => {
 describe("documentation validator", () => {
   it("accepts the lean proof-grade baseline", () =>
     expect(validate(fixture().root)).toContain("checks passed"));
+  it("rejects retired workspace paths in the component catalog", () => {
+    const { root } = fixture();
+    write(
+      join(root, "tools/workspace-source-boundaries.v1.json"),
+      JSON.stringify({
+        retired_workspace_roots: ["services/retired-library"],
+        manifests: [],
+      }),
+    );
+    edit(
+      root,
+      "docs/components/README.md",
+      (source) => `${source}\nPrimary source: services/retired-library\n`,
+    );
+    expect(validate(root)).toContain(
+      "component catalog mentions retired workspace services/retired-library",
+    );
+  });
   it.each([
     [
       "qualification assertion set",

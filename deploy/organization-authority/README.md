@@ -1,8 +1,8 @@
-# Clean V1 Authority deployment
+# Organization Authority deployment
 
-This is the deployable clean V1 Authority only. It uses a new `clean-data/`
-directory, never imports previous Authority state, and uses both EC2 Compose
-profiles automatically.
+This is the deployable Organization Authority. Its current `clean-v1`
+compatibility profile uses a new `clean-data/` directory, never imports
+previous Authority state, and uses both EC2 Compose profiles automatically.
 
 [ADR-0008](../../docs/decisions/ADR-0008-echo-hosted-authority-by-default.md)
 defines the operator. ECHO operates the default deployment in ECHO's AWS
@@ -83,7 +83,7 @@ this same lineage: Authority V3, private-approval control-plane V2, and
 record-log V2. It refuses older or mixed persisted state before runtime,
 configuration, or state mutation. This is deliberately a replacement boundary,
 not a hidden migration path; use `replace-rehearsal --confirm-no-live-users`
-for pre-live state that does not meet this floor.
+for unreleased rehearsal state that does not meet this floor.
 
 Complete the bootstrap, initial-owner identity link, credential installation, and
 finalization, then start the active runtime. `resume` stops at this point and
@@ -133,7 +133,7 @@ operator's root identity. An exact repeat is safe; a changed release, setup
 value, runtime user, or private input fails rather than silently changing this
 organization.
 
-### Replace pre-live rehearsal state
+### Replace unreleased rehearsal state
 
 The roster candidate changes the fresh Authority baseline. It cannot start over
 an earlier rehearsal lineage. Because that lineage has no live users, retire it
@@ -148,9 +148,9 @@ This stops the Compose profile, copies and verifies the contents of the retained
 moves its environment file into that archive, and empties the live mount for
 fresh preparation. It does not delete the archived rehearsal. It also accepts
 a clean rehearsal created before this wrapper, so no wrapper-specific setup
-record is required for the one pre-live replacement.
+record is required for the one unreleased-rehearsal replacement.
 Run `prepare` again with the new exact release record. Never use this command
-after the first live-user release; subsequent baseline-preserving updates use
+after the first user release; subsequent baseline-preserving updates use
 the release procedure below.
 
 ## Resumable initial-owner onboarding
@@ -297,7 +297,7 @@ exists, the whole current root volume is the off-host protection boundary for
 `clean-data/`, including its `state/`, `release/`, and `private/` directories.
 
 Use [RB-OPERATIONS-002](../../docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md)
-to complete the live source-volume encryption evidence gate, create the
+to complete the active root-volume encryption evidence gate, create the
 scheduled AWS Backup protection, and rehearse one quiesced recovery point. The
 release installation procedure must first install the exact reviewed
 `backup-authority-maintenance.sh` at

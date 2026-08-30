@@ -24,7 +24,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import {
-  runCleanSlackConnectCli,
+  runSlackConnectionSetupCli,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
 } from "@echo-brain/organization-control-plane/slack-connection-setup-v1";
 import { assertDisplayName } from "../domain/rules.js";
@@ -245,7 +245,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   },
   connect_slack: async (input) => {
     const result = await captureCommand((stdout) =>
-      runCleanSlackConnectCli(
+      runSlackConnectionSetupCli(
         [
           "--state-dir",
           input.state_directory,

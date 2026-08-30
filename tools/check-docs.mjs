@@ -635,6 +635,15 @@ function validateCatalog(recordsById, errors) {
       "utf8",
     ),
   );
+  const catalogText = readFileSync(
+    join(DOCS, "components", "README.md"),
+    "utf8",
+  );
+  for (const retiredRoot of registry.retired_workspace_roots ?? [])
+    if (catalogText.includes(retiredRoot))
+      errors.push(
+        `component catalog mentions retired workspace ${retiredRoot}`,
+      );
   const componentText = markdownFiles(join(DOCS, "components"))
     .map((path) => readFileSync(path, "utf8"))
     .join("\n");
