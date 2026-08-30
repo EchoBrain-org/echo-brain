@@ -14,6 +14,7 @@ fi
 ENV_FILE="${ECHO_CLEAN_ENV_FILE:-$DEPLOY_DIR/.env.clean-v1}"
 RUNTIME_CONFIG_DIR="${ECHO_CLEAN_RUNTIME_CONFIG_DIR:-$DEPLOY_DIR}"
 RELEASE_STATE_DIR="${ECHO_CLEAN_RELEASE_STATE_DIR:-$DEPLOY_DIR/clean-data/release}"
+STATE_DIR="${ECHO_CLEAN_STATE_DIR:-${RELEASE_STATE_DIR%/*}/state}"
 CURRENT_RECORD="$RELEASE_STATE_DIR/current.clean-v1.json"
 CANDIDATE_RECORD="$RELEASE_STATE_DIR/candidate.clean-v1.json"
 RUNTIME_PROFILE_STATE_DIR="$RELEASE_STATE_DIR/runtime-profiles"
@@ -78,6 +79,83 @@ for index, raw in enumerate(sys.argv[1:]):
         state = path.lstat()
     if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
         raise SystemExit(str(path) + ' is not a safe release-state directory')
+PY
+}
+
+# This release family deliberately has no migration bridge.  A state directory
+# that contains no lineage databases is a fresh setup (credentials may already
+# be present there).  Once state exists, accept only the current Authority V3 /
+# private-approval V2 / record-log V2 lineage before changing the runtime. It
+# intentionally does not duplicate the runtime's complete manifest verifier.
+verify_state_lineage_compatibility() {
+  python3 - "$STATE_DIR" <<'PY'
+import json, os, pathlib, sqlite3, stat, sys
+
+state_dir = pathlib.Path(sys.argv[1])
+expected_versions = {
+    "authority.sqlite": 3,
+    "integrations.sqlite": 2,
+    "record-log.sqlite": 2,
+}
+expected_roles = {
+    "authority", "control-plane", "record-log", "record-derived",
+    "retrieval-facts", "retrieval-lexical", "retrieval-content",
+}
+
+def refuse(message):
+    raise SystemExit("persisted Authority state is not compatible with this V3/private-approval-V2 release; " + message + ". Run an explicit replacement or migration procedure instead")
+
+try:
+    directory_state = state_dir.lstat()
+except FileNotFoundError:
+    raise SystemExit(0)
+if stat.S_ISLNK(directory_state.st_mode) or not stat.S_ISDIR(directory_state.st_mode):
+    refuse("state directory is unsafe")
+
+root = state_dir / "state-lineage-root.v1.json"
+legacy_paths = [state_dir / name for name in expected_versions]
+legacy_paths.append(state_dir / "record-retrieval")
+try:
+    root_state = root.lstat()
+except FileNotFoundError:
+    if any(path.exists() or path.is_symlink() for path in legacy_paths):
+        refuse("state has no current lineage manifest")
+    raise SystemExit(0)
+if stat.S_ISLNK(root_state.st_mode) or not stat.S_ISREG(root_state.st_mode):
+    refuse("state lineage root is unsafe")
+try:
+    body = json.loads(root.read_text(encoding="utf-8"))
+    if not isinstance(body, dict) or not isinstance(body.get("databases"), list):
+        raise ValueError
+    roles = [entry["role"] for entry in body["databases"]]
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    refuse("state lineage root is malformed")
+if (
+    body.get("schema_version") != 1
+    or body.get("kind") != "echo-state-lineage-root-manifest-v1"
+    or len(roles) != len(expected_roles)
+    or set(roles) != expected_roles
+):
+    refuse("state lineage root is not the current seven-role lineage")
+
+for name, version in expected_versions.items():
+    database = state_dir / name
+    try:
+        database_state = database.lstat()
+    except FileNotFoundError:
+        refuse(name + " is missing")
+    if stat.S_ISLNK(database_state.st_mode) or not stat.S_ISREG(database_state.st_mode):
+        refuse(name + " is unsafe")
+    try:
+        connection = sqlite3.connect("file:" + database.as_posix() + "?mode=ro", uri=True)
+        try:
+            actual = connection.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        refuse(name + " cannot be opened read-only")
+    if actual != version:
+        refuse(name + " schema version is not " + str(version))
 PY
 }
 
@@ -514,6 +592,7 @@ case "$command" in
     supplied_profile="$(cd "$(dirname "$5")" && pwd -P)/$(basename "$5")"
     validate "$candidate"
     verify_runtime_profile "$candidate" "$supplied_profile"
+    verify_state_lineage_compatibility
     candidate_id="$(field "$candidate" release-id)"
     release_id_unused "$candidate_id" || fail 'release_id was already used by current, candidate, history, or failed state'
     [[ ! -e "$CANDIDATE_RECORD" ]] || fail 'a candidate is already staged; promote or roll it back first'

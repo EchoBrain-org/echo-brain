@@ -78,6 +78,13 @@ created from it. Run the re-onboarding only with a wholly fresh provider-
 neutral V3 staging lineage; do not reuse an older shared-channel rehearsal
 state directory, database, or approval binding.
 
+After that setup, the ordinary release updater only replaces artifacts within
+this same lineage: Authority V3, private-approval control-plane V2, and
+record-log V2. It refuses older or mixed persisted state before contacting
+Docker. This is deliberately a replacement boundary, not a hidden migration
+path; use `replace-rehearsal --confirm-no-live-users` for pre-live state that
+does not meet this floor.
+
 Complete the bootstrap, founder identity link, credential installation, and
 finalization, then start the active runtime. `resume` stops at this point and
 prints the exact URL. Only once that runtime is healthy, enable

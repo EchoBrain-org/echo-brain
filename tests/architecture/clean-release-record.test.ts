@@ -186,6 +186,45 @@ function installActiveTuple(
   writeFileSync(environmentFile, environment, { mode: 0o600 });
 }
 
+function writeCurrentStateLineage(stateDirectory: string) {
+  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+  const roles = [
+    "authority",
+    "control-plane",
+    "record-log",
+    "record-derived",
+    "retrieval-facts",
+    "retrieval-lexical",
+    "retrieval-content",
+  ];
+  writeFileSync(
+    join(stateDirectory, "state-lineage-root.v1.json"),
+    JSON.stringify({
+      schema_version: 1,
+      kind: "echo-state-lineage-root-manifest-v1",
+      databases: roles.map((role) => ({ role })),
+    }),
+  );
+  const created = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import pathlib, sqlite3, sys",
+        "root = pathlib.Path(sys.argv[1])",
+        "for name, version in {'authority.sqlite': 3, 'integrations.sqlite': 2, 'record-log.sqlite': 2, 'record-derived.sqlite': 1}.items():",
+        "  connection = sqlite3.connect(root / name)",
+        "  connection.execute(f'PRAGMA user_version = {version}')",
+        "  connection.commit()",
+        "  connection.close()",
+      ].join("\n"),
+      stateDirectory,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(created.status).toBe(0);
+}
+
 function writeRecord(value: unknown): string {
   const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-release-"));
   roots.push(root);
@@ -1000,6 +1039,80 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(result.status).toBe(1);
     expect(existsSync(marker)).toBe(false);
     expect(readFileSync(envFile, "utf8")).toContain(record().authority_image.reference);
+  });
+
+  it("refuses unmanifested and older persisted Authority lineage before Docker is contacted", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-lineage-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const releaseState = join(root, "release-state");
+    const stateDirectory = join(root, "state");
+    const marker = join(root, "docker-called");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const profile = writeRuntimeProfile();
+    const candidate = writeRecord(
+      releaseWithRuntimeProfile(profile, {
+        release_id: "clean-v1-20260822-002",
+        authority_image: {
+          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
+        },
+      }),
+    );
+    mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDirectory, "authority.sqlite"), "legacy state");
+    mkdirSync(bin);
+    writeFileSync(docker, `#!/usr/bin/env bash\ntouch "${marker}"\n`);
+    chmodSync(docker, 0o755);
+    writeFileSync(
+      envFile,
+      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}\n`,
+      { mode: 0o600 },
+    );
+
+    const unmanifested = run(
+      "bash",
+      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
+      {
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_CLEAN_ENV_FILE: envFile,
+        ECHO_CLEAN_RELEASE_STATE_DIR: releaseState,
+        ECHO_CLEAN_STATE_DIR: stateDirectory,
+      },
+    );
+    expect(unmanifested.status).toBe(1);
+    expect(unmanifested.stderr).toContain("state has no current lineage manifest");
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(releaseState, "candidate.clean-v1.json"))).toBe(false);
+
+    rmSync(join(stateDirectory, "authority.sqlite"));
+    writeCurrentStateLineage(stateDirectory);
+    expect(
+      run("python3", [
+        "-c",
+        [
+          "import sqlite3, sys",
+          "database = sqlite3.connect(sys.argv[1])",
+          "database.execute('PRAGMA user_version = 2')",
+          "database.commit()",
+        ].join("\n"),
+        join(stateDirectory, "authority.sqlite"),
+      ]).status,
+    ).toBe(0);
+    const older = run(
+      "bash",
+      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
+      {
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_CLEAN_ENV_FILE: envFile,
+        ECHO_CLEAN_RELEASE_STATE_DIR: releaseState,
+        ECHO_CLEAN_STATE_DIR: stateDirectory,
+      },
+    );
+    expect(older.status).toBe(1);
+    expect(older.stderr).toContain("state is not compatible");
+    expect(older.stderr).toContain("authority.sqlite schema version is not 3");
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("rejects a runtime-profile digest mismatch before Docker can mutate the deployment", () => {
