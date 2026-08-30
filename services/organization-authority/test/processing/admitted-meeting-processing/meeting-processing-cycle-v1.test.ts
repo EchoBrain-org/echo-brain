@@ -21,14 +21,14 @@ import {
   type AuthorityMeetingProcessingStateV1,
 } from "../../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
-  CleanLiveWorkerLifecycleV1,
-  type CleanLiveWorkerTelemetryEventV1,
-} from "../../../src/processing/clean-v1/clean-live-worker-lifecycle.js";
+  MeetingProcessingWorkerLifecycleV1,
+  type MeetingProcessingWorkerTelemetryEventV1,
+} from "../../../src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 import {
-  cleanReviewInputSha256V1,
-  cleanReviewLineageIdV1,
+  reviewInputSha256V1,
+  reviewLineageIdV1,
   legacyRestrictedReviewerReviewPolicySnapshotV1,
-} from "../../../src/processing/clean-v1/review-lineage-semantics.js";
+} from "../../../src/processing/admitted-meeting-processing/review-lineage-semantics.js";
 
 const CUT_OFF = "2026-08-22T02:03:04.005Z";
 const SOURCE = {
@@ -165,7 +165,7 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
     input: MeetingProcessingCandidateSnapshotInputV1,
   ): Promise<MeetingProcessingCandidateV1> {
     this.candidates.push(input);
-    const reviewInputSha256 = cleanReviewInputSha256V1({
+    const reviewInputSha256 = reviewInputSha256V1({
       meeting: input.meeting,
       processor: input.admission.processor,
     });
@@ -176,7 +176,7 @@ class FakeState implements AuthorityMeetingProcessingStateV1 {
         candidate.review_input_sha256 === reviewInputSha256,
     );
     const actionable = input.decisions.signals.length > 0;
-    const reviewLineageId = cleanReviewLineageIdV1({
+    const reviewLineageId = reviewLineageIdV1({
       adapter_id: input.meeting.provenance.source.adapter_id,
       instance_id: input.meeting.provenance.source.instance_id,
       external_id: input.meeting.provenance.external_id,
@@ -316,7 +316,7 @@ function liveCycle(
 
 describe("admitted meeting-processing cycle", () => {
   it("reports source intake, extraction, and approval staging without meeting data", async () => {
-    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
     const observedMeeting = meeting();
     const cycle = liveCycle({
       source: source({ meetings: [observedMeeting], next_cursor: undefined }),
@@ -325,7 +325,7 @@ describe("admitted meeting-processing cycle", () => {
       stager: stager({ kind: "staged", stage_id: "stage-1" }),
     });
     cycle.setWorkerLifecycle(
-      new CleanLiveWorkerLifecycleV1((event) => events.push(event)),
+      new MeetingProcessingWorkerLifecycleV1((event) => events.push(event)),
     );
 
     await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "staged" });
@@ -369,7 +369,7 @@ describe("admitted meeting-processing cycle", () => {
         failure: "source cursor advance failed",
       },
     ]) {
-      const events: CleanLiveWorkerTelemetryEventV1[] = [];
+      const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
       const cycle = liveCycle({
         source: scenario.source,
         processor: processor(),
@@ -377,7 +377,7 @@ describe("admitted meeting-processing cycle", () => {
         stager: stager({ kind: "staged", stage_id: "never" }),
       });
       cycle.setWorkerLifecycle(
-        new CleanLiveWorkerLifecycleV1((event) => events.push(event)),
+        new MeetingProcessingWorkerLifecycleV1((event) => events.push(event)),
       );
 
       await expect(cycle.runOnce()).rejects.toThrow(scenario.failure);
@@ -397,7 +397,7 @@ describe("admitted meeting-processing cycle", () => {
   });
 
   it("reports canonical decision validation failures as extraction failures", async () => {
-    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
     const cycle = liveCycle({
       source: source({ meetings: [meeting()] }),
       processor: processor((value) => ({
@@ -408,7 +408,7 @@ describe("admitted meeting-processing cycle", () => {
       stager: stager({ kind: "staged", stage_id: "never" }),
     });
     cycle.setWorkerLifecycle(
-      new CleanLiveWorkerLifecycleV1((event) => events.push(event)),
+      new MeetingProcessingWorkerLifecycleV1((event) => events.push(event)),
     );
 
     await expect(cycle.runOnce()).rejects.toThrow();
@@ -427,7 +427,7 @@ describe("admitted meeting-processing cycle", () => {
   });
 
   it("does not start the next phase after shutdown is requested", async () => {
-    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
     const controller = new AbortController();
     const state = new FakeState(admission());
     let extracts = 0;
@@ -441,7 +441,7 @@ describe("admitted meeting-processing cycle", () => {
       stager: stager({ kind: "staged", stage_id: "never" }),
     });
     cycle.setWorkerLifecycle(
-      new CleanLiveWorkerLifecycleV1((event) => {
+      new MeetingProcessingWorkerLifecycleV1((event) => {
         events.push(event);
         if (
           event.kind === "echo-clean-live-worker-phase-v1" &&

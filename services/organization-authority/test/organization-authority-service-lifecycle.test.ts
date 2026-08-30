@@ -4,7 +4,7 @@ import {
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
 } from "../src/composition/organization-authority-service-lifecycle.js";
-import type { CleanLiveWorkerTelemetryEventV1 } from "../src/processing/clean-v1/clean-live-worker-lifecycle.js";
+import type { MeetingProcessingWorkerTelemetryEventV1 } from "../src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 import { AdapterError } from "../src/processing/core/contracts/adapter.js";
 import type {
   OrganizationAuthorityApiRuntimeConfig,
@@ -65,7 +65,7 @@ function apiRuntime(events: string[]): RunningOrganizationAuthorityApiRuntime {
 describe("Organization Authority service lifecycle", () => {
   it("emits a successful content-free heartbeat for an empty cycle", async () => {
     vi.useFakeTimers();
-    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
     let now = 1_000;
     const runtime = await startOrganizationAuthorityServiceLifecycle(
       { api: apiConfig, worker_interval_ms: 1_000 },
@@ -206,7 +206,7 @@ describe("Organization Authority service lifecycle", () => {
 
   it("rejects startup, clears the handle, and never starts the API when prewarm fails", async () => {
     const events: string[] = [];
-    const telemetry: CleanLiveWorkerTelemetryEventV1[] = [];
+    const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
     const startApi = vi.fn(async () => apiRuntime(events));
     await expect(
       startOrganizationAuthorityServiceLifecycle(
@@ -238,7 +238,7 @@ describe("Organization Authority service lifecycle", () => {
 
   it("rejects startup before prewarm or API start when append recovery fails", async () => {
     const events: string[] = [];
-    const telemetry: CleanLiveWorkerTelemetryEventV1[] = [];
+    const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
     const startApi = vi.fn(async () => apiRuntime(events));
     const startupProcessing = processing(events);
 
@@ -274,7 +274,7 @@ describe("Organization Authority service lifecycle", () => {
   });
 
   it("marks an in-flight aborted phase and its cycle as cancelled", async () => {
-    const telemetry: CleanLiveWorkerTelemetryEventV1[] = [];
+    const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
     let phaseStarted!: () => void;
     const started = new Promise<void>((resolve) => {
       phaseStarted = resolve;
@@ -319,7 +319,7 @@ describe("Organization Authority service lifecycle", () => {
 
   it("reports a later automatic retry even when an adapter marks its error non-retryable", async () => {
     vi.useFakeTimers();
-    const telemetry: CleanLiveWorkerTelemetryEventV1[] = [];
+    const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
     const order: string[] = [];
     let attempts = 0;
     const runtime = await startOrganizationAuthorityServiceLifecycle(

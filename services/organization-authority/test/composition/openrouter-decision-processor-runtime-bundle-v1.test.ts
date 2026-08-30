@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
-  OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
-  openRouterCleanProcessorConfigurationSha256V1,
-  openRouterCleanProcessorCredentialReferenceSha256V1,
-} from "../../src/composition/openrouter-clean-processor-config-v1.js";
+  OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+  openRouterDecisionProcessorConfigurationSha256V1,
+  openRouterDecisionProcessorCredentialReferenceSha256V1,
+} from "../../src/composition/openrouter-decision-processor-config-v1.js";
 import { createOpenRouterDecisionProcessorRuntimeBundleV1 } from "../../src/composition/openrouter-decision-processor-runtime-bundle-v1.js";
 
 const directories: string[] = [];
@@ -39,8 +39,8 @@ function admission(): AdmittedMeetingProcessingAdmissionV1 {
     processor: {
       adapter_id: "llm",
       instance_id: "fixed-processor",
-      version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
-      configuration_sha256: openRouterCleanProcessorConfigurationSha256V1(),
+      version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+      configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
     },
   };
 }
@@ -62,10 +62,10 @@ describe("OpenRouter clean live processor runtime bundle", () => {
       processor: {
         adapter_id: "llm",
         instance_id: "fixed-processor",
-        version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
-        configuration_sha256: openRouterCleanProcessorConfigurationSha256V1(),
+        version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+        configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
         credential_reference_sha256:
-          openRouterCleanProcessorCredentialReferenceSha256V1(
+          openRouterDecisionProcessorCredentialReferenceSha256V1(
             `file:${credential_file}`,
           ),
       },
@@ -80,7 +80,7 @@ describe("OpenRouter clean live processor runtime bundle", () => {
       kind: "decision-processor",
       adapter_id: "llm",
       instance_id: "fixed-processor",
-      version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+      version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
     });
   });
 
@@ -102,10 +102,10 @@ describe("OpenRouter clean live processor runtime bundle", () => {
         processor: {
           adapter_id: "llm",
           instance_id: "fixed-processor",
-          version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
-          configuration_sha256: openRouterCleanProcessorConfigurationSha256V1(),
+          version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+          configuration_sha256: openRouterDecisionProcessorConfigurationSha256V1(),
           credential_reference_sha256:
-            openRouterCleanProcessorCredentialReferenceSha256V1(
+            openRouterDecisionProcessorCredentialReferenceSha256V1(
               "file:/private/replaced-credential",
             ),
         },

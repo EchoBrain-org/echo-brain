@@ -4,13 +4,13 @@ import type {
   MeetingDocument,
 } from "../../../src/processing/core/index.js";
 import {
-  cleanReviewInputSha256V1,
-  cleanReviewSemanticSha256V1,
-  type CleanReviewPolicySnapshotV1,
-  type CleanReviewProcessorCommitmentV1,
-} from "../../../src/processing/clean-v1/review-lineage-semantics.js";
+  reviewInputSha256V1,
+  reviewSemanticSha256V1,
+  type ReviewPolicySnapshotV1,
+  type ReviewProcessorCommitmentV1,
+} from "../../../src/processing/admitted-meeting-processing/review-lineage-semantics.js";
 
-const PROCESSOR: CleanReviewProcessorCommitmentV1 = {
+const PROCESSOR: ReviewProcessorCommitmentV1 = {
   adapter_id: "llm",
   instance_id: "test-llm",
   version: "1.0.0",
@@ -21,7 +21,7 @@ const REVIEW_POLICY = {
   policy_contract_sha256: `sha256:${"b".repeat(64)}`,
   policy_consequence_text: "Approving makes this review member-readable.",
   policy_consequence_sha256: `sha256:${"c".repeat(64)}`,
-} as CleanReviewPolicySnapshotV1;
+} as ReviewPolicySnapshotV1;
 
 function meeting(overrides: Partial<MeetingDocument> = {}): MeetingDocument {
   return {
@@ -107,10 +107,10 @@ describe("clean review lineage semantics", () => {
       content: [{ ...first.content[0]!, id: "provider-reassigned-id" }],
     });
 
-    expect(cleanReviewInputSha256V1({
+    expect(reviewInputSha256V1({
       meeting: blockIdOnlyRevision,
       processor: PROCESSOR,
-    })).toBe(cleanReviewInputSha256V1({
+    })).toBe(reviewInputSha256V1({
       meeting: first,
       processor: PROCESSOR,
     }));
@@ -120,10 +120,10 @@ describe("clean review lineage semantics", () => {
     const first = meeting();
     const reordered = meeting({ participants: [...first.participants].reverse() });
 
-    expect(cleanReviewInputSha256V1({
+    expect(reviewInputSha256V1({
       meeting: reordered,
       processor: PROCESSOR,
-    })).toBe(cleanReviewInputSha256V1({
+    })).toBe(reviewInputSha256V1({
       meeting: first,
       processor: PROCESSOR,
     }));
@@ -139,10 +139,10 @@ describe("clean review lineage semantics", () => {
       participants: [],
     });
 
-    expect(cleanReviewInputSha256V1({
+    expect(reviewInputSha256V1({
       meeting: blank,
       processor: PROCESSOR,
-    })).toBe(cleanReviewInputSha256V1({
+    })).toBe(reviewInputSha256V1({
       meeting: absent,
       processor: PROCESSOR,
     }));
@@ -151,12 +151,12 @@ describe("clean review lineage semantics", () => {
   it("treats reordered signals as the same semantic review", () => {
     const value = meeting();
 
-    expect(cleanReviewSemanticSha256V1({
+    expect(reviewSemanticSha256V1({
       meeting: value,
       decisions: decisions(value, [INVITE_ACTION, SHIP_DECISION]),
       processor: PROCESSOR,
       review_policy: REVIEW_POLICY,
-    })).toBe(cleanReviewSemanticSha256V1({
+    })).toBe(reviewSemanticSha256V1({
       meeting: value,
       decisions: decisions(value, [SHIP_DECISION, INVITE_ACTION]),
       processor: PROCESSOR,
@@ -168,12 +168,12 @@ describe("clean review lineage semantics", () => {
     const value = meeting();
     const changed = { ...SHIP_DECISION, status: "unresolved" as const };
 
-    expect(cleanReviewSemanticSha256V1({
+    expect(reviewSemanticSha256V1({
       meeting: value,
       decisions: decisions(value, [changed]),
       processor: PROCESSOR,
       review_policy: REVIEW_POLICY,
-    })).not.toBe(cleanReviewSemanticSha256V1({
+    })).not.toBe(reviewSemanticSha256V1({
       meeting: value,
       decisions: decisions(value, [SHIP_DECISION]),
       processor: PROCESSOR,
@@ -185,12 +185,12 @@ describe("clean review lineage semantics", () => {
     const absent = meeting({ title: undefined });
     const blank = meeting({ title: "   " });
 
-    expect(cleanReviewSemanticSha256V1({
+    expect(reviewSemanticSha256V1({
       meeting: absent,
       decisions: decisions(absent, [SHIP_DECISION]),
       processor: PROCESSOR,
       review_policy: REVIEW_POLICY,
-    })).toBe(cleanReviewSemanticSha256V1({
+    })).toBe(reviewSemanticSha256V1({
       meeting: blank,
       decisions: decisions(blank, [SHIP_DECISION]),
       processor: PROCESSOR,
@@ -202,12 +202,12 @@ describe("clean review lineage semantics", () => {
     const value = meeting();
     const rationaleSignal = rationale("signal-rationale", [SHIP_DECISION.id]);
 
-    expect(cleanReviewSemanticSha256V1({
+    expect(reviewSemanticSha256V1({
       meeting: value,
       decisions: decisions(value, [SHIP_DECISION, INVITE_ACTION, rationaleSignal]),
       processor: PROCESSOR,
       review_policy: REVIEW_POLICY,
-    })).not.toBe(cleanReviewSemanticSha256V1({
+    })).not.toBe(reviewSemanticSha256V1({
       meeting: value,
       decisions: decisions(value, [
         SHIP_DECISION,
@@ -223,7 +223,7 @@ describe("clean review lineage semantics", () => {
     const value = meeting();
     const renamedDecision = { ...SHIP_DECISION, id: "renamed-decision" };
 
-    expect(cleanReviewSemanticSha256V1({
+    expect(reviewSemanticSha256V1({
       meeting: value,
       decisions: decisions(value, [
         SHIP_DECISION,
@@ -231,7 +231,7 @@ describe("clean review lineage semantics", () => {
       ]),
       processor: PROCESSOR,
       review_policy: REVIEW_POLICY,
-    })).toBe(cleanReviewSemanticSha256V1({
+    })).toBe(reviewSemanticSha256V1({
       meeting: value,
       decisions: decisions(value, [
         renamedDecision,

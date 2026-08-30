@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PrivateSlackApprovalCardPosterV1,
   type PrivateSlackApprovalCardPresentationV1,
-} from "../../../src/processing/clean-v1/private-slack-approval-card-poster-v1.js";
+} from "../../../../../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 
 const CARD: PrivateSlackApprovalCardPresentationV1 = Object.freeze({
   text: "Private meeting-owner approval requested.",

@@ -1,6 +1,6 @@
 import type { DecisionProcessorAdapter } from "../processing/core/ports/adapters.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
+import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/admitted-meeting-processing/admitted-meeting-runtime-commitments.js";
 
 /**
  * Provider-neutral construction boundary for the decision processor selected

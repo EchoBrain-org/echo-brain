@@ -22,10 +22,10 @@ import {
   admitGranolaMeetingSource,
 } from "../src/composition/granola-meeting-source-admission.js";
 import {
-  OPENROUTER_CLEAN_PROCESSOR_MODEL_V1,
-  OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
-} from "../src/composition/openrouter-clean-processor-config-v1.js";
-import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-clean-processor-admission-commitment.js";
+  OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
+  OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
+} from "../src/composition/openrouter-decision-processor-config-v1.js";
+import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-decision-processor-admission-commitment.js";
 import { runGranolaMeetingSourceAdmissionCli } from "../src/composition/granola-meeting-source-admission-cli.js";
 import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
 import {
@@ -130,7 +130,7 @@ function fixture() {
     granola_credential_reference: `file:${privateFile(parent, "granola.key", `grn_${"a".repeat(32)}`)}`,
     granola_owner_email_reference: `file:${privateFile(parent, "granola-owner-email", "founder@example.com")}`,
     llm_credential_reference: llmCredentialReference,
-    processor: createOpenRouterCleanProcessorAdmissionCommitmentV1({
+    processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
       instance_id: "founder-llm",
       credential_reference: llmCredentialReference,
     }),
@@ -292,7 +292,7 @@ describe("clean Granola source admission", () => {
       processor: {
         adapter_id: "llm",
         instance_id: "founder-llm",
-        version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+        version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
       },
     });
     expect(admitted.source.cursor).toMatch(/^granola:v1:/);
@@ -300,7 +300,7 @@ describe("clean Granola source admission", () => {
     expect(admitted.processor.configuration_sha256).toMatch(/^sha256:/);
     expect(JSON.stringify(admitted)).not.toContain("grn_");
     expect(JSON.stringify(admitted)).not.toContain(
-      OPENROUTER_CLEAN_PROCESSOR_MODEL_V1,
+      OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
     );
 
     const database = new Database(

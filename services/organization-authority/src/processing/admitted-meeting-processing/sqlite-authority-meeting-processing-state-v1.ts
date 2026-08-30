@@ -12,11 +12,11 @@ import {
 import type { AdmittedMeetingSourceBoundaryV1 } from "./admitted-meeting-source-boundary-v1.js";
 import {
   assertLegacyReviewPolicySnapshotV1,
-  cleanReviewInputSha256V1,
-  cleanReviewLineageIdV1,
-  cleanReviewSemanticSha256V1,
-  type CleanReviewPolicySnapshotV1,
-} from "../clean-v1/review-lineage-semantics.js";
+  reviewInputSha256V1,
+  reviewLineageIdV1,
+  reviewSemanticSha256V1,
+  type ReviewPolicySnapshotV1,
+} from "./review-lineage-semantics.js";
 import type {
   AdmittedMeetingProcessingAdmissionV1,
   ActionableMeetingProcessingCandidateV1,
@@ -30,7 +30,7 @@ import {
   isStagingSyntheticMeetingCanaryV1,
   stagingSyntheticMeetingCanaryCursorV1,
   type StagingSyntheticMeetingCanaryInputV1,
-} from "../clean-v1/staging-synthetic-meeting-canary-v1.js";
+} from "./staging-synthetic-meeting-canary-v1.js";
 
 interface AdmissionRow {
   readonly source_adapter_id: string;
@@ -57,10 +57,10 @@ interface CandidateRow {
   readonly review_lineage_id: string;
   readonly review_input_sha256: string;
   readonly review_semantic_sha256: string;
-  readonly review_policy_id: CleanReviewPolicySnapshotV1["policy_id"];
-  readonly review_policy_contract_sha256: CleanReviewPolicySnapshotV1["policy_contract_sha256"];
+  readonly review_policy_id: ReviewPolicySnapshotV1["policy_id"];
+  readonly review_policy_contract_sha256: ReviewPolicySnapshotV1["policy_contract_sha256"];
   readonly review_policy_consequence_text: string;
-  readonly review_policy_consequence_sha256: CleanReviewPolicySnapshotV1["policy_consequence_sha256"];
+  readonly review_policy_consequence_sha256: ReviewPolicySnapshotV1["policy_consequence_sha256"];
   readonly disposition: "actionable" | "coalesced" | "no_signals";
   readonly approval_id: string | null;
   readonly stage_command_id: string | null;
@@ -89,7 +89,7 @@ function candidateSemanticDigest(input: {
   });
 }
 
-export interface CleanPostedApprovalCardV1 {
+export interface PostedPrivateApprovalCardV1 {
   readonly candidate_id: string;
   readonly post_started_at: string;
   /** Opaque identifier assigned by the approval presentation provider. */
@@ -98,7 +98,7 @@ export interface CleanPostedApprovalCardV1 {
   readonly approved_snapshot: Readonly<Record<string, unknown>>;
 }
 
-export interface CleanPreparedApprovalPostV1 {
+export interface PreparedPrivateApprovalPostV1 {
   readonly outbox: ApprovalWorkflowOutboxV1;
   /** True only for the transaction that froze the durable post intent. */
   readonly created: boolean;
@@ -116,7 +116,7 @@ export type ApprovalWorkflowOutboxV1 = ActionableMeetingProcessingCandidateV1 & 
   readonly tombstoned_at: string | null;
 };
 
-export interface CleanSupersededApprovalCardV1 {
+export interface SupersededPrivateApprovalCardV1 {
   readonly approval_id: string;
   readonly review_lineage_id: string;
   readonly superseded_by_candidate_id: string;
@@ -341,7 +341,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
 
       assertLegacyReviewPolicySnapshotV1(input.review_policy);
 
-      const reviewLineageId = cleanReviewLineageIdV1({
+      const reviewLineageId = reviewLineageIdV1({
         adapter_id: input.meeting.provenance.source.adapter_id,
         instance_id: input.meeting.provenance.source.instance_id,
         external_id: input.meeting.provenance.external_id,
@@ -352,11 +352,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         version: current.processor.version,
         configuration_sha256: current.processor.configuration_sha256,
       };
-      const reviewInputSha256 = cleanReviewInputSha256V1({
+      const reviewInputSha256 = reviewInputSha256V1({
         meeting: input.meeting,
         processor: reviewProcessor,
       });
-      const reviewSemanticSha256 = cleanReviewSemanticSha256V1({
+      const reviewSemanticSha256 = reviewSemanticSha256V1({
         meeting: input.meeting,
         decisions: input.decisions,
         review_policy: input.review_policy,
@@ -556,7 +556,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     });
   }
 
-  listPendingSupersededApprovalCards(): readonly CleanSupersededApprovalCardV1[] {
+  listPendingSupersededApprovalCards(): readonly SupersededPrivateApprovalCardV1[] {
     return this.database
       .prepare(
         `SELECT outbox.approval_id, candidate.review_lineage_id,
@@ -571,7 +571,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
             AND outbox.tombstoned_at IS NULL
           ORDER BY outbox.approval_id`,
       )
-      .all() as CleanSupersededApprovalCardV1[];
+      .all() as SupersededPrivateApprovalCardV1[];
   }
 
   recordSupersededApprovalCardTombstoned(input: {
@@ -850,7 +850,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     readonly candidate_id: string;
     readonly frozen_card_sha256: string;
     readonly approved_snapshot: Readonly<Record<string, unknown>>;
-  }): CleanPreparedApprovalPostV1 {
+  }): PreparedPrivateApprovalPostV1 {
     return this.database.transaction(() => {
       const current = this.outbox(input.candidate_id);
       const snapshotJson = canonicalJson(input.approved_snapshot);
@@ -972,7 +972,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   }
 
   recordPostedApprovalCard(
-    input: CleanPostedApprovalCardV1,
+    input: PostedPrivateApprovalCardV1,
   ): ApprovalWorkflowOutboxV1 {
     return this.database.transaction(() => {
       assertCanonicalUtcMillis(input.post_started_at);

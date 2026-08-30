@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
-  CleanLiveWorkerLifecycleV1,
-  type CleanLiveWorkerTelemetryEventV1,
-} from "../../../src/processing/clean-v1/clean-live-worker-lifecycle.js";
+  MeetingProcessingWorkerLifecycleV1,
+  type MeetingProcessingWorkerTelemetryEventV1,
+} from "../../../src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 import { AdapterError } from "../../../src/processing/core/contracts/adapter.js";
 
 describe("clean live worker lifecycle", () => {
   it("emits only closed lifecycle fields and keeps failure contents out", async () => {
-    const events: CleanLiveWorkerTelemetryEventV1[] = [];
+    const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
     let now = 1_000;
-    const lifecycle = new CleanLiveWorkerLifecycleV1(
+    const lifecycle = new MeetingProcessingWorkerLifecycleV1(
       (event) => events.push(event),
       () => now,
     );
@@ -67,7 +67,7 @@ describe("clean live worker lifecycle", () => {
   });
 
   it("leaves retries untouched when a telemetry observer fails", async () => {
-    const lifecycle = new CleanLiveWorkerLifecycleV1(() => {
+    const lifecycle = new MeetingProcessingWorkerLifecycleV1(() => {
       throw new Error("observer failure");
     });
 
@@ -79,8 +79,8 @@ describe("clean live worker lifecycle", () => {
   });
 
   it("maps an internal rate-limit signal to a bounded retryable class", async () => {
-    const events: CleanLiveWorkerTelemetryEventV1[] = [];
-    const lifecycle = new CleanLiveWorkerLifecycleV1(
+    const events: MeetingProcessingWorkerTelemetryEventV1[] = [];
+    const lifecycle = new MeetingProcessingWorkerLifecycleV1(
       (event) => events.push(event),
       () => 1_000,
     );

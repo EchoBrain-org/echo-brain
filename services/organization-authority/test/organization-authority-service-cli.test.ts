@@ -1,7 +1,7 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdapterError } from "../src/processing/core/contracts/adapter.js";
-import { CleanLiveWorkerLifecycleV1 } from "../src/processing/clean-v1/clean-live-worker-lifecycle.js";
+import { MeetingProcessingWorkerLifecycleV1 } from "../src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 
 type WorkerErrorObserver = (error: Error) => void;
 type AnswerCompositionFailureObserver = (event: object) => void;
@@ -171,7 +171,7 @@ describe("clean live CLI runtime events", () => {
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) });
     await vi.waitFor(() => expect(runtimeState.worker_telemetry).toBeDefined());
-    const lifecycle = new CleanLiveWorkerLifecycleV1(
+    const lifecycle = new MeetingProcessingWorkerLifecycleV1(
       (event) => runtimeState.worker_telemetry!(event),
       () => 1_000,
     );

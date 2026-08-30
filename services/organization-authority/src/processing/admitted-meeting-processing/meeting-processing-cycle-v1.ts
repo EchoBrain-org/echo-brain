@@ -8,16 +8,16 @@ import {
   type MeetingSourceAdapter,
 } from "../core/index.js";
 import type {
-  CleanLiveWorkerPhaseRunnerV1,
-  CleanLiveWorkerPhaseV1,
-} from "../clean-v1/clean-live-worker-lifecycle.js";
+  MeetingProcessingWorkerPhaseRunnerV1,
+  MeetingProcessingWorkerPhaseV1,
+} from "./meeting-processing-worker-lifecycle.js";
 import type { AdmittedMeetingSourceBoundaryV1 } from "./admitted-meeting-source-boundary-v1.js";
 import {
-  cleanReviewInputSha256V1,
-  cleanReviewLineageIdV1,
+  reviewInputSha256V1,
+  reviewLineageIdV1,
   legacyRestrictedReviewerReviewPolicySnapshotV1,
-  type CleanReviewPolicySnapshotV1,
-} from "../clean-v1/review-lineage-semantics.js";
+  type ReviewPolicySnapshotV1,
+} from "./review-lineage-semantics.js";
 
 const MAXIMUM_PULL_LIMIT = 1;
 
@@ -69,7 +69,7 @@ export interface MeetingProcessingCandidateSnapshotInputV1 {
   readonly admission: AdmittedMeetingProcessingAdmissionV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
-  readonly review_policy: CleanReviewPolicySnapshotV1;
+  readonly review_policy: ReviewPolicySnapshotV1;
 }
 
 interface MeetingProcessingCandidateBaseV1 {
@@ -78,10 +78,10 @@ interface MeetingProcessingCandidateBaseV1 {
   readonly review_lineage_id: string;
   readonly review_input_sha256: string;
   readonly review_semantic_sha256: string;
-  readonly review_policy_id: CleanReviewPolicySnapshotV1["policy_id"];
-  readonly review_policy_contract_sha256: CleanReviewPolicySnapshotV1["policy_contract_sha256"];
+  readonly review_policy_id: ReviewPolicySnapshotV1["policy_id"];
+  readonly review_policy_contract_sha256: ReviewPolicySnapshotV1["policy_contract_sha256"];
   readonly review_policy_consequence_text: string;
-  readonly review_policy_consequence_sha256: CleanReviewPolicySnapshotV1["policy_consequence_sha256"];
+  readonly review_policy_consequence_sha256: ReviewPolicySnapshotV1["policy_consequence_sha256"];
 }
 
 /** A durable Authority candidate with a deterministic D2 handoff. */
@@ -336,11 +336,11 @@ function rebindDecisionsToRevision(
  */
 export class AdmittedMeetingProcessingCycleV1 {
   private running: Promise<AdmittedMeetingProcessingCycleResultV1> | undefined;
-  private workerLifecycle: CleanLiveWorkerPhaseRunnerV1 | undefined;
+  private workerLifecycle: MeetingProcessingWorkerPhaseRunnerV1 | undefined;
 
   constructor(private readonly options: AdmittedMeetingProcessingCycleV1Options) {}
 
-  setWorkerLifecycle(lifecycle: CleanLiveWorkerPhaseRunnerV1): void {
+  setWorkerLifecycle(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void {
     this.workerLifecycle = lifecycle;
   }
 
@@ -475,7 +475,7 @@ export class AdmittedMeetingProcessingCycleV1 {
       );
     }
     const decisions = await this.phase("extraction", async () => {
-      const reviewInputSha256 = cleanReviewInputSha256V1({
+      const reviewInputSha256 = reviewInputSha256V1({
         meeting,
         processor: {
           adapter_id: admission.processor.adapter_id,
@@ -484,7 +484,7 @@ export class AdmittedMeetingProcessingCycleV1 {
           configuration_sha256: admission.processor.configuration_sha256,
         },
       });
-      const reviewLineageId = cleanReviewLineageIdV1({
+      const reviewLineageId = reviewLineageIdV1({
         adapter_id: meeting.provenance.source.adapter_id,
         instance_id: meeting.provenance.source.instance_id,
         external_id: meeting.provenance.external_id,
@@ -654,7 +654,7 @@ export class AdmittedMeetingProcessingCycleV1 {
   }
 
   private phase<T>(
-    phase: CleanLiveWorkerPhaseV1,
+    phase: MeetingProcessingWorkerPhaseV1,
     operation: () => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {

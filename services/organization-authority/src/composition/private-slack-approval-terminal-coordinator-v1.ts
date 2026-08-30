@@ -31,8 +31,8 @@ import type {
   FrozenPrivateSlackApprovalCandidateV1,
   PrivateSlackBlockApprovalTerminalV1,
   PrivateSlackBlockV4RecordWriterV1,
-} from "../processing/clean-v1-record/private-slack-block-v4-record-writer-v1.js";
-import type { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
+} from "../processing/private-approval-records/private-slack-block-v4-record-writer-v1.js";
+import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 
 type Awaitable<T> = T | Promise<T>;
 

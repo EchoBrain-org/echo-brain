@@ -12,7 +12,7 @@ import {
 import {
   PrivateSlackBlockV4RecordWriterV1,
   type FrozenPrivateSlackApprovalCandidateV1,
-} from "../src/processing/clean-v1-record/private-slack-block-v4-record-writer-v1.js";
+} from "../src/processing/private-approval-records/private-slack-block-v4-record-writer-v1.js";
 
 const digest = (text: string): Sha256Digest => canonicalSha256({ text });
 const coordinates = {

@@ -2,7 +2,7 @@ import {
   SlackApiError,
   SlackWebApiClient,
   type SlackWebApiClientOptions,
-} from "../adapters/shared/slack/slack-web-api-client.js";
+} from "../../shared/slack/slack-web-api-client.js";
 
 const POST_RECONCILIATION_LOOKBACK_MS = 5 * 60 * 1_000;
 const POST_RECONCILIATION_LOOKAHEAD_MS = 10 * 60 * 1_000;

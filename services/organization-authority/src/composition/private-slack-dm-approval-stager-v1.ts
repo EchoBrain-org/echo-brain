@@ -30,7 +30,7 @@ import { compileDecisionBrief } from "../processing/core/processing/brief.js";
 import {
   PrivateSlackApprovalCardPosterV1,
   type PrivateSlackApprovalCardPresentationV1,
-} from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
+} from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import type { ApprovalWorkflowStageInputV1, ApprovalWorkflowStagerV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
   SqliteAuthorityMeetingProcessingStateV1,

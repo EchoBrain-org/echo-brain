@@ -7,8 +7,8 @@ import {
 import {
   createStagingSyntheticMeetingCanaryV1,
   type StagingSyntheticMeetingCanaryInputV1,
-} from "../processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
-import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../processing/clean-v1/review-lineage-semantics.js";
+} from "../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
+import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../processing/admitted-meeting-processing/review-lineage-semantics.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
 export interface RunStagingSyntheticPrivateDmCanaryV1Input {

@@ -8,7 +8,7 @@ import {
   STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
 } from "../../src/composition/staging-synthetic-private-dm-canary-control-v1.js";
 import type { OpenedOrganizationAuthorityRuntime } from "../../src/composition/organization-authority-runtime.js";
-import { createStagingSyntheticMeetingCanaryV1 } from "../../src/processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
+import { createStagingSyntheticMeetingCanaryV1 } from "../../src/processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
 
 const RELEASE_ID = "clean-v1-staging-canary";
 const OWNER_EMAIL = "founder@example.com";

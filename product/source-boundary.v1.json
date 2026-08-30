@@ -72,7 +72,7 @@
       },
       {
         "identifier": "deepseek",
-        "root": "services/organization-authority/src/composition/openrouter-clean-processor-config-v1.ts"
+        "root": "services/organization-authority/src/composition/openrouter-decision-processor-config-v1.ts"
       },
       {
         "identifier": "slack",
@@ -100,11 +100,11 @@
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/processing/clean-v1/private-slack-approval-card-poster-v1.ts"
+        "root": "services/organization-authority/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts"
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/processing/clean-v1-record/private-slack-block-v4-record-writer-v1.ts"
+        "root": "services/organization-authority/src/processing/private-approval-records/private-slack-block-v4-record-writer-v1.ts"
       },
       {
         "identifier": "synthetic-source",
@@ -132,9 +132,6 @@
       "services/organization-authority/src/processing/live/**",
       "services/organization-authority/src/processing/admitted-meeting-processing/**",
       "services/organization-authority/src/processing/reference/**",
-      "services/organization-authority/src/processing/clean-v1/live-source-runtime-commitments.ts",
-      "services/organization-authority/src/processing/clean-v1/processor-admission-commitment.ts",
-      "services/organization-authority/src/processing/clean-v1/review-lineage-semantics.ts",
       "services/organization-authority/src/answer-composition/retrieval-grounded-answer-composition.ts",
       "services/organization-authority/src/composition/organization-authority-service-lifecycle.ts",
       "services/organization-authority/src/composition/organization-authority-runtime.ts",
@@ -186,7 +183,7 @@
         "identifier": "deepseek",
         "transport_provider": false,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/openrouter-clean-processor-config-v1.ts"
+          "services/organization-authority/src/composition/openrouter-decision-processor-config-v1.ts"
         ]
       }
     ],

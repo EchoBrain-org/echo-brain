@@ -287,7 +287,7 @@
         "services/organization-authority/src/state-lineage/**",
         "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
         "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
-        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/**",
+        "services/organization-authority/src/processing/adapters/approval-delivery/slack/**",
         "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
         "services/organization-authority/src/processing/authorization/**",
         "services/organization-authority/src/processing/core/contracts/adapter.ts",
@@ -295,9 +295,7 @@
         "services/organization-authority/src/processing/core/ports/adapters.ts",
         "services/organization-authority/src/processing/core/processing/brief.ts",
         "services/organization-authority/src/processing/admitted-meeting-processing/**",
-        "services/organization-authority/src/processing/clean-v1/**",
-        "services/organization-authority/src/processing/clean-v1-d2-d3/**",
-        "services/organization-authority/src/processing/clean-v1-record/**",
+        "services/organization-authority/src/processing/private-approval-records/**",
         "services/organization-authority/src/processing/live/**",
         "services/organization-authority/src/quality/**",
         "services/organization-authority/src/processing/record/**",
@@ -369,12 +367,11 @@
       ]
     },
     {
-      "name": "clean-v1-release-compatibility-processing-is-provider-neutral",
-      "from": "services/organization-authority/src/processing/clean-v1/**",
+      "name": "admitted-meeting-processing-is-provider-neutral",
+      "from": "services/organization-authority/src/processing/admitted-meeting-processing/**",
       "allowed_imports": [
-        "services/organization-authority/src/processing/clean-v1/**",
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/shared/slack/slack-web-api-client.ts"
+        "services/organization-authority/src/processing/admitted-meeting-processing/**",
+        "services/organization-authority/src/processing/core/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -386,20 +383,13 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "admitted-meeting-processing-is-provider-neutral",
-      "from": "services/organization-authority/src/processing/admitted-meeting-processing/**",
+      "name": "private-slack-approval-delivery-adapter-uses-only-slack-transport",
+      "from": "services/organization-authority/src/processing/adapters/approval-delivery/slack/**",
       "allowed_imports": [
-        "services/organization-authority/src/processing/admitted-meeting-processing/**",
-        "services/organization-authority/src/processing/clean-v1/**",
-        "services/organization-authority/src/processing/core/**"
+        "services/organization-authority/src/processing/adapters/shared/slack/**"
       ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-control-plane"
-      ],
-      "allowed_external_packages": [
-        "better-sqlite3"
-      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
     {
@@ -502,11 +492,11 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-clean-v1-record-writer-uses-only-clean-record-ports",
-      "from": "services/organization-authority/src/processing/clean-v1-record/**",
+      "name": "private-approval-record-writer-uses-only-record-ports",
+      "from": "services/organization-authority/src/processing/private-approval-records/**",
       "allowed_imports": [
         "services/organization-authority/src/application/ports/runtime-ports.ts",
-        "services/organization-authority/src/processing/clean-v1-record/**"
+        "services/organization-authority/src/processing/private-approval-records/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",

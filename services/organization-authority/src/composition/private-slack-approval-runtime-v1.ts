@@ -5,8 +5,8 @@ import {
   SqliteSlackDmApprovalPersistenceV1,
 } from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import { readPrivateAuthoritySlackSigningSecret } from "../adapters/security/private-file-credentials.js";
-import { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
-import { createPrivateSlackBlockV4RecordWriterV1 } from "../processing/clean-v1-record/private-slack-block-v4-record-writer-v1.js";
+import { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import { createPrivateSlackBlockV4RecordWriterV1 } from "../processing/private-approval-records/private-slack-block-v4-record-writer-v1.js";
 import type {
   ApprovalWorkflowRuntimeBundleV1,
   ApprovalWorkflowRuntimeContextV1,

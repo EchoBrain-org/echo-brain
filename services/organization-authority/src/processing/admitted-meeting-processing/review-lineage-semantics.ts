@@ -19,15 +19,15 @@ import type {
 } from "../core/index.js";
 
 /** The policy commitment that changes the human-review boundary. */
-export interface CleanReviewPolicyCommitmentV1 {
+export interface ReviewPolicyCommitmentV1 {
   readonly policy_id: PersonApprovalPolicyId;
   readonly policy_contract_sha256: ApprovalContractSha256;
   readonly policy_consequence_sha256: ApprovalContractSha256;
 }
 
 /** The exact human-facing policy material frozen with one review candidate. */
-export interface CleanReviewPolicySnapshotV1
-  extends CleanReviewPolicyCommitmentV1 {
+export interface ReviewPolicySnapshotV1
+  extends ReviewPolicyCommitmentV1 {
   readonly policy_consequence_text: string;
 }
 
@@ -38,7 +38,7 @@ export interface CleanReviewPolicySnapshotV1
  * who approves the private card. Until then the safe default is Only me.
  */
 export const legacyRestrictedReviewerReviewPolicySnapshotV1:
-  CleanReviewPolicySnapshotV1 = Object.freeze({
+  ReviewPolicySnapshotV1 = Object.freeze({
   policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   policy_contract_sha256: RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
   policy_consequence_text: RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
@@ -47,7 +47,7 @@ export const legacyRestrictedReviewerReviewPolicySnapshotV1:
 
 /** V1 candidates may only carry their provider-neutral compatibility tuple. */
 export function assertLegacyReviewPolicySnapshotV1(
-  actual: CleanReviewPolicySnapshotV1,
+  actual: ReviewPolicySnapshotV1,
 ): void {
   const expected = legacyRestrictedReviewerReviewPolicySnapshotV1;
   if (
@@ -62,7 +62,7 @@ export function assertLegacyReviewPolicySnapshotV1(
   }
 }
 
-export interface CleanReviewProcessorCommitmentV1 {
+export interface ReviewProcessorCommitmentV1 {
   readonly adapter_id: string;
   readonly instance_id: string;
   readonly version: string;
@@ -70,7 +70,7 @@ export interface CleanReviewProcessorCommitmentV1 {
 }
 
 /** Stable across revisions of one meeting, but never across source instances. */
-export function cleanReviewLineageIdV1(input: {
+export function reviewLineageIdV1(input: {
   readonly adapter_id: string;
   readonly instance_id: string;
   readonly external_id: string;
@@ -83,9 +83,9 @@ export function cleanReviewLineageIdV1(input: {
 }
 
 /** Mirrors the bounded material actually supplied to extraction. */
-export function cleanReviewInputSha256V1(input: {
+export function reviewInputSha256V1(input: {
   readonly meeting: MeetingDocument;
-  readonly processor: CleanReviewProcessorCommitmentV1;
+  readonly processor: ReviewProcessorCommitmentV1;
 }): string {
   return canonicalSha256({
     schema_version: 1,
@@ -103,11 +103,11 @@ export function cleanReviewInputSha256V1(input: {
  * The material a human must reconsider. Provider revisions, timestamps, and
  * extraction/evidence identifiers cannot create work on their own.
  */
-export function cleanReviewSemanticSha256V1(input: {
+export function reviewSemanticSha256V1(input: {
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
-  readonly review_policy: CleanReviewPolicySnapshotV1;
-  readonly processor: CleanReviewProcessorCommitmentV1;
+  readonly review_policy: ReviewPolicySnapshotV1;
+  readonly processor: ReviewProcessorCommitmentV1;
 }): string {
   const signalsById = new Map(
     input.decisions.signals.map((signal) => [signal.id, signal]),

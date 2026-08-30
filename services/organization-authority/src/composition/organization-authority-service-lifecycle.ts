@@ -4,10 +4,10 @@ import {
   type SerializedAuthorityMeetingWorkerOptions,
 } from "../processing/live/serialized-authority-meeting-worker.js";
 import {
-  CleanLiveWorkerLifecycleV1,
-  type CleanLiveWorkerPhaseRunnerV1,
-  type CleanLiveWorkerTelemetryEventV1,
-} from "../processing/clean-v1/clean-live-worker-lifecycle.js";
+  MeetingProcessingWorkerLifecycleV1,
+  type MeetingProcessingWorkerPhaseRunnerV1,
+  type MeetingProcessingWorkerTelemetryEventV1,
+} from "../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 import {
   startOrganizationAuthorityApiRuntime,
   type OrganizationAuthorityApiRuntimeConfig,
@@ -40,7 +40,7 @@ export interface OrganizationAuthorityProcessingCycleV1 {
    */
   reconcileReadableSearchGeneration(signal: AbortSignal): Promise<void>;
   /** Optional composition seam for source/extraction/staging phase telemetry. */
-  setWorkerLifecycle?(lifecycle: CleanLiveWorkerPhaseRunnerV1): void;
+  setWorkerLifecycle?(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void;
   /** True only when the processing implementation emits its inner phases. */
   readonly hasFineGrainedSourceLifecycle?: boolean;
 }
@@ -59,7 +59,7 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
   ) => Promise<RunningOrganizationAuthorityApiRuntime>;
   readonly on_worker_error?: SerializedAuthorityMeetingWorkerOptions["onError"];
   /** Content-free lifecycle events; observer failures never affect the worker. */
-  readonly on_worker_telemetry?: (event: CleanLiveWorkerTelemetryEventV1) => void;
+  readonly on_worker_telemetry?: (event: MeetingProcessingWorkerTelemetryEventV1) => void;
   /** Deterministic test seam for elapsed lifecycle telemetry. */
   readonly worker_telemetry_now?: () => number;
   /** Test seam; production always clears the sole lean-V1 process handle. */
@@ -84,10 +84,10 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
 export async function runOrganizationAuthorityProcessingCycleV1(
   processing: OrganizationAuthorityProcessingCycleV1,
   signal: AbortSignal,
-  lifecycle?: CleanLiveWorkerPhaseRunnerV1,
+  lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
 ): Promise<void> {
   const phase = <T>(
-    name: Parameters<CleanLiveWorkerPhaseRunnerV1["runPhase"]>[0],
+    name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
     operation: () => Promise<T>,
   ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
   await phase("recovery", () => processing.recoverV4Appends(signal));
@@ -127,7 +127,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     dependencies.clear_readable_search_handle ??
     clearCleanReadableSearchActiveGenerationV1;
   const startup = new AbortController();
-  const lifecycle = new CleanLiveWorkerLifecycleV1(
+  const lifecycle = new MeetingProcessingWorkerLifecycleV1(
     dependencies.on_worker_telemetry ?? (() => undefined),
     dependencies.worker_telemetry_now,
   );

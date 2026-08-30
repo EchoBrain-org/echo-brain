@@ -10,10 +10,10 @@ export const CLEAN_LIVE_WORKER_PHASES_V1 = [
   "search_reconciliation",
 ] as const;
 
-export type CleanLiveWorkerPhaseV1 =
+export type MeetingProcessingWorkerPhaseV1 =
   (typeof CLEAN_LIVE_WORKER_PHASES_V1)[number];
 
-export type CleanLiveWorkerFailureClassV1 =
+export type MeetingProcessingWorkerFailureClassV1 =
   | "authorization"
   | "rate_limited"
   | "timeout"
@@ -22,21 +22,21 @@ export type CleanLiveWorkerFailureClassV1 =
   | "unknown"
   | "cancelled";
 
-export type CleanLiveWorkerTelemetryEventV1 =
+export type MeetingProcessingWorkerTelemetryEventV1 =
   | {
       readonly schema_version: 1;
       readonly kind: "echo-clean-live-worker-phase-v1";
       readonly event: "started" | "succeeded";
-      readonly cycle_phase: CleanLiveWorkerPhaseV1;
+      readonly cycle_phase: MeetingProcessingWorkerPhaseV1;
       readonly elapsed_ms: number;
     }
   | {
       readonly schema_version: 1;
       readonly kind: "echo-clean-live-worker-phase-v1";
       readonly event: "failed";
-      readonly cycle_phase: CleanLiveWorkerPhaseV1;
+      readonly cycle_phase: MeetingProcessingWorkerPhaseV1;
       readonly elapsed_ms: number;
-      readonly failure_class: CleanLiveWorkerFailureClassV1;
+      readonly failure_class: MeetingProcessingWorkerFailureClassV1;
       readonly retryable: boolean;
     }
   | {
@@ -50,13 +50,13 @@ export type CleanLiveWorkerTelemetryEventV1 =
       readonly kind: "echo-clean-live-worker-cycle-v1";
       readonly event: "failed";
       readonly elapsed_ms: number;
-      readonly failure_class: CleanLiveWorkerFailureClassV1;
+      readonly failure_class: MeetingProcessingWorkerFailureClassV1;
       readonly retryable: boolean;
     };
 
-export interface CleanLiveWorkerPhaseRunnerV1 {
+export interface MeetingProcessingWorkerPhaseRunnerV1 {
   runPhase<T>(
-    phase: CleanLiveWorkerPhaseV1,
+    phase: MeetingProcessingWorkerPhaseV1,
     operation: () => Promise<T>,
     signal?: AbortSignal,
     retryableOnFailure?: boolean,
@@ -68,7 +68,7 @@ function elapsed(startedAt: number, now: () => number): number {
 }
 
 function classifyFailure(error: unknown, cancelled = false): {
-  readonly failure_class: CleanLiveWorkerFailureClassV1;
+  readonly failure_class: MeetingProcessingWorkerFailureClassV1;
   readonly retryable: boolean;
 } {
   // Never inspect or serialize message, stack, cause, or arbitrary properties.
@@ -86,7 +86,7 @@ function classifyFailure(error: unknown, cancelled = false): {
       unknown_outcome: "unknown",
     } as const satisfies Record<
       typeof error.code,
-      Exclude<CleanLiveWorkerFailureClassV1, "cancelled">
+      Exclude<MeetingProcessingWorkerFailureClassV1, "cancelled">
     >;
     // The serialized worker always starts a later cycle after every
     // non-aborted failure, regardless of an adapter's local retry hint.
@@ -100,13 +100,13 @@ function classifyFailure(error: unknown, cancelled = false): {
  * no durable state: operational detail must not widen the meeting custody
  * boundary.
  */
-export class CleanLiveWorkerLifecycleV1
-  implements CleanLiveWorkerPhaseRunnerV1
+export class MeetingProcessingWorkerLifecycleV1
+  implements MeetingProcessingWorkerPhaseRunnerV1
 {
   private cycleStartedAt: number | undefined;
 
   constructor(
-    private readonly emit: (event: CleanLiveWorkerTelemetryEventV1) => void,
+    private readonly emit: (event: MeetingProcessingWorkerTelemetryEventV1) => void,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -147,7 +147,7 @@ export class CleanLiveWorkerLifecycleV1
   }
 
   async runPhase<T>(
-    phase: CleanLiveWorkerPhaseV1,
+    phase: MeetingProcessingWorkerPhaseV1,
     operation: () => Promise<T>,
     signal?: AbortSignal,
     retryableOnFailure = true,
@@ -188,7 +188,7 @@ export class CleanLiveWorkerLifecycleV1
     }
   }
 
-  private report(event: CleanLiveWorkerTelemetryEventV1): void {
+  private report(event: MeetingProcessingWorkerTelemetryEventV1): void {
     try {
       this.emit(Object.freeze(event));
     } catch {

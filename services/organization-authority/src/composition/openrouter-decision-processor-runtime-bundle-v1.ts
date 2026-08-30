@@ -5,11 +5,11 @@ import {
 } from "../processing/adapters/decision-processors/llm/llm-decision-processor.js";
 import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/clean-v1/live-source-runtime-commitments.js";
+import type { AdmittedMeetingSourceRuntimeCommitmentsV1 } from "../processing/admitted-meeting-processing/admitted-meeting-runtime-commitments.js";
 import {
-  assertOpenRouterCleanProcessorRuntimeCommitmentsV1,
-  fixedOpenRouterCleanProcessorConfigV1,
-} from "./openrouter-clean-processor-config-v1.js";
+  assertOpenRouterDecisionProcessorRuntimeCommitmentsV1,
+  fixedOpenRouterDecisionProcessorConfigV1,
+} from "./openrouter-decision-processor-config-v1.js";
 import type { DecisionProcessorRuntimeBundleV1 } from "./decision-processor-runtime-bundle-v1.js";
 
 function assertProcessorConfig(
@@ -49,7 +49,7 @@ export function createOpenRouterDecisionProcessorRuntimeBundleV1(input: {
           "OpenRouter decision-processor adapter differs from the admitted commitment",
         );
       }
-      assertOpenRouterCleanProcessorRuntimeCommitmentsV1({
+      assertOpenRouterDecisionProcessorRuntimeCommitmentsV1({
         configuration_sha256: commitments.processor.configuration_sha256,
         credential_reference_sha256:
           commitments.processor.credential_reference_sha256,
@@ -68,7 +68,7 @@ export function createOpenRouterDecisionProcessorRuntimeBundleV1(input: {
           "OpenRouter decision-processor differs from the admitted processor",
         );
       }
-      const config = fixedOpenRouterCleanProcessorConfigV1(
+      const config = fixedOpenRouterDecisionProcessorConfigV1(
         admission.processor.instance_id,
         credentialReference,
       );

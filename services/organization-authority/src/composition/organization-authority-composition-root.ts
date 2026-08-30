@@ -15,7 +15,7 @@ import { createOpenRouterAnswerCompositionRuntimeBundleV1 } from "./openrouter-a
 import { createPrivateSlackApprovalRuntimeBundleV1 } from "./private-slack-approval-runtime-v1.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./slack-person-external-identity-runtime.js";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-v1.js";
-import type { PrivateSlackApprovalCardPosterV1 } from "../processing/clean-v1/private-slack-approval-card-poster-v1.js";
+import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<

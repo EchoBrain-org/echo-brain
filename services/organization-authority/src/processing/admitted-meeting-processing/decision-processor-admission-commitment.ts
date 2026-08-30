@@ -9,7 +9,7 @@ const SHA256 = /^sha256:[0-9a-f]{64}$/;
  * credentials/configuration are usable, but never exposes credential bytes to
  * the source-admission flow.
  */
-export interface CleanProcessorAdmissionCommitmentV1 {
+export interface DecisionProcessorAdmissionCommitmentV1 {
   readonly adapter_id: string;
   readonly instance_id: string;
   readonly version: string;
@@ -18,8 +18,8 @@ export interface CleanProcessorAdmissionCommitmentV1 {
   preflight(): void | Promise<void>;
 }
 
-export function assertCleanProcessorAdmissionCommitmentV1(
-  commitment: CleanProcessorAdmissionCommitmentV1,
+export function assertDecisionProcessorAdmissionCommitmentV1(
+  commitment: DecisionProcessorAdmissionCommitmentV1,
 ): void {
   if (
     commitment.adapter_id.trim().length === 0 ||
@@ -30,6 +30,6 @@ export function assertCleanProcessorAdmissionCommitmentV1(
     !SHA256.test(commitment.configuration_sha256) ||
     !SHA256.test(commitment.credential_reference_sha256)
   ) {
-    throw new Error("clean processor admission commitment is invalid");
+    throw new Error("decision processor admission commitment is invalid");
   }
 }

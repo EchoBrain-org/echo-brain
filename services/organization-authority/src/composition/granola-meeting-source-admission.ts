@@ -14,9 +14,9 @@ import {
   type GranolaRecordOwnerObservationClient,
 } from "../processing/adapters/meeting-sources/granola/index.js";
 import {
-  assertCleanProcessorAdmissionCommitmentV1,
-  type CleanProcessorAdmissionCommitmentV1,
-} from "../processing/clean-v1/processor-admission-commitment.js";
+  assertDecisionProcessorAdmissionCommitmentV1,
+  type DecisionProcessorAdmissionCommitmentV1,
+} from "../processing/admitted-meeting-processing/decision-processor-admission-commitment.js";
 import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 
 export const CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1 = "2.2.0";
@@ -30,7 +30,7 @@ export interface AdmitGranolaMeetingSourceInput {
   /** A canonical `file:` reference to a current-user 0600 owner email. */
   readonly granola_owner_email_reference: string;
   /** Processor facts and local proof are owned by its provider composition. */
-  readonly processor: CleanProcessorAdmissionCommitmentV1;
+  readonly processor: DecisionProcessorAdmissionCommitmentV1;
   /**
    * Metadata-only provider seam. It exposes listNotes only, so admission
    * cannot fetch provider content while proving the configured owner exists.
@@ -147,7 +147,7 @@ function result(
 export async function admitGranolaMeetingSource(
   input: AdmitGranolaMeetingSourceInput,
 ): Promise<GranolaMeetingSourceAdmissionResult> {
-  assertCleanProcessorAdmissionCommitmentV1(input.processor);
+  assertDecisionProcessorAdmissionCommitmentV1(input.processor);
   await input.processor.preflight();
   const granolaCredential = readPrivateAuthorityGranolaOrganizationCredential(
     input.granola_credential_reference,

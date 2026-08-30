@@ -7,7 +7,7 @@ import {
 import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/slack-approval-runtime-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyAuthorityBaselineV3 } from "../../../src/adapters/persistence/sqlite/baseline.js";
-import { OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1 } from "../../../src/composition/openrouter-clean-processor-config-v1.js";
+import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "../../../src/composition/openrouter-decision-processor-config-v1.js";
 import { PrivateSlackApprovalTerminalCoordinatorV1 } from "../../../src/composition/private-slack-approval-terminal-coordinator-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "../../../src/composition/sqlite-private-slack-approval-assignment-state-v1.js";
 import { SqlitePrivateSlackApprovalTerminalAuthorityV1 } from "../../../src/composition/sqlite-private-slack-approval-terminal-authority-v1.js";
@@ -17,7 +17,7 @@ import type {
 } from "../../../src/processing/core/index.js";
 import { createGranolaLiveOnlyCursor } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
 import { granolaAdmittedMeetingSourceBoundaryV1 } from "../../../src/composition/granola-admitted-meeting-source-boundary-v1.js";
-import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../../../src/processing/clean-v1/review-lineage-semantics.js";
+import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../../../src/processing/admitted-meeting-processing/review-lineage-semantics.js";
 import type {
   ActionableMeetingProcessingCandidateV1,
   MeetingProcessingCandidateV1,
@@ -29,7 +29,7 @@ import {
 import {
   createStagingSyntheticMeetingCanaryV1,
   stagingSyntheticMeetingCanaryCursorV1,
-} from "../../../src/processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
+} from "../../../src/processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
 
 const ADMITTED_AT = "2026-08-22T02:03:04.005Z";
 const ADVANCED_AT = "2026-08-22T02:04:04.005Z";
@@ -79,7 +79,7 @@ const decisions: DecisionSet = {
     kind: "decision-processor",
     adapter_id: "llm",
     instance_id: "founder-llm",
-    version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+    version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
   },
   generated_at: ADVANCED_AT,
   signals: [
@@ -141,7 +141,7 @@ function database(): Database.Database {
       SHA,
       sourceCursor,
       ADMITTED_AT,
-      OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+      OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
       SHA,
       SHA,
       SHA,
@@ -791,7 +791,7 @@ describe("SQLite admitted meeting-processing state", () => {
       source: { cursor: sourceCursor, cutoff_at: ADMITTED_AT },
       processor: {
         instance_id: "founder-llm",
-        version: OPENROUTER_CLEAN_PROCESSOR_RUNTIME_VERSION_V1,
+        version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
       },
     });
     expect(

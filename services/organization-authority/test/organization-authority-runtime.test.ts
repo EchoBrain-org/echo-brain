@@ -40,7 +40,7 @@ import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-se
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import { admitGranolaMeetingSource } from "../src/composition/granola-meeting-source-admission.js";
-import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-clean-processor-admission-commitment.js";
+import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-decision-processor-admission-commitment.js";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
@@ -83,7 +83,7 @@ import type {
   PrivateSlackApprovalPostOutcomeV1,
   PrivateSlackApprovalTerminalPresentationV1,
   PrivateSlackApprovalUpdateOutcomeV1,
-} from "../src/processing/clean-v1/private-slack-approval-card-poster-v1.js";
+} from "../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 
 const roots: string[] = [];
 let testAuthorizationCheck = 0;
@@ -547,7 +547,7 @@ async function admittedFixture(input: {
     source_instance_id: "founder-granola",
     granola_credential_reference: `file:${granola_credential_file}`,
     granola_owner_email_reference: `file:${granola_owner_email_file}`,
-    processor: createOpenRouterCleanProcessorAdmissionCommitmentV1({
+    processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
       instance_id: "founder-llm",
       credential_reference: `file:${openrouterCredentialFile}`,
     }),

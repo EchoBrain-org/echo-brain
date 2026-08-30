@@ -16,7 +16,7 @@ import type { AdmittedMeetingSourceBoundaryV1 } from "../processing/admitted-mee
 import {
   readAdmittedMeetingSourceRuntimeCommitmentsV1,
   type AdmittedMeetingSourceRuntimeCommitmentsV1,
-} from "../processing/clean-v1/live-source-runtime-commitments.js";
+} from "../processing/admitted-meeting-processing/admitted-meeting-runtime-commitments.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type {
   ApprovalWorkflowProcessingV1,
@@ -34,12 +34,12 @@ import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-autho
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
-import type { CleanLiveWorkerPhaseRunnerV1 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
+import type { MeetingProcessingWorkerPhaseRunnerV1 } from "../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
 import {
   runStagingSyntheticPrivateDmCanaryV1,
   type StagingSyntheticPrivateDmCanaryResultV1,
 } from "./staging-synthetic-private-dm-canary-v1.js";
-import type { StagingSyntheticMeetingCanaryInputV1 } from "../processing/clean-v1/staging-synthetic-meeting-canary-v1.js";
+import type { StagingSyntheticMeetingCanaryInputV1 } from "../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
 
 export interface OrganizationAuthorityRuntimeConfig {
   readonly state_directory: string;
@@ -64,7 +64,7 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly on_worker_error?: (error: Error) => void;
   /** Observational only: bounded, content-free worker lifecycle events. */
   readonly on_worker_telemetry?: (
-    event: import("../processing/clean-v1/clean-live-worker-lifecycle.js").CleanLiveWorkerTelemetryEventV1,
+    event: import("../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js").MeetingProcessingWorkerTelemetryEventV1,
   ) => void;
   /** Observational only: redacted answer-composition model-stage failures. */
   readonly on_answer_composition_failure?: (
@@ -151,7 +151,7 @@ class OrganizationAuthorityProcessingCoordinator
     private readonly readableSearch: ReadableSearchReconcilerV1,
   ) {}
 
-  setWorkerLifecycle(lifecycle: CleanLiveWorkerPhaseRunnerV1): void {
+  setWorkerLifecycle(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void {
     this.source.setWorkerLifecycle(lifecycle);
   }
 
