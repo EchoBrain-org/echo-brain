@@ -45,7 +45,32 @@ function outbox(state: "queued" | "posting" | "posted" | "staged" = "queued") {
 describe("private Slack DM approval stager V1", () => {
   it("binds null policy before publishing one verified-owner DM card", async () => {
     const operations: string[] = [];
+    const reviewedInput = {
+      ...input,
+      decisions: {
+        ...input.decisions,
+        signals: [
+          {
+            id: "decision-1", kind: "decision", text: "Keep the owner-only default.",
+            subject: null, confidence: 0.9, evidence: [], status: "decided",
+          },
+          {
+            id: "action-1", kind: "action", text: "Rehearse the private Slack approval flow.",
+            subject: null, confidence: 0.8, evidence: [], owner: "Audrey", due_at: null,
+          },
+          {
+            id: "rationale-1", kind: "rationale", text: "The owner must choose visibility before release.",
+            subject: null, confidence: 0.7, evidence: [], supports_signal_ids: ["decision-1"],
+          },
+        ],
+      },
+    } as unknown as ApprovalWorkflowStageInputV1;
     let current = outbox();
+    let preparedSnapshot: unknown;
+    let publishedCard: {
+      readonly text: string;
+      readonly blocks: readonly unknown[];
+    } | undefined;
     let assignment = {
       organization_id: "org_1",
       candidate: {},
@@ -58,6 +83,7 @@ describe("private Slack DM approval stager V1", () => {
       readCandidateByApprovalId: () => current,
       prepareApprovalPost: (received: { frozen_card_sha256: Sha256; approved_snapshot: unknown }) => {
         operations.push("freeze");
+        preparedSnapshot = received.approved_snapshot;
         current = { ...outbox("posting"), frozen_card_sha256: received.frozen_card_sha256, approved_snapshot_sha256: canonicalSha256(received.approved_snapshot) as Sha256 };
         return { outbox: current, created: true };
       },
@@ -95,7 +121,7 @@ describe("private Slack DM approval stager V1", () => {
         openDirectMessage: async (user: string) => { operations.push("open-dm"); expect(user).toBe("U01"); return { kind: "opened" as const, channel_id: "D01", user_id: "U01" }; },
         postMarker: async () => { operations.push("marker"); return { kind: "posted" as const, provider_message_ts: "123.000001" }; },
         reconcileMarker: vi.fn(),
-        publish: async () => { operations.push("publish"); return { kind: "done" as const }; },
+        publish: async (received) => { operations.push("publish"); publishedCard = received.card; return { kind: "done" as const }; },
         tombstone: vi.fn(),
       },
       resolve_reviewer_target: () => ({
@@ -110,11 +136,78 @@ describe("private Slack DM approval stager V1", () => {
       now: () => NOW,
     });
 
-    await expect(stager.stage(input)).resolves.toEqual({ kind: "staged", stage_id: "apr_1" });
+    await expect(stager.stage(reviewedInput)).resolves.toEqual({ kind: "staged", stage_id: "apr_1" });
     expect(operations).toEqual([
       "freeze", "open-dm", "assignment", "marker", "marker-durable", "cp-pending", "publish", "authority-staged",
     ]);
     expect(stage).toHaveBeenCalledOnce();
+    expect(JSON.stringify(preparedSnapshot)).toContain("Keep the owner-only default.");
+    if (publishedCard === undefined) throw new Error("expected a published approval card");
+    const actionsIndex = publishedCard.blocks.findIndex(
+      (block) =>
+        block !== null &&
+        typeof block === "object" &&
+        !Array.isArray(block) &&
+        (block as Readonly<Record<string, unknown>>).type === "actions",
+    );
+    expect(actionsIndex).toBeGreaterThan(0);
+    const informedContent = JSON.stringify(publishedCard.blocks.slice(0, actionsIndex));
+    expect(informedContent).toContain("Decision (decided): Keep the owner-only default.");
+    expect(informedContent).toContain("Action (owner: Audrey; due: none): Rehearse the private Slack approval flow.");
+    expect(informedContent).toContain("Rationale (supports: decision-1): The owner must choose visibility before release.");
+    expect(publishedCard.text).toContain("Decision (decided): Keep the owner-only default.");
+    expect(publishedCard.text).toContain("Action (owner: Audrey; due: none): Rehearse the private Slack approval flow.");
+    expect(publishedCard.text).toContain("Rationale (supports: decision-1): The owner must choose visibility before release.");
+    expect(JSON.stringify(publishedCard.blocks.slice(actionsIndex))).toContain("Approve");
+  });
+
+  it("fails before durable or provider I/O when every frozen signal cannot fit", async () => {
+    const prepareApprovalPost = vi.fn();
+    const openDirectMessage = vi.fn();
+    const postMarker = vi.fn();
+    const publish = vi.fn();
+    const controlPlaneStage = vi.fn();
+    const oversizedInput = {
+      ...input,
+      decisions: {
+        ...input.decisions,
+        signals: [{
+          id: "decision-too-large", kind: "decision", text: "x".repeat(3_000),
+          subject: null, confidence: null, evidence: [], status: "decided",
+        }],
+      },
+    } as unknown as ApprovalWorkflowStageInputV1;
+    const stager = new PrivateSlackDmApprovalStagerV1({
+      authority: {
+        readCandidateByApprovalId: () => outbox(),
+        prepareApprovalPost,
+      } as unknown as SqliteAuthorityMeetingProcessingStateV1,
+      authority_database: {} as never, control_plane_database: {} as never,
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      assignments: { readCurrent: vi.fn(), stage: vi.fn() } as never,
+      control_plane: { stage: controlPlaneStage },
+      poster: {
+        openDirectMessage, postMarker, reconcileMarker: vi.fn(), publish, tombstone: vi.fn(),
+      },
+      resolve_reviewer_target: () => ({
+        reviewer: { principal_id: "prn_1", membership_id: "mem_1", membership_type: "owner" },
+        slack_target: {
+          connection: { body: { organization_id: "org_1", connection_id: "con_1", provider_app_id: "A01", provider_bot_id: "B01", provider_bot_user_id: "U02", provider_tenant_id: "T01", provider_enterprise_id: null }, sha256: DIGEST("6") },
+          connection_state: { body: {}, sha256: DIGEST("7") },
+          current_slack_identity_link: { provider: "slack", external_identity_link_id: "clm_1", external_identity_link_contract_sha256: DIGEST("4"), provider_subject_id: "U01" },
+        },
+      }) as never,
+      canonical_sha256: canonicalSha256,
+    });
+
+    await expect(stager.stage(oversizedInput)).rejects.toThrow(
+      /complete frozen signal preview exceeds Slack's section limit/,
+    );
+    expect(prepareApprovalPost).not.toHaveBeenCalled();
+    expect(openDirectMessage).not.toHaveBeenCalled();
+    expect(postMarker).not.toHaveBeenCalled();
+    expect(controlPlaneStage).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("revalidates the owner after CP staging before publishing the full card", async () => {
