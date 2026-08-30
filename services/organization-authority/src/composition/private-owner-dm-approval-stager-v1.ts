@@ -83,6 +83,48 @@ function displayText(value: unknown, fallback: string, maximum: number): string 
   return selected.slice(0, maximum).trim();
 }
 
+function completeSignalText(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value !== value.trim() ||
+    /[\u0000-\u0008\u000B-\u001F\u007F]/.test(value)
+  ) {
+    throw new Error(`private approval ${label} is not exact displayable text`);
+  }
+  return value;
+}
+
+function frozenApprovalContext(
+  brief: ReturnType<typeof compileDecisionBrief>,
+): string {
+  const signalLines = [
+    ...brief.decisions.map(
+      (signal) =>
+        `Decision (${signal.status}): ${completeSignalText(signal.text, "decision")}`,
+    ),
+    ...brief.actions.map(
+      (signal) =>
+        `Action (owner: ${signal.owner === null ? "unassigned" : completeSignalText(signal.owner, "action owner")}; due: ${signal.due_at ?? "none"}): ${completeSignalText(signal.text, "action")}`,
+    ),
+    ...brief.rationales.map(
+      (signal) =>
+        `Rationale (supports: ${signal.supports_signal_ids.length === 0 ? "none" : signal.supports_signal_ids.map((id) => completeSignalText(id, "rationale support id")).join(", ")}): ${completeSignalText(signal.text, "rationale")}`,
+    ),
+  ];
+  const context = [
+    `Review ${brief.decisions.length} decision${brief.decisions.length === 1 ? "" : "s"}, ${brief.actions.length} action${brief.actions.length === 1 ? "" : "s"}, and ${brief.rationales.length} rationale${brief.rationales.length === 1 ? "" : "s"} from this meeting.`,
+    "Frozen content:",
+    ...signalLines,
+  ].join("\n");
+  if (context.length > MAX_CONTEXT) {
+    throw new Error(
+      "private approval complete frozen signal preview exceeds Slack's section limit",
+    );
+  }
+  return context;
+}
+
 function buildCardAndSnapshot(
   input: CleanApprovalStageInputV1,
   sha256: (value: unknown) => Digest,
@@ -113,11 +155,10 @@ function buildCardAndSnapshot(
     payload_contract_id: "organization-record-approval-payload-v1" as const,
     approved_payload: payload,
   });
-  const approval_context = displayText(
-    `Review ${brief.decisions.length} decision${brief.decisions.length === 1 ? "" : "s"} and ${brief.actions.length} action${brief.actions.length === 1 ? "" : "s"} from this meeting.`,
-    "Review this meeting's extracted decisions.",
-    MAX_CONTEXT,
-  );
+  // The active controls must follow a complete projection of the exact brief
+  // they authorize. If Slack cannot show every frozen signal, fail before any
+  // post attempt is prepared instead of truncating an informed-consent view.
+  const approval_context = frozenApprovalContext(brief);
   const card = buildPrivateApprovalBlockKitCardV1({
     schema_version: 1,
     approval_id: input.candidate.approval_id,
