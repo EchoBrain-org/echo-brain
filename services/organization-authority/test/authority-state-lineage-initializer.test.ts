@@ -10,15 +10,15 @@ import {
   STATE_LINEAGE_ROLE_APPLICATION_IDS_V1,
 } from "../src/state-lineage/state-lineage-manifest-v1.js";
 import {
-  initializeNewStateLineageV1,
-  type InitializeNewStateLineageV1Input,
-} from "../src/state-lineage/new-lineage-genesis-v1.js";
+  initializeAuthorityStateLineageV1,
+  type InitializeAuthorityStateLineageV1Input,
+} from "../src/state-lineage/authority-state-lineage-initializer.js";
 import {
   applyAuthorityBaselineV1,
   AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
   authorityBaselineSha256V1,
 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import {
   applyOrganizationControlBaselineV1,
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
@@ -55,15 +55,15 @@ afterEach(() => {
 });
 
 function fixtureRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "echo-new-lineage-"));
+  const root = mkdtempSync(join(tmpdir(), "echo-authority-state-lineage-"));
   roots.push(root);
   return root;
 }
 
 function input(
   stateDirectory: string,
-  overrides: Partial<InitializeNewStateLineageV1Input> = {},
-): InitializeNewStateLineageV1Input {
+  overrides: Partial<InitializeAuthorityStateLineageV1Input> = {},
+): InitializeAuthorityStateLineageV1Input {
   const schemas = Object.fromEntries(
     Object.keys(STATE_LINEAGE_ROLE_APPLICATION_IDS_V1).map((role) => [
       role,
@@ -72,7 +72,7 @@ function input(
         schema_sha256: `sha256:${"a".repeat(64)}` as Sha256Digest,
       },
     ]),
-  ) as InitializeNewStateLineageV1Input["schemas"];
+  ) as InitializeAuthorityStateLineageV1Input["schemas"];
   return {
     state_directory: stateDirectory,
     binding: {
@@ -136,7 +136,7 @@ function input(
 
 function realBaselineInput(
   stateDirectory: string,
-): InitializeNewStateLineageV1Input {
+): InitializeAuthorityStateLineageV1Input {
   return {
     ...input(stateDirectory),
     schemas: {
@@ -196,11 +196,11 @@ function realBaselineInput(
   };
 }
 
-describe("new-lineage genesis v1", () => {
+describe("Authority state-lineage initializer", () => {
   it("publishes and verifies the actual four top-level baseline set", () => {
     const parent = fixtureRoot();
     const stateDirectory = join(parent, "state");
-    const result = initializeNewStateLineageV1(
+    const result = initializeAuthorityStateLineageV1(
       realBaselineInput(stateDirectory),
     );
 
@@ -213,7 +213,7 @@ describe("new-lineage genesis v1", () => {
   it("publishes all top-level roles, stamps manifests, and verifies the absent retrieval tree", () => {
     const parent = fixtureRoot();
     const stateDirectory = join(parent, "state");
-    const result = initializeNewStateLineageV1(input(stateDirectory));
+    const result = initializeAuthorityStateLineageV1(input(stateDirectory));
 
     expect(result.state_directory).toBe(stateDirectory);
     expect(result.verification.retrieval).toEqual({
@@ -267,7 +267,7 @@ describe("new-lineage genesis v1", () => {
       },
     });
 
-    expect(() => initializeNewStateLineageV1(failing)).toThrow(
+    expect(() => initializeAuthorityStateLineageV1(failing)).toThrow(
       "record-log baseline failed",
     );
     expect(existsSync(stateDirectory)).toBe(false);
@@ -284,11 +284,11 @@ describe("new-lineage genesis v1", () => {
       schemas: {
         ...base.schemas,
         "record-log": undefined,
-      } as unknown as InitializeNewStateLineageV1Input["schemas"],
+      } as unknown as InitializeAuthorityStateLineageV1Input["schemas"],
     });
 
-    expect(() => initializeNewStateLineageV1(missing)).toThrow(
-      "new-lineage schemas must give the record-log role a schema",
+    expect(() => initializeAuthorityStateLineageV1(missing)).toThrow(
+      "Authority state schemas must give the record-log role a schema",
     );
     expect(existsSync(stateDirectory)).toBe(false);
     expect(
@@ -299,9 +299,9 @@ describe("new-lineage genesis v1", () => {
   it("refuses an occupied target before opening a new database", () => {
     const parent = fixtureRoot();
     const stateDirectory = join(parent, "state");
-    const first = initializeNewStateLineageV1(input(stateDirectory));
+    const first = initializeAuthorityStateLineageV1(input(stateDirectory));
     expect(first.verification.databases).toHaveLength(4);
-    expect(() => initializeNewStateLineageV1(input(stateDirectory))).toThrow(
+    expect(() => initializeAuthorityStateLineageV1(input(stateDirectory))).toThrow(
       "must not already exist",
     );
   });

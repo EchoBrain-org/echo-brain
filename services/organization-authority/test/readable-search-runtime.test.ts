@@ -17,11 +17,11 @@ import {
   clearCleanReadableSearchActiveGenerationV1,
   searchCleanReadableSearchGenerationV1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../src/composition/readable-search-runtime.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
-import { verifyCleanStateLineage } from "../src/composition/verify-clean-state-lineage.js";
+import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
 
 const roots: string[] = [];
 
@@ -49,7 +49,7 @@ describe("clean readable-search runtime composition", () => {
       created_at: "2026-08-22T12:00:00.000Z",
       creating_artifact_revision: "clean-search-runtime-test",
     });
-    const lineage = verifyCleanStateLineage(initialized.state_directory);
+    const lineage = verifyAuthorityStateLineage(initialized.state_directory);
     const authority = openAuthorityDatabase(
       join(initialized.state_directory, "authority.sqlite"),
       { fileMustExist: true },
@@ -152,7 +152,7 @@ describe("clean readable-search runtime composition", () => {
         ),
       ).toEqual(generations);
 
-      const restartVerification = verifyCleanStateLineage(
+      const restartVerification = verifyAuthorityStateLineage(
         initialized.state_directory,
       );
       expect(restartVerification.retrieval).toEqual({

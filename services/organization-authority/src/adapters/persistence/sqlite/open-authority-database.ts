@@ -8,7 +8,7 @@ export interface OpenAuthorityDatabaseOptions {
 
 /**
  * Opens an Authority SQLite file without importing or applying migrations.
- * The stopped clean-reset composer is the only new-lineage consumer.
+ * The stopped Authority state initializer is the only absent-database consumer.
  */
 export function openAuthorityDatabase(
   databasePath: string,

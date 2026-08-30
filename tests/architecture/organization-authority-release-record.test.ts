@@ -1158,8 +1158,8 @@ fi
       `--mount type=bind,src=${stateDirectory},dst=/echo-clean/state,readonly`,
     );
     expect(dockerCalls).toContain("--input-type=module -e");
-    expect(dockerCalls).toContain("verify-clean-state-lineage.js");
-    expect(dockerCalls).toContain('verifyCleanStateLineage("/echo-clean/state")');
+    expect(dockerCalls).toContain("verify-authority-state-lineage.js");
+    expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
     expect(dockerCalls.indexOf("pull ")).toBeLessThan(
       dockerCalls.indexOf("run "),
     );

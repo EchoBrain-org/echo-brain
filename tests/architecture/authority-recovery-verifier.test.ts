@@ -21,11 +21,11 @@ import {
   createPersonPolicyFactProjectorV2,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/new-lineage-v1";
-import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/readable-search-runtime.js";
 import { initializeAuthorityState } from "../../services/organization-authority/src/composition/authority-state-initializer.js";
-import { verifyCleanStateLineage } from "../../services/organization-authority/src/composition/verify-clean-state-lineage.js";
+import { verifyAuthorityStateLineage } from "../../services/organization-authority/src/composition/verify-authority-state-lineage.js";
 import {
   inspectLinuxReadOnlyMount,
   parseLinuxMountinfo,
@@ -85,7 +85,7 @@ async function writeFixture(): Promise<string> {
     created_at: "2026-08-25T12:00:00.000Z",
     creating_artifact_revision: "recovery-verifier-test",
   });
-  const lineage = verifyCleanStateLineage(stateDirectory);
+  const lineage = verifyAuthorityStateLineage(stateDirectory);
   const authority = openAuthorityDatabase(
     join(stateDirectory, "authority.sqlite"),
     {
@@ -308,7 +308,7 @@ describe("authority offline recovery verifier", () => {
 
   it("refuses a retrieval SQLite symlink before lineage or SQLite inspection", async () => {
     const cleanData = await writeFixture();
-    const lineage = verifyCleanStateLineage(join(cleanData, "state"));
+    const lineage = verifyAuthorityStateLineage(join(cleanData, "state"));
     const retrievalDatabase = lineage.databases.find((database) =>
       database.role.startsWith("retrieval-"),
     );
@@ -347,7 +347,7 @@ describe("authority offline recovery verifier", () => {
 
   it("refuses a retrieval SQLite hot-state sidecar before immutable reads", async () => {
     const cleanData = await writeFixture();
-    const lineage = verifyCleanStateLineage(join(cleanData, "state"));
+    const lineage = verifyAuthorityStateLineage(join(cleanData, "state"));
     const retrievalDatabase = lineage.databases.find((database) =>
       database.role.startsWith("retrieval-"),
     );

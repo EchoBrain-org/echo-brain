@@ -36,11 +36,11 @@ import {
   AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
   authorityBaselineSha256V3,
 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { runOrganizationAuthorityResetCli } from "../src/composition/organization-authority-reset-cli.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";
-import { verifyCleanStateLineage } from "../src/composition/verify-clean-state-lineage.js";
-import { initializeNewStateLineageV1 } from "../src/state-lineage/new-lineage-genesis-v1.js";
+import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
+import { initializeAuthorityStateLineageV1 } from "../src/state-lineage/authority-state-lineage-initializer.js";
 import { StateLineagePreopenRefusal } from "../src/state-lineage/state-lineage-preopen-guard.js";
 
 const roots: string[] = [];
@@ -74,7 +74,7 @@ function rows(
 }
 
 function initializeRecordLogV1State(stateDirectory: string): void {
-  initializeNewStateLineageV1({
+  initializeAuthorityStateLineageV1({
     state_directory: stateDirectory,
     binding: {
       authority_id: "oau_00000000-0000-4000-8000-000000000001",
@@ -348,11 +348,11 @@ describe("Authority state initialization", () => {
     const stateDirectory = join(root, "legacy-v1-state");
     initializeRecordLogV1State(stateDirectory);
 
-    expect(() => verifyCleanStateLineage(stateDirectory)).toThrow(
+    expect(() => verifyAuthorityStateLineage(stateDirectory)).toThrow(
       StateLineagePreopenRefusal,
     );
     try {
-      verifyCleanStateLineage(stateDirectory);
+      verifyAuthorityStateLineage(stateDirectory);
       throw new Error("expected V1 lineage to be refused");
     } catch (error) {
       expect(error).toMatchObject({ family: "schema_version_mismatch" });

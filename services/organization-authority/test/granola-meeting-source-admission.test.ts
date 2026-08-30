@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import {

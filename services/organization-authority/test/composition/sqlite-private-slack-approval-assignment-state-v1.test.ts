@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyAuthorityBaselineV3,
 } from "../../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-authority-database.js";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/composition/resolve-private-slack-approval-reviewer-target-v1.js";
 import {
   SqlitePrivateSlackApprovalAssignmentStateV1,

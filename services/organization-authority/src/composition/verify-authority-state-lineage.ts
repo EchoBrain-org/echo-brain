@@ -32,13 +32,13 @@ function rootForState(stateDirectory: string) {
     );
   } catch {
     throw new Error(
-      "clean runtime requires a valid clean state-lineage root manifest",
+      "Organization Authority requires a valid state-lineage root manifest",
     );
   }
 }
 
-/** Verify every clean role before any stopped command opens a writable handle. */
-export function verifyCleanStateLineage(stateDirectory: string) {
+/** Verify every Authority state role before a stopped command opens a writable handle. */
+export function verifyAuthorityStateLineage(stateDirectory: string) {
   const root = rootForState(stateDirectory);
   return verifyStateLineageBeforeOpen({
     state_directory: stateDirectory,

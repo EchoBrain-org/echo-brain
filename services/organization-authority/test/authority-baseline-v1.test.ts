@@ -5,7 +5,7 @@ import {
   AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
   authorityBaselineSha256V1,
 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 
 const AUTHORITY_BASELINE_SHA256_V1 =
   "sha256:007a1498dd1db87d03ba2876086c5ec6b6c655f77e5c25691abafd18451465d6";

@@ -8,7 +8,7 @@ import {
 } from "@echo-brain/organization-record/new-lineage-v1";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
 import { AdmittedMeetingProcessingCycleV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
@@ -32,7 +32,7 @@ import {
 import { createReadableSearchGenerationReconcilerV1 } from "./readable-search-runtime.js";
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
-import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
+import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
 import type { CleanLiveWorkerPhaseRunnerV1 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
 import {
@@ -186,7 +186,7 @@ export async function openOrganizationAuthorityRuntime(
   config: OrganizationAuthorityRuntimeConfig,
   dependencies: OrganizationAuthorityRuntimeDependencies = {},
 ): Promise<OpenedOrganizationAuthorityRuntime> {
-  const lineage = verifyCleanStateLineage(config.state_directory);
+  const lineage = verifyAuthorityStateLineage(config.state_directory);
   const api: OrganizationAuthorityApiRuntimeConfig = {
     state_directory: config.state_directory,
     host: config.host,

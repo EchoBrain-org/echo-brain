@@ -10,7 +10,7 @@ import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-ap
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
 import { OpenIdClientPersonSessionProvider } from "../adapters/oidc/openid-client-person-session-provider.js";
 import { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
@@ -24,7 +24,7 @@ import { createPersonRecordSearchRouteV1 } from "./person-record-search-route.js
 import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
 import { readableSearchRuntimeContractV1 } from "./readable-search-runtime.js";
-import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
+import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 import {
   createPersonAnswerRouteV1,
   type AnswerCompositionFailureEventV1,
@@ -71,7 +71,7 @@ export interface RunningOrganizationAuthorityApiRuntime {
 }
 
 export function verifyOrganizationAuthorityApiLineage(stateDirectory: string) {
-  return verifyCleanStateLineage(stateDirectory);
+  return verifyAuthorityStateLineage(stateDirectory);
 }
 
 /**

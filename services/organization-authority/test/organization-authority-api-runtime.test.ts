@@ -17,7 +17,7 @@ import {
 } from "../src/application/person-identity-sessions.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import { initializeAuthorityState } from "../src/composition/authority-state-initializer.js";

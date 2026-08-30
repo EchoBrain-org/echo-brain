@@ -433,18 +433,18 @@ async function importedValidator(sourceRoot) {
     "organization-authority",
     "dist",
     "composition",
-    "verify-clean-state-lineage.js",
+    "verify-authority-state-lineage.js",
   );
   safeRegularFile(releasePath);
   safeRegularFile(profilePath);
   safeRegularFile(lineagePath);
   try {
     const lineage = await import(pathToFileURL(lineagePath).href);
-    if (typeof lineage.verifyCleanStateLineage !== "function") fail();
+    if (typeof lineage.verifyAuthorityStateLineage !== "function") fail();
     return Object.freeze({
       readRelease: (path) => runValidator(releasePath, path),
       readProfile: (path) => runValidator(profilePath, path),
-      verifyLineage: lineage.verifyCleanStateLineage,
+      verifyLineage: lineage.verifyAuthorityStateLineage,
     });
   } catch {
     fail();

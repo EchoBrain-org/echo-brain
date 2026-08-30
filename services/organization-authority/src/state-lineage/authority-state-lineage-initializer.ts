@@ -29,7 +29,7 @@ import { verifyStateLineageBeforeOpen } from "./state-lineage-preopen-guard.js";
 import type { StateLineageRoleV1 } from "./state-lineage-manifest-v1.js";
 
 /**
- * Private, dependency-injected new-lineage genesis.
+ * Private, dependency-injected Authority state-lineage initialization.
  *
  * This deliberately owns no baseline SQL and selects no runtime. Callers must
  * supply the exact v1 appliers and their frozen schema digests. It writes only
@@ -50,40 +50,40 @@ const TOP_LEVEL_ROLES: readonly TopLevelRoleV1[] = Object.freeze([
   "record-derived",
 ]);
 
-export interface NewLineageSchemaV1 {
+export interface AuthorityStateSchemaV1 {
   readonly database_schema_version: number;
   readonly schema_sha256: Sha256Digest;
 }
 
-export interface NewLineageBindingV1 {
+export interface AuthorityStateBindingV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
 }
 
-export interface NewLineageRoleApplierV1 {
+export interface AuthorityStateRoleApplierV1 {
   /** Applies the role's frozen baseline to the completely empty handle. */
   readonly apply: (database: Database.Database) => void;
 }
 
-export interface NewLineageStagedStateV1 {
+export interface StagedAuthorityStateV1 {
   readonly state_directory: string;
-  readonly binding: NewLineageBindingV1;
+  readonly binding: AuthorityStateBindingV1;
   readonly created_at: string;
   readonly creating_artifact_revision: string;
 }
 
-export interface InitializeNewStateLineageV1Input {
+export interface InitializeAuthorityStateLineageV1Input {
   /** An absent, normalized absolute directory. Its parent must already exist. */
   readonly state_directory: string;
-  readonly binding: NewLineageBindingV1;
+  readonly binding: AuthorityStateBindingV1;
   readonly created_at: string;
   readonly creating_artifact_revision: string;
   /** Exact schemas for all seven roles, including the not-yet-built retrieval roles. */
-  readonly schemas: Readonly<Record<StateLineageRoleV1, NewLineageSchemaV1>>;
+  readonly schemas: Readonly<Record<StateLineageRoleV1, AuthorityStateSchemaV1>>;
   /** Appliers only for the four state-directory peer databases. */
   readonly top_level_appliers: Readonly<
-    Record<TopLevelRoleV1, NewLineageRoleApplierV1>
+    Record<TopLevelRoleV1, AuthorityStateRoleApplierV1>
   >;
   /**
    * Deliberately injected so this private scaffold does not guess opener
@@ -99,10 +99,10 @@ export interface InitializeNewStateLineageV1Input {
    * staging output. It must close every handle it opens and may not publish
    * files outside `state_directory`.
    */
-  readonly prepare_staged_state?: (state: NewLineageStagedStateV1) => void;
+  readonly prepare_staged_state?: (state: StagedAuthorityStateV1) => void;
 }
 
-export interface InitializedNewStateLineageV1 {
+export interface InitializedAuthorityStateLineageV1 {
   readonly state_directory: string;
   readonly verification: StateLineagePreopenResultV1;
 }
@@ -122,8 +122,8 @@ function assertPrivateExistingDirectory(path: string, label: string): void {
 
 function preopenExpectation(
   stateDirectory: string,
-  binding: NewLineageBindingV1,
-  schemas: InitializeNewStateLineageV1Input["schemas"],
+  binding: AuthorityStateBindingV1,
+  schemas: InitializeAuthorityStateLineageV1Input["schemas"],
 ): StateLineagePreopenExpectationV1 {
   return {
     state_directory: stateDirectory,
@@ -135,23 +135,23 @@ function preopenExpectation(
 function schemaForRole(
   schemas: unknown,
   role: StateLineageRoleV1,
-): NewLineageSchemaV1 {
+): AuthorityStateSchemaV1 {
   if (
     schemas === null ||
     typeof schemas !== "object" ||
     Array.isArray(schemas) ||
     !Object.prototype.hasOwnProperty.call(schemas, role)
   ) {
-    throw new Error(`new-lineage schemas must give the ${role} role a schema`);
+    throw new Error(`Authority state schemas must give the ${role} role a schema`);
   }
   const schema = (schemas as Record<string, unknown>)[role];
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
-    throw new Error(`new-lineage schemas must give the ${role} role a schema`);
+    throw new Error(`Authority state schemas must give the ${role} role a schema`);
   }
-  return schema as NewLineageSchemaV1;
+  return schema as AuthorityStateSchemaV1;
 }
 
-function validateInput(input: InitializeNewStateLineageV1Input): void {
+function validateInput(input: InitializeAuthorityStateLineageV1Input): void {
   if (
     typeof input.state_directory !== "string" ||
     input.state_directory.length === 0 ||
@@ -160,26 +160,26 @@ function validateInput(input: InitializeNewStateLineageV1Input): void {
     input.state_directory === "/"
   ) {
     throw new Error(
-      "new-lineage state directory must be an explicit non-root absolute path",
+      "Authority state directory must be an explicit non-root absolute path",
     );
   }
   if (existsSync(input.state_directory)) {
-    throw new Error("new-lineage state directory must not already exist");
+    throw new Error("Authority state directory must not already exist");
   }
   const parent = dirname(input.state_directory);
   if (!existsSync(parent)) {
-    throw new Error("new-lineage state directory parent must already exist");
+    throw new Error("Authority state directory parent must already exist");
   }
-  assertPrivateExistingDirectory(parent, "new-lineage state directory parent");
+  assertPrivateExistingDirectory(parent, "Authority state directory parent");
   if (typeof input.open_writable_database !== "function") {
     throw new Error(
-      "new-lineage genesis requires an open_writable_database function",
+      "Authority state initialization requires an open_writable_database function",
     );
   }
   for (const role of TOP_LEVEL_ROLES) {
     if (typeof input.top_level_appliers?.[role]?.apply !== "function") {
       throw new Error(
-        `new-lineage genesis requires a ${role} baseline applier`,
+        `Authority state initialization requires a ${role} baseline applier`,
       );
     }
   }
@@ -214,7 +214,7 @@ function validateInput(input: InitializeNewStateLineageV1Input): void {
 function stampDatabaseManifest(
   database: Database.Database,
   role: TopLevelRoleV1,
-  input: InitializeNewStateLineageV1Input,
+  input: InitializeAuthorityStateLineageV1Input,
 ): void {
   const schema = schemaForRole(input.schemas, role);
   const body = validateStateLineageDatabaseManifestV1({
@@ -267,7 +267,7 @@ function stampDatabaseManifest(
 
 function writeRootManifest(
   stagingDirectory: string,
-  input: InitializeNewStateLineageV1Input,
+  input: InitializeAuthorityStateLineageV1Input,
 ): void {
   const root = validateStateLineageRootManifestV1({
     schema_version: 1,
@@ -289,9 +289,9 @@ function writeRootManifest(
  * Creates and validates an isolated v1 state lineage. This does not make that
  * lineage live: the caller receives only read-only verification evidence.
  */
-export function initializeNewStateLineageV1(
-  input: InitializeNewStateLineageV1Input,
-): InitializedNewStateLineageV1 {
+export function initializeAuthorityStateLineageV1(
+  input: InitializeAuthorityStateLineageV1Input,
+): InitializedAuthorityStateLineageV1 {
   validateInput(input);
   const stateParent = dirname(input.state_directory);
   const stagingDirectory = mkdtempSync(join(stateParent, ".installing-"));

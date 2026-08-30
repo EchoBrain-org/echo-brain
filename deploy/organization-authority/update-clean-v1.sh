@@ -139,7 +139,7 @@ verify_candidate_state_lineage() {
     --security-opt no-new-privileges --user "$runtime_identity" --workdir /app \
     --entrypoint node \
     --mount "type=bind,src=$STATE_DIR,dst=/echo-clean/state,readonly" \
-    "$image" --input-type=module -e 'import { verifyCleanStateLineage } from "./services/organization-authority/dist/composition/verify-clean-state-lineage.js"; verifyCleanStateLineage("/echo-clean/state");' || \
+    "$image" --input-type=module -e 'import { verifyAuthorityStateLineage } from "./services/organization-authority/dist/composition/verify-authority-state-lineage.js"; verifyAuthorityStateLineage("/echo-clean/state");' || \
     fail 'candidate Authority image rejected persisted state lineage; run an explicit replacement or migration procedure instead'
 }
 

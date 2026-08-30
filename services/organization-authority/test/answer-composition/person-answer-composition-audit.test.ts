@@ -2,7 +2,7 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import { describe, expect, it } from "vitest";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { applyAuthorityBaselineV1 } from "../../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-authority-database.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 

@@ -28,7 +28,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../src/domain/errors.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";

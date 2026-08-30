@@ -37,14 +37,14 @@ import {
   AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
   authorityBaselineSha256V3,
 } from "../adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { assertDisplayName } from "../domain/rules.js";
 import {
-  initializeNewStateLineageV1,
-  type InitializedNewStateLineageV1,
-  type NewLineageStagedStateV1,
-} from "../state-lineage/new-lineage-genesis-v1.js";
+  initializeAuthorityStateLineageV1,
+  type InitializedAuthorityStateLineageV1,
+  type StagedAuthorityStateV1,
+} from "../state-lineage/authority-state-lineage-initializer.js";
 import {
   stateLineageDatabaseManifestSha256V1,
   stateLineageRootManifestSha256V1,
@@ -169,7 +169,7 @@ function validateAuthorityStateSeed(
 }
 
 function seedAuthority(
-  state: NewLineageStagedStateV1,
+  state: StagedAuthorityStateV1,
   input: InitializeAuthorityStateInput,
   seed: AuthorityStateSeedV1,
 ): {
@@ -243,7 +243,7 @@ function seedAuthority(
 }
 
 function prepareAuthorityState(
-  state: NewLineageStagedStateV1,
+  state: StagedAuthorityStateV1,
   input: InitializeAuthorityStateInput,
   seed: AuthorityStateSeedV1,
   captured: { descriptor_sha256?: Sha256Digest },
@@ -327,7 +327,7 @@ function prepareAuthorityState(
 }
 
 function manifestEvidence(
-  initialized: InitializedNewStateLineageV1,
+  initialized: InitializedAuthorityStateLineageV1,
 ): AuthorityStateManifestEvidenceV1 {
   const databaseManifests = Object.fromEntries(
     initialized.verification.databases.map((database) => [
@@ -358,7 +358,7 @@ export function initializeAuthorityState(
     input.seed ?? generatedAuthorityStateSeed(),
   );
   const captured: { descriptor_sha256?: Sha256Digest } = {};
-  const initialized = initializeNewStateLineageV1({
+  const initialized = initializeAuthorityStateLineageV1({
     state_directory: input.state_directory,
     binding: {
       authority_id: seed.authority_id,

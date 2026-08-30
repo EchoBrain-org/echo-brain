@@ -6,7 +6,7 @@ import {
   readPrivateAuthorityGranolaOwnerEmail,
 } from "../adapters/security/private-file-credentials.js";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
 import {
   createGranolaLiveOnlyCursor,
   granolaLiveOnlyCutoff,
@@ -17,7 +17,7 @@ import {
   assertCleanProcessorAdmissionCommitmentV1,
   type CleanProcessorAdmissionCommitmentV1,
 } from "../processing/clean-v1/processor-admission-commitment.js";
-import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
+import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 
 export const CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1 = "2.2.0";
 const INSTANCE_ID = /^[a-z][a-z0-9-]{0,127}$/;
@@ -183,7 +183,7 @@ async function admitGranolaMeetingSourceAfterOwnerPreflight(
     );
   }
 
-  const lineage = verifyCleanStateLineage(input.state_directory);
+  const lineage = verifyAuthorityStateLineage(input.state_directory);
   // Private values are never persisted, logged, or returned.
   const ownerEmailSha256 = personLoginGrantExpectedEmailSha256(
     ownerEmail,

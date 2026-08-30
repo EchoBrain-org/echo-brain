@@ -35,7 +35,7 @@ import { PersonIdentitySessionApplication } from "../src/application/person-iden
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";

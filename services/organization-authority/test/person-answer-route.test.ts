@@ -3,7 +3,7 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import {
   createPersonAnswerRouteV1,

@@ -46,7 +46,7 @@ import {
   readPersonOidcConfiguration,
   runOrganizationAuthorityPersonAdministrationCli,
 } from "./organization-authority-person-administration-cli.js";
-import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
+import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 
 const MANIFEST_DIRECTORY = "onboarding";
 const MANIFEST_FILENAME = "clean-founder-v1.json";
@@ -736,7 +736,7 @@ function loadSetupManifest(stateDirectory: string): {
 }
 
 function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1): void {
-  const verified = verifyCleanStateLineage(manifest.state_directory);
+  const verified = verifyAuthorityStateLineage(manifest.state_directory);
   if (
     verified.root.authority_id !== manifest.setup_seed.authority_id ||
     verified.root.organization_id !== manifest.setup_seed.organization_id ||
