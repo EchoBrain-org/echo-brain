@@ -50,7 +50,7 @@ async function start(
 }
 
 describe("private Slack approval interactions HTTP mount V1", () => {
-  it("limits OIDC begins per loopback-proxied client without blocking another client", async () => {
+  it("allows a retry-heavy login flow, then limits OIDC begins without blocking another client", async () => {
     const beginOidcLogin = vi.fn(() => ({
       login_attempt_id: "ola_00000000-0000-4000-8000-000000000001",
       issuer: "https://issuer.example",
@@ -90,7 +90,7 @@ describe("private Slack approval interactions HTTP mount V1", () => {
         body: JSON.stringify({ kind: "existing_identity_login" }),
       });
     try {
-      for (let index = 0; index < 4; index += 1) {
+      for (let index = 0; index < 10; index += 1) {
         expect((await begin("203.0.113.10")).status).toBe(201);
       }
       const throttled = await begin("203.0.113.10");
@@ -99,7 +99,7 @@ describe("private Slack approval interactions HTTP mount V1", () => {
         error: { code: "rate_limited", message: "request failed" },
       });
       expect((await begin("198.51.100.8")).status).toBe(201);
-      expect(beginOidcLogin).toHaveBeenCalledTimes(5);
+      expect(beginOidcLogin).toHaveBeenCalledTimes(11);
     } finally {
       const closed = once(server, "close");
       server.close();

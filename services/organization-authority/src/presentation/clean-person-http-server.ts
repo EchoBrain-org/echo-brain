@@ -41,7 +41,7 @@ import type { PrivateApprovalInteractionHttpApplicationV1 } from "./private-appr
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const OIDC_BEGIN_CLIENT_WINDOW_MS = 60 * 1000;
-const OIDC_BEGIN_CLIENT_LIMIT = 4;
+const OIDC_BEGIN_CLIENT_LIMIT = 10;
 const MAXIMUM_TRACKED_OIDC_BEGIN_CLIENTS = 1024;
 
 /**
