@@ -69,7 +69,7 @@ export interface OrganizationAuthorityRuntimeConfig {
     input: {
       readonly authority_url: string;
       readonly canary: StagingSyntheticMeetingCanaryInputV1;
-      readonly state: MeetingSourceAdapter;
+      readonly state: SqliteAuthorityMeetingProcessingStateV1;
       readonly processor: DecisionProcessorAdapter;
       readonly stager: Awaited<ReturnType<ApprovalWorkflowBundleV1["load"]>>["stager"];
       readonly signal: AbortSignal;
@@ -87,8 +87,8 @@ export interface OpenedOrganizationAuthorityRuntime
   extends RunningOrganizationAuthorityServiceLifecycle {
   readonly processing: "idle_until_finalize" | "active";
   /**
-   * A staging-guarded rehearsal hook. It exists only after live admission and
-   * uses the same admitted processor and private approval stager as production
+   * A staging-guarded rehearsal hook. It exists only after source admission and
+   * uses the same admitted processor and private approval stager as deployed
    * intake; it never touches the provider cursor.
    */
   readonly run_staging_synthetic_private_dm_canary?: (
@@ -262,7 +262,7 @@ export async function openOrganizationAuthorityRuntime(
       processor.identity.version !== admission.processor.version
     ) {
       throw new Error(
-        "clean live adapters differ from their admitted configurations",
+        "processing adapters differ from their admitted configurations",
       );
     }
     const coordinates = Object.freeze({
