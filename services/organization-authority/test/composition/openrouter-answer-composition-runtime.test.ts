@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  createOpenRouterCleanAnswerCompositionRuntimeBundleV1,
-  OPENROUTER_CLEAN_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-  OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
-  OPENROUTER_CLEAN_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "../../src/composition/openrouter-clean-answer-composition-runtime.js";
+  createOpenRouterAnswerCompositionRuntimeBundleV1,
+  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+} from "../../src/composition/openrouter-answer-composition-runtime-v1.js";
 
 const directories: string[] = [];
 
@@ -28,25 +28,25 @@ function credentialFile(): string {
   return path;
 }
 
-describe("OpenRouter clean Layer 4 runtime bundle", () => {
+describe("OpenRouter answer-composition runtime bundle", () => {
   it("owns credential resolution, structured-output construction, and the V3.2 generation profile", () => {
-    const bundle = createOpenRouterCleanAnswerCompositionRuntimeBundleV1({
+    const bundle = createOpenRouterAnswerCompositionRuntimeBundleV1({
       credential_file: credentialFile(),
     });
     const runtime = bundle.open();
 
     expect(runtime.generation).toEqual({
       generation_adapter_id:
-        OPENROUTER_CLEAN_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-      planner_model: OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
-      answer_model: OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
-      timeout_ms: OPENROUTER_CLEAN_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+        OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+      planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+      answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+      timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
     });
     expect(runtime.structured_output.generate).toBeTypeOf("function");
   });
 
   it("defers credential access until the active runtime opens", () => {
-    const bundle = createOpenRouterCleanAnswerCompositionRuntimeBundleV1({
+    const bundle = createOpenRouterAnswerCompositionRuntimeBundleV1({
       credential_file: "/private/missing-openrouter-credential",
     });
     expect(() => bundle.open()).toThrow();

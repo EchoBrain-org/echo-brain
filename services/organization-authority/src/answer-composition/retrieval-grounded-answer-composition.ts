@@ -21,10 +21,10 @@ const POLICY_IDS = new Set([
   "restricted-reviewer-person-v2",
 ]);
 
-export class LeanAnswerCompositionError extends Error {
+export class RetrievalGroundedAnswerCompositionError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "LeanAnswerCompositionError";
+    this.name = "RetrievalGroundedAnswerCompositionError";
   }
 }
 
@@ -155,7 +155,7 @@ export interface Layer4FailureDiagnosticV1 {
   readonly retrieval_generation_id: Sha256Digest | null;
 }
 
-export interface LeanAnswerCompositionOptions {
+export interface RetrievalGroundedAnswerCompositionOptions {
   readonly planner: Layer4StructuredOutputPort;
   readonly answerer: Layer4StructuredOutputPort;
   readonly layer3: Layer4BatchReadPort;
@@ -171,7 +171,7 @@ export interface LeanAnswerCompositionOptions {
   readonly now_ms?: () => number;
 }
 
-export interface LeanAnswerCompositionResult {
+export interface RetrievalGroundedAnswerCompositionResult {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-answer-v1";
   readonly generation_id: Sha256Digest;
@@ -232,7 +232,7 @@ function hasExactKeys(
 
 function nonEmpty(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0) {
-    throw new LeanAnswerCompositionError(`${label} is invalid`);
+    throw new RetrievalGroundedAnswerCompositionError(`${label} is invalid`);
   }
   return value;
 }
@@ -254,7 +254,7 @@ export function validateLayer2CompatibleQuery(value: unknown): string {
     terms.size > 16 ||
     [...terms].some((term) => Buffer.byteLength(term, "utf8") > 64)
   ) {
-    throw new LeanAnswerCompositionError("query is not Layer 2 compatible");
+    throw new RetrievalGroundedAnswerCompositionError("query is not Layer 2 compatible");
   }
   return query;
 }
@@ -276,7 +276,7 @@ function opaqueIdentifier(
 function configuredModel(value: string, label: string): string {
   const model = opaqueIdentifier(value);
   if (model === null) {
-    throw new LeanAnswerCompositionError(`${label} is invalid`);
+    throw new RetrievalGroundedAnswerCompositionError(`${label} is invalid`);
   }
   return model;
 }
@@ -284,7 +284,7 @@ function configuredModel(value: string, label: string): string {
 function timeout(value: number | undefined): number {
   const chosen = value ?? LAYER4_DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(chosen) || chosen < 1 || chosen > LAYER4_MAX_TIMEOUT_MS) {
-    throw new LeanAnswerCompositionError("Layer 4 timeout is invalid");
+    throw new RetrievalGroundedAnswerCompositionError("Layer 4 timeout is invalid");
   }
   return chosen;
 }
@@ -292,11 +292,11 @@ function timeout(value: number | undefined): number {
 function parsePlan(value: unknown, originalQuestion: string): readonly string[] {
   const body = record(value);
   if (body === null || !hasExactKeys(body, ["queries"])) {
-    throw new LeanAnswerCompositionError("planner response is invalid");
+    throw new RetrievalGroundedAnswerCompositionError("planner response is invalid");
   }
   const raw = body.queries;
   if (!Array.isArray(raw) || raw.length > LAYER4_MAX_ADDITIONAL_QUERIES) {
-    throw new LeanAnswerCompositionError("planner response is invalid");
+    throw new RetrievalGroundedAnswerCompositionError("planner response is invalid");
   }
   const observed = new Set<string>([originalQuestion]);
   const additional: string[] = [];
@@ -333,7 +333,7 @@ function assertRelease(value: Layer4ReleasedBatch): void {
     (value.record_head.record_sha256 !== null && !SHA256.test(value.record_head.record_sha256)) ||
     new Date(value.checked_at).toISOString() !== value.checked_at
   ) {
-    throw new LeanAnswerCompositionError("Layer 3 release is invalid");
+    throw new RetrievalGroundedAnswerCompositionError("Layer 3 release is invalid");
   }
 }
 
@@ -353,7 +353,7 @@ function boundedContext(release: Layer4ReleasedBatch): readonly ContextAtom[] {
       typeof atom.policy_id !== "string" || !POLICY_IDS.has(atom.policy_id) ||
       typeof atom.text !== "string" || atom.text.length === 0
     ) {
-      throw new LeanAnswerCompositionError("Layer 3 released atom is invalid");
+      throw new RetrievalGroundedAnswerCompositionError("Layer 3 released atom is invalid");
     }
     if (seen.has(atom.atom_id)) continue;
     seen.add(atom.atom_id);
@@ -387,7 +387,7 @@ function parseAnswer(value: unknown, context: readonly ContextAtom[]): {
 } {
   const body = record(value);
   if (body === null || !hasExactKeys(body, ["status", "answer", "citations"])) {
-    throw new LeanAnswerCompositionError("answer response is invalid");
+    throw new RetrievalGroundedAnswerCompositionError("answer response is invalid");
   }
   const status = body.status;
   const answer = body.answer;
@@ -400,18 +400,18 @@ function parseAnswer(value: unknown, context: readonly ContextAtom[]): {
     [...answer].length > LAYER4_MAX_ANSWER_CHARACTERS ||
     !Array.isArray(rawCitations)
   ) {
-    throw new LeanAnswerCompositionError("answer response is invalid");
+    throw new RetrievalGroundedAnswerCompositionError("answer response is invalid");
   }
   const byCitation = new Map(context.map((atom) => [atom.citation_id, atom]));
   const seen = new Set<string>();
   const citations: ContextAtom[] = [];
   for (const raw of rawCitations) {
     if (typeof raw !== "string" || !CITATION_ID.test(raw) || seen.has(raw)) {
-      throw new LeanAnswerCompositionError("answer response contains a malformed or duplicate citation");
+      throw new RetrievalGroundedAnswerCompositionError("answer response contains a malformed or duplicate citation");
     }
     const atom = byCitation.get(raw);
     if (atom === undefined) {
-      throw new LeanAnswerCompositionError("answer response cites an unreleased atom");
+      throw new RetrievalGroundedAnswerCompositionError("answer response cites an unreleased atom");
     }
     seen.add(raw);
     citations.push(atom);
@@ -420,7 +420,7 @@ function parseAnswer(value: unknown, context: readonly ContextAtom[]): {
     (status === "answered" && citations.length === 0) ||
     (status === "insufficient_evidence" && citations.length !== 0)
   ) {
-    throw new LeanAnswerCompositionError("answer response has invalid citation status");
+    throw new RetrievalGroundedAnswerCompositionError("answer response has invalid citation status");
   }
   return Object.freeze({ status, answer, citations: Object.freeze(citations) });
 }
@@ -468,7 +468,7 @@ type ModelFailureMetadata = Pick<
 >;
 
 function modelFailureMetadata(error: unknown): ModelFailureMetadata {
-  const coreValidation = error instanceof LeanAnswerCompositionError;
+  const coreValidation = error instanceof RetrievalGroundedAnswerCompositionError;
   const diagnostic = coreValidation
     ? null
     : record(record(error)?.diagnostic);
@@ -504,7 +504,7 @@ function modelFailureMetadata(error: unknown): ModelFailureMetadata {
 }
 
 function reportModelFailure(
-  options: LeanAnswerCompositionOptions,
+  options: RetrievalGroundedAnswerCompositionOptions,
   input: {
     readonly stage: Layer4FailureDiagnosticV1["stage"];
     readonly error: unknown;
@@ -530,22 +530,22 @@ function reportModelFailure(
   }
 }
 
-export function createLeanAnswerComposition(options: LeanAnswerCompositionOptions): {
-  answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<LeanAnswerCompositionResult>;
+export function createRetrievalGroundedAnswerComposition(options: RetrievalGroundedAnswerCompositionOptions): {
+  answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<RetrievalGroundedAnswerCompositionResult>;
 } {
   const generationAdapterId = opaqueIdentifier(
     options.generation_adapter_id,
     64,
   );
   if (generationAdapterId === null) {
-    throw new LeanAnswerCompositionError("generation adapter id is invalid");
+    throw new RetrievalGroundedAnswerCompositionError("generation adapter id is invalid");
   }
   const plannerModel = configuredModel(options.planner_model, "planner model");
   const answerModel = configuredModel(options.answer_model, "answer model");
   const requestTimeout = timeout(options.timeout_ms);
   const now = options.now_ms ?? Date.now;
   return Object.freeze({
-    async answer(input): Promise<LeanAnswerCompositionResult> {
+    async answer(input): Promise<RetrievalGroundedAnswerCompositionResult> {
       const question = validateLayer2CompatibleQuery(input.question);
       const plannerRequest: AuditedLayer4StructuredGenerationInput =
         Object.freeze({
@@ -630,9 +630,9 @@ export function createLeanAnswerComposition(options: LeanAnswerCompositionOption
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       if (new Date(finalAuthorization.checked_at).toISOString() !== finalAuthorization.checked_at) {
-        throw new LeanAnswerCompositionError("Layer 3 final revalidation is invalid");
+        throw new RetrievalGroundedAnswerCompositionError("Layer 3 final revalidation is invalid");
       }
-      const result: LeanAnswerCompositionResult = Object.freeze({
+      const result: RetrievalGroundedAnswerCompositionResult = Object.freeze({
         schema_version: 1,
         kind: "echo-clean-person-answer-v1",
         generation_id: release.generation_id,

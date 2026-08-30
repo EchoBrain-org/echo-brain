@@ -32,7 +32,7 @@ import type {
   PersonAccessAuthorization,
 } from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
-import { SqliteCleanPersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.js";
+import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
 import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
@@ -54,16 +54,16 @@ import {
   type CleanLiveSourceRuntimeBundleV1,
 } from "../src/composition/open-clean-live-runtime.js";
 import type { CleanLiveProcessorRuntimeBundleV1 } from "../src/composition/clean-live-processor-runtime.js";
-import type { CleanAnswerCompositionRuntimeBundleV1 } from "../src/composition/clean-answer-composition-runtime.js";
+import type { AnswerCompositionRuntimeBundleV1 } from "../src/composition/answer-composition-runtime.js";
 import type {
   CleanApprovalRuntimeBundleV1,
   CleanApprovalRuntimeContextV1,
 } from "../src/composition/approval-runtime-bundle-v1.js";
 import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/new-lineage-v1";
 import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
-import { createCleanPersonAnswerRouteV1 } from "../src/composition/clean-person-answer-route.js";
+import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
-import type { Layer4StructuredOutputPort } from "../src/answer-composition/lean-answer-composition.js";
+import type { Layer4StructuredOutputPort } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
 import {
   PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
   privateSlackApprovalBlockKitActionIdV1,
@@ -888,7 +888,7 @@ function createAnswerRoute(input: {
   readonly authority: ReturnType<typeof openAuthorityDatabase>;
   readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
 }) {
-  return createCleanPersonAnswerRouteV1({
+  return createPersonAnswerRouteV1({
     authority_id: input.fixture.initialized.authority_id,
     organization_id: input.fixture.initialized.organization_id,
     state_lineage_id: input.fixture.initialized.state_lineage_id,
@@ -900,7 +900,7 @@ function createAnswerRoute(input: {
       answer_model: "test-answer",
       timeout_ms: 60_000,
     },
-    audit: new SqliteCleanPersonAnswerCompositionAuditV1(input.authority),
+    audit: new SqlitePersonAnswerCompositionAuditV1(input.authority),
   });
 }
 
@@ -1067,7 +1067,7 @@ describe("open clean live runtime private approval lane", () => {
         return fakeProcessor(fixture.processorIdentity);
       },
     };
-    const answerCompositionRuntime: CleanAnswerCompositionRuntimeBundleV1 = {
+    const answerCompositionRuntime: AnswerCompositionRuntimeBundleV1 = {
       open() {
         return {
           generation: {

@@ -19,9 +19,15 @@ const LAYER1_3_READ_SEARCH_ROOTS = [
 const ANSWER_COMPOSITION_ROOT =
   "services/organization-authority/src/answer-composition";
 const ANSWER_COMPOSITION_ROUTE =
-  "services/organization-authority/src/composition/clean-person-answer-route.ts";
+  "services/organization-authority/src/composition/person-answer-route.ts";
 const ANSWER_COMPOSITION_AUDIT_WRITER =
-  "services/organization-authority/src/adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.ts";
+  "services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts";
+const ANSWER_COMPOSITION_RUNTIME_WIRING = new Set([
+  "services/organization-authority/src/composition/clean-live-cli.ts",
+  "services/organization-authority/src/composition/clean-person-runtime.ts",
+  "services/organization-authority/src/composition/open-clean-live-runtime.ts",
+  "services/organization-authority/src/composition/open-clean-organization-authority-runtime.ts",
+]);
 const MODEL_IMPORT =
   /(?:anthropic|openai|openrouter|ollama|processing\/adapters\/decision-processors\/llm)/;
 const DIRECT_LOWER_LAYER_IMPORT =
@@ -225,7 +231,7 @@ describe("retrieval and answer-composition boundaries", () => {
     ]);
   });
 
-  it("keeps the persisted answer_composition audit kind in the audit writer", () => {
+  it("keeps answer composition confined to its component, audit writer, and declared runtime wiring", () => {
     const production = [
       "services/organization-authority/src",
       "services/organization-control-plane/src",
@@ -239,10 +245,18 @@ describe("retrieval and answer-composition boundaries", () => {
     expect(
       production.filter(
         (path) =>
-          /["']answer_composition["']/.test(source(path)) &&
-          path !== ANSWER_COMPOSITION_AUDIT_WRITER,
+          /answer_composition/.test(source(path)) &&
+          !path.startsWith(`${ANSWER_COMPOSITION_ROOT}/`) &&
+          path !== ANSWER_COMPOSITION_AUDIT_WRITER &&
+          !ANSWER_COMPOSITION_RUNTIME_WIRING.has(path),
       ),
     ).toEqual([]);
+  });
+
+  it("keeps the persisted answer_composition audit kind in the audit writer", () => {
+    expect(source(ANSWER_COMPOSITION_AUDIT_WRITER)).toContain(
+      'operation: "answer_composition"',
+    );
   });
 
   it("keeps Layer 4 from directly importing Layer 1, Layer 2, or storage", () => {

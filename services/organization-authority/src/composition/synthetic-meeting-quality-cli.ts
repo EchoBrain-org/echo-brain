@@ -16,10 +16,10 @@ import {
   SyntheticMeetingSourceAdapterV1,
 } from "../quality/synthetic-meeting-fixture-v1.js";
 import {
-  OPENROUTER_CLEAN_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-  OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
-  OPENROUTER_CLEAN_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "./openrouter-clean-answer-composition-runtime.js";
+  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+} from "./openrouter-answer-composition-runtime-v1.js";
 import { fixedOpenRouterCleanProcessorConfigV1 } from "./openrouter-clean-processor-config-v1.js";
 
 const USAGE =
@@ -160,10 +160,10 @@ export async function runSyntheticMeetingQualityCommandV1(
         planner: model,
         answerer: model,
         generation_adapter_id:
-          OPENROUTER_CLEAN_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-        planner_model: OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
-        answer_model: OPENROUTER_CLEAN_ANSWER_COMPOSITION_MODEL_V1,
-        timeout_ms: OPENROUTER_CLEAN_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+          OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+        planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+        answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+        timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
       });
     io.stdout(`${JSON.stringify(result)}\n`);
     return result.passed ? 0 : 1;

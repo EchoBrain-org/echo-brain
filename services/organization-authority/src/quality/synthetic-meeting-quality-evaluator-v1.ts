@@ -1,7 +1,7 @@
 import {
-  createLeanAnswerComposition,
+  createRetrievalGroundedAnswerComposition,
   type Layer4StructuredOutputPort,
-} from "../answer-composition/lean-answer-composition.js";
+} from "../answer-composition/retrieval-grounded-answer-composition.js";
 import {
   assertCanonicalDecisionSet,
   assertCanonicalMeetingBatch,
@@ -256,7 +256,7 @@ async function evaluateLayer4(
       principal_id: qualityCase.principal_id,
       atoms: input.corpus.layer4_atoms,
     });
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: input.planner,
       answerer: input.answerer,
       layer3,

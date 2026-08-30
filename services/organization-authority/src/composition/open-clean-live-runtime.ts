@@ -22,7 +22,7 @@ import type {
   CleanApprovalProcessingV1,
   CleanApprovalRuntimeBundleV1,
 } from "./approval-runtime-bundle-v1.js";
-import type { CleanAnswerCompositionRuntimeBundleV1 } from "./clean-answer-composition-runtime.js";
+import type { AnswerCompositionRuntimeBundleV1 } from "./answer-composition-runtime.js";
 import type { CleanLiveProcessorRuntimeBundleV1 } from "./clean-live-processor-runtime.js";
 import {
   startCleanLiveRuntime,
@@ -33,7 +33,7 @@ import { createCleanReadableSearchGenerationReconcilerV1 } from "./clean-readabl
 import type { CleanPersonRuntimeConfig } from "./clean-person-runtime.js";
 import type { CleanPersonRuntimeDependencies } from "./clean-person-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
-import type { CleanAnswerCompositionFailureEventV1 } from "./clean-person-answer-route.js";
+import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
 import type { CleanLiveWorkerPhaseRunnerV1 } from "../processing/clean-v1/clean-live-worker-lifecycle.js";
 import {
   runStagingSyntheticPrivateDmCanaryV1,
@@ -56,7 +56,7 @@ export interface OpenCleanLiveRuntimeConfig {
   /** Explicit approval/delivery bundle. This generic root does not select one. */
   readonly approval_runtime: CleanApprovalRuntimeBundleV1;
   /** Explicit answer-composition bundle. This generic root does not select one. */
-  readonly answer_composition_runtime: CleanAnswerCompositionRuntimeBundleV1;
+  readonly answer_composition_runtime: AnswerCompositionRuntimeBundleV1;
   /** Exact durable record-resolution protocols admitted into append and retrieval. */
   readonly record_policy_fact_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly worker_interval_ms?: number;
@@ -68,7 +68,7 @@ export interface OpenCleanLiveRuntimeConfig {
   ) => void;
   /** Observational only: redacted Layer 4 model-stage failures. */
   readonly on_answer_composition_failure?: (
-    event: CleanAnswerCompositionFailureEventV1,
+    event: AnswerCompositionFailureEventV1,
   ) => void;
 }
 

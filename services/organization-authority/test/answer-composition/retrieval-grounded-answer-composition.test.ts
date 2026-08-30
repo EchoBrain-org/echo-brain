@@ -1,13 +1,13 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
-  createLeanAnswerComposition,
-  LeanAnswerCompositionError,
+  createRetrievalGroundedAnswerComposition,
+  RetrievalGroundedAnswerCompositionError,
   type Layer4BatchReadPort,
   type Layer4FailureDiagnosticV1,
   type Layer4ReleasedBatch,
   type Layer4StructuredGenerationInput,
-} from "../../src/answer-composition/lean-answer-composition.js";
+} from "../../src/answer-composition/retrieval-grounded-answer-composition.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 
@@ -42,7 +42,7 @@ function release(atoms = true): Layer4ReleasedBatch {
   };
 }
 
-describe("lean Layer 4 answer composition", () => {
+describe("retrieval-grounded answer composition", () => {
   it("plans once, reads one Layer 3 batch, verifies citations, revalidates, and audits hashes", async () => {
     const events: string[] = [];
     let plannerRequest: Layer4StructuredGenerationInput | undefined;
@@ -75,7 +75,7 @@ describe("lean Layer 4 answer composition", () => {
       },
     };
     const auditEntries: unknown[] = [];
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner,
       answerer,
       layer3,
@@ -132,7 +132,7 @@ describe("lean Layer 4 answer composition", () => {
 
   it("accepts a non-OpenRouter adapter identifier and model form through the same core path", async () => {
     const audit = { append: vi.fn() };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: {
         generate: vi.fn(async () => ({
@@ -182,7 +182,7 @@ describe("lean Layer 4 answer composition", () => {
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const audit = { append: vi.fn() };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: { generate: vi.fn(async () => response) },
       layer3,
@@ -193,7 +193,7 @@ describe("lean Layer 4 answer composition", () => {
     });
 
     await expect(answer.answer({ question: "What is the launch date?" })).rejects.toBeInstanceOf(
-      LeanAnswerCompositionError,
+      RetrievalGroundedAnswerCompositionError,
     );
     expect(layer3.revalidate).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
@@ -206,7 +206,7 @@ describe("lean Layer 4 answer composition", () => {
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const audit = { append: vi.fn() };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer,
       layer3,
@@ -241,7 +241,7 @@ describe("lean Layer 4 answer composition", () => {
     };
     const answerer = { generate: vi.fn() };
     const audit = { append: vi.fn() };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => response) },
       answerer,
       layer3,
@@ -252,7 +252,7 @@ describe("lean Layer 4 answer composition", () => {
     });
     await expect(
       answer.answer({ question: "What is the launch date?" }),
-    ).rejects.toBeInstanceOf(LeanAnswerCompositionError);
+    ).rejects.toBeInstanceOf(RetrievalGroundedAnswerCompositionError);
     expect(layer3.retrieve).not.toHaveBeenCalled();
     expect(layer3.revalidate).not.toHaveBeenCalled();
     expect(answerer.generate).not.toHaveBeenCalled();
@@ -273,7 +273,7 @@ describe("lean Layer 4 answer composition", () => {
       })),
     };
     const audit = { append: vi.fn() };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: {
         generate: vi.fn(async () => {
           throw plannerFailure;
@@ -306,7 +306,7 @@ describe("lean Layer 4 answer composition", () => {
       })),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
       answerer: { generate: vi.fn() },
       layer3,
@@ -319,7 +319,7 @@ describe("lean Layer 4 answer composition", () => {
     });
 
     await expect(answer.answer({ question })).rejects.toBeInstanceOf(
-      LeanAnswerCompositionError,
+      RetrievalGroundedAnswerCompositionError,
     );
 
     expect(layer3.retrieve).not.toHaveBeenCalled();
@@ -350,7 +350,7 @@ describe("lean Layer 4 answer composition", () => {
       retrieve: vi.fn(async () => released),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: {
         generate: vi.fn(async () => ({
@@ -369,7 +369,7 @@ describe("lean Layer 4 answer composition", () => {
     });
 
     await expect(answer.answer({ question: "Question that must remain redacted" })).rejects.toBeInstanceOf(
-      LeanAnswerCompositionError,
+      RetrievalGroundedAnswerCompositionError,
     );
 
     expect(diagnostics).toEqual([
@@ -405,7 +405,7 @@ describe("lean Layer 4 answer composition", () => {
         adapter_request_id: "request-abcdefgh12345678",
       }),
     });
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: { generate: vi.fn(async () => { throw adapterFailure; }) },
       layer3: {
@@ -444,7 +444,7 @@ describe("lean Layer 4 answer composition", () => {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
       answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "Tuesday.", citations: ["a1"] })) },
       layer3,
@@ -459,7 +459,7 @@ describe("lean Layer 4 answer composition", () => {
 
     await expect(
       answer.answer({ question: "What is the launch date?" }),
-    ).rejects.toBeInstanceOf(LeanAnswerCompositionError);
+    ).rejects.toBeInstanceOf(RetrievalGroundedAnswerCompositionError);
     expect(layer3.retrieve).not.toHaveBeenCalled();
     expect(layer3.revalidate).not.toHaveBeenCalled();
   });
@@ -472,7 +472,7 @@ describe("lean Layer 4 answer composition", () => {
       retrieve: vi.fn(async () => release()),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner,
       answerer: { generate: vi.fn() },
       layer3,
@@ -495,7 +495,7 @@ describe("lean Layer 4 answer composition", () => {
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const question = "What is the launch date?";
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: {
         generate: vi.fn(async () => ({
           queries: [question, "launch date", "launch date"],

@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqliteCleanPersonSessionRepository } from "../adapters/persistence/sqlite/clean-person-session-repository.js";
 import { SqliteCleanPersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
-import { SqliteCleanPersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.js";
+import { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
 import { OpenIdClientPersonSessionProvider } from "../adapters/oidc/openid-client-person-session-provider.js";
@@ -26,10 +26,10 @@ import { createCleanPersonEmployeeHttpApplication } from "../presentation/clean-
 import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import {
-  createCleanPersonAnswerRouteV1,
-  type CleanAnswerCompositionFailureEventV1,
-} from "./clean-person-answer-route.js";
-import type { CleanAnswerCompositionRuntimeV1 } from "./clean-answer-composition-runtime.js";
+  createPersonAnswerRouteV1,
+  type AnswerCompositionFailureEventV1,
+} from "./person-answer-route.js";
+import type { AnswerCompositionRuntimeV1 } from "./answer-composition-runtime.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
 import type {
   CleanPersonExternalIdentityRuntimeBundleV1,
@@ -57,9 +57,9 @@ export interface CleanPersonRuntimeDependencies {
   /** Optional external identity provider, omitted until it is configured. */
   readonly external_identity_runtime?: CleanPersonExternalIdentityRuntimeBundleV1;
   /** Present only in the active live runtime; omitted during founder setup. */
-  readonly answer_composition_runtime?: CleanAnswerCompositionRuntimeV1;
+  readonly answer_composition_runtime?: AnswerCompositionRuntimeV1;
   /** Metadata-only Layer 4 failure observer for the live server log. */
-  readonly answer_failure?: (event: CleanAnswerCompositionFailureEventV1) => void;
+  readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
   /** Present only when the signed private-approval surface is active. */
   readonly private_approval_interaction_ingress?:
     PrivateApprovalInteractionHttpApplicationV1;
@@ -198,14 +198,14 @@ export async function startCleanPersonRuntime(
       ...(dependencies.answer_composition_runtime === undefined
         ? {}
         : {
-            person_answer: createCleanPersonAnswerRouteV1({
+            person_answer: createPersonAnswerRouteV1({
               authority_id: metadata.authority_id,
               organization_id: metadata.organization_id,
               state_lineage_id: lineage.root.state_lineage_id,
               search: recordSearch,
               model: dependencies.answer_composition_runtime.structured_output,
               generation: dependencies.answer_composition_runtime.generation,
-              audit: new SqliteCleanPersonAnswerCompositionAuditV1(database),
+              audit: new SqlitePersonAnswerCompositionAuditV1(database),
               ...(dependencies.answer_failure === undefined
                 ? {}
                 : { on_failure: dependencies.answer_failure }),

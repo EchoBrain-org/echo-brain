@@ -98,7 +98,7 @@ The reviewed source is covered by:
 - `services/organization-authority/test/processing/clean-v1/live-only-source-cycle.test.ts`;
 - `services/organization-authority/test/open-clean-live-runtime.test.ts`;
 - `services/organization-authority/test/composition/openrouter-clean-live-processor-runtime.test.ts`;
-- `services/organization-authority/test/composition/openrouter-clean-answer-composition-runtime.test.ts`;
+- `services/organization-authority/test/composition/openrouter-answer-composition-runtime.test.ts`;
 - `services/organization-record/test/record-log-v4-append.test.ts`; and
 - the synthetic meeting-source adapter and evaluator tests.
 

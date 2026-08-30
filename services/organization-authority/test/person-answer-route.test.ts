@@ -1,18 +1,18 @@
 import { once } from "node:events";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SqliteCleanPersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.js";
+import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import {
-  createCleanPersonAnswerRouteV1,
-  type CleanAnswerCompositionFailureEventV1,
-} from "../src/composition/clean-person-answer-route.js";
+  createPersonAnswerRouteV1,
+  type AnswerCompositionFailureEventV1,
+} from "../src/composition/person-answer-route.js";
 import type {
   Layer4StructuredGenerationInput,
   Layer4StructuredOutputPort,
-} from "../src/answer-composition/lean-answer-composition.js";
+} from "../src/answer-composition/retrieval-grounded-answer-composition.js";
 import type {
   CleanPersonRecordSearchBatchApplicationV1,
   CleanPersonRecordSearchBatchReleaseV1,
@@ -20,9 +20,9 @@ import type {
 import { AuthorityOperationError } from "../src/domain/errors.js";
 import { createCleanPersonHttpServer } from "../src/presentation/clean-person-http-server.js";
 import type {
-  CleanPersonAnswerHttpApplicationV1,
-  CleanPersonAnswerResponseV1,
-} from "../src/presentation/clean-person-answer-http-application.js";
+  PersonAnswerHttpApplicationV1,
+  PersonAnswerResponseV1,
+} from "../src/presentation/person-answer-http-application.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const NOW = "2026-08-23T00:00:00.000Z";
@@ -93,7 +93,7 @@ function searchResponse() {
 function setup(input: {
   readonly model?: Layer4StructuredOutputPort;
   readonly revalidate?: () => PersonAccessAuthorization;
-  readonly on_failure?: (event: CleanAnswerCompositionFailureEventV1) => void;
+  readonly on_failure?: (event: AnswerCompositionFailureEventV1) => void;
   readonly source_text?: string;
 }) {
   const database = openAuthorityDatabase(":memory:");
@@ -125,7 +125,7 @@ function setup(input: {
       return input.revalidate?.() ?? authorization();
     }),
   };
-  const audit = new SqliteCleanPersonAnswerCompositionAuditV1(database);
+  const audit = new SqlitePersonAnswerCompositionAuditV1(database);
   const append = vi.spyOn(audit, "append").mockImplementation((entry) => {
     events.push("audit");
     return digest(`answer-audit-${entry.checked_at}`);
@@ -146,7 +146,7 @@ function setup(input: {
     ),
   };
   const model = input.model ?? defaultModel;
-  const route = createCleanPersonAnswerRouteV1({
+  const route = createPersonAnswerRouteV1({
     authority_id: "oau_clean",
     organization_id: "org_clean",
     state_lineage_id: "lineage_clean",
@@ -161,7 +161,7 @@ function setup(input: {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("clean Person Layer 4 answer route", () => {
+describe("Person answer route", () => {
   it("uses the bearer as the only caller identity, makes one bounded Layer 3 batch, and returns only public bindings", async () => {
     const value = setup({});
     try {
@@ -308,7 +308,7 @@ describe("clean Person Layer 4 answer route", () => {
     const providerSecret = "PROVIDER-SECRET-DO-NOT-LOG-79a3067";
     const prompt = "PROMPT-DO-NOT-LOG-79a3067";
     const reasoning = "REASONING-DO-NOT-LOG-79a3067";
-    const failures: CleanAnswerCompositionFailureEventV1[] = [];
+    const failures: AnswerCompositionFailureEventV1[] = [];
     const value = setup({
       model: {
         generate: vi
@@ -415,7 +415,7 @@ describe("clean Person Layer 4 answer route", () => {
   });
 });
 
-async function startServer(person_answer?: CleanPersonAnswerHttpApplicationV1) {
+async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
   const server = createCleanPersonHttpServer({
     descriptor: {} as never,
     sessions: {} as never,
@@ -443,7 +443,7 @@ async function startServer(person_answer?: CleanPersonAnswerHttpApplicationV1) {
 describe("clean Person answer HTTP mount", () => {
   it("mounts POST /v1/person/ask as a bearer-only application call", async () => {
     const ask = vi.fn(
-      async (): Promise<CleanPersonAnswerResponseV1> => ({
+      async (): Promise<PersonAnswerResponseV1> => ({
         schema_version: 1,
         kind: "echo-clean-person-answer-v1",
         generation_id: digest("generation"),
@@ -452,7 +452,7 @@ describe("clean Person answer HTTP mount", () => {
         citations: [],
       }),
     );
-    const application: CleanPersonAnswerHttpApplicationV1 = {
+    const application: PersonAnswerHttpApplicationV1 = {
       ask,
     };
     const server = await startServer(application);
@@ -480,7 +480,7 @@ describe("clean Person answer HTTP mount", () => {
   });
 
   it("rejects malformed answer requests and reports an unconfigured answer app as a sanitized 503", async () => {
-    const application: CleanPersonAnswerHttpApplicationV1 = {
+    const application: PersonAnswerHttpApplicationV1 = {
       ask: vi.fn(async () => {
         throw new Error("must not be called");
       }),

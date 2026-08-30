@@ -136,13 +136,13 @@
       "services/organization-authority/src/processing/clean-v1/processor-admission-commitment.ts",
       "services/organization-authority/src/processing/clean-v1/review-lineage-semantics.ts",
       "services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts",
-      "services/organization-authority/src/answer-composition/lean-answer-composition.ts",
+      "services/organization-authority/src/answer-composition/retrieval-grounded-answer-composition.ts",
       "services/organization-authority/src/composition/clean-live-runtime.ts",
       "services/organization-authority/src/composition/open-clean-live-runtime.ts",
       "services/organization-authority/src/composition/approval-runtime-bundle-v1.ts",
-      "services/organization-authority/src/composition/clean-answer-composition-runtime.ts",
+      "services/organization-authority/src/composition/answer-composition-runtime.ts",
       "services/organization-authority/src/composition/clean-live-processor-runtime.ts",
-      "services/organization-authority/src/composition/clean-person-answer-route.ts",
+      "services/organization-authority/src/composition/person-answer-route.ts",
       "services/organization-authority/src/composition/clean-person-external-identity-runtime.ts",
       "services/organization-authority/src/composition/clean-person-runtime.ts",
       "services/organization-authority/src/composition/clean-readable-search-runtime.ts",
@@ -159,7 +159,7 @@
         "identifier": "openrouter",
         "transport_provider": true,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/openrouter-clean-answer-composition-runtime.ts"
+          "services/organization-authority/src/composition/openrouter-answer-composition-runtime-v1.ts"
         ]
       },
       {

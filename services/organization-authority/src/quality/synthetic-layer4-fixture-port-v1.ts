@@ -6,7 +6,7 @@ import type {
   Layer4BatchReadPort,
   Layer4ReleasedAtom,
   Layer4ReleasedBatch,
-} from "../answer-composition/lean-answer-composition.js";
+} from "../answer-composition/retrieval-grounded-answer-composition.js";
 import type { SyntheticLayer4AtomV1 } from "./synthetic-meeting-fixture-v1.js";
 
 const digest = (value: unknown): Sha256Digest => canonicalSha256(value);

@@ -2,7 +2,7 @@ import {
   type Layer4JsonSchema,
   type Layer4StructuredGenerationInput,
   type Layer4StructuredOutputPort,
-} from "./lean-answer-composition.js";
+} from "./retrieval-grounded-answer-composition.js";
 
 export const OPENROUTER_STRUCTURED_OUTPUT_TIMEOUT_MS = 30_000;
 export const OPENROUTER_STRUCTURED_OUTPUT_MAX_TIMEOUT_MS = 120_000;

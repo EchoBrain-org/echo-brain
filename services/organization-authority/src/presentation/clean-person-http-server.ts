@@ -34,9 +34,9 @@ import {
   type CleanPersonEmployeeHttpApplication,
 } from "./clean-person-employee-http-application.js";
 import {
-  CLEAN_PERSON_ANSWER_PATH_V1,
-  type CleanPersonAnswerHttpApplicationV1,
-} from "./clean-person-answer-http-application.js";
+  PERSON_ANSWER_PATH_V1,
+  type PersonAnswerHttpApplicationV1,
+} from "./person-answer-http-application.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "./private-approval-interaction-http-application-v1.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
@@ -61,7 +61,7 @@ const CORE_PERSON_HTTP_ROUTES = new Set<string>([
   `DELETE ${CLEAN_PERSON_EMPLOYEES_PATH_V1}`,
   `GET ${CLEAN_PERSON_RECORDS_PATH_V1}`,
   `POST ${CLEAN_PERSON_RECORD_SEARCH_PATH_V1}`,
-  `POST ${CLEAN_PERSON_ANSWER_PATH_V1}`,
+  `POST ${PERSON_ANSWER_PATH_V1}`,
 ]);
 
 function routeKey(method: string, path: string): string {
@@ -87,7 +87,7 @@ export interface CleanPersonHttpServerOptions {
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees?: CleanPersonEmployeeHttpApplication;
   /** Optional until the active clean runtime has a configured answer model. */
-  readonly person_answer?: CleanPersonAnswerHttpApplicationV1;
+  readonly person_answer?: PersonAnswerHttpApplicationV1;
   /** Optional until an active private-approval surface is fully composed. */
   readonly private_approval_interaction_ingress?:
     PrivateApprovalInteractionHttpApplicationV1;
@@ -700,7 +700,7 @@ export function createCleanPersonHttpServer(
       }
       if (
         method === "POST" &&
-        url.pathname === CLEAN_PERSON_ANSWER_PATH_V1 &&
+        url.pathname === PERSON_ANSWER_PATH_V1 &&
         url.search === ""
       ) {
         if (options.person_answer === undefined) {

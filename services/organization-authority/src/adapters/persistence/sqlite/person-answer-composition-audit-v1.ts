@@ -6,7 +6,7 @@ import {
 import type Database from "better-sqlite3";
 
 /** Local persistence shape: this adapter deliberately does not depend on Layer 4. */
-export interface CleanPersonAnswerCompositionAuditEntryV1 {
+export interface PersonAnswerCompositionAuditEntryV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -28,21 +28,21 @@ export interface CleanPersonAnswerCompositionAuditEntryV1 {
 }
 
 /** Writes the already-provisioned answer_composition variant of the one audit table. */
-export class SqliteCleanPersonAnswerCompositionAuditV1 {
+export class SqlitePersonAnswerCompositionAuditV1 {
   constructor(private readonly database: Database.Database) {}
 
-  append(entry: CleanPersonAnswerCompositionAuditEntryV1): Sha256Digest {
+  append(entry: PersonAnswerCompositionAuditEntryV1): Sha256Digest {
     if (
       !Number.isSafeInteger(entry.citation_count) ||
       entry.citation_count < 0 ||
       entry.citation_count > 16 ||
       new Date(entry.checked_at).toISOString() !== entry.checked_at
     ) {
-      throw new Error("clean Person answer composition audit entry is invalid");
+      throw new Error("Person answer composition audit entry is invalid");
     }
     const body = {
       schema_version: 1,
-      kind: "echo-clean-person-answer-composition-audit-v1",
+      kind: "echo-person-answer-composition-audit-v1",
       context_kind: "answer_composition",
       prompt_sha256: entry.prompt_sha256,
       answer_sha256: entry.answer_sha256,

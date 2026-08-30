@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createLeanAnswerComposition,
+  createRetrievalGroundedAnswerComposition,
   type Layer4StructuredGenerationInput,
-} from "../../src/answer-composition/lean-answer-composition.js";
+} from "../../src/answer-composition/retrieval-grounded-answer-composition.js";
 import type {
   AdapterConfig,
   AdapterConfigValidation,
@@ -171,7 +171,7 @@ describe("synthetic meeting quality support", () => {
       atoms: syntheticMeetingQualityCorpusV1.layer4_atoms,
     });
     let answerInput: Layer4StructuredGenerationInput | undefined;
-    const answer = createLeanAnswerComposition({
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: async () => ({ queries: [] }) },
       answerer: {
         generate: vi.fn(async (input: Layer4StructuredGenerationInput) => {

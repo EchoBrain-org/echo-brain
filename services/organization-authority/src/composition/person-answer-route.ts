@@ -1,41 +1,41 @@
 import { randomUUID } from "node:crypto";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
-  createLeanAnswerComposition,
-  LeanAnswerCompositionError,
+  createRetrievalGroundedAnswerComposition,
+  RetrievalGroundedAnswerCompositionError,
   validateLayer2CompatibleQuery,
   type Layer4FailureDiagnosticV1,
   type Layer4ReleasedBatch,
   type Layer4StructuredOutputPort,
-} from "../answer-composition/lean-answer-composition.js";
-import type { SqliteCleanPersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.js";
+} from "../answer-composition/retrieval-grounded-answer-composition.js";
+import type { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import type {
   CleanPersonRecordSearchBatchApplicationV1,
   CleanPersonRecordSearchBatchReleaseV1,
 } from "./clean-person-record-search-route.js";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type {
-  CleanPersonAnswerHttpApplicationV1,
-  CleanPersonAnswerPolicyV1,
-  CleanPersonAnswerResponseV1,
-} from "../presentation/clean-person-answer-http-application.js";
-import type { CleanAnswerCompositionGenerationProfileV1 } from "./clean-answer-composition-runtime.js";
+  PersonAnswerHttpApplicationV1,
+  PersonAnswerPolicyV1,
+  PersonAnswerResponseV1,
+} from "../presentation/person-answer-http-application.js";
+import type { AnswerCompositionGenerationProfileV1 } from "./answer-composition-runtime.js";
 
-export interface CleanAnswerCompositionFailureEventV1
+export interface AnswerCompositionFailureEventV1
   extends Layer4FailureDiagnosticV1 {
   readonly failure_id: string;
 }
 
-export interface CreateCleanPersonAnswerRouteV1Options {
+export interface CreatePersonAnswerRouteV1Options {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
   readonly search: CleanPersonRecordSearchBatchApplicationV1;
   readonly model: Layer4StructuredOutputPort;
-  readonly generation: CleanAnswerCompositionGenerationProfileV1;
-  readonly audit: SqliteCleanPersonAnswerCompositionAuditV1;
+  readonly generation: AnswerCompositionGenerationProfileV1;
+  readonly audit: SqlitePersonAnswerCompositionAuditV1;
   /** Metadata-only server observer. It never changes the public response. */
-  readonly on_failure?: (event: CleanAnswerCompositionFailureEventV1) => void;
+  readonly on_failure?: (event: AnswerCompositionFailureEventV1) => void;
 }
 
 function unavailable(): never {
@@ -60,7 +60,7 @@ function callLayer3<T>(operation: () => T): T {
   }
 }
 
-function policy(value: string): CleanPersonAnswerPolicyV1 {
+function policy(value: string): PersonAnswerPolicyV1 {
   if (
     value !== "organization-member-readable-person-v2" &&
     value !== "restricted-reviewer-person-v2"
@@ -72,9 +72,9 @@ function policy(value: string): CleanPersonAnswerPolicyV1 {
 
 function publicResponse(
   value: Awaited<
-    ReturnType<ReturnType<typeof createLeanAnswerComposition>["answer"]>
+    ReturnType<ReturnType<typeof createRetrievalGroundedAnswerComposition>["answer"]>
   >,
-): CleanPersonAnswerResponseV1 {
+): PersonAnswerResponseV1 {
   return Object.freeze({
     schema_version: 1,
     kind: "echo-clean-person-answer-v1",
@@ -98,18 +98,18 @@ function publicResponse(
  * query text and released atoms only; it never receives caller or policy
  * controls and cannot reuse the release in another request.
  */
-export function createCleanPersonAnswerRouteV1(
-  options: CreateCleanPersonAnswerRouteV1Options,
-): CleanPersonAnswerHttpApplicationV1 {
+export function createPersonAnswerRouteV1(
+  options: CreatePersonAnswerRouteV1Options,
+): PersonAnswerHttpApplicationV1 {
   return Object.freeze({
     async ask(input: {
       readonly access_token: string;
       readonly question: string;
-    }): Promise<CleanPersonAnswerResponseV1> {
+    }): Promise<PersonAnswerResponseV1> {
       try {
         validateLayer2CompatibleQuery(input.question);
       } catch (error) {
-        if (error instanceof LeanAnswerCompositionError) {
+        if (error instanceof RetrievalGroundedAnswerCompositionError) {
           throw new AuthorityOperationError(
             "invalid_request",
             "request is invalid",
@@ -191,7 +191,7 @@ export function createCleanPersonAnswerRouteV1(
       });
 
       try {
-        const composition = createLeanAnswerComposition({
+        const composition = createRetrievalGroundedAnswerComposition({
           planner: options.model,
           answerer: options.model,
           layer3,

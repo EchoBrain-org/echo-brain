@@ -22,7 +22,7 @@ import {
 } from "./open-clean-live-runtime.js";
 import { granolaLiveSourceBoundaryV1 } from "./granola-live-source-boundary-v1.js";
 import { createOpenRouterCleanLiveProcessorRuntimeBundleV1 } from "./openrouter-clean-live-processor-runtime.js";
-import { createOpenRouterCleanAnswerCompositionRuntimeBundleV1 } from "./openrouter-clean-answer-composition-runtime.js";
+import { createOpenRouterAnswerCompositionRuntimeBundleV1 } from "./openrouter-answer-composition-runtime-v1.js";
 import { createPrivateSlackApprovalRuntimeBundleV1 } from "./private-slack-approval-runtime-v1.js";
 import { createCleanSlackPersonExternalIdentityRuntimeBundleV1 } from "./clean-slack-person-external-identity-runtime.js";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-v1.js";
@@ -231,7 +231,7 @@ export function openCleanOrganizationAuthorityRuntime(
           : { on_rejection: on_private_approval_slack_rejection }),
       }),
       answer_composition_runtime:
-        createOpenRouterCleanAnswerCompositionRuntimeBundleV1({
+        createOpenRouterAnswerCompositionRuntimeBundleV1({
         credential_file: llm_credential_file,
         }),
       record_policy_fact_projectors:
