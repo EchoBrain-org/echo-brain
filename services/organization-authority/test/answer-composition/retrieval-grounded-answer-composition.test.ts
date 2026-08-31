@@ -687,6 +687,12 @@ describe("retrieval-grounded answer composition", () => {
     "Compare clean-v1-staging-20260830-014 and clean-v1-staging-20260831-015.",
     "Compare clean-v1-staging-20260830-014 with clean-v1-staging-20260830-014.",
     "What changed in xclean-v1-staging-20260830-014?",
+    "What changed in Xclean-v1-staging-20260830-014?",
+    "What changed in clean-v1-staging-20260830-014X?",
+    "What changed in _clean-v1-staging-20260830-014?",
+    "What changed in clean-v1-staging-20260830-014_other?",
+    "What changed in éclean-v1-staging-20260830-014?",
+    "What changed in clean-v1-staging-20260830-014中?",
   ])("omits the selector unless the original question has one unambiguous whole-token ID: %s", async (question) => {
     const releasedRetrieval = {
       retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) =>

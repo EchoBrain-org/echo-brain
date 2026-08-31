@@ -10,6 +10,10 @@ import {
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import {
+  containsCanonicalReleaseId,
+  isCanonicalReleaseId,
+} from "../application/canonical-release-id.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type {
@@ -216,19 +220,6 @@ function validBatchQuery(query: string): boolean {
   );
 }
 
-function validExactReleaseId(value: string): boolean {
-  return /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/.test(value);
-}
-
-function includesExactRelease(
-  item: ReadableSearchResultItemV1,
-  releaseId: string,
-): boolean {
-  return new RegExp(
-    `(?<![a-z0-9-])${releaseId}(?![a-z0-9-])`,
-  ).test(item.text);
-}
-
 function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
   if (
     input.queries.length < 1 ||
@@ -236,7 +227,7 @@ function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
     new Set(input.queries).size !== input.queries.length ||
     input.queries.some((query) => !validBatchQuery(query)) ||
     (input.exact_release_id !== undefined &&
-      !validExactReleaseId(input.exact_release_id)) ||
+      !isCanonicalReleaseId(input.exact_release_id)) ||
     (input.limit !== undefined &&
       (!Number.isSafeInteger(input.limit) ||
         input.limit < 1 ||
@@ -404,11 +395,12 @@ export function createPersonRecordSearchRouteV1(
     // This selector is a relevance narrowing only. It runs after the existing
     // generation, head, and second current-Person checks, and falls back to
     // the complete authorized result set when no exact evidence exists.
+    const exactReleaseId = input.exact_release_id;
     const exactItems =
-      input.exact_release_id === undefined
+      exactReleaseId === undefined
         ? []
         : items.filter((item) =>
-            includesExactRelease(item, input.exact_release_id!),
+            containsCanonicalReleaseId(item.text, exactReleaseId),
           );
     const response = asResponse({
       generation_id: pointer.generation_id,

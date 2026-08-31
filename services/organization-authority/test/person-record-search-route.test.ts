@@ -579,6 +579,12 @@ describe("Person Layer 2 route", () => {
         authorization_audit_entry_sha256: sha256Digest(`${input.name}-entry`),
       };
     };
+    const embeddedReleaseIds = [
+      ["uppercase-prefix", `X${releaseId}`],
+      ["underscore-prefix", `_${releaseId}`],
+      ["underscore-suffix", `${releaseId}_other`],
+      ["unicode-prefix", `é${releaseId}`],
+    ] as const;
     const built = buildReadableSearchGenerationV1(
       realGenerationInput(value.state_directory, [
         atom({
@@ -605,6 +611,14 @@ describe("Person Layer 2 route", () => {
           text: `Private release ${releaseId} owner approval delivery completed.`,
           atom_order: 1,
         }),
+        ...embeddedReleaseIds.map(([name, embeddedId], index) =>
+          atom({
+            name,
+            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+            text: `Synthetic staging release ${embeddedId} is not exact evidence.`,
+            atom_order: index + 2,
+          }),
+        ),
       ]),
     );
     warmReadableSearchActiveGenerationV1({
@@ -677,9 +691,6 @@ describe("Person Layer 2 route", () => {
         ]),
       );
       expect(ownerResult.response.items).toHaveLength(2);
-      expect(
-        ownerResult.response.items.every((item) => item.text.includes(releaseId)),
-      ).toBe(true);
 
       const employeeResult = route.searchBatch({
         access_token: "employee",
@@ -702,7 +713,7 @@ describe("Person Layer 2 route", () => {
         queries: [query],
         exact_release_id: "clean-v1-staging-20260901-016",
       });
-      expect(fallback.response.items).toHaveLength(4);
+      expect(fallback.response.items).toHaveLength(8);
       expect(
         fallback.response.items.some((item) =>
           item.text.includes("clean-v1-staging-20260829-013"),
