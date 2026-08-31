@@ -3,6 +3,7 @@ import {
   canonicalSha256,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
+import { extractSingleCanonicalReleaseId } from "./canonical-release-id.js";
 
 /** Lean V1 deliberately has one bounded plan, retrieval batch, and answer. */
 export const ANSWER_COMPOSITION_MAX_ADDITIONAL_QUERIES = 3;
@@ -92,6 +93,8 @@ export interface ReleasedRetrievalBatch {
 export interface ReleasedRetrievalPort {
   retrieve(input: {
     readonly queries: readonly string[];
+    /** Internal relevance preference derived only from the original question. */
+    readonly exact_release_id?: string;
     readonly signal?: AbortSignal;
   }): Promise<ReleasedRetrievalBatch>;
   /** Re-checks the current authenticated Person and exact release before return. */
@@ -626,6 +629,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
   return Object.freeze({
     async answer(input): Promise<RetrievalGroundedAnswerCompositionResult> {
       const question = validateReleasedRetrievalQuery(input.question);
+      const exactRelease = extractSingleCanonicalReleaseId(question);
       const authorshipUnsupported =
         isFirstPersonDecisionAuthorshipQuestion(question);
       let plannerRequest: AuditedStructuredGenerationInput | null = null;
@@ -664,6 +668,9 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
       }
       const release = await options.released_retrieval.retrieve({
         queries: plan,
+        ...(exactRelease === undefined
+          ? {}
+          : { exact_release_id: exactRelease }),
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       assertRelease(release);

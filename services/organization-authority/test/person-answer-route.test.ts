@@ -226,6 +226,30 @@ describe("Person answer route", () => {
     }
   });
 
+  it("forwards an original-question selector through Layer 3", async () => {
+    const releaseId = "clean-v1-staging-20260830-014";
+    const value = setup({});
+    try {
+      await value.route.ask({
+        access_token: "bearer-only-token",
+        question: `What did we decide for ${releaseId}?`,
+      });
+
+      expect(value.search.searchBatch).toHaveBeenCalledWith({
+        access_token: "bearer-only-token",
+        queries: [
+          `What did we decide for ${releaseId}?`,
+          "launch date",
+          "launch owner",
+        ],
+        exact_release_id: releaseId,
+        limit: 10,
+      });
+    } finally {
+      value.database.close();
+    }
+  });
+
   it.each([
     {
       name: "the provider fails during planning",
