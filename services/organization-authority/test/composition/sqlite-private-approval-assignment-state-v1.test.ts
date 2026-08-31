@@ -7,10 +7,10 @@ import {
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV2,
+  applyAuthorityBaselineV3,
 } from "../../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-unmigrated-database.js";
-import type { GranolaMeetingOwnerPrivateApprovalTargetV1 } from "../../src/composition/resolve-granola-meeting-owner-private-approval-target-v1.js";
+import type { PrivateApprovalTargetV1 } from "../../src/composition/resolve-private-approval-target-v1.js";
 import {
   SqlitePrivateApprovalAssignmentStateV1,
   type PrivateApprovalCandidateCommitmentV1,
@@ -31,7 +31,7 @@ const LINK_CONTRACT_SHA256 = canonicalSha256({ link: "contract" });
 
 function fixture() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV2(database);
+  applyAuthorityBaselineV3(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(
@@ -43,7 +43,7 @@ function fixture() {
     .run(ORGANIZATION_ID, NOW, NOW);
   database
     .prepare(
-      `INSERT INTO authority_clean_live_candidates_v1 (
+      `INSERT INTO authority_live_source_candidates_v2 (
          candidate_id, candidate_semantic_sha256,
          admission_semantic_input_sha256, review_lineage_id,
          review_input_sha256, review_semantic_sha256, review_policy_id,
@@ -67,14 +67,14 @@ function fixture() {
     );
   database
     .prepare(
-      `INSERT INTO authority_clean_live_review_lineage_heads_v1
+      `INSERT INTO authority_live_source_review_lineage_heads_v2
          (review_lineage_id, candidate_id, updated_at)
        VALUES ('rli_private', ?, ?)`,
     )
     .run(CANDIDATE_ID, NOW);
   database
     .prepare(
-      `INSERT INTO authority_clean_live_approval_outbox_v1
+      `INSERT INTO authority_live_approval_outbox_v2
          (candidate_id, approval_id, stage_command_id, state,
           provider_message_ts, frozen_card_sha256, approved_snapshot_json,
           approved_snapshot_sha256, post_started_at, updated_at)
@@ -87,7 +87,7 @@ function fixture() {
 function supersede(database: ReturnType<typeof fixture>): void {
   database
     .prepare(
-      `INSERT INTO authority_clean_live_candidates_v1 (
+      `INSERT INTO authority_live_source_candidates_v2 (
          candidate_id, candidate_semantic_sha256,
          admission_semantic_input_sha256, review_lineage_id,
          review_input_sha256, review_semantic_sha256, review_policy_id,
@@ -111,14 +111,14 @@ function supersede(database: ReturnType<typeof fixture>): void {
     );
   database
     .prepare(
-      `UPDATE authority_clean_live_review_lineage_heads_v1
+      `UPDATE authority_live_source_review_lineage_heads_v2
           SET candidate_id = 'cnd_successor', updated_at = ?
         WHERE review_lineage_id = 'rli_private'`,
     )
     .run(NOW);
   database
     .prepare(
-      `UPDATE authority_clean_live_approval_outbox_v1
+      `UPDATE authority_live_approval_outbox_v2
           SET state = 'superseded', superseded_by_candidate_id = 'cnd_successor',
               superseded_at = ?, updated_at = ?
         WHERE approval_id = ?`,
@@ -165,7 +165,7 @@ function input(
           provider_subject_id: "UOWNER",
         },
       },
-    } as unknown as GranolaMeetingOwnerPrivateApprovalTargetV1,
+    } as unknown as PrivateApprovalTargetV1,
     dm_channel: {
       workspace_id: "TPRIVATE",
       enterprise_id: null,
@@ -294,7 +294,7 @@ describe("SQLite private approval assignment state v1", () => {
       ).toThrow(/candidate is not current/);
       expect(
         database
-          .prepare("SELECT count(*) AS count FROM authority_private_approval_assignments_v2")
+          .prepare("SELECT count(*) AS count FROM authority_private_approval_assignments_v3")
           .get(),
       ).toEqual({ count: 0 });
     } finally {
@@ -308,11 +308,11 @@ describe("SQLite private approval assignment state v1", () => {
       const state = new SqlitePrivateApprovalAssignmentStateV1(database, () => NOW);
       state.stage(input());
       database.exec(
-        "DROP TRIGGER authority_private_approval_assignments_v2_immutable_update",
+        "DROP TRIGGER authority_private_approval_assignments_v3_immutable_update",
       );
       database
         .prepare(
-          `UPDATE authority_private_approval_assignments_v2
+          `UPDATE authority_private_approval_assignments_v3
               SET assignee_principal_id = 'prn_💥'
             WHERE approval_id = ?`,
         )
@@ -338,11 +338,11 @@ describe("SQLite private approval assignment state v1", () => {
         source_outbox_state: "superseded",
       });
       database.exec(
-        "DROP TRIGGER authority_clean_live_approval_outbox_v1_ordered_transition",
+        "DROP TRIGGER authority_live_approval_outbox_v2_ordered_transition",
       );
       database
         .prepare(
-          `UPDATE authority_clean_live_approval_outbox_v1
+          `UPDATE authority_live_approval_outbox_v2
               SET frozen_card_sha256 = ?
             WHERE approval_id = ?`,
         )

@@ -10,6 +10,7 @@ import { connectCleanSlackV1 } from "../../organization-control-plane/src/persis
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { ReadableSearchAuthorizationFence } from "../src/application/readable-search-authorization-fence.js";
 import { createCleanPersonSlackIdentityLinkServiceV1 } from "../src/composition/clean-person-slack-identity-link.js";
+import { createCleanSlackExternalIdentityHttpApplicationV1 } from "../src/composition/clean-slack-person-external-identity-runtime.js";
 import { createCleanPersonHttpServer } from "../src/presentation/clean-person-http-server.js";
 
 const NOW = "2026-08-22T00:00:00.000Z";
@@ -214,7 +215,10 @@ describe("clean Person Slack identity-link service", () => {
       sessions: {} as never,
       oidc_provider: {} as never,
       expected_issuer: "https://issuer.example",
-      person_slack_identity_link: context.application,
+      person_external_identity_link:
+        createCleanSlackExternalIdentityHttpApplicationV1({
+          service: context.application,
+        }),
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");

@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-ADAPTERS
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+reviewed_at: 2026-08-29
+reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
 decision_ids:
   - ADR-0003
   - ADR-0004
@@ -20,6 +20,7 @@ invariant_ids:
   - INV-ADAPTERS-002
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
+  - INV-ADAPTERS-005
   - INV-IDENTITY-001
   - INV-IDENTITY-005
   - INV-PERMISSIONS-013
@@ -29,6 +30,7 @@ failure_pattern_ids:
   - FP-ADAPTERS-002
   - FP-ADAPTERS-003
   - FP-ADAPTERS-004
+  - FP-ADAPTERS-005
   - FP-IDENTITY-001
   - FP-PERMISSIONS-001
 qualification_ids:
@@ -48,6 +50,10 @@ processing ports and external capabilities:
 - delivery surfaces; and
 - shared provider clients such as Slack.
 
+Selecting composition bundles own external capabilities; provider-neutral
+runtime receives only their ports and canonical contracts. Scope and exceptions
+are defined by [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md).
+
 An adapter owns provider transport and canonicalization. It must not redefine
 core evidence, identity, authorization, or approval semantics.
 
@@ -61,6 +67,8 @@ semantics.
 ## Current references
 
 - [Core and adapters](../architecture/core-and-adapters.md)
+- [Active-provider boundary invariant](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
+- [First-provider architecture failure pattern](../failure-patterns/FP-ADAPTERS-005-first-provider-becomes-architecture.md)
 - Source: [`services/organization-authority/src/processing/adapters/`](../../services/organization-authority/src/processing/adapters)
 - Adapter tests: [`services/organization-authority/test/processing/adapters/`](../../services/organization-authority/test/processing/adapters)
 - [Failure-pattern registry](../failure-patterns/README.md)

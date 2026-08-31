@@ -604,6 +604,7 @@ describe("Granola canonical meeting mapping", () => {
       scheduled_end_at: "2026-07-15T17:15:00.000Z",
     });
     expect(meeting.context).toEqual({
+      owner_participant_id: "email:founder@example.com",
       calendar: {
         event_id: "calendar-event-123",
         organizer_participant_id: "email:founder@example.com",
@@ -636,6 +637,59 @@ describe("Granola canonical meeting mapping", () => {
         speaker_participant_id: "email:teammate@example.com",
       }),
     ]);
+  });
+
+  it("normalizes an ad-hoc note owner only when its calendar event is absent", async () => {
+    const adHocDetail: GranolaNoteDetail = {
+      ...detail,
+      id: "note-ad-hoc-owner",
+      calendar_event: null,
+      owner: { email: "OWNER@example.com", name: "Owner" },
+    };
+    const malformedCalendarDetail: GranolaNoteDetail = {
+      ...adHocDetail,
+      id: "note-malformed-calendar-owner",
+      calendar_event: { organizer: { name: "Owner" } },
+    };
+    const client = new FakeClient(
+      [
+        {
+          notes: [
+            { id: adHocDetail.id, updated_at: adHocDetail.updated_at },
+            {
+              id: malformedCalendarDetail.id,
+              updated_at: malformedCalendarDetail.updated_at,
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        },
+      ],
+      new Map([
+        [adHocDetail.id, adHocDetail],
+        [malformedCalendarDetail.id, malformedCalendarDetail],
+      ]),
+    );
+
+    const result = await new GranolaMeetingSourceAdapter(config, {
+      client,
+      now: () => "2026-07-16T00:00:00.000Z",
+    }).pull({ limit: 2 });
+
+    const adHoc = result.meetings[0]!;
+    expect(adHoc.context?.owner_participant_id).toBe("email:owner@example.com");
+    expect(adHoc.participants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "email:owner@example.com",
+          identities: [{ kind: "email", value: "owner@example.com" }],
+        }),
+      ]),
+    );
+    expect(result.meetings[1]!.context?.owner_participant_id).toBeUndefined();
+    expect(result.meetings[1]!.participants).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "email:owner@example.com" })]),
+    );
   });
 
   it("leaves audio channels unlinked and creates stable meeting-local diarization speakers", async () => {
@@ -687,12 +741,15 @@ describe("Granola canonical meeting mapping", () => {
         .map((block) => block.speaker_participant_id),
     ).toEqual(speakerReferences);
 
-    expect(meeting.participants).toHaveLength(2);
+    expect(meeting.participants).toHaveLength(3);
     expect(
       meeting.participants.some(
         (participant) => participant.id === "email:owner@example.com",
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(meeting.context?.owner_participant_id).toBe(
+      "email:owner@example.com",
+    );
     expect(meeting.extensions).toMatchObject({
       granola: {
         owner: { name: "Note Owner", email: "owner@example.com" },

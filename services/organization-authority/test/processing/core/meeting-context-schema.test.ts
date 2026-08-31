@@ -97,6 +97,7 @@ describe('canonical meeting-context baseline', () => {
         },
       ],
       context: {
+        owner_participant_id: 'participant-1',
         calendar: {
           event_id: 'calendar-event-1',
           organizer_participant_id: 'participant-1',
@@ -158,5 +159,45 @@ describe('canonical meeting-context baseline', () => {
 
     expect(validateJsonSchema(invalid), JSON.stringify(validateJsonSchema.errors)).toBe(true);
     expect(() => assertCanonicalMeetingDocument(invalid, source)).toThrow(/does not resolve/);
+  });
+
+  it('requires the canonical meeting owner to resolve to exactly one canonical email', () => {
+    const danglingOwner = {
+      ...minimalMeeting,
+      context: { owner_participant_id: 'missing-owner' },
+    };
+    const nonCanonicalOwnerEmail = {
+      ...minimalMeeting,
+      participants: [
+        {
+          id: 'owner',
+          identities: [{ kind: 'email', value: 'OWNER@example.test' }],
+        },
+      ],
+      context: { owner_participant_id: 'owner' },
+    };
+    const ambiguousOwnerEmail = {
+      ...minimalMeeting,
+      participants: [
+        {
+          id: 'owner',
+          identities: [
+            { kind: 'email', value: 'owner@example.test' },
+            { kind: 'email', value: 'other@example.test' },
+          ],
+        },
+      ],
+      context: { owner_participant_id: 'owner' },
+    };
+
+    expect(validateJsonSchema(danglingOwner)).toBe(true);
+    expect(() => assertCanonicalMeetingDocument(danglingOwner, source)).toThrow(/does not resolve/);
+    expect(validateJsonSchema(nonCanonicalOwnerEmail)).toBe(true);
+    expect(() => assertCanonicalMeetingDocument(nonCanonicalOwnerEmail, source)).toThrow(
+      /one canonical email identity/,
+    );
+    expect(() => assertCanonicalMeetingDocument(ambiguousOwnerEmail, source)).toThrow(
+      /one canonical email identity/,
+    );
   });
 });

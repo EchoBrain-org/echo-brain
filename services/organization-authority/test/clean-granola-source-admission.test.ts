@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
@@ -19,9 +20,12 @@ import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-se
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import {
   admitCleanGranolaSource,
+} from "../src/composition/clean-granola-source-admission.js";
+import {
   CLEAN_LLM_PROCESSOR_MODEL_V1,
   CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
-} from "../src/composition/clean-granola-source-admission.js";
+} from "../src/composition/clean-live-llm-processor-config.js";
+import { createOpenRouterCleanProcessorAdmissionCommitmentV1 } from "../src/composition/openrouter-clean-processor-admission-commitment.js";
 import { runCleanGranolaSourceCli } from "../src/composition/clean-granola-source-cli.js";
 import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
 import {
@@ -112,6 +116,11 @@ function fixture() {
     creating_artifact_revision: "clean-granola-source-test",
   });
   let recordOwnerCalls = 0;
+  const llmCredentialReference = `file:${privateFile(
+    parent,
+    "llm.key",
+    "llm-private-credential-material-000000",
+  )}`;
   return {
     parent,
     initialized,
@@ -120,7 +129,11 @@ function fixture() {
     processor_instance_id: "founder-llm",
     granola_credential_reference: `file:${privateFile(parent, "granola.key", `grn_${"a".repeat(32)}`)}`,
     granola_owner_email_reference: `file:${privateFile(parent, "granola-owner-email", "founder@example.com")}`,
-    llm_credential_reference: `file:${privateFile(parent, "llm.key", "llm-private-credential-material-000000")}`,
+    llm_credential_reference: llmCredentialReference,
+    processor: createOpenRouterCleanProcessorAdmissionCommitmentV1({
+      instance_id: "founder-llm",
+      credential_reference: llmCredentialReference,
+    }),
     create_granola_record_owner_client: () => ({
       async listNotes(params: { page_size?: number }) {
         recordOwnerCalls += 1;
@@ -204,6 +217,54 @@ afterEach(() => {
 });
 
 describe("clean Granola source admission", () => {
+  it("commits a provider-neutral processor after its own preflight", async () => {
+    const input = fixture();
+    await bootstrapFounder(input);
+    let preflightCalls = 0;
+    const admitted = await admitCleanGranolaSource({
+      ...input,
+      processor: {
+        adapter_id: "fixture-processor",
+        instance_id: "fixture-runner",
+        version: "fixture-v1",
+        configuration_sha256: canonicalSha256({ fixture: "configuration" }),
+        credential_reference_sha256: canonicalSha256({ fixture: "credential" }),
+        preflight: () => {
+          preflightCalls += 1;
+        },
+      },
+      now: () => ADMITTED_AT,
+    });
+
+    expect(preflightCalls).toBe(1);
+    expect(admitted.processor).toMatchObject({
+      adapter_id: "fixture-processor",
+      instance_id: "fixture-runner",
+      version: "fixture-v1",
+    });
+    const database = new Database(
+      join(input.state_directory, "authority.sqlite"),
+      { readonly: true, fileMustExist: true },
+    );
+    try {
+      expect(
+        database
+          .prepare(
+            `SELECT processor_adapter_id, processor_instance_id,
+                    processor_adapter_version
+               FROM authority_live_source_admission_v2`,
+          )
+          .get(),
+      ).toEqual({
+        processor_adapter_id: "fixture-processor",
+        processor_instance_id: "fixture-runner",
+        processor_adapter_version: "fixture-v1",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   it("requires founder OIDC re-onboarding, then admits a fresh live-only source and fixed LLM processing identity", async () => {
     const input = fixture();
     await expect(
@@ -250,19 +311,22 @@ describe("clean Granola source admission", () => {
       expect(
         database
           .prepare(
-          `SELECT source_adapter_version, normalizer_version, cutoff_at,
-                  owner_observation_assurance, owner_observed_at,
+          `SELECT source_adapter_id, source_adapter_version, normalizer_version, cutoff_at,
+                  source_custodian_assurance, source_custodian_observed_at,
+                  processor_adapter_id,
                   processor_configuration_sha256, source_credential_reference_sha256,
                     processor_credential_reference_sha256
-               FROM authority_clean_granola_source_admission_v1`,
+               FROM authority_live_source_admission_v2`,
           )
           .get(),
       ).toMatchObject({
+        source_adapter_id: "granola",
         source_adapter_version: "2.2.0",
         normalizer_version: "2.2.0",
         cutoff_at: ADMITTED_AT,
-        owner_observation_assurance: "provider_record_owner_observed",
-        owner_observed_at: ADMITTED_AT,
+        source_custodian_assurance: "provider_record_owner_observed",
+        source_custodian_observed_at: ADMITTED_AT,
+        processor_adapter_id: "llm",
       });
     } finally {
       database.close();
@@ -345,7 +409,7 @@ describe("clean Granola source admission", () => {
         expect(
           database
             .prepare(
-              "SELECT count(*) AS count FROM authority_clean_granola_source_admission_v1",
+              "SELECT count(*) AS count FROM authority_live_source_admission_v2",
             )
             .get(),
         ).toEqual({ count: 0 });

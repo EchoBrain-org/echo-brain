@@ -1,6 +1,10 @@
 import { sha256Digest } from '@echo-brain/federation-protocol';
 import type { Sha256Digest } from './contracts.js';
 import { derivedAtomIdentity } from './atom-identity.js';
+import type {
+  ApprovedRecordPolicyEnvelopeV1,
+  ApprovedRecordPolicyProjectorV1,
+} from './approved-record-policy-projection-v1.js';
 
 /**
  * Private D3-3 structural views for append-atomic Person-v2 policy facts.
@@ -870,4 +874,102 @@ export function projectPersonPolicyFactsV2(
       policy_id: approvedRef.policy_id,
     }),
   });
+}
+
+function personPolicyEnvelope(
+  envelope: ApprovedRecordPolicyEnvelopeV1,
+): StructurallyVerifiedPersonPolicyRecordV4View {
+  const reference = envelope.body.human_act_resolution_ref as
+    ApprovedRecordPolicyEnvelopeV1["body"]["human_act_resolution_ref"] & {
+      readonly policy_id: PersonPolicyIdV2;
+      readonly policy_contract_sha256: Sha256Digest;
+      readonly provider_action_kind: "echo-provider-human-action-v2";
+      readonly provider_action_schema_version: 2;
+    };
+  const event = envelope.body.event as PersonPolicyEventV4View;
+  const projectedEvent: PersonPolicyEventV4View =
+    event.kind === 'rejected'
+      ? { kind: 'rejected' }
+      : {
+          kind: 'approved',
+          approved_snapshot: {
+            approved_payload: {
+              brief: {
+                decisions:
+                  event.approved_snapshot.approved_payload.brief.decisions.map(
+                    (signal) => ({ id: signal.id, kind: signal.kind }),
+                  ),
+                actions: event.approved_snapshot.approved_payload.brief.actions.map(
+                  (signal) => ({ id: signal.id, kind: signal.kind }),
+                ),
+                rationales:
+                  event.approved_snapshot.approved_payload.brief.rationales.map(
+                    (signal) => ({ id: signal.id, kind: signal.kind }),
+                  ),
+              },
+            },
+          },
+        };
+  return {
+    record_sha256: envelope.record_sha256,
+    body: {
+      authority_id: envelope.body.authority_id,
+      organization_id: envelope.body.organization_id,
+      state_lineage_id: envelope.body.state_lineage_id,
+      human_act_resolution_ref: {
+        authority_id: reference.authority_id,
+        organization_id: reference.organization_id,
+        state_lineage_id: reference.state_lineage_id,
+        approval_id: reference.approval_id,
+        action: reference.action,
+        policy_id: reference.policy_id,
+        policy_contract_sha256: reference.policy_contract_sha256,
+        audit_event_id: reference.audit_event_id,
+        audit_sequence: reference.audit_sequence,
+        audit_entry_sha256: reference.audit_entry_sha256,
+        provider_action_kind: reference.provider_action_kind,
+        provider_action_schema_version: reference.provider_action_schema_version,
+        provider_action_sha256: reference.provider_action_sha256,
+        authorization_proof_sha256: reference.authorization_proof_sha256,
+      },
+      event: projectedEvent,
+    },
+  };
+}
+
+/** The established provider-human action protocol behind the generic seam. */
+export function createPersonPolicyFactProjectorV2(): ApprovedRecordPolicyProjectorV1 {
+  const projector: ApprovedRecordPolicyProjectorV1 = {
+    id: 'echo-provider-human-action-v2',
+    matches: (envelope: ApprovedRecordPolicyEnvelopeV1) =>
+      envelope.body.human_act_resolution_ref.provider_action_kind ===
+        'echo-provider-human-action-v2' &&
+      envelope.body.human_act_resolution_ref.provider_action_schema_version === 2,
+    project: ({ envelope, record_position, witness }: {
+      readonly envelope: ApprovedRecordPolicyEnvelopeV1;
+      readonly record_position: number;
+      readonly witness: unknown;
+    }) =>
+      projectPersonPolicyFactsV2({
+        envelope: personPolicyEnvelope(envelope),
+        record_position,
+        witness: witness as ReprovedPersonPolicyD2WitnessV2,
+    }),
+    approvedPolicy: (envelope: ApprovedRecordPolicyEnvelopeV1) => {
+      const reference = resolutionRef(
+        personPolicyEnvelope(envelope).body.human_act_resolution_ref,
+      );
+      if (
+        reference.action !== 'approve' ||
+        envelope.body.event.kind !== 'approved'
+      ) {
+        invalid('approved Person policy binding is unavailable');
+      }
+      return Object.freeze({
+        policy_id: reference.policy_id,
+        policy_contract_sha256: reference.policy_contract_sha256,
+      });
+    },
+  };
+  return Object.freeze(projector);
 }

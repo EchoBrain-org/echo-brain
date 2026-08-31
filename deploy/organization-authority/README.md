@@ -74,9 +74,16 @@ or a shell argument.
 `slack_approval_channel_id` in the onboarding JSON is a transitional legacy
 field. It names only the public founder identity-link channel used during
 onboarding. It never receives approval cards and no shared approval binding is
-created from it. Run the re-onboarding only with a wholly fresh private-
-approval V2 staging lineage; do not reuse an older shared-channel rehearsal
+created from it. Run the re-onboarding only with a wholly fresh provider-
+neutral V3 staging lineage; do not reuse an older shared-channel rehearsal
 state directory, database, or approval binding.
+
+After that setup, the ordinary release updater only replaces artifacts within
+this same lineage: Authority V3, private-approval control-plane V2, and
+record-log V2. It refuses older or mixed persisted state before runtime,
+configuration, or state mutation. This is deliberately a replacement boundary,
+not a hidden migration path; use `replace-rehearsal --confirm-no-live-users`
+for pre-live state that does not meet this floor.
 
 Complete the bootstrap, founder identity link, credential installation, and
 finalization, then start the active runtime. `resume` stops at this point and
@@ -136,10 +143,12 @@ once through the explicit founder attestation:
 ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
 ```
 
-This stops the Compose profile and moves both `clean-data` and its environment
-file into a mode-`0700` timestamped `retired-rehearsals/` archive. It does not
-delete them. It also accepts a clean rehearsal created before this wrapper, so
-no wrapper-specific setup record is required for the one pre-live replacement.
+This stops the Compose profile, copies and verifies the contents of the retained
+`clean-data` mount in a mode-`0700` timestamped `retired-rehearsals/` archive,
+moves its environment file into that archive, and empties the live mount for
+fresh preparation. It does not delete the archived rehearsal. It also accepts
+a clean rehearsal created before this wrapper, so no wrapper-specific setup
+record is required for the one pre-live replacement.
 Run `prepare` again with the new exact release record. Never use this command
 after the first live-user release; subsequent baseline-preserving updates use
 the release procedure below.

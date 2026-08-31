@@ -1,13 +1,6 @@
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import {
-  FileOrganizationSecretStore,
-  CleanSlackWebIdentityProviderV1,
-  type CleanSlackIdentityProviderV1,
-} from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
-import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/new-lineage-genesis-v1";
 import {
   CleanPersonRecordReaderV1,
   openOrganizationRecordDatabase,
@@ -24,22 +17,24 @@ import { PersonIdentitySessionApplication } from "../application/person-identity
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-runtime.js";
 import { SystemAuthorityClock } from "../adapters/runtime/system-runtime-ports.js";
 import { createCleanPersonHttpServer } from "../presentation/clean-person-http-server.js";
-import { ReadableSearchAuthorizationFence } from "../application/readable-search-authorization-fence.js";
 import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
 import { LazyPersonSessionOidcProvider } from "./lazy-person-session-oidc-provider.js";
-import { createCleanPersonSlackIdentityLinkServiceV1 } from "./clean-person-slack-identity-link.js";
 import { createCleanPersonRecordReadRouteV1 } from "./clean-person-record-read-route.js";
 import { createCleanPersonRecordSearchRouteV1 } from "./clean-person-record-search-route.js";
 import { CleanPersonEmployeeLifecycleApplication } from "../application/clean-person-employee-lifecycle.js";
 import { createCleanPersonEmployeeHttpApplication } from "../presentation/clean-person-employee-http-application.js";
 import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
-import type { Layer4StructuredOutputPort } from "../answer-composition/lean-answer-composition.js";
 import {
   createCleanPersonAnswerRouteV1,
   type CleanLayer4FailureEventV1,
 } from "./clean-person-answer-route.js";
-import type { PrivateApprovalSlackInteractionsHttpApplicationV1 } from "../presentation/private-approval-slack-interactions-http-application-v1.js";
+import type { CleanLayer4RuntimeV1 } from "./clean-layer4-runtime.js";
+import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
+import type {
+  CleanPersonExternalIdentityRuntimeBundleV1,
+  OpenedCleanPersonExternalIdentityRuntimeV1,
+} from "./clean-person-external-identity-runtime.js";
 
 export interface CleanPersonRuntimeConfig {
   readonly state_directory: string;
@@ -55,25 +50,19 @@ export interface CleanPersonRuntimeConfig {
         readonly client_secret: string;
       };
   readonly pkce_sealing_key: Uint8Array;
-  /**
-   * Omit until the stopped-state clean Slack connect has completed. Person
-   * login remains runnable without an installed Slack connection.
-   */
-  readonly slack_link?: {
-    readonly approval_channel_id: string;
-  };
 }
 
 export interface CleanPersonRuntimeDependencies {
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
-  readonly slack_provider?: CleanSlackIdentityProviderV1;
+  /** Optional external identity provider, omitted until it is configured. */
+  readonly external_identity_runtime?: CleanPersonExternalIdentityRuntimeBundleV1;
   /** Present only in the active live runtime; omitted during founder setup. */
-  readonly answer_model?: Layer4StructuredOutputPort;
+  readonly layer4_runtime?: CleanLayer4RuntimeV1;
   /** Metadata-only Layer 4 failure observer for the live server log. */
   readonly answer_failure?: (event: CleanLayer4FailureEventV1) => void;
-  /** Present only when the signed private Slack approval lane is active. */
-  readonly private_slack_approval_interactions?:
-    PrivateApprovalSlackInteractionsHttpApplicationV1;
+  /** Present only when the signed private-approval surface is active. */
+  readonly private_approval_interaction_ingress?:
+    PrivateApprovalInteractionHttpApplicationV1;
 }
 
 export interface RunningCleanPersonRuntime {
@@ -124,22 +113,16 @@ export async function startCleanPersonRuntime(
     join(config.state_directory, "authority.sqlite"),
     { fileMustExist: true },
   );
-  let controlDatabase:
-    ReturnType<typeof openOrganizationControlDatabase> | undefined;
   let recordDatabase:
     ReturnType<typeof openOrganizationRecordDatabase> | undefined;
+  let externalIdentity:
+    | OpenedCleanPersonExternalIdentityRuntimeV1
+    | undefined;
   try {
     recordDatabase = openOrganizationRecordDatabase(
       join(config.state_directory, "record-log.sqlite"),
       { fileMustExist: true },
     );
-    controlDatabase =
-      config.slack_link === undefined
-        ? undefined
-        : openOrganizationControlDatabase(
-            join(config.state_directory, "integrations.sqlite"),
-            { fileMustExist: true },
-          );
     const repository = new SqliteCleanPersonSessionRepository(database);
     const metadata = repository.read((transaction) => transaction.metadata());
     if (
@@ -163,55 +146,28 @@ export async function startCleanPersonRuntime(
       },
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
-    const personSlackIdentityLink =
-      config.slack_link === undefined || controlDatabase === undefined
-        ? undefined
-        : createCleanPersonSlackIdentityLinkServiceV1({
-            database: controlDatabase,
-            authority_id: metadata.authority_id,
-            organization_id: metadata.organization_id,
-            state_lineage_id: lineage.root.state_lineage_id,
-            approval_channel_id: config.slack_link.approval_channel_id,
-            authentication: {
-              authenticateAccess: (input) => sessions.authenticateAccess(input),
-            },
-            membership_type: (input) => {
-              const membership = repository.read((transaction) =>
-                transaction.membership(input.membership_id),
-              );
-              if (
-                membership === undefined ||
-                membership.principal_id !== input.principal_id ||
-                membership.status !== "active"
-              ) {
-                throw new Error("active Person membership is unavailable");
-              }
-              return membership.membership_type;
-            },
-            slack:
-              dependencies.slack_provider ??
-              new CleanSlackWebIdentityProviderV1(),
-            slack_token_access: {
-              readActiveSlackBotToken: ({ state }) => {
-                const secrets = new FileOrganizationSecretStore(
-                  join(config.state_directory, "secrets"),
-                );
-                const matches = secrets
-                  .listReferences()
-                  .filter(
-                    (reference) =>
-                      canonicalSha256(reference) ===
-                      state.credential_reference_sha256,
-                  );
-                if (matches.length !== 1)
-                  throw new Error(
-                    "active clean Slack credential is unavailable",
-                  );
-                return secrets.read(matches[0]!);
-              },
-            },
-            authorization_fence: new ReadableSearchAuthorizationFence(),
-          });
+    externalIdentity = dependencies.external_identity_runtime?.open({
+      state_directory: config.state_directory,
+      authority_id: metadata.authority_id,
+      organization_id: metadata.organization_id,
+      state_lineage_id: lineage.root.state_lineage_id,
+      authentication: {
+        authenticateAccess: (input) => sessions.authenticateAccess(input),
+      },
+      membership_type: (input) => {
+        const membership = repository.read((transaction) =>
+          transaction.membership(input.membership_id),
+        );
+        if (
+          membership === undefined ||
+          membership.principal_id !== input.principal_id ||
+          membership.status !== "active"
+        ) {
+          throw new Error("active Person membership is unavailable");
+        }
+        return membership.membership_type;
+      },
+    });
     const readAudit = new SqliteCleanPersonRecordReadAuditV1(database);
     const recordSearch = createCleanPersonRecordSearchRouteV1({
       state_directory: config.state_directory,
@@ -239,7 +195,7 @@ export async function startCleanPersonRuntime(
         audit: readAudit,
       }),
       person_record_search: recordSearch,
-      ...(dependencies.answer_model === undefined
+      ...(dependencies.layer4_runtime === undefined
         ? {}
         : {
             person_answer: createCleanPersonAnswerRouteV1({
@@ -247,7 +203,8 @@ export async function startCleanPersonRuntime(
               organization_id: metadata.organization_id,
               state_lineage_id: lineage.root.state_lineage_id,
               search: recordSearch,
-              model: dependencies.answer_model,
+              model: dependencies.layer4_runtime.structured_output,
+              generation: dependencies.layer4_runtime.generation,
               audit: new SqliteCleanPersonAnswerCompositionAuditV1(database),
               ...(dependencies.answer_failure === undefined
                 ? {}
@@ -261,14 +218,14 @@ export async function startCleanPersonRuntime(
           },
         }),
       ),
-      ...(personSlackIdentityLink === undefined
+      ...(externalIdentity === undefined
         ? {}
-        : { person_slack_identity_link: personSlackIdentityLink }),
-      ...(dependencies.private_slack_approval_interactions === undefined
+        : { person_external_identity_link: externalIdentity.application }),
+      ...(dependencies.private_approval_interaction_ingress === undefined
         ? {}
         : {
-            private_slack_approval_interactions:
-              dependencies.private_slack_approval_interactions,
+            private_approval_interaction_ingress:
+              dependencies.private_approval_interaction_ingress,
           }),
     });
     server.listen(config.port, config.host);
@@ -284,13 +241,13 @@ export async function startCleanPersonRuntime(
           server.close();
           await closed;
         }
-        controlDatabase?.close();
+        externalIdentity?.close();
         recordDatabase?.close();
         database.close();
       },
     };
   } catch (error) {
-    controlDatabase?.close();
+    externalIdentity?.close();
     recordDatabase?.close();
     database.close();
     throw error;

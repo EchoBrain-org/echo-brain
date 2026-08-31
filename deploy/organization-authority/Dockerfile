@@ -27,6 +27,7 @@ FROM node:22.22.1-bookworm-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c357
 
 ARG ECHO_SOURCE_SHA
 LABEL org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"
+LABEL org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"
 ENV NODE_ENV=production
 WORKDIR /app
 RUN apt-get update \

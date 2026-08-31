@@ -5,7 +5,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
-/** Private, unwired Authority new-lineage baseline. */
+/** Frozen Authority V1 baseline. */
 export const AUTHORITY_BASELINE_SCHEMA_VERSION_V1 = 1;
 /** `ECAU`, the role-stable Authority SQLite header application ID. */
 export const AUTHORITY_BASELINE_APPLICATION_ID_V1 = 0x45434155;
@@ -14,6 +14,14 @@ export const AUTHORITY_BASELINE_SCHEMA_VERSION_V2 = 2;
 /** The Authority application ID is role-stable across fresh schemas. */
 export const AUTHORITY_BASELINE_APPLICATION_ID_V2 =
   AUTHORITY_BASELINE_APPLICATION_ID_V1;
+/**
+ * Fresh provider-neutral live-source lineage.  It is deliberately a new
+ * empty-database baseline, never an upgrade of V1 or V2 state.
+ */
+export const AUTHORITY_BASELINE_SCHEMA_VERSION_V3 = 3;
+/** The Authority application ID is role-stable across fresh schemas. */
+export const AUTHORITY_BASELINE_APPLICATION_ID_V3 =
+  AUTHORITY_BASELINE_APPLICATION_ID_V1;
 
 const BASELINE_SQL_URL = new URL(
   "../../../../baselines/authority-baseline-v1.sql",
@@ -21,6 +29,10 @@ const BASELINE_SQL_URL = new URL(
 );
 const PRIVATE_APPROVAL_SQL_V2_URL = new URL(
   "../../../../baselines/authority-private-approval-v2.sql",
+  import.meta.url,
+);
+const LIVE_SOURCE_SQL_V3_URL = new URL(
+  "../../../../baselines/authority-live-source-v3.sql",
   import.meta.url,
 );
 
@@ -44,6 +56,28 @@ export function authorityBaselineSqlV2(): string {
 
 export function authorityBaselineSha256V2(): Sha256Digest {
   return sha256Digest(authorityBaselineSqlV2());
+}
+
+/**
+ * Provider-neutral V3 companion SQL. It replaces only the legacy
+ * provider-specific live-source table family while retaining the frozen V1
+ * Authority identity/session foundation byte-for-byte.
+ */
+export function authorityLiveSourceSqlV3(): string {
+  return readFileSync(LIVE_SOURCE_SQL_V3_URL, "utf8");
+}
+
+/**
+ * Complete fresh Authority V3 schema. The V3 companion removes the V1
+ * Granola-only objects during fresh construction, then installs generic
+ * source/approval state and its dependent private-approval tables.
+ */
+export function authorityBaselineSqlV3(): string {
+  return `${authorityBaselineSqlV1()}\n${authorityLiveSourceSqlV3()}`;
+}
+
+export function authorityBaselineSha256V3(): Sha256Digest {
+  return sha256Digest(authorityBaselineSqlV3());
 }
 
 /**
@@ -105,6 +139,40 @@ export function applyAuthorityBaselineV2(database: Database.Database): void {
     database.exec(authorityBaselineSqlV2());
     database.pragma(`application_id = ${AUTHORITY_BASELINE_APPLICATION_ID_V2}`);
     database.pragma(`user_version = ${AUTHORITY_BASELINE_SCHEMA_VERSION_V2}`);
+    database.exec("COMMIT");
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {}
+    throw error;
+  }
+}
+
+/**
+ * Applies the provider-neutral Authority V3 baseline only to a completely
+ * empty database. Existing V1/V2 files must stay on their original lineage.
+ */
+export function applyAuthorityBaselineV3(database: Database.Database): void {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const userVersion = database.pragma("user_version", {
+      simple: true,
+    }) as number;
+    const applicationId = database.pragma("application_id", {
+      simple: true,
+    }) as number;
+    const objectCount = database
+      .prepare("SELECT count(*) AS objects FROM sqlite_master")
+      .pluck()
+      .get() as number;
+    if (userVersion !== 0 || applicationId !== 0 || objectCount !== 0) {
+      throw new Error(
+        "authority baseline requires a completely empty database",
+      );
+    }
+    database.exec(authorityBaselineSqlV3());
+    database.pragma(`application_id = ${AUTHORITY_BASELINE_APPLICATION_ID_V3}`);
+    database.pragma(`user_version = ${AUTHORITY_BASELINE_SCHEMA_VERSION_V3}`);
     database.exec("COMMIT");
   } catch (error) {
     try {

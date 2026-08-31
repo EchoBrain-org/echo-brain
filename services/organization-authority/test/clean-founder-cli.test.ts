@@ -296,17 +296,18 @@ function installDurableCanaryFixture(
     const admissionSemanticSha256 = sha256Digest("founder-canary-admission");
     authority
       .prepare(
-        `INSERT INTO authority_clean_granola_source_admission_v1
+        `INSERT INTO authority_live_source_admission_v2
          (singleton, organization_id, principal_id, membership_id, membership_type,
-          source_instance_id, source_adapter_version, normalizer_version,
-          owner_email_sha256, owner_observation_assurance, owner_observed_at,
-          source_credential_reference_sha256, cursor, cutoff_at,
-          processor_instance_id, processor_adapter_version,
+          source_adapter_id, source_adapter_version, source_adapter_instance_id,
+          normalizer_version, source_custodian_sha256,
+          source_custodian_assurance, source_custodian_observed_at,
+          source_credential_reference_sha256, initial_cursor, cutoff_at,
+          processor_adapter_id, processor_instance_id, processor_adapter_version,
           processor_configuration_sha256, processor_credential_reference_sha256,
           semantic_input_sha256, admitted_at)
-         VALUES (1, ?, ?, ?, 'owner', 'founder-granola-v1', '2.2.0', '2.2.0',
+         VALUES (1, ?, ?, ?, 'owner', 'granola', '2.2.0', 'founder-granola-v1', '2.2.0',
                  ?, 'provider_record_owner_observed', ?, ?, 'granola:v1:live:admission', ?,
-                 'founder-llm-v1', '1.3.0+processing.a', ?, ?, ?, ?)`,
+                 'llm', 'founder-llm-v1', '1.3.0+processing.a', ?, ?, ?, ?)`,
       )
       .run(
         manifest.organization_id,
@@ -323,7 +324,7 @@ function installDurableCanaryFixture(
       );
     authority
       .prepare(
-        `INSERT INTO authority_clean_granola_source_progress_v1
+        `INSERT INTO authority_live_source_progress_v2
          (singleton, admission_semantic_input_sha256, cursor, cursor_version, updated_at)
          VALUES (1, ?, 'granola:v1:live:canary', ?, ?)`,
       )

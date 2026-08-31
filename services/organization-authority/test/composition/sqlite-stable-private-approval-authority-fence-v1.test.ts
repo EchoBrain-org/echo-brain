@@ -5,9 +5,9 @@ import {
   type PrivateApprovalSlackCardBindingV1,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV2 } from "../../src/adapters/persistence/sqlite/baseline.js";
+import { applyAuthorityBaselineV3 } from "../../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-unmigrated-database.js";
-import type { GranolaMeetingOwnerPrivateApprovalTargetV1 } from "../../src/composition/resolve-granola-meeting-owner-private-approval-target-v1.js";
+import type { PrivateApprovalTargetV1 } from "../../src/composition/resolve-private-approval-target-v1.js";
 import {
   SqlitePrivateApprovalAssignmentStateV1,
   type PrivateApprovalCandidateCommitmentV1,
@@ -44,7 +44,7 @@ function fixture(): {
   readonly card: PrivateApprovalSlackCardBindingV1;
 } {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV2(database);
+  applyAuthorityBaselineV3(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(
@@ -73,7 +73,7 @@ function fixture(): {
     .run(ORGANIZATION_ID, NOW);
   database
     .prepare(
-      `INSERT INTO authority_clean_live_candidates_v1 (
+      `INSERT INTO authority_live_source_candidates_v2 (
          candidate_id, candidate_semantic_sha256,
          admission_semantic_input_sha256, review_lineage_id,
          review_input_sha256, review_semantic_sha256, review_policy_id,
@@ -97,14 +97,14 @@ function fixture(): {
     );
   database
     .prepare(
-      `INSERT INTO authority_clean_live_review_lineage_heads_v1
+      `INSERT INTO authority_live_source_review_lineage_heads_v2
          (review_lineage_id, candidate_id, updated_at)
        VALUES ('rli_private', ?, ?)`,
     )
     .run(CANDIDATE_ID, NOW);
   database
     .prepare(
-      `INSERT INTO authority_clean_live_approval_outbox_v1
+      `INSERT INTO authority_live_approval_outbox_v2
          (candidate_id, approval_id, stage_command_id, state, updated_at)
        VALUES (?, ?, 'pas_private', 'queued', ?)`,
     )
@@ -136,7 +136,7 @@ function fixture(): {
           provider_subject_id: "UOWNER",
         },
       },
-    } as unknown as GranolaMeetingOwnerPrivateApprovalTargetV1,
+    } as unknown as PrivateApprovalTargetV1,
     dm_channel: {
       workspace_id: "TPRIVATE",
       enterprise_id: null,
@@ -145,7 +145,7 @@ function fixture(): {
   });
   database
     .prepare(
-      `UPDATE authority_clean_live_approval_outbox_v1
+      `UPDATE authority_live_approval_outbox_v2
           SET state = 'posting', frozen_card_sha256 = ?,
               approved_snapshot_json = ?, approved_snapshot_sha256 = ?,
               post_started_at = ?
@@ -154,7 +154,7 @@ function fixture(): {
     .run(FROZEN_CARD_SHA256, canonicalJson(SNAPSHOT), SNAPSHOT_SHA256, NOW, APPROVAL_ID);
   database
     .prepare(
-      `UPDATE authority_clean_live_approval_outbox_v1
+      `UPDATE authority_live_approval_outbox_v2
           SET state = 'posted', provider_message_ts = ?
         WHERE approval_id = ?`,
     )

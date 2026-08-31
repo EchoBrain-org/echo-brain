@@ -133,7 +133,7 @@ workspace:
 3. Put the signing secret from that same Slack app in a separate current-user
    `0600` regular file containing one value with no trailing newline. Do not
    reuse a signing secret from another Slack app.
-4. Use a wholly fresh private-approval V2 staging lineage. Do not upgrade or
+4. Use a wholly fresh provider-neutral V3 staging lineage. Do not upgrade or
    reuse an earlier shared-channel rehearsal database, state directory, or
    approval binding.
 
@@ -320,9 +320,10 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the live runtime.
 
-The private-approval fresh lineage uses schema version 2 for Authority and
-control-plane and record-log, while record-derived and the three Layer-2 planes
-(`facts`, `lexical`, and `content`) remain at schema version 1. Each baseline
+The provider-neutral fresh lineage uses schema version 3 for Authority.
+Control-plane and record-log remain at schema version 2, while record-derived
+and the three Layer-2 planes (`facts`, `lexical`, and `content`) remain at
+schema version 1. Each baseline
 applies only to a completely empty database. A V1 Authority, control-plane, or
 record-log lineage is refused rather than upgraded in place. Do not modify
 SQLite files, copy one state directory into another, or introduce a schema

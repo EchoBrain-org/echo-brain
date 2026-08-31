@@ -31,9 +31,9 @@ export type OpenRouterFinishReason =
 export interface OpenRouterFailureDiagnostic {
   readonly failure_class: OpenRouterFailureClass;
   readonly http_status: number | null;
-  readonly provider: string | null;
+  readonly adapter_id: "openrouter";
   readonly finish_reason: OpenRouterFinishReason | null;
-  readonly provider_generation_id: string | null;
+  readonly adapter_request_id: string | null;
 }
 
 export class OpenRouterStructuredOutputError extends Error {
@@ -95,16 +95,9 @@ function object(value: unknown): Record<string, unknown> | null {
 }
 
 const OPENROUTER_GENERATION_ID = /^gen-[A-Za-z0-9]{8,64}$/;
-const OPENROUTER_PROVIDER_NAME = /^[A-Za-z][A-Za-z0-9]{1,31}$/;
 
 function generationId(value: unknown): string | null {
   return typeof value === "string" && OPENROUTER_GENERATION_ID.test(value)
-    ? value
-    : null;
-}
-
-function providerName(value: unknown): string | null {
-  return typeof value === "string" && OPENROUTER_PROVIDER_NAME.test(value)
     ? value
     : null;
 }
@@ -138,12 +131,9 @@ function failureDiagnostic(input: {
   return Object.freeze({
     failure_class: input.failure_class,
     http_status: input.response?.status ?? null,
-    provider:
-      providerGenerationId === null
-        ? null
-        : (providerName(root?.provider) ?? providerName(metadata?.provider_name)),
+    adapter_id: "openrouter",
     finish_reason: input.finish_reason ?? null,
-    provider_generation_id: providerGenerationId,
+    adapter_request_id: providerGenerationId,
   });
 }
 

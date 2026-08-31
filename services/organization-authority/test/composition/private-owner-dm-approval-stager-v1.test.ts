@@ -30,7 +30,7 @@ function outbox(state: "queued" | "posting" | "posted" | "staged" = "queued") {
   return {
     ...input.candidate,
     state,
-    provider_message_ts: state === "queued" || state === "posting" ? null : "123.000001",
+    presentation_external_id: state === "queued" || state === "posting" ? null : "123.000001",
     frozen_card_sha256: state === "queued" ? null : DIGEST("1"),
     approved_snapshot_json: state === "queued" ? null : "{}",
     approved_snapshot_sha256: state === "queued" ? null : DIGEST("2"),
@@ -87,9 +87,9 @@ describe("private owner-DM approval stager V1", () => {
         current = { ...outbox("posting"), frozen_card_sha256: received.frozen_card_sha256, approved_snapshot_sha256: canonicalSha256(received.approved_snapshot) as Sha256 };
         return { outbox: current, created: true };
       },
-      recordPostedApprovalCard: (received: { frozen_card_sha256: Sha256; approved_snapshot: unknown; provider_message_ts: string }) => {
+      recordPostedApprovalCard: (received: { frozen_card_sha256: Sha256; approved_snapshot: unknown; presentation_external_id: string }) => {
         operations.push("marker-durable");
-        current = { ...current, state: "posted", provider_message_ts: received.provider_message_ts, frozen_card_sha256: received.frozen_card_sha256, approved_snapshot_sha256: canonicalSha256(received.approved_snapshot) as Sha256 };
+        current = { ...current, state: "posted", presentation_external_id: received.presentation_external_id, frozen_card_sha256: received.frozen_card_sha256, approved_snapshot_sha256: canonicalSha256(received.approved_snapshot) as Sha256 };
         return current;
       },
       markControlPlaneStaged: ({ control_approval_sha256 }: { control_approval_sha256: Sha256 }) => {
@@ -247,8 +247,8 @@ describe("private owner-DM approval stager V1", () => {
           current = { ...outbox("posting"), frozen_card_sha256: received.frozen_card_sha256, approved_snapshot_sha256: canonicalSha256(received.approved_snapshot) as Sha256 };
           return { outbox: current, created: true };
         },
-        recordPostedApprovalCard: (received: { frozen_card_sha256: Sha256; approved_snapshot: unknown; provider_message_ts: string }) => {
-          current = { ...current, state: "posted", provider_message_ts: received.provider_message_ts, frozen_card_sha256: received.frozen_card_sha256, approved_snapshot_sha256: canonicalSha256(received.approved_snapshot) as Sha256 };
+        recordPostedApprovalCard: (received: { frozen_card_sha256: Sha256; approved_snapshot: unknown; presentation_external_id: string }) => {
+          current = { ...current, state: "posted", presentation_external_id: received.presentation_external_id, frozen_card_sha256: received.frozen_card_sha256, approved_snapshot_sha256: canonicalSha256(received.approved_snapshot) as Sha256 };
           return current;
         },
         markControlPlaneStaged,
@@ -338,7 +338,7 @@ describe("private owner-DM approval stager V1", () => {
         listPendingApprovalDeliveries: () => [],
         listPendingSupersededApprovalCards: () => [{
           approval_id: "apr_old", review_lineage_id: "rli_1", successor_id: "ignored",
-          superseded_by_candidate_id: "cnd_new", provider_message_ts: "123.000001", post_started_at: NOW,
+          superseded_by_candidate_id: "cnd_new", presentation_external_id: "123.000001", post_started_at: NOW,
         }],
         recordSupersededApprovalCardTombstoned: recorded,
       } as unknown as SqliteCleanLiveOnlySourceStateV1,
@@ -347,12 +347,13 @@ describe("private owner-DM approval stager V1", () => {
       assignments: { readForPresentation: () => recovery } as never,
       control_plane: {} as never,
       poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone },
+      resolve_target: () => undefined,
     });
     await stager.reconcilePendingDeliveries();
     expect(tombstone).toHaveBeenCalledWith({
       approval_id: "apr_old", successor_id: "cnd_new", dm_channel_id: "D01", provider_message_ts: "123.000001",
     }, undefined);
-    expect(recorded).toHaveBeenCalledWith({ approval_id: "apr_old", provider_message_ts: "123.000001" });
+    expect(recorded).toHaveBeenCalledWith({ approval_id: "apr_old", presentation_external_id: "123.000001" });
   });
 
   it("leaves a superseded unknown marker pending when no presentation proof exists", async () => {
@@ -361,7 +362,7 @@ describe("private owner-DM approval stager V1", () => {
       authority: {
         listPendingSupersededApprovalCards: () => [{
           approval_id: "apr_unknown", review_lineage_id: "rli_1", successor_id: "ignored",
-          superseded_by_candidate_id: "cnd_new", provider_message_ts: null, post_started_at: NOW,
+          superseded_by_candidate_id: "cnd_new", presentation_external_id: null, post_started_at: NOW,
         }],
         recordSupersededApprovalCardTombstoned: vi.fn(),
       } as unknown as SqliteCleanLiveOnlySourceStateV1,
@@ -370,6 +371,7 @@ describe("private owner-DM approval stager V1", () => {
       assignments: { readForPresentation: () => undefined } as never,
       control_plane: {} as never,
       poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone },
+      resolve_target: () => undefined,
     });
     await expect(stager.reconcileSuperseded()).resolves.toBeUndefined();
     expect(tombstone).not.toHaveBeenCalled();

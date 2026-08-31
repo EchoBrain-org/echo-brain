@@ -32,6 +32,8 @@ const NODE22_BUILTINS = new Set([
 
 const WORKSPACE_BOUNDARY_REGISTRY = 'tools/workspace-source-boundaries.v1.json';
 const PRODUCT_BOUNDARY_MANIFEST = 'product/source-boundary.v1.json';
+const LLM_PROVIDER_SOURCE = 'services/organization-authority/src/processing/adapters/decision-processors/llm/llm-provider.ts';
+const LLM_PROVIDER_ROOT = 'services/organization-authority/src/processing/adapters/decision-processors/llm/';
 const BOUNDARY_MANIFEST_RE = /(?:^|\/)source-boundary\.v1\.json$/;
 const SOURCE_FILE_RE = /\.(?:[cm]?[jt]sx?)$/;
 
@@ -146,6 +148,341 @@ function isPublicWorkspaceSpecifier(specifier, workspaceName, packageJson) {
 
 function isStringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isRepositoryPathPattern(path) {
+  return typeof path === 'string' && isRepositoryPath(path.replaceAll('*', 'provider'));
+}
+
+function stringArrayInitializer(sourceFile, name) {
+  let values;
+  const visit = (node) => {
+    if (!ts.isVariableDeclaration(node) || node.name.getText(sourceFile) !== name) {
+      ts.forEachChild(node, visit);
+      return;
+    }
+    const initializer = node.initializer;
+    const array =
+      initializer !== undefined && ts.isCallExpression(initializer) &&
+      ts.isPropertyAccessExpression(initializer.expression) &&
+      initializer.expression.expression.getText(sourceFile) === 'Object' &&
+      initializer.expression.name.getText(sourceFile) === 'freeze'
+        ? initializer.arguments[0]
+        : initializer;
+    if (array === undefined || !ts.isArrayLiteralExpression(array)) return;
+    const literals = array.elements.filter(ts.isStringLiteral);
+    if (literals.length !== array.elements.length) return;
+    values = literals.map((literal) => literal.text);
+  };
+  ts.forEachChild(sourceFile, visit);
+  return values;
+}
+
+function collectLlmProviderSelectors(tree, errors) {
+  const source = textFile(tree, LLM_PROVIDER_SOURCE);
+  if (source === null) {
+    errors.push(`canonical LLM provider source is missing: ${LLM_PROVIDER_SOURCE}`);
+    return new Set();
+  }
+  const sourceFile = ts.createSourceFile(
+    LLM_PROVIDER_SOURCE,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const identifiers = stringArrayInitializer(sourceFile, 'LLM_PROVIDER_IDS');
+  if (identifiers === undefined || identifiers.length === 0 || new Set(identifiers).size !== identifiers.length) {
+    errors.push('LLM_PROVIDER_IDS must be a non-empty unique literal string array');
+    return new Set();
+  }
+  return new Set(identifiers);
+}
+
+function literalString(expression) {
+  let value = expression;
+  while (ts.isAsExpression(value) || ts.isParenthesizedExpression(value)) {
+    value = value.expression;
+  }
+  return ts.isStringLiteral(value) ? value.text : undefined;
+}
+
+function llmProviderClientNames(sourceFile) {
+  const names = new Set(['LlmProviderClient']);
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      !statement.moduleSpecifier.text.endsWith('/llm-provider.js') ||
+      statement.importClause?.namedBindings === undefined ||
+      !ts.isNamedImports(statement.importClause.namedBindings)
+    ) continue;
+    for (const element of statement.importClause.namedBindings.elements) {
+      if ((element.propertyName?.text ?? element.name.text) === 'LlmProviderClient') {
+        names.add(element.name.text);
+      }
+    }
+  }
+  return names;
+}
+
+function classImplementsLlmProviderClient(node, sourceFile, localNames) {
+  return node.heritageClauses?.some(
+    (clause) =>
+      clause.token === ts.SyntaxKind.ImplementsKeyword &&
+      clause.types.some((type) => {
+        const name = type.expression.getText(sourceFile);
+        return localNames.has(name) || name.endsWith('.LlmProviderClient');
+      }),
+  ) ?? false;
+}
+
+function classLooksLikeLlmProviderClient(node, sourceFile) {
+  const members = new Set(
+    node.members
+      .map((member) => member.name?.getText(sourceFile))
+      .filter((name) => name !== undefined),
+  );
+  return (
+    members.has('provider') &&
+    members.has('generateStructured') &&
+    members.has('verifyModel')
+  );
+}
+
+function providerSelector(member, sourceFile) {
+  if (ts.isPropertyDeclaration(member) && member.initializer !== undefined) {
+    return literalString(member.initializer);
+  }
+  if (ts.isGetAccessorDeclaration(member) && member.body !== undefined) {
+    const statements = member.body.statements;
+    if (
+      statements.length === 1 &&
+      ts.isReturnStatement(statements[0]) &&
+      statements[0].expression !== undefined
+    ) {
+      return literalString(statements[0].expression);
+    }
+  }
+  return undefined;
+}
+
+function collectLlmDriverSelectors(tree, errors) {
+  const selectors = new Set();
+  for (const [path] of tree) {
+    if (!SOURCE_FILE_RE.test(path) || !path.startsWith(LLM_PROVIDER_ROOT)) continue;
+    const source = textFile(tree, path);
+    const sourceFile = ts.createSourceFile(
+      path,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    const localNames = llmProviderClientNames(sourceFile);
+    const visit = (node) => {
+      if (
+        ts.isClassDeclaration(node) &&
+        (classImplementsLlmProviderClient(node, sourceFile, localNames) ||
+          classLooksLikeLlmProviderClient(node, sourceFile))
+      ) {
+        // A transport client is the ownership boundary. Its selector must be
+        // explicit and literal (a property or one-return getter) so the
+        // canonical provider set cannot be bypassed with dynamic code.
+        const providerMembers = node.members.filter(
+          (member) => member.name?.getText(sourceFile) === 'provider',
+        );
+        const selector =
+          providerMembers.length === 1
+            ? providerSelector(providerMembers[0], sourceFile)
+            : undefined;
+        if (selector === undefined) {
+          const name = node.name?.text ?? '<anonymous>';
+          errors.push(
+            `LLM provider client '${name}' in ${path} must expose exactly one literal provider selector`,
+          );
+        } else {
+          selectors.add(selector);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(sourceFile, visit);
+  }
+  return selectors;
+}
+
+function collectRegisteredProviderIdentifiers(tree, adapterArchitecture, errors) {
+  const registry = adapterArchitecture?.provider_identifier_registry;
+  if (!Array.isArray(registry)) {
+    errors.push('adapter architecture provider_identifier_registry must be an array');
+    return new Set();
+  }
+
+  const identifiers = new Set();
+  const transportIdentifiers = new Set();
+  for (const entry of registry) {
+    if (
+      entry === null ||
+      typeof entry !== 'object' ||
+      typeof entry.identifier !== 'string' ||
+      !/^[a-z][a-z0-9-]*$/.test(entry.identifier) ||
+      (entry.transport_provider !== undefined && typeof entry.transport_provider !== 'boolean') ||
+      !isStringArray(entry.source_evidence_paths) ||
+      entry.source_evidence_paths.length === 0
+    ) {
+      errors.push('adapter architecture provider_identifier_registry contains an invalid entry');
+      continue;
+    }
+    if (identifiers.has(entry.identifier)) {
+      errors.push(`adapter architecture provider_identifier_registry duplicates '${entry.identifier}'`);
+      continue;
+    }
+    identifiers.add(entry.identifier);
+    if (entry.transport_provider === true) transportIdentifiers.add(entry.identifier);
+
+    const evidenceFiles = new Set();
+    for (const pattern of entry.source_evidence_paths) {
+      if (!isRepositoryPathPattern(pattern)) {
+        errors.push(
+          `adapter architecture provider '${entry.identifier}' has a non-normalized source evidence path: ${String(pattern)}`,
+        );
+        continue;
+      }
+      const matches = [...tree.keys()].filter(
+        (path) => SOURCE_FILE_RE.test(path) && matchesGlob(path, pattern),
+      );
+      if (matches.length === 0) {
+        errors.push(
+          `adapter architecture provider '${entry.identifier}' source evidence path matches no source file: ${pattern}`,
+        );
+      }
+      for (const path of matches) evidenceFiles.add(path);
+    }
+
+    const escaped = entry.identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (
+      ![...evidenceFiles].some((path) =>
+        new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`, 'i').test(textFile(tree, path)),
+      )
+    ) {
+      errors.push(
+        `adapter architecture provider '${entry.identifier}' has no source evidence containing its identifier`,
+      );
+    }
+  }
+  const llmProviders = collectLlmProviderSelectors(tree, errors);
+  if (
+    llmProviders.size > 0 &&
+    (llmProviders.size !== transportIdentifiers.size ||
+      [...llmProviders].some((identifier) => !transportIdentifiers.has(identifier)))
+  ) {
+    errors.push(
+      `LLM_PROVIDER_IDS transport providers must exactly match registered transport providers: expected ${[...llmProviders].sort().join(', ')}, registered ${[...transportIdentifiers].sort().join(', ')}`,
+    );
+  }
+  const driverProviders = collectLlmDriverSelectors(tree, errors);
+  if (
+    driverProviders.size !== llmProviders.size ||
+    [...driverProviders].some((identifier) => !llmProviders.has(identifier))
+  ) {
+    errors.push(
+      `LLM provider declarations must exactly match LLM_PROVIDER_IDS: declared ${[...driverProviders].sort().join(', ')}, registered ${[...llmProviders].sort().join(', ')}`,
+    );
+  }
+  return { identifiers, transportIdentifiers };
+}
+
+function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) {
+  const declared = adapterArchitecture?.provider_adapter_roots;
+  if (!Array.isArray(declared)) {
+    errors.push('adapter architecture provider_adapter_roots must be an array');
+    return { roots: [], identifiers: new Set() };
+  }
+
+  const roots = [];
+  const declaredRoots = new Set();
+  for (const entry of declared) {
+    if (
+      entry === null ||
+      typeof entry !== 'object' ||
+      typeof entry.identifier !== 'string' ||
+      !/^[a-z][a-z0-9-]*$/.test(entry.identifier) ||
+      typeof entry.root !== 'string' ||
+      !isRepositoryPath(entry.root)
+    ) {
+      errors.push('adapter architecture provider_adapter_roots contains an invalid entry');
+      continue;
+    }
+    if (declaredRoots.has(entry.root)) {
+      errors.push(`adapter architecture provider_adapter_roots duplicates root '${entry.root}'`);
+      continue;
+    }
+    const sourceFiles = [...tree.keys()].filter(
+      (path) => SOURCE_FILE_RE.test(path) && matchesGlob(path, entry.root),
+    );
+    if (sourceFiles.length === 0) {
+      errors.push(
+        `adapter architecture provider/adapter root '${entry.identifier}' matches no source file: ${entry.root}`,
+      );
+      continue;
+    }
+    declaredRoots.add(entry.root);
+    roots.push({ identifier: entry.identifier, root: entry.root });
+  }
+
+  const adapterRoots = adapterArchitecture?.adapters_roots;
+  if (!isStringArray(adapterRoots)) {
+    errors.push('adapter architecture adapters_roots must be a string array');
+  } else {
+    for (const adapterRoot of adapterRoots) {
+      if (!isRepositoryPath(adapterRoot)) {
+        errors.push(`adapter architecture has a non-normalized adapter root: ${adapterRoot}`);
+        continue;
+      }
+      for (const [path] of tree) {
+        if (!SOURCE_FILE_RE.test(path) || !matchesGlob(path, adapterRoot)) continue;
+        if (!roots.some((entry) => matchesGlob(path, entry.root))) {
+          errors.push(
+            `provider/adapter source is not covered by declared provider_adapter_roots: ${path}`,
+          );
+        }
+      }
+    }
+  }
+
+  for (const [path] of tree) {
+    if (
+      !SOURCE_FILE_RE.test(path) ||
+      !path.startsWith('services/organization-authority/src/') ||
+      !/\bimplements\s+(?:MeetingSourceAdapter|DecisionProcessorAdapter|DeliverySurfaceAdapter|ApprovalSurfaceAdapter)\b/.test(textFile(tree, path))
+    ) continue;
+    if (!roots.some((entry) => matchesGlob(path, entry.root))) {
+      errors.push(
+        `provider/adapter implementation is not covered by declared provider_adapter_roots: ${path}`,
+      );
+    }
+  }
+  return { roots, identifiers: new Set(roots.map((entry) => entry.identifier)) };
+}
+
+function reachableProviderAdapterRoot(tree, start, providerAdapterRoots) {
+  const seen = new Set();
+  const work = [start];
+  while (work.length > 0) {
+    const path = work.pop();
+    if (path === undefined || seen.has(path)) continue;
+    seen.add(path);
+    for (const reference of moduleReferences(path, textFile(tree, path))) {
+      if (reference.specifier === null || !reference.specifier.startsWith('.')) continue;
+      const resolved = resolveRelative(tree, path, reference.specifier);
+      if (resolved === null) continue;
+      const root = providerAdapterRoots.find((entry) => matchesGlob(resolved, entry.root));
+      if (root !== undefined) return { root, path: resolved };
+      work.push(resolved);
+    }
+  }
+  return undefined;
 }
 
 function checkWorkspaceBoundaries(tree, errors) {
@@ -631,29 +968,56 @@ function main() {
     }
   }
 
-  const discoveredAdapterIds = new Set();
-  if (adapterArchitecture?.forbid_discovered_adapter_ids_in_core === true) {
-    for (const adaptersRoot of adapterArchitecture.adapters_roots) {
-      for (const [path] of tree) {
-        if (!path.startsWith(adaptersRoot)) continue;
-        const relative = path.slice(adaptersRoot.length);
-        const parts = relative.split('/');
-        if (parts.length >= 3) discoveredAdapterIds.add(parts[1]);
-      }
+  const {
+    identifiers: registeredProviderIdentifiers,
+    transportIdentifiers: registeredTransportProviderIdentifiers,
+  } = collectRegisteredProviderIdentifiers(
+    tree,
+    adapterArchitecture,
+    errors,
+  );
+  const {
+    roots: declaredProviderAdapterRoots,
+    identifiers: declaredProviderAdapterIdentifiers,
+  } = collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors);
+
+  for (const identifier of registeredTransportProviderIdentifiers) {
+    if (!declaredProviderAdapterRoots.some((entry) => entry.identifier === identifier)) {
+      errors.push(`registered transport provider '${identifier}' has no declared implementation root`);
     }
-    for (const [path] of tree) {
-      if (
-        !matchesGlob(path, adapterArchitecture.core_root) ||
-        !SOURCE_FILE_RE.test(path)
-      ) continue;
-      const source = textFile(tree, path).toLowerCase();
-      for (const adapterId of discoveredAdapterIds) {
-        // Word-boundary match: a bare substring check false-positives on short
-        // ids (e.g. 'llm' inside 'pullMs') while a genuine leak always appears
-        // as a standalone token ('llm', "llm", llm-adapter, ...).
-        const escaped = adapterId.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(source)) {
-          errors.push(`adapter id '${adapterId}' leaked into tool-agnostic core module: ${path}`);
+  }
+
+  if (adapterArchitecture?.forbid_discovered_adapter_ids_in_provider_neutral_paths === true) {
+    const neutralPaths = adapterArchitecture.provider_neutral_paths;
+    if (!isStringArray(neutralPaths)) {
+      errors.push('adapter architecture provider_neutral_paths must be a string array');
+    }
+    if (isStringArray(neutralPaths)) {
+      const forbiddenProviderIdentifiers = new Set([
+        ...registeredProviderIdentifiers,
+        ...declaredProviderAdapterIdentifiers,
+      ]);
+      for (const [path] of tree) {
+        if (
+          !SOURCE_FILE_RE.test(path) ||
+          !neutralPaths.some((pattern) => matchesGlob(path, pattern))
+        ) continue;
+        const source = textFile(tree, path).toLowerCase();
+        for (const providerIdentifier of forbiddenProviderIdentifiers) {
+          const escaped = providerIdentifier.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          if (new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(source)) {
+            errors.push(`provider identifier '${providerIdentifier}' leaked into provider-neutral module: ${path}`);
+          }
+        }
+        const reachable = reachableProviderAdapterRoot(
+          tree,
+          path,
+          declaredProviderAdapterRoots,
+        );
+        if (reachable !== undefined) {
+          errors.push(
+            `provider-neutral module reaches declared provider/adapter root '${reachable.root.identifier}': ${path} -> ${reachable.path}`,
+          );
         }
       }
     }
@@ -790,7 +1154,7 @@ function main() {
     runtime_assets: runtimeAssets,
     removed_internal_roots: removed,
     layer_rules: layerRules.map((rule) => rule.name),
-    discovered_adapter_ids: [...discoveredAdapterIds].sort(),
+    discovered_adapter_ids: [...declaredProviderAdapterIdentifiers].sort(),
     workspace_boundaries: workspaceBoundaries,
     errors,
   };

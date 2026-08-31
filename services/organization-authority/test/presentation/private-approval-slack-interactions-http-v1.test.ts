@@ -5,19 +5,33 @@ import {
   PRIVATE_APPROVAL_SLACK_INTERACTIONS_PATH_V1,
   type PrivateApprovalSlackInteractionsHttpApplicationV1,
 } from "../../src/presentation/private-approval-slack-interactions-http-application-v1.js";
+import { createPrivateApprovalSlackInteractionHttpIngressV1 } from "../../src/composition/private-approval-slack-interaction-http-ingress-v1.js";
+import type { PrivateApprovalInteractionHttpApplicationV1 } from "../../src/presentation/private-approval-interaction-http-application-v1.js";
+import type { PersonExternalIdentityLinkHttpApplicationV1 } from "../../src/presentation/person-external-identity-link-http-application.js";
+import { PERSON_SESSION_OIDC_BEGIN_PATH } from "../../src/presentation/person-identity-session-http-application.js";
 
-async function start(
-  application?: PrivateApprovalSlackInteractionsHttpApplicationV1,
-) {
-  const server = createCleanPersonHttpServer({
+function serverOptions(input: {
+  readonly approval?: PrivateApprovalInteractionHttpApplicationV1;
+  readonly external_identity?: PersonExternalIdentityLinkHttpApplicationV1;
+} = {}) {
+  return {
     descriptor: {} as never,
     sessions: {} as never,
     oidc_provider: {} as never,
     expected_issuer: "https://issuer.example",
-    ...(application === undefined
+    ...(input.approval === undefined
       ? {}
-      : { private_slack_approval_interactions: application }),
-  });
+      : { private_approval_interaction_ingress: input.approval }),
+    ...(input.external_identity === undefined
+      ? {}
+      : { person_external_identity_link: input.external_identity }),
+  };
+}
+
+async function start(
+  application?: PrivateApprovalInteractionHttpApplicationV1,
+) {
+  const server = createCleanPersonHttpServer(serverOptions({ approval: application }));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -36,6 +50,76 @@ async function start(
 }
 
 describe("private Slack approval interactions HTTP mount V1", () => {
+  it("rejects a provider route that would shadow a core Authority route", () => {
+    expect(() =>
+      createCleanPersonHttpServer(
+        serverOptions({
+          approval: {
+            method: "POST",
+            path: PERSON_SESSION_OIDC_BEGIN_PATH,
+            accept: async () => "accepted",
+          },
+        }),
+      ),
+    ).toThrow(
+      `provider ingress route collides with Authority route: POST ${PERSON_SESSION_OIDC_BEGIN_PATH}`,
+    );
+  });
+
+  it("rejects duplicate provider routes across independently selected adapters", () => {
+    const path = "/v2/integrations/example/identity";
+    expect(() =>
+      createCleanPersonHttpServer(
+        serverOptions({
+          approval: { method: "POST", path, accept: async () => "accepted" },
+          external_identity: {
+            routes: [{ route_id: "example-identity", method: "POST", path }],
+            accept: async () => ({ status: 200, body: {} }),
+          },
+        }),
+      ),
+    ).toThrow(`provider ingress route is configured more than once: POST ${path}`);
+  });
+
+  it("mounts a selected non-Slack ingress without a server route change", async () => {
+    const accept = vi.fn(
+      async (
+        _request: Parameters<
+          PrivateApprovalInteractionHttpApplicationV1["accept"]
+        >[0],
+      ) => "accepted" as const,
+    );
+    const server = await start({
+      method: "POST",
+      path: "/v2/integrations/example/approvals",
+      accept,
+    });
+    try {
+      const response = await fetch(
+        `${server.url}/v2/integrations/example/approvals`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "text/plain",
+            "x-example-signature": "proof",
+          },
+          body: "exact-body",
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(accept).toHaveBeenCalledWith({
+        raw_body: expect.any(Uint8Array),
+        content_type: "text/plain",
+        headers: expect.objectContaining({ "x-example-signature": "proof" }),
+      });
+      expect(Buffer.from(accept.mock.calls[0]![0].raw_body).toString("utf8")).toBe(
+        "exact-body",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("passes the exact unparsed bytes and Slack headers to the signed application", async () => {
     const accept = vi.fn(
       async (
@@ -44,7 +128,9 @@ describe("private Slack approval interactions HTTP mount V1", () => {
         >[0],
       ) => "accepted" as const,
     );
-    const server = await start({ accept });
+    const server = await start(
+      createPrivateApprovalSlackInteractionHttpIngressV1({ accept }),
+    );
     const raw = "payload=%7B%22exact%22%3A%22a%2Bb%2520c%22%7D";
     try {
       const response = await fetch(
@@ -74,16 +160,16 @@ describe("private Slack approval interactions HTTP mount V1", () => {
     }
   });
 
-  it("returns a sanitized unavailable response when the signed application is absent", async () => {
+  it("does not reserve a provider route when no ingress is configured", async () => {
     const server = await start();
     try {
       const response = await fetch(
         `${server.url}${PRIVATE_APPROVAL_SLACK_INTERACTIONS_PATH_V1}`,
         { method: "POST", body: "payload=%7B%7D" },
       );
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(404);
       expect(await response.json()).toEqual({
-        error: { code: "unavailable", message: "request failed" },
+        error: { code: "not_found", message: "request failed" },
       });
     } finally {
       await server.close();
@@ -98,7 +184,9 @@ describe("private Slack approval interactions HTTP mount V1", () => {
         >[0],
       ) => "accepted" as const,
     );
-    const server = await start({ accept });
+    const server = await start(
+      createPrivateApprovalSlackInteractionHttpIngressV1({ accept }),
+    );
     try {
       const response = await fetch(
         `${server.url}${PRIVATE_APPROVAL_SLACK_INTERACTIONS_PATH_V1}`,

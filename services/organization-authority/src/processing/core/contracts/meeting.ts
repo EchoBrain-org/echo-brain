@@ -162,6 +162,12 @@ export interface MeetingArtifact {
 }
 
 export interface MeetingContext {
+  /**
+   * The person responsible for this meeting, when the source can establish
+   * that identity. This is deliberately separate from the calendar organizer:
+   * ad-hoc meetings may have an owner without a calendar event.
+   */
+  owner_participant_id?: string;
   calendar?: {
     event_id?: string;
     series_id?: string;

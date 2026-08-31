@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-CORE-PIPELINE
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+reviewed_at: 2026-08-29
+reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
 decision_ids:
   - ADR-0001
   - ADR-0003
@@ -18,10 +18,12 @@ decision_ids:
 invariant_ids:
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
+  - INV-ADAPTERS-005
   - INV-IDENTITY-005
 failure_pattern_ids:
   - FP-ADAPTERS-003
   - FP-ADAPTERS-004
+  - FP-ADAPTERS-005
 qualification_ids:
   - QMAT-ADAPTERS-001
 ---
@@ -42,7 +44,10 @@ organization deployment, or concrete persistence.
 The core operates on bounded domain values. It reaches sources, processors,
 approval surfaces, delivery surfaces, and storage only through ports. Concrete
 provider and infrastructure code depends inward on the core; the core must not
-depend outward on them.
+depend outward on them. Provider selection belongs in explicit composition
+bundles for source, processor, Layer 4 generation, approval/interaction, and
+Person external identity. Shared flow retains only opaque presentation
+references and approved-record policy projectors.
 
 ## Current references
 

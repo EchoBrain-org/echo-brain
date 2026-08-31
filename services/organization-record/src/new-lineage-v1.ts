@@ -21,7 +21,6 @@ export {
   type V4ReceiptFactory,
   type V4RecordEnvelopeFactory,
   type V4RecordEnvelopeView,
-  type ReprovedPrivateSlackBlockApprovalD2WitnessV1,
 } from "./log/record-log-v4-append.js";
 export {
   CleanPersonRecordReaderV1,
@@ -41,6 +40,7 @@ export {
 export {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  createPersonPolicyFactProjectorV2,
   type ReprovedPersonPolicyD2WitnessV2,
   type ReprovedPersonPolicyAuthorizationAllowV2View,
   type ReprovedPersonPolicyAuditEntryV2View,
@@ -49,8 +49,18 @@ export {
   PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
   PrivateSlackBlockApprovalPolicyFactProjectionV1Error,
   SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
+  createPrivateSlackBlockApprovalPolicyProjectorV1,
   projectPrivateSlackBlockApprovalPolicyFactsV1,
 } from "./application/private-slack-block-approval-policy-facts-v1.js";
 export type {
   PrivateSlackBlockApprovalPolicyFactsInputV1,
+  ReprovedPrivateSlackBlockApprovalD2WitnessV1,
 } from "./application/private-slack-block-approval-policy-facts-v1.js";
+export {
+  createApprovedRecordPolicyProjectorRegistryV1,
+} from "./application/approved-record-policy-projection-v1.js";
+export type {
+  ApprovedRecordPolicyEnvelopeV1,
+  ApprovedRecordPolicyProjectorRegistryV1,
+  ApprovedRecordPolicyProjectorV1,
+} from "./application/approved-record-policy-projection-v1.js";

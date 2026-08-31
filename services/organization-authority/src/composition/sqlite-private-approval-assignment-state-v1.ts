@@ -14,7 +14,7 @@ import {
   type PrivateApprovalSlackIdentityLinkV1,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import type Database from "better-sqlite3";
-import type { GranolaMeetingOwnerPrivateApprovalTargetV1 } from "./resolve-granola-meeting-owner-private-approval-target-v1.js";
+import type { PrivateApprovalTargetV1 } from "./resolve-private-approval-target-v1.js";
 
 /**
  * The Authority-owned, immutable assignment persistence for the private
@@ -62,7 +62,7 @@ export interface PrivateApprovalSlackDmChannelV1 {
 
 export interface StagePrivateApprovalAssignmentInputV1 {
   readonly candidate: PrivateApprovalCandidateCommitmentV1;
-  readonly owner_target: GranolaMeetingOwnerPrivateApprovalTargetV1;
+  readonly owner_target: PrivateApprovalTargetV1;
   readonly dm_channel: PrivateApprovalSlackDmChannelV1;
 }
 
@@ -377,10 +377,10 @@ function currentCandidate(
   return database
     .prepare(
       `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256
-         FROM authority_clean_live_candidates_v1 AS candidate
-         JOIN authority_clean_live_approval_outbox_v1 AS outbox
+         FROM authority_live_source_candidates_v2 AS candidate
+         JOIN authority_live_approval_outbox_v2 AS outbox
            ON outbox.candidate_id = candidate.candidate_id
-         JOIN authority_clean_live_review_lineage_heads_v1 AS head
+         JOIN authority_live_source_review_lineage_heads_v2 AS head
            ON head.review_lineage_id = candidate.review_lineage_id
         WHERE outbox.approval_id = ?
           AND candidate.candidate_id = ?
@@ -527,7 +527,7 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       assertCanonicalUtcMillis(createdAt, "stage time");
       this.database
         .prepare(
-          `INSERT INTO authority_private_approval_assignments_v2 (
+          `INSERT INTO authority_private_approval_assignments_v3 (
              approval_id, candidate_id, candidate_sha256, frozen_card_sha256,
              approved_snapshot_sha256, connection_id, connection_contract_sha256,
              connection_state_sha256, external_identity_link_id,
@@ -722,7 +722,7 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       assertCanonicalUtcMillis(recordedAt, "terminal receipt time");
       this.database
         .prepare(
-          `INSERT INTO authority_private_approval_terminal_receipts_v2 (
+          `INSERT INTO authority_private_approval_terminal_receipts_v3 (
              approval_id, candidate_id, outcome, resolution_json,
              resolution_sha256, v4_receipt_json, v4_receipt_sha256,
              card_render_state, card_rendered_at, recorded_at
@@ -758,7 +758,7 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       assertCanonicalUtcMillis(renderedAt, "terminal card render time");
       const update = this.database
         .prepare(
-          `UPDATE authority_private_approval_terminal_receipts_v2
+          `UPDATE authority_private_approval_terminal_receipts_v3
               SET card_render_state = 'rendered', card_rendered_at = ?
             WHERE approval_id = ?
               AND card_render_state = 'unrendered'
@@ -781,7 +781,7 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
                 external_identity_link_contract_sha256, assignee_principal_id,
                 assignee_membership_id, slack_workspace_id, slack_enterprise_id,
                 slack_subject_id, slack_dm_channel_id, created_at
-           FROM authority_private_approval_assignments_v2
+           FROM authority_private_approval_assignments_v3
           WHERE approval_id = ?`,
       )
       .get(approvalId) as AssignmentRow | undefined;
@@ -793,7 +793,7 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
         `SELECT approval_id, candidate_id, outcome, resolution_json,
                 resolution_sha256, v4_receipt_json, v4_receipt_sha256,
                 card_render_state, card_rendered_at, recorded_at
-           FROM authority_private_approval_terminal_receipts_v2
+           FROM authority_private_approval_terminal_receipts_v3
           WHERE approval_id = ?`,
       )
       .get(approvalId) as TerminalRow | undefined;
@@ -806,10 +806,11 @@ export class SqlitePrivateApprovalAssignmentStateV1 {
       .prepare(
         `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
                 outbox.approval_id, outbox.frozen_card_sha256,
-                outbox.approved_snapshot_sha256, outbox.provider_message_ts,
+                outbox.approved_snapshot_sha256,
+                outbox.provider_message_ts,
                 outbox.state
-           FROM authority_clean_live_candidates_v1 AS candidate
-           JOIN authority_clean_live_approval_outbox_v1 AS outbox
+           FROM authority_live_source_candidates_v2 AS candidate
+           JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
           WHERE outbox.approval_id = ?
             AND candidate.candidate_id = ?

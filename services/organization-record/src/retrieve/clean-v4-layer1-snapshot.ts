@@ -7,10 +7,16 @@ import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  createPersonPolicyFactProjectorV2,
   type PersonPolicyFactItemKindV2,
   type PersonPolicyIdV2,
 } from "../application/person-policy-facts-v2.js";
 import { derivedAtomIdentity } from "../application/atom-identity.js";
+import {
+  createApprovedRecordPolicyProjectorRegistryV1,
+  type ApprovedRecordPolicyEnvelopeV1,
+  type ApprovedRecordPolicyProjectorRegistryV1,
+} from "../application/approved-record-policy-projection-v1.js";
 
 type RecordEventKind = "approved" | "rejected";
 type RecordAction = "approve" | "reject";
@@ -20,55 +26,9 @@ type RecordAction = "approve" | "reject";
  * composition. This workspace verifies no signatures and imports no durable
  * Organization Protocol shape; it only reads the already-proved V4 view.
  */
-export interface CleanV4Layer1VerifiedEnvelope {
-  readonly record_sha256: Sha256Digest;
-  readonly body: {
-    readonly envelope_id: string;
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
-    readonly semantic_idempotency_key: Sha256Digest;
-    readonly predecessor_position: number | null;
-    readonly predecessor_record_sha256: Sha256Digest | null;
-    readonly human_act_resolution_ref:
-      | {
-      readonly authority_id: string;
-      readonly organization_id: string;
-      readonly state_lineage_id: string;
-      readonly approval_id: string;
-      readonly action: RecordAction;
-      readonly policy_id: PersonPolicyIdV2;
-      readonly policy_contract_sha256: Sha256Digest;
-      readonly audit_event_id: string;
-      readonly audit_sequence: number;
-      readonly audit_entry_sha256: Sha256Digest;
-      readonly provider_action_kind: "echo-provider-human-action-v2";
-      readonly provider_action_schema_version: 2;
-      readonly provider_action_sha256: Sha256Digest;
-      readonly authorization_proof_sha256: Sha256Digest;
-      }
-      | {
-          readonly schema_version: 1;
-          readonly kind: "echo-private-slack-block-approval-resolution-ref-v1";
-          readonly authority_id: string;
-          readonly organization_id: string;
-          readonly state_lineage_id: string;
-          readonly approval_id: string;
-          readonly action: RecordAction;
-          readonly selected_policy_id: PersonPolicyIdV2 | null;
-          readonly policy_contract_sha256: Sha256Digest | null;
-          readonly final_approver: {
-            readonly principal_id: string;
-            readonly membership_id: string;
-          };
-          readonly audit_event_id: string;
-          readonly audit_sequence: number;
-          readonly audit_entry_sha256: Sha256Digest;
-          readonly provider_action_kind: "echo-signed-slack-block-action-v1";
-          readonly provider_action_schema_version: 1;
-          readonly provider_action_sha256: Sha256Digest;
-          readonly authorization_proof_sha256: Sha256Digest;
-        };
+export interface CleanV4Layer1VerifiedEnvelope
+  extends ApprovedRecordPolicyEnvelopeV1 {
+  readonly body: ApprovedRecordPolicyEnvelopeV1["body"] & {
     readonly event:
       | {
           readonly kind: "approved";
@@ -98,6 +58,8 @@ export interface CleanV4Layer1SnapshotInput {
   readonly state_lineage_id: string;
   /** Must invoke the protocol's signature and V4 schema verifier. */
   readonly verify_envelope: (value: unknown) => CleanV4Layer1VerifiedEnvelope;
+  /** Explicit approval-protocol registry selected by composition. */
+  readonly policy_projectors?: ApprovedRecordPolicyProjectorRegistryV1;
 }
 
 export interface CleanV4Layer1Head {
@@ -284,28 +246,6 @@ function expectedSignals(
   return Object.freeze(signals);
 }
 
-function approvedPolicy(reference: CleanV4Layer1VerifiedEnvelope["body"]["human_act_resolution_ref"]): {
-  readonly policy_id: PersonPolicyIdV2;
-  readonly policy_contract_sha256: Sha256Digest;
-} {
-  if ("selected_policy_id" in reference) {
-    if (
-      reference.selected_policy_id === null ||
-      reference.policy_contract_sha256 === null
-    ) {
-      invalid("private approved resolution must select a policy");
-    }
-    return Object.freeze({
-      policy_id: reference.selected_policy_id,
-      policy_contract_sha256: reference.policy_contract_sha256,
-    });
-  }
-  return Object.freeze({
-    policy_id: reference.policy_id,
-    policy_contract_sha256: reference.policy_contract_sha256,
-  });
-}
-
 function materialize(database: Database.Database): MaterializedSnapshot {
   database.exec("BEGIN");
   try {
@@ -368,7 +308,13 @@ function asJsonObject(value: unknown, label: string): JsonObject {
  * Layer 2 builder will scope before indexing.
  */
 export class CleanV4Layer1SnapshotPort {
-  constructor(private readonly database: Database.Database) {}
+  constructor(
+    private readonly database: Database.Database,
+    private readonly defaultPolicyProjectors: ApprovedRecordPolicyProjectorRegistryV1 =
+      createApprovedRecordPolicyProjectorRegistryV1([
+        createPersonPolicyFactProjectorV2(),
+      ]),
+  ) {}
 
   snapshot(input: CleanV4Layer1SnapshotInput): CleanV4Layer1Snapshot {
     requiredText(input.authority_id, "authority_id");
@@ -543,7 +489,8 @@ export class CleanV4Layer1SnapshotPort {
           "approved record Person facts do not exactly cover its signals",
         );
       }
-      const binding = approvedPolicy(reference);
+      const binding = (input.policy_projectors ?? this.defaultPolicyProjectors)
+        .approvedPolicy(envelope);
       const expectedFamily =
         binding.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
           ? "reviewer"

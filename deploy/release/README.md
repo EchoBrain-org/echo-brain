@@ -5,11 +5,16 @@ organization release. It is deliberately an artifact-selection process, not a
 schema migration or client fleet-management system.
 
 The runtime-profile field is current-only. A pre-beta Authority prepared with
-an older release record has no compatibility bridge. While there are no live
-users, run `onboard-clean-v1.sh replace-rehearsal
---confirm-no-live-users`, then prepare the organization again with the new
-release record and matching profile. Do not point this updater at the older
-accepted record.
+an older release record has no compatibility bridge. `clean-v1` describes an
+artifact replacement loop, not a database migration: it accepts only the
+current provider-neutral Authority V3, private-approval control-plane V2, and
+record-log V2 state lineage. For populated state, `stage` pulls the immutable
+candidate and runs its exact verifier in an isolated read-only container before
+any runtime, configuration, or state mutation. While there are no live users,
+run `onboard-clean-v1.sh
+replace-rehearsal --confirm-no-live-users`, then prepare the organization again
+with the new release record and matching profile. Do not point this updater at
+the older accepted record.
 
 ## Release record
 
@@ -179,7 +184,9 @@ as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
 migration is not eligible for this loop; make an explicit migration decision
-instead.
+instead. If persisted state is older or otherwise not that exact V3/V2/V2
+lineage, `stage` refuses before activating or recording the candidate. It does
+not attempt to repair, infer, or migrate the state.
 
 ## First-cohort employee onboarding kit
 

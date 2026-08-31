@@ -3,36 +3,40 @@ import {
   canonicalJson,
   canonicalSha256,
 } from "@echo-brain/federation-protocol";
-import { granolaCursorPhase } from "../adapters/meeting-sources/granola/index.js";
 import {
   assertCanonicalDecisionSet,
   assertCanonicalMeetingDocument,
   type DecisionSet,
   type MeetingDocument,
 } from "../core/index.js";
+import type { CleanLiveSourceBoundaryV1 } from "./live-source-boundary.js";
 import {
-  assertGranolaPersonContentPolicySnapshotV1,
-} from "./granola-person-content-policy.js";
-import {
+  assertLegacyReviewPolicySnapshotV1,
   cleanReviewInputSha256V1,
   cleanReviewLineageIdV1,
   cleanReviewSemanticSha256V1,
   type CleanReviewPolicySnapshotV1,
 } from "./review-lineage-semantics.js";
 import type {
-  CleanGranolaSourceAdmissionV1,
+  CleanLiveSourceAdmissionV1,
   CleanActionableLiveCandidateV1,
   CleanFrozenCandidateSnapshotV1,
   CleanLiveCandidateSnapshotInputV1,
   CleanLiveCandidateV1,
   CleanLiveOnlySourceStateV1,
 } from "./live-only-source-cycle.js";
+import {
+  assertStagingSyntheticMeetingCanaryV1,
+  isStagingSyntheticMeetingCanaryV1,
+} from "./staging-synthetic-meeting-canary-v1.js";
 
 interface AdmissionRow {
+  readonly source_adapter_id: string;
   readonly source_instance_id: string;
   readonly source_adapter_version: string;
   readonly cursor: string;
   readonly cutoff_at: string;
+  readonly processor_adapter_id: string;
   readonly processor_instance_id: string;
   readonly processor_adapter_version: string;
   readonly processor_configuration_sha256: string;
@@ -86,7 +90,8 @@ function candidateSemanticDigest(input: {
 export interface CleanPostedApprovalCardV1 {
   readonly candidate_id: string;
   readonly post_started_at: string;
-  readonly provider_message_ts: string;
+  /** Opaque identifier assigned by the approval presentation provider. */
+  readonly presentation_external_id: string;
   readonly frozen_card_sha256: string;
   readonly approved_snapshot: Readonly<Record<string, unknown>>;
 }
@@ -98,7 +103,7 @@ export interface CleanPreparedApprovalPostV1 {
 }
 
 export type CleanLiveApprovalOutboxV1 = CleanActionableLiveCandidateV1 & {
-  readonly provider_message_ts: string | null;
+  readonly presentation_external_id: string | null;
   readonly frozen_card_sha256: string | null;
   readonly approved_snapshot_json: string | null;
   readonly approved_snapshot_sha256: string | null;
@@ -113,12 +118,12 @@ export interface CleanSupersededApprovalCardV1 {
   readonly approval_id: string;
   readonly review_lineage_id: string;
   readonly superseded_by_candidate_id: string;
-  readonly provider_message_ts: string | null;
+  readonly presentation_external_id: string | null;
   readonly post_started_at: string;
 }
 
 export type CleanFrozenCandidateForApprovalV1 = CleanLiveApprovalOutboxV1 & {
-  readonly admission: CleanGranolaSourceAdmissionV1;
+  readonly admission: CleanLiveSourceAdmissionV1;
   readonly meeting: MeetingDocument;
   readonly decisions: DecisionSet;
   readonly approved_snapshot: Readonly<Record<string, unknown>> | null;
@@ -126,7 +131,7 @@ export type CleanFrozenCandidateForApprovalV1 = CleanLiveApprovalOutboxV1 & {
 
 export class CleanLiveOnlySourceRevokedError extends Error {
   constructor() {
-    super("clean live-only Granola source owner membership is revoked");
+    super("clean live-only source owner membership is revoked");
     this.name = "CleanLiveOnlySourceRevokedError";
   }
 }
@@ -139,33 +144,29 @@ function assertCanonicalUtcMillis(value: string): void {
   }
 }
 
-function assertLiveGranolaCursor(cursor: string): void {
-  if (
-    !cursor.startsWith("granola:v1:") ||
-    granolaCursorPhase(cursor) !== "live"
-  ) {
-    throw new Error(
-      "clean live-only source cursor must be a Granola v1 live cursor",
-    );
-  }
-}
-
 function admissionFrom(
   row: AdmissionRow,
   progress: ProgressRow,
-): CleanGranolaSourceAdmissionV1 {
+  sourceBoundary: CleanLiveSourceBoundaryV1,
+  expectedProcessorAdapterId: string,
+): CleanLiveSourceAdmissionV1 {
+  assertAdmissionAdapterIdentity(
+    row,
+    sourceBoundary,
+    expectedProcessorAdapterId,
+  );
   assertCanonicalUtcMillis(row.cutoff_at);
-  assertLiveGranolaCursor(progress.cursor);
+  sourceBoundary.assert_live_cursor(progress.cursor);
   return Object.freeze({
     source: {
-      adapter_id: "granola" as const,
+      adapter_id: row.source_adapter_id,
       instance_id: row.source_instance_id,
       version: row.source_adapter_version,
       cursor: progress.cursor,
       cutoff_at: row.cutoff_at,
     },
     processor: {
-      adapter_id: "llm" as const,
+      adapter_id: row.processor_adapter_id,
       instance_id: row.processor_instance_id,
       version: row.processor_adapter_version,
       configuration_sha256: row.processor_configuration_sha256,
@@ -180,12 +181,30 @@ function admissionFrom(
  * one SQLite transaction, so no runner can overwrite a newer checkpoint.
  */
 export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStateV1 {
+  private readonly expectedProcessorAdapterId: string;
+  private readonly now: () => string;
+
   constructor(
     private readonly database: Database.Database,
-    private readonly now: () => string = () => new Date().toISOString(),
-  ) {}
+    private readonly sourceBoundary: CleanLiveSourceBoundaryV1,
+    /**
+     * The caller must name the processor adapter selected by its runtime
+     * bundle. An admitted source cannot be reopened through a different
+     * decision processor implementation by accident.
+     */
+    expectedProcessorAdapterId: string,
+    now: () => string = () => new Date().toISOString(),
+  ) {
+    if (expectedProcessorAdapterId.trim().length === 0) {
+      throw new Error(
+        "clean live-only source expected processor adapter identity is invalid",
+      );
+    }
+    this.expectedProcessorAdapterId = expectedProcessorAdapterId;
+    this.now = now;
+  }
 
-  async readAdmission(): Promise<CleanGranolaSourceAdmissionV1> {
+  async readAdmission(): Promise<CleanLiveSourceAdmissionV1> {
     return this.database.transaction(() => {
       const admission = this.admission();
       if (admission.membership_status !== "active") {
@@ -193,7 +212,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       this.database
         .prepare(
-          `INSERT INTO authority_clean_granola_source_progress_v1 (
+          `INSERT INTO authority_live_source_progress_v2 (
              singleton, admission_semantic_input_sha256, cursor,
              cursor_version, updated_at
            ) VALUES (1, ?, ?, 0, ?)
@@ -207,7 +226,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       const progress = this.database
         .prepare(
           `SELECT cursor
-             FROM authority_clean_granola_source_progress_v1
+             FROM authority_live_source_progress_v2
             WHERE singleton = 1
               AND admission_semantic_input_sha256 = ?`,
         )
@@ -217,7 +236,12 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           "clean live-only source progress conflicts with its admission",
         );
       }
-      return admissionFrom(admission, progress);
+      return admissionFrom(
+        admission,
+        progress,
+        this.sourceBoundary,
+        this.expectedProcessorAdapterId,
+      );
     })();
   }
 
@@ -230,12 +254,22 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         throw new CleanLiveOnlySourceRevokedError();
       }
       const progress = this.progress(admission.semantic_input_sha256);
-      const current = admissionFrom(admission, progress);
+      const current = admissionFrom(
+        admission,
+        progress,
+        this.sourceBoundary,
+        this.expectedProcessorAdapterId,
+      );
       if (
+        input.admission.source.adapter_id !== current.source.adapter_id ||
         input.admission.source.cursor !== current.source.cursor ||
         input.admission.source.instance_id !== current.source.instance_id ||
+        input.admission.source.version !== current.source.version ||
+        input.admission.processor.adapter_id !==
+          current.processor.adapter_id ||
         input.admission.processor.instance_id !==
           current.processor.instance_id ||
+        input.admission.processor.version !== current.processor.version ||
         input.admission.processor.configuration_sha256 !==
           current.processor.configuration_sha256
       ) {
@@ -243,6 +277,18 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           "clean live candidate differs from the current admitted source state",
         );
       }
+      assertCanonicalMeetingDocument(input.meeting, {
+        kind: "meeting-source",
+        adapter_id: current.source.adapter_id,
+        instance_id: current.source.instance_id,
+        version: current.source.version,
+      });
+      assertCanonicalDecisionSet(input.decisions, input.meeting, {
+        kind: "decision-processor",
+        adapter_id: current.processor.adapter_id,
+        instance_id: current.processor.instance_id,
+        version: current.processor.version,
+      });
       const meetingJson = canonicalJson(input.meeting);
       const decisionsJson = canonicalJson(input.decisions);
       // A source page can be retried after its cursor has advanced, and the
@@ -260,10 +306,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       const existing = this.candidate(candidateSemanticSha256);
       if (existing !== undefined) return existing as CleanLiveCandidateV1;
 
-      assertGranolaPersonContentPolicySnapshotV1(
-        input.meeting.extensions,
-        input.review_policy,
-      );
+      assertLegacyReviewPolicySnapshotV1(input.review_policy);
 
       const reviewLineageId = cleanReviewLineageIdV1({
         adapter_id: input.meeting.provenance.source.adapter_id,
@@ -309,7 +352,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       assertCanonicalUtcMillis(now);
       this.database
         .prepare(
-          `INSERT INTO authority_clean_live_candidates_v1 (
+          `INSERT INTO authority_live_source_candidates_v2 (
              candidate_id, candidate_semantic_sha256,
              admission_semantic_input_sha256, review_lineage_id,
              review_input_sha256, review_semantic_sha256,
@@ -349,7 +392,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       if (disposition === "actionable") {
         this.database
           .prepare(
-            `INSERT INTO authority_clean_live_approval_outbox_v1 (
+            `INSERT INTO authority_live_approval_outbox_v2 (
                candidate_id, approval_id, stage_command_id, state, updated_at
              ) VALUES (?, ?, ?, 'queued', ?)`,
           )
@@ -358,7 +401,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       if (semanticChanged) {
         this.database
           .prepare(
-          `INSERT INTO authority_clean_live_review_lineage_heads_v1 (
+          `INSERT INTO authority_live_source_review_lineage_heads_v2 (
              review_lineage_id, candidate_id, updated_at
            ) VALUES (?, ?, ?)
              ON CONFLICT (review_lineage_id) DO UPDATE SET
@@ -384,6 +427,11 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       if (admission.membership_status !== "active") {
         throw new CleanLiveOnlySourceRevokedError();
       }
+      assertAdmissionAdapterIdentity(
+        admission,
+        this.sourceBoundary,
+        this.expectedProcessorAdapterId,
+      );
       const candidate = this.candidate(
         candidateSemanticDigest({
           admission_semantic_input_sha256: admission.semantic_input_sha256,
@@ -406,10 +454,15 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       if (admission.membership_status !== "active") {
         throw new CleanLiveOnlySourceRevokedError();
       }
+      assertAdmissionAdapterIdentity(
+        admission,
+        this.sourceBoundary,
+        this.expectedProcessorAdapterId,
+      );
       const row = this.database
         .prepare(
           `SELECT candidate.candidate_id
-             FROM authority_clean_live_candidates_v1 AS candidate
+             FROM authority_live_source_candidates_v2 AS candidate
             WHERE candidate.review_lineage_id = ?
               AND candidate.review_input_sha256 = ?
             ORDER BY candidate.created_at ASC
@@ -427,10 +480,10 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     const row = this.database
       .prepare(
         `SELECT 1
-           FROM authority_clean_live_approval_outbox_v1 AS outbox
-           JOIN authority_clean_live_candidates_v1 AS candidate
+           FROM authority_live_approval_outbox_v2 AS outbox
+           JOIN authority_live_source_candidates_v2 AS candidate
              ON candidate.candidate_id = outbox.candidate_id
-           JOIN authority_clean_live_review_lineage_heads_v1 AS head
+           JOIN authority_live_source_review_lineage_heads_v2 AS head
              ON head.review_lineage_id = candidate.review_lineage_id
           WHERE outbox.approval_id = ?
             AND outbox.state != 'superseded'
@@ -441,7 +494,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   }
 
   /**
-   * Reproves every current, actionable approval that still needs Slack/D2
+   * Reproves every current, actionable approval that still needs presentation
    * delivery. The query deliberately selects the lineage head first; the
    * frozen reader then verifies the immutable meeting, decisions, and any
    * frozen card snapshot before exposing it to a delivery worker.
@@ -450,10 +503,10 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     const approvals = this.database
       .prepare(
         `SELECT outbox.approval_id
-           FROM authority_clean_live_approval_outbox_v1 AS outbox
-           JOIN authority_clean_live_candidates_v1 AS candidate
+           FROM authority_live_approval_outbox_v2 AS outbox
+           JOIN authority_live_source_candidates_v2 AS candidate
              ON candidate.candidate_id = outbox.candidate_id
-           JOIN authority_clean_live_review_lineage_heads_v1 AS head
+           JOIN authority_live_source_review_lineage_heads_v2 AS head
              ON head.review_lineage_id = candidate.review_lineage_id
           WHERE candidate.disposition = 'actionable'
             AND head.candidate_id = candidate.candidate_id
@@ -475,9 +528,10 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       .prepare(
         `SELECT outbox.approval_id, candidate.review_lineage_id,
                 outbox.superseded_by_candidate_id,
-                outbox.provider_message_ts, outbox.post_started_at
-           FROM authority_clean_live_approval_outbox_v1 AS outbox
-           JOIN authority_clean_live_candidates_v1 AS candidate
+                outbox.provider_message_ts AS presentation_external_id,
+                outbox.post_started_at
+           FROM authority_live_approval_outbox_v2 AS outbox
+           JOIN authority_live_source_candidates_v2 AS candidate
              ON candidate.candidate_id = outbox.candidate_id
           WHERE outbox.state = 'superseded'
             AND outbox.post_started_at IS NOT NULL
@@ -489,29 +543,31 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
 
   recordSupersededApprovalCardTombstoned(input: {
     readonly approval_id: string;
-    readonly provider_message_ts: string;
+    readonly presentation_external_id: string;
   }): void {
     this.database.transaction(() => {
       const current = this.database
         .prepare(
-          `SELECT state, provider_message_ts, tombstoned_at
-             FROM authority_clean_live_approval_outbox_v1
+          `SELECT state,
+                  provider_message_ts AS presentation_external_id,
+                  tombstoned_at
+             FROM authority_live_approval_outbox_v2
             WHERE approval_id = ?`,
         )
         .get(input.approval_id) as
         | {
             readonly state: string;
-            readonly provider_message_ts: string | null;
+            readonly presentation_external_id: string | null;
             readonly tombstoned_at: string | null;
           }
         | undefined;
       if (
         current === undefined ||
         current.state !== "superseded" ||
-        current.provider_message_ts !== input.provider_message_ts
+        current.presentation_external_id !== input.presentation_external_id
       ) {
         throw new Error(
-          "clean superseded Slack tombstone lacks its durable card identity",
+          "clean superseded presentation retirement lacks its durable identity",
         );
       }
       if (current.tombstoned_at !== null) return;
@@ -519,14 +575,14 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       assertCanonicalUtcMillis(now);
       const update = this.database
         .prepare(
-          `UPDATE authority_clean_live_approval_outbox_v1
+          `UPDATE authority_live_approval_outbox_v2
               SET tombstoned_at = ?, updated_at = ?
             WHERE approval_id = ? AND state = 'superseded'
               AND provider_message_ts = ? AND tombstoned_at IS NULL`,
         )
-        .run(now, now, input.approval_id, input.provider_message_ts);
+        .run(now, now, input.approval_id, input.presentation_external_id);
       if (update.changes !== 1) {
-        throw new Error("clean superseded Slack tombstone state drifted");
+        throw new Error("clean superseded presentation retirement state drifted");
       }
     })();
   }
@@ -535,8 +591,17 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     readonly expected_cursor: string;
     readonly next_cursor: string;
   }): Promise<"advanced" | "state_drift" | "revoked"> {
-    assertLiveGranolaCursor(input.expected_cursor);
-    assertLiveGranolaCursor(input.next_cursor);
+    // `advanceCursor` is public and can be called by a resumed worker before
+    // it has re-read the admission. Reprove the persisted adapter identities
+    // before it mutates the checkpoint.
+    const admission = this.admission();
+    assertAdmissionAdapterIdentity(
+      admission,
+      this.sourceBoundary,
+      this.expectedProcessorAdapterId,
+    );
+    this.sourceBoundary.assert_live_cursor(input.expected_cursor);
+    this.sourceBoundary.assert_live_cursor(input.next_cursor);
     if (input.next_cursor === input.expected_cursor) {
       throw new Error(
         "clean live-only source cursor advance must change the cursor",
@@ -547,20 +612,20 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     return this.database.transaction(() => {
       const update = this.database
         .prepare(
-          `UPDATE authority_clean_granola_source_progress_v1
+          `UPDATE authority_live_source_progress_v2
               SET cursor = ?, cursor_version = cursor_version + 1, updated_at = ?
             WHERE singleton = 1
               AND cursor = ?
               AND EXISTS (
                 SELECT 1
-                  FROM authority_clean_granola_source_admission_v1 AS admission
+                  FROM authority_live_source_admission_v2 AS admission
                   JOIN authority_memberships AS membership
                     ON membership.membership_id = admission.membership_id
                    AND membership.organization_id = admission.organization_id
                    AND membership.principal_id = admission.principal_id
                    AND membership.membership_type = admission.membership_type
                  WHERE admission.semantic_input_sha256 =
-                       authority_clean_granola_source_progress_v1.admission_semantic_input_sha256
+                       authority_live_source_progress_v2.admission_semantic_input_sha256
                    AND membership.status = 'active'
               )`,
         )
@@ -588,14 +653,15 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                 candidate.review_policy_consequence_sha256,
                 candidate.disposition,
                 outbox.approval_id, outbox.stage_command_id, outbox.state,
-                outbox.provider_message_ts, outbox.frozen_card_sha256,
+                outbox.provider_message_ts AS presentation_external_id,
+                outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
                 outbox.post_started_at,
                 outbox.control_approval_sha256,
                 outbox.superseded_by_candidate_id, outbox.superseded_at,
                 outbox.tombstoned_at
-           FROM authority_clean_live_candidates_v1 AS candidate
-           JOIN authority_clean_live_approval_outbox_v1 AS outbox
+           FROM authority_live_source_candidates_v2 AS candidate
+           JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
           WHERE outbox.approval_id = ?`,
       )
@@ -611,12 +677,15 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                 candidate.source_cursor, candidate.meeting_sha256,
                 candidate.meeting_json, candidate.decisions_sha256,
                 candidate.decisions_json,
-                admission.source_instance_id, admission.source_adapter_version,
-                admission.cutoff_at, admission.processor_instance_id,
+                admission.source_adapter_id,
+                admission.source_adapter_instance_id AS source_instance_id,
+                admission.source_adapter_version,
+                admission.cutoff_at, admission.processor_adapter_id,
+                admission.processor_instance_id,
                 admission.processor_adapter_version,
                 admission.processor_configuration_sha256
-           FROM authority_clean_live_candidates_v1 AS candidate
-           JOIN authority_clean_granola_source_admission_v1 AS admission
+           FROM authority_live_source_candidates_v2 AS candidate
+           JOIN authority_live_source_admission_v2 AS admission
              ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
           WHERE candidate.candidate_id = ?`,
       )
@@ -629,8 +698,10 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           readonly decisions_sha256: string;
           readonly decisions_json: string;
           readonly source_instance_id: string;
+          readonly source_adapter_id: string;
           readonly source_adapter_version: string;
           readonly cutoff_at: string;
+          readonly processor_adapter_id: string;
           readonly processor_instance_id: string;
           readonly processor_adapter_version: string;
           readonly processor_configuration_sha256: string;
@@ -651,28 +722,51 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     ) {
       throw new Error("clean frozen candidate snapshot digest is invalid");
     }
-    const admission: CleanGranolaSourceAdmissionV1 = {
+    const syntheticCanary = isStagingSyntheticMeetingCanaryV1(
+      meeting,
+      row.source_cursor,
+    );
+    const admission: CleanLiveSourceAdmissionV1 = {
       source: {
-        adapter_id: "granola" as const,
-        instance_id: row.source_instance_id,
-        version: row.source_adapter_version,
+        adapter_id: syntheticCanary
+          ? meeting.provenance.source.adapter_id
+          : row.source_adapter_id,
+        instance_id: syntheticCanary
+          ? meeting.provenance.source.instance_id
+          : row.source_instance_id,
+        version: syntheticCanary
+          ? meeting.provenance.source.version
+          : row.source_adapter_version,
         cursor: row.source_cursor,
         cutoff_at: row.cutoff_at,
       },
       processor: {
-        adapter_id: "llm" as const,
+        adapter_id: row.processor_adapter_id,
         instance_id: row.processor_instance_id,
         version: row.processor_adapter_version,
         configuration_sha256: row.processor_configuration_sha256,
       },
     };
-    assertAdmissionSnapshot(admission);
-    assertCanonicalMeetingDocument(meeting, {
-      kind: "meeting-source",
-      adapter_id: admission.source.adapter_id,
-      instance_id: admission.source.instance_id,
-      version: admission.source.version,
-    });
+    if (syntheticCanary) {
+      // This exception is recovery-only. PR98 has no ingress that can create
+      // a synthetic candidate, and a non-exact envelope remains a hard error.
+      assertStagingSyntheticMeetingCanaryV1(meeting);
+      if (admission.processor.adapter_id !== this.expectedProcessorAdapterId) {
+        throw new Error("admission processor differs from its configured processor");
+      }
+    } else {
+      assertAdmissionSnapshot(
+        admission,
+        this.sourceBoundary,
+        this.expectedProcessorAdapterId,
+      );
+      assertCanonicalMeetingDocument(meeting, {
+        kind: "meeting-source",
+        adapter_id: admission.source.adapter_id,
+        instance_id: admission.source.instance_id,
+        version: admission.source.version,
+      });
+    }
     assertCanonicalDecisionSet(decisions, meeting, {
       kind: "decision-processor",
       adapter_id: admission.processor.adapter_id,
@@ -718,7 +812,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   }
 
   /**
-   * Persist the exact card payload before any Slack side effect. Recovery must
+   * Persist the exact presentation payload before any external side effect. Recovery must
    * prove the same frozen payload; it can never silently construct a new one.
    */
   prepareApprovalPost(input: {
@@ -735,7 +829,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         assertCanonicalUtcMillis(now);
         const updated = this.database
           .prepare(
-            `UPDATE authority_clean_live_approval_outbox_v1
+            `UPDATE authority_live_approval_outbox_v2
                 SET state = 'posting', frozen_card_sha256 = ?,
                     approved_snapshot_json = ?, approved_snapshot_sha256 = ?,
                     post_started_at = ?, updated_at = ?
@@ -781,12 +875,12 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       if (current.state === "queued") return current;
       if (
         current.state === "superseded" &&
-        current.provider_message_ts === null &&
+        current.presentation_external_id === null &&
         current.post_started_at === null
       ) {
         return current;
       }
-      if (current.provider_message_ts !== null) {
+      if (current.presentation_external_id !== null) {
         throw new Error(
           "clean live approval post attempt is externally visible",
         );
@@ -802,7 +896,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         assertCanonicalUtcMillis(now);
         const updated = this.database
           .prepare(
-            `UPDATE authority_clean_live_approval_outbox_v1
+            `UPDATE authority_live_approval_outbox_v2
                 SET frozen_card_sha256 = NULL,
                     approved_snapshot_json = NULL,
                     approved_snapshot_sha256 = NULL,
@@ -829,7 +923,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       assertCanonicalUtcMillis(now);
       const updated = this.database
         .prepare(
-          `UPDATE authority_clean_live_approval_outbox_v1
+          `UPDATE authority_live_approval_outbox_v2
               SET state = 'queued', frozen_card_sha256 = NULL,
                   approved_snapshot_json = NULL,
                   approved_snapshot_sha256 = NULL,
@@ -856,7 +950,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       const snapshotSha256 = canonicalSha256(input.approved_snapshot);
       if (current.state !== "posting") {
         if (
-          current.provider_message_ts === input.provider_message_ts &&
+          current.presentation_external_id === input.presentation_external_id &&
           current.post_started_at === input.post_started_at &&
           current.frozen_card_sha256 === input.frozen_card_sha256 &&
           current.approved_snapshot_json === snapshotJson &&
@@ -866,7 +960,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         }
         if (
           current.state === "superseded" &&
-          current.provider_message_ts === null &&
+          current.presentation_external_id === null &&
           current.frozen_card_sha256 === input.frozen_card_sha256 &&
           current.approved_snapshot_json === snapshotJson &&
           current.approved_snapshot_sha256 === snapshotSha256 &&
@@ -876,7 +970,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
           assertCanonicalUtcMillis(now);
           this.database
             .prepare(
-              `UPDATE authority_clean_live_approval_outbox_v1
+              `UPDATE authority_live_approval_outbox_v2
                   SET provider_message_ts = ?,
                       updated_at = ?
                 WHERE candidate_id = ? AND state = 'superseded'
@@ -884,7 +978,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                   AND post_started_at = ?`,
             )
             .run(
-              input.provider_message_ts,
+              input.presentation_external_id,
               now,
               input.candidate_id,
               input.post_started_at,
@@ -899,14 +993,14 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       assertCanonicalUtcMillis(now);
       const updated = this.database
         .prepare(
-          `UPDATE authority_clean_live_approval_outbox_v1
+          `UPDATE authority_live_approval_outbox_v2
               SET state = 'posted', provider_message_ts = ?,
                   updated_at = ?
             WHERE candidate_id = ? AND state = 'posting'
               AND post_started_at = ?`,
         )
         .run(
-          input.provider_message_ts,
+          input.presentation_external_id,
           now,
           input.candidate_id,
           input.post_started_at,
@@ -937,7 +1031,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       if (current.state === "superseded") {
         if (
-          current.provider_message_ts === null ||
+          current.presentation_external_id === null ||
           current.frozen_card_sha256 === null ||
           current.approved_snapshot_sha256 === null
         ) {
@@ -949,7 +1043,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         assertCanonicalUtcMillis(now);
         this.database
           .prepare(
-            `UPDATE authority_clean_live_approval_outbox_v1
+            `UPDATE authority_live_approval_outbox_v2
                 SET control_approval_sha256 = ?, updated_at = ?
               WHERE candidate_id = ? AND state = 'superseded'
                 AND control_approval_sha256 IS NULL`,
@@ -966,7 +1060,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       assertCanonicalUtcMillis(now);
       this.database
         .prepare(
-          `UPDATE authority_clean_live_approval_outbox_v1
+          `UPDATE authority_live_approval_outbox_v2
               SET state = 'staged', control_approval_sha256 = ?, updated_at = ?
             WHERE candidate_id = ? AND state = 'posted'`,
         )
@@ -978,12 +1072,15 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   private admission(): AdmissionRow {
     const admission = this.database
       .prepare(
-        `SELECT source_instance_id, source_adapter_version, cursor, cutoff_at,
-                processor_instance_id, processor_adapter_version,
+        `SELECT source_adapter_id,
+                source_adapter_instance_id AS source_instance_id,
+                source_adapter_version, initial_cursor AS cursor, cutoff_at,
+                processor_adapter_id, processor_instance_id,
+                processor_adapter_version,
                 processor_configuration_sha256,
                 semantic_input_sha256, admitted_at,
                 membership.status AS membership_status
-           FROM authority_clean_granola_source_admission_v1 AS admission
+           FROM authority_live_source_admission_v2 AS admission
            JOIN authority_memberships AS membership
              ON membership.membership_id = admission.membership_id
             AND membership.organization_id = admission.organization_id
@@ -1002,7 +1099,7 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
     const progress = this.database
       .prepare(
         `SELECT cursor
-           FROM authority_clean_granola_source_progress_v1
+           FROM authority_live_source_progress_v2
           WHERE singleton = 1 AND admission_semantic_input_sha256 = ?`,
       )
       .get(admissionSemanticSha256) as ProgressRow | undefined;
@@ -1027,8 +1124,8 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                 candidate.disposition, outbox.approval_id,
                 outbox.stage_command_id,
                 COALESCE(outbox.state, candidate.disposition) AS state
-           FROM authority_clean_live_candidates_v1 AS candidate
-           LEFT JOIN authority_clean_live_approval_outbox_v1 AS outbox
+           FROM authority_live_source_candidates_v2 AS candidate
+           LEFT JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
           WHERE candidate.candidate_semantic_sha256 = ?`,
       )
@@ -1040,8 +1137,8 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       .prepare(
         `SELECT head.review_lineage_id, head.candidate_id,
                 candidate.review_semantic_sha256
-           FROM authority_clean_live_review_lineage_heads_v1 AS head
-           JOIN authority_clean_live_candidates_v1 AS candidate
+           FROM authority_live_source_review_lineage_heads_v2 AS head
+           JOIN authority_live_source_candidates_v2 AS candidate
              ON candidate.candidate_id = head.candidate_id
           WHERE head.review_lineage_id = ?`,
       )
@@ -1055,19 +1152,19 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
   ): void {
     this.database
       .prepare(
-        `UPDATE authority_clean_live_approval_outbox_v1
+        `UPDATE authority_live_approval_outbox_v2
             SET state = 'superseded', superseded_by_candidate_id = ?,
                 superseded_at = ?, updated_at = ?
           WHERE candidate_id IN (
             SELECT candidate_id
-              FROM authority_clean_live_candidates_v1
+              FROM authority_live_source_candidates_v2
              WHERE review_lineage_id = ?
           )
             AND state != 'superseded'
             AND NOT EXISTS (
               SELECT 1
-                FROM authority_private_approval_terminal_receipts_v2 AS terminal
-               WHERE terminal.approval_id = authority_clean_live_approval_outbox_v1.approval_id
+                FROM authority_private_approval_terminal_receipts_v3 AS terminal
+               WHERE terminal.approval_id = authority_live_approval_outbox_v2.approval_id
             )`,
       )
       .run(successorCandidateId, supersededAt, supersededAt, reviewLineageId);
@@ -1085,14 +1182,15 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
                 candidate.review_policy_consequence_sha256,
                 candidate.disposition,
                 outbox.approval_id, outbox.stage_command_id, outbox.state,
-                outbox.provider_message_ts, outbox.frozen_card_sha256,
+                outbox.provider_message_ts AS presentation_external_id,
+                outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
                 outbox.post_started_at,
                 outbox.control_approval_sha256,
                 outbox.superseded_by_candidate_id, outbox.superseded_at,
                 outbox.tombstoned_at
-           FROM authority_clean_live_candidates_v1 AS candidate
-           JOIN authority_clean_live_approval_outbox_v1 AS outbox
+           FROM authority_live_source_candidates_v2 AS candidate
+           JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
           WHERE candidate.candidate_id = ?`,
       )
@@ -1104,8 +1202,37 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
 }
 
 function assertAdmissionSnapshot(
-  admission: CleanGranolaSourceAdmissionV1,
+  admission: CleanLiveSourceAdmissionV1,
+  sourceBoundary: CleanLiveSourceBoundaryV1,
+  expectedProcessorAdapterId: string,
 ): void {
+  if (admission.source.adapter_id !== sourceBoundary.source_adapter_id) {
+    throw new Error(
+      "clean live-only source admission adapter differs from its configured boundary",
+    );
+  }
+  if (admission.processor.adapter_id !== expectedProcessorAdapterId) {
+    throw new Error(
+      "clean live-only source admission processor differs from its configured processor",
+    );
+  }
   assertCanonicalUtcMillis(admission.source.cutoff_at);
-  assertLiveGranolaCursor(admission.source.cursor);
+  sourceBoundary.assert_live_cursor(admission.source.cursor);
+}
+
+function assertAdmissionAdapterIdentity(
+  row: AdmissionRow,
+  sourceBoundary: CleanLiveSourceBoundaryV1,
+  expectedProcessorAdapterId: string,
+): void {
+  if (row.source_adapter_id !== sourceBoundary.source_adapter_id) {
+    throw new Error(
+      "clean live-only source admission adapter differs from its configured boundary",
+    );
+  }
+  if (row.processor_adapter_id !== expectedProcessorAdapterId) {
+    throw new Error(
+      "clean live-only source admission processor differs from its configured processor",
+    );
+  }
 }

@@ -18,9 +18,10 @@ import {
 import type Database from "better-sqlite3";
 import { buildPrivateApprovalBlockKitCardV1 } from "./private-approval-block-kit-card-v1.js";
 import {
-  resolveGranolaMeetingOwnerPrivateApprovalTargetV1,
-  type GranolaMeetingOwnerPrivateApprovalTargetV1,
-} from "./resolve-granola-meeting-owner-private-approval-target-v1.js";
+  type PrivateApprovalTargetResolverInputV1,
+  type PrivateApprovalTargetResolverV1,
+  type PrivateApprovalTargetV1,
+} from "./resolve-private-approval-target-v1.js";
 import {
   SqlitePrivateApprovalAssignmentStateV1,
   type PrivateApprovalAssignmentStateV1,
@@ -54,10 +55,8 @@ export interface PrivateOwnerDmApprovalStagerV1Options {
   >;
   /** Kept injected so deterministic tests need no global clock. */
   readonly now?: () => string;
-  /** Injected only for focused proof; production uses the bounded resolver. */
-  readonly resolve_target?: (
-    input: Parameters<typeof resolveGranolaMeetingOwnerPrivateApprovalTargetV1>[0],
-  ) => GranolaMeetingOwnerPrivateApprovalTargetV1 | undefined;
+  /** Provider-specific owner observation plus generic current-identity proof. */
+  readonly resolve_target: PrivateApprovalTargetResolverV1;
   /** This is a protocol boundary, not a card-specific hash implementation. */
   readonly canonical_sha256?: (value: unknown) => Digest;
 }
@@ -195,7 +194,7 @@ function candidateCommitment(
 
 function assignmentMatchesCurrentTarget(
   assignment: PrivateApprovalAssignmentStateV1,
-  target: GranolaMeetingOwnerPrivateApprovalTargetV1,
+  target: PrivateApprovalTargetV1,
 ): boolean {
   const link = target.slack_target.current_slack_identity_link;
   return (
@@ -222,15 +221,12 @@ function assignmentMatchesCurrentTarget(
 export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
   private readonly now: () => string;
   private readonly sha256: (value: unknown) => Digest;
-  private readonly resolveTarget: NonNullable<
-    PrivateOwnerDmApprovalStagerV1Options["resolve_target"]
-  >;
+  private readonly resolveTarget: PrivateApprovalTargetResolverV1;
 
   constructor(private readonly options: PrivateOwnerDmApprovalStagerV1Options) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.sha256 = options.canonical_sha256 ?? (canonicalSha256 as (value: unknown) => Digest);
-    this.resolveTarget =
-      options.resolve_target ?? resolveGranolaMeetingOwnerPrivateApprovalTargetV1;
+    this.resolveTarget = options.resolve_target;
   }
 
   async reconcilePendingDeliveries(
@@ -260,8 +256,8 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       if (
         recovery === undefined ||
         recovery.source_outbox_state !== "superseded" ||
-        obsolete.provider_message_ts === null ||
-        recovery.provider_message_ts !== obsolete.provider_message_ts
+        obsolete.presentation_external_id === null ||
+        recovery.provider_message_ts !== obsolete.presentation_external_id
       ) {
         // An unknown post response cannot be reconciled without the stored DM
         // proof. `readForPresentation` deliberately exposes that proof only
@@ -281,7 +277,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       if (rendered.kind === "done") {
         this.options.authority.recordSupersededApprovalCardTombstoned({
           approval_id: obsolete.approval_id,
-          provider_message_ts: recovery.provider_message_ts,
+          presentation_external_id: recovery.provider_message_ts,
         });
       }
     }
@@ -305,7 +301,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     // This read-only proof has no external side effect. Resolve it before
     // freezing a post attempt so a missing/deactivated owner cannot leave an
     // avoidable `posting` recovery delay in the Authority outbox.
-    const targetInput = {
+    const targetInput: PrivateApprovalTargetResolverInputV1 = {
       meeting: input.meeting,
       authority_database: this.options.authority_database,
       control_plane_database: this.options.control_plane_database,
@@ -352,7 +348,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     }
 
     if (outbox.post_started_at === null) return { kind: "state_drift" };
-    if (outbox.provider_message_ts === null) {
+    if (outbox.presentation_external_id === null) {
       const outcome = prepared.created
         ? await this.options.poster.postMarker(
             { approval_id: outbox.approval_id, dm_channel_id: assignment.dm_channel.channel_id },
@@ -378,7 +374,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       outbox = this.options.authority.recordPostedApprovalCard({
         candidate_id: outbox.candidate_id,
         post_started_at: outbox.post_started_at,
-        provider_message_ts: outcome.provider_message_ts,
+        presentation_external_id: outcome.provider_message_ts,
         frozen_card_sha256: frozen.frozen_card_sha256,
         approved_snapshot: frozen.approved_snapshot,
       });
@@ -387,7 +383,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       await this.tombstoneKnown(outbox, assignment, context);
       return { kind: "state_drift" };
     }
-    if (outbox.provider_message_ts === null || outbox.frozen_card_sha256 === null || outbox.approved_snapshot_sha256 === null) {
+    if (outbox.presentation_external_id === null || outbox.frozen_card_sha256 === null || outbox.approved_snapshot_sha256 === null) {
       return { kind: "state_drift" };
     }
 
@@ -415,7 +411,7 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       slack_subject_id:
         assignment.assigned_owner_slack_identity_link.provider_subject_id,
       dm_channel_id: assignment.dm_channel.channel_id,
-      provider_message_ts: outbox.provider_message_ts,
+      provider_message_ts: outbox.presentation_external_id,
       card_sha256: outbox.frozen_card_sha256 as Digest,
     });
     const staged = this.options.control_plane.stage({
@@ -443,7 +439,8 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
       {
         approval_id: refreshed.approval_id,
         dm_channel_id: assignment.dm_channel.channel_id,
-        provider_message_ts: refreshed.provider_message_ts ?? outbox.provider_message_ts,
+        provider_message_ts:
+          refreshed.presentation_external_id ?? outbox.presentation_external_id,
         card: frozen.card,
       },
       context?.signal,
@@ -465,20 +462,20 @@ export class PrivateOwnerDmApprovalStagerV1 implements CleanApprovalStagerV1 {
     assignment: PrivateApprovalAssignmentStateV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<void> {
-    if (outbox.provider_message_ts === null || outbox.superseded_by_candidate_id === null) return;
+    if (outbox.presentation_external_id === null || outbox.superseded_by_candidate_id === null) return;
     const result = await this.options.poster.tombstone(
       {
         approval_id: outbox.approval_id,
         successor_id: outbox.superseded_by_candidate_id,
         dm_channel_id: assignment.dm_channel.channel_id,
-        provider_message_ts: outbox.provider_message_ts,
+        provider_message_ts: outbox.presentation_external_id,
       },
       context?.signal,
     );
     if (result.kind === "done") {
       this.options.authority.recordSupersededApprovalCardTombstoned({
         approval_id: outbox.approval_id,
-        provider_message_ts: outbox.provider_message_ts,
+        presentation_external_id: outbox.presentation_external_id,
       });
     }
   }

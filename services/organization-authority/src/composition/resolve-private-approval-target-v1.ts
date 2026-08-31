@@ -14,17 +14,31 @@ export interface CleanMeetingOwnerAssigneeV1 {
   readonly membership_type: "owner" | "employee";
 }
 
-export interface GranolaMeetingOwnerPrivateApprovalTargetV1 {
+/** A current, verified private-approval recipient independent of its meeting provider. */
+export interface PrivateApprovalTargetV1 {
   readonly assignee: CleanMeetingOwnerAssigneeV1;
   readonly slack_target: CurrentPrivateApprovalSlackTargetV1;
 }
 
-export interface ResolveGranolaMeetingOwnerPrivateApprovalTargetInputV1 {
+/**
+ * The stager supplies a canonical meeting to an owner resolver. The shared
+ * proof below intentionally receives only a canonical observed email.
+ */
+export interface PrivateApprovalTargetResolverInputV1 {
   readonly meeting: MeetingDocument;
   readonly authority_database: Database.Database;
   readonly control_plane_database: Database.Database;
   readonly coordinates: PrivateApprovalSlackTargetCoordinatesV1;
   readonly connection_id: string;
+}
+
+export type PrivateApprovalTargetResolverV1 = (
+  input: PrivateApprovalTargetResolverInputV1,
+) => PrivateApprovalTargetV1 | undefined;
+
+export interface ResolvePrivateApprovalTargetInputV1
+  extends Omit<PrivateApprovalTargetResolverInputV1, "meeting"> {
+  readonly owner_email: string;
 }
 
 interface AuthorityMetadataRow {
@@ -34,63 +48,9 @@ interface AuthorityMetadataRow {
 
 type AssigneeRow = CleanMeetingOwnerAssigneeV1;
 
-interface OwnDataProperty {
-  readonly present: boolean;
-  readonly value: unknown;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function ownDataProperty(value: object, key: string): OwnDataProperty {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor !== undefined && "value" in descriptor
-    ? { present: true, value: descriptor.value }
-    : { present: false, value: undefined };
-}
-
-function canonicalEmail(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+function canonicalEmail(value: string): string | undefined {
   const normalized = value.trim().toLowerCase();
   return isCanonicalPersonEmail(normalized) ? normalized : undefined;
-}
-
-function observedEmail(source: unknown): string | undefined {
-  if (typeof source === "string") return canonicalEmail(source);
-  if (!isPlainObject(source)) return undefined;
-  const email = ownDataProperty(source, "email");
-  return email.present ? canonicalEmail(email.value) : undefined;
-}
-
-/**
- * Prefer the raw calendar organizer. An ad-hoc Granola note has a missing or
- * null calendar event, so only in that absence use the raw provider note owner. A
- * present but malformed organizer remains a hard failure and cannot be
- * replaced by weaker evidence.
- *
- * This stays local to the target resolver: no intermediate observation
- * contract is persisted or exposed for callers to accidentally reuse.
- */
-function observedGranolaOwnerEmail(meeting: MeetingDocument): string | undefined {
-  if (!isPlainObject(meeting.extensions)) return undefined;
-  const granola = ownDataProperty(meeting.extensions, "granola");
-  if (!granola.present || !isPlainObject(granola.value)) return undefined;
-  const calendarEvent = ownDataProperty(granola.value, "calendar_event");
-  if (calendarEvent.present && calendarEvent.value !== null) {
-    if (!isPlainObject(calendarEvent.value)) return undefined;
-    const organizer = ownDataProperty(calendarEvent.value, "organizer");
-    if (organizer.present) return observedEmail(organizer.value);
-    const organiser = ownDataProperty(calendarEvent.value, "organiser");
-    if (organiser.present) return observedEmail(organiser.value);
-  }
-
-  const owner = ownDataProperty(granola.value, "owner");
-  return owner.present ? observedEmail(owner.value) : undefined;
 }
 
 /**
@@ -155,17 +115,14 @@ function resolveObservedOwnerAssignee(input: {
 }
 
 /**
- * Composes the evidence-only ownership checks required before private
- * approval delivery: raw Granola organizer or note owner, current Authority
- * membership, and a current Control Plane Slack identity link.
- *
- * This is intentionally read-only. It does not persist an assignment, open a
- * DM, post a card, or choose an approval policy. Missing or mismatched proof
- * at any boundary is a normal no-target outcome.
+ * Composes the provider-neutral proof required before private approval
+ * delivery. A source adapter establishes the canonical meeting owner; this
+ * boundary verifies current Authority membership and the current Control
+ * Plane Slack identity link.
  */
-export function resolveGranolaMeetingOwnerPrivateApprovalTargetV1(
-  input: ResolveGranolaMeetingOwnerPrivateApprovalTargetInputV1,
-): GranolaMeetingOwnerPrivateApprovalTargetV1 | undefined {
+export function resolvePrivateApprovalTargetV1(
+  input: ResolvePrivateApprovalTargetInputV1,
+): PrivateApprovalTargetV1 | undefined {
   const authority = input.authority_database
     .prepare(
       `SELECT authority_id, organization_id
@@ -181,7 +138,7 @@ export function resolveGranolaMeetingOwnerPrivateApprovalTargetV1(
     return undefined;
   }
 
-  const email = observedGranolaOwnerEmail(input.meeting);
+  const email = canonicalEmail(input.owner_email);
   if (email === undefined) return undefined;
   const assignee = resolveObservedOwnerAssignee({
     authority_database: input.authority_database,

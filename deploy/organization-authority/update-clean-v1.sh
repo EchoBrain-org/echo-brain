@@ -14,6 +14,7 @@ fi
 ENV_FILE="${ECHO_CLEAN_ENV_FILE:-$DEPLOY_DIR/.env.clean-v1}"
 RUNTIME_CONFIG_DIR="${ECHO_CLEAN_RUNTIME_CONFIG_DIR:-$DEPLOY_DIR}"
 RELEASE_STATE_DIR="${ECHO_CLEAN_RELEASE_STATE_DIR:-$DEPLOY_DIR/clean-data/release}"
+STATE_DIR="${ECHO_CLEAN_STATE_DIR:-${RELEASE_STATE_DIR%/*}/state}"
 CURRENT_RECORD="$RELEASE_STATE_DIR/current.clean-v1.json"
 CANDIDATE_RECORD="$RELEASE_STATE_DIR/candidate.clean-v1.json"
 RUNTIME_PROFILE_STATE_DIR="$RELEASE_STATE_DIR/runtime-profiles"
@@ -79,6 +80,65 @@ for index, raw in enumerate(sys.argv[1:]):
     if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
         raise SystemExit(str(path) + ' is not a safe release-state directory')
 PY
+}
+
+# A missing or empty state directory is the explicit first-deployment case.
+# Any populated state, including an unmanifested directory, belongs to the
+# candidate runtime's complete verifier.  This wrapper deliberately owns no
+# partial copy of that manifest or schema contract.
+state_preflight_required() {
+  python3 - "$STATE_DIR" <<'PY'
+import pathlib, stat, sys
+
+state_dir = pathlib.Path(sys.argv[1])
+try:
+    state = state_dir.lstat()
+except FileNotFoundError:
+    print("false")
+    raise SystemExit(0)
+if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+    raise SystemExit("persisted Authority state directory is unsafe")
+try:
+    print("true" if next(state_dir.iterdir(), None) is not None else "false")
+except OSError as error:
+    raise SystemExit("could not inspect persisted Authority state: " + str(error))
+PY
+}
+
+authority_runtime_identity() {
+  python3 - "$ENV_FILE" <<'PY'
+import pathlib, re, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+state = path.lstat()
+if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
+    raise SystemExit('clean Authority environment must be a private regular file')
+values = {}
+for name in ('ECHO_CLEAN_AUTHORITY_UID', 'ECHO_CLEAN_AUTHORITY_GID'):
+    rows = [line.split('=', 1)[1] for line in path.read_text(encoding='utf-8').splitlines() if line.startswith(name + '=')]
+    if len(rows) != 1 or not re.fullmatch(r'[1-9][0-9]{0,9}', rows[0]) or int(rows[0]) > 4294967295:
+        raise SystemExit('clean Authority environment must contain one validated non-root ' + name)
+    values[name] = rows[0]
+print(values['ECHO_CLEAN_AUTHORITY_UID'] + ':' + values['ECHO_CLEAN_AUTHORITY_GID'])
+PY
+}
+
+verify_candidate_state_lineage() {
+  [[ "$(state_preflight_required)" == true ]] || return 0
+  local image source runtime_identity
+  image="$(field "$1" authority-image)"
+  source="$(field "$1" source-sha)"
+  runtime_identity="$(authority_runtime_identity)" || \
+    fail 'could not obtain the validated Authority runtime UID/GID for lineage verification'
+  docker pull "$image" || fail 'could not pull the immutable candidate Authority image for lineage verification'
+  image_source_matches "$image" "$source" || \
+    fail 'candidate Authority image source label does not match the release record before lineage verification'
+  docker run --rm --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges --user "$runtime_identity" --workdir /app \
+    --entrypoint node \
+    --mount "type=bind,src=$STATE_DIR,dst=/echo-clean/state,readonly" \
+    "$image" --input-type=module -e 'import { verifyCleanStateLineage } from "./services/organization-authority/dist/composition/verify-clean-state-lineage.js"; verifyCleanStateLineage("/echo-clean/state");' || \
+    fail 'candidate Authority image rejected persisted state lineage; run an explicit replacement or migration procedure instead'
 }
 
 current_image() {
@@ -527,13 +587,14 @@ case "$command" in
       active_materialized_profile_matches
       active_environment_matches "$CURRENT_RECORD"
       [[ "$(current_image)" == "$(field "$CURRENT_RECORD" authority-image)" ]] || fail 'environment image does not match the current accepted release record'
-      running_exact_release "$CURRENT_RECORD" || fail 'current accepted release is stopped, source-unbound, or runtime image drifted'
+      running_exact_release "$CURRENT_RECORD" || fail 'current accepted release is stopped or runtime image drifted'
     else
       first_deploy=true
       if running_container_id authority >/dev/null; then
         fail 'first deployment refuses to replace an unrecorded running Authority'
       fi
     fi
+    verify_candidate_state_lineage "$candidate"
     store_release_tuple "$candidate" "$supplied_profile"
     if ! copy_record "$candidate" "$CANDIDATE_RECORD" no-replace; then
       remove_release_tuple "$candidate" || true
@@ -561,7 +622,7 @@ case "$command" in
     active_runtime_profile_matches "$CANDIDATE_RECORD"
     active_materialized_profile_matches
     active_environment_matches "$CANDIDATE_RECORD"
-    running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped, source-unbound, or runtime image drifted'
+    running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped or runtime image drifted'
     safe_public_descriptor_check || fail 'candidate public descriptor is unavailable; roll back instead of promoting'
     if [[ -f "$CURRENT_RECORD" ]]; then
       validate "$CURRENT_RECORD"
@@ -610,7 +671,7 @@ case "$command" in
       active_runtime_profile_matches "$CANDIDATE_RECORD"
       active_materialized_profile_matches
       active_environment_matches "$CANDIDATE_RECORD"
-      running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped, source-unbound, or runtime image drifted'
+      running_exact_release "$CANDIDATE_RECORD" || fail 'candidate is stopped or runtime image drifted'
       printf '{"ok":true,"accepted_release_present":%s,"candidate_staged":true,"runtime_matches_staged_candidate":true}\n' "$accepted"
       exit 0
     fi
@@ -619,7 +680,7 @@ case "$command" in
     active_runtime_profile_matches "$CURRENT_RECORD"
     active_materialized_profile_matches
     active_environment_matches "$CURRENT_RECORD"
-    running_exact_release "$CURRENT_RECORD" || fail 'accepted release is stopped, source-unbound, or runtime image drifted'
+    running_exact_release "$CURRENT_RECORD" || fail 'accepted release is stopped or runtime image drifted'
     printf '{"ok":true,"accepted_release_present":true,"candidate_staged":false,"runtime_matches_accepted":true}\n'
     ;;
   *) usage ;;

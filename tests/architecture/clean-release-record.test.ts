@@ -186,6 +186,45 @@ function installActiveTuple(
   writeFileSync(environmentFile, environment, { mode: 0o600 });
 }
 
+function writeCurrentStateLineage(stateDirectory: string) {
+  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+  const roles = [
+    "authority",
+    "control-plane",
+    "record-log",
+    "record-derived",
+    "retrieval-facts",
+    "retrieval-lexical",
+    "retrieval-content",
+  ];
+  writeFileSync(
+    join(stateDirectory, "state-lineage-root.v1.json"),
+    JSON.stringify({
+      schema_version: 1,
+      kind: "echo-state-lineage-root-manifest-v1",
+      databases: roles.map((role) => ({ role })),
+    }),
+  );
+  const created = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import pathlib, sqlite3, sys",
+        "root = pathlib.Path(sys.argv[1])",
+        "for name, version in {'authority.sqlite': 3, 'integrations.sqlite': 2, 'record-log.sqlite': 2, 'record-derived.sqlite': 1}.items():",
+        "  connection = sqlite3.connect(root / name)",
+        "  connection.execute(f'PRAGMA user_version = {version}')",
+        "  connection.commit()",
+        "  connection.close()",
+      ].join("\n"),
+      stateDirectory,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(created.status).toBe(0);
+}
+
 function writeRecord(value: unknown): string {
   const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-release-"));
   roots.push(root);
@@ -470,6 +509,9 @@ describe("clean-v1 release record", () => {
     const update = readFileSync(UPDATE, "utf8");
     expect(dockerfile).toContain("ARG ECHO_SOURCE_SHA");
     expect(dockerfile).toContain('org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"');
+    expect(dockerfile).toContain(
+      'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"',
+    );
     expect(update).toContain("org.opencontainers.image.revision");
     expect(update).toContain("image_source_matches \"$expected\" \"$expected_source\"");
   });
@@ -1000,6 +1042,94 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(result.status).toBe(1);
     expect(existsSync(marker)).toBe(false);
     expect(readFileSync(envFile, "utf8")).toContain(record().authority_image.reference);
+  });
+
+  it("runs the candidate lineage verifier before mutating a malformed version-matching state", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-lineage-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const releaseState = join(root, "release-state");
+    const stateDirectory = join(root, "state");
+    const verifier = join(root, "lineage-verifier-called");
+    const activation = join(root, "compose-activation-called");
+    const dockerLog = join(root, "docker.log");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const profile = writeRuntimeProfile();
+    const candidate = writeRecord(
+      releaseWithRuntimeProfile(profile, {
+        release_id: "clean-v1-20260822-002",
+        authority_image: {
+          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
+        },
+      }),
+    );
+    mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+    // Its root has the old partial shape but all SQLite user_versions match.
+    // The updater must delegate that malformed lineage to the candidate image,
+    // rather than treating a version-only mirror as sufficient.
+    writeCurrentStateLineage(stateDirectory);
+    mkdirSync(bin);
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${dockerLog}"
+if [[ "$1" == pull ]]; then exit 0; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
+  printf '%s\\n' '${"a".repeat(40)}'
+  exit 0
+fi
+if [[ "$1" == run ]]; then touch "${verifier}"; exit 1; fi
+if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
+  touch "${activation}"
+fi
+`,
+    );
+    chmodSync(docker, 0o755);
+    const initialEnvironment = [
+      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
+      "ECHO_CLEAN_AUTHORITY_UID=1000",
+      "ECHO_CLEAN_AUTHORITY_GID=1000",
+      "",
+    ].join("\n");
+    writeFileSync(
+      envFile,
+      initialEnvironment,
+      { mode: 0o600 },
+    );
+
+    const malformed = run(
+      "bash",
+      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
+      {
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_CLEAN_ENV_FILE: envFile,
+        ECHO_CLEAN_RELEASE_STATE_DIR: releaseState,
+        ECHO_CLEAN_STATE_DIR: stateDirectory,
+      },
+    );
+    expect(malformed.status).toBe(1);
+    expect(malformed.stderr).toContain("candidate Authority image rejected persisted state lineage");
+    expect(existsSync(verifier)).toBe(true);
+    expect(existsSync(activation)).toBe(false);
+    expect(existsSync(join(releaseState, "candidate.clean-v1.json"))).toBe(false);
+    expect(readdirSync(join(releaseState, "runtime-profiles"))).toEqual([]);
+    expect(readdirSync(join(releaseState, "runtime-environments"))).toEqual([]);
+    expect(readFileSync(envFile, "utf8")).toBe(initialEnvironment);
+    expect(readFileSync(candidate, "utf8")).toContain('"release_id":"clean-v1-20260822-002"');
+    const dockerCalls = readFileSync(dockerLog, "utf8");
+    expect(dockerCalls).toContain(
+      "run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --workdir /app --entrypoint node",
+    );
+    expect(dockerCalls).toContain(
+      `--mount type=bind,src=${stateDirectory},dst=/echo-clean/state,readonly`,
+    );
+    expect(dockerCalls).toContain("--input-type=module -e");
+    expect(dockerCalls).toContain("verify-clean-state-lineage.js");
+    expect(dockerCalls).toContain('verifyCleanStateLineage("/echo-clean/state")');
+    expect(dockerCalls.indexOf("pull ")).toBeLessThan(
+      dockerCalls.indexOf("run "),
+    );
   });
 
   it("rejects a runtime-profile digest mismatch before Docker can mutate the deployment", () => {
