@@ -477,6 +477,36 @@ async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
 }
 
 describe("Person answer HTTP mount", () => {
+  it("keeps legacy requests on the exact V1 shape and exposes outcomes only after V2 negotiation", async () => {
+    const application: PersonAnswerHttpApplicationV1 = {
+      ask: vi.fn(async (input) => Object.freeze({
+        schema_version: 1 as const,
+        kind: "echo-clean-person-answer-v1" as const,
+        generation_id: digest("generation"),
+        record_head: Object.freeze({ position: 7, record_sha256: digest("head") }),
+        answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
+        citations: Object.freeze([]),
+        ...(input.accept_outcome_v2 === true ? { outcome: "authorship_unsupported" as const } : {}),
+      })),
+    };
+    const server = await startServer(application);
+    try {
+      const request = (headers: Record<string, string>) => fetch(`${server.url}/v1/person/ask`, {
+        method: "POST",
+        headers: { authorization: "Bearer bearer-only-token", "content-type": "application/json", ...headers },
+        body: JSON.stringify({ question: "What did I decide?" }),
+      });
+      const legacy = await request({});
+      expect(Object.keys(await legacy.json()).sort()).toEqual(["answer", "citations", "generation_id", "kind", "record_head", "schema_version"]);
+      const v2 = await request({ "x-echo-person-answer-version": "2" });
+      expect(await v2.json()).toMatchObject({ outcome: "authorship_unsupported" });
+      expect(application.ask).toHaveBeenNthCalledWith(1, { access_token: "bearer-only-token", question: "What did I decide?" });
+      expect(application.ask).toHaveBeenNthCalledWith(2, { access_token: "bearer-only-token", question: "What did I decide?", accept_outcome_v2: true });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("mounts POST /v1/person/ask as a bearer-only application call", async () => {
     const ask = vi.fn(
       async (): Promise<PersonAnswerResponseV1> => ({

@@ -280,6 +280,16 @@ describe("retrieval-grounded answer composition", () => {
     expect(planner.generate).toHaveBeenCalledOnce();
   });
 
+  it("does not model-answer direct first-person decision-verb questions", async () => {
+    const planner = { generate: vi.fn() };
+    const answerer = { generate: vi.fn() };
+    const retrieval = { retrieve: vi.fn(async (input) => release(true, input.queries.length)), revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })) };
+    const answer = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
+    await expect(answer.answer({ question: "What did I decide?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
+    expect(planner.generate).not.toHaveBeenCalled();
+    expect(answerer.generate).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "contains an invalid retrieval query",

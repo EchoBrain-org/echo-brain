@@ -347,6 +347,7 @@ const AUTHORSHIP_TERMS = new Set([
   "owned",
   "ownership",
 ]);
+const FIRST_PERSON_DECISION_VERBS = new Set(["decide", "decided", "deciding"]);
 
 /**
  * Attribution is unsupported unless this deliberately narrow, English lexical
@@ -362,7 +363,9 @@ function isFirstPersonDecisionAuthorshipQuestion(question: string): boolean {
     ([...terms].some((term) => FIRST_PERSON_TERMS.has(term)) &&
       [...terms].some((term) => DECISION_TERMS.has(term)) &&
       ([...terms].some((term) => AUTHORSHIP_TERMS.has(term)) ||
-        terms.has("my")))
+        terms.has("my") ||
+        (terms.has("i") &&
+          [...terms].some((term) => FIRST_PERSON_DECISION_VERBS.has(term)))))
   );
 }
 
