@@ -516,10 +516,11 @@ describe("Person client", () => {
       const client = new PersonClient({
         home_directory: home,
         now: () => NOW,
-        fetch: async (input) => {
+        fetch: async (input, init) => {
           if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
             return json({ authority_descriptor: authority });
           }
+          expect(new Headers(init?.headers).get("x-echo-person-answer-version")).toBe("2");
           return json({
             schema_version: 1,
             kind: "echo-clean-person-answer-v1",
