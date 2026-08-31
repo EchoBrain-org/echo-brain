@@ -505,6 +505,12 @@ describe("Person Layer 2 route", () => {
       );
       expect(owner.items).toHaveLength(2);
 
+      const maximumCallerTermDecisionQuery = route.search({
+        access_token: "owner-bearer",
+        query: `decision ${Array.from({ length: 15 }, (_, index) => `term${index}`).join(" ")}`,
+      });
+      expect(maximumCallerTermDecisionQuery.items).toHaveLength(10);
+
       const employee = route.search({
         access_token: "employee-bearer",
         query: "policy",

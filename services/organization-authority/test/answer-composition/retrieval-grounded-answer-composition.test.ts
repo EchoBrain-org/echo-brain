@@ -274,6 +274,7 @@ describe("retrieval-grounded answer composition", () => {
     const retrieval = { retrieve: vi.fn(async (input) => release(true, input.queries.length)), revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })) };
     const answer = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
     await expect(answer.answer({ question: "What are my decisions?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
+    await expect(answer.answer({ question: "Which decisions are mine?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
     expect(planner.generate).not.toHaveBeenCalled();
     const readable = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
     await readable.answer({ question: "What decisions can I read?" });

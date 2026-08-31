@@ -61,6 +61,8 @@ const READABLE_SEARCH_ANALYZER_RELEASE_V3 = Object.freeze({
     kind: "closed-exact-term-family-v1",
     family: ["decision", "decisions", "decide", "decided", "deciding"],
     trigger: "any-exact-family-term",
+    caller_term_limit: 16,
+    generated_family_terms_count_outside_caller_limit: true,
   },
   decision_item_category_index: {
     source: "admitted-item-kind",

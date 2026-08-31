@@ -32,8 +32,9 @@ describe('readable-search analyzer', () => {
       'decided',
     ]);
     expect(analyzeReadableSearchQuery('decisive')).toEqual(['decisive']);
-    expect(() => analyzeReadableSearchQuery(`decision ${Array.from({ length: 15 }, (_, index) => `term${index}`).join(' ')}`)).toThrow(
-      'decision-family expansion exceeds sixteen',
+    expect(analyzeReadableSearchQuery(`decision ${Array.from({ length: 15 }, (_, index) => `term${index}`).join(' ')}`)).toHaveLength(20);
+    expect(() => analyzeReadableSearchQuery(`decision ${Array.from({ length: 16 }, (_, index) => `term${index}`).join(' ')}`)).toThrow(
+      'one through sixteen',
     );
   });
 

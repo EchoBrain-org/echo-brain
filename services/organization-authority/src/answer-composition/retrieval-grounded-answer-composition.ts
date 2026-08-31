@@ -339,6 +339,7 @@ const DECISION_TERMS = new Set([
   "deciding",
 ]);
 const FIRST_PERSON_TERMS = new Set(["i", "me", "my", "mine", "myself"]);
+const FIRST_PERSON_POSSESSIVE_TERMS = new Set(["my", "mine"]);
 const AUTHORSHIP_TERMS = new Set([
   "make",
   "made",
@@ -366,7 +367,7 @@ function isFirstPersonDecisionAuthorshipQuestion(question: string): boolean {
     ([...terms].some((term) => FIRST_PERSON_TERMS.has(term)) &&
       [...terms].some((term) => DECISION_TERMS.has(term)) &&
       ([...terms].some((term) => AUTHORSHIP_TERMS.has(term)) ||
-        terms.has("my") ||
+        [...terms].some((term) => FIRST_PERSON_POSSESSIVE_TERMS.has(term)) ||
         (terms.has("i") &&
           [...terms].some((term) => FIRST_PERSON_DECISION_VERBS.has(term)))))
   );

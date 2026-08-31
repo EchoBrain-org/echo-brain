@@ -48,9 +48,9 @@ export function analyzeReadableSearchQuery(query: string): readonly string[] {
     const missingFamilyTerms = READABLE_SEARCH_DECISION_TERM_FAMILY.filter(
       (term) => !observed.has(term),
     );
-    if (unique.length + missingFamilyTerms.length > MAXIMUM_QUERY_TERMS) {
-      throw new ReadableSearchValidationError('query decision-family expansion exceeds sixteen unique terms');
-    }
+    // The public ceiling applies to caller-supplied terms. These fixed,
+    // reviewable aliases are internal recall behavior and must not turn an
+    // otherwise valid query into a server-side validation failure.
     for (const term of missingFamilyTerms) {
       if (!observed.has(term)) {
         observed.add(term);
