@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -27,6 +29,132 @@ function bootstrap(): string {
 
 function tunnelInstaller(): string {
   return readFileSync(TUNNEL_INSTALLER, "utf8");
+}
+
+function bootstrapFunction(name: string): string {
+  const definition = bootstrap().match(
+    new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}$`, "m"),
+  )?.[0];
+  if (!definition) {
+    throw new Error(`${name} is missing from the staging bootstrap script`);
+  }
+  return definition;
+}
+
+type VolumeInitializationCase = {
+  initialize?: boolean;
+  marker?: boolean;
+  markerVolumeId?: string;
+  rootState?: string;
+  lostFoundEntry?: boolean;
+  topLevelEntry?: boolean;
+  mutateOwnership?: boolean;
+};
+
+function runVolumeInitializationCase({
+  initialize = true,
+  marker = true,
+  markerVolumeId = "vol-0123456789abcdef0",
+  rootState = "0:0:755",
+  lostFoundEntry = false,
+  topLevelEntry = false,
+  mutateOwnership = true,
+}: VolumeInitializationCase = {}) {
+  const root = mkdtempSync(join(tmpdir(), "echo-volume-initialization-"));
+  const markerPath = join(root, ".echo-authority-volume-initialization-v1");
+  const lostFound = join(root, "lost+found");
+  const trace = join(root, "trace");
+  mkdirSync(lostFound);
+  if (marker) {
+    writeFileSync(
+      markerPath,
+      "schema=echo-authority-volume-initialization-v1\n" +
+        `data_volume_id=${markerVolumeId}\n`,
+      { mode: 0o600 },
+    );
+  }
+  if (lostFoundEntry) {
+    writeFileSync(join(lostFound, "unexpected"), "state");
+  }
+  if (topLevelEntry) {
+    writeFileSync(join(root, "unexpected"), "state");
+  }
+
+  try {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail
+AUTHORITY_UID=999
+AUTHORITY_GID=988
+DATA_DIR=$1
+VOLUME_INITIALIZATION_MARKER=.echo-authority-volume-initialization-v1
+VOLUME_INITIALIZATION_SCHEMA=echo-authority-volume-initialization-v1
+DATA_VOLUME_ID=vol-0123456789abcdef0
+INITIALIZE_BLANK_DATA_VOLUME=$2
+TRACE=$3
+harness_root_state=$4
+mutate_ownership=$5
+
+${bootstrapFunction("fail")}
+${bootstrapFunction("finish_pending_volume_initialization")}
+
+# These are the privileged or filesystem-metadata commands that the production
+# function uses.  The harness models their effects in shell state, so it needs
+# neither a block device nor root access.
+stat() {
+  case $2 in
+    '%u:%g:%a')
+      case $3 in
+        "$DATA_DIR") printf '%s\\n' "$harness_root_state" ;;
+        "$DATA_DIR/$VOLUME_INITIALIZATION_MARKER") printf '0:0:600\\n' ;;
+        "$DATA_DIR/lost+found") printf '0:0:700\\n' ;;
+        *) return 1 ;;
+      esac
+      ;;
+    '%s') wc -c <"$3" | tr -d ' ' ;;
+    *) return 1 ;;
+  esac
+}
+chown() {
+  printf 'chown:%s:%s\\n' "$1" "$2" >>"$TRACE"
+  if [[ $mutate_ownership == true ]]; then
+    harness_root_state="$AUTHORITY_UID:$AUTHORITY_GID:755"
+  fi
+}
+chmod() {
+  printf 'chmod:%s:%s\\n' "$1" "$2" >>"$TRACE"
+  if [[ $mutate_ownership == true && $1 == 0700 ]]; then
+    harness_root_state="$AUTHORITY_UID:$AUTHORITY_GID:700"
+  fi
+}
+rm() {
+  printf 'rm:%s\\n' "$3" >>"$TRACE"
+  command rm "$@"
+}
+
+finish_pending_volume_initialization
+`,
+        "volume-initialization-harness",
+        root,
+        String(initialize),
+        trace,
+        rootState,
+        String(mutateOwnership),
+      ],
+      { encoding: "utf8" },
+    );
+    return {
+      ...result,
+      markerExists: existsSync(markerPath),
+      trace: existsSync(trace)
+        ? readFileSync(trace, "utf8").trim().split("\n").filter(Boolean)
+        : [],
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 function executableTunnelInstaller() {
@@ -163,6 +291,142 @@ describe("Authority staging host bootstrap", () => {
     expect(chown).toBeGreaterThan(initialize);
     expect(chmod).toBeGreaterThan(chown);
     expect(removeMarker).toBeGreaterThan(chmod);
+  });
+
+  it.each([
+    ["fresh ext4 root", "0:0:755"],
+    ["after chown", "999:988:755"],
+    ["after chmod", "999:988:700"],
+  ])(
+    "resumes pending blank-volume initialization from the %s crash boundary",
+    (_boundary, rootState) => {
+      const result = runVolumeInitializationCase({ rootState });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.markerExists).toBe(false);
+      expect(result.trace).toEqual([
+        expect.stringMatching(/^chown:999:988:/),
+        expect.stringMatching(/^chmod:0700:/),
+        expect.stringMatching(/^rm:/),
+      ]);
+    },
+  );
+
+  it.each([
+    [
+      "the explicit initialization flag is absent",
+      { initialize: false },
+      "unfinished blank data volume initialization requires --initialize-blank-data-volume",
+    ],
+    [
+      "the marker is missing",
+      { marker: false },
+      "blank data volume initialization marker is missing or unsafe",
+    ],
+    [
+      "the marker is bound to another volume",
+      { markerVolumeId: "vol-11111111111111111" },
+      "blank data volume initialization marker does not match this volume",
+    ],
+    [
+      "lost+found is non-empty",
+      { lostFoundEntry: true },
+      "blank data volume lost+found directory is not empty",
+    ],
+    [
+      "an extra top-level entry exists",
+      { topLevelEntry: true },
+      "blank data volume contains state outside its initialization marker",
+    ],
+    [
+      "the root ownership is outside the crash-resume states",
+      { rootState: "0:0:700" },
+      "blank data volume root is outside the allowed initialization states",
+    ],
+  ])("fails closed without repair when %s", (_description, testCase, error) => {
+    const result = runVolumeInitializationCase(testCase);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(error);
+    expect(result.trace).not.toContainEqual(
+      expect.stringMatching(/^chown:/),
+    );
+    expect(result.markerExists).toBe(
+      !("marker" in testCase && testCase.marker === false),
+    );
+  });
+
+  it("retains the marker when final ownership verification fails", () => {
+    const result = runVolumeInitializationCase({ mutateOwnership: false });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "blank data volume ownership initialization did not complete",
+    );
+    expect(result.trace).toEqual([
+      expect.stringMatching(/^chown:999:988:/),
+      expect.stringMatching(/^chmod:0700:/),
+    ]);
+    expect(result.markerExists).toBe(true);
+  });
+
+  it("does not enter initialization repair for an already initialized organization volume", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-initialized-volume-"));
+    const trace = join(root, "trace");
+    try {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+AUTHORITY_UID=999
+AUTHORITY_GID=988
+DATA_DIR=$1
+DATA_VOLUME_LABEL=echo-auth-data
+VOLUME_INITIALIZATION_MARKER=.echo-authority-volume-initialization-v1
+INITIALIZE_BLANK_DATA_VOLUME=false
+TRACE=$2
+
+${bootstrapFunction("fail")}
+${bootstrapFunction("finish_pending_volume_initialization")}
+${bootstrapFunction("mount_data_volume")}
+
+finish_pending_volume_initialization() {
+  printf 'repair-entered\\n' >>"$TRACE"
+  return 99
+}
+mountpoint() { [[ $1 == -q && $2 == "$DATA_DIR" ]]; }
+findmnt() {
+  case "$*" in
+    *SOURCE*) printf '/dev/fake-data-volume\\n' ;;
+    *FSTYPE*) printf 'ext4\\n' ;;
+    *) return 1 ;;
+  esac
+}
+readlink() { printf '%s\\n' "\${!#}"; }
+blkid() { printf 'echo-auth-data\\n'; }
+ensure_fstab_mount() { printf 'fstab-verified\\n' >>"$TRACE"; }
+stat() {
+  [[ $2 == '%u:%g:%a' && $3 == "$DATA_DIR" ]] \\
+    && printf '999:988:700\\n'
+}
+
+mount_data_volume /dev/fake-data-volume
+`,
+          "already-initialized-volume-harness",
+          root,
+          trace,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(trace) ? readFileSync(trace, "utf8").trim() : "").toBe(
+        "fstab-verified",
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("writes the volume initialization marker under Bash nounset", () => {
