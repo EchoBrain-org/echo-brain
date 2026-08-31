@@ -22,6 +22,14 @@ export const AUTHORITY_BASELINE_SCHEMA_VERSION_V3 = 3;
 /** The Authority application ID is role-stable across fresh schemas. */
 export const AUTHORITY_BASELINE_APPLICATION_ID_V3 =
   AUTHORITY_BASELINE_APPLICATION_ID_V1;
+/**
+ * Fresh approval-delivery quarantine lineage. It is deliberately a new
+ * empty-database baseline, never an upgrade of V1, V2, or V3 state.
+ */
+export const AUTHORITY_BASELINE_SCHEMA_VERSION_V4 = 4;
+/** The Authority application ID is role-stable across fresh schemas. */
+export const AUTHORITY_BASELINE_APPLICATION_ID_V4 =
+  AUTHORITY_BASELINE_APPLICATION_ID_V1;
 
 const BASELINE_SQL_URL = new URL(
   "../../../../baselines/authority-baseline-v1.sql",
@@ -33,6 +41,10 @@ const PRIVATE_APPROVAL_SQL_V2_URL = new URL(
 );
 const MEETING_PROCESSING_SQL_V3_URL = new URL(
   "../../../../baselines/authority-meeting-processing-v3.sql",
+  import.meta.url,
+);
+const APPROVAL_DELIVERY_QUARANTINE_SQL_V4_URL = new URL(
+  "../../../../baselines/authority-approval-delivery-quarantine-v4.sql",
   import.meta.url,
 );
 
@@ -80,31 +92,53 @@ export function authorityBaselineSha256V3(): Sha256Digest {
   return sha256Digest(authorityBaselineSqlV3());
 }
 
+/** V4-only companion SQL. It requires the V3 tables to have been created. */
+export function authorityApprovalDeliveryQuarantineSqlV4(): string {
+  return readFileSync(APPROVAL_DELIVERY_QUARANTINE_SQL_V4_URL, "utf8");
+}
+
 /**
- * Applies the fresh Authority baseline to a completely empty database only.
- * It is deliberately not an upgrade or a lineage conversion mechanism.
+ * Complete fresh Authority V4 schema: retained V3 plus durable approval
+ * delivery quarantine state.
  */
-export function applyAuthorityBaselineV1(database: Database.Database): void {
+export function authorityBaselineSqlV4(): string {
+  return `${authorityBaselineSqlV3()}\n${authorityApprovalDeliveryQuarantineSqlV4()}`;
+}
+
+export function authorityBaselineSha256V4(): Sha256Digest {
+  return sha256Digest(authorityBaselineSqlV4());
+}
+
+function applyFreshAuthorityBaseline(
+  database: Database.Database,
+  sql: string,
+  applicationId: number,
+  schemaVersion: number,
+): void {
   database.exec("BEGIN IMMEDIATE");
   try {
     const userVersion = database.pragma("user_version", {
       simple: true,
     }) as number;
-    const applicationId = database.pragma("application_id", {
+    const currentApplicationId = database.pragma("application_id", {
       simple: true,
     }) as number;
     const objectCount = database
       .prepare("SELECT count(*) AS objects FROM sqlite_master")
       .pluck()
       .get() as number;
-    if (userVersion !== 0 || applicationId !== 0 || objectCount !== 0) {
+    if (
+      userVersion !== 0 ||
+      currentApplicationId !== 0 ||
+      objectCount !== 0
+    ) {
       throw new Error(
         "authority baseline requires a completely empty database",
       );
     }
-    database.exec(authorityBaselineSqlV1());
-    database.pragma(`application_id = ${AUTHORITY_BASELINE_APPLICATION_ID_V1}`);
-    database.pragma(`user_version = ${AUTHORITY_BASELINE_SCHEMA_VERSION_V1}`);
+    database.exec(sql);
+    database.pragma(`application_id = ${applicationId}`);
+    database.pragma(`user_version = ${schemaVersion}`);
     database.exec("COMMIT");
   } catch (error) {
     try {
@@ -112,6 +146,19 @@ export function applyAuthorityBaselineV1(database: Database.Database): void {
     } catch {}
     throw error;
   }
+}
+
+/**
+ * Applies the fresh Authority baseline to a completely empty database only.
+ * It is deliberately not an upgrade or a lineage conversion mechanism.
+ */
+export function applyAuthorityBaselineV1(database: Database.Database): void {
+  applyFreshAuthorityBaseline(
+    database,
+    authorityBaselineSqlV1(),
+    AUTHORITY_BASELINE_APPLICATION_ID_V1,
+    AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
+  );
 }
 
 /**
@@ -119,33 +166,12 @@ export function applyAuthorityBaselineV1(database: Database.Database): void {
  * database. This is a distinct fresh lineage, never a V1 upgrade.
  */
 export function applyAuthorityBaselineV2(database: Database.Database): void {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const userVersion = database.pragma("user_version", {
-      simple: true,
-    }) as number;
-    const applicationId = database.pragma("application_id", {
-      simple: true,
-    }) as number;
-    const objectCount = database
-      .prepare("SELECT count(*) AS objects FROM sqlite_master")
-      .pluck()
-      .get() as number;
-    if (userVersion !== 0 || applicationId !== 0 || objectCount !== 0) {
-      throw new Error(
-        "authority baseline requires a completely empty database",
-      );
-    }
-    database.exec(authorityBaselineSqlV2());
-    database.pragma(`application_id = ${AUTHORITY_BASELINE_APPLICATION_ID_V2}`);
-    database.pragma(`user_version = ${AUTHORITY_BASELINE_SCHEMA_VERSION_V2}`);
-    database.exec("COMMIT");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK");
-    } catch {}
-    throw error;
-  }
+  applyFreshAuthorityBaseline(
+    database,
+    authorityBaselineSqlV2(),
+    AUTHORITY_BASELINE_APPLICATION_ID_V2,
+    AUTHORITY_BASELINE_SCHEMA_VERSION_V2,
+  );
 }
 
 /**
@@ -153,31 +179,24 @@ export function applyAuthorityBaselineV2(database: Database.Database): void {
  * empty database. Existing V1/V2 files must stay on their original lineage.
  */
 export function applyAuthorityBaselineV3(database: Database.Database): void {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const userVersion = database.pragma("user_version", {
-      simple: true,
-    }) as number;
-    const applicationId = database.pragma("application_id", {
-      simple: true,
-    }) as number;
-    const objectCount = database
-      .prepare("SELECT count(*) AS objects FROM sqlite_master")
-      .pluck()
-      .get() as number;
-    if (userVersion !== 0 || applicationId !== 0 || objectCount !== 0) {
-      throw new Error(
-        "authority baseline requires a completely empty database",
-      );
-    }
-    database.exec(authorityBaselineSqlV3());
-    database.pragma(`application_id = ${AUTHORITY_BASELINE_APPLICATION_ID_V3}`);
-    database.pragma(`user_version = ${AUTHORITY_BASELINE_SCHEMA_VERSION_V3}`);
-    database.exec("COMMIT");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK");
-    } catch {}
-    throw error;
-  }
+  applyFreshAuthorityBaseline(
+    database,
+    authorityBaselineSqlV3(),
+    AUTHORITY_BASELINE_APPLICATION_ID_V3,
+    AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
+  );
+}
+
+/**
+ * Applies the approval-delivery-quarantine Authority V4 baseline only to a
+ * completely empty database. Existing V1/V2/V3 files stay on their original
+ * lineage.
+ */
+export function applyAuthorityBaselineV4(database: Database.Database): void {
+  applyFreshAuthorityBaseline(
+    database,
+    authorityBaselineSqlV4(),
+    AUTHORITY_BASELINE_APPLICATION_ID_V4,
+    AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
+  );
 }

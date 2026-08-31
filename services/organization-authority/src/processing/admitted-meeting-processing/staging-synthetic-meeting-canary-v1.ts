@@ -3,6 +3,7 @@ import {
   assertCanonicalMeetingDocument,
   type MeetingDocument,
 } from "../core/index.js";
+import type { ApprovalDeliveryQuarantineReasonV1 } from "./meeting-processing-cycle-v1.js";
 
 /**
  * A deliberately invented source identity. It must never be confused with a
@@ -26,6 +27,14 @@ export interface StagingSyntheticMeetingCanaryInputV1 {
   /** A canonical time supplied by the staging operator. */
   readonly observed_at: string;
 }
+
+/** Provider-neutral outcome of running a synthetic meeting through approval delivery. */
+export type StagingSyntheticMeetingCanaryResultV1 =
+  | { readonly kind: "staged"; readonly approval_id: string; readonly stage_id: string; readonly reused_frozen_extraction: boolean }
+  | { readonly kind: "delivery_pending"; readonly approval_id: string; readonly reused_frozen_extraction: boolean }
+  | { readonly kind: "quarantined"; readonly approval_id: string; readonly reason_code: ApprovalDeliveryQuarantineReasonV1; readonly reused_frozen_extraction: boolean }
+  | { readonly kind: "not_actionable"; readonly disposition: "coalesced" | "no_signals"; readonly reused_frozen_extraction: boolean }
+  | { readonly kind: "not_staged"; readonly approval_id: string; readonly reason: "revoked" | "state_drift"; readonly reused_frozen_extraction: boolean };
 
 function assertCanaryId(value: string): void {
   // A release-bound canary must accept the longest canonical clean-v1 release

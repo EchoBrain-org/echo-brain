@@ -20,6 +20,7 @@ import {
 import type {
   AdmittedMeetingProcessingAdmissionV1,
   ActionableMeetingProcessingCandidateV1,
+  ApprovalDeliveryQuarantineReasonV1,
   FrozenMeetingProcessingCandidateSnapshotV1,
   MeetingProcessingCandidateSnapshotInputV1,
   MeetingProcessingCandidateV1,
@@ -115,6 +116,12 @@ export type ApprovalWorkflowOutboxV1 = ActionableMeetingProcessingCandidateV1 & 
   readonly superseded_at: string | null;
   readonly tombstoned_at: string | null;
 };
+
+export interface ApprovalDeliveryQuarantineV1 {
+  readonly candidate_id: string;
+  readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
+  readonly quarantined_at: string;
+}
 
 export interface SupersededPrivateApprovalCardV1 {
   readonly approval_id: string;
@@ -520,6 +527,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
              ON head.review_lineage_id = candidate.review_lineage_id
           WHERE outbox.approval_id = ?
             AND outbox.state != 'superseded'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM authority_live_approval_delivery_quarantines_v1 AS quarantine
+               WHERE quarantine.candidate_id = candidate.candidate_id
+            )
             AND head.candidate_id = candidate.candidate_id`,
       )
       .get(approvalId) as { readonly 1: number } | undefined;
@@ -544,6 +556,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           WHERE candidate.disposition = 'actionable'
             AND head.candidate_id = candidate.candidate_id
             AND outbox.state IN ('queued', 'posting', 'posted')
+            AND NOT EXISTS (
+              SELECT 1
+                FROM authority_live_approval_delivery_quarantines_v1 AS quarantine
+               WHERE quarantine.candidate_id = candidate.candidate_id
+            )
           ORDER BY candidate.created_at ASC, candidate.candidate_id ASC`,
       )
       .all() as readonly { readonly approval_id: string }[];
@@ -701,6 +718,57 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       .get(approvalId) as ApprovalWorkflowOutboxV1 | undefined;
   }
 
+  readApprovalDeliveryQuarantine(
+    candidateId: string,
+  ): ApprovalDeliveryQuarantineV1 | undefined {
+    return this.database
+      .prepare(
+        `SELECT candidate_id, reason_code, quarantined_at
+           FROM authority_live_approval_delivery_quarantines_v1
+          WHERE candidate_id = ?`,
+      )
+      .get(candidateId) as ApprovalDeliveryQuarantineV1 | undefined;
+  }
+
+  quarantineApprovalDelivery(input: {
+    readonly candidate_id: string;
+    readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
+  }): ApprovalDeliveryQuarantineV1 {
+    return this.database.transaction(() => {
+      const existing = this.readApprovalDeliveryQuarantine(input.candidate_id);
+      if (existing !== undefined) {
+        if (existing.reason_code !== input.reason_code) {
+          throw new Error(
+            "approval delivery quarantine conflicts with its durable reason",
+          );
+        }
+        return existing;
+      }
+      const outbox = this.outbox(input.candidate_id);
+      if (outbox.state !== "queued") {
+        throw new Error(
+          "approval delivery can only be quarantined before presentation starts",
+        );
+      }
+      const quarantinedAt = this.now();
+      assertCanonicalUtcMillis(quarantinedAt);
+      this.database
+        .prepare(
+          `INSERT INTO authority_live_approval_delivery_quarantines_v1 (
+             candidate_id, reason_code, quarantined_at
+           ) VALUES (?, ?, ?)`,
+        )
+        .run(input.candidate_id, input.reason_code, quarantinedAt);
+      const quarantined = this.readApprovalDeliveryQuarantine(
+        input.candidate_id,
+      );
+      if (quarantined === undefined) {
+        throw new Error("approval delivery quarantine was not persisted");
+      }
+      return quarantined;
+    })();
+  }
+
   private readFrozenCandidateById(
     candidateId: string,
   ): FrozenMeetingProcessingCandidateSnapshotV1 | undefined {
@@ -814,6 +882,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     return this.database.transaction(() => {
       const outbox = this.readCandidateByApprovalId(approvalId);
       if (outbox === undefined) return undefined;
+      if (
+        this.readApprovalDeliveryQuarantine(outbox.candidate_id) !== undefined
+      ) {
+        return undefined;
+      }
       const frozen = this.readFrozenCandidateById(outbox.candidate_id);
       if (frozen === undefined || frozen.disposition !== "actionable") {
         throw new Error("D2 approval has no frozen actionable candidate");
@@ -852,6 +925,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     readonly approved_snapshot: Readonly<Record<string, unknown>>;
   }): PreparedPrivateApprovalPostV1 {
     return this.database.transaction(() => {
+      if (
+        this.readApprovalDeliveryQuarantine(input.candidate_id) !== undefined
+      ) {
+        throw new Error("approval delivery is quarantined");
+      }
       const current = this.outbox(input.candidate_id);
       const snapshotJson = canonicalJson(input.approved_snapshot);
       const snapshotSha256 = canonicalSha256(input.approved_snapshot);

@@ -32,9 +32,9 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV3,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
-  authorityBaselineSha256V3,
+  applyAuthorityBaselineV4,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
+  authorityBaselineSha256V4,
 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { runOrganizationAuthorityResetCli } from "../src/composition/organization-authority-reset-cli.js";
@@ -85,8 +85,8 @@ function initializeRecordLogV1State(stateDirectory: string): void {
     creating_artifact_revision: "legacy-v1-fixture",
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: authorityBaselineSha256V3(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: authorityBaselineSha256V4(),
       },
       "control-plane": {
         database_schema_version:
@@ -126,7 +126,7 @@ function initializeRecordLogV1State(stateDirectory: string): void {
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV3 },
+      authority: { apply: applyAuthorityBaselineV4 },
       "control-plane": { apply: applyOrganizationControlBaselineV2 },
       "record-log": { apply: applyOrganizationRecordLogBaselineV1 },
       "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },
@@ -182,7 +182,7 @@ describe("Authority state initialization", () => {
         join(stateDirectory, "authority.sqlite"),
         "PRAGMA user_version",
       ),
-    ).toEqual([{ user_version: 3 }]);
+    ).toEqual([{ user_version: 4 }]);
     expect(
       rows(
         join(stateDirectory, "integrations.sqlite"),

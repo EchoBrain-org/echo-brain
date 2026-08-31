@@ -1,6 +1,8 @@
 import { AuthorityOperationError } from "./errors.js";
 import { timestampMillis } from "./rules.js";
 
+export { isCanonicalPersonEmail } from "../shared/person-email-rules.js";
+
 export const PERSON_LOGIN_GRANT_LIFETIME_MS = 15 * 60 * 1000;
 export const OIDC_LOGIN_ATTEMPT_LIFETIME_MS = 10 * 60 * 1000;
 /** A small Authority-wide bound for unauthenticated, pending OIDC attempts. */
@@ -9,25 +11,6 @@ export const PERSON_ACCESS_CREDENTIAL_LIFETIME_MS = 12 * 60 * 60 * 1000;
 export const PERSON_SESSION_HARD_REAUTHENTICATION_MS = 7 * 24 * 60 * 60 * 1000;
 export const OIDC_ASSERTION_ISSUED_AT_SKEW_MS = 60 * 1000;
 export const PERSON_SESSION_SECRET_BYTES = 32;
-
-export function isCanonicalPersonEmail(value: unknown): value is string {
-  if (
-    typeof value !== "string" ||
-    value.length < 3 ||
-    value.length > 254 ||
-    value !== value.trim() ||
-    value !== value.toLowerCase() ||
-    !/^[!-~]+$/.test(value)
-  ) {
-    return false;
-  }
-  const separator = value.indexOf("@");
-  return (
-    separator > 0 &&
-    separator === value.lastIndexOf("@") &&
-    separator < value.length - 1
-  );
-}
 
 const OPAQUE_FAILURE_MESSAGE = "person authentication failed";
 

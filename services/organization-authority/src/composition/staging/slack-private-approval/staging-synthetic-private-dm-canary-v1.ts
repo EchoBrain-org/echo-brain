@@ -7,6 +7,7 @@ import {
 import {
   createStagingSyntheticMeetingCanaryV1,
   type StagingSyntheticMeetingCanaryInputV1,
+  type StagingSyntheticMeetingCanaryResultV1,
 } from "../../../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
 import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../../../processing/admitted-meeting-processing/review-lineage-semantics.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
@@ -20,30 +21,6 @@ export interface RunStagingSyntheticPrivateDmCanaryV1Input {
   readonly stager: ApprovalWorkflowStagerV1;
   readonly signal?: AbortSignal;
 }
-
-export type StagingSyntheticPrivateDmCanaryResultV1 =
-  | {
-      readonly kind: "staged";
-      readonly approval_id: string;
-      readonly stage_id: string;
-      readonly reused_frozen_extraction: boolean;
-    }
-  | {
-      readonly kind: "delivery_pending";
-      readonly approval_id: string;
-      readonly reused_frozen_extraction: boolean;
-    }
-  | {
-      readonly kind: "not_actionable";
-      readonly disposition: "coalesced" | "no_signals";
-      readonly reused_frozen_extraction: boolean;
-    }
-  | {
-      readonly kind: "not_staged";
-      readonly approval_id: string;
-      readonly reason: "revoked" | "state_drift";
-      readonly reused_frozen_extraction: boolean;
-    };
 
 function assertStagingAuthorityUrl(authorityUrl: string): void {
   let parsed: URL;
@@ -79,7 +56,7 @@ function actionable(
  */
 export async function runStagingSyntheticPrivateDmCanaryV1(
   input: RunStagingSyntheticPrivateDmCanaryV1Input,
-): Promise<StagingSyntheticPrivateDmCanaryResultV1> {
+): Promise<StagingSyntheticMeetingCanaryResultV1> {
   input.signal?.throwIfAborted();
   assertStagingAuthorityUrl(input.authority_url);
   const meeting = createStagingSyntheticMeetingCanaryV1(input.canary);
@@ -175,6 +152,14 @@ export async function runStagingSyntheticPrivateDmCanaryV1(
     return {
       kind: "delivery_pending",
       approval_id: frozen.approval_id,
+      reused_frozen_extraction: reusedFrozenExtraction,
+    };
+  }
+  if (staged.kind === "quarantined") {
+    return {
+      kind: "quarantined",
+      approval_id: frozen.approval_id,
+      reason_code: staged.reason_code,
       reused_frozen_extraction: reusedFrozenExtraction,
     };
   }

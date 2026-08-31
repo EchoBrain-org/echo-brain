@@ -140,7 +140,7 @@ verify_candidate_state_lineage() {
     --entrypoint node \
     --mount "type=bind,src=$STATE_DIR,dst=/echo-clean/state,readonly" \
     "$image" --input-type=module -e 'import { verifyAuthorityStateLineage } from "./services/organization-authority/dist/composition/verify-authority-state-lineage.js"; verifyAuthorityStateLineage("/echo-clean/state");' || \
-    fail 'candidate Authority image rejected persisted state lineage; run an explicit replacement or migration procedure instead'
+    fail 'candidate Authority image rejected persisted state lineage; if this is a pre-live rehearsal with no live users, use onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users; otherwise use an explicit migration procedure'
 }
 
 current_image() {
@@ -597,7 +597,7 @@ if (
     receipt.get("schema_version") != 1 or
     receipt.get("kind") != "echo-staging-synthetic-private-dm-canary-receipt-v1" or
     receipt.get("release_id") != expected_release_id or
-    receipt.get("approval_outcome") not in {"staged", "delivery_pending", "not_actionable", "not_staged"}
+    receipt.get("approval_outcome") not in {"staged", "delivery_pending", "quarantined", "not_actionable", "not_staged"}
 ):
     raise SystemExit(1)
 if receipt["approval_outcome"] == "not_actionable":
@@ -732,7 +732,7 @@ PY
       printf '%s\n' "$normalized"
       fail 'staging canary delivery is still pending; retry the canary command'
       ;;
-    not_actionable|not_staged)
+    quarantined|not_actionable|not_staged)
       printf '%s\n' "$normalized"
       fail "staging canary did not stage a private approval card: $outcome"
       ;;

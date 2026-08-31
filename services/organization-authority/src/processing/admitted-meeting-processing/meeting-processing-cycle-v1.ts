@@ -21,6 +21,12 @@ import {
 
 const MAXIMUM_PULL_LIMIT = 1;
 
+export const APPROVAL_DELIVERY_QUARANTINE_REASON_V1 =
+  "approval_package_unrepresentable" as const;
+
+export type ApprovalDeliveryQuarantineReasonV1 =
+  typeof APPROVAL_DELIVERY_QUARANTINE_REASON_V1;
+
 export interface AdmittedMeetingProcessingAdmissionV1 {
   readonly source: {
     readonly adapter_id: string;
@@ -120,6 +126,21 @@ export interface ApprovalWorkflowStageInputV1 {
   readonly decisions: DecisionSet;
 }
 
+export type ApprovalWorkflowStageResultV1 =
+  | { readonly kind: "staged"; readonly stage_id: string }
+  | { readonly kind: "delivery_pending" }
+  | {
+      readonly kind: "quarantined";
+      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
+    }
+  | { readonly kind: "revoked" }
+  | { readonly kind: "state_drift" };
+
+type DurableApprovalDeliveryOutcomeV1 = Extract<
+  ApprovalWorkflowStageResultV1,
+  { readonly kind: "delivery_pending" | "quarantined" }
+>;
+
 /**
  * This is deliberately a narrow handoff. The eventual control-plane adapter
  * owns the durable approval card and returns `staged` only once it is
@@ -129,12 +150,7 @@ export interface ApprovalWorkflowStagerV1 {
   stage(
     input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
-  ): Promise<
-    | { readonly kind: "staged"; readonly stage_id: string }
-    | { readonly kind: "delivery_pending" }
-    | { readonly kind: "revoked" }
-    | { readonly kind: "state_drift" }
-  >;
+  ): Promise<ApprovalWorkflowStageResultV1>;
   /**
    * Reconciles durable approval delivery work independently of source intake.
    * A provider-ambiguous post remains frozen and is never blindly repeated.
@@ -186,6 +202,17 @@ export type AdmittedMeetingProcessingCycleResultV1 =
     }
   | {
       readonly kind: "delivery_pending_cursor_not_advanced";
+      readonly reason: "revoked" | "state_drift";
+      readonly cursor_advanced: false;
+    }
+  | {
+      readonly kind: "quarantined";
+      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
+      readonly cursor_advanced: boolean;
+    }
+  | {
+      readonly kind: "quarantined_cursor_not_advanced";
+      readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
       readonly reason: "revoked" | "state_drift";
       readonly cursor_advanced: false;
     }
@@ -332,7 +359,8 @@ function rebindDecisionsToRevision(
  * Performs exactly one serialized source poll. It never imports history: its
  * only cursor comes from a previously admitted source, and
  * it advances that cursor only after either a verified empty provider page or
- * the downstream staging port reports a durable acknowledgement.
+ * the candidate and approval outbox are durably recorded for independent
+ * delivery.
  */
 export class AdmittedMeetingProcessingCycleV1 {
   private running: Promise<AdmittedMeetingProcessingCycleResultV1> | undefined;
@@ -362,6 +390,24 @@ export class AdmittedMeetingProcessingCycleV1 {
   private async run(
     signal: AbortSignal | undefined,
   ): Promise<AdmittedMeetingProcessingCycleResultV1> {
+    const result = await this.processSource(signal);
+    // Delivery recovery is deliberately after source work. A broken or
+    // provider-ambiguous older card can fail visibly, but it cannot prevent
+    // this cycle from durably admitting the next unrelated meeting first.
+    await this.phase(
+      "approval_staging",
+      () =>
+        this.options.stager.reconcilePendingDeliveries(
+          signal === undefined ? undefined : { signal },
+        ),
+      signal,
+    );
+    return result;
+  }
+
+  private async processSource(
+    signal: AbortSignal | undefined,
+  ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     if (signal?.aborted === true) {
       throw signal.reason instanceof Error
         ? signal.reason
@@ -374,12 +420,6 @@ export class AdmittedMeetingProcessingCycleV1 {
         this.options.source,
         this.options.processor,
         this.options.source_cursor_policy,
-      );
-      // Approval delivery is a durable outbox, not the source checkpoint.
-      // Drain prior work first, but never let one provider-ambiguous card
-      // prevent the source adapter from admitting an unrelated meeting.
-      await this.options.stager.reconcilePendingDeliveries(
-        signal === undefined ? undefined : { signal },
       );
       const batch = await this.options.source.pull(
         { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
@@ -564,12 +604,28 @@ export class AdmittedMeetingProcessingCycleV1 {
     nextCursor: string | undefined,
     signal: AbortSignal | undefined,
   ): Promise<AdmittedMeetingProcessingCycleResultV1> {
-    const staged = await this.options.stager.stage(
-      { admission, candidate, meeting, decisions },
-      signal === undefined ? undefined : { signal },
-    );
+    let staged: Awaited<ReturnType<ApprovalWorkflowStagerV1["stage"]>>;
+    try {
+      staged = await this.options.stager.stage(
+        { admission, candidate, meeting, decisions },
+        signal === undefined ? undefined : { signal },
+      );
+    } catch (error) {
+      // The candidate/outbox is already durable. Preserve a visible delivery
+      // failure, but release source intake so one presentation defect cannot
+      // cork every later meeting.
+      if (signal?.aborted !== true) {
+        await this.advanceAfterDurableDelivery(admission, nextCursor, {
+          kind: "delivery_pending",
+        });
+      }
+      throw error;
+    }
     if (staged.kind === "delivery_pending") {
-      return this.advanceAfterPendingDelivery(admission, nextCursor);
+      return this.advanceAfterDurableDelivery(admission, nextCursor, staged);
+    }
+    if (staged.kind === "quarantined") {
+      return this.advanceAfterDurableDelivery(admission, nextCursor, staged);
     }
     if (staged.kind !== "staged") {
       return {
@@ -603,21 +659,30 @@ export class AdmittedMeetingProcessingCycleV1 {
     return { kind: "staged", stage_id: staged.stage_id, cursor_advanced: true };
   }
 
-  private async advanceAfterPendingDelivery(
+  private async advanceAfterDurableDelivery(
     admission: AdmittedMeetingProcessingAdmissionV1,
     nextCursor: string | undefined,
+    outcome: DurableApprovalDeliveryOutcomeV1,
   ): Promise<AdmittedMeetingProcessingCycleResultV1> {
     if (nextCursor === undefined || nextCursor === admission.source.cursor) {
-      return { kind: "delivery_pending", cursor_advanced: false };
+      return { ...outcome, cursor_advanced: false };
     }
     const advanced = await this.options.state.advanceCursor({
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,
     });
-    return advanced === "advanced"
-      ? { kind: "delivery_pending", cursor_advanced: true }
-      : {
+    if (advanced === "advanced") {
+      return { ...outcome, cursor_advanced: true };
+    }
+    return outcome.kind === "delivery_pending"
+      ? {
           kind: "delivery_pending_cursor_not_advanced",
+          reason: advanced,
+          cursor_advanced: false,
+        }
+      : {
+          kind: "quarantined_cursor_not_advanced",
+          reason_code: outcome.reason_code,
           reason: advanced,
           cursor_advanced: false,
         };

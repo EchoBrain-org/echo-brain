@@ -78,7 +78,7 @@ Only the owner can read the projection, and it contains only email, display
 name, membership state, and invitation state.
 
 This changes the fresh Authority genesis bytes. There are no live users on the
-pre-roster rehearsal baseline, so this candidate replaces that rehearsal state
+V3 rehearsal baseline, so this candidate replaces that rehearsal state
 through clean organization re-onboarding. It must not be applied to the old
 rehearsal state as a baseline-preserving image update. The first accepted
 live-user release freezes the new exact baseline hash. The supported server

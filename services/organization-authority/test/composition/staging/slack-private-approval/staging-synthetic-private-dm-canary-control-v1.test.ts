@@ -143,9 +143,9 @@ describe("staging synthetic private-DM canary control", () => {
       runtime: runtime(async (input) => {
         calls.push(input);
         return {
-          kind: "staged",
+          kind: "quarantined",
           approval_id: "apr_private",
-          stage_id: "stage_private",
+          reason_code: "approval_package_unrepresentable",
           reused_frozen_extraction: false,
         };
       }),
@@ -159,7 +159,7 @@ describe("staging synthetic private-DM canary control", () => {
       schema_version: 1,
       kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
       release_id: RELEASE_ID,
-      approval_outcome: "staged",
+      approval_outcome: "quarantined",
       approval_id: "apr_private",
     });
     expect(response.body).not.toContain(OWNER_EMAIL);

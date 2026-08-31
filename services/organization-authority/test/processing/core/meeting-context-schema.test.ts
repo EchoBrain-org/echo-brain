@@ -176,6 +176,16 @@ describe('canonical meeting-context baseline', () => {
       ],
       context: { owner_participant_id: 'owner' },
     };
+    const nonAsciiOwnerEmail = {
+      ...minimalMeeting,
+      participants: [
+        {
+          id: 'owner',
+          identities: [{ kind: 'email', value: 'rené@example.test' }],
+        },
+      ],
+      context: { owner_participant_id: 'owner' },
+    };
     const ambiguousOwnerEmail = {
       ...minimalMeeting,
       participants: [
@@ -194,6 +204,10 @@ describe('canonical meeting-context baseline', () => {
     expect(() => assertCanonicalMeetingDocument(danglingOwner, source)).toThrow(/does not resolve/);
     expect(validateJsonSchema(nonCanonicalOwnerEmail)).toBe(true);
     expect(() => assertCanonicalMeetingDocument(nonCanonicalOwnerEmail, source)).toThrow(
+      /one canonical email identity/,
+    );
+    expect(validateJsonSchema(nonAsciiOwnerEmail)).toBe(true);
+    expect(() => assertCanonicalMeetingDocument(nonAsciiOwnerEmail, source)).toThrow(
       /one canonical email identity/,
     );
     expect(() => assertCanonicalMeetingDocument(ambiguousOwnerEmail, source)).toThrow(

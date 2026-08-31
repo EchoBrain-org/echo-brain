@@ -33,9 +33,9 @@ import {
   readableSearchPlaneBaselineSha256V1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  applyAuthorityBaselineV3,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
-  authorityBaselineSha256V3,
+  applyAuthorityBaselineV4,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
+  authorityBaselineSha256V4,
 } from "../adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
@@ -369,8 +369,8 @@ export function bootstrapOrganizationAuthorityState(
     creating_artifact_revision: input.creating_artifact_revision,
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: authorityBaselineSha256V3(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: authorityBaselineSha256V4(),
       },
       "control-plane": {
         database_schema_version:
@@ -410,7 +410,7 @@ export function bootstrapOrganizationAuthorityState(
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV3 },
+      authority: { apply: applyAuthorityBaselineV4 },
       "control-plane": { apply: applyOrganizationControlBaselineV2 },
       "record-log": { apply: applyOrganizationRecordLogBaselineV2 },
       "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },

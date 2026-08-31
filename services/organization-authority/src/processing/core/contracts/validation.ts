@@ -1,4 +1,5 @@
 import type { ApprovalDecision } from '../approval/approval-gate.js';
+import { isCanonicalPersonEmail } from '../../../shared/person-email-rules.js';
 import type { AdapterIdentity } from './adapter.js';
 import type { DecisionSet, ExtractedSignal } from './decision.js';
 import type { DecisionBrief, DeliveryEnvelope } from './delivery.js';
@@ -114,25 +115,6 @@ function metadata(value: unknown, label: string): void {
 
 function optionalNonEmptyString(value: unknown, label: string): void {
   if (value !== undefined) nonEmptyString(value, label);
-}
-
-function isCanonicalEmailIdentity(value: unknown): value is string {
-  if (
-    typeof value !== 'string' ||
-    value.length < 3 ||
-    value.length > 254 ||
-    value !== value.trim() ||
-    value !== value.toLowerCase() ||
-    !/^[!-~]+$/.test(value)
-  ) {
-    return false;
-  }
-  const separator = value.indexOf('@');
-  return (
-    separator > 0 &&
-    separator === value.lastIndexOf('@') &&
-    separator < value.length - 1
-  );
 }
 
 function oneOf(value: unknown, allowed: readonly string[], label: string): asserts value is string {
@@ -616,7 +598,7 @@ export function assertCanonicalMeetingDocument(
       }
       const ownerEmails = (owner.identities ?? []).filter(
         (identity) =>
-          identity.kind === 'email' && isCanonicalEmailIdentity(identity.value),
+          identity.kind === 'email' && isCanonicalPersonEmail(identity.value),
       );
       if (ownerEmails.length !== 1) {
         throw new Error(

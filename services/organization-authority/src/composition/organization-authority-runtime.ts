@@ -33,7 +33,10 @@ import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization
 import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
 import type { MeetingProcessingWorkerPhaseRunnerV1 } from "../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
-import type { StagingSyntheticMeetingCanaryInputV1 } from "../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
+import type {
+  StagingSyntheticMeetingCanaryInputV1,
+  StagingSyntheticMeetingCanaryResultV1,
+} from "../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
 
 export interface OrganizationAuthorityRuntimeConfig {
   readonly state_directory: string;
@@ -78,10 +81,7 @@ export interface OrganizationAuthorityRuntimeConfig {
 }
 
 export type StagingSyntheticPrivateDmCanaryResultV1 =
-  | { readonly kind: "staged"; readonly approval_id: string; readonly stage_id: string; readonly reused_frozen_extraction: boolean }
-  | { readonly kind: "delivery_pending"; readonly approval_id: string; readonly reused_frozen_extraction: boolean }
-  | { readonly kind: "not_actionable"; readonly disposition: "coalesced" | "no_signals"; readonly reused_frozen_extraction: boolean }
-  | { readonly kind: "not_staged"; readonly approval_id: string; readonly reason: "revoked" | "state_drift"; readonly reused_frozen_extraction: boolean };
+  StagingSyntheticMeetingCanaryResultV1;
 
 export interface OpenedOrganizationAuthorityRuntime
   extends RunningOrganizationAuthorityServiceLifecycle {

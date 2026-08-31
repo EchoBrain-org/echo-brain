@@ -16,7 +16,36 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import {
+  applyOrganizationControlBaselineV2,
+  openOrganizationControlDatabase,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+  organizationControlBaselineSha256V2,
+} from "@echo-brain/organization-control-plane/organization-control-database-v1";
+import {
+  applyOrganizationRecordDerivedBaselineV1,
+  applyOrganizationRecordLogBaselineV2,
+  openOrganizationRecordDatabase,
+  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
+  organizationRecordDerivedBaselineSha256V1,
+  organizationRecordLogBaselineSha256V2,
+} from "@echo-brain/organization-record/organization-record-api-v1";
+import {
+  READABLE_SEARCH_CONTENT_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+  readableSearchPlaneBaselineSha256V1,
+} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  applyAuthorityBaselineV3,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
+  authorityBaselineSha256V3,
+} from "../../services/organization-authority/src/adapters/persistence/sqlite/baseline.js";
+import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.js";
+import { initializeAuthorityStateLineageV1 } from "../../services/organization-authority/src/state-lineage/authority-state-lineage-initializer.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TOOL = join(REPO, "tools", "clean-v1-release.mjs");
@@ -43,6 +72,14 @@ const ONBOARDING_KIT = join(
 );
 const DOCKERFILE = join(REPO, "deploy", "organization-authority", "Dockerfile");
 const AUTHORITY_IMAGE_BUILD = join(REPO, "tools", "build-authority-image.mjs");
+const V4_LINEAGE_VERIFIER = join(
+  REPO,
+  "services",
+  "organization-authority",
+  "dist",
+  "composition",
+  "verify-authority-state-lineage.js",
+);
 const roots: string[] = [];
 
 function canonical(value: unknown): string {
@@ -249,6 +286,72 @@ function writeCurrentStateLineage(stateDirectory: string) {
     { encoding: "utf8" },
   );
   expect(created.status).toBe(0);
+}
+
+function writeValidAuthorityV3Lineage(stateDirectory: string): void {
+  initializeAuthorityStateLineageV1({
+    state_directory: stateDirectory,
+    binding: {
+      authority_id: "oau_00000000-0000-4000-8000-000000000003",
+      organization_id: "org_00000000-0000-4000-8000-000000000003",
+      state_lineage_id: "lineage-00000000-0000-4000-8000-000000000003",
+    },
+    created_at: "2026-08-22T00:00:00.000Z",
+    creating_artifact_revision: "authority-v3-fixture",
+    schemas: {
+      authority: {
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
+        schema_sha256: authorityBaselineSha256V3(),
+      },
+      "control-plane": {
+        database_schema_version:
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: organizationControlBaselineSha256V2(),
+      },
+      "record-log": {
+        database_schema_version:
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: organizationRecordLogBaselineSha256V2(),
+      },
+      "record-derived": {
+        database_schema_version:
+          ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: organizationRecordDerivedBaselineSha256V1(),
+      },
+      "retrieval-facts": {
+        database_schema_version:
+          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: readableSearchPlaneBaselineSha256V1(
+          READABLE_SEARCH_FACTS_BASELINE_V1,
+        ),
+      },
+      "retrieval-lexical": {
+        database_schema_version:
+          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: readableSearchPlaneBaselineSha256V1(
+          READABLE_SEARCH_LEXICAL_BASELINE_V1,
+        ),
+      },
+      "retrieval-content": {
+        database_schema_version:
+          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+        schema_sha256: readableSearchPlaneBaselineSha256V1(
+          READABLE_SEARCH_CONTENT_BASELINE_V1,
+        ),
+      },
+    },
+    top_level_appliers: {
+      authority: { apply: applyAuthorityBaselineV3 },
+      "control-plane": { apply: applyOrganizationControlBaselineV2 },
+      "record-log": { apply: applyOrganizationRecordLogBaselineV2 },
+      "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },
+    },
+    open_writable_database: (path, role) => {
+      if (role === "authority") return openAuthorityDatabase(path);
+      if (role === "control-plane") return openOrganizationControlDatabase(path);
+      return openOrganizationRecordDatabase(path);
+    },
+  });
 }
 
 function writeRecord(value: unknown): string {
@@ -1165,6 +1268,73 @@ fi
     );
   });
 
+  it("rejects a valid Authority V3 lineage before staging a V4 candidate and explains the pre-live rehearsal replacement path", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-v3-lineage-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const releaseState = join(root, "release-state");
+    const stateDirectory = join(root, "state");
+    const verifier = join(root, "lineage-verifier-called");
+    const activation = join(root, "compose-activation-called");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const profile = writeRuntimeProfile();
+    const candidate = writeRecord(releaseWithRuntimeProfile(profile));
+    writeValidAuthorityV3Lineage(stateDirectory);
+    mkdirSync(bin);
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+if [[ "$1" == pull ]]; then exit 0; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
+  printf '%s\\n' '${"a".repeat(40)}'
+  exit 0
+fi
+if [[ "$1" == run ]]; then
+  touch "${verifier}"
+  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${V4_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "${stateDirectory}"
+  exit $?
+fi
+if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
+  touch "${activation}"
+fi
+`,
+    );
+    chmodSync(docker, 0o755);
+    const initialEnvironment = [
+      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
+      "ECHO_CLEAN_AUTHORITY_UID=1000",
+      "ECHO_CLEAN_AUTHORITY_GID=1000",
+      "",
+    ].join("\n");
+    writeFileSync(envFile, initialEnvironment, { mode: 0o600 });
+
+    const result = run(
+      "bash",
+      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
+      {
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_CLEAN_ENV_FILE: envFile,
+        ECHO_CLEAN_RELEASE_STATE_DIR: releaseState,
+        ECHO_CLEAN_STATE_DIR: stateDirectory,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "candidate Authority image rejected persisted state lineage",
+    );
+    expect(result.stderr).toContain("schema version is not exactly 4");
+    expect(result.stderr).toContain(
+      "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
+    );
+    expect(result.stderr).toContain("otherwise use an explicit migration");
+    expect(existsSync(verifier)).toBe(true);
+    expect(existsSync(activation)).toBe(false);
+    expect(existsSync(join(releaseState, "candidate.clean-v1.json"))).toBe(false);
+    expect(readFileSync(envFile, "utf8")).toBe(initialEnvironment);
+  });
+
   it("rejects a runtime-profile digest mismatch before Docker can mutate the deployment", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-runtime-profile-mismatch-"));
     roots.push(root);
@@ -1278,6 +1448,7 @@ fi
 
   it.each([
     ["delivery_pending", "delivery is still pending", '"approval_outcome":"delivery_pending","approval_id":"approval-canary"'],
+    ["quarantined", "did not stage a private approval card: quarantined", '"approval_outcome":"quarantined","approval_id":"approval-canary"'],
     ["not_actionable", "did not stage a private approval card: not_actionable", '"approval_outcome":"not_actionable"'],
   ])("aborts a first-deployment candidate after a %s canary and permits a new stage", (_outcome, expectedFailure, outcomeFields) => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-first-deploy-abort-"));

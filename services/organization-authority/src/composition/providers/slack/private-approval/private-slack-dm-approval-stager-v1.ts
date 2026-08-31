@@ -31,7 +31,12 @@ import {
   PrivateSlackApprovalCardPosterV1,
   type PrivateSlackApprovalCardPresentationV1,
 } from "../../../../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
-import type { ApprovalWorkflowStageInputV1, ApprovalWorkflowStagerV1 } from "../../../../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import {
+  APPROVAL_DELIVERY_QUARANTINE_REASON_V1,
+  type ApprovalWorkflowStageInputV1,
+  type ApprovalWorkflowStageResultV1,
+  type ApprovalWorkflowStagerV1,
+} from "../../../../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import {
   SqliteAuthorityMeetingProcessingStateV1,
   type ApprovalWorkflowOutboxV1,
@@ -73,53 +78,73 @@ interface PrivateCardAndSnapshotV1 {
 const MAX_TITLE = 150;
 const MAX_CONTEXT = 3_000;
 
-function displayText(value: unknown, fallback: string, maximum: number): string {
+function legacyMeetingTitle(value: unknown): string {
   const normalized =
     typeof value === "string"
       ? value.replace(/[\u0000-\u001F\u007F]/g, " ").replace(/\s+/g, " ").trim()
       : "";
-  const selected = normalized.length === 0 ? fallback : normalized;
-  return selected.slice(0, maximum).trim();
+  const selected = normalized.length === 0 ? "Meeting approval" : normalized;
+  return selected.slice(0, MAX_TITLE).trim();
 }
 
-function completeSignalText(value: unknown, label: string): string {
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value !== value.trim() ||
-    /[\u0000-\u0008\u000B-\u001F\u007F]/.test(value)
-  ) {
-    throw new Error(`private approval ${label} is not exact displayable text`);
-  }
-  return value;
+function isExactContextText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value === value.trim() &&
+    !/[\u0000-\u0008\u000B-\u001F\u007F]/.test(value)
+  );
 }
 
 function frozenApprovalContext(
   brief: ReturnType<typeof compileDecisionBrief>,
-): string {
-  const signalLines = [
-    ...brief.decisions.map(
-      (signal) =>
-        `Decision (${signal.status}): ${completeSignalText(signal.text, "decision")}`,
-    ),
-    ...brief.actions.map(
-      (signal) =>
-        `Action (owner: ${signal.owner === null ? "unassigned" : completeSignalText(signal.owner, "action owner")}; due: ${signal.due_at ?? "none"}): ${completeSignalText(signal.text, "action")}`,
-    ),
-    ...brief.rationales.map(
-      (signal) =>
-        `Rationale (supports: ${signal.supports_signal_ids.length === 0 ? "none" : signal.supports_signal_ids.map((id) => completeSignalText(id, "rationale support id")).join(", ")}): ${completeSignalText(signal.text, "rationale")}`,
-    ),
-  ];
-  const context = [
+): string | undefined {
+  let context = [
     `Review ${brief.decisions.length} decision${brief.decisions.length === 1 ? "" : "s"}, ${brief.actions.length} action${brief.actions.length === 1 ? "" : "s"}, and ${brief.rationales.length} rationale${brief.rationales.length === 1 ? "" : "s"} from this meeting.`,
     "Frozen content:",
-    ...signalLines,
   ].join("\n");
-  if (context.length > MAX_CONTEXT) {
-    throw new Error(
-      "private approval complete frozen signal preview exceeds Slack's section limit",
-    );
+  const append = (line: string): boolean => {
+    if (context.length + 1 + line.length > MAX_CONTEXT) return false;
+    context += `\n${line}`;
+    return true;
+  };
+  for (const signal of brief.decisions) {
+    if (
+      !isExactContextText(signal.text) ||
+      !append(`Decision (${signal.status}): ${signal.text}`)
+    ) {
+      return undefined;
+    }
+  }
+  for (const signal of brief.actions) {
+    if (
+      !isExactContextText(signal.text) ||
+      (signal.owner !== null && !isExactContextText(signal.owner))
+    ) {
+      return undefined;
+    }
+    if (
+      !append(
+        `Action (owner: ${signal.owner ?? "unassigned"}; due: ${signal.due_at ?? "none"}): ${signal.text}`,
+      )
+    ) {
+      return undefined;
+    }
+  }
+  for (const signal of brief.rationales) {
+    if (
+      !isExactContextText(signal.text) ||
+      signal.supports_signal_ids.some((id) => !isExactContextText(id))
+    ) {
+      return undefined;
+    }
+    if (
+      !append(
+        `Rationale (supports: ${signal.supports_signal_ids.length === 0 ? "none" : signal.supports_signal_ids.join(", ")}): ${signal.text}`,
+      )
+    ) {
+      return undefined;
+    }
   }
   return context;
 }
@@ -127,7 +152,7 @@ function frozenApprovalContext(
 function buildCardAndSnapshot(
   input: ApprovalWorkflowStageInputV1,
   sha256: (value: unknown) => Digest,
-): PrivateCardAndSnapshotV1 {
+): PrivateCardAndSnapshotV1 | undefined {
   const brief = compileDecisionBrief(
     `brf_${input.candidate.candidate_semantic_sha256.slice("sha256:".length)}`,
     input.meeting,
@@ -158,14 +183,18 @@ function buildCardAndSnapshot(
     approved_payload: payload,
   });
   // The active controls must follow a complete projection of the exact brief
-  // they authorize. If Slack cannot show every frozen signal, fail before any
-  // post attempt is prepared instead of truncating an informed-consent view.
-  const approval_context = frozenApprovalContext(brief);
+  // they authorize. An unrepresentable candidate is durably quarantined before
+  // any post attempt instead of truncating an informed-consent view.
+  const approvalContext = frozenApprovalContext(brief);
+  if (approvalContext === undefined) return undefined;
   const card = buildPrivateSlackApprovalBlockKitCardV1({
     schema_version: 1,
     approval_id: input.candidate.approval_id,
-    meeting_title: displayText(input.meeting.title, "Meeting approval", MAX_TITLE),
-    approval_context,
+    // The title is display chrome, not authorized decision content. Keep its
+    // legacy deterministic normalization so long provider titles do not
+    // quarantine an otherwise complete approval package.
+    meeting_title: legacyMeetingTitle(input.meeting.title),
+    approval_context: approvalContext,
   });
   const approved_snapshot_sha256 = sha256(approved_snapshot);
   const frozen_card_sha256 = sha256({
@@ -289,21 +318,39 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
   async stage(
     input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
-  ): Promise<
-    | { readonly kind: "staged"; readonly stage_id: string }
-    | { readonly kind: "delivery_pending" }
-    | { readonly kind: "revoked" }
-    | { readonly kind: "state_drift" }
-  > {
+  ): Promise<ApprovalWorkflowStageResultV1> {
+    const existingQuarantine =
+      this.options.authority.readApprovalDeliveryQuarantine(
+        input.candidate.candidate_id,
+      );
+    if (existingQuarantine !== undefined) {
+      return {
+        kind: "quarantined",
+        reason_code: existingQuarantine.reason_code,
+      };
+    }
     let outbox = this.options.authority.readCandidateByApprovalId(input.candidate.approval_id);
     if (outbox === undefined || outbox.candidate_id !== input.candidate.candidate_id) {
       return { kind: "state_drift" };
     }
     if (outbox.state === "superseded") return { kind: "state_drift" };
 
+    const frozen = buildCardAndSnapshot(
+      input,
+      this.sha256,
+    );
+    if (frozen === undefined) {
+      const quarantine = this.options.authority.quarantineApprovalDelivery({
+        candidate_id: outbox.candidate_id,
+        reason_code: APPROVAL_DELIVERY_QUARANTINE_REASON_V1,
+      });
+      return { kind: "quarantined", reason_code: quarantine.reason_code };
+    }
+
     // This read-only proof has no external side effect. Resolve it before
-    // freezing a post attempt so a missing/deactivated owner cannot leave an
-    // avoidable `posting` recovery delay in the Authority outbox.
+    // freezing a post attempt so a missing/deactivated owner leaves the
+    // already-durable candidate queued, rather than creating a `posting`
+    // recovery record without a deliverable target.
     const targetInput: PrivateSlackApprovalReviewerTargetResolverInputV1 = {
       meeting: input.meeting,
       authority_database: this.options.authority_database,
@@ -312,8 +359,10 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       connection_id: this.options.connection_id,
     } as const;
     const target = this.resolveReviewerTarget(targetInput);
-    if (target === undefined) return { kind: "state_drift" };
-    const frozen = buildCardAndSnapshot(input, this.sha256);
+    // An owner identity can arrive after the meeting itself. The candidate is
+    // already durable, so this is a recoverable delivery dependency: preserve
+    // it for reconciliation and let source intake advance past this meeting.
+    if (target === undefined) return { kind: "delivery_pending" };
     const prepared = this.options.authority.prepareApprovalPost({
       candidate_id: outbox.candidate_id,
       frozen_card_sha256: frozen.frozen_card_sha256,
