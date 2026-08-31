@@ -4,7 +4,7 @@ const CANONICAL_RELEASE_ID = new RegExp(
   `^${CANONICAL_RELEASE_ID_SOURCE}$`,
 );
 const CANONICAL_RELEASE_ID_TOKEN = new RegExp(
-  `(?<![\\p{L}\\p{N}_-])${CANONICAL_RELEASE_ID_SOURCE}(?![\\p{L}\\p{N}_-])`,
+  `(?<![\\p{ID_Continue}-])${CANONICAL_RELEASE_ID_SOURCE}(?![\\p{ID_Continue}-])`,
   "gu",
 );
 

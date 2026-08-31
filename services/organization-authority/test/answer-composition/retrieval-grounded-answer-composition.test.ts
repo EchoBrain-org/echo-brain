@@ -693,6 +693,7 @@ describe("retrieval-grounded answer composition", () => {
     "What changed in clean-v1-staging-20260830-014_other?",
     "What changed in éclean-v1-staging-20260830-014?",
     "What changed in clean-v1-staging-20260830-014中?",
+    "What changed in clean-v1-staging-20260830-014\u0301?",
   ])("omits the selector unless the original question has one unambiguous whole-token ID: %s", async (question) => {
     const releasedRetrieval = {
       retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) =>

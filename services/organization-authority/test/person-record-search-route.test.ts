@@ -584,6 +584,7 @@ describe("Person Layer 2 route", () => {
       ["underscore-prefix", `_${releaseId}`],
       ["underscore-suffix", `${releaseId}_other`],
       ["unicode-prefix", `é${releaseId}`],
+      ["combining-suffix", `${releaseId}\u0301`],
     ] as const;
     const built = buildReadableSearchGenerationV1(
       realGenerationInput(value.state_directory, [
@@ -713,7 +714,7 @@ describe("Person Layer 2 route", () => {
         queries: [query],
         exact_release_id: "clean-v1-staging-20260901-016",
       });
-      expect(fallback.response.items).toHaveLength(8);
+      expect(fallback.response.items).toHaveLength(9);
       expect(
         fallback.response.items.some((item) =>
           item.text.includes("clean-v1-staging-20260829-013"),
