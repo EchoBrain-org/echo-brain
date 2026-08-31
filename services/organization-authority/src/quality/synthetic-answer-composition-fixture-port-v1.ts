@@ -71,6 +71,7 @@ export class SyntheticFixtureReleasedRetrievalPortV1 implements ReleasedRetrieva
         record_sha256: released_atoms.at(-1)?.record_sha256 ?? null,
       },
       released_atoms,
+      query_hit_counts: Object.freeze(input.queries.map(() => released_atoms.length)),
       checked_at: "2026-08-29T00:00:00.000Z",
     };
     this.releases.push(release);

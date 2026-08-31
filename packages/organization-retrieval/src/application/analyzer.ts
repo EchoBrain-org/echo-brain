@@ -45,7 +45,13 @@ export function analyzeReadableSearchQuery(query: string): readonly string[] {
     throw new ReadableSearchValidationError('query must contain from one through sixteen unique terms');
   }
   if (unique.some((term) => DECISION_TERM_FAMILY.has(term))) {
-    for (const term of READABLE_SEARCH_DECISION_TERM_FAMILY) {
+    const missingFamilyTerms = READABLE_SEARCH_DECISION_TERM_FAMILY.filter(
+      (term) => !observed.has(term),
+    );
+    if (unique.length + missingFamilyTerms.length > MAXIMUM_QUERY_TERMS) {
+      throw new ReadableSearchValidationError('query decision-family expansion exceeds sixteen unique terms');
+    }
+    for (const term of missingFamilyTerms) {
       if (!observed.has(term)) {
         observed.add(term);
         unique.push(term);
@@ -55,12 +61,21 @@ export function analyzeReadableSearchQuery(query: string): readonly string[] {
   return Object.freeze(unique);
 }
 
-export function analyzeReadableSearchDocument(text: string): ReadonlyMap<string, number> {
+export function analyzeReadableSearchDocument(
+  text: string,
+  itemKind?: 'decision' | 'action' | 'rationale',
+): ReadonlyMap<string, number> {
   assertNfc(text, 'document text');
   const frequencies = new Map<string, number>();
   for (const term of normalizedTerms(text)) {
     if (Buffer.byteLength(term, 'utf8') > MAXIMUM_TERM_UTF8_BYTES) continue;
     frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
+  }
+  // The admitted item kind is permission-bound in the facts plane. A decision
+  // therefore has one controlled lexical category even if its approved text
+  // uses no member of the closed decision word family.
+  if (itemKind === 'decision') {
+    frequencies.set('decision', (frequencies.get('decision') ?? 0) + 1);
   }
   return frequencies;
 }

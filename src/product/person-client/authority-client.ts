@@ -678,6 +678,7 @@ export class PersonAuthorityClient {
     readonly require_canonical_response?: boolean;
     readonly timeout_ms?: number;
     readonly method?: "POST" | "PUT";
+    readonly headers?: Readonly<Record<string, string>>;
   }): Promise<T> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
@@ -694,6 +695,7 @@ export class PersonAuthorityClient {
           ...(input.access_token === undefined
             ? {}
             : { authorization: `Bearer ${input.access_token}` }),
+          ...input.headers,
         },
         body,
       },
@@ -971,6 +973,7 @@ export class PersonAuthorityClient {
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       timeout_ms: ASK_TIMEOUT_MS,
+      headers: { "x-echo-person-answer-version": "2" },
     });
   }
 

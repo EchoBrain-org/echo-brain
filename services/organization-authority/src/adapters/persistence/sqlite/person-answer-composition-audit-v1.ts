@@ -32,6 +32,7 @@ export interface PersonAnswerCompositionAuditEntryV1 {
     readonly planned_query_count: number;
     readonly released_atom_count: number;
     readonly context_atom_count: number;
+    readonly query_hit_counts: readonly number[];
   };
   readonly checked_at: string;
 }
@@ -53,10 +54,15 @@ export class SqlitePersonAnswerCompositionAuditV1 {
       entry.retrieval.planned_query_count > 4 ||
       !Number.isSafeInteger(entry.retrieval.released_atom_count) ||
       entry.retrieval.released_atom_count < 0 ||
-      entry.retrieval.released_atom_count > 16 ||
+      entry.retrieval.released_atom_count > 40 ||
       !Number.isSafeInteger(entry.retrieval.context_atom_count) ||
       entry.retrieval.context_atom_count < 0 ||
       entry.retrieval.context_atom_count > entry.retrieval.released_atom_count ||
+      !Array.isArray(entry.retrieval.query_hit_counts) ||
+      entry.retrieval.query_hit_counts.length !== entry.retrieval.planned_query_count ||
+      entry.retrieval.query_hit_counts.some(
+        (count) => !Number.isSafeInteger(count) || count < 0 || count > 10,
+      ) ||
       new Date(entry.checked_at).toISOString() !== entry.checked_at
     ) {
       throw new Error("Person answer composition audit entry is invalid");

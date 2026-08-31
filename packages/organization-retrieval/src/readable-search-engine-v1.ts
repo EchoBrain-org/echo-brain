@@ -592,6 +592,7 @@ function buildSegment(
         );
       for (const [term, term_frequency] of analyzeReadableSearchDocument(
         atom.text,
+        atom.item_kind,
       ))
         lexical
           .prepare(
@@ -727,7 +728,7 @@ function assertWithinAdmissionBudget(
         atom.reviewer_membership_id,
       ).segment_id,
     );
-    postings += analyzeReadableSearchDocument(atom.text).size;
+    postings += analyzeReadableSearchDocument(atom.text, atom.item_kind).size;
     if (postings > budget.maximum_postings)
       throw new Error("readable-search generation exceeds maximum_postings");
   }

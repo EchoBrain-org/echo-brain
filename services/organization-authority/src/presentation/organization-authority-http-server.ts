@@ -712,6 +712,9 @@ export function createOrganizationAuthorityHttpServer(
           200,
           await options.person_answer.ask({
             access_token: accessToken(request.headers.authorization),
+            ...(request.headers["x-echo-person-answer-version"] === "2"
+              ? { accept_outcome_v2: true }
+              : {}),
             ...answerInput(await body(request)),
           }),
         );

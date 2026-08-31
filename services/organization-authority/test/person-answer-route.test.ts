@@ -118,6 +118,7 @@ function setup(input: {
                 ),
               }),
         release: witness,
+        query_hit_counts: Object.freeze(_value.queries.map(() => 2)),
       });
     }),
     revalidateBatchRelease: vi.fn(() => {
@@ -395,6 +396,7 @@ describe("Person answer route", () => {
         value.route.ask({
           access_token: "bearer-only-token",
           question: "Which decisions did I make?",
+          accept_outcome_v2: true,
         }),
       ).resolves.toMatchObject({
         outcome: "authorship_unsupported",
@@ -413,6 +415,7 @@ describe("Person answer route", () => {
           planned_query_count: 1,
           released_atom_count: 2,
           context_atom_count: 0,
+          query_hit_counts: [2],
         },
       }));
     } finally {

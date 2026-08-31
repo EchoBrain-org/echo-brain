@@ -78,6 +78,8 @@ export interface PersonRecordSearchBatchReleaseV1 {
 export interface PersonRecordSearchBatchResultV1 {
   readonly response: PersonRecordSearchResponseV1;
   readonly release: PersonRecordSearchBatchReleaseV1;
+  /** Ordered per-query result counts, kept server-side for answer auditing only. */
+  readonly query_hit_counts: readonly number[];
 }
 
 export interface PersonRecordSearchBatchApplicationV1 {
@@ -412,7 +414,11 @@ export function createPersonRecordSearchRouteV1(
       record_read_audit_row_sha256: recordReadAuditRowSha256,
     });
     releaseWitnesses.add(release);
-    return Object.freeze({ response, release });
+    return Object.freeze({
+      response,
+      release,
+      query_hit_counts: Object.freeze(results.map((result) => result.items.length)),
+    });
   }
 
   return Object.freeze({

@@ -81,6 +81,8 @@ export interface ReleasedRetrievalBatch {
   };
   /** Ordered by released retrieval's relevance/release order. */
   readonly released_atoms: readonly ReleasedRetrievalAtom[];
+  /** Ordered counts, one per submitted plan query; no query text is retained. */
+  readonly query_hit_counts: readonly number[];
   readonly checked_at: string;
 }
 
@@ -124,6 +126,7 @@ export interface AnswerCompositionAuditEntry {
     readonly planned_query_count: number;
     readonly released_atom_count: number;
     readonly context_atom_count: number;
+    readonly query_hit_counts: readonly number[];
   };
   readonly checked_at: string;
 }
@@ -356,9 +359,10 @@ function isFirstPersonDecisionAuthorshipQuestion(question: string): boolean {
     ),
   );
   return (
-    [...terms].some((term) => FIRST_PERSON_TERMS.has(term)) &&
-    [...terms].some((term) => DECISION_TERMS.has(term)) &&
-    [...terms].some((term) => AUTHORSHIP_TERMS.has(term))
+    ([...terms].some((term) => FIRST_PERSON_TERMS.has(term)) &&
+      [...terms].some((term) => DECISION_TERMS.has(term)) &&
+      ([...terms].some((term) => AUTHORSHIP_TERMS.has(term)) ||
+        terms.has("my")))
   );
 }
 
@@ -385,6 +389,16 @@ function assertRelease(value: ReleasedRetrievalBatch): void {
     new Date(value.checked_at).toISOString() !== value.checked_at
   ) {
     throw new RetrievalGroundedAnswerCompositionError("released retrieval batch is invalid");
+  }
+  if (
+    !Array.isArray(value.query_hit_counts) ||
+    value.query_hit_counts.length < 1 ||
+    value.query_hit_counts.length > ANSWER_COMPOSITION_MAX_ADDITIONAL_QUERIES + 1 ||
+    value.query_hit_counts.some(
+      (count) => !Number.isSafeInteger(count) || count < 0 || count > 10,
+    )
+  ) {
+    throw new RetrievalGroundedAnswerCompositionError("released retrieval hit counts are invalid");
   }
 }
 
@@ -639,6 +653,9 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       assertRelease(release);
+      if (release.query_hit_counts.length !== plan.length) {
+        throw new RetrievalGroundedAnswerCompositionError("released retrieval hit counts do not match the plan");
+      }
       const context = authorshipUnsupported
         ? Object.freeze([]) as readonly ContextAtom[]
         : boundedContext(release);
@@ -727,7 +744,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
         generation_id: release.generation_id,
         record_head: release.record_head,
         released_atoms_sha256: digest(
-          context.map((atom) => ({
+          release.released_atoms.map((atom) => ({
             atom_id: atom.atom_id,
             record_sha256: atom.record_sha256,
             policy_id: atom.policy_id,
@@ -751,6 +768,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           planned_query_count: plan.length,
           released_atom_count: release.released_atoms.length,
           context_atom_count: context.length,
+          query_hit_counts: Object.freeze([...release.query_hit_counts]),
         }),
         checked_at: finalAuthorization.checked_at,
       });

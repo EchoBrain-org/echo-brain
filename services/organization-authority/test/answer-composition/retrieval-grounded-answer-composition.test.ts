@@ -11,7 +11,7 @@ import {
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 
-function release(atoms = true): ReleasedRetrievalBatch {
+function release(atoms = true, queryCount = 1): ReleasedRetrievalBatch {
   return {
     release_id: digest("release"),
     authority_id: "oau_clean",
@@ -38,6 +38,7 @@ function release(atoms = true): ReleasedRetrievalBatch {
           },
         ]
       : [],
+    query_hit_counts: Array.from({ length: queryCount }, () => (atoms ? 2 : 0)),
     checked_at: "2026-08-23T00:00:00.000Z",
   };
 }
@@ -67,7 +68,7 @@ describe("retrieval-grounded answer composition", () => {
         retrieveCount += 1;
         retrievedQueries = input.queries;
         events.push("retrieve");
-        return release();
+        return release(true, input.queries.length);
       },
       revalidate: async () => {
         events.push("revalidate");
@@ -142,7 +143,7 @@ describe("retrieval-grounded answer composition", () => {
         })),
       },
       released_retrieval: {
-        retrieve: vi.fn(async () => release()),
+        retrieve: vi.fn(async (input) => release(true, input.queries.length)),
         revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
       },
       audit,
@@ -178,7 +179,7 @@ describe("retrieval-grounded answer composition", () => {
     },
   ])("rejects an answer with $name before final revalidation", async ({ response }) => {
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
+      retrieve: vi.fn(async (input) => release(true, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const audit = { append: vi.fn() };
@@ -202,7 +203,7 @@ describe("retrieval-grounded answer composition", () => {
   it("does not call the answer model when released retrieval has no usable atoms, but revalidates and audits", async () => {
     const answerer = { generate: vi.fn(async () => ({ status: "answered", answer: "wrong", citations: ["a1"] })) };
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release(false)),
+      retrieve: vi.fn(async (input) => release(false, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const audit = { append: vi.fn() };
@@ -232,7 +233,7 @@ describe("retrieval-grounded answer composition", () => {
     const releasedRetrieval = {
       retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) => {
         retrieved.push([...input.queries]);
-        return release();
+        return release(true, input.queries.length);
       }),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
@@ -262,8 +263,21 @@ describe("retrieval-grounded answer composition", () => {
         planned_query_count: 1,
         released_atom_count: 2,
         context_atom_count: 0,
+        query_hit_counts: [2],
       },
     }));
+  });
+
+  it("treats possessive first-person decision questions as unsupported without overmatching readable-decision questions", async () => {
+    const planner = { generate: vi.fn(async () => ({ queries: [] })) };
+    const answerer = { generate: vi.fn(async () => ({ status: "insufficient_evidence", answer: "No evidence.", citations: [] })) };
+    const retrieval = { retrieve: vi.fn(async (input) => release(true, input.queries.length)), revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })) };
+    const answer = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
+    await expect(answer.answer({ question: "What are my decisions?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
+    expect(planner.generate).not.toHaveBeenCalled();
+    const readable = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
+    await readable.answer({ question: "What decisions can I read?" });
+    expect(planner.generate).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -277,7 +291,7 @@ describe("retrieval-grounded answer composition", () => {
     },
   ])("fails closed before retrieval when planner output $name", async ({ response }) => {
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release(false)),
+      retrieve: vi.fn(async (input) => release(false, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answerer = { generate: vi.fn() };
@@ -303,7 +317,7 @@ describe("retrieval-grounded answer composition", () => {
   it("fails closed before retrieval when the planner is unavailable", async () => {
     const plannerFailure = new Error("provider unavailable");
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
+      retrieve: vi.fn(async (input) => release(true, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answerer = {
@@ -482,7 +496,7 @@ describe("retrieval-grounded answer composition", () => {
 
   it("does not let a diagnostics observer failure mask planner rejection", async () => {
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
+      retrieve: vi.fn(async (input) => release(true, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answer = createRetrievalGroundedAnswerComposition({
@@ -510,7 +524,7 @@ describe("retrieval-grounded answer composition", () => {
     controller.abort(new Error("caller cancelled"));
     const planner = { generate: vi.fn() };
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
+      retrieve: vi.fn(async (input) => release(true, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answer = createRetrievalGroundedAnswerComposition({
@@ -532,7 +546,7 @@ describe("retrieval-grounded answer composition", () => {
 
   it("keeps the original query first and drops exact planner duplicates", async () => {
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release(false)),
+      retrieve: vi.fn(async (input) => release(false, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const question = "What is the launch date?";

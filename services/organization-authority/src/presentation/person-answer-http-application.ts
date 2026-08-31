@@ -29,5 +29,6 @@ export interface PersonAnswerHttpApplicationV1 {
   ask(input: {
     readonly access_token: string;
     readonly question: string;
+    readonly accept_outcome_v2?: boolean;
   }): Promise<PersonAnswerResponseV1>;
 }

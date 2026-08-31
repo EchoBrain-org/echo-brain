@@ -32,6 +32,25 @@ describe('readable-search analyzer', () => {
       'decided',
     ]);
     expect(analyzeReadableSearchQuery('decisive')).toEqual(['decisive']);
+    expect(() => analyzeReadableSearchQuery(`decision ${Array.from({ length: 15 }, (_, index) => `term${index}`).join(' ')}`)).toThrow(
+      'decision-family expansion exceeds sixteen',
+    );
+  });
+
+  it('adds the controlled decision category only for admitted decision items', () => {
+    expect([...analyzeReadableSearchDocument('We approved the launch for Tuesday.', 'decision')]).toEqual([
+      ['we', 1],
+      ['approved', 1],
+      ['the', 1],
+      ['launch', 1],
+      ['for', 1],
+      ['tuesday', 1],
+      ['decision', 1],
+    ]);
+    expect([...analyzeReadableSearchDocument('We approved the launch for Tuesday.', 'action')]).not.toContainEqual([
+      'decision',
+      1,
+    ]);
   });
 
   it('rejects an empty, non-NFC, or over-wide query while documents omit wide tokens', () => {
