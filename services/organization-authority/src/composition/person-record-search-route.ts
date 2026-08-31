@@ -10,6 +10,10 @@ import {
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import {
+  containsCanonicalReleaseId,
+  isCanonicalReleaseId,
+} from "../answer-composition/canonical-release-id.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type {
@@ -47,6 +51,11 @@ type SearchGeneration = typeof searchReadableSearchGenerationV1;
 export interface PersonRecordSearchBatchInputV1 {
   readonly access_token: string;
   readonly queries: readonly string[];
+  /**
+   * A canonical release named by the answer question. Layer 3 applies it only
+   * after normal authorization has admitted the merged evidence.
+   */
+  readonly exact_release_id?: string;
   readonly limit?: number;
 }
 
@@ -78,6 +87,8 @@ export interface PersonRecordSearchBatchReleaseV1 {
 export interface PersonRecordSearchBatchResultV1 {
   readonly response: PersonRecordSearchResponseV1;
   readonly release: PersonRecordSearchBatchReleaseV1;
+  /** Ordered per-query result counts, kept server-side for answer auditing only. */
+  readonly query_hit_counts: readonly number[];
 }
 
 export interface PersonRecordSearchBatchApplicationV1 {
@@ -215,6 +226,8 @@ function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
     input.queries.length > 4 ||
     new Set(input.queries).size !== input.queries.length ||
     input.queries.some((query) => !validBatchQuery(query)) ||
+    (input.exact_release_id !== undefined &&
+      !isCanonicalReleaseId(input.exact_release_id)) ||
     (input.limit !== undefined &&
       (!Number.isSafeInteger(input.limit) ||
         input.limit < 1 ||
@@ -378,10 +391,21 @@ export function createPersonRecordSearchRouteV1(
         "person authentication failed",
       );
     }
+    const items = [...merged.values()];
+    // This selector is a relevance narrowing only. It runs after the existing
+    // generation, head, and second current-Person checks, and falls back to
+    // the complete authorized result set when no exact evidence exists.
+    const exactReleaseId = input.exact_release_id;
+    const exactItems =
+      exactReleaseId === undefined
+        ? []
+        : items.filter((item) =>
+            containsCanonicalReleaseId(item.text, exactReleaseId),
+          );
     const response = asResponse({
       generation_id: pointer.generation_id,
       record_head: head,
-      items: [...merged.values()],
+      items: exactItems.length === 0 ? items : exactItems,
     });
     const recordReadAuditRowSha256 = options.audit.append({
       read_mode: "layer2",
@@ -412,7 +436,11 @@ export function createPersonRecordSearchRouteV1(
       record_read_audit_row_sha256: recordReadAuditRowSha256,
     });
     releaseWitnesses.add(release);
-    return Object.freeze({ response, release });
+    return Object.freeze({
+      response,
+      release,
+      query_hit_counts: Object.freeze(results.map((result) => result.items.length)),
+    });
   }
 
   return Object.freeze({

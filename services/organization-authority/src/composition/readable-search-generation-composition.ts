@@ -47,16 +47,29 @@ import {
 export const READABLE_SEARCH_SOURCE_REVISION_V1 =
   "organization-authority-clean-readable-search-v1" as const;
 
-const READABLE_SEARCH_ANALYZER_RELEASE_V1 = Object.freeze({
-  schema_version: 1,
-  kind: "echo-clean-readable-search-analyzer-release-v1",
-  analyzer_id: "echo-unicode-alnum-frequency-v1",
+const READABLE_SEARCH_ANALYZER_RELEASE_V3 = Object.freeze({
+  schema_version: 3,
+  kind: "echo-clean-readable-search-analyzer-release-v3",
+  analyzer_id: "echo-unicode-alnum-decision-category-frequency-v3",
   input_normalization: "NFC",
   tokenization: "maximal-ecmascript-unicode-letter-or-number-runs",
   case_mapping: "locale-independent-string-lowercase",
   output_normalization: "NFC",
   document_term_occurrences: "retain-for-frequency",
   document_overlong_term_policy: "omit",
+  query_expansion: {
+    kind: "closed-exact-term-family-v1",
+    family: ["decision", "decisions", "decide", "decided", "deciding"],
+    trigger: "any-exact-family-term",
+    caller_term_limit: 16,
+    generated_family_terms_count_outside_caller_limit: true,
+  },
+  decision_item_category_index: {
+    source: "admitted-item-kind",
+    item_kind: "decision",
+    term: "decision",
+    term_frequency: 1,
+  },
 });
 
 const READABLE_SEARCH_BUILDER_RELEASE_V1 = Object.freeze({
@@ -92,7 +105,7 @@ export function readableSearchGenerationContractV1():
   const restrictedReviewerPolicy =
     restrictedReviewerPersonPolicyContractSha256();
   const analyzerSource = sha256Digest(
-    canonicalJson(READABLE_SEARCH_ANALYZER_RELEASE_V1),
+    canonicalJson(READABLE_SEARCH_ANALYZER_RELEASE_V3),
   );
   const analyzer = Object.freeze({
     analyzer_contract_sha256: canonicalSha256({
@@ -124,6 +137,14 @@ export function readableSearchGenerationContractV1():
       ],
       query: {
         match: "any-unique-query-term",
+        exact_term_family_recall: [
+          "decision",
+          "decisions",
+          "decide",
+          "decided",
+          "deciding",
+        ],
+        decision_item_category_term: "decision",
         score: "sum-matched-term-frequency",
         order: [
           "score-desc",

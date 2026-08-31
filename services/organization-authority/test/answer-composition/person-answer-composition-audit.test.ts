@@ -26,6 +26,13 @@ describe("answer composition audit", () => {
       answer_sha256: digest("private answer"),
       response_sha256: digest("response"),
       citation_count: 1,
+      outcome: "answered",
+      retrieval: {
+        planned_query_count: 1,
+        released_atom_count: 1,
+        context_atom_count: 1,
+        query_hit_counts: [1],
+      },
       checked_at: "2026-08-23T00:00:00.000Z",
     });
     const row = database
@@ -39,5 +46,6 @@ describe("answer composition audit", () => {
     expect(row.answer_sha256).toBe(digest("private answer"));
     expect(row.body_json).not.toContain("private question");
     expect(row.body_json).not.toContain("private answer");
+    expect(row.body_json).toContain('"query_hit_counts":[1]');
   });
 });

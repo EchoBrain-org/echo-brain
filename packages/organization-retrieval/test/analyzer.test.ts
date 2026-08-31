@@ -14,6 +14,46 @@ describe('readable-search analyzer', () => {
     expect(readableSearchScore(document, ['café', 'missing', '１２3'])).toBe(4);
   });
 
+  it('expands only the closed decision word family for query recall', () => {
+    expect(analyzeReadableSearchQuery('What was decided?')).toEqual([
+      'what',
+      'was',
+      'decided',
+      'decision',
+      'decisions',
+      'decide',
+      'deciding',
+    ]);
+    expect(analyzeReadableSearchQuery('decision deciding')).toEqual([
+      'decision',
+      'deciding',
+      'decisions',
+      'decide',
+      'decided',
+    ]);
+    expect(analyzeReadableSearchQuery('decisive')).toEqual(['decisive']);
+    expect(analyzeReadableSearchQuery(`decision ${Array.from({ length: 15 }, (_, index) => `term${index}`).join(' ')}`)).toHaveLength(20);
+    expect(() => analyzeReadableSearchQuery(`decision ${Array.from({ length: 16 }, (_, index) => `term${index}`).join(' ')}`)).toThrow(
+      'one through sixteen',
+    );
+  });
+
+  it('adds the controlled decision category only for admitted decision items', () => {
+    expect([...analyzeReadableSearchDocument('We approved the launch for Tuesday.', 'decision')]).toEqual([
+      ['we', 1],
+      ['approved', 1],
+      ['the', 1],
+      ['launch', 1],
+      ['for', 1],
+      ['tuesday', 1],
+      ['decision', 1],
+    ]);
+    expect([...analyzeReadableSearchDocument('We approved the launch for Tuesday.', 'action')]).not.toContainEqual([
+      'decision',
+      1,
+    ]);
+  });
+
   it('rejects an empty, non-NFC, or over-wide query while documents omit wide tokens', () => {
     expect(() => analyzeReadableSearchQuery('...')).toThrow('one through sixteen');
     expect(() => analyzeReadableSearchQuery('e\u0301')).toThrow('must be NFC');

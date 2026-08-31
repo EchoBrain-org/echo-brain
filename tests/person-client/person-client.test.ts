@@ -510,6 +510,38 @@ describe("Person client", () => {
     });
   });
 
+  it("accepts only the machine-readable authorship-unsupported outcome", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input, init) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          expect(new Headers(init?.headers).get("x-echo-person-answer-version")).toBe("2");
+          return json({
+            schema_version: 1,
+            kind: "echo-clean-person-answer-v1",
+            generation_id: `sha256:${"a".repeat(64)}`,
+            record_head: {
+              position: 1,
+              record_sha256: `sha256:${"b".repeat(64)}`,
+            },
+            answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
+            citations: [],
+            outcome: "authorship_unsupported",
+          });
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(client.ask("Which decisions did I make?")).resolves.toMatchObject({
+        outcome: "authorship_unsupported",
+      });
+    });
+  });
+
   it("gives a safe retry instruction while a queried generation is unavailable", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();

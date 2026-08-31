@@ -118,6 +118,7 @@ function setup(input: {
                 ),
               }),
         release: witness,
+        query_hit_counts: Object.freeze(_value.queries.map(() => 2)),
       });
     }),
     revalidateBatchRelease: vi.fn(() => {
@@ -220,6 +221,30 @@ describe("Person answer route", () => {
       expect(value.append.mock.calls[0]?.[0].response_sha256).toBe(
         canonicalSha256(response as never),
       );
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("forwards an original-question selector through Layer 3", async () => {
+    const releaseId = "clean-v1-staging-20260830-014";
+    const value = setup({});
+    try {
+      await value.route.ask({
+        access_token: "bearer-only-token",
+        question: `What did we decide for ${releaseId}?`,
+      });
+
+      expect(value.search.searchBatch).toHaveBeenCalledWith({
+        access_token: "bearer-only-token",
+        queries: [
+          `What did we decide for ${releaseId}?`,
+          "launch date",
+          "launch owner",
+        ],
+        exact_release_id: releaseId,
+        limit: 10,
+      });
     } finally {
       value.database.close();
     }
@@ -387,6 +412,41 @@ describe("Person answer route", () => {
     }
   });
 
+  it("returns the fixed authorship outcome without calling either model, after Layer 3 release and revalidation", async () => {
+    const model: StructuredGenerationPort = { generate: vi.fn() };
+    const value = setup({ model });
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "bearer-only-token",
+          question: "Which decisions did I make?",
+          accept_outcome_v2: true,
+        }),
+      ).resolves.toMatchObject({
+        outcome: "authorship_unsupported",
+        citations: [],
+      });
+      expect(model.generate).not.toHaveBeenCalled();
+      expect(value.search.searchBatch).toHaveBeenCalledWith({
+        access_token: "bearer-only-token",
+        queries: ["Which decisions did I make?"],
+        limit: 10,
+      });
+      expect(value.search.revalidateBatchRelease).toHaveBeenCalledOnce();
+      expect(value.append).toHaveBeenCalledWith(expect.objectContaining({
+        outcome: "authorship_unsupported",
+        retrieval: {
+          planned_query_count: 1,
+          released_atom_count: 2,
+          context_atom_count: 0,
+          query_hit_counts: [2],
+        },
+      }));
+    } finally {
+      value.database.close();
+    }
+  });
+
   it("does not return an answer when the immutable answer audit append fails", async () => {
     const value = setup({});
     value.append.mockImplementation(() => {
@@ -441,6 +501,36 @@ async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
 }
 
 describe("Person answer HTTP mount", () => {
+  it("keeps legacy requests on the exact V1 shape and exposes outcomes only after V2 negotiation", async () => {
+    const application: PersonAnswerHttpApplicationV1 = {
+      ask: vi.fn(async (input) => Object.freeze({
+        schema_version: 1 as const,
+        kind: "echo-clean-person-answer-v1" as const,
+        generation_id: digest("generation"),
+        record_head: Object.freeze({ position: 7, record_sha256: digest("head") }),
+        answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
+        citations: Object.freeze([]),
+        ...(input.accept_outcome_v2 === true ? { outcome: "authorship_unsupported" as const } : {}),
+      })),
+    };
+    const server = await startServer(application);
+    try {
+      const request = (headers: Record<string, string>) => fetch(`${server.url}/v1/person/ask`, {
+        method: "POST",
+        headers: { authorization: "Bearer bearer-only-token", "content-type": "application/json", ...headers },
+        body: JSON.stringify({ question: "What did I decide?" }),
+      });
+      const legacy = await request({});
+      expect(Object.keys(await legacy.json()).sort()).toEqual(["answer", "citations", "generation_id", "kind", "record_head", "schema_version"]);
+      const v2 = await request({ "x-echo-person-answer-version": "2" });
+      expect(await v2.json()).toMatchObject({ outcome: "authorship_unsupported" });
+      expect(application.ask).toHaveBeenNthCalledWith(1, { access_token: "bearer-only-token", question: "What did I decide?" });
+      expect(application.ask).toHaveBeenNthCalledWith(2, { access_token: "bearer-only-token", question: "What did I decide?", accept_outcome_v2: true });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("mounts POST /v1/person/ask as a bearer-only application call", async () => {
     const ask = vi.fn(
       async (): Promise<PersonAnswerResponseV1> => ({

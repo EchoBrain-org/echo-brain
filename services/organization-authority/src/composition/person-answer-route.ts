@@ -74,6 +74,7 @@ function publicResponse(
   value: Awaited<
     ReturnType<ReturnType<typeof createRetrievalGroundedAnswerComposition>["answer"]>
   >,
+  acceptOutcomeV2: boolean,
 ): PersonAnswerResponseV1 {
   return Object.freeze({
     schema_version: 1,
@@ -90,6 +91,7 @@ function publicResponse(
         }),
       ),
     ),
+    ...(value.outcome === undefined || !acceptOutcomeV2 ? {} : { outcome: value.outcome }),
   });
 }
 
@@ -105,6 +107,7 @@ export function createPersonAnswerRouteV1(
     async ask(input: {
       readonly access_token: string;
       readonly question: string;
+      readonly accept_outcome_v2?: boolean;
     }): Promise<PersonAnswerResponseV1> {
       try {
         validateReleasedRetrievalQuery(input.question);
@@ -123,6 +126,7 @@ export function createPersonAnswerRouteV1(
       const releasedRetrieval = Object.freeze({
         retrieve: async (request: {
           readonly queries: readonly string[];
+          readonly exact_release_id?: string;
           readonly signal?: AbortSignal;
         }): Promise<ReleasedRetrievalBatch> => {
           if (internalRelease !== undefined || releasedRetrievalBatch !== undefined) {
@@ -133,6 +137,9 @@ export function createPersonAnswerRouteV1(
             options.search.searchBatch({
               access_token: input.access_token,
               queries: request.queries,
+              ...(request.exact_release_id === undefined
+                ? {}
+                : { exact_release_id: request.exact_release_id }),
               limit: 10,
             }),
           );
@@ -163,6 +170,7 @@ export function createPersonAnswerRouteV1(
                 }),
               ),
             ),
+            query_hit_counts: Object.freeze([...batch.query_hit_counts]),
             checked_at: authorization.checked_at,
           });
           return releasedRetrievalBatch;
@@ -214,6 +222,7 @@ export function createPersonAnswerRouteV1(
         });
         return publicResponse(
           await composition.answer({ question: input.question }),
+          input.accept_outcome_v2 === true,
         );
       } catch (error) {
         if (

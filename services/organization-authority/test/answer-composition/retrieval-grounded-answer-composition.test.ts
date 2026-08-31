@@ -11,7 +11,7 @@ import {
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 
-function release(atoms = true): ReleasedRetrievalBatch {
+function release(atoms = true, queryCount = 1): ReleasedRetrievalBatch {
   return {
     release_id: digest("release"),
     authority_id: "oau_clean",
@@ -38,6 +38,7 @@ function release(atoms = true): ReleasedRetrievalBatch {
           },
         ]
       : [],
+    query_hit_counts: Array.from({ length: queryCount }, () => (atoms ? 2 : 0)),
     checked_at: "2026-08-23T00:00:00.000Z",
   };
 }
@@ -67,7 +68,7 @@ describe("retrieval-grounded answer composition", () => {
         retrieveCount += 1;
         retrievedQueries = input.queries;
         events.push("retrieve");
-        return release();
+        return release(true, input.queries.length);
       },
       revalidate: async () => {
         events.push("revalidate");
@@ -142,7 +143,7 @@ describe("retrieval-grounded answer composition", () => {
         })),
       },
       released_retrieval: {
-        retrieve: vi.fn(async () => release()),
+        retrieve: vi.fn(async (input) => release(true, input.queries.length)),
         revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
       },
       audit,
@@ -178,7 +179,7 @@ describe("retrieval-grounded answer composition", () => {
     },
   ])("rejects an answer with $name before final revalidation", async ({ response }) => {
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
+      retrieve: vi.fn(async (input) => release(true, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const audit = { append: vi.fn() };
@@ -202,7 +203,7 @@ describe("retrieval-grounded answer composition", () => {
   it("does not call the answer model when released retrieval has no usable atoms, but revalidates and audits", async () => {
     const answerer = { generate: vi.fn(async () => ({ status: "answered", answer: "wrong", citations: ["a1"] })) };
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release(false)),
+      retrieve: vi.fn(async (input) => release(false, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const audit = { append: vi.fn() };
@@ -225,6 +226,144 @@ describe("retrieval-grounded answer composition", () => {
     expect(audit.append).toHaveBeenCalledTimes(1);
   });
 
+  it("does not ask a model to attribute a first-person decision, while preserving Layer 3 release and audit", async () => {
+    const planner = { generate: vi.fn() };
+    const answerer = { generate: vi.fn() };
+    const retrieved: string[][] = [];
+    const releasedRetrieval = {
+      retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) => {
+        retrieved.push([...input.queries]);
+        return release(true, input.queries.length);
+      }),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const audit = { append: vi.fn() };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner,
+      answerer,
+      released_retrieval: releasedRetrieval,
+      audit,
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await expect(answer.answer({ question: "Which decisions did I make?" })).resolves.toMatchObject({
+      outcome: "authorship_unsupported",
+      answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
+      citations: [],
+    });
+    expect(planner.generate).not.toHaveBeenCalled();
+    expect(answerer.generate).not.toHaveBeenCalled();
+    expect(retrieved).toEqual([["Which decisions did I make?"]]);
+    expect(releasedRetrieval.revalidate).toHaveBeenCalledOnce();
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: "authorship_unsupported",
+      retrieval: {
+        planned_query_count: 1,
+        released_atom_count: 2,
+        context_atom_count: 0,
+        query_hit_counts: [2],
+      },
+    }));
+  });
+
+  it("treats possessive first-person decision questions as unsupported without overmatching readable-decision questions", async () => {
+    const planner = { generate: vi.fn(async () => ({ queries: [] })) };
+    const answerer = { generate: vi.fn(async () => ({ status: "insufficient_evidence", answer: "No evidence.", citations: [] })) };
+    const retrieval = { retrieve: vi.fn(async (input) => release(true, input.queries.length)), revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })) };
+    const answer = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
+    await expect(answer.answer({ question: "What are my decisions?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
+    await expect(answer.answer({ question: "Which decisions are mine?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
+    expect(planner.generate).not.toHaveBeenCalled();
+    const readable = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
+    await readable.answer({ question: "What decisions can I read?" });
+    expect(planner.generate).toHaveBeenCalledOnce();
+  });
+
+  it("does not model-answer direct first-person decision-verb questions", async () => {
+    const planner = { generate: vi.fn() };
+    const answerer = { generate: vi.fn() };
+    const retrieval = { retrieve: vi.fn(async (input) => release(true, input.queries.length)), revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })) };
+    const answer = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
+    await expect(answer.answer({ question: "What did I decide?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
+    expect(planner.generate).not.toHaveBeenCalled();
+    expect(answerer.generate).not.toHaveBeenCalled();
+  });
+
+  it("replaces a model-authored insufficient-evidence answer before it is released or audited", async () => {
+    const modelAnswer = "The acquisition closes Tuesday.";
+    const releasedRetrieval = {
+      retrieve: vi.fn(async () => release()),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const audit = { append: vi.fn() };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer: {
+        generate: vi.fn(async () => ({
+          status: "insufficient_evidence",
+          answer: modelAnswer,
+          citations: [],
+        })),
+      },
+      released_retrieval: releasedRetrieval,
+      audit,
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    const result = await answer.answer({ question: "When does the acquisition close?" });
+
+    expect(result).toMatchObject({
+      answer: "Insufficient accessible evidence to answer this question.",
+      citations: [],
+    });
+    expect(JSON.stringify({ result, audit: audit.append.mock.calls })).not.toContain(modelAnswer);
+    expect(audit.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        answer_sha256: canonicalSha256({
+          status: "insufficient_evidence",
+          outcome: "insufficient_evidence",
+          answer: "Insufficient accessible evidence to answer this question.",
+          citations: [],
+        }),
+        citation_count: 0,
+      }),
+    );
+    expect(releasedRetrieval.revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when an insufficient-evidence response includes citations", async () => {
+    const releasedRetrieval = {
+      retrieve: vi.fn(async () => release()),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const audit = { append: vi.fn() };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer: {
+        generate: vi.fn(async () => ({
+          status: "insufficient_evidence",
+          answer: "The acquisition closes Tuesday.",
+          citations: ["a1"],
+        })),
+      },
+      released_retrieval: releasedRetrieval,
+      audit,
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await expect(answer.answer({ question: "When does the acquisition close?" })).rejects.toBeInstanceOf(
+      RetrievalGroundedAnswerCompositionError,
+    );
+    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "contains an invalid retrieval query",
@@ -236,7 +375,7 @@ describe("retrieval-grounded answer composition", () => {
     },
   ])("fails closed before retrieval when planner output $name", async ({ response }) => {
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release(false)),
+      retrieve: vi.fn(async (input) => release(false, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answerer = { generate: vi.fn() };
@@ -262,7 +401,7 @@ describe("retrieval-grounded answer composition", () => {
   it("fails closed before retrieval when the planner is unavailable", async () => {
     const plannerFailure = new Error("provider unavailable");
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
+      retrieve: vi.fn(async (input) => release(true, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answerer = {
@@ -441,7 +580,7 @@ describe("retrieval-grounded answer composition", () => {
 
   it("does not let a diagnostics observer failure mask planner rejection", async () => {
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
+      retrieve: vi.fn(async (input) => release(true, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answer = createRetrievalGroundedAnswerComposition({
@@ -469,7 +608,7 @@ describe("retrieval-grounded answer composition", () => {
     controller.abort(new Error("caller cancelled"));
     const planner = { generate: vi.fn() };
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
+      retrieve: vi.fn(async (input) => release(true, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answer = createRetrievalGroundedAnswerComposition({
@@ -491,7 +630,7 @@ describe("retrieval-grounded answer composition", () => {
 
   it("keeps the original query first and drops exact planner duplicates", async () => {
     const releasedRetrieval = {
-      retrieve: vi.fn(async () => release(false)),
+      retrieve: vi.fn(async (input) => release(false, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const question = "What is the launch date?";
@@ -513,6 +652,73 @@ describe("retrieval-grounded answer composition", () => {
 
     expect(releasedRetrieval.retrieve).toHaveBeenCalledWith({
       queries: [question, "launch date"],
+    });
+  });
+
+  it("forwards exactly one whole-token release ID from the original question", async () => {
+    const releasedRetrieval = {
+      retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) =>
+        release(false, input.queries.length),
+      ),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const question =
+      "What changed in clean-v1-staging-20260830-014?";
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: ["staging decision"] })) },
+      answerer: { generate: vi.fn() },
+      released_retrieval: releasedRetrieval,
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await answer.answer({ question });
+
+    expect(releasedRetrieval.retrieve).toHaveBeenCalledWith({
+      queries: [question, "staging decision"],
+      exact_release_id: "clean-v1-staging-20260830-014",
+    });
+  });
+
+  it.each([
+    "What changed in staging?",
+    "Compare clean-v1-staging-20260830-014 and clean-v1-staging-20260831-015.",
+    "Compare clean-v1-staging-20260830-014 with clean-v1-staging-20260830-014.",
+    "What changed in xclean-v1-staging-20260830-014?",
+    "What changed in Xclean-v1-staging-20260830-014?",
+    "What changed in clean-v1-staging-20260830-014X?",
+    "What changed in _clean-v1-staging-20260830-014?",
+    "What changed in clean-v1-staging-20260830-014_other?",
+    "What changed in éclean-v1-staging-20260830-014?",
+    "What changed in clean-v1-staging-20260830-014中?",
+    "What changed in clean-v1-staging-20260830-014\u0301?",
+  ])("omits the selector unless the original question has one unambiguous whole-token ID: %s", async (question) => {
+    const releasedRetrieval = {
+      retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) =>
+        release(false, input.queries.length),
+      ),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: {
+        generate: vi.fn(async () => ({
+          queries: ["clean-v1-planner-20260830-999"],
+        })),
+      },
+      answerer: { generate: vi.fn() },
+      released_retrieval: releasedRetrieval,
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await answer.answer({ question });
+
+    expect(releasedRetrieval.retrieve).toHaveBeenCalledWith({
+      queries: [question, "clean-v1-planner-20260830-999"],
     });
   });
 });
