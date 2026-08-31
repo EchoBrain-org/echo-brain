@@ -19,6 +19,9 @@ const INSUFFICIENT_EVIDENCE_ANSWER =
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const CITATION_ID = /^a[1-9][0-9]*$/;
+const CANONICAL_RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
+const CANONICAL_RELEASE_ID_TOKEN =
+  /(?<![a-z0-9-])clean-v1-[a-z0-9][a-z0-9-]{2,63}(?![a-z0-9-])/g;
 const POLICY_IDS = new Set([
   "organization-member-readable-person-v2",
   "restricted-reviewer-person-v2",
@@ -92,6 +95,8 @@ export interface ReleasedRetrievalBatch {
 export interface ReleasedRetrievalPort {
   retrieve(input: {
     readonly queries: readonly string[];
+    /** Internal relevance preference derived only from the original question. */
+    readonly exact_release_id?: string;
     readonly signal?: AbortSignal;
   }): Promise<ReleasedRetrievalBatch>;
   /** Re-checks the current authenticated Person and exact release before return. */
@@ -329,6 +334,18 @@ function parsePlan(value: unknown, originalQuestion: string): readonly string[] 
     additional.push(query);
   }
   return Object.freeze([originalQuestion, ...additional]);
+}
+
+/**
+ * A selector is valid only when the original question names one canonical ID
+ * exactly once. Repeated IDs are intentionally ambiguous, even when equal.
+ */
+function exactReleaseId(question: string): string | undefined {
+  const matches = question.match(CANONICAL_RELEASE_ID_TOKEN) ?? [];
+  const candidate = matches.length === 1 ? matches[0] : undefined;
+  return candidate !== undefined && CANONICAL_RELEASE_ID.test(candidate)
+    ? candidate
+    : undefined;
 }
 
 const DECISION_TERMS = new Set([
@@ -626,6 +643,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
   return Object.freeze({
     async answer(input): Promise<RetrievalGroundedAnswerCompositionResult> {
       const question = validateReleasedRetrievalQuery(input.question);
+      const exactRelease = exactReleaseId(question);
       const authorshipUnsupported =
         isFirstPersonDecisionAuthorshipQuestion(question);
       let plannerRequest: AuditedStructuredGenerationInput | null = null;
@@ -664,6 +682,9 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
       }
       const release = await options.released_retrieval.retrieve({
         queries: plan,
+        ...(exactRelease === undefined
+          ? {}
+          : { exact_release_id: exactRelease }),
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       assertRelease(release);

@@ -226,6 +226,37 @@ describe("Person answer route", () => {
     }
   });
 
+  it("forwards an original-question selector through Layer 3 and preserves its cited atoms", async () => {
+    const releaseId = "clean-v1-staging-20260830-014";
+    const value = setup({
+      source_text: `Synthetic staging release ${releaseId} approved the new decision.`,
+    });
+    try {
+      const response = await value.route.ask({
+        access_token: "bearer-only-token",
+        question: `What did we decide for ${releaseId}?`,
+      });
+
+      expect(value.search.searchBatch).toHaveBeenCalledWith({
+        access_token: "bearer-only-token",
+        queries: [
+          `What did we decide for ${releaseId}?`,
+          "launch date",
+          "launch owner",
+        ],
+        exact_release_id: releaseId,
+        limit: 10,
+      });
+      expect(response.citations).toEqual([
+        expect.objectContaining({ atom_id: digest("atom-one") }),
+        expect.objectContaining({ atom_id: digest("atom-two") }),
+      ]);
+      expect(value.modelInputs[1]?.user_prompt).toContain(releaseId);
+    } finally {
+      value.database.close();
+    }
+  });
+
   it.each([
     {
       name: "the provider fails during planning",

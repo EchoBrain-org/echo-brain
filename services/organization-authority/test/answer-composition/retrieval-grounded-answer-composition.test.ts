@@ -654,4 +654,64 @@ describe("retrieval-grounded answer composition", () => {
       queries: [question, "launch date"],
     });
   });
+
+  it("forwards exactly one whole-token release ID from the original question", async () => {
+    const releasedRetrieval = {
+      retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) =>
+        release(false, input.queries.length),
+      ),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const question =
+      "What changed in clean-v1-staging-20260830-014?";
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: ["staging decision"] })) },
+      answerer: { generate: vi.fn() },
+      released_retrieval: releasedRetrieval,
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await answer.answer({ question });
+
+    expect(releasedRetrieval.retrieve).toHaveBeenCalledWith({
+      queries: [question, "staging decision"],
+      exact_release_id: "clean-v1-staging-20260830-014",
+    });
+  });
+
+  it.each([
+    "What changed in staging?",
+    "Compare clean-v1-staging-20260830-014 and clean-v1-staging-20260831-015.",
+    "Compare clean-v1-staging-20260830-014 with clean-v1-staging-20260830-014.",
+    "What changed in xclean-v1-staging-20260830-014?",
+  ])("omits the selector unless the original question has one unambiguous whole-token ID: %s", async (question) => {
+    const releasedRetrieval = {
+      retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) =>
+        release(false, input.queries.length),
+      ),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: {
+        generate: vi.fn(async () => ({
+          queries: ["clean-v1-planner-20260830-999"],
+        })),
+      },
+      answerer: { generate: vi.fn() },
+      released_retrieval: releasedRetrieval,
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await answer.answer({ question });
+
+    expect(releasedRetrieval.retrieve).toHaveBeenCalledWith({
+      queries: [question, "clean-v1-planner-20260830-999"],
+    });
+  });
 });

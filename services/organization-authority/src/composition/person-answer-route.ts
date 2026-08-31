@@ -126,6 +126,7 @@ export function createPersonAnswerRouteV1(
       const releasedRetrieval = Object.freeze({
         retrieve: async (request: {
           readonly queries: readonly string[];
+          readonly exact_release_id?: string;
           readonly signal?: AbortSignal;
         }): Promise<ReleasedRetrievalBatch> => {
           if (internalRelease !== undefined || releasedRetrievalBatch !== undefined) {
@@ -136,6 +137,9 @@ export function createPersonAnswerRouteV1(
             options.search.searchBatch({
               access_token: input.access_token,
               queries: request.queries,
+              ...(request.exact_release_id === undefined
+                ? {}
+                : { exact_release_id: request.exact_release_id }),
               limit: 10,
             }),
           );

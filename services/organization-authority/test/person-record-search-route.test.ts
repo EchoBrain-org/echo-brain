@@ -541,6 +541,180 @@ describe("Person Layer 2 route", () => {
     }
   });
 
+  it("narrows only already-authorized merged atoms to an exact release, with broad fallback", () => {
+    const value = setup(false);
+    const record = new Database(":memory:");
+    record.exec(
+      "CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)",
+    );
+    const restrictedRecordHash = sha256Digest("restricted-record");
+    record
+      .prepare(
+        "INSERT INTO organization_record_log (position, record_sha256) VALUES (?, ?)",
+      )
+      .run(2, restrictedRecordHash);
+    const releaseId = "clean-v1-staging-20260830-014";
+    const atom = (input: {
+      readonly name: string;
+      readonly policy_id: ReadableSearchAtomV1["policy_id"];
+      readonly text: string;
+      readonly atom_order: number;
+    }): ReadableSearchAtomV1 => {
+      const restricted =
+        input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
+      const base = policyAtom({
+        id: restricted ? "restricted" : "member",
+        policy_id: input.policy_id,
+      });
+      return {
+        ...base,
+        atom_id: sha256Digest(`${input.name}-atom`),
+        envelope_sha256: sha256Digest(`${input.name}-envelope`),
+        approval_id: `${input.name}-approval`,
+        signal_id_sha256: sha256Digest(`${input.name}-signal`),
+        atom_order: input.atom_order,
+        text: input.text,
+        text_sha256: sha256Digest(input.text),
+        authorization_audit_event_id: `${input.name}-audit`,
+        authorization_audit_entry_sha256: sha256Digest(`${input.name}-entry`),
+      };
+    };
+    const built = buildReadableSearchGenerationV1(
+      realGenerationInput(value.state_directory, [
+        atom({
+          name: "older-member",
+          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+          text: "Synthetic staging canary clean-v1-staging-20260829-013 was accepted.",
+          atom_order: 0,
+        }),
+        atom({
+          name: "exact-member",
+          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+          text: `Synthetic staging release ${releaseId} approved the new decision.`,
+          atom_order: 1,
+        }),
+        atom({
+          name: "older-reviewer",
+          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+          text: "Private canary clean-v1-staging-20260829-013 owner approval delivered.",
+          atom_order: 0,
+        }),
+        atom({
+          name: "exact-reviewer",
+          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+          text: `Private release ${releaseId} owner approval delivery completed.`,
+          atom_order: 1,
+        }),
+      ]),
+    );
+    warmReadableSearchActiveGenerationV1({
+      state_directory: value.state_directory,
+      active_generation: {
+        generation_id: built.manifest.generation_id,
+        manifest_sha256: built.manifest_sha256,
+        retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
+        exact_head: built.manifest.exact_head,
+      },
+    });
+    value.authority
+      .prepare(
+        `INSERT INTO authority_readable_search_active_generation
+         (singleton, organization_id, generation_id, manifest_sha256,
+          retrieval_contract_sha256, record_head_position,
+          record_head_hash, published_at)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "org_clean",
+        built.manifest.generation_id,
+        built.manifest_sha256,
+        RETRIEVAL_CONTRACT,
+        2,
+        restrictedRecordHash,
+        "2026-08-22T11:59:00.000Z",
+      );
+    const owner = readerAuthorization({
+      principal_id: "principal_owner",
+      membership_id: "membership_owner",
+      membership_type: "owner",
+    });
+    const employee = readerAuthorization({
+      principal_id: "principal_employee",
+      membership_id: "membership_employee",
+      membership_type: "employee",
+    });
+    try {
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: {
+          authenticateAccess: ({ access_token }) => {
+            if (access_token === "owner") return owner;
+            if (access_token === "employee") return employee;
+            throw new AuthorityOperationError(
+              "unauthorized",
+              "person authentication failed",
+            );
+          },
+        },
+        authority: value.authority,
+        record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
+      });
+      const query = "synthetic staging release";
+      const ownerResult = route.searchBatch({
+        access_token: "owner",
+        queries: [query],
+        exact_release_id: releaseId,
+      });
+      expect(ownerResult.response.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ atom_id: sha256Digest("exact-member-atom") }),
+          expect.objectContaining({ atom_id: sha256Digest("exact-reviewer-atom") }),
+        ]),
+      );
+      expect(ownerResult.response.items).toHaveLength(2);
+      expect(
+        ownerResult.response.items.every((item) => item.text.includes(releaseId)),
+      ).toBe(true);
+
+      const employeeResult = route.searchBatch({
+        access_token: "employee",
+        queries: [query],
+        exact_release_id: releaseId,
+      });
+      expect(employeeResult.response.items).toEqual([
+        expect.objectContaining({ atom_id: sha256Digest("exact-member-atom") }),
+      ]);
+      expect(() =>
+        route.searchBatch({
+          access_token: "unauthorized",
+          queries: [query],
+          exact_release_id: releaseId,
+        }),
+      ).toThrow("person authentication failed");
+
+      const fallback = route.searchBatch({
+        access_token: "owner",
+        queries: [query],
+        exact_release_id: "clean-v1-staging-20260901-016",
+      });
+      expect(fallback.response.items).toHaveLength(4);
+      expect(
+        fallback.response.items.some((item) =>
+          item.text.includes("clean-v1-staging-20260829-013"),
+        ),
+      ).toBe(true);
+    } finally {
+      record.close();
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
   it("returns unavailable without search or audit when the exact-head pointer is absent", () => {
     const value = setup(false);
     const search = vi.fn();
