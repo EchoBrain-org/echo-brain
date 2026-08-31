@@ -290,6 +290,78 @@ describe("retrieval-grounded answer composition", () => {
     expect(answerer.generate).not.toHaveBeenCalled();
   });
 
+  it("replaces a model-authored insufficient-evidence answer before it is released or audited", async () => {
+    const modelAnswer = "The acquisition closes Tuesday.";
+    const releasedRetrieval = {
+      retrieve: vi.fn(async () => release()),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const audit = { append: vi.fn() };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer: {
+        generate: vi.fn(async () => ({
+          status: "insufficient_evidence",
+          answer: modelAnswer,
+          citations: [],
+        })),
+      },
+      released_retrieval: releasedRetrieval,
+      audit,
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    const result = await answer.answer({ question: "When does the acquisition close?" });
+
+    expect(result).toMatchObject({
+      answer: "Insufficient accessible evidence to answer this question.",
+      citations: [],
+    });
+    expect(JSON.stringify({ result, audit: audit.append.mock.calls })).not.toContain(modelAnswer);
+    expect(audit.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        answer_sha256: canonicalSha256({
+          status: "insufficient_evidence",
+          answer: "Insufficient accessible evidence to answer this question.",
+          citations: [],
+        }),
+        citation_count: 0,
+      }),
+    );
+    expect(releasedRetrieval.revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when an insufficient-evidence response includes citations", async () => {
+    const releasedRetrieval = {
+      retrieve: vi.fn(async () => release()),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const audit = { append: vi.fn() };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer: {
+        generate: vi.fn(async () => ({
+          status: "insufficient_evidence",
+          answer: "The acquisition closes Tuesday.",
+          citations: ["a1"],
+        })),
+      },
+      released_retrieval: releasedRetrieval,
+      audit,
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await expect(answer.answer({ question: "When does the acquisition close?" })).rejects.toBeInstanceOf(
+      RetrievalGroundedAnswerCompositionError,
+    );
+    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
+    expect(audit.append).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "contains an invalid retrieval query",

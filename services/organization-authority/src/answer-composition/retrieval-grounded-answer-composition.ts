@@ -14,6 +14,9 @@ export const ANSWER_COMPOSITION_PLANNER_MAX_OUTPUT_TOKENS = 300;
 export const ANSWER_COMPOSITION_ANSWER_MAX_OUTPUT_TOKENS = 1_200;
 export const ANSWER_COMPOSITION_MAX_ANSWER_CHARACTERS = 12_000;
 
+const INSUFFICIENT_EVIDENCE_ANSWER =
+  "Insufficient accessible evidence to answer this question.";
+
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const CITATION_ID = /^a[1-9][0-9]*$/;
 const POLICY_IDS = new Set([
@@ -490,6 +493,13 @@ function parseAnswer(value: unknown, context: readonly ContextAtom[]): {
   ) {
     throw new RetrievalGroundedAnswerCompositionError("answer response has invalid citation status");
   }
+  if (status === "insufficient_evidence") {
+    return Object.freeze({
+      status,
+      answer: INSUFFICIENT_EVIDENCE_ANSWER,
+      citations: Object.freeze([]),
+    });
+  }
   return Object.freeze({ status, answer, citations: Object.freeze(citations) });
 }
 
@@ -686,7 +696,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
       } else if (answerRequest === null) {
         parsed = Object.freeze({
           status: "insufficient_evidence" as const,
-          answer: "Insufficient accessible evidence to answer this question.",
+          answer: INSUFFICIENT_EVIDENCE_ANSWER,
           citations: Object.freeze([]) as readonly ContextAtom[],
         });
       } else {
