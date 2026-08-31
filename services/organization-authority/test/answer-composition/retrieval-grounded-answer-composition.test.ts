@@ -324,6 +324,7 @@ describe("retrieval-grounded answer composition", () => {
       expect.objectContaining({
         answer_sha256: canonicalSha256({
           status: "insufficient_evidence",
+          outcome: "insufficient_evidence",
           answer: "Insufficient accessible evidence to answer this question.",
           citations: [],
         }),
