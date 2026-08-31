@@ -24,6 +24,15 @@ export interface PersonAnswerCompositionAuditEntryV1 {
   readonly answer_sha256: Sha256Digest;
   readonly response_sha256: Sha256Digest;
   readonly citation_count: number;
+  readonly outcome:
+    | "answered"
+    | "insufficient_evidence"
+    | "authorship_unsupported";
+  readonly retrieval: {
+    readonly planned_query_count: number;
+    readonly released_atom_count: number;
+    readonly context_atom_count: number;
+  };
   readonly checked_at: string;
 }
 
@@ -36,6 +45,18 @@ export class SqlitePersonAnswerCompositionAuditV1 {
       !Number.isSafeInteger(entry.citation_count) ||
       entry.citation_count < 0 ||
       entry.citation_count > 16 ||
+      (entry.outcome !== "answered" &&
+        entry.outcome !== "insufficient_evidence" &&
+        entry.outcome !== "authorship_unsupported") ||
+      !Number.isSafeInteger(entry.retrieval.planned_query_count) ||
+      entry.retrieval.planned_query_count < 1 ||
+      entry.retrieval.planned_query_count > 4 ||
+      !Number.isSafeInteger(entry.retrieval.released_atom_count) ||
+      entry.retrieval.released_atom_count < 0 ||
+      entry.retrieval.released_atom_count > 16 ||
+      !Number.isSafeInteger(entry.retrieval.context_atom_count) ||
+      entry.retrieval.context_atom_count < 0 ||
+      entry.retrieval.context_atom_count > entry.retrieval.released_atom_count ||
       new Date(entry.checked_at).toISOString() !== entry.checked_at
     ) {
       throw new Error("Person answer composition audit entry is invalid");
@@ -58,6 +79,8 @@ export class SqlitePersonAnswerCompositionAuditV1 {
       released_atoms_sha256: entry.released_atoms_sha256,
       response_sha256: entry.response_sha256,
       citation_count: entry.citation_count,
+      outcome: entry.outcome,
+      retrieval: entry.retrieval,
       checked_at: entry.checked_at,
     } as const;
     const body_json = canonicalJson(body);

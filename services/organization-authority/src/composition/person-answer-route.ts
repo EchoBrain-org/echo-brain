@@ -90,6 +90,7 @@ function publicResponse(
         }),
       ),
     ),
+    ...(value.outcome === undefined ? {} : { outcome: value.outcome }),
   });
 }
 

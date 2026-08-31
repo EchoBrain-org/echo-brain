@@ -14,6 +14,26 @@ describe('readable-search analyzer', () => {
     expect(readableSearchScore(document, ['café', 'missing', '１２3'])).toBe(4);
   });
 
+  it('expands only the closed decision word family for query recall', () => {
+    expect(analyzeReadableSearchQuery('What was decided?')).toEqual([
+      'what',
+      'was',
+      'decided',
+      'decision',
+      'decisions',
+      'decide',
+      'deciding',
+    ]);
+    expect(analyzeReadableSearchQuery('decision deciding')).toEqual([
+      'decision',
+      'deciding',
+      'decisions',
+      'decide',
+      'decided',
+    ]);
+    expect(analyzeReadableSearchQuery('decisive')).toEqual(['decisive']);
+  });
+
   it('rejects an empty, non-NFC, or over-wide query while documents omit wide tokens', () => {
     expect(() => analyzeReadableSearchQuery('...')).toThrow('one through sixteen');
     expect(() => analyzeReadableSearchQuery('e\u0301')).toThrow('must be NFC');

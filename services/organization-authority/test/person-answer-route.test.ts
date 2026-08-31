@@ -387,6 +387,39 @@ describe("Person answer route", () => {
     }
   });
 
+  it("returns the fixed authorship outcome without calling either model, after Layer 3 release and revalidation", async () => {
+    const model: StructuredGenerationPort = { generate: vi.fn() };
+    const value = setup({ model });
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "bearer-only-token",
+          question: "Which decisions did I make?",
+        }),
+      ).resolves.toMatchObject({
+        outcome: "authorship_unsupported",
+        citations: [],
+      });
+      expect(model.generate).not.toHaveBeenCalled();
+      expect(value.search.searchBatch).toHaveBeenCalledWith({
+        access_token: "bearer-only-token",
+        queries: ["Which decisions did I make?"],
+        limit: 10,
+      });
+      expect(value.search.revalidateBatchRelease).toHaveBeenCalledOnce();
+      expect(value.append).toHaveBeenCalledWith(expect.objectContaining({
+        outcome: "authorship_unsupported",
+        retrieval: {
+          planned_query_count: 1,
+          released_atom_count: 2,
+          context_atom_count: 0,
+        },
+      }));
+    } finally {
+      value.database.close();
+    }
+  });
+
   it("does not return an answer when the immutable answer audit append fails", async () => {
     const value = setup({});
     value.append.mockImplementation(() => {

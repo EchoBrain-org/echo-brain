@@ -3,6 +3,20 @@ import { ReadableSearchValidationError } from './readable-search-contracts.js';
 export const MAXIMUM_QUERY_TERMS = 16;
 export const MAXIMUM_TERM_UTF8_BYTES = 64;
 
+/**
+ * This is an intentionally closed recall family, not a stemmer. Keeping the
+ * forms explicit makes both recall and the generation contract reviewable.
+ */
+export const READABLE_SEARCH_DECISION_TERM_FAMILY = Object.freeze([
+  'decision',
+  'decisions',
+  'decide',
+  'decided',
+  'deciding',
+] as const);
+
+const DECISION_TERM_FAMILY = new Set<string>(READABLE_SEARCH_DECISION_TERM_FAMILY);
+
 function assertNfc(value: string, label: string): void {
   if (value !== value.normalize('NFC')) {
     throw new ReadableSearchValidationError(`${label} must be NFC`);
@@ -29,6 +43,14 @@ export function analyzeReadableSearchQuery(query: string): readonly string[] {
   }
   if (unique.length === 0 || unique.length > MAXIMUM_QUERY_TERMS) {
     throw new ReadableSearchValidationError('query must contain from one through sixteen unique terms');
+  }
+  if (unique.some((term) => DECISION_TERM_FAMILY.has(term))) {
+    for (const term of READABLE_SEARCH_DECISION_TERM_FAMILY) {
+      if (!observed.has(term)) {
+        observed.add(term);
+        unique.push(term);
+      }
+    }
   }
   return Object.freeze(unique);
 }

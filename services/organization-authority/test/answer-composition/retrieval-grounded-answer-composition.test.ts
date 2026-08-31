@@ -225,6 +225,47 @@ describe("retrieval-grounded answer composition", () => {
     expect(audit.append).toHaveBeenCalledTimes(1);
   });
 
+  it("does not ask a model to attribute a first-person decision, while preserving Layer 3 release and audit", async () => {
+    const planner = { generate: vi.fn() };
+    const answerer = { generate: vi.fn() };
+    const retrieved: string[][] = [];
+    const releasedRetrieval = {
+      retrieve: vi.fn(async (input: { readonly queries: readonly string[] }) => {
+        retrieved.push([...input.queries]);
+        return release();
+      }),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const audit = { append: vi.fn() };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner,
+      answerer,
+      released_retrieval: releasedRetrieval,
+      audit,
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await expect(answer.answer({ question: "Which decisions did I make?" })).resolves.toMatchObject({
+      outcome: "authorship_unsupported",
+      answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
+      citations: [],
+    });
+    expect(planner.generate).not.toHaveBeenCalled();
+    expect(answerer.generate).not.toHaveBeenCalled();
+    expect(retrieved).toEqual([["Which decisions did I make?"]]);
+    expect(releasedRetrieval.revalidate).toHaveBeenCalledOnce();
+    expect(audit.append).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: "authorship_unsupported",
+      retrieval: {
+        planned_query_count: 1,
+        released_atom_count: 2,
+        context_atom_count: 0,
+      },
+    }));
+  });
+
   it.each([
     {
       name: "contains an invalid retrieval query",

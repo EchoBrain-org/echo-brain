@@ -4,6 +4,7 @@ export type PersonAnswerDigestV1 = `sha256:${string}`;
 export type PersonAnswerPolicyV1 =
   | "organization-member-readable-person-v2"
   | "restricted-reviewer-person-v2";
+export type PersonAnswerOutcomeV1 = "authorship_unsupported";
 
 export interface PersonAnswerResponseV1 {
   readonly schema_version: 1;
@@ -19,6 +20,8 @@ export interface PersonAnswerResponseV1 {
     readonly record_sha256: PersonAnswerDigestV1;
     readonly policy_id: PersonAnswerPolicyV1;
   }[];
+  /** Omitted for ordinary answers so existing clients retain their response shape. */
+  readonly outcome?: PersonAnswerOutcomeV1;
 }
 
 /** A bearer-only answer-composition route. Caller identity never appears in the body. */
