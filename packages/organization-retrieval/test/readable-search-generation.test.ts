@@ -347,6 +347,63 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
+  it("recalls decision-category atoms without source-word overlap, with exact reviewer controls and repeatable results", () => {
+    const firstDirectory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    const secondDirectory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const atoms = [
+        atomWith("member-category", {
+          text: "We approved the launch for Tuesday.",
+          item_kind: "decision",
+        }),
+        atomWith("reviewer-category", {
+          record_position: 2,
+          record_sha256: digest("record-reviewer-category"),
+          text: "The reviewer approved the hiring plan.",
+          item_kind: "decision",
+          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+          policy_contract_sha256: digest(`policy-${RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2}`),
+          reviewer_principal_id: "prn_reviewer",
+          reviewer_membership_id: "mem_reviewer",
+        }),
+      ];
+      const first = buildReadableSearchGenerationV1(input(firstDirectory, atoms));
+      const second = buildReadableSearchGenerationV1(input(secondDirectory, atoms));
+      expect(second.manifest.generation_id).toBe(first.manifest.generation_id);
+      expect(second.manifest_sha256).toBe(first.manifest_sha256);
+      for (const [directory, built] of [[firstDirectory, first], [secondDirectory, second]] as const) {
+        const active_generation = {
+          generation_id: built.manifest.generation_id,
+          manifest_sha256: built.manifest_sha256,
+          retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
+          exact_head: built.manifest.exact_head,
+        };
+        warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation });
+        const query = "what decisions did i make";
+        expect(searchReadableSearchGenerationV1({
+          state_directory: directory,
+          active_generation,
+          reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer" },
+          query,
+        }).items.map((item) => item.text)).toEqual([
+          "The reviewer approved the hiring plan.",
+          "We approved the launch for Tuesday.",
+        ]);
+        expect(searchReadableSearchGenerationV1({
+          state_directory: directory,
+          active_generation,
+          reader: { principal_id: "prn_other", membership_id: "mem_reviewer" },
+          query,
+        }).items.map((item) => item.text)).toEqual([
+          "We approved the launch for Tuesday.",
+        ]);
+      }
+    } finally {
+      rmSync(firstDirectory, { recursive: true, force: true });
+      rmSync(secondDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when the active pointer does not bind the immutable manifest", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {

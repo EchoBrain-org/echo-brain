@@ -108,6 +108,7 @@ export interface PersonAnswerV1 {
   };
   readonly answer: string;
   readonly citations: readonly PersonAnswerCitationV1[];
+  readonly outcome?: "authorship_unsupported";
 }
 
 export interface PersonAnswerCitationV1 {
@@ -460,16 +461,17 @@ function validatePersonRecordSearch(
 
 function validatePersonAnswer(value: unknown): PersonAnswerV1 {
   const response = asPlainRecord(value, "ask response is invalid");
+  const answerKeys = [
+    "schema_version",
+    "kind",
+    "generation_id",
+    "record_head",
+    "answer",
+    "citations",
+  ];
   exactKeys(
     response,
-    [
-      "schema_version",
-      "kind",
-      "generation_id",
-      "record_head",
-      "answer",
-      "citations",
-    ],
+    response.outcome === undefined ? answerKeys : [...answerKeys, "outcome"],
     "ask response is invalid",
   );
   if (
@@ -482,7 +484,8 @@ function validatePersonAnswer(value: unknown): PersonAnswerV1 {
     response.answer.trim() !== response.answer ||
     [...response.answer].length > 12_000 ||
     !Array.isArray(response.citations) ||
-    response.citations.length > 16
+    response.citations.length > 16 ||
+    (response.outcome !== undefined && response.outcome !== "authorship_unsupported")
   ) {
     throw new Error("ask response is invalid");
   }
@@ -534,6 +537,7 @@ function validatePersonAnswer(value: unknown): PersonAnswerV1 {
     }),
     answer: response.answer,
     citations: Object.freeze(citations),
+    ...(response.outcome === undefined ? {} : { outcome: response.outcome }),
   });
 }
 
@@ -674,6 +678,7 @@ export class PersonAuthorityClient {
     readonly require_canonical_response?: boolean;
     readonly timeout_ms?: number;
     readonly method?: "POST" | "PUT";
+    readonly headers?: Readonly<Record<string, string>>;
   }): Promise<T> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
@@ -690,6 +695,7 @@ export class PersonAuthorityClient {
           ...(input.access_token === undefined
             ? {}
             : { authorization: `Bearer ${input.access_token}` }),
+          ...input.headers,
         },
         body,
       },
@@ -967,6 +973,7 @@ export class PersonAuthorityClient {
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       timeout_ms: ASK_TIMEOUT_MS,
+      headers: { "x-echo-person-answer-version": "2" },
     });
   }
 

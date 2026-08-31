@@ -84,6 +84,8 @@ export interface ReleasedRetrievalBatch {
   };
   /** Ordered by released retrieval's relevance/release order. */
   readonly released_atoms: readonly ReleasedRetrievalAtom[];
+  /** Ordered counts, one per submitted plan query; no query text is retained. */
+  readonly query_hit_counts: readonly number[];
   readonly checked_at: string;
 }
 
@@ -118,8 +120,21 @@ export interface AnswerCompositionAuditEntry {
   readonly answer_sha256: Sha256Digest;
   readonly response_sha256: Sha256Digest;
   readonly citation_count: number;
+  /** No question, query, answer, source, or provider text is retained here. */
+  readonly outcome:
+    | "answered"
+    | "insufficient_evidence"
+    | "authorship_unsupported";
+  readonly retrieval: {
+    readonly planned_query_count: number;
+    readonly released_atom_count: number;
+    readonly context_atom_count: number;
+    readonly query_hit_counts: readonly number[];
+  };
   readonly checked_at: string;
 }
+
+export type PersonAnswerOutcomeV1 = "authorship_unsupported";
 
 export type AnswerCompositionFailureClassV1 =
   | "adapter_timeout"
@@ -185,6 +200,8 @@ export interface RetrievalGroundedAnswerCompositionResult {
     readonly record_sha256: Sha256Digest;
     readonly policy_id: string;
   }[];
+  /** Omitted for the existing ordinary answer and insufficient-evidence paths. */
+  readonly outcome?: PersonAnswerOutcomeV1;
 }
 
 const plannerSchema: StructuredGenerationJsonSchema = Object.freeze({
@@ -314,6 +331,48 @@ function parsePlan(value: unknown, originalQuestion: string): readonly string[] 
   return Object.freeze([originalQuestion, ...additional]);
 }
 
+const DECISION_TERMS = new Set([
+  "decision",
+  "decisions",
+  "decide",
+  "decided",
+  "deciding",
+]);
+const FIRST_PERSON_TERMS = new Set(["i", "me", "my", "mine", "myself"]);
+const FIRST_PERSON_POSSESSIVE_TERMS = new Set(["my", "mine"]);
+const AUTHORSHIP_TERMS = new Set([
+  "make",
+  "made",
+  "making",
+  "author",
+  "authored",
+  "authorship",
+  "own",
+  "owned",
+  "ownership",
+]);
+const FIRST_PERSON_DECISION_VERBS = new Set(["decide", "decided", "deciding"]);
+
+/**
+ * Attribution is unsupported unless this deliberately narrow, English lexical
+ * shape asks about a first-person decision and contains a direct authorship cue.
+ */
+function isFirstPersonDecisionAuthorshipQuestion(question: string): boolean {
+  const terms = new Set(
+    (question.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
+      term.toLowerCase().normalize("NFC"),
+    ),
+  );
+  return (
+    ([...terms].some((term) => FIRST_PERSON_TERMS.has(term)) &&
+      [...terms].some((term) => DECISION_TERMS.has(term)) &&
+      ([...terms].some((term) => AUTHORSHIP_TERMS.has(term)) ||
+        [...terms].some((term) => FIRST_PERSON_POSSESSIVE_TERMS.has(term)) ||
+        (terms.has("i") &&
+          [...terms].some((term) => FIRST_PERSON_DECISION_VERBS.has(term)))))
+  );
+}
+
 function digest(value: unknown): Sha256Digest {
   return canonicalSha256(JSON.parse(canonicalJson(value)) as never);
 }
@@ -337,6 +396,16 @@ function assertRelease(value: ReleasedRetrievalBatch): void {
     new Date(value.checked_at).toISOString() !== value.checked_at
   ) {
     throw new RetrievalGroundedAnswerCompositionError("released retrieval batch is invalid");
+  }
+  if (
+    !Array.isArray(value.query_hit_counts) ||
+    value.query_hit_counts.length < 1 ||
+    value.query_hit_counts.length > ANSWER_COMPOSITION_MAX_ADDITIONAL_QUERIES + 1 ||
+    value.query_hit_counts.some(
+      (count) => !Number.isSafeInteger(count) || count < 0 || count > 10,
+    )
+  ) {
+    throw new RetrievalGroundedAnswerCompositionError("released retrieval hit counts are invalid");
   }
 }
 
@@ -557,8 +626,15 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
   return Object.freeze({
     async answer(input): Promise<RetrievalGroundedAnswerCompositionResult> {
       const question = validateReleasedRetrievalQuery(input.question);
-      const plannerRequest: AuditedStructuredGenerationInput =
-        Object.freeze({
+      const authorshipUnsupported =
+        isFirstPersonDecisionAuthorshipQuestion(question);
+      let plannerRequest: AuditedStructuredGenerationInput | null = null;
+      input.signal?.throwIfAborted();
+      let plan: readonly string[];
+      if (authorshipUnsupported) {
+        plan = Object.freeze([question]);
+      } else {
+        plannerRequest = Object.freeze({
           model: plannerModel,
           system_prompt: PLANNER_SYSTEM_PROMPT,
           user_prompt: plannerPrompt(question),
@@ -566,33 +642,37 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           max_output_tokens: ANSWER_COMPOSITION_PLANNER_MAX_OUTPUT_TOKENS,
           timeout_ms: requestTimeout,
         });
-      input.signal?.throwIfAborted();
-      let plan: readonly string[];
-      const plannerStartedAt = now();
-      try {
-        plan = parsePlan(
-          await options.planner.generate({
-            ...plannerRequest,
-            ...(input.signal === undefined ? {} : { signal: input.signal }),
-          }),
-          question,
-        );
-      } catch (error) {
-        input.signal?.throwIfAborted();
-        reportModelFailure(options, {
-          stage: "planner",
-          error,
-          started_at_ms: plannerStartedAt,
-          retrieval_generation_id: null,
-        });
-        throw error;
+        const plannerStartedAt = now();
+        try {
+          plan = parsePlan(
+            await options.planner.generate({
+              ...plannerRequest,
+              ...(input.signal === undefined ? {} : { signal: input.signal }),
+            }),
+            question,
+          );
+        } catch (error) {
+          input.signal?.throwIfAborted();
+          reportModelFailure(options, {
+            stage: "planner",
+            error,
+            started_at_ms: plannerStartedAt,
+            retrieval_generation_id: null,
+          });
+          throw error;
+        }
       }
       const release = await options.released_retrieval.retrieve({
         queries: plan,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       assertRelease(release);
-      const context = boundedContext(release);
+      if (release.query_hit_counts.length !== plan.length) {
+        throw new RetrievalGroundedAnswerCompositionError("released retrieval hit counts do not match the plan");
+      }
+      const context = authorshipUnsupported
+        ? Object.freeze([]) as readonly ContextAtom[]
+        : boundedContext(release);
       const prompt = answerPrompt(question, context);
       const answerRequest: AuditedStructuredGenerationInput | null =
         context.length === 0
@@ -608,7 +688,13 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
       // An empty permitted release is not a generation task. Returning this fixed
       // response is both cheaper and clearer than inviting an unsupported answer.
       let parsed: ReturnType<typeof parseAnswer>;
-      if (answerRequest === null) {
+      if (authorshipUnsupported) {
+        parsed = Object.freeze({
+          status: "insufficient_evidence" as const,
+          answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
+          citations: Object.freeze([]) as readonly ContextAtom[],
+        });
+      } else if (answerRequest === null) {
         parsed = Object.freeze({
           status: "insufficient_evidence" as const,
           answer: INSUFFICIENT_EVIDENCE_ANSWER,
@@ -657,6 +743,9 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
             }),
           ),
         ),
+        ...(authorshipUnsupported
+          ? { outcome: "authorship_unsupported" as const }
+          : {}),
       });
       await options.audit.append({
         authority_id: release.authority_id,
@@ -669,7 +758,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
         generation_id: release.generation_id,
         record_head: release.record_head,
         released_atoms_sha256: digest(
-          context.map((atom) => ({
+          release.released_atoms.map((atom) => ({
             atom_id: atom.atom_id,
             record_sha256: atom.record_sha256,
             policy_id: atom.policy_id,
@@ -680,9 +769,21 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           planner: plannerRequest,
           answer: answerRequest,
         }),
-        answer_sha256: digest({ status: parsed.status, answer: parsed.answer, citations: parsed.citations.map((atom) => atom.citation_id) }),
+        answer_sha256: digest({
+          status: parsed.status,
+          outcome: result.outcome ?? parsed.status,
+          answer: parsed.answer,
+          citations: parsed.citations.map((atom) => atom.citation_id),
+        }),
         response_sha256: digest(result),
         citation_count: parsed.citations.length,
+        outcome: result.outcome ?? parsed.status,
+        retrieval: Object.freeze({
+          planned_query_count: plan.length,
+          released_atom_count: release.released_atoms.length,
+          context_atom_count: context.length,
+          query_hit_counts: Object.freeze([...release.query_hit_counts]),
+        }),
         checked_at: finalAuthorization.checked_at,
       });
       return result;

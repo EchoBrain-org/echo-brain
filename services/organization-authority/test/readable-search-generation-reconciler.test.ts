@@ -9,6 +9,7 @@ import {
 
 const ORGANIZATION_ID = "org_clean";
 const CONTRACT = canonicalSha256({ contract: "clean-search" });
+const UPDATED_CONTRACT = canonicalSha256({ contract: "clean-search-decision-family" });
 const GENERATION = canonicalSha256({ generation: "clean-search" });
 const MANIFEST = canonicalSha256({ manifest: "clean-search" });
 const NOW = "2026-08-22T12:00:00.000Z";
@@ -85,6 +86,58 @@ describe("readable-search generation reconciliation", () => {
     ).resolves.toEqual({ status: "current", record_head: current });
     expect(capture).toHaveBeenCalledTimes(1);
     expect(build).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds when only the immutable retrieval contract changes at an unchanged head", async () => {
+    const authority = database();
+    const current = head(2);
+    authority
+      .prepare(
+        `INSERT INTO authority_readable_search_active_generation (
+           singleton, organization_id, generation_id, manifest_sha256,
+           retrieval_contract_sha256, record_head_position, record_head_hash,
+           published_at
+         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        ORGANIZATION_ID,
+        canonicalSha256({ generation: "prior" }),
+        canonicalSha256({ manifest: "prior" }),
+        CONTRACT,
+        current.position,
+        current.record_sha256,
+        NOW,
+      );
+    const capture = vi.fn(() => ({ record_head: current }));
+    const build = vi.fn(() => ({
+      generation_id: GENERATION,
+      manifest_sha256: MANIFEST,
+      retrieval_contract_sha256: UPDATED_CONTRACT,
+      record_head: current,
+    }));
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
+      authority,
+      organization_id: ORGANIZATION_ID,
+      retrieval_contract_sha256: UPDATED_CONTRACT,
+      read_record_head: () => current,
+      capture_snapshot: capture,
+      build_generation: build,
+      now: () => NOW,
+    });
+
+    await expect(
+      reconciler.reconcile(new AbortController().signal),
+    ).resolves.toMatchObject({ status: "published", record_head: current });
+    expect(capture).toHaveBeenCalledOnce();
+    expect(build).toHaveBeenCalledOnce();
+    expect(
+      authority
+        .prepare(
+          "SELECT retrieval_contract_sha256 FROM authority_readable_search_active_generation",
+        )
+        .pluck()
+        .get(),
+    ).toBe(UPDATED_CONTRACT);
   });
 
   it("leaves the prior pointer untouched when a build fails", async () => {

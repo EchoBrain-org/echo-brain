@@ -49,14 +49,15 @@ type SegmentKind = "organization-member" | "reviewer";
 
 /**
  * Lean V1 admission ceiling. The values leave room for roughly one thousand
- * approved signal atoms while bounding every collection traversed by the
+ * approved signal atoms with sixteen content postings plus one controlled
+ * category posting each, while bounding every collection traversed by the
  * synchronous reader. Validation happens before retrieval staging is touched.
  */
 export const READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
   maximum_atoms: 1_024,
   maximum_segments: 32,
   maximum_atom_text_utf8_bytes: 4_096,
-  maximum_postings: 16_384,
+  maximum_postings: 17_408,
 });
 
 export const READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
@@ -592,6 +593,7 @@ function buildSegment(
         );
       for (const [term, term_frequency] of analyzeReadableSearchDocument(
         atom.text,
+        atom.item_kind,
       ))
         lexical
           .prepare(
@@ -727,7 +729,7 @@ function assertWithinAdmissionBudget(
         atom.reviewer_membership_id,
       ).segment_id,
     );
-    postings += analyzeReadableSearchDocument(atom.text).size;
+    postings += analyzeReadableSearchDocument(atom.text, atom.item_kind).size;
     if (postings > budget.maximum_postings)
       throw new Error("readable-search generation exceeds maximum_postings");
   }
