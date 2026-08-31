@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { CleanSlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
-import { runCleanPersonSlackApprovalActivateCli } from "@echo-brain/organization-control-plane/clean-founder-v1";
 import { runCleanSlackConnectCli } from "../../services/organization-control-plane/src/composition/clean-slack-connect-cli.js";
 import { verifyCleanControlPlaneStateV1 } from "../../services/organization-control-plane/src/persistence/verified-clean-control-plane-state-v1.js";
 import { afterEach, describe, expect, it } from "vitest";
@@ -124,6 +123,8 @@ const fakeSlack: CleanSlackIdentityProviderV1 = {
       "channels:history",
       "channels:read",
       "chat:write",
+      "im:history",
+      "im:write",
       "reactions:read",
       "users:read",
     ],
@@ -215,9 +216,9 @@ function founderDependencies(): CleanFounderCliDependencies {
           app_id: verified.provider_app_id,
           bot_id: verified.provider_bot_id,
           bot_user_id: verified.provider_bot_user_id,
-          approval_channel_id: verified.approval_channel_id,
+          identity_link_channel_id: verified.approval_channel_id,
           required_scopes: verified.required_scopes,
-          approval_channel_access: "verified",
+          identity_link_channel_access: "verified",
           selected_channel_public: verified.selected_channel_public,
           selected_channel_active: verified.selected_channel_active,
           bot_membership_verified: verified.bot_membership_verified,
@@ -238,22 +239,6 @@ function founderDependencies(): CleanFounderCliDependencies {
         authority_url: input.authority_url,
         output_path: input.output_path,
       });
-    },
-    activate_approval: async (input) => {
-      const output = commandOutput();
-      const status = await runCleanPersonSlackApprovalActivateCli(
-        [
-          "--state-dir",
-          input.state_directory,
-          "--connection-id",
-          input.connection_id,
-          "--approval-channel-id",
-          input.approval_channel_id,
-        ],
-        { stdout: output.write },
-      );
-      expect(status).toBe(0);
-      oneJson(output);
     },
     admit_source: async (input) => {
       const output = commandOutput();
@@ -440,6 +425,13 @@ describe("clean founder command rehearsal", () => {
           "credentials",
           "person-session-pkce-sealing-key",
         ),
+        slack_signing_secret_file: join(
+          stateDirectory,
+          "credentials",
+          "slack-signing-secret",
+        ),
+        // The provider-free idle branch must not inspect this exact-id input.
+        slack_connection_id: "con_not_read",
         slack_approval_channel_id: "C12345678",
         granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
         granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
@@ -550,6 +542,13 @@ describe("clean founder command rehearsal", () => {
           "credentials",
           "person-session-pkce-sealing-key",
         ),
+        slack_signing_secret_file: join(
+          stateDirectory,
+          "credentials",
+          "slack-signing-secret",
+        ),
+        // The injected processing seam also remains provider-free.
+        slack_connection_id: "con_not_read",
         slack_approval_channel_id: "C12345678",
         granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
         granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),

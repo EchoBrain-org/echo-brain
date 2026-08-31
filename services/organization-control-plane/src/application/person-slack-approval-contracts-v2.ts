@@ -6,6 +6,8 @@
  * compute every digest supplied to the aggregate builders below.
  */
 
+import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "./contracts.js";
+
 export type ApprovalContractSha256 = `sha256:${string}`;
 export type PersonApprovalAction = "approve" | "reject";
 export type PersonMembershipType = "employee" | "owner";
@@ -52,13 +54,13 @@ export const PERSON_CONTENT_POLICY_READABLE_ITEM_KINDS = Object.freeze([
   "action",
   "rationale",
 ] as const);
-export const SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES = Object.freeze([
-  "channels:history",
-  "channels:read",
-  "chat:write",
-  "reactions:read",
-  "users:read",
-] as const);
+/**
+ * Approval contracts admit exactly the verified organization connection scope
+ * set. Keep this alias rather than a second literal so onboarding, persisted
+ * contracts, and action-time reproof cannot silently diverge.
+ */
+export const SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES =
+  SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES;
 export const ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256 =
   "sha256:7a874f8b8c0bea7fd58066f93e4f4a26f6f6c05bbbdfe45bf2141f0b2f3ff5e3" as const;
 export const ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_SHA256 =

@@ -27,7 +27,8 @@
   ],
   "runtime_assets": [
     "services/organization-record/baselines/organization-record-derived-baseline-v1.sql",
-    "services/organization-record/baselines/organization-record-log-baseline-v1.sql"
+    "services/organization-record/baselines/organization-record-log-baseline-v1.sql",
+    "services/organization-record/baselines/organization-record-log-baseline-v2.sql"
   ],
   "layer_rules": [
     {

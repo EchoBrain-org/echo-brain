@@ -1,6 +1,83 @@
 import { describe, expect, it } from "vitest";
 import { SlackWebApiClient } from "../../../src/processing/adapters/shared/slack/slack-web-api-client.js";
 
+describe("SlackWebApiClient conversations.open", () => {
+  it("proves a one-person direct message for the requested user", async () => {
+    const calls: Array<{ readonly url: string; readonly init: RequestInit }> =
+      [];
+    const client = new SlackWebApiClient("test-token", {
+      baseUrl: "https://slack.example.test/api",
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            channel: { id: "D123", is_im: true, user: "U123" },
+          }),
+          { headers: { "x-oauth-scopes": "chat:write,im:write" } },
+        );
+      },
+    });
+
+    await expect(client.openDirectMessage("U123")).resolves.toEqual({
+      channel_id: "D123",
+      user_id: "U123",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(
+      "https://slack.example.test/api/conversations.open",
+    );
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
+      users: "U123",
+      return_im: true,
+    });
+  });
+
+  it.each([
+    ["no scope evidence", undefined],
+    ["wrong scope evidence", "chat:write,channels:history"],
+  ])("rejects %s for direct-message opening", async (_case, scopes) => {
+    const client = new SlackWebApiClient("test-token", {
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            channel: { id: "D123", is_im: true, user: "U123" },
+          }),
+          {
+            headers:
+              scopes === undefined ? undefined : { "x-oauth-scopes": scopes },
+          },
+        ),
+    });
+
+    await expect(client.openDirectMessage("U123")).rejects.toMatchObject({
+      code: scopes === undefined ? "invalid" : "auth",
+      retryable: false,
+    });
+  });
+
+  it("rejects a direct-message response for a different user", async () => {
+    const client = new SlackWebApiClient("test-token", {
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            channel: { id: "D123", is_im: true, user: "U456" },
+          }),
+          { headers: { "x-oauth-scopes": "im:write" } },
+        ),
+    });
+
+    await expect(client.openDirectMessage("U123")).rejects.toMatchObject({
+      code: "invalid",
+      message:
+        "Slack conversations.open returned a different direct-message user",
+      retryable: false,
+    });
+  });
+});
+
 describe("SlackWebApiClient conversations.history recovery", () => {
   it("reads every cursor page and preserves exact bot-authored evidence", async () => {
     const urls: string[] = [];
@@ -71,6 +148,57 @@ describe("SlackWebApiClient conversations.history recovery", () => {
         latest: "1724292904.000000",
       }),
     ).rejects.toMatchObject({ code: "invalid", retryable: false });
+  });
+
+  it("accepts im:history for direct-message recovery", async () => {
+    const client = new SlackWebApiClient("test-token", {
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            has_more: false,
+            messages: [],
+            response_metadata: { next_cursor: "" },
+          }),
+          { headers: { "x-oauth-scopes": "im:history" } },
+        ),
+    });
+
+    await expect(
+      client.channelHistory({
+        channel: "D123",
+        oldest: "1724292304.000000",
+        latest: "1724292904.000000",
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("rejects channels:history as insufficient for direct-message recovery", async () => {
+    const client = new SlackWebApiClient("test-token", {
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            has_more: false,
+            messages: [],
+            response_metadata: { next_cursor: "" },
+          }),
+          { headers: { "x-oauth-scopes": "channels:history" } },
+        ),
+    });
+
+    await expect(
+      client.channelHistory({
+        channel: "D123",
+        oldest: "1724292304.000000",
+        latest: "1724292904.000000",
+      }),
+    ).rejects.toMatchObject({
+      code: "auth",
+      message:
+        "Slack conversations.history did not prove the required im:history scope",
+      retryable: false,
+    });
   });
 });
 

@@ -43,7 +43,8 @@
     "util"
   ],
   "runtime_assets": [
-    "services/organization-authority/baselines/authority-baseline-v1.sql"
+    "services/organization-authority/baselines/authority-baseline-v1.sql",
+    "services/organization-authority/baselines/authority-private-approval-v2.sql"
   ],
   "layer_rules": [
     {
@@ -272,7 +273,6 @@
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/presentation/**",
         "services/organization-authority/src/state-lineage/**",
-        "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/**",
         "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
         "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
         "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/**",

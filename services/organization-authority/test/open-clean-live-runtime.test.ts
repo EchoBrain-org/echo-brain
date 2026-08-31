@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -7,53 +8,31 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { Buffer } from "node:buffer";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   canonicalJson,
   canonicalSha256,
-  sha256Digest,
-  type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import {
-  CleanPersonRecordReaderV1,
-  openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/new-lineage-v1";
-import {
-  buildCleanReadableSearchGenerationV1,
-  warmCleanReadableSearchActiveGenerationV1,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  readableSearchPlaneBaselineSha256V1,
-  RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
-  type BuildCleanReadableSearchGenerationV1Input,
-  type CleanReadableSearchAtomV1,
-} from "@echo-brain/organization-retrieval/new-lineage-v1";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   openOrganizationControlDatabase,
-  type PersonSlackApprovalObserverV2,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
-  RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
-  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
-  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
   buildExternalHumanIdentityLinkContractV2,
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
-  buildPersonSlackApprovalActionCapabilityV2,
-  buildPersonSlackApprovalBindingContractV2,
 } from "../../organization-control-plane/src/application/person-slack-approval-contracts-v2.js";
-import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
+import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/new-lineage-v1";
+import { afterEach, describe, expect, it } from "vitest";
+import type {
+  BegunPersonOidcLogin,
+  PersonAccessAuthorization,
+} from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
+import { SqliteCleanPersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.js";
 import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
 import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
@@ -61,19 +40,24 @@ import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-se
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import { admitCleanGranolaSource } from "../src/composition/clean-granola-source-admission.js";
-import { initializeCleanPersonCredentials } from "../src/composition/clean-person-onboarding.js";
-import { issueCleanPersonInvitation } from "../src/composition/clean-person-onboarding.js";
-import { createCleanPersonRecordReadRouteV1 } from "../src/composition/clean-person-record-read-route.js";
-import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
-import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
-import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
-import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
+import {
+  initializeCleanPersonCredentials,
+  issueCleanPersonInvitation,
+} from "../src/composition/clean-person-onboarding.js";
 import {
   openCleanLiveRuntime,
   type OpenCleanLiveRuntimeConfig,
 } from "../src/composition/open-clean-live-runtime.js";
-import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
-import type { CleanSlackApprovalCardPosterV1 } from "../src/processing/clean-v1/clean-slack-approval-stager.js";
+import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
+import { createCleanPersonAnswerRouteV1 } from "../src/composition/clean-person-answer-route.js";
+import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
+import type { Layer4StructuredOutputPort } from "../src/answer-composition/lean-answer-composition.js";
+import {
+  PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1,
+  privateApprovalBlockKitActionIdV1,
+} from "../src/composition/private-approval-block-kit-card-v1.js";
+import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
+import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import type {
   AdapterHealth,
   DecisionProcessorAdapter,
@@ -81,12 +65,40 @@ import type {
   MeetingDocument,
   MeetingSourceAdapter,
 } from "../src/processing/core/index.js";
+import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
 import type {
-  Layer4StructuredGenerationInput,
-  Layer4StructuredOutputPort,
-} from "../src/answer-composition/lean-answer-composition.js";
+  PrivateSlackApprovalCardPresentationV1,
+  PrivateSlackApprovalPostOutcomeV1,
+  PrivateSlackApprovalTerminalPresentationV1,
+  PrivateSlackApprovalUpdateOutcomeV1,
+} from "../src/processing/clean-v1/private-slack-approval-card-poster-v1.js";
 
 const roots: string[] = [];
+let testAuthorizationCheck = 0;
+const NOW = "2026-08-22T12:00:00.000Z";
+const SLACK_WORKSPACE = "T012LIVETEST";
+const SLACK_APP = "A012LIVETEST";
+const SLACK_BOT = "B012LIVETEST";
+const SLACK_BOT_USER = "U012LIVEBOT";
+const SLACK_OWNER = "U012FOUNDER";
+const SLACK_DM_CHANNEL = "D012LIVETEST";
+const SLACK_SIGNING_SECRET = "test-slack-signing-secret-000000000";
+const PRIVATE_SLACK_SCOPES = [
+  "channels:history",
+  "channels:read",
+  "chat:write",
+  "im:history",
+  "im:write",
+  "reactions:read",
+  "users:read",
+] as const;
+const OIDC = {
+  issuer: "https://issuer.example",
+  client_id: "founder-client",
+  redirect_uri: "https://authority.example/v2/session/oidc/callback",
+  tenant: { kind: "issuer" as const },
+  id_token_algorithms: ["RS256"],
+};
 
 function root(): string {
   const created = mkdtempSync(join(tmpdir(), "echo-open-clean-live-"));
@@ -108,29 +120,24 @@ async function availablePort(): Promise<number> {
     throw new Error("test port did not resolve");
   }
   await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
+    server.close((error) => (error === undefined ? resolve() : reject(error))),
   );
   return address.port;
 }
 
-const OIDC = {
-  issuer: "https://issuer.example",
-  client_id: "founder-client",
-  redirect_uri: "https://authority.example/v2/session/oidc/callback",
-  tenant: { kind: "issuer" as const },
-  id_token_algorithms: ["RS256"],
-};
-const SLACK_CHANNEL = "C0123456789";
-const NOW = "2026-08-22T12:00:00.000Z";
+function privateFile(parent: string, name: string, value: string): string {
+  const path = join(parent, name);
+  writeFileSync(path, value, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
+}
 
 class FounderOidcProvider implements PersonSessionOidcAuthorizationProvider {
   private attempt: BegunPersonOidcLogin | undefined;
-
   buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
     this.attempt = attempt;
     return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
   }
-
   async redeemAuthorizationCode() {
     if (this.attempt === undefined)
       throw new Error("OIDC begin was not called");
@@ -148,80 +155,6 @@ class FounderOidcProvider implements PersonSessionOidcAuthorizationProvider {
   }
 }
 
-/** A deterministic browser-login stand-in for the owner and one employee. */
-class OwnerAndEmployeeOidcProvider implements PersonSessionOidcAuthorizationProvider {
-  private attempt: BegunPersonOidcLogin | undefined;
-  email = "founder@example.com";
-
-  buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
-    this.attempt = attempt;
-    return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
-  }
-
-  async redeemAuthorizationCode() {
-    if (this.attempt === undefined)
-      throw new Error("OIDC begin was not called");
-    const founder = this.email === "founder@example.com";
-    return {
-      kind: "verified" as const,
-      token: {
-        issuer: OIDC.issuer,
-        subject: founder ? "founder-subject" : "employee-subject",
-        audience: OIDC.client_id,
-        nonce: this.attempt.nonce,
-        issued_at: Math.floor(Date.now() / 1_000),
-        claims: { email: this.email, email_verified: true },
-      },
-    };
-  }
-}
-
-async function responseJson(
-  response: Response,
-): Promise<Record<string, unknown>> {
-  return JSON.parse(await response.text()) as Record<string, unknown>;
-}
-
-async function browserLogin(
-  origin: string,
-  input: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const begun = await fetch(`${origin}/v2/session/oidc/begin`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      ...input,
-      loopback_handoff: {
-        url: `http://127.0.0.1:39999/${"P".repeat(43)}`,
-        token: "T".repeat(43),
-      },
-    }),
-  });
-  expect(begun.status).toBe(201);
-  const authorization = await responseJson(begun);
-  const state = new URL(
-    authorization.authorization_url as string,
-  ).searchParams.get("state");
-  expect(state).not.toBeNull();
-  const callback = await fetch(
-    `${origin}/v2/session/oidc/callback?state=${encodeURIComponent(state!)}&code=browser-code`,
-  );
-  expect(callback.status).toBe(200);
-  const page = await callback.text();
-  const encoded = /name="session" value="([A-Za-z0-9_-]+)"/.exec(page)?.[1];
-  expect(encoded).toBeDefined();
-  return JSON.parse(
-    Buffer.from(encoded!, "base64url").toString("utf8"),
-  ) as Record<string, unknown>;
-}
-
-function privateFile(parent: string, name: string, value: string): string {
-  const path = join(parent, name);
-  writeFileSync(path, value, { mode: 0o600 });
-  chmodSync(path, 0o600);
-  return path;
-}
-
 async function completeFounderReonboarding(input: {
   readonly state_directory: string;
   readonly parent: string;
@@ -231,10 +164,10 @@ async function completeFounderReonboarding(input: {
     state_directory: input.state_directory,
   });
   const pkce = credentials.pkce_sealing_key_reference.slice("file:".length);
-  const invitationDirectory = join(input.parent, "invitations");
-  mkdirSync(invitationDirectory, { mode: 0o700 });
-  chmodSync(invitationDirectory, 0o700);
-  const invitationPath = join(invitationDirectory, "founder.invitation.json");
+  const invitations = join(input.parent, "invitations");
+  mkdirSync(invitations, { mode: 0o700 });
+  chmodSync(invitations, 0o700);
+  const invitationPath = join(invitations, "founder.invitation.json");
   issueCleanPersonInvitation({
     state_directory: input.state_directory,
     oidc: OIDC,
@@ -286,7 +219,8 @@ async function completeFounderReonboarding(input: {
   return pkce;
 }
 
-function seedActiveSlackApproval(input: {
+/** Seed only the connection and verified owner identity needed for a private DM. */
+function seedPrivateSlackConnection(input: {
   readonly state_directory: string;
   readonly authority_id: string;
   readonly organization_id: string;
@@ -309,26 +243,22 @@ function seedActiveSlackApproval(input: {
       connection_id: "con_live_test",
       provider_issuer: "https://slack.com",
       provider_tenant_kind: "workspace",
-      provider_tenant_id: "T_LIVE_TEST",
+      provider_tenant_id: SLACK_WORKSPACE,
       provider_enterprise_id: null,
       tool_kind: "slack",
-      provider_app_id: "A_LIVE_TEST",
-      provider_bot_id: "B_LIVE_TEST",
-      provider_bot_user_id: "U_LIVE_BOT",
-      required_provider_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
-      public_connection_configuration_sha256: canonicalSha256({
-        kind: "configuration",
-      }),
+      provider_app_id: SLACK_APP,
+      provider_bot_id: SLACK_BOT,
+      provider_bot_user_id: SLACK_BOT_USER,
+      required_provider_scopes: PRIVATE_SLACK_SCOPES,
+      public_connection_configuration_sha256: canonicalSha256({ kind: "test" }),
     });
     const connectionSha = canonicalSha256(connection);
     const state = buildOrganizationToolConnectionStateV2({
       connection_id: connection.connection_id,
       connection_contract_sha256: connectionSha,
       connection_status: "active",
-      credential_reference_sha256: canonicalSha256({
-        kind: "test-only-unread-token",
-      }),
-      observed_granted_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+      credential_reference_sha256: canonicalSha256({ kind: "test-token" }),
+      observed_granted_scopes: PRIVATE_SLACK_SCOPES,
       verification_event_id: "verify_live_test",
       verification_evidence_sha256: canonicalSha256({ kind: "verification" }),
       verification_revision: 1,
@@ -361,9 +291,9 @@ function seedActiveSlackApproval(input: {
       external_identity_link_id: "clm_live_test",
       provider_issuer: "https://slack.com",
       provider_tenant_kind: "workspace",
-      provider_tenant_id: "T_LIVE_TEST",
+      provider_tenant_id: SLACK_WORKSPACE,
       provider_enterprise_id: null,
-      provider_subject_id: "UFOUNDER",
+      provider_subject_id: SLACK_OWNER,
       principal_id: input.principal_id,
       membership_id: input.membership_id,
       membership_type: "owner",
@@ -393,125 +323,56 @@ function seedActiveSlackApproval(input: {
         link.membership_id,
         NOW,
       );
-    const binding = buildPersonSlackApprovalBindingContractV2({
-      ...coordinates,
-      approval_binding_id: "bnd_live_test",
-      connection_id: connection.connection_id,
-      connection_contract_sha256: connectionSha,
-      approval_adapter_kind: "approval-surface",
-      approval_adapter_id: "slack-reactions",
-      approval_adapter_instance_id: "founder-approval",
-      approval_adapter_version: "1.0.0",
-      approval_channel_id: SLACK_CHANNEL,
-      approve_reaction: "white_check_mark",
-      reject_reaction: "x",
-      supported_policy_actions: [
-        {
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-          policy_contract_sha256:
-            ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-          actions: ["approve", "reject"],
-        },
-        {
-          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-          policy_contract_sha256:
-            RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
-          actions: ["approve", "reject"],
-        },
-      ],
-    });
-    const bindingSha = canonicalSha256(binding);
-    control
-      .prepare(
-        "INSERT INTO organization_approval_binding_contracts VALUES (?, ?, ?, ?, ?)",
-      )
-      .run(
-        binding.approval_binding_id,
-        canonicalJson(binding),
-        bindingSha,
-        connection.connection_id,
-        NOW,
-      );
-    control
-      .prepare(
-        "INSERT INTO organization_approval_binding_current VALUES (?, ?, 'active', ?)",
-      )
-      .run(binding.approval_binding_id, bindingSha, NOW);
-    for (const policy of [
-      {
-        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-        policy_contract_sha256:
-          ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-      },
-      {
-        policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-        policy_contract_sha256:
-          RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
-      },
-    ] as const) {
-      for (const action of ["approve", "reject"] as const) {
-        const capability = buildPersonSlackApprovalActionCapabilityV2({
-          ...coordinates,
-          action_capability_id: `cap_live_${policy.policy_id}_${action}`,
-          approval_binding_id: binding.approval_binding_id,
-          approval_binding_contract_sha256: bindingSha,
-          external_identity_link_id: link.external_identity_link_id,
-          principal_id: input.principal_id,
-          membership_id: input.membership_id,
-          membership_type: "owner",
-          policy_id: policy.policy_id,
-          policy_contract_sha256: policy.policy_contract_sha256,
-          action,
-        });
-        const capabilitySha = canonicalSha256(capability);
-        control
-          .prepare(
-            "INSERT INTO organization_approval_action_capability_contracts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-          )
-          .run(
-            capability.action_capability_id,
-            canonicalJson(capability),
-            capabilitySha,
-            binding.approval_binding_id,
-            link.external_identity_link_id,
-            capability.policy_id,
-            action,
-            NOW,
-          );
-        control
-          .prepare(
-            "INSERT INTO organization_approval_action_capability_current VALUES (?, ?, 'active', ?)",
-          )
-          .run(capability.action_capability_id, capabilitySha, NOW);
-      }
-    }
   } finally {
     control.close();
   }
 }
 
-const healthy = (): AdapterHealth => ({
-  status: "healthy",
-  checked_at: NOW,
-});
+const healthy = (): AdapterHealth => ({ status: "healthy", checked_at: NOW });
 
 function fakeSource(
-  meetings: readonly MeetingDocument[],
-  source: MeetingSourceAdapter["identity"],
+  identity: MeetingSourceAdapter["identity"],
 ): MeetingSourceAdapter & { readonly pulls: () => number } {
   let pulls = 0;
+  const meeting: MeetingDocument = {
+    schema_version: 1,
+    id: "granola:founder-granola:note-live-test",
+    title: "Live migration review",
+    provenance: {
+      source: identity,
+      external_id: "note-live-test",
+      canonical_revision: canonicalSha256({ note: "live-test" }),
+      observed_at: NOW,
+      normalizer_version: identity.version,
+    },
+    capture: { state: "complete", components: [] },
+    participants: [],
+    content: [
+      {
+        id: "note-live-test",
+        kind: "note",
+        text: "Ship the clean live migration.",
+      },
+    ],
+    artifacts: [],
+    extensions: {
+      granola: {
+        calendar_event: null,
+        owner: { email: "founder@example.com" },
+      },
+    },
+  };
   return {
-    identity: source,
+    identity,
     validateConfig: () => ({ ok: true, errors: [] }),
     healthCheck: async () => healthy(),
     pull: async (request) => {
       pulls += 1;
-      const meeting = meetings[pulls - 1];
-      return meeting !== undefined
+      return pulls === 1
         ? {
             meetings: [meeting],
             next_cursor: createGranolaLiveOnlyCursor(
-              `2026-08-22T12:00:0${String(pulls)}.000Z`,
+              "2026-08-22T12:00:01.000Z",
             ),
           }
         : { meetings: [], next_cursor: request.cursor };
@@ -553,54 +414,80 @@ function fakeProcessor(
   };
 }
 
-function fakeReaction(
-  action: "approve" | "reject",
-): PersonSlackApprovalObserverV2 & { readonly calls: () => number } {
-  let calls = 0;
-  return {
-    async observeApprovalReaction(expectation, expectation_sha256) {
-      calls += 1;
-      return {
-        kind: "observed",
-        expectation_sha256,
-        provider_actor_subject: "UFOUNDER",
-        observed_reaction:
-          action === "approve"
-            ? expectation.approve_reaction
-            : expectation.reject_reaction,
-        observed_action: action,
-        provider_response_evidence_sha256: canonicalSha256({
-          kind: "synthetic-slack-reaction",
-          approval_id: expectation.approval_id,
-          action,
-        }),
-        observed_at: NOW,
-      };
+type PublishedCard = {
+  readonly approval_id: string;
+  readonly dm_channel_id: string;
+  readonly provider_message_ts: string;
+  readonly card: PrivateSlackApprovalCardPresentationV1;
+};
+
+/** Provider-free structural seam. It retains only private delivery inputs. */
+class FakePrivateApprovalPoster {
+  readonly markers: Array<{
+    readonly approval_id: string;
+    readonly dm_channel_id: string;
+  }> = [];
+  readonly published: PublishedCard[] = [];
+  readonly terminal: Array<
+    PrivateSlackApprovalTerminalPresentationV1 & {
+      readonly dm_channel_id: string;
+      readonly provider_message_ts: string;
+    }
+  > = [];
+  readonly tombstones: string[] = [];
+  async openDirectMessage(providerSubjectId: string) {
+    expect(providerSubjectId).toBe(SLACK_OWNER);
+    return {
+      kind: "opened" as const,
+      channel_id: SLACK_DM_CHANNEL,
+      user_id: SLACK_OWNER,
+    };
+  }
+  async postMarker(input: {
+    readonly approval_id: string;
+    readonly dm_channel_id: string;
+  }): Promise<PrivateSlackApprovalPostOutcomeV1> {
+    this.markers.push(input);
+    return {
+      kind: "posted",
+      provider_message_ts: `1724112000.${String(this.markers.length).padStart(6, "0")}`,
+    };
+  }
+  async reconcileMarker(): Promise<PrivateSlackApprovalPostOutcomeV1> {
+    return { kind: "uncertain" };
+  }
+  async publish(
+    input: PublishedCard,
+  ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
+    this.published.push(input);
+    return { kind: "done" };
+  }
+  async renderTerminal(
+    input: PrivateSlackApprovalTerminalPresentationV1 & {
+      readonly dm_channel_id: string;
+      readonly provider_message_ts: string;
     },
-    calls: () => calls,
-  };
+  ): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
+    this.terminal.push(input);
+    return { kind: "done" };
+  }
+  async tombstone(input: {
+    readonly approval_id: string;
+  }): Promise<PrivateSlackApprovalUpdateOutcomeV1> {
+    this.tombstones.push(input.approval_id);
+    return { kind: "done" };
+  }
 }
 
 async function waitFor(assertion: () => boolean, label: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     if (assertion()) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function activeFixture(
-  action: "approve" | "reject",
-  person?: PersonSessionOidcAuthorizationProvider,
-  meetingVariants?: readonly {
-    readonly title: string;
-    readonly external_id: string;
-    readonly text: string;
-    readonly folder_membership?: readonly { readonly name: string }[];
-  }[],
-  answerModel?: Layer4StructuredOutputPort,
-  approvalPoster?: CleanSlackApprovalCardPosterV1,
-) {
+async function activeFixture() {
   const parent = root();
   const initialized = initializeCleanResetState({
     state_directory: join(parent, "state"),
@@ -629,6 +516,11 @@ async function activeFixture(
     "llm.key",
     "llm-private-credential-material-000000",
   );
+  const slack_signing_secret_file = privateFile(
+    parent,
+    "slack-signing-secret",
+    SLACK_SIGNING_SECRET,
+  );
   const admitted = await admitCleanGranolaSource({
     state_directory: initialized.state_directory,
     source_instance_id: "founder-granola",
@@ -649,7 +541,7 @@ async function activeFixture(
     }),
     now: () => NOW,
   });
-  seedActiveSlackApproval({
+  seedPrivateSlackConnection({
     state_directory: initialized.state_directory,
     authority_id: initialized.authority_id,
     organization_id: initialized.organization_id,
@@ -657,73 +549,13 @@ async function activeFixture(
     principal_id: initialized.owner_principal_id,
     membership_id: initialized.owner_membership_id,
   });
-  const sourceIdentity = {
-    kind: "meeting-source" as const,
+  const source = fakeSource({
+    kind: "meeting-source",
     adapter_id: "granola",
     instance_id: admitted.source.instance_id,
     version: admitted.source.version,
-  };
-  const processorIdentity = {
-    kind: "decision-processor" as const,
-    adapter_id: "llm",
-    instance_id: admitted.processor.instance_id,
-    version: admitted.processor.version,
-  };
-  const meeting: MeetingDocument = {
-    schema_version: 1,
-    id: "granola:founder-granola:note-live-test",
-    title: "Live migration review",
-    provenance: {
-      source: sourceIdentity,
-      external_id: "note-live-test",
-      canonical_revision: canonicalSha256({ note: "live-test" }),
-      observed_at: NOW,
-      normalizer_version: sourceIdentity.version,
-    },
-    capture: { state: "complete", components: [] },
-    participants: [],
-    content: [
-      {
-        id: "note-live-test",
-        kind: "note",
-        text: "Ship the clean live migration.",
-      },
-    ],
-    artifacts: [],
-  };
-  const source = fakeSource(
-    meetingVariants?.map((variant) => ({
-      ...meeting,
-      id: `granola:founder-granola:${variant.external_id}`,
-      title: variant.title,
-      provenance: {
-        ...meeting.provenance,
-        external_id: variant.external_id,
-        canonical_revision: canonicalSha256({
-          note: variant.external_id,
-          title: variant.title,
-          text: variant.text,
-          folder_membership: variant.folder_membership ?? [],
-        }),
-      },
-      content: [{ id: variant.external_id, kind: "note", text: variant.text }],
-      ...(variant.folder_membership === undefined
-        ? {}
-        : {
-            extensions: {
-              granola: {
-                folder_membership: variant.folder_membership.map((folder) => ({
-                  ...folder,
-                })),
-              },
-            },
-          }),
-    })) ?? [meeting],
-    sourceIdentity,
-  );
-  const reaction = fakeReaction(action);
-  const posted: string[] = [];
-  const tombstoned: string[] = [];
+  });
+  const poster = new FakePrivateApprovalPoster();
   const errors: Error[] = [];
   const config: OpenCleanLiveRuntimeConfig = {
     state_directory: initialized.state_directory,
@@ -733,47 +565,27 @@ async function activeFixture(
     oidc: OIDC,
     client_authentication: { method: "none" },
     pkce_key_file,
-    slack_approval_channel_id: SLACK_CHANNEL,
+    slack_signing_secret_file,
+    slack_connection_id: "con_live_test",
+    // Identity-link onboarding still uses this field. Delivery never does.
+    slack_approval_channel_id: "C0123456789",
     granola_credential_file,
     granola_owner_email_file,
     llm_credential_file,
-    worker_interval_ms: meetingVariants === undefined ? 60_000 : 10,
+    worker_interval_ms: 10,
     on_worker_error: (error) => errors.push(error),
   };
+  const processorIdentity = {
+    kind: "decision-processor" as const,
+    adapter_id: "llm",
+    instance_id: admitted.processor.instance_id,
+    version: admitted.processor.version,
+  };
   const runtime = await openCleanLiveRuntime(config, {
-    ...(person === undefined && answerModel === undefined
-      ? {}
-      : {
-          person: {
-            ...(person === undefined ? {} : { oidc_provider: person }),
-            ...(answerModel === undefined
-              ? {}
-              : { answer_model: answerModel }),
-          },
-        }),
     live_adapters: {
       source,
       processor: fakeProcessor(processorIdentity),
-      approval_card_poster: approvalPoster ?? {
-        async post() {
-          return {
-            kind: "posted",
-            provider_message_ts: `1724112000.${String(posted.length).padStart(6, "0")}`,
-          };
-        },
-        async reconcile() {
-          return { kind: "uncertain" };
-        },
-        async tombstone(input) {
-          tombstoned.push(input.approval_id);
-          return { kind: "done" };
-        },
-        async publish(input) {
-          posted.push(input.text);
-          return { kind: "done" };
-        },
-      },
-      approval_observer: reaction,
+      private_approval_card_poster: poster,
     },
   });
   return {
@@ -781,274 +593,305 @@ async function activeFixture(
     config,
     source,
     processorIdentity,
-    reaction,
-    posted,
-    tombstoned,
+    poster,
     errors,
     runtime,
   };
 }
 
-function readableSearchBuildInput(input: {
-  readonly state_directory: string;
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
-  readonly exact_head: {
-    readonly position: number;
-    readonly record_sha256: Sha256Digest;
+function cardParts(card: PublishedCard["card"]) {
+  const blocks = card.blocks as ReadonlyArray<Record<string, unknown>>;
+  const policy = blocks.find(
+    (block) =>
+      block.type === "input" && String(block.block_id).endsWith("-policy-v1"),
+  );
+  const comment = blocks.find(
+    (block) =>
+      block.type === "input" && String(block.block_id).endsWith("-comment-v1"),
+  );
+  const actions = blocks.find((block) => block.type === "actions");
+  if (policy === undefined || comment === undefined || actions === undefined)
+    throw new Error("published private approval card is incomplete");
+  const policyElement = policy.element as Record<string, unknown>;
+  const commentElement = comment.element as Record<string, unknown>;
+  const elements = actions.elements as ReadonlyArray<Record<string, unknown>>;
+  const identity = JSON.parse(String(elements[0]?.value)) as {
+    readonly approval_id: string;
   };
-  readonly atoms: readonly CleanReadableSearchAtomV1[];
-}): BuildCleanReadableSearchGenerationV1Input {
-  const plane = (role: string, schema_sha256: Sha256Digest) => {
-    const manifest_json = canonicalJson({
-      schema_version: 1,
-      kind: "echo-state-lineage-database-manifest-v1",
-      role,
-      authority_id: input.authority_id,
-      organization_id: input.organization_id,
-      state_lineage_id: input.state_lineage_id,
-      database_schema_version: 1,
-      schema_sha256,
-      created_at: NOW,
-      creating_artifact_revision: "employee-permission-acceptance",
-    });
-    return {
-      database_schema_version: 1 as const,
-      schema_sha256,
-      manifest_json,
-      manifest_sha256: sha256Digest(manifest_json),
-    };
-  };
-  const contract = cleanReadableSearchRuntimeContractV1();
+  const approve = elements.find(
+    (element) =>
+      element.action_id ===
+      privateApprovalBlockKitActionIdV1(
+        identity,
+        PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
+      ),
+  );
+  const reject = elements.find(
+    (element) =>
+      element.action_id ===
+      privateApprovalBlockKitActionIdV1(
+        identity,
+        PRIVATE_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject,
+      ),
+  );
+  if (approve === undefined || reject === undefined)
+    throw new Error("published card has no terminal buttons");
   return {
-    state_directory: input.state_directory,
-    lineage: {
-      authority_id: input.authority_id,
-      organization_id: input.organization_id,
-      state_lineage_id: input.state_lineage_id,
-      planes: {
-        facts: plane(
-          "retrieval-facts",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_FACTS_BASELINE_V1,
-          ),
-        ),
-        content: plane(
-          "retrieval-content",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_CONTENT_BASELINE_V1,
-          ),
-        ),
-        lexical: plane(
-          "retrieval-lexical",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_LEXICAL_BASELINE_V1,
-          ),
-        ),
+    policy,
+    comment,
+    actions,
+    policyElement,
+    commentElement,
+    approve,
+    reject,
+  };
+}
+
+/** Signs and posts an exact form-encoded Slack block_actions request. */
+async function clickCard(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly card: PublishedCard;
+  readonly action: "approve" | "reject";
+  readonly policy_id:
+    | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
+    | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID;
+  readonly comment?: string;
+  readonly request_timestamp?: string;
+}): Promise<Response> {
+  const parts = cardParts(input.card.card);
+  const terminal = input.action === "approve" ? parts.approve : parts.reject;
+  const trigger_id = "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD";
+  const action_ts = "1712345680.123456";
+  const payload = {
+    type: "block_actions",
+    user: { id: SLACK_OWNER, team_id: SLACK_WORKSPACE },
+    api_app_id: SLACK_APP,
+    trigger_id,
+    container: {
+      type: "message",
+      channel_id: input.card.dm_channel_id,
+      message_ts: input.card.provider_message_ts,
+      is_ephemeral: false,
+    },
+    team: { id: SLACK_WORKSPACE, domain: "echo" },
+    enterprise: null,
+    is_enterprise_install: false,
+    channel: { id: input.card.dm_channel_id, name: "directmessage" },
+    message: {
+      type: "message",
+      user: SLACK_BOT_USER,
+      ts: input.card.provider_message_ts,
+      app_id: SLACK_APP,
+      bot_id: SLACK_BOT,
+      blocks: input.card.card.blocks,
+    },
+    state: {
+      values: {
+        [parts.policy.block_id as string]: {
+          [parts.policyElement.action_id as string]: {
+            type: "radio_buttons",
+            selected_option: {
+              text: {
+                type: "plain_text",
+                text:
+                  input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
+                    ? "Only me"
+                    : "Team",
+                emoji: false,
+              },
+              value: input.policy_id,
+            },
+          },
+        },
+        [parts.comment.block_id as string]: {
+          [parts.commentElement.action_id as string]: {
+            type: "plain_text_input",
+            // Slack sends null, rather than an empty string, when an optional
+            // plain-text input is untouched.
+            value: input.comment ?? null,
+          },
+        },
       },
     },
-    exact_head: {
-      authority_id: input.authority_id,
-      organization_id: input.organization_id,
-      state_lineage_id: input.state_lineage_id,
-      position: input.exact_head.position,
-      record_sha256: input.exact_head.record_sha256,
+    actions: [
+      {
+        type: "button",
+        action_id: terminal.action_id,
+        block_id: parts.actions.block_id,
+        value: terminal.value,
+        action_ts,
+      },
+    ],
+  };
+  const body = new URLSearchParams({
+    payload: JSON.stringify(payload),
+  }).toString();
+  const timestamp =
+    input.request_timestamp ?? String(Math.floor(Date.now() / 1_000));
+  const signature = createHmac("sha256", SLACK_SIGNING_SECRET)
+    .update(`v0:${timestamp}:`)
+    .update(body)
+    .digest("hex");
+  return fetch(
+    `http://127.0.0.1:${String(input.fixture.runtime.address.port)}/v2/integrations/slack/interactions`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-slack-request-timestamp": timestamp,
+        "x-slack-signature": `v0=${signature}`,
+      },
+      body,
     },
-    retrieval_contract_sha256: contract.retrieval_contract_sha256,
-    organization_member_policy_contract_sha256:
-      contract.organization_member_policy_contract_sha256,
-    restricted_reviewer_policy_contract_sha256:
-      contract.restricted_reviewer_policy_contract_sha256,
-    analyzer: contract.analyzer,
-    source_revision: contract.source_revision,
-    builder_artifact_sha256: contract.builder_artifact_sha256,
-    sqlite_version: "3.50.4",
-    atoms: input.atoms,
-  };
-}
-
-function syntheticRestrictedRecord(input: {
-  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
-  readonly initialized: {
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
-    readonly owner_principal_id: string;
-    readonly owner_membership_id: string;
-  };
-}): {
-  readonly record_sha256: Sha256Digest;
-  readonly atom: CleanReadableSearchAtomV1;
-} {
-  const prior = input.record
-    .prepare(
-      `SELECT position, record_sha256, canonical_envelope
-       FROM organization_record_log WHERE position = 1`,
-    )
-    .get() as {
-    readonly position: number;
-    readonly record_sha256: Sha256Digest;
-    readonly canonical_envelope: string;
-  };
-  const memberFact = input.record
-    .prepare(
-      `SELECT atom_order, signal_id_sha256, item_kind, audit_event_id, audit_sequence,
-            audit_entry_sha256, provider_action_sha256, authorization_proof_sha256
-       FROM organization_record_member_readable_person_fact
-      WHERE record_position = 1 AND record_sha256 = ?`,
-    )
-    .get(prior.record_sha256) as {
-    readonly atom_order: number;
-    readonly signal_id_sha256: Sha256Digest;
-    readonly item_kind: "decision" | "action" | "rationale";
-    readonly audit_event_id: string;
-    readonly audit_sequence: number;
-    readonly audit_entry_sha256: Sha256Digest;
-    readonly provider_action_sha256: Sha256Digest;
-    readonly authorization_proof_sha256: Sha256Digest;
-  };
-  const record_sha256 = sha256Digest("employee-permission-restricted-record");
-  const envelope = JSON.parse(prior.canonical_envelope) as {
-    body: Record<string, unknown>;
-    record_sha256: string;
-  };
-  const body = envelope.body;
-  const reference = body.human_act_resolution_ref as Record<string, unknown>;
-  const event = body.event as Record<string, unknown>;
-  const approval_id = "approval-employee-permission-restricted";
-  body.envelope_id = "envelope-employee-permission-restricted";
-  body.semantic_idempotency_key = sha256Digest(
-    "employee-permission-restricted-idempotency",
   );
-  body.predecessor_position = prior.position;
-  body.predecessor_record_sha256 = prior.record_sha256;
-  reference.approval_id = approval_id;
-  reference.policy_id = RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
-  reference.policy_contract_sha256 =
-    cleanReadableSearchRuntimeContractV1().restricted_reviewer_policy_contract_sha256;
-  event.policy_id = RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
-  event.policy_contract_sha256 =
-    cleanReadableSearchRuntimeContractV1().restricted_reviewer_policy_contract_sha256;
-  envelope.record_sha256 = record_sha256;
-  const canonical_envelope = canonicalJson(envelope);
-  const receipt = canonicalJson({
-    schema_version: 2,
-    kind: "echo-organization-record-receipt-v2",
-    authority_id: input.initialized.authority_id,
-    organization_id: input.initialized.organization_id,
-    state_lineage_id: input.initialized.state_lineage_id,
-    envelope_id: body.envelope_id,
-    semantic_idempotency_key: body.semantic_idempotency_key,
-    event_kind: "approved",
-    record_position: 2,
-    record_sha256,
-    predecessor_record_sha256: prior.record_sha256,
-    record_head_position: 2,
-    record_head_sha256: record_sha256,
-    issued_at: NOW,
-  });
-  input.record
-    .prepare(
-      `INSERT INTO organization_record_log
-      (position, envelope_id, event_kind, approval_id, action, semantic_idempotency_key,
-       canonical_envelope, envelope_sha256, predecessor_position, predecessor_record_sha256,
-       record_sha256, receipt_payload, receipt_issued_at)
-     VALUES (2, ?, 'approved', ?, 'approve', ?, ?, ?, 1, ?, ?, ?, ?)`,
-    )
-    .run(
-      body.envelope_id,
-      approval_id,
-      body.semantic_idempotency_key,
-      canonical_envelope,
-      sha256Digest(canonical_envelope),
-      prior.record_sha256,
-      record_sha256,
-      receipt,
-      NOW,
-    );
-  const atom_id = sha256Digest("employee-permission-restricted-atom");
-  input.record
-    .prepare(
-      `INSERT INTO organization_record_restricted_reviewer_person_fact
-      (authority_id, organization_id, state_lineage_id, approval_id, action, policy_id,
-       policy_contract_sha256, record_position, record_sha256, atom_order,
-       signal_id_sha256, atom_id, item_kind, audit_event_id, audit_sequence,
-       audit_entry_sha256, provider_action_sha256, authorization_proof_sha256,
-       reviewer_principal_id, reviewer_membership_id)
-     VALUES (?, ?, ?, ?, 'approve', ?, ?, 2, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      input.initialized.authority_id,
-      input.initialized.organization_id,
-      input.initialized.state_lineage_id,
-      approval_id,
-      RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
-      cleanReadableSearchRuntimeContractV1()
-        .restricted_reviewer_policy_contract_sha256,
-      record_sha256,
-      memberFact.signal_id_sha256,
-      atom_id,
-      memberFact.item_kind,
-      memberFact.audit_event_id,
-      memberFact.audit_sequence,
-      memberFact.audit_entry_sha256,
-      memberFact.provider_action_sha256,
-      memberFact.authorization_proof_sha256,
-      input.initialized.owner_principal_id,
-      input.initialized.owner_membership_id,
-    );
-  return {
-    record_sha256,
-    atom: {
-      authority_id: input.initialized.authority_id,
-      organization_id: input.initialized.organization_id,
-      state_lineage_id: input.initialized.state_lineage_id,
-      record_position: 2,
-      record_sha256,
-      envelope_sha256: sha256Digest(canonical_envelope),
-      approval_id,
-      atom_id,
-      atom_order: 0,
-      signal_id_sha256: memberFact.signal_id_sha256,
-      item_kind: memberFact.item_kind,
-      text: "restricted employee permission acceptance",
-      text_sha256: sha256Digest("restricted employee permission acceptance"),
-      policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
-      policy_contract_sha256:
-        cleanReadableSearchRuntimeContractV1()
-          .restricted_reviewer_policy_contract_sha256,
-      authorization_audit_event_id: memberFact.audit_event_id,
-      authorization_audit_sequence: memberFact.audit_sequence,
-      authorization_audit_entry_sha256: memberFact.audit_entry_sha256,
-      provider_action_sha256: memberFact.provider_action_sha256,
-      authorization_proof_sha256: memberFact.authorization_proof_sha256,
-      reviewer_principal_id: input.initialized.owner_principal_id,
-      reviewer_membership_id: input.initialized.owner_membership_id,
-    },
-  };
 }
 
-function ownerAuthorization(input: {
-  readonly organization_id: string;
+function readerAuthorization(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
   readonly principal_id: string;
   readonly membership_id: string;
-}) {
-  const digest = (value: string): Sha256Digest => canonicalSha256({ value });
+  readonly membership_type: "owner" | "employee";
+}): PersonAccessAuthorization {
   return {
-    organization_id: input.organization_id,
+    organization_id: input.fixture.initialized.organization_id,
     principal_id: input.principal_id,
     membership_id: input.membership_id,
-    membership_type: "owner" as const,
-    identity_binding_id: "identity_live_test",
-    session_family_id: "session_live_test",
-    access_credential_sha256: digest("access"),
+    membership_type: input.membership_type,
+    identity_binding_id: `identity-${input.principal_id}`,
+    session_family_id: `session-${input.membership_id}`,
+    access_credential_sha256: canonicalSha256({
+      kind: "test-access",
+      membership_id: input.membership_id,
+    }),
     access_expires_at: "2026-08-22T13:00:00.000Z",
     hard_reauthentication_at: "2026-08-22T14:00:00.000Z",
-    person_state_sha256: digest("person"),
-    session_state_sha256: digest("session"),
+    person_state_sha256: canonicalSha256({
+      kind: "test-person",
+      membership_id: input.membership_id,
+    }),
+    session_state_sha256: canonicalSha256({
+      kind: "test-session",
+      membership_id: input.membership_id,
+    }),
     checked_at: NOW,
   };
+}
+
+/**
+ * Exercise the composed Person retrieval route against the generation the
+ * live runtime actually published. The tokens are only a test seam: the
+ * reader tuples are still derived by the route's sessions port, never passed
+ * into the retrieval API itself.
+ */
+function createOwnerAndMemberSearchRoute(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly authority: ReturnType<typeof openAuthorityDatabase>;
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+}) {
+  const owner = readerAuthorization({
+    fixture: input.fixture,
+    principal_id: input.fixture.initialized.owner_principal_id,
+    membership_id: input.fixture.initialized.owner_membership_id,
+    membership_type: "owner",
+  });
+  const member = readerAuthorization({
+    fixture: input.fixture,
+    principal_id: "principal_active_member",
+    membership_id: "membership_active_member",
+    membership_type: "employee",
+  });
+  const byToken = new Map([
+    ["owner", owner],
+    ["member", member],
+  ]);
+  const route = createCleanPersonRecordSearchRouteV1({
+    state_directory: input.fixture.initialized.state_directory,
+    authority_id: input.fixture.initialized.authority_id,
+    organization_id: input.fixture.initialized.organization_id,
+    state_lineage_id: input.fixture.initialized.state_lineage_id,
+    retrieval_contract_sha256:
+      cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
+    sessions: {
+      authenticateAccess: ({ access_token }) => {
+        const authorization = byToken.get(access_token);
+        if (authorization === undefined) throw new Error("unknown test bearer");
+        // The compact audit intentionally deduplicates identical observations.
+        // A real session verifier supplies a fresh check time for each request.
+        testAuthorizationCheck += 1;
+        return {
+          ...authorization,
+          checked_at: `2026-08-22T12:00:00.${String(testAuthorizationCheck).padStart(3, "0")}Z`,
+        };
+      },
+    },
+    authority: input.authority,
+    record: input.record,
+    audit: new SqliteCleanPersonRecordReadAuditV1(input.authority),
+  });
+  return route;
+}
+
+function answerModel(): Layer4StructuredOutputPort {
+  return {
+    async generate(input) {
+      const properties = input.schema.properties as
+        | Record<string, unknown>
+        | undefined;
+      if (properties !== undefined && Object.hasOwn(properties, "queries")) {
+        return { queries: [] };
+      }
+      return {
+        status: "answered",
+        answer: "Ship the clean live migration.",
+        citations: ["a1"],
+      };
+    },
+  };
+}
+
+function createAnswerRoute(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly authority: ReturnType<typeof openAuthorityDatabase>;
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+}) {
+  return createCleanPersonAnswerRouteV1({
+    authority_id: input.fixture.initialized.authority_id,
+    organization_id: input.fixture.initialized.organization_id,
+    state_lineage_id: input.fixture.initialized.state_lineage_id,
+    search: createOwnerAndMemberSearchRoute(input),
+    model: answerModel(),
+    audit: new SqliteCleanPersonAnswerCompositionAuditV1(input.authority),
+  });
+}
+
+async function answerAsOwnerAndMember(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly authority: ReturnType<typeof openAuthorityDatabase>;
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+}) {
+  const answers = createAnswerRoute(input);
+  return {
+    owner: await answers.ask({
+      access_token: "owner",
+      question: "What decision was made about the migration?",
+    }),
+    member: await answers.ask({
+      access_token: "member",
+      question: "What decision was made about the migration?",
+    }),
+  };
+}
+
+async function answerAsOwner(input: {
+  readonly fixture: Awaited<ReturnType<typeof activeFixture>>;
+  readonly authority: ReturnType<typeof openAuthorityDatabase>;
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+}) {
+  const answers = createAnswerRoute(input);
+  return answers.ask({
+    access_token: "owner",
+    question: "What decision was made about the migration?",
+  });
 }
 
 afterEach(() => {
@@ -1056,14 +899,14 @@ afterEach(() => {
     rmSync(value, { recursive: true, force: true });
 });
 
-describe("open clean live runtime", () => {
-  it("starts the same Person server before finalize without contacting OIDC, Granola, OpenRouter, or Slack", async () => {
+describe("open clean live runtime private approval lane", () => {
+  it("starts the Person server before finalize without reading provider credentials", async () => {
     const parent = root();
     const initialized = initializeCleanResetState({
       state_directory: join(parent, "state"),
       organization_display_name: "Founder Organization",
       owner_display_name: "Founder",
-      created_at: "2026-08-22T12:00:00.000Z",
+      created_at: NOW,
       creating_artifact_revision: "open-clean-live-runtime-test",
     });
     const credentials = initializeCleanPersonCredentials({
@@ -1074,48 +917,95 @@ describe("open clean live runtime", () => {
       host: "127.0.0.1",
       port: await availablePort(),
       authority_url: "https://authority.example",
-      // A real discovery request to this deliberately invalid issuer would
-      // fail. Successful startup proves construction is provider-free.
-      oidc: {
-        issuer: "https://issuer.invalid",
-        client_id: "founder-client",
-        redirect_uri: "https://authority.example/v2/session/oidc/callback",
-        tenant: { kind: "issuer" },
-        id_token_algorithms: ["RS256"],
-      },
+      oidc: { ...OIDC, issuer: "https://issuer.invalid" },
       client_authentication: { method: "none" },
       pkce_key_file: credentials.pkce_sealing_key_reference.slice(
         "file:".length,
       ),
+      slack_signing_secret_file: join(parent, "not-read-slack-signing-secret"),
+      slack_connection_id: "con_not_read",
       slack_approval_channel_id: "C0123456789",
-      // Admission is intentionally absent, so these private paths must not be
-      // touched until stopped-state finalize admits the source.
       granola_credential_file: join(parent, "not-read-granola"),
       granola_owner_email_file: join(parent, "not-read-owner"),
       llm_credential_file: join(parent, "not-read-llm"),
     });
     try {
       expect(runtime.processing).toBe("idle_until_finalize");
-      const descriptor = await fetch(
-        `http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`,
-      );
-      expect(descriptor.status).toBe(200);
+      expect(
+        (
+          await fetch(
+            `http://127.0.0.1:${String(runtime.address.port)}/v1/authority-descriptor`,
+          )
+        ).status,
+      ).toBe(200);
     } finally {
       await runtime.close();
     }
   });
 
-  it("carries one synthetic Granola decision through Slack approval, D2 finalization, V4, exact-head Layer 2, and an authenticated read", async () => {
-    const fixture = await activeFixture("approve");
-    const authority = openAuthorityDatabase(
-      join(fixture.initialized.state_directory, "authority.sqlite"),
+  it("stages a null-policy private card, then a signed Team approve binds policy, appends one V4 record, and is replay-safe", async () => {
+    const fixture = await activeFixture();
+    const control = openOrganizationControlDatabase(
+      join(fixture.initialized.state_directory, "integrations.sqlite"),
       { fileMustExist: true },
     );
     const record = openOrganizationRecordDatabase(
       join(fixture.initialized.state_directory, "record-log.sqlite"),
       { fileMustExist: true },
     );
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
     try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 || fixture.poster.published.length === 1,
+        "private approval card",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      const card = fixture.poster.published[0]!;
+      const parts = cardParts(card.card);
+      const policyElement = parts.policyElement as {
+        initial_option: { value: string };
+        options: readonly { value: string }[];
+      };
+      expect(policyElement.initial_option.value).toBe(
+        RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+      );
+      expect(policyElement.options.map((option) => option.value)).toEqual([
+        RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+      ]);
+      expect((parts.comment.element as { multiline: boolean }).multiline).toBe(
+        true,
+      );
+      const replayTimestamp = String(Math.floor(Date.now() / 1_000));
+      expect(
+        (
+          await clickCard({
+            fixture,
+            card,
+            action: "approve",
+            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+            comment: "Share with the team after review.",
+            request_timestamp: replayTimestamp,
+          })
+        ).status,
+      ).toBe(200);
+      // Same complete provider action is a receipt replay, never a second approval.
+      expect(
+        (
+          await clickCard({
+            fixture,
+            card,
+            action: "approve",
+            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+            comment: "Share with the team after review.",
+            request_timestamp: replayTimestamp,
+          })
+        ).status,
+      ).toBe(200);
       await waitFor(
         () =>
           fixture.errors.length > 0 ||
@@ -1124,832 +1014,245 @@ describe("open clean live runtime", () => {
               .prepare("SELECT count(*) AS count FROM organization_record_log")
               .get() as { count: number }
           ).count === 1,
-        "V4 append",
+        "Team V4 append",
       );
       if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-      expect(fixture.posted).toHaveLength(1);
-      expect(fixture.posted[0]).toContain("Ship the clean live migration.");
-      expect(fixture.reaction.calls()).toBe(1);
       expect(
-        authority
+        control
           .prepare(
-            `SELECT record_head_position
-               FROM authority_readable_search_active_generation
-              WHERE singleton = 1`,
+            "SELECT count(*) AS count FROM organization_private_approval_signed_action_receipts_v2",
           )
           .get(),
-      ).toEqual({ record_head_position: 1 });
-    } finally {
-      record.close();
-      authority.close();
-      await fixture.runtime.close();
-    }
-
-    // A normal restart first recovers append receipts and cannot append the
-    // finalized action a second time.
-    const restarted = await openCleanLiveRuntime(fixture.config, {
-      live_adapters: {
-        source: fixture.source,
-        processor: fakeProcessor(fixture.processorIdentity),
-        approval_card_poster: {
-          async post() {
-            throw new Error("restart must not post a duplicate approval card");
-          },
-          async reconcile() {
-            return { kind: "uncertain" };
-          },
-          async tombstone() {
-            return { kind: "done" };
-          },
-          async publish() {
-            throw new Error("restart must not republish an approval card");
-          },
-        },
-        approval_observer: fixture.reaction,
-      },
-    });
-    try {
-      await waitFor(() => fixture.source.pulls() >= 2, "restart source poll");
-    } finally {
-      await restarted.close();
-    }
-
-    const rereadAuthority = openAuthorityDatabase(
-      join(fixture.initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    const rereadRecord = openOrganizationRecordDatabase(
-      join(fixture.initialized.state_directory, "record-log.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
+      ).toEqual({ count: 1 });
       expect(
-        rereadRecord
-          .prepare("SELECT count(*) AS count FROM organization_record_log")
+        control
+          .prepare(
+            "SELECT count(*) AS count FROM organization_private_approval_terminal_evidence_v2",
+          )
           .get(),
       ).toEqual({ count: 1 });
-      const authorization = ownerAuthorization({
-        organization_id: fixture.initialized.organization_id,
-        principal_id: fixture.initialized.owner_principal_id,
-        membership_id: fixture.initialized.owner_membership_id,
-      });
-      const sessions = { authenticateAccess: () => authorization };
-      const list = createCleanPersonRecordReadRouteV1({
-        authority_id: fixture.initialized.authority_id,
-        organization_id: fixture.initialized.organization_id,
-        state_lineage_id: fixture.initialized.state_lineage_id,
-        sessions,
-        records: new CleanPersonRecordReaderV1(rereadRecord),
-        audit: new SqliteCleanPersonRecordReadAuditV1(rereadAuthority),
-      });
-      expect(
-        list.list({ access_token: "synthetic-founder-token" }).records,
-      ).toHaveLength(1);
-
-      const persistedPointer = rereadAuthority
-        .prepare(
-          `SELECT generation_id, manifest_sha256, retrieval_contract_sha256,
-                  record_head_position, record_head_hash
-             FROM authority_readable_search_active_generation
-            WHERE singleton = 1`,
-        )
-        .get() as {
-        generation_id: Sha256Digest;
-        manifest_sha256: Sha256Digest;
-        retrieval_contract_sha256: Sha256Digest;
-        record_head_position: number;
-        record_head_hash: Sha256Digest;
+      const resolution = JSON.parse(
+        (
+          control
+            .prepare(
+              "SELECT resolution_json FROM organization_private_approval_terminal_evidence_v2 WHERE approval_id = ?",
+            )
+            .get(card.approval_id) as { resolution_json: string }
+        ).resolution_json,
+      ) as {
+        readonly comment: string | null;
+        readonly canonical_record_policy: { readonly policy_id: string } | null;
       };
-      warmCleanReadableSearchActiveGenerationV1({
-        state_directory: fixture.initialized.state_directory,
-        active_generation: {
-          generation_id: persistedPointer.generation_id,
-          manifest_sha256: persistedPointer.manifest_sha256,
-          retrieval_contract_sha256:
-            persistedPointer.retrieval_contract_sha256,
-          exact_head: {
-            authority_id: fixture.initialized.authority_id,
-            organization_id: fixture.initialized.organization_id,
-            state_lineage_id: fixture.initialized.state_lineage_id,
-            position: persistedPointer.record_head_position,
-            record_sha256: persistedPointer.record_head_hash,
-          },
+      expect(resolution).toMatchObject({
+        comment: "Share with the team after review.",
+        canonical_record_policy: {
+          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
         },
       });
-
-      const search = createCleanPersonRecordSearchRouteV1({
-        state_directory: fixture.initialized.state_directory,
-        authority_id: fixture.initialized.authority_id,
-        organization_id: fixture.initialized.organization_id,
-        state_lineage_id: fixture.initialized.state_lineage_id,
-        retrieval_contract_sha256:
-          cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
-        sessions,
-        authority: rereadAuthority,
-        record: rereadRecord,
-        audit: new SqliteCleanPersonRecordReadAuditV1(rereadAuthority),
-      });
-      const result = search.search({
-        access_token: "synthetic-founder-token",
-        query: "ship live migration",
-      });
-      expect(result.record_head.position).toBe(1);
-      expect(result.items).toHaveLength(1);
-      expect(result.items[0]).toMatchObject({
-        text: "Ship the clean live migration.",
-        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-      });
-    } finally {
-      rereadRecord.close();
-      rereadAuthority.close();
-    }
-  });
-
-  it("keeps intake moving while an earlier Slack post is reconciled without reposting", async () => {
-    const operations: string[] = [];
-    const postCalls: string[] = [];
-    let ambiguousApprovalId: string | undefined;
-    let reconciliationAttempts = 0;
-    const poster: CleanSlackApprovalCardPosterV1 = {
-      async post(input) {
-        postCalls.push(input.approval_id);
-        if (ambiguousApprovalId === undefined) {
-          ambiguousApprovalId = input.approval_id;
-          operations.push("post-ambiguous");
-          return { kind: "uncertain" };
-        }
-        operations.push("post-unrelated");
-        return {
-          kind: "posted",
-          provider_message_ts: "1724112000.000002",
-        };
-      },
-      async reconcile(input) {
-        expect(input.approval_id).toBe(ambiguousApprovalId);
-        reconciliationAttempts += 1;
-        operations.push(
-          reconciliationAttempts === 1
-            ? "reconcile-absent"
-            : "reconcile-found",
-        );
-        return reconciliationAttempts === 1
-          ? { kind: "uncertain" }
-          : {
-              kind: "posted",
-              provider_message_ts: "1724112000.000001",
-            };
-      },
-      async tombstone() {
-        return { kind: "done" };
-      },
-      async publish() {
-        return { kind: "done" };
-      },
-    };
-    const fixture = await activeFixture(
-      "approve",
-      undefined,
-      [
-        {
-          title: "Ambiguous delivery",
-          external_id: "ambiguous-delivery",
-          text: "Preserve this first decision.",
-        },
-        {
-          title: "Unrelated delivery",
-          external_id: "unrelated-delivery",
-          text: "Continue with this unrelated decision.",
-        },
-      ],
-      undefined,
-      poster,
-    );
-    const authority = openAuthorityDatabase(
-      join(fixture.initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    const record = openOrganizationRecordDatabase(
-      join(fixture.initialized.state_directory, "record-log.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
-      await waitFor(
-        () =>
-          fixture.errors.length > 0 ||
-          (
-            record
-              .prepare("SELECT count(*) AS count FROM organization_record_log")
-              .get() as { count: number }
-          ).count === 2,
-        "both decoupled approval deliveries",
-      );
-      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-
-      expect(postCalls).toHaveLength(2);
-      expect(new Set(postCalls).size).toBe(2);
-      expect(reconciliationAttempts).toBeGreaterThanOrEqual(2);
-      expect(operations.slice(0, 4)).toEqual([
-        "post-ambiguous",
-        "reconcile-absent",
-        "post-unrelated",
-        "reconcile-found",
-      ]);
-      expect(
-        authority
-          .prepare(
-            `SELECT state, provider_message_ts
-               FROM authority_clean_live_approval_outbox_v1
-              ORDER BY provider_message_ts`,
-          )
-          .all(),
-      ).toEqual([
-        { state: "staged", provider_message_ts: "1724112000.000001" },
-        { state: "staged", provider_message_ts: "1724112000.000002" },
-      ]);
-    } finally {
-      record.close();
-      authority.close();
-      await fixture.runtime.close();
-    }
-  });
-
-  it("keeps one approval card while preserving a folder-only provider revision", async () => {
-    const fixture = await activeFixture("approve", undefined, [
-      {
-        title: "Folder move review",
-        external_id: "folder-move-note",
-        text: "Keep this review singular.",
-      },
-      {
-        title: "Folder move review",
-        external_id: "folder-move-note",
-        text: "Keep this review singular.",
-        folder_membership: [{ name: "notes" }],
-      },
-    ]);
-    const authority = openAuthorityDatabase(
-      join(fixture.initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    const record = openOrganizationRecordDatabase(
-      join(fixture.initialized.state_directory, "record-log.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
-      await waitFor(
-        () =>
-          fixture.errors.length > 0 ||
-          (
-            authority
-              .prepare(
-                "SELECT count(*) AS count FROM authority_clean_live_candidates_v1",
-              )
-              .get() as { count: number }
-          ).count === 2,
-        "both folder-only source revisions",
-      );
-      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-      expect(
-        authority
-          .prepare(
-            `SELECT disposition, count(*) AS count
-               FROM authority_clean_live_candidates_v1
-              GROUP BY disposition
-              ORDER BY disposition`,
-          )
-          .all(),
-      ).toEqual([
-        { disposition: "actionable", count: 1 },
-        { disposition: "coalesced", count: 1 },
-      ]);
-      expect(
-        authority
-          .prepare(
-            "SELECT count(*) AS count FROM authority_clean_live_approval_outbox_v1",
-          )
-          .get(),
-      ).toEqual({ count: 1 });
-      expect(
-        record
-          .prepare("SELECT count(*) AS count FROM organization_record_log")
-          .get(),
-      ).toEqual({ count: 1 });
-      expect(fixture.posted).toHaveLength(1);
-      expect(fixture.tombstoned).toEqual([]);
-      expect(fixture.reaction.calls()).toBe(1);
-    } finally {
-      record.close();
-      authority.close();
-      await fixture.runtime.close();
-    }
-  });
-
-  it("gives an employee only member-readable Layer 1 and Layer 2 content, then revocation fences both paths", async () => {
-    const provider = new OwnerAndEmployeeOidcProvider();
-    const fixture = await activeFixture("approve", provider);
-    const authority = openAuthorityDatabase(
-      join(fixture.initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    const record = openOrganizationRecordDatabase(
-      join(fixture.initialized.state_directory, "record-log.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
-      await waitFor(
-        () =>
-          fixture.errors.length > 0 ||
-          (
-            record
-              .prepare("SELECT count(*) AS count FROM organization_record_log")
-              .get() as { count: number }
-          ).count === 1,
-        "member-readable V4 append",
-      );
-      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-
-      const member = record
-        .prepare(
-          `SELECT log.record_sha256, log.envelope_sha256, fact.atom_id, fact.atom_order,
-                fact.signal_id_sha256, fact.item_kind, fact.audit_event_id, fact.audit_sequence,
-                fact.audit_entry_sha256, fact.provider_action_sha256, fact.authorization_proof_sha256
-           FROM organization_record_log AS log
-           JOIN organization_record_member_readable_person_fact AS fact
-             ON fact.record_position = log.position AND fact.record_sha256 = log.record_sha256
-          WHERE log.position = 1`,
-        )
-        .get() as {
-        readonly record_sha256: Sha256Digest;
-        readonly envelope_sha256: Sha256Digest;
-        readonly atom_id: Sha256Digest;
-        readonly atom_order: number;
-        readonly signal_id_sha256: Sha256Digest;
-        readonly item_kind: "decision" | "action" | "rationale";
-        readonly audit_event_id: string;
-        readonly audit_sequence: number;
-        readonly audit_entry_sha256: Sha256Digest;
-        readonly provider_action_sha256: Sha256Digest;
-        readonly authorization_proof_sha256: Sha256Digest;
-      };
-      const restricted = syntheticRestrictedRecord({
-        record,
-        initialized: fixture.initialized,
-      });
-      const contract = cleanReadableSearchRuntimeContractV1();
-      const built = buildCleanReadableSearchGenerationV1(
-        readableSearchBuildInput({
-          state_directory: fixture.initialized.state_directory,
-          authority_id: fixture.initialized.authority_id,
-          organization_id: fixture.initialized.organization_id,
-          state_lineage_id: fixture.initialized.state_lineage_id,
-          exact_head: { position: 2, record_sha256: restricted.record_sha256 },
-          atoms: [
-            {
-              authority_id: fixture.initialized.authority_id,
-              organization_id: fixture.initialized.organization_id,
-              state_lineage_id: fixture.initialized.state_lineage_id,
-              record_position: 1,
-              record_sha256: member.record_sha256,
-              envelope_sha256: member.envelope_sha256,
-              approval_id: "apr_live_test",
-              atom_id: member.atom_id,
-              atom_order: member.atom_order,
-              signal_id_sha256: member.signal_id_sha256,
-              item_kind: member.item_kind,
-              text: "Ship the clean live migration.",
-              text_sha256: sha256Digest("Ship the clean live migration."),
-              policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-              policy_contract_sha256:
-                contract.organization_member_policy_contract_sha256,
-              authorization_audit_event_id: member.audit_event_id,
-              authorization_audit_sequence: member.audit_sequence,
-              authorization_audit_entry_sha256: member.audit_entry_sha256,
-              provider_action_sha256: member.provider_action_sha256,
-              authorization_proof_sha256: member.authorization_proof_sha256,
-              reviewer_principal_id: null,
-              reviewer_membership_id: null,
-            },
-            restricted.atom,
-          ],
-        }),
-      );
-      authority
-        .prepare(
-          `UPDATE authority_readable_search_active_generation
-            SET generation_id = ?, manifest_sha256 = ?, retrieval_contract_sha256 = ?,
-                record_head_position = 2, record_head_hash = ?, published_at = ?
-          WHERE singleton = 1`,
-        )
-        .run(
-          built.manifest.generation_id,
-          built.manifest_sha256,
-          contract.retrieval_contract_sha256,
-          restricted.record_sha256,
-          NOW,
-        );
-      warmCleanReadableSearchActiveGenerationV1({
-        state_directory: fixture.initialized.state_directory,
-        active_generation: {
-          generation_id: built.manifest.generation_id,
-          manifest_sha256: built.manifest_sha256,
-          retrieval_contract_sha256: contract.retrieval_contract_sha256,
-          exact_head: built.manifest.exact_head,
-        },
-      });
-
-      const origin = `http://127.0.0.1:${String(fixture.runtime.address.port)}`;
-      const owner = await browserLogin(origin, {
-        kind: "existing_identity_login",
-      });
-      const ownerAccess = owner.access_token as string;
-      const invitation = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${ownerAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          name: "Employee",
-          email: "employee@example.com",
-        }),
-      });
-      expect(invitation.status).toBe(201);
-      const invitationBody = await responseJson(invitation);
-      provider.email = "employee@example.com";
-      const employee = await browserLogin(origin, {
-        kind: "identity_bootstrap",
-        login_grant: invitationBody.login_grant,
-      });
-      const employeeAccess = employee.access_token as string;
-
-      const employeeList = await fetch(`${origin}/v1/person/records`, {
-        headers: { authorization: `Bearer ${employeeAccess}` },
-      });
-      expect(employeeList.status).toBe(200);
-      const employeeListBody = await responseJson(employeeList);
-      expect(employeeListBody.records).toEqual([
-        expect.objectContaining({ record_sha256: member.record_sha256 }),
-      ]);
-      const employeeSearch = await fetch(`${origin}/v1/person/records`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${employeeAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ query: "migration restricted" }),
-      });
-      expect(employeeSearch.status).toBe(200);
-      const employeeSearchBody = await responseJson(employeeSearch);
-      expect(employeeSearchBody).toMatchObject({
-        generation_id: built.manifest.generation_id,
-        record_head: { position: 2, record_sha256: restricted.record_sha256 },
-      });
-      expect(employeeSearchBody.items).toEqual([
-        expect.objectContaining({
-          atom_id: member.atom_id,
-          record_sha256: member.record_sha256,
-          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-        }),
-      ]);
-
-      provider.email = "founder@example.com";
-      const ownerList = await fetch(`${origin}/v1/person/records`, {
-        headers: { authorization: `Bearer ${ownerAccess}` },
-      });
-      expect(ownerList.status).toBe(200);
-      expect((await responseJson(ownerList)).records).toHaveLength(2);
-      const ownerSearch = await fetch(`${origin}/v1/person/records`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${ownerAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ query: "migration restricted" }),
-      });
-      expect(ownerSearch.status).toBe(200);
-      expect((await responseJson(ownerSearch)).items).toHaveLength(2);
-
-      const revoked = await fetch(`${origin}/v1/person/employees`, {
-        method: "DELETE",
-        headers: {
-          authorization: `Bearer ${ownerAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ email: "employee@example.com" }),
-      });
-      expect(revoked.status).toBe(204);
-      const employeeListAfterRevoke = await fetch(
-        `${origin}/v1/person/records`,
-        {
-          headers: { authorization: `Bearer ${employeeAccess}` },
-        },
-      );
-      expect(employeeListAfterRevoke.status).toBe(401);
-      const employeeSearchAfterRevoke = await fetch(
-        `${origin}/v1/person/records`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${employeeAccess}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ query: "migration" }),
-        },
-      );
-      expect(employeeSearchAfterRevoke.status).toBe(401);
-      const ownerContinues = await fetch(`${origin}/v1/person/records`, {
-        headers: { authorization: `Bearer ${ownerAccess}` },
-      });
-      expect(ownerContinues.status).toBe(200);
-      const ownerSearchContinues = await fetch(`${origin}/v1/person/records`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${ownerAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ query: "migration restricted" }),
-      });
-      expect(ownerSearchContinues.status).toBe(200);
-      expect((await responseJson(ownerSearchContinues)).items).toHaveLength(2);
-    } finally {
-      record.close();
-      authority.close();
-      await fixture.runtime.close();
-    }
-  });
-
-  it("processes an echo-restricted Granola folder record through approval while an active employee receives only member-readable content", async () => {
-    const provider = new OwnerAndEmployeeOidcProvider();
-    const observedAnswerContexts: string[][] = [];
-    const answerModel: Layer4StructuredOutputPort = {
-      async generate(input: Layer4StructuredGenerationInput): Promise<unknown> {
-        const schema = input.schema as {
-          readonly required?: readonly string[];
-        };
-        if (schema.required?.includes("queries") === true) {
-          return {
-            queries: ["MemberVisibleC186576 RestrictedOnlyC186576"],
-          };
-        }
-        const prompt = JSON.parse(input.user_prompt) as {
-          readonly sources: readonly {
-            readonly citation_id: string;
-            readonly text: string;
-          }[];
-        };
-        observedAnswerContexts.push(
-          prompt.sources.map((source) => source.text),
-        );
-        return {
-          status: "answered",
-          answer: prompt.sources.map((source) => source.text).join(" "),
-          citations: prompt.sources.map((source) => source.citation_id),
-        };
-      },
-    };
-    const fixture = await activeFixture("approve", provider, [
-      {
-        title: "Member record",
-        external_id: "member-visible",
-        text: "MemberVisibleC186576",
-      },
-      {
-        title: "Founder review",
-        external_id: "restricted-only",
-        text: "RestrictedOnlyC186576",
-        folder_membership: [{ name: "echo-restricted" }],
-      },
-    ], answerModel);
-    const authority = openAuthorityDatabase(
-      join(fixture.initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    const record = openOrganizationRecordDatabase(
-      join(fixture.initialized.state_directory, "record-log.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
-      await waitFor(
-        () =>
-          fixture.errors.length > 0 ||
-          (
-            record
-              .prepare("SELECT count(*) AS count FROM organization_record_log")
-              .get() as { count: number }
-          ).count === 2,
-        "both live Granola approvals appended",
-      );
-      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-      expect(fixture.posted).toHaveLength(2);
-      expect(fixture.posted[0]).toContain(
-        ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
-      );
-      expect(fixture.posted[1]).toContain(
-        RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
-      );
       expect(
         record
           .prepare(
-            `SELECT policy_id
-               FROM (
-                 SELECT record_position, policy_id
-                   FROM organization_record_member_readable_person_fact
-                 UNION ALL
-                 SELECT record_position, policy_id
-                   FROM organization_record_restricted_reviewer_person_fact
-               )
-              ORDER BY record_position`,
+            "SELECT policy_id FROM organization_record_member_readable_person_fact",
           )
           .all(),
-      ).toEqual([
-        { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
-        { policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID },
-      ]);
+      ).toEqual([{ policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID }]);
       await waitFor(
         () =>
           (
             authority
               .prepare(
-                `SELECT record_head_position
-                   FROM authority_readable_search_active_generation
-                  WHERE singleton = 1`,
+                "SELECT record_head_position FROM authority_readable_search_active_generation WHERE singleton = 1",
               )
-              .get() as { record_head_position: number }
-          ).record_head_position === 2,
-        "exact-head search generation",
+              .get() as { record_head_position: number } | undefined
+          )?.record_head_position === 1,
+        "Team readable-search generation",
       );
-
-      const origin = `http://127.0.0.1:${String(fixture.runtime.address.port)}`;
-      const owner = await browserLogin(origin, { kind: "existing_identity_login" });
-      const ownerAccess = owner.access_token as string;
-      const invitation = await fetch(`${origin}/v1/person/employees`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${ownerAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          name: "Employee",
-          email: "employee@example.com",
-        }),
-      });
-      expect(invitation.status).toBe(201);
-      provider.email = "employee@example.com";
-      const employee = await browserLogin(origin, {
-        kind: "identity_bootstrap",
-        login_grant: (await responseJson(invitation)).login_grant,
-      });
-      const employeeAccess = employee.access_token as string;
-
-      const employeeList = await fetch(`${origin}/v1/person/records`, {
-        headers: { authorization: `Bearer ${employeeAccess}` },
-      });
-      expect(employeeList.status).toBe(200);
-      expect((await responseJson(employeeList)).records).toHaveLength(1);
-      const employeeMemberSearch = await fetch(`${origin}/v1/person/records`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${employeeAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ query: "MemberVisibleC186576" }),
-      });
-      expect(employeeMemberSearch.status).toBe(200);
-      expect((await responseJson(employeeMemberSearch)).items).toHaveLength(1);
-      const employeeRestrictedSearch = await fetch(
-        `${origin}/v1/person/records`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${employeeAccess}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ query: "RestrictedOnlyC186576" }),
-        },
-      );
-      expect(employeeRestrictedSearch.status).toBe(200);
-      expect((await responseJson(employeeRestrictedSearch)).items).toEqual([]);
-
-      const employeeAnswer = await fetch(`${origin}/v1/person/ask`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${employeeAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ question: "What was decided in these notes?" }),
-      });
-      expect(employeeAnswer.status).toBe(200);
-      expect(await responseJson(employeeAnswer)).toMatchObject({
-        answer: expect.stringContaining("MemberVisibleC186576"),
-        citations: [
-          expect.objectContaining({
-            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-          }),
-        ],
-      });
-      expect(observedAnswerContexts[0]).toEqual([
-        expect.stringContaining("MemberVisibleC186576"),
-      ]);
-
-      provider.email = "founder@example.com";
-      const ownerList = await fetch(`${origin}/v1/person/records`, {
-        headers: { authorization: `Bearer ${ownerAccess}` },
-      });
-      expect(ownerList.status).toBe(200);
-      expect((await responseJson(ownerList)).records).toHaveLength(2);
-      const ownerRestrictedSearch = await fetch(`${origin}/v1/person/records`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${ownerAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ query: "RestrictedOnlyC186576" }),
-      });
-      expect(ownerRestrictedSearch.status).toBe(200);
-      expect((await responseJson(ownerRestrictedSearch)).items).toHaveLength(1);
-      const ownerAnswer = await fetch(`${origin}/v1/person/ask`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${ownerAccess}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ question: "What was decided in these notes?" }),
-      });
-      expect(ownerAnswer.status).toBe(200);
-      expect((await responseJson(ownerAnswer)).citations).toHaveLength(2);
-      expect(observedAnswerContexts[1]).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining("MemberVisibleC186576"),
-          expect.stringContaining("RestrictedOnlyC186576"),
-        ]),
-      );
-    } finally {
-      record.close();
-      authority.close();
-      await fixture.runtime.close();
-    }
-  });
-
-  it("records a synthetic Slack rejection without a readable V4 record or Layer 2 result", async () => {
-    const fixture = await activeFixture("reject");
-    const authority = openAuthorityDatabase(
-      join(fixture.initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    const record = openOrganizationRecordDatabase(
-      join(fixture.initialized.state_directory, "record-log.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
-      await waitFor(
-        () => fixture.reaction.calls() === 1,
-        "D2 rejection finalization",
-      );
-      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-      // A rejection is durably recorded for replay/audit, but it is not a
-      // readable content record and therefore never becomes a Layer 2 atom.
-      expect(
-        record
-          .prepare("SELECT count(*) AS count FROM organization_record_log")
-          .get(),
-      ).toEqual({ count: 1 });
-      const authorization = ownerAuthorization({
-        organization_id: fixture.initialized.organization_id,
-        principal_id: fixture.initialized.owner_principal_id,
-        membership_id: fixture.initialized.owner_membership_id,
-      });
-      const list = createCleanPersonRecordReadRouteV1({
-        authority_id: fixture.initialized.authority_id,
-        organization_id: fixture.initialized.organization_id,
-        state_lineage_id: fixture.initialized.state_lineage_id,
-        sessions: { authenticateAccess: () => authorization },
-        records: new CleanPersonRecordReaderV1(record),
-        audit: new SqliteCleanPersonRecordReadAuditV1(authority),
-      });
-      expect(
-        list.list({ access_token: "synthetic-founder-token" }).records,
-      ).toEqual([]);
-      const search = createCleanPersonRecordSearchRouteV1({
-        state_directory: fixture.initialized.state_directory,
-        authority_id: fixture.initialized.authority_id,
-        organization_id: fixture.initialized.organization_id,
-        state_lineage_id: fixture.initialized.state_lineage_id,
-        retrieval_contract_sha256:
-          cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
-        sessions: { authenticateAccess: () => authorization },
+      const teamAnswers = await answerAsOwnerAndMember({
+        fixture,
         authority,
         record,
-        audit: new SqliteCleanPersonRecordReadAuditV1(authority),
       });
-      expect(
-        search.search({
-          access_token: "synthetic-founder-token",
-          query: "ship live migration",
-        }).items,
-      ).toEqual([]);
+      expect(teamAnswers.owner).toMatchObject({
+        answer: "Ship the clean live migration.",
+        citations: [
+          { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
+        ],
+      });
+      expect(teamAnswers.member).toMatchObject({
+        answer: "Ship the clean live migration.",
+        citations: [
+          { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
+        ],
+      });
+      await waitFor(
+        () => fixture.poster.terminal.length === 1,
+        "approved terminal card",
+      );
+      expect(fixture.poster.terminal[0]).toMatchObject({
+        approval_id: card.approval_id,
+        outcome: "approved",
+        policy_label: "Team",
+        dm_channel_id: SLACK_DM_CHANNEL,
+      });
     } finally {
       record.close();
       authority.close();
+      control.close();
+      await fixture.runtime.close();
+    }
+  });
+
+  it("uses Only me when approved and recovers a restart without reposting the private card", async () => {
+    const fixture = await activeFixture();
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 || fixture.poster.published.length === 1,
+        "private approval card",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      const card = fixture.poster.published[0]!;
+      expect(
+        (
+          await clickCard({
+            fixture,
+            card,
+            action: "approve",
+            policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+          })
+        ).status,
+      ).toBe(200);
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 ||
+          (
+            record
+              .prepare("SELECT count(*) AS count FROM organization_record_log")
+              .get() as { count: number }
+          ).count === 1,
+        "Only me V4 append",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(
+        record
+          .prepare(
+            "SELECT policy_id FROM organization_record_restricted_reviewer_person_fact",
+          )
+          .all(),
+      ).toEqual([{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }]);
+      await waitFor(
+        () =>
+          (
+            authority
+              .prepare(
+                "SELECT record_head_position FROM authority_readable_search_active_generation WHERE singleton = 1",
+              )
+              .get() as { record_head_position: number } | undefined
+          )?.record_head_position === 1,
+        "Only-me readable-search generation",
+      );
+      const onlyMeAnswers = await answerAsOwnerAndMember({
+        fixture,
+        authority,
+        record,
+      });
+      expect(onlyMeAnswers.owner).toMatchObject({
+        answer: "Ship the clean live migration.",
+        citations: [{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }],
+      });
+      expect(onlyMeAnswers.member).toMatchObject({
+        answer: "Insufficient accessible evidence to answer this question.",
+        citations: [],
+      });
+      await fixture.runtime.close();
+      const restartedPoster = new FakePrivateApprovalPoster();
+      const restarted = await openCleanLiveRuntime(fixture.config, {
+        live_adapters: {
+          source: fixture.source,
+          processor: fakeProcessor(fixture.processorIdentity),
+          private_approval_card_poster: restartedPoster,
+        },
+      });
+      try {
+        await waitFor(() => fixture.source.pulls() >= 2, "restart source poll");
+        expect(restartedPoster.markers).toEqual([]);
+        expect(restartedPoster.published).toEqual([]);
+        // The restart must warm the already-published exact-head generation,
+        // not merely avoid reposting the Slack card.
+        const recoveredOnlyMeAnswer = await answerAsOwner({
+          fixture,
+          authority,
+          record,
+        });
+        expect(recoveredOnlyMeAnswer).toMatchObject({
+          answer: "Ship the clean live migration.",
+          citations: [{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }],
+        });
+      } finally {
+        await restarted.close();
+      }
+    } finally {
+      record.close();
+      authority.close();
+    }
+  });
+
+  it("accepts a signed Reject, leaves policy null, creates no V4 record, and renders a rejected private card", async () => {
+    const fixture = await activeFixture();
+    const control = openOrganizationControlDatabase(
+      join(fixture.initialized.state_directory, "integrations.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 || fixture.poster.published.length === 1,
+        "private approval card",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      const card = fixture.poster.published[0]!;
+      expect(
+        (
+          await clickCard({
+            fixture,
+            card,
+            action: "reject",
+            policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+            comment: "Needs a clearer decision.",
+          })
+        ).status,
+      ).toBe(200);
+      await waitFor(
+        () => fixture.errors.length > 0 || fixture.poster.terminal.length === 1,
+        "rejected terminal card",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(
+        record
+          .prepare("SELECT count(*) AS count FROM organization_record_log")
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(fixture.poster.terminal[0]).toMatchObject({
+        approval_id: card.approval_id,
+        outcome: "rejected",
+        policy_label: null,
+        dm_channel_id: SLACK_DM_CHANNEL,
+      });
+    } finally {
+      record.close();
+      control.close();
       await fixture.runtime.close();
     }
   });

@@ -9,9 +9,12 @@ Slack connection and approval-activation commands. The runtime keeps both the
 member-readable and restricted-reviewer policies and performs permission
 checks against current Authority membership.
 
-New state is initialized only from
-`baselines/organization-control-plane-baseline-v1.sql`. Historical migration
-runners and generic control-plane root APIs are not shipped.
+Private-approval fresh state is initialized from the composed V2 baseline:
+the retained `baselines/organization-control-plane-baseline-v1.sql` plus
+`baselines/organization-control-plane-private-approval-v2.sql`. It applies
+only to an empty database; existing V1 state is refused rather than migrated.
+Historical migration runners and generic control-plane root APIs are not
+shipped.
 
 See [the canonical architecture specification](../../docs/architecture/organization-control-plane.md)
 for the complete safety and deferred-scope contract.

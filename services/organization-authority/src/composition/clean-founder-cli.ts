@@ -24,7 +24,6 @@ import {
 } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import {
-  runCleanPersonSlackApprovalActivateCli,
   runCleanSlackConnectCli,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
 } from "@echo-brain/organization-control-plane/clean-founder-v1";
@@ -65,7 +64,10 @@ const USAGE = `usage:
   echo-organization-authority-clean-founder resume --state-dir <absolute-path> < slack-bot-token
   echo-organization-authority-clean-founder credentials-install --state-dir <absolute-path> --granola-credential-file <absolute-private-path> --granola-owner-email-file <absolute-private-path> --llm-credential-file <absolute-private-path>
   echo-organization-authority-clean-founder finalize --state-dir <absolute-path>
-  echo-organization-authority-clean-founder status --state-dir <absolute-path>`;
+  echo-organization-authority-clean-founder status --state-dir <absolute-path>
+
+The legacy --slack-approval-channel-id flag names the temporary public founder
+identity-link channel only. Private approval cards are never sent to it.`;
 
 interface CliIo {
   readonly stdout: (value: string) => void;
@@ -98,6 +100,11 @@ export interface CleanFounderOnboardingManifestV1 {
   readonly oidc_config_path: string;
   readonly pkce_key_file: string;
   readonly invitation_path: string;
+  /**
+   * Transitional field name. This public channel exists only for the current
+   * founder Person-to-Slack identity-link challenge. It is never an approval
+   * destination, approval binding, or approval-readiness gate.
+   */
   readonly slack_approval_channel_id: string;
   readonly slack_connection_id: string;
   readonly authority_id: string;
@@ -121,6 +128,7 @@ interface BootstrapInput {
   readonly owner_email: string;
   readonly authority_url: string;
   readonly oidc_config_path: string;
+  /** Transitional identity-link-only channel argument; see manifest field. */
   readonly slack_approval_channel_id: string;
   readonly artifact_revision: string;
 }
@@ -141,9 +149,10 @@ interface SafeSlackVerification {
   readonly app_id: string;
   readonly bot_id: string;
   readonly bot_user_id: string;
-  readonly approval_channel_id: string;
+  /** Temporary public channel used solely by the founder identity-link flow. */
+  readonly identity_link_channel_id: string;
   readonly required_scopes: readonly string[];
-  readonly approval_channel_access: "verified";
+  readonly identity_link_channel_access: "verified";
   readonly selected_channel_public: true;
   readonly selected_channel_active: true;
   readonly bot_membership_verified: true;
@@ -168,6 +177,7 @@ export interface CleanFounderCliDependencies {
   readonly initialize_credentials: (stateDirectory: string) => Promise<void>;
   readonly connect_slack: (input: {
     readonly state_directory: string;
+    /** Legacy adapter name for the temporary founder identity-link channel. */
     readonly approval_channel_id: string;
     readonly connection_id?: string;
     readonly read_stdin: () => Promise<string>;
@@ -180,11 +190,6 @@ export interface CleanFounderCliDependencies {
     readonly expected_email: string;
     readonly authority_url: string;
     readonly output_path: string;
-  }) => Promise<void>;
-  readonly activate_approval: (input: {
-    readonly state_directory: string;
-    readonly connection_id: string;
-    readonly approval_channel_id: string;
   }) => Promise<void>;
   readonly admit_source: (input: {
     readonly state_directory: string;
@@ -291,9 +296,9 @@ const DEFAULT_DEPENDENCIES: CleanFounderCliDependencies = {
         app_id: result.provider_app_id as string,
         bot_id: result.provider_bot_id as string,
         bot_user_id: result.provider_bot_user_id as string,
-        approval_channel_id: result.approval_channel_id as string,
+        identity_link_channel_id: result.approval_channel_id as string,
         required_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-        approval_channel_access: "verified" as const,
+        identity_link_channel_access: "verified" as const,
         selected_channel_public: true,
         selected_channel_active: true,
         bot_membership_verified: true,
@@ -323,21 +328,6 @@ const DEFAULT_DEPENDENCIES: CleanFounderCliDependencies = {
           input.output_path,
         ],
         { stdout, stderr: () => undefined },
-      ),
-    );
-  },
-  activate_approval: async (input) => {
-    await captureCommand((stdout) =>
-      runCleanPersonSlackApprovalActivateCli(
-        [
-          "--state-dir",
-          input.state_directory,
-          "--connection-id",
-          input.connection_id,
-          "--approval-channel-id",
-          input.approval_channel_id,
-        ],
-        { stdout },
       ),
     );
   },
@@ -946,7 +936,6 @@ interface FullFounderStatus {
   readonly founder_oidc_bound: boolean;
   readonly founder_slack_link_active: boolean;
   readonly granola_credentials_valid: boolean;
-  readonly slack_approval_binding_active: boolean;
   readonly granola_admission_present: boolean;
   readonly slack_verification?: SafeSlackVerification;
   readonly granola_admission_proof?: {
@@ -1023,10 +1012,7 @@ function nextFounderSetupStep(input: {
   if (!input.full.founder_oidc_bound) return "complete_founder_browser_login";
   if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
   if (!input.full.granola_credentials_valid) return "install_provider_credentials";
-  if (
-    !input.full.slack_approval_binding_active ||
-    !input.full.granola_admission_present
-  ) return "run_finalize";
+  if (!input.full.granola_admission_present) return "run_finalize";
   return "ready_to_start";
 }
 
@@ -1314,7 +1300,6 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
     founder_oidc_bound: false,
     founder_slack_link_active: false,
     granola_credentials_valid: false,
-    slack_approval_binding_active: false,
     granola_admission_present: false,
   };
   try {
@@ -1459,9 +1444,9 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
               app_id: slackProofRow.app_id,
               bot_id: slackProofRow.bot_id,
               bot_user_id: slackProofRow.bot_user_id,
-              approval_channel_id: manifest.slack_approval_channel_id,
+              identity_link_channel_id: manifest.slack_approval_channel_id,
               required_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-              approval_channel_access: "verified" as const,
+              identity_link_channel_access: "verified" as const,
               selected_channel_public: true as const,
               selected_channel_active: true as const,
               bot_membership_verified: true as const,
@@ -1469,21 +1454,10 @@ function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFoun
               verified_at: slackProofRow.verified_at,
             })
           : undefined;
-      const slackApprovalBindingActive = control.prepare(
-        `SELECT 1 FROM organization_approval_binding_current AS current_binding
-          JOIN organization_approval_binding_contracts AS binding
-            ON binding.approval_binding_id = current_binding.approval_binding_id
-           AND binding.contract_sha256 = current_binding.contract_sha256
-          WHERE current_binding.current_status = 'active'
-            AND binding.connection_id = ?
-            AND json_extract(binding.contract_json, '$.approval_channel_id') = ?
-          LIMIT 1`,
-      ).get(manifest.slack_connection_id, manifest.slack_approval_channel_id) !== undefined;
       return Object.freeze({
         founder_oidc_bound: founderOidcBound,
         founder_slack_link_active: founderSlackLinkActive,
         granola_credentials_valid: granolaCredentialsValid,
-        slack_approval_binding_active: slackApprovalBindingActive,
         granola_admission_present: granolaAdmissionProof !== undefined,
         ...(slackVerification === undefined ? {} : { slack_verification: slackVerification }),
         ...(granolaAdmissionProof === undefined
@@ -1727,10 +1701,10 @@ async function finalize(
   dependencies: CleanFounderCliDependencies,
 ): Promise<void> {
   const manifest = readCleanFounderOnboardingManifest(input.state_directory);
-  // This is a stopped-state activation gate, not merely a convenience
-  // command. Prove genesis before a dependency can activate anything.
+  // This is a stopped-state publication gate, not merely a convenience
+  // command. Prove genesis before a dependency can admit anything.
   verifySetupGenesis(manifest);
-  let full = readFullFounderStatus(manifest, dependencies);
+  const full = readFullFounderStatus(manifest, dependencies);
   const missing = [
     !full.founder_oidc_bound && "founder OIDC binding",
     !full.founder_slack_link_active && "founder Slack link",
@@ -1738,14 +1712,6 @@ async function finalize(
   ].filter((value): value is string => typeof value === "string");
   if (missing.length > 0) {
     throw new Error(`clean founder finalize requires ${missing.join(", ")}`);
-  }
-  if (!full.slack_approval_binding_active) {
-    await dependencies.activate_approval({
-      state_directory: manifest.state_directory,
-      connection_id: manifest.slack_connection_id,
-      approval_channel_id: manifest.slack_approval_channel_id,
-    });
-    full = readFullFounderStatus(manifest, dependencies);
   }
   if (!full.granola_admission_present) {
     await dependencies.admit_source({
@@ -1787,7 +1753,6 @@ function status(
         founder_oidc_bound: false,
         founder_slack_link_active: false,
         granola_credentials_valid: false,
-        slack_approval_binding_active: false,
         granola_admission_present: false,
         source_progress_observed: false,
         approved_record_present: false,
@@ -1855,7 +1820,6 @@ function status(
       founder_oidc_bound: full.founder_oidc_bound,
       founder_slack_link_active: full.founder_slack_link_active,
       granola_credentials_valid: full.granola_credentials_valid,
-      slack_approval_binding_active: full.slack_approval_binding_active,
       granola_admission_present: full.granola_admission_present,
       source_progress_observed: canary.source_progress_observed,
       approved_record_present: canary.approved_record_present,

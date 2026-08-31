@@ -88,6 +88,20 @@ export function readPrivateAuthorityCredential(reference: string): string {
   );
 }
 
+/**
+ * Slack signing secrets are provider credentials, not configuration values.
+ * Keep their filesystem validation identical to other Authority secrets while
+ * accepting Slack's visible-ASCII secret representation without logging it.
+ */
+export function readPrivateAuthoritySlackSigningSecret(
+  reference: string,
+): string {
+  return readPrivateVisibleAsciiCredential(
+    reference,
+    MINIMUM_CREDENTIAL_BYTES,
+  );
+}
+
 export function readPrivateAuthorityGranolaOrganizationCredential(
   reference: string,
 ): string {

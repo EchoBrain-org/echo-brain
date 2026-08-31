@@ -299,7 +299,8 @@ than eight minutes left for CloudFormation plus the 300-second Run Command
 plugin timeout. The controller polls for a terminal SSM result for up to six
 minutes, cancels on local timeout, and waits up to two more minutes for terminal
 cancellation before it permits any cleanup. It verifies the archive digest,
-accepts exactly the eight established regular input files, runs `doctor` and
+accepts exactly the nine established regular input files, including
+`slack-signing-secret`, runs `doctor` and
 `prepare` without exposing their output, then revokes the host permission and
 permanently deletes that exact S3 version. The private local archive and receipt
 are removed only after both remote cleanup steps are proved.
@@ -324,7 +325,7 @@ state before deciding whether a fresh operation is safe; it never reports
 `prepared`.
 
 Create a private controller input outside the checkout. Its `privateInputDir`
-must contain exactly the eight mode-`0600` files accepted by
+must contain exactly the nine mode-`0600` files accepted by
 `onboard-clean-v1.sh`; `archiveDir` must be an existing mode-`0700` directory
 outside the checkout. No secret values belong in this controller JSON.
 

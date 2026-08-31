@@ -76,6 +76,7 @@ INPUT_RUNTIME_PROFILE_NAME='runtime-profile.json'
 INPUT_OIDC_CONFIG_NAME='oidc-config.json'
 INPUT_OIDC_SECRET_NAME='oidc-client-secret'
 INPUT_SLACK_TOKEN_NAME='slack-bot-token'
+INPUT_SLACK_SIGNING_SECRET_NAME='slack-signing-secret'
 INPUT_GRANOLA_CREDENTIAL_NAME='granola-credential'
 INPUT_LLM_CREDENTIAL_NAME='llm-credential'
 
@@ -85,6 +86,7 @@ input_runtime_profile=''
 input_oidc_config=''
 input_oidc_secret=''
 input_slack_token=''
+input_slack_signing_secret=''
 input_granola_credential=''
 input_llm_credential=''
 input_runtime_user=''
@@ -277,6 +279,7 @@ check_input_dir() {
     "$INPUT_OIDC_CONFIG_NAME"
     "$INPUT_OIDC_SECRET_NAME"
     "$INPUT_SLACK_TOKEN_NAME"
+    "$INPUT_SLACK_SIGNING_SECRET_NAME"
     "$INPUT_GRANOLA_CREDENTIAL_NAME"
     "$INPUT_LLM_CREDENTIAL_NAME"
   )
@@ -296,6 +299,7 @@ check_input_dir() {
   input_oidc_config="$input_dir/$INPUT_OIDC_CONFIG_NAME"
   input_oidc_secret="$input_dir/$INPUT_OIDC_SECRET_NAME"
   input_slack_token="$input_dir/$INPUT_SLACK_TOKEN_NAME"
+  input_slack_signing_secret="$input_dir/$INPUT_SLACK_SIGNING_SECRET_NAME"
   input_granola_credential="$input_dir/$INPUT_GRANOLA_CREDENTIAL_NAME"
   input_llm_credential="$input_dir/$INPUT_LLM_CREDENTIAL_NAME"
   return 0
@@ -593,7 +597,7 @@ require_prepared() {
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Compose environment is missing; run prepare again with the same inputs'
   python3 "$RELEASE_TOOL" validate "$RELEASE_FILE" >/dev/null || fail 'persisted release record is no longer canonical clean-v1'
   runtime_profile_matches_prepared_tuple || fail 'prepared runtime profile tuple is missing, noncanonical, or drifted from the accepted release'
-  for required in oidc-config.json oidc-client-secret slack-bot-token granola-credential-source granola-owner-email llm-credential-source; do
+  for required in oidc-config.json oidc-client-secret slack-bot-token slack-signing-secret granola-credential-source granola-owner-email llm-credential-source; do
     [[ -f "$PRIVATE_DIR/$required" && ! -L "$PRIVATE_DIR/$required" ]] || fail "fixed private input is missing: $required"
   done
 }
@@ -851,6 +855,7 @@ ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
   copy_exact_private "$input_oidc_config" "$PRIVATE_DIR/oidc-config.json" 'OIDC configuration'
   copy_exact_private "$input_oidc_secret" "$PRIVATE_DIR/oidc-client-secret" 'OIDC client secret'
   copy_exact_private "$input_slack_token" "$PRIVATE_DIR/slack-bot-token" 'Slack bot token'
+  copy_exact_private "$input_slack_signing_secret" "$PRIVATE_DIR/slack-signing-secret" 'Slack signing secret'
   copy_exact_private "$input_granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
   copy_exact_private "$input_llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
   write_exact_private "$PRIVATE_DIR/granola-owner-email" "$input_owner_email" 'Granola owner email'
@@ -1182,6 +1187,15 @@ finalize() {
     "$FOUNDER_MAIN" finalize --state-dir /echo-clean/state
 }
 
+slack_interactivity_request_url() {
+  printf '%s/v2/integrations/slack/interactions\n' "$(setup_value authority_url)"
+}
+
+print_slack_interactivity_action() {
+  printf 'ACTION: In Slack App settings, enable Interactivity & Shortcuts, set Request URL to %s, and save it. Then create the bounded canary and rerun onboard-clean-v1.sh resume.\n' \
+    "$(slack_interactivity_request_url)"
+}
+
 resume() {
   acquire_operation_lock
   trap 'release_operation_lock' EXIT
@@ -1230,6 +1244,9 @@ resume() {
         compose_clean down
         finalize
         start_runtime
+        print_slack_interactivity_action
+        print_status "$(founder_status)"
+        return
         ;;
       ready_to_start)
         start_runtime

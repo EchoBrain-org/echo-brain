@@ -30,6 +30,7 @@ import {
 import type {
   HumanActEventV1,
   HumanActRecordInputV1,
+  HumanActResolutionRefV1,
   PersonContentPolicyIdV2,
 } from "../src/human-act-record-input-v1.js";
 import {
@@ -481,11 +482,15 @@ describe("private D3-2 record envelope v4", () => {
       const body = recordBody("approve", policyId);
       const validated = validateOrganizationRecordEnvelopeBodyV4(body);
       expect(validated.event.kind).toBe("approved");
-      expect(validated.human_act_resolution_ref.policy_id).toBe(policyId);
+      expect(
+        (validated.human_act_resolution_ref as HumanActResolutionRefV1)
+          .policy_id,
+      ).toBe(policyId);
       expect(validated.semantic_idempotency_key).toBe(
         buildHumanActRecordInputV1({
-          human_act_resolution_ref: body.human_act_resolution_ref,
-          event: body.event,
+          human_act_resolution_ref:
+            body.human_act_resolution_ref as HumanActResolutionRefV1,
+          event: body.event as HumanActEventV1,
         }).semantic_idempotency_key,
       );
       expect(Object.keys(validated).sort()).toEqual([
@@ -530,7 +535,10 @@ describe("private D3-2 record envelope v4", () => {
       expect(validated.event.kind).toBe("rejected");
       expect(validated.predecessor_position).toBe(7);
       expect(validated.predecessor_record_sha256).toBe(digest("7"));
-      expect(validated.human_act_resolution_ref.policy_id).toBe(policyId);
+      expect(
+        (validated.human_act_resolution_ref as HumanActResolutionRefV1)
+          .policy_id,
+      ).toBe(policyId);
     }
   });
 
@@ -578,8 +586,9 @@ describe("private D3-2 record envelope v4", () => {
       ),
     );
     mutable(wrongSource).semantic_idempotency_key = buildHumanActRecordInputV1({
-      human_act_resolution_ref: wrongSource.human_act_resolution_ref,
-      event: wrongSource.event,
+      human_act_resolution_ref:
+        wrongSource.human_act_resolution_ref as HumanActResolutionRefV1,
+      event: wrongSource.event as HumanActEventV1,
     }).semantic_idempotency_key;
     expect(() => validateOrganizationRecordEnvelopeBodyV4(wrongSource)).toThrow(
       "does not match source provenance",
@@ -596,8 +605,9 @@ describe("private D3-2 record envelope v4", () => {
       validateApprovedDecisionSnapshotV2(wrongRevisionEvent.approved_snapshot),
     );
     mutable(wrongRevision).semantic_idempotency_key = buildHumanActRecordInputV1({
-      human_act_resolution_ref: wrongRevision.human_act_resolution_ref,
-      event: wrongRevision.event,
+      human_act_resolution_ref:
+        wrongRevision.human_act_resolution_ref as HumanActResolutionRefV1,
+      event: wrongRevision.event as HumanActEventV1,
     }).semantic_idempotency_key;
     expect(() => validateOrganizationRecordEnvelopeBodyV4(wrongRevision)).toThrow(
       "meeting revision",
@@ -616,8 +626,9 @@ describe("private D3-2 record envelope v4", () => {
       validateApprovedDecisionSnapshotV2(wrongProcessorEvent.approved_snapshot),
     );
     mutable(wrongProcessor).semantic_idempotency_key = buildHumanActRecordInputV1({
-      human_act_resolution_ref: wrongProcessor.human_act_resolution_ref,
-      event: wrongProcessor.event,
+      human_act_resolution_ref:
+        wrongProcessor.human_act_resolution_ref as HumanActResolutionRefV1,
+      event: wrongProcessor.event as HumanActEventV1,
     }).semantic_idempotency_key;
     expect(() =>
       validateOrganizationRecordEnvelopeBodyV4(wrongProcessor),
@@ -747,8 +758,10 @@ describe("private D3-2 record envelope v4", () => {
       mutable(input.source_provenance).external_id = "mutated-source";
       mutable(input.processor_provenance).processor_adapter_version =
         "mutated-version";
-      mutable(input.human_act_record_input.human_act_resolution_ref).approval_id =
-        "mutated-approval";
+      mutable(
+        (input.human_act_record_input as HumanActRecordInputV1)
+          .human_act_resolution_ref,
+      ).approval_id = "mutated-approval";
       return authority.sign(bytes, keyId);
     };
     const envelope = await createOrganizationRecordEnvelopeV4(

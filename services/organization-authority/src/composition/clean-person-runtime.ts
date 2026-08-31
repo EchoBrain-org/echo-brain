@@ -39,6 +39,7 @@ import {
   createCleanPersonAnswerRouteV1,
   type CleanLayer4FailureEventV1,
 } from "./clean-person-answer-route.js";
+import type { PrivateApprovalSlackInteractionsHttpApplicationV1 } from "../presentation/private-approval-slack-interactions-http-application-v1.js";
 
 export interface CleanPersonRuntimeConfig {
   readonly state_directory: string;
@@ -70,6 +71,9 @@ export interface CleanPersonRuntimeDependencies {
   readonly answer_model?: Layer4StructuredOutputPort;
   /** Metadata-only Layer 4 failure observer for the live server log. */
   readonly answer_failure?: (event: CleanLayer4FailureEventV1) => void;
+  /** Present only when the signed private Slack approval lane is active. */
+  readonly private_slack_approval_interactions?:
+    PrivateApprovalSlackInteractionsHttpApplicationV1;
 }
 
 export interface RunningCleanPersonRuntime {
@@ -260,6 +264,12 @@ export async function startCleanPersonRuntime(
       ...(personSlackIdentityLink === undefined
         ? {}
         : { person_slack_identity_link: personSlackIdentityLink }),
+      ...(dependencies.private_slack_approval_interactions === undefined
+        ? {}
+        : {
+            private_slack_approval_interactions:
+              dependencies.private_slack_approval_interactions,
+          }),
     });
     server.listen(config.port, config.host);
     await once(server, "listening");

@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  organizationControlBaselineSha256V1,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
+  organizationControlBaselineSha256V2,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
 } from "@echo-brain/organization-control-plane/new-lineage-genesis-v1";
 import {
   organizationRecordDerivedBaselineSha256V1,
-  organizationRecordLogBaselineSha256V1,
+  organizationRecordLogBaselineSha256V2,
   ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
 } from "@echo-brain/organization-record/new-lineage-v1";
 import {
   readableSearchPlaneBaselineSha256V1,
@@ -18,8 +18,8 @@ import {
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 import {
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
-  authorityBaselineSha256V1,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V2,
+  authorityBaselineSha256V2,
 } from "../adapters/persistence/sqlite/baseline.js";
 import { verifyStateLineageBeforeOpen } from "../state-lineage/state-lineage-preopen-guard.js";
 import { validateStateLineageRootManifestV1 } from "../state-lineage/state-lineage-manifest-v1.js";
@@ -49,18 +49,18 @@ export function verifyCleanStateLineage(stateDirectory: string) {
     },
     expected_schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: authorityBaselineSha256V1(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: authorityBaselineSha256V2(),
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationControlBaselineSha256V1(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: organizationControlBaselineSha256V2(),
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordLogBaselineSha256V1(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: organizationRecordLogBaselineSha256V2(),
       },
       "record-derived": {
         database_schema_version:

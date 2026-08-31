@@ -83,15 +83,17 @@ function dependencies(order: string[]): CleanFounderCliDependencies {
           app_id: "A_APP",
           bot_id: "B_BOT",
           bot_user_id: "U_BOT",
-          approval_channel_id: input.approval_channel_id,
+          identity_link_channel_id: input.approval_channel_id,
           required_scopes: [
             "channels:history",
             "channels:read",
             "chat:write",
+            "im:history",
+            "im:write",
             "reactions:read",
             "users:read",
           ],
-          approval_channel_access: "verified" as const,
+          identity_link_channel_access: "verified" as const,
           selected_channel_public: true,
           selected_channel_active: true,
           bot_membership_verified: true,
@@ -108,11 +110,6 @@ function dependencies(order: string[]): CleanFounderCliDependencies {
         invitation_path: input.output_path,
         pkce_key_file: input.pkce_key_file,
       });
-    },
-    activate_approval: async (input) => {
-      order.push(
-        `activate:${input.connection_id}:${input.approval_channel_id}`,
-      );
     },
     admit_source: async (input) => {
       order.push(`admit:${input.granola_credential_file}`);
@@ -135,7 +132,6 @@ function readyStatusDependencies(
       founder_oidc_bound: true,
       founder_slack_link_active: true,
       granola_credentials_valid: true,
-      slack_approval_binding_active: true,
       granola_admission_present: true,
     }),
     read_founder_canary_evidence: () => ({
@@ -465,15 +461,17 @@ describe("clean founder coordinator", () => {
         app_id: "A_APP",
         bot_id: "B_BOT",
         bot_user_id: "U_BOT",
-        approval_channel_id: "C123",
+        identity_link_channel_id: "C123",
         required_scopes: [
           "channels:history",
           "channels:read",
           "chat:write",
+          "im:history",
+          "im:write",
           "reactions:read",
           "users:read",
         ],
-        approval_channel_access: "verified",
+        identity_link_channel_access: "verified",
         selected_channel_public: true,
         selected_channel_active: true,
         bot_membership_verified: true,
@@ -639,7 +637,6 @@ describe("clean founder coordinator", () => {
           founder_oidc_bound: true,
           founder_slack_link_active: true,
           granola_credentials_valid: true,
-          slack_approval_binding_active: false,
           granola_admission_present: false,
         }),
       },
@@ -647,14 +644,13 @@ describe("clean founder coordinator", () => {
 
     expect(status).toBe(0);
     expect(order).toEqual([
-      expect.stringMatching(/^activate:con_.+:C123$/),
       `admit:${join(state, "credentials", "granola-credential")}`,
     ]);
     expect(stdout).not.toContain("con_clean-founder");
     expect(stdout).toContain("live-only cutoff");
   });
 
-  it("refuses finalize before every founder prerequisite without activating anything", async () => {
+  it("refuses finalize before every founder prerequisite without publishing anything", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
@@ -675,7 +671,6 @@ describe("clean founder coordinator", () => {
           founder_oidc_bound: false,
           founder_slack_link_active: false,
           granola_credentials_valid: false,
-          slack_approval_binding_active: false,
           granola_admission_present: false,
         }),
       },
@@ -688,7 +683,7 @@ describe("clean founder coordinator", () => {
     expect(order).toEqual([]);
   });
 
-  it("proves genesis before a full-status seam can activate anything", async () => {
+  it("proves genesis before a full-status seam can publish anything", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
@@ -710,7 +705,6 @@ describe("clean founder coordinator", () => {
           founder_oidc_bound: true,
           founder_slack_link_active: true,
           granola_credentials_valid: true,
-          slack_approval_binding_active: false,
           granola_admission_present: false,
         }),
       },
@@ -721,7 +715,7 @@ describe("clean founder coordinator", () => {
     expect(order).toEqual([]);
   });
 
-  it("resumes finalize after source admission fails without activating Slack twice", async () => {
+  it("resumes finalize after source admission fails without creating a Slack approval binding", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
@@ -735,16 +729,11 @@ describe("clean founder coordinator", () => {
       founder_oidc_bound: true,
       founder_slack_link_active: true,
       granola_credentials_valid: true,
-      slack_approval_binding_active: false,
       granola_admission_present: false,
     };
     let failAdmission = true;
     const retrying: CleanFounderCliDependencies = {
       ...base,
-      activate_approval: async (input) => {
-        order.push(`activate:${input.connection_id}:${input.approval_channel_id}`);
-        full.slack_approval_binding_active = true;
-      },
       admit_source: async (input) => {
         order.push(`admit:${input.granola_credential_file}`);
         if (failAdmission) {
@@ -759,7 +748,7 @@ describe("clean founder coordinator", () => {
 
     expect(await runCleanFounderCli(["finalize", "--state-dir", state], io, retrying)).toBe(1);
     expect(await runCleanFounderCli(["finalize", "--state-dir", state], io, retrying)).toBe(0);
-    expect(order.filter((entry) => entry.startsWith("activate:"))).toHaveLength(1);
+    expect(order.filter((entry) => entry.startsWith("activate:"))).toHaveLength(0);
     expect(order.filter((entry) => entry.startsWith("admit:"))).toHaveLength(2);
   });
 
@@ -782,7 +771,6 @@ describe("clean founder coordinator", () => {
           founder_oidc_bound: true,
           founder_slack_link_active: false,
           granola_credentials_valid: false,
-          slack_approval_binding_active: false,
           granola_admission_present: false,
         }),
       },
@@ -981,6 +969,7 @@ describe("clean founder coordinator", () => {
       ),
     ).toBe(0);
     const incomplete = JSON.parse(incompleteOutput) as Record<string, unknown>;
+    expect(incomplete).not.toHaveProperty("slack_approval_binding_active");
     expect(incomplete).toMatchObject({
       next_step: "ready_to_start",
       canary_status: "not_complete",

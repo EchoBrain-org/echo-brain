@@ -8,6 +8,8 @@ export const SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES = Object.freeze([
   "channels:history",
   "channels:read",
   "chat:write",
+  "im:history",
+  "im:write",
   "reactions:read",
   "users:read",
 ] as const);

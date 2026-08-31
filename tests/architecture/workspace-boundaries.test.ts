@@ -361,13 +361,18 @@ describe("workspace source boundaries", () => {
 
   it("declares and ships all new-lineage baseline SQL assets", () => {
     const expectedByRoot: Record<string, string[]> = {
-      "services/organization-authority": ["authority-baseline-v1.sql"],
+      "services/organization-authority": [
+        "authority-baseline-v1.sql",
+        "authority-private-approval-v2.sql",
+      ],
       "services/organization-control-plane": [
         "organization-control-plane-baseline-v1.sql",
+        "organization-control-plane-private-approval-v2.sql",
       ],
       "services/organization-record": [
         "organization-record-derived-baseline-v1.sql",
         "organization-record-log-baseline-v1.sql",
+        "organization-record-log-baseline-v2.sql",
       ],
       "services/organization-retrieval": [
         "readable-search-content-baseline-v1.sql",

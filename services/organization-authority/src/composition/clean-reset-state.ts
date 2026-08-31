@@ -11,19 +11,19 @@ import {
   type OrganizationAuthorityDescriptorV1,
 } from "@echo-brain/organization-protocol";
 import {
-  applyOrganizationControlBaselineV1,
+  applyOrganizationControlBaselineV2,
   openOrganizationControlDatabase,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-  organizationControlBaselineSha256V1,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+  organizationControlBaselineSha256V2,
 } from "@echo-brain/organization-control-plane/new-lineage-genesis-v1";
 import {
   applyOrganizationRecordDerivedBaselineV1,
-  applyOrganizationRecordLogBaselineV1,
+  applyOrganizationRecordLogBaselineV2,
   openOrganizationRecordDatabase,
   ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
   organizationRecordDerivedBaselineSha256V1,
-  organizationRecordLogBaselineSha256V1,
+  organizationRecordLogBaselineSha256V2,
 } from "@echo-brain/organization-record/new-lineage-v1";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
@@ -33,9 +33,9 @@ import {
   readableSearchPlaneBaselineSha256V1,
 } from "@echo-brain/organization-retrieval/new-lineage-v1";
 import {
-  applyAuthorityBaselineV1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
-  authorityBaselineSha256V1,
+  applyAuthorityBaselineV2,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V2,
+  authorityBaselineSha256V2,
 } from "../adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
 import { DevelopmentFileOrganizationAuthoritySigner } from "../adapters/security/development-file-authority-signer.js";
@@ -351,18 +351,18 @@ export function initializeCleanResetState(
     creating_artifact_revision: input.creating_artifact_revision,
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: authorityBaselineSha256V1(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: authorityBaselineSha256V2(),
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationControlBaselineSha256V1(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: organizationControlBaselineSha256V2(),
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordLogBaselineSha256V1(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: organizationRecordLogBaselineSha256V2(),
       },
       "record-derived": {
         database_schema_version:
@@ -392,9 +392,9 @@ export function initializeCleanResetState(
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV1 },
-      "control-plane": { apply: applyOrganizationControlBaselineV1 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV1 },
+      authority: { apply: applyAuthorityBaselineV2 },
+      "control-plane": { apply: applyOrganizationControlBaselineV2 },
+      "record-log": { apply: applyOrganizationRecordLogBaselineV2 },
       "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },
     },
     open_writable_database: (path, role) => {

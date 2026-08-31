@@ -7,6 +7,7 @@ import { readCleanPersonOidcConfiguration } from "./clean-person-cli.js";
 const USAGE =
   "usage: echo-organization-authority-clean-live serve " +
   "--state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> " +
+  "--slack-signing-secret-file <absolute-path> " +
   "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>]";
 
 interface CliIo {
@@ -41,6 +42,7 @@ function flags(
     "--host",
     "--port",
     "--client-secret-file",
+    "--slack-signing-secret-file",
     "--worker-interval-ms",
   ]);
   const parsed: Record<string, string | undefined> = {};
@@ -58,7 +60,12 @@ function flags(
     }
     parsed[key] = value;
   }
-  for (const required of ["--state-dir", "--host", "--port"]) {
+  for (const required of [
+    "--state-dir",
+    "--host",
+    "--port",
+    "--slack-signing-secret-file",
+  ]) {
     if (parsed[required] === undefined) throw new Error(USAGE);
   }
   return Object.freeze(parsed);
@@ -126,6 +133,11 @@ export async function runCleanLiveCli(
               ),
             },
       pkce_key_file: manifest.pkce_key_file,
+      slack_signing_secret_file: required(
+        parsed,
+        "--slack-signing-secret-file",
+      ),
+      slack_connection_id: manifest.slack_connection_id,
       slack_approval_channel_id: manifest.slack_approval_channel_id,
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
@@ -147,6 +159,15 @@ export async function runCleanLiveCli(
             elapsed_ms: event.elapsed_ms,
             http_status: event.http_status,
             finish_reason: event.finish_reason,
+          } as never)}\n`,
+        );
+      },
+      on_private_approval_slack_rejection: (event) => {
+        io.stderr(
+          `${canonicalJson({
+            schema_version: 1,
+            kind: "echo-private-approval-slack-interaction-rejection-v1",
+            stage: event.stage,
           } as never)}\n`,
         );
       },

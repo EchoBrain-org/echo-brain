@@ -57,7 +57,8 @@ that already contains state.
 Bootstrap and finalization are stopped-state operations. The path is:
 
 1. Bootstrap the clean lineage, initialize Person credentials, verify the Slack
-   bot and selected approval channel, and issue the founder invitation.
+   bot and temporary public founder identity-link channel, and issue the
+   founder invitation. That channel never receives an approval card.
 2. Start clean live, complete the founder's browser OIDC sign-in, and link the
    signed-in founder to Slack.
 3. Stop clean live, install the three provider credentials, then finalize.
@@ -73,7 +74,10 @@ canonical lowercase.
 
 Pass the Slack bot token through standard input. The token file contains the
 token with at most one trailing newline; it is never recorded in the setup
-manifest or command output.
+manifest or command output. `--slack-approval-channel-id` is a transitional
+legacy name: it supplies only the temporary public channel used to complete the
+founder's Slack identity-link challenge. It is not an approval destination or
+approval-readiness gate.
 
 ```sh
 echo-organization-authority-clean-founder bootstrap \
@@ -114,6 +118,42 @@ echo-organization-authority-clean-founder status \
 It reports the next step and durable readiness facts, but not credentials,
 grants, bearer values, generated internal IDs, or note content.
 
+### Slack re-onboarding checklist for private approval V1
+
+Use one Slack app for the connection token and interactive signing secret.
+Before bootstrap, update that app's scopes, then reinstall it to the staging
+workspace:
+
+1. Grant the exact required bot scopes:
+   `channels:history`, `channels:read`, `chat:write`, `im:history`,
+   `im:write`, `reactions:read`, and `users:read`. The `im:*` scopes are
+   required for the meeting-owner DM lane.
+2. Reinstall the app after the scope change, then use the new bot token from
+   that same installation.
+3. Put the signing secret from that same Slack app in a separate current-user
+   `0600` regular file containing one value with no trailing newline. Do not
+   reuse a signing secret from another Slack app.
+4. Use a wholly fresh private-approval V2 staging lineage. Do not upgrade or
+   reuse an earlier shared-channel rehearsal database, state directory, or
+   approval binding.
+
+Complete bootstrap, the founder identity link, credential installation, and
+finalization first, then start the active runtime. Only after that runtime is
+healthy, enable **Interactivity & Shortcuts** and save this Request URL before
+creating the first post-cutoff canary meeting:
+
+```text
+https://<staging-authority-host>/v2/integrations/slack/interactions
+```
+
+The callback deliberately returns `503` before finalization, so do not try to
+validate or save that URL against a pre-finalize runtime. Event Subscriptions,
+Socket Mode, and a Slack OAuth redirect are not required for this V1.
+
+The temporary public identity-link channel is still required only until the
+linking transport is moved to a private surface. It receives the founder's
+challenge thread, never shared approval cards.
+
 ### 2. Start Person service, sign in, and link Slack
 
 Before finalization, clean live exposes the Person surface with an inert
@@ -124,7 +164,8 @@ PKCE key, and Slack channel, so they are not repeated here.
 echo-organization-authority-clean-live serve \
   --state-dir /absolute/clean-state \
   --host 127.0.0.1 \
-  --port 39479
+  --port 39479 \
+  --slack-signing-secret-file /absolute/private/slack-signing-secret
 ```
 
 For `client_secret_basic` or `client_secret_post`, append
@@ -186,7 +227,8 @@ echo-organization-authority-clean-person serve \
 The Person `serve` form additionally accepts
 `--client-secret-file <absolute-path>` when its OIDC configuration uses a
 client-secret authentication method, and an optional
-`--slack-approval-channel-id <channel-id>` to expose Slack linking. Do not use
+`--slack-approval-channel-id <channel-id>` to expose the temporary public
+founder identity-link channel. Do not use
 the low-level invitation form for the founder or employee product flow: clean
 founder onboarding and the owner-facing Person client keep membership IDs
 internal.
@@ -209,10 +251,11 @@ echo-organization-authority-clean-founder finalize \
 ```
 
 Credential installation validates all three inputs before replacing any fixed
-destination. Finalization requires the clean genesis, the founder's active OIDC
-binding and Slack link, and valid provider credentials. It activates the
-verified Slack approval binding and admits Granola at a fresh live-only cutoff:
-existing notes are not imported.
+destination. Finalization requires the clean genesis, an exact active Slack
+connection, the founder's active OIDC binding and Slack identity link, and
+valid provider credentials. It creates no shared-channel/reaction approval
+binding; it only admits Granola at a fresh live-only cutoff. Existing notes are
+not imported.
 
 ### 4. Restart live runtime and canary
 
@@ -223,7 +266,7 @@ V4 appends, polls the admitted live-only source, finalizes approvals, appends
 approved records, and reconciles Layer 2 again.
 
 Create one new post-finalization Granola note with a unique marker, approve its
-Slack card, then check both read paths:
+private meeting-owner Slack DM card, then check both read paths:
 
 ```sh
 echo-brain person records --limit 20
@@ -254,15 +297,16 @@ query never triggers a build. If the head advances or a generation build fails,
 the existing pointer is not used for the new head. The Person client reports
 that search is catching up; wait for the next worker cycle and retry.
 
-Approved content is selected at the frozen Granola source snapshot:
+The private owner-approval card chooses approved-content visibility. It defaults
+to **Only me** (`restricted-reviewer-person-v2`), which allows only the exact
+approving owner and that owner's current membership tenure to read the record.
+Before approving, the owner may select **Team**
+(`organization-member-readable-person-v2`), which allows every current active
+owner or employee in the organization to read it. The selected policy freezes
+with the approved record.
 
-- By default, `organization-member-readable-person-v2` allows every current
-  active owner or employee in the organization to read the record.
-- A note in a folder named exactly `echo-restricted` selects
-  `restricted-reviewer-person-v2`; only the exact approving owner and that
-  owner's current membership tenure may read it.
-
-A later folder move does not reinterpret a posted card or approved record.
+A later source-folder move does not reinterpret a posted card or approved
+record.
 Revoking a membership denies both list and search for that tenure. A newly
 invited employee gets a new membership tenure and may read only content allowed
 to that membership. The owner sees the current roster with
@@ -276,12 +320,14 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the live runtime.
 
-The retained V1 state consists of the Authority, control-plane, record-log,
-record-derived, and three Layer-2 planes (`facts`, `lexical`, and `content`).
-Each baseline is schema version 1 and applies only to a completely empty
-database. Do not modify SQLite files, copy one state directory into another,
-or introduce a schema migration under this runbook. After the first live-user
-release, use only baseline-preserving image replacements through the
+The private-approval fresh lineage uses schema version 2 for Authority and
+control-plane and record-log, while record-derived and the three Layer-2 planes
+(`facts`, `lexical`, and `content`) remain at schema version 1. Each baseline
+applies only to a completely empty database. A V1 Authority, control-plane, or
+record-log lineage is refused rather than upgraded in place. Do not modify
+SQLite files, copy one state directory into another, or introduce a schema
+migration under this runbook. After the first live-user release, use only
+baseline-preserving image replacements through the
 [release procedure](../../deploy/release/README.md).
 
 The pre-live roster candidate changes the Authority baseline bytes and replaces

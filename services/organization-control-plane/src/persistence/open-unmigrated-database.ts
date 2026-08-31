@@ -9,6 +9,11 @@ import {
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 
+// Slack requires interaction acknowledgements within three seconds. Terminal
+// actions synchronously enqueue into this database before their HTTP 200, so
+// leave a small fixed margin for signature verification and serialization.
+const INTERACTION_SAFE_BUSY_TIMEOUT_MS = 2_000;
+
 /** Options for a schema-neutral control-plane database open. */
 export interface OpenOrganizationControlDatabaseOptions {
   fileMustExist?: boolean;
@@ -67,7 +72,7 @@ export function openOrganizationControlDatabase(
     database.pragma("journal_mode = DELETE");
     database.pragma("synchronous = FULL");
     database.pragma("foreign_keys = ON");
-    database.pragma("busy_timeout = 5000");
+    database.pragma(`busy_timeout = ${INTERACTION_SAFE_BUSY_TIMEOUT_MS}`);
     database.pragma("temp_store = MEMORY");
     return database;
   } catch (error) {

@@ -30,7 +30,8 @@ export interface CleanV4Layer1VerifiedEnvelope {
     readonly semantic_idempotency_key: Sha256Digest;
     readonly predecessor_position: number | null;
     readonly predecessor_record_sha256: Sha256Digest | null;
-    readonly human_act_resolution_ref: {
+    readonly human_act_resolution_ref:
+      | {
       readonly authority_id: string;
       readonly organization_id: string;
       readonly state_lineage_id: string;
@@ -45,7 +46,29 @@ export interface CleanV4Layer1VerifiedEnvelope {
       readonly provider_action_schema_version: 2;
       readonly provider_action_sha256: Sha256Digest;
       readonly authorization_proof_sha256: Sha256Digest;
-    };
+      }
+      | {
+          readonly schema_version: 1;
+          readonly kind: "echo-private-slack-block-approval-resolution-ref-v1";
+          readonly authority_id: string;
+          readonly organization_id: string;
+          readonly state_lineage_id: string;
+          readonly approval_id: string;
+          readonly action: RecordAction;
+          readonly selected_policy_id: PersonPolicyIdV2 | null;
+          readonly policy_contract_sha256: Sha256Digest | null;
+          readonly final_approver: {
+            readonly principal_id: string;
+            readonly membership_id: string;
+          };
+          readonly audit_event_id: string;
+          readonly audit_sequence: number;
+          readonly audit_entry_sha256: Sha256Digest;
+          readonly provider_action_kind: "echo-signed-slack-block-action-v1";
+          readonly provider_action_schema_version: 1;
+          readonly provider_action_sha256: Sha256Digest;
+          readonly authorization_proof_sha256: Sha256Digest;
+        };
     readonly event:
       | {
           readonly kind: "approved";
@@ -259,6 +282,28 @@ function expectedSignals(
     }
   }
   return Object.freeze(signals);
+}
+
+function approvedPolicy(reference: CleanV4Layer1VerifiedEnvelope["body"]["human_act_resolution_ref"]): {
+  readonly policy_id: PersonPolicyIdV2;
+  readonly policy_contract_sha256: Sha256Digest;
+} {
+  if ("selected_policy_id" in reference) {
+    if (
+      reference.selected_policy_id === null ||
+      reference.policy_contract_sha256 === null
+    ) {
+      invalid("private approved resolution must select a policy");
+    }
+    return Object.freeze({
+      policy_id: reference.selected_policy_id,
+      policy_contract_sha256: reference.policy_contract_sha256,
+    });
+  }
+  return Object.freeze({
+    policy_id: reference.policy_id,
+    policy_contract_sha256: reference.policy_contract_sha256,
+  });
 }
 
 function materialize(database: Database.Database): MaterializedSnapshot {
@@ -498,8 +543,9 @@ export class CleanV4Layer1SnapshotPort {
           "approved record Person facts do not exactly cover its signals",
         );
       }
+      const binding = approvedPolicy(reference);
       const expectedFamily =
-        reference.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
+        binding.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
           ? "reviewer"
           : "member";
       let reviewerPrincipal: string | null = null;
@@ -532,12 +578,12 @@ export class CleanV4Layer1SnapshotPort {
         assertEqual(fact.action, "approve", "Person fact action");
         assertEqual(
           fact.policy_id,
-          reference.policy_id,
+          binding.policy_id,
           "Person fact policy_id",
         );
         assertEqual(
           fact.policy_contract_sha256,
-          reference.policy_contract_sha256,
+          binding.policy_contract_sha256,
           "Person fact policy contract",
         );
         assertEqual(
@@ -628,8 +674,8 @@ export class CleanV4Layer1SnapshotPort {
             state_lineage_id: input.state_lineage_id,
             approval_id: reference.approval_id,
             action: "approve",
-            policy_id: reference.policy_id,
-            policy_contract_sha256: reference.policy_contract_sha256,
+            policy_id: binding.policy_id,
+            policy_contract_sha256: binding.policy_contract_sha256,
             record_position: position,
             record_sha256: row.record_sha256,
             atom_order: atomOrder,
@@ -667,7 +713,7 @@ export class CleanV4Layer1SnapshotPort {
           record_sha256: requiredDigest(row.record_sha256, "row record digest"),
           classification: Object.freeze({
             kind: "approved",
-            policy_id: reference.policy_id,
+            policy_id: binding.policy_id,
             atom_count: signals.length,
           }),
         }),

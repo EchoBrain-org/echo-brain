@@ -8,6 +8,9 @@ export {
   applyOrganizationRecordLogBaselineV1,
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
   organizationRecordLogBaselineSha256V1,
+  applyOrganizationRecordLogBaselineV2,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
+  organizationRecordLogBaselineSha256V2,
 } from "./persistence/record-log-baseline.js";
 export { openOrganizationRecordDatabase } from "./persistence/open-unmigrated-database.js";
 export {
@@ -18,6 +21,7 @@ export {
   type V4ReceiptFactory,
   type V4RecordEnvelopeFactory,
   type V4RecordEnvelopeView,
+  type ReprovedPrivateSlackBlockApprovalD2WitnessV1,
 } from "./log/record-log-v4-append.js";
 export {
   CleanPersonRecordReaderV1,
@@ -41,3 +45,12 @@ export {
   type ReprovedPersonPolicyAuthorizationAllowV2View,
   type ReprovedPersonPolicyAuditEntryV2View,
 } from "./application/person-policy-facts-v2.js";
+export {
+  PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
+  PrivateSlackBlockApprovalPolicyFactProjectionV1Error,
+  SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
+  projectPrivateSlackBlockApprovalPolicyFactsV1,
+} from "./application/private-slack-block-approval-policy-facts-v1.js";
+export type {
+  PrivateSlackBlockApprovalPolicyFactsInputV1,
+} from "./application/private-slack-block-approval-policy-facts-v1.js";
