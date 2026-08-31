@@ -16,6 +16,41 @@
   "allowed_external_packages": [],
   "allowed_node_builtins": [],
   "runtime_assets": [],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Organization API public contract",
+        "path": "packages/organization-api/src/index.ts",
+        "export": "validateOrganizationPersonSession"
+      },
+      {
+        "name": "Organization API contract types",
+        "path": "packages/organization-api/src/contracts.ts",
+        "export": "OrganizationSlackReactionApprovalPermissionCheckRequestV1"
+      },
+      {
+        "name": "Person meeting-ingestion exclusion change contract",
+        "path": "packages/organization-api/src/person-meeting-ingestion-exclusion-change.ts",
+        "export": "validateOrganizationPersonMeetingIngestionExclusionChangeRequest"
+      },
+      {
+        "name": "Person meeting-ingestion exclusion read contract",
+        "path": "packages/organization-api/src/person-meeting-ingestion-exclusion-read.ts",
+        "export": "validateOrganizationPersonMeetingIngestionExclusionListRequest"
+      },
+      {
+        "name": "Person Slack identity-link contract",
+        "path": "packages/organization-api/src/person-slack-identity-link.ts",
+        "export": "validateOrganizationPersonSlackIdentityLinkBeginRequest"
+      }
+    ],
+    "retired_source_paths": [
+      "packages/organization-api/src/person-member-exclusion-change.ts",
+      "packages/organization-api/src/person-member-exclusion-read.ts",
+       "packages/organization-api/src/person-slack-link.ts"
+     ],
+    "compatibility_entrypoints": []
+  },
   "layer_rules": [
     {
       "name": "organization-api-has-no-implementation-dependencies",

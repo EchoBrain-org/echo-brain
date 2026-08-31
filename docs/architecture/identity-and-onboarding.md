@@ -54,7 +54,7 @@ revocation state on the Authority.
 
 Organization-tool onboarding remains an Authority administrator operation. An
 owner supplies the organization Slack bot credential and a temporary public
-founder identity-link channel. The Authority verifies the workspace, app, bot,
+initial-owner identity-link channel. The Authority verifies the workspace, app, bot,
 scopes, and channel before storing the secret in its private credential store.
 SQLite receives only an opaque secret handle and verified public identity. The
 legacy field name `slack_approval_channel_id` is transitional naming debt: that

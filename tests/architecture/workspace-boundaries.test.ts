@@ -26,6 +26,7 @@ afterAll(() =>
 interface Registry {
   registry_version: number;
   kind: string;
+  retired_workspace_roots: string[];
   manifests: string[];
 }
 
@@ -48,6 +49,18 @@ interface BoundaryManifest {
   forbidden_repository_roots?: string[];
   runtime_assets?: string[];
   layer_rules: LayerRule[];
+  component_index_contract?: {
+    canonical_components: Array<{
+      name: string;
+      path: string;
+      export: string;
+    }>;
+    retired_source_paths: string[];
+    compatibility_entrypoints: Array<{
+      path: string;
+      targets: string[];
+    }>;
+  };
 }
 
 interface PackageManifest {
@@ -60,7 +73,7 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(join(REPO, path), "utf8")) as T;
 }
 
-// Mirrors matchesGlob in tools/check-boundary.mjs. The tool runs main() at
+// Mirrors matchesGlob in tools/check-architecture-boundaries.mjs. The tool runs main() at
 // import time, so its matcher cannot be imported; a boundary pattern is
 // compared against another pattern exactly as the tool compares it to a path.
 function matchesGlob(path: string, pattern: string): boolean {
@@ -146,7 +159,7 @@ function runBoundary(fixture: string): {
 } {
   const result = spawnSync(
     process.execPath,
-    [join(fixture, "tools/check-boundary.mjs")],
+    [join(fixture, "tools/check-architecture-boundaries.mjs")],
     {
       cwd: fixture,
       encoding: "utf8",
@@ -160,6 +173,101 @@ function runBoundary(fixture: string): {
 }
 
 describe("workspace source boundaries", () => {
+  it("accepts the declared workspace component indexes", () => {
+    const fixture = fixtureRepository();
+
+    const result = runBoundary(fixture);
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+
+  it("rejects a reintroduced retired workspace root", () => {
+    const fixture = fixtureRepository();
+    const registry = readFixtureJson<Registry>(fixture, REGISTRY);
+    const retiredRoot = registry.retired_workspace_roots[0]!;
+    mkdirSync(join(fixture, retiredRoot), { recursive: true });
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      `retired workspace root remains: ${retiredRoot}`,
+    );
+  });
+
+  it("requires a component index for every workspace", () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      "packages/federation-protocol/source-boundary.v1.json";
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    delete manifest.component_index_contract;
+    writeFixtureJson(fixture, manifestPath, manifest);
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "@echo-brain/federation-protocol: component_index_contract is required",
+    );
+  });
+
+  it("rejects a missing canonical Authority component path", () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      "services/organization-authority/source-boundary.v1.json";
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    const contract = manifest.component_index_contract;
+    expect(contract).toBeDefined();
+    contract!.canonical_components[0]!.path =
+      "services/organization-authority/src/composition/missing-organization-authority-composition-root.ts";
+    writeFixtureJson(fixture, manifestPath, manifest);
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "canonical component 'Organization Authority composition root' path is missing",
+    );
+  });
+
+  it("rejects a reintroduced retired Authority component path", () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      "services/organization-authority/source-boundary.v1.json";
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    const contract = manifest.component_index_contract;
+    expect(contract).toBeDefined();
+    const retiredPath = contract!.retired_source_paths[0]!;
+    writeFileSync(join(fixture, retiredPath), "export {};\n");
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      `retired component source path remains: ${retiredPath}`,
+    );
+  });
+
+  it("rejects a compatibility facade that targets the wrong implementation", () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      "services/organization-authority/source-boundary.v1.json";
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    const contract = manifest.component_index_contract;
+    expect(contract).toBeDefined();
+    contract!.compatibility_entrypoints[0]!.targets = [
+      "services/organization-authority/src/composition/organization-authority-service-cli.ts",
+    ];
+    writeFixtureJson(fixture, manifestPath, manifest);
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "compatibility entrypoint must import only its declared implementation targets",
+    );
+  });
+
   it("matches every declared workspace to one checked boundary", () => {
     const rootPackage = readJson<{ workspaces: string[] }>("package.json");
     const registry = readJson<Registry>(REGISTRY);
@@ -175,6 +283,11 @@ describe("workspace source boundaries", () => {
       registry_version: 1,
       kind: "echo-workspace-source-boundary-registry",
     });
+    expect(registry.retired_workspace_roots).toEqual([
+      "services/organization-control-plane",
+      "services/organization-record",
+      "services/organization-retrieval",
+    ]);
     expect(workspaceRoots).toEqual([...rootPackage.workspaces].sort());
     expect(new Set(manifests.map((manifest) => manifest.name)).size).toBe(
       manifests.length,
@@ -283,7 +396,7 @@ describe("workspace source boundaries", () => {
 
     // npm's workspace links resolve into these runtime directories. Every
     // reachable workspace therefore needs its package exports and compiled
-    // code, and service packages that ship new-lineage baselines need those
+    // code, and service packages that ship Authority state baselines need those
     // immutable filesystem assets beside dist.
     for (const workspace of [...runtimeClosure].sort()) {
       const manifest = readJson<PackageManifest>(`${workspace}/package.json`);
@@ -330,16 +443,16 @@ describe("workspace source boundaries", () => {
         "services/organization-authority/source-boundary.v1.json",
       ],
       [
-        "services/organization-control-plane",
-        "services/organization-control-plane/source-boundary.v1.json",
+        "packages/organization-control-plane",
+        "packages/organization-control-plane/source-boundary.v1.json",
       ],
       [
-        "services/organization-record",
-        "services/organization-record/source-boundary.v1.json",
+        "packages/organization-record",
+        "packages/organization-record/source-boundary.v1.json",
       ],
       [
-        "services/organization-retrieval",
-        "services/organization-retrieval/source-boundary.v1.json",
+        "packages/organization-retrieval",
+        "packages/organization-retrieval/source-boundary.v1.json",
       ],
     ]) {
       const packageManifest = readJson<PackageManifest>(`${root}/package.json`);
@@ -359,23 +472,23 @@ describe("workspace source boundaries", () => {
       .not.toContain("/migrations");
   });
 
-  it("declares and ships all new-lineage baseline SQL assets", () => {
+  it("declares and ships all Authority state baseline SQL assets", () => {
     const expectedByRoot: Record<string, string[]> = {
       "services/organization-authority": [
         "authority-baseline-v1.sql",
-        "authority-live-source-v3.sql",
+        "authority-meeting-processing-v3.sql",
         "authority-private-approval-v2.sql",
       ],
-      "services/organization-control-plane": [
+      "packages/organization-control-plane": [
         "organization-control-plane-baseline-v1.sql",
         "organization-control-plane-private-approval-v2.sql",
       ],
-      "services/organization-record": [
+      "packages/organization-record": [
         "organization-record-derived-baseline-v1.sql",
         "organization-record-log-baseline-v1.sql",
         "organization-record-log-baseline-v2.sql",
       ],
-      "services/organization-retrieval": [
+      "packages/organization-retrieval": [
         "readable-search-content-baseline-v1.sql",
         "readable-search-facts-baseline-v1.sql",
         "readable-search-lexical-baseline-v1.sql",
@@ -944,22 +1057,22 @@ describe("workspace source boundaries", () => {
       fixture,
       "services/organization-authority/source-boundary.v1.json",
     );
-    const cleanRuntimeRule = manifest.layer_rules.find(
-      (rule) => rule.name === "clean-live-only-source-cycle-is-provider-neutral",
+    const admittedMeetingProcessingRule = manifest.layer_rules.find(
+      (rule) => rule.name === "admitted-meeting-processing-is-provider-neutral",
     );
-    expect(cleanRuntimeRule).toBeDefined();
-    expect(cleanRuntimeRule?.allowed_imports).not.toContain(
+    expect(admittedMeetingProcessingRule).toBeDefined();
+    expect(admittedMeetingProcessingRule?.allowed_imports).not.toContain(
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
     );
     const compositionRule = manifest.layer_rules.find(
-      (rule) => rule.name === "authority-composition-may-wire-pre-processing-layers",
+      (rule) => rule.name === "authority-composition-selects-concrete-implementations",
     );
     expect(compositionRule?.allowed_imports).toContain(
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
     );
     for (const concreteCompositionModule of [
-      "services/organization-authority/src/composition/granola-live-source-boundary-v1.ts",
-      "services/organization-authority/src/composition/open-clean-founder-live-runtime.ts",
+      "services/organization-authority/src/composition/providers/granola/granola-admitted-meeting-source-cursor-policy-v1.ts",
+      "services/organization-authority/src/composition/organization-authority-composition-root.ts",
     ]) {
       expect(existsSync(join(fixture, concreteCompositionModule))).toBe(true);
     }
@@ -980,7 +1093,7 @@ describe("workspace source boundaries", () => {
       };
     }>(fixture, "product/source-boundary.v1.json");
     expect(product.adapter_architecture.provider_neutral_paths).toContain(
-      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts",
+      "services/organization-authority/src/processing/admitted-meeting-processing/**",
     );
     expect(
       product.adapter_architecture.provider_identifier_registry.map(
@@ -1010,11 +1123,11 @@ describe("workspace source boundaries", () => {
       },
       {
         identifier: "openrouter",
-        root: "services/organization-authority/src/composition/*openrouter*.ts",
+        root: "services/organization-authority/src/composition/providers/openrouter/",
       },
       {
         identifier: "slack",
-        root: "services/organization-authority/src/composition/*slack*.ts",
+        root: "services/organization-authority/src/composition/providers/slack/",
       },
       {
         identifier: "synthetic-source",
@@ -1023,7 +1136,7 @@ describe("workspace source boundaries", () => {
     ]));
 
     const probePath =
-      "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts";
+      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.ts";
     const probe = join(fixture, probePath);
     const original = readFileSync(probe, "utf8");
     for (const providerIdentifier of [
@@ -1161,7 +1274,7 @@ describe("workspace source boundaries", () => {
   it("rejects direct and transitive neutral-module reachability into declared provider roots", () => {
     const fixture = fixtureRepository();
     const neutralPath =
-      "services/organization-authority/src/composition/open-clean-live-runtime.ts";
+      "services/organization-authority/src/composition/organization-authority-runtime.ts";
     const neutral = join(fixture, neutralPath);
     const original = readFileSync(neutral, "utf8");
     const providerPath =
@@ -1201,19 +1314,19 @@ describe("workspace source boundaries", () => {
   it("rejects a bland three-hop bridge from a neutral root into provider composition", () => {
     const fixture = fixtureRepository();
     const neutralPath =
-      "services/organization-authority/src/composition/open-clean-live-runtime.ts";
+      "services/organization-authority/src/composition/organization-authority-runtime.ts";
     const neutral = join(fixture, neutralPath);
     const original = readFileSync(neutral, "utf8");
     const firstBridge = "services/organization-authority/src/composition/bland-bridge-one.ts";
     const secondBridge = "services/organization-authority/src/composition/bland-bridge-two.ts";
     try {
-      writeFileSync(join(fixture, secondBridge), 'import "./private-approval-slack-interaction-v1.js";\n');
+      writeFileSync(join(fixture, secondBridge), 'import "./providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.js";\n');
       writeFileSync(join(fixture, firstBridge), 'import "./bland-bridge-two.js";\n');
       writeFileSync(neutral, `${original}\nimport "./bland-bridge-one.js";\n`);
       const result = runBoundary(fixture);
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stdout + result.stderr).toContain(
-        `provider-neutral module reaches declared provider/adapter root 'slack': ${neutralPath} -> services/organization-authority/src/composition/private-approval-slack-interaction-v1.ts`,
+        `provider-neutral module reaches declared provider/adapter root 'slack': ${neutralPath} -> services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.ts`,
       );
     } finally {
       writeFileSync(neutral, original);
@@ -1224,7 +1337,7 @@ describe("workspace source boundaries", () => {
     const fixture = fixtureRepository();
     const compositionPath = join(
       fixture,
-      "services/organization-authority/src/composition/clean-founder-cli.ts",
+      "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
     );
     writeFileSync(
       compositionPath,
@@ -1235,7 +1348,7 @@ describe("workspace source boundaries", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/clean-founder-cli.ts -> services/organization-authority/src/processing/core/index.ts",
+      "@echo-brain/organization-authority: layer rule 'authority-composition-selects-concrete-implementations' rejects edge: services/organization-authority/src/composition/organization-authority-setup-cli.ts -> services/organization-authority/src/processing/core/index.ts",
     );
   });
 

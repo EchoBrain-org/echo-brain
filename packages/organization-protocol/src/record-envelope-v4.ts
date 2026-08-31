@@ -163,7 +163,7 @@ export interface DecisionProcessorProvenanceV1 {
   readonly processor_adapter_version: string;
   /**
    * Opaque frozen processor contract/config commitment. D3-2 binds but does
-   * not claim to derive or reprove its Phase-3-owned exact preimage.
+   * not claim to derive or revalidate its Phase-3-owned exact preimage.
    */
   readonly processor_contract_sha256: Sha256Digest;
 }

@@ -4,7 +4,7 @@ id: INV-ADAPTERS-001
 kind: invariant
 title: Provider transport is part of the verified contract
 component_ids:
-  - CMP-ADAPTERS
+  - CMP-PROCESSING-ADAPTERS
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 06811c29458b0bf3aac443baf35453d3a2eb27f3

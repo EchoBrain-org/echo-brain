@@ -2,9 +2,15 @@
 
 **Status:** Current
 
-The repository contains eight runtime workspaces. The root package is private
+The repository contains eight workspaces. The root package is private
 workspace orchestration only: it has no executable, runtime export, product
 database, or packable application.
+
+`services/` is reserved for independently deployable processes and lifecycle
+owners. `packages/` contains linked reusable/server modules and shared
+contracts. `src/product/` contains shipped machine product. Therefore the
+control plane, record, and retrieval workspaces are packages linked into the
+Authority process rather than deployable services.
 
 ## Workspace graph
 
@@ -64,9 +70,9 @@ machine product from silently reappearing outside the Person workspace.
 domain        pure organization and access rules
 application   commands, queries, and transaction ports
 adapters      SQLite, signing, credentials, OIDC, private files
-presentation  JSON routes and server-rendered admin console
+presentation  JSON routes and explicit provider ingress
 composition   configuration and concrete wiring
-processing    meeting core, adapters, live cycle, replay, and durability
+processing    meeting core, adapters, admitted-meeting cycle, replay, and durability
 ```
 
 Routes call application use cases rather than SQLite. The service is bound to
@@ -118,7 +124,7 @@ runtime closure are enforced by the Dockerfile and architecture tests. A
 multi-replica deployment requires a later persistence/coordination design and
 is outside minimum V1.
 
-See [Product runtime](product-runtime.md),
-[Core and adapters](core-and-adapters.md), and
+See [Person client architecture](person-client-architecture.md),
+[meeting processing core and adapters](meeting-processing-core-and-adapters.md), and
 [Identity and onboarding](identity-and-onboarding.md) for the adjacent
 boundaries.

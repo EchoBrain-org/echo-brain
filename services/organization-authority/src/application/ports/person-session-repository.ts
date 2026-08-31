@@ -16,7 +16,7 @@ import type {
   StoredPersonSessionFamily,
 } from "./authority-repository.js";
 
-/** The clean subset of Authority persistence needed for Person sessions. */
+/** The session-scoped subset of Authority persistence needed for Person sessions. */
 export interface PersonSessionReadTransaction {
   metadata(): StoredAuthorityMetadata;
   membership(membershipId: string): StoredAuthorityMembership | undefined;
@@ -38,6 +38,7 @@ export interface PersonSessionReadTransaction {
   oidcLoginAttemptForLoginGrant(
     loginGrantSha256: Sha256Digest,
   ): StoredOidcLoginAttempt | undefined;
+  hasOidcLoginAttemptCapacity(limit: number): boolean;
   personLoginGrant(
     loginGrantSha256: Sha256Digest,
   ): StoredPersonLoginGrant | undefined;
@@ -53,7 +54,7 @@ export interface PersonSessionReadTransaction {
 }
 
 export interface PersonSessionWriteTransaction extends PersonSessionReadTransaction {
-  /** Present for the legacy repository only; clean state has no generic audit. */
+  /** Present for the legacy repository only; the session store has no generic audit. */
   appendAudit?(entry: AuthorityAuditEntry): void;
   insertOidcIdentityBinding(
     binding: NewOidcIdentityBinding,
@@ -73,6 +74,9 @@ export interface PersonSessionWriteTransaction extends PersonSessionReadTransact
     completion: OidcLoginAttemptCompletion,
   ): StoredOidcLoginAttempt | undefined;
   expireOidcLoginAttempts(limit: number): number;
+  invalidatePersonLoginGrant(
+    loginGrantSha256: Sha256Digest,
+  ): StoredPersonLoginGrant | undefined;
   insertPersonLoginGrant(grant: NewPersonLoginGrant): StoredPersonLoginGrant;
   consumePersonLoginGrant(
     loginGrantSha256: Sha256Digest,
@@ -95,12 +99,12 @@ export interface PersonSessionWriteTransaction extends PersonSessionReadTransact
 
 /**
  * No installation, enrollment, lease, record, or generic-audit capability is
- * exposed here. The clean baseline represents a Person login grant by its own
+ * exposed here. The session baseline represents a Person login grant by its own
  * durable row, not an additional legacy audit event.
  */
 export interface PersonSessionRepository {
   /**
-   * `false` means this is the clean login/session-only store. Legacy callers
+   * `false` means this is the login/session-only store. Legacy callers
    * that need a full Authority transaction leave this absent (treated as true).
    */
   readonly supports_full_person_authorization_transactions?: boolean;

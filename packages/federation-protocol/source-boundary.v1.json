@@ -13,6 +13,17 @@
   "allowed_external_packages": [],
   "allowed_node_builtins": ["buffer", "crypto"],
   "runtime_assets": [],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Signed-document primitives",
+        "path": "packages/federation-protocol/src/signed-document.ts",
+        "export": "createSignedDocumentWithKey"
+      }
+    ],
+    "retired_source_paths": [],
+    "compatibility_entrypoints": []
+  },
   "layer_rules": [
     {
       "name": "federation-protocol-is-self-contained",

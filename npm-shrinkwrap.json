@@ -14,9 +14,9 @@
         "packages/organization-api",
         "src/product/person-client",
         "services/organization-authority",
-        "services/organization-control-plane",
-        "services/organization-record",
-        "services/organization-retrieval"
+        "packages/organization-control-plane",
+        "packages/organization-record",
+        "packages/organization-retrieval"
       ],
       "devDependencies": {
         "@types/better-sqlite3": "7.6.11",
@@ -45,7 +45,7 @@
       "link": true
     },
     "node_modules/@echo-brain/organization-control-plane": {
-      "resolved": "services/organization-control-plane",
+      "resolved": "packages/organization-control-plane",
       "link": true
     },
     "node_modules/@echo-brain/organization-protocol": {
@@ -53,11 +53,11 @@
       "link": true
     },
     "node_modules/@echo-brain/organization-record": {
-      "resolved": "services/organization-record",
+      "resolved": "packages/organization-record",
       "link": true
     },
     "node_modules/@echo-brain/organization-retrieval": {
-      "resolved": "services/organization-retrieval",
+      "resolved": "packages/organization-retrieval",
       "link": true
     },
     "node_modules/@echo-brain/person-client": {
@@ -3593,6 +3593,23 @@
         "npm": "10.9.4"
       }
     },
+    "packages/organization-control-plane": {
+      "name": "@echo-brain/organization-control-plane",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "better-sqlite3": "12.10.0"
+      },
+      "bin": {
+        "echo-organization-control-plane-activate-person-slack-approval": "dist/clean-person-slack-approval-activate-main.js",
+        "echo-organization-control-plane-activate-person-slack-reaction-approval": "dist/clean-person-slack-reaction-approval-activate-main.js",
+        "echo-organization-control-plane-connect-slack": "dist/clean-slack-connect-main.js"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
     "packages/organization-protocol": {
       "name": "@echo-brain/organization-protocol",
       "version": "0.0.0-dev.0",
@@ -3602,6 +3619,32 @@
       },
       "devDependencies": {
         "ajv": "8.20.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "packages/organization-record": {
+      "name": "@echo-brain/organization-record",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "packages/organization-retrieval": {
+      "name": "@echo-brain/organization-retrieval",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
       },
       "engines": {
         "node": "22.22.1",
@@ -3622,46 +3665,22 @@
         "better-sqlite3": "12.10.0",
         "openid-client": "6.8.4"
       },
+      "bin": {
+        "echo-organization-authority-admit-clean-granola-source": "dist/clean-granola-source-main.js",
+        "echo-organization-authority-admit-granola-meeting-source": "dist/clean-granola-source-main.js",
+        "echo-organization-authority-clean-founder": "dist/clean-founder-main.js",
+        "echo-organization-authority-clean-live": "dist/clean-live-main.js",
+        "echo-organization-authority-clean-person": "dist/clean-person-main.js",
+        "echo-organization-authority-init-clean-state": "dist/clean-reset-main.js",
+        "echo-organization-authority-person-admin": "dist/clean-person-main.js",
+        "echo-organization-authority-serve": "dist/clean-live-main.js",
+        "echo-organization-authority-setup": "dist/clean-founder-main.js",
+        "echo-organization-authority-state-bootstrap": "dist/clean-reset-main.js",
+        "echo-organization-authority-synthetic-meeting-quality": "dist/synthetic-meeting-quality-main.js",
+        "echo-organization-authority-synthetic-quality": "dist/synthetic-meeting-quality-main.js"
+      },
       "devDependencies": {
         "ajv": "8.20.0"
-      },
-      "engines": {
-        "node": "22.22.1",
-        "npm": "10.9.4"
-      }
-    },
-    "services/organization-control-plane": {
-      "name": "@echo-brain/organization-control-plane",
-      "version": "0.0.0-dev.0",
-      "license": "MIT",
-      "dependencies": {
-        "better-sqlite3": "12.10.0"
-      },
-      "engines": {
-        "node": "22.22.1",
-        "npm": "10.9.4"
-      }
-    },
-    "services/organization-record": {
-      "name": "@echo-brain/organization-record",
-      "version": "0.0.0-dev.0",
-      "license": "MIT",
-      "dependencies": {
-        "@echo-brain/federation-protocol": "0.0.0-dev.0",
-        "better-sqlite3": "12.10.0"
-      },
-      "engines": {
-        "node": "22.22.1",
-        "npm": "10.9.4"
-      }
-    },
-    "services/organization-retrieval": {
-      "name": "@echo-brain/organization-retrieval",
-      "version": "0.0.0-dev.0",
-      "license": "MIT",
-      "dependencies": {
-        "@echo-brain/federation-protocol": "0.0.0-dev.0",
-        "better-sqlite3": "12.10.0"
       },
       "engines": {
         "node": "22.22.1",

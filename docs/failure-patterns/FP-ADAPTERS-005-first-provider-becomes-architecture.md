@@ -4,8 +4,8 @@ id: FP-ADAPTERS-005
 kind: failure-pattern
 title: The first provider becomes the architecture
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-29
 reviewed_at: 2026-08-29
 reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
@@ -84,6 +84,6 @@ Layer 4 bundles, generic approval and external-identity ingress, approved-record
 policy projection, boundary-manifest rules, negative architecture probes, and
 a synthetic source using the same core port. The pattern remains `mitigating`;
 full provider qualification is still pending, static checks cannot detect every
-semantic leak, and the current founder onboarding and compatibility CLI still
+semantic leak, and initial-owner onboarding plus the compatibility CLI still
 intentionally select the concrete Granola, OpenRouter, and Slack product
 profile.

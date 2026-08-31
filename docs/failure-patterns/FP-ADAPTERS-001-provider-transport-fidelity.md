@@ -4,7 +4,7 @@ id: FP-ADAPTERS-001
 kind: failure-pattern
 title: Provider success envelope hides a wire-contract mismatch
 component_ids:
-  - CMP-ADAPTERS
+  - CMP-PROCESSING-ADAPTERS
   - CMP-IDENTITY-ACCESS
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

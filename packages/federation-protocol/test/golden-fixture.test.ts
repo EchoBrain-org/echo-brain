@@ -337,7 +337,7 @@ describe("federation protocol golden fixture", () => {
         publicKey,
         `sha256:${"0".repeat(64)}`,
       ),
-    ).toThrow("signed document key does not match the active installation");
+    ).toThrow("signed document key id does not match the expected signer");
     expectSignedDocumentFailure(
       signedDocumentWithIntegrity({ canonicalization: "not-supported" }),
       "signed document canonicalization is unsupported",

@@ -6,7 +6,7 @@ title: Layer 3 is the sole Authority content-release boundary
 component_ids:
   - CMP-PERMISSIONS
   - CMP-IDENTITY-ACCESS
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-22
 reviewed_at: 2026-08-23
 reviewed_ref: fe78f2c7e11cffaa4b00ec699dfe71f97edfa986

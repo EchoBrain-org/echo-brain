@@ -4,7 +4,7 @@ id: QUAL-20260814-050326-001
 kind: qualification
 title: Job B active-member readable-search proof
 component_ids:
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
   - CMP-OPERATIONS-RELEASE

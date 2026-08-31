@@ -4,8 +4,8 @@ id: FP-ADAPTERS-004
 kind: failure-pattern
 title: Model is required to reproduce evidence bytes
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: fd762a45e8745eebf27f346317e97038be69de44

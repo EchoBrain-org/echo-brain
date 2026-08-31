@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
+import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -261,7 +261,7 @@ describe("Person client", () => {
     });
   });
 
-  it("lists clean records for the installed Person without an identity input", async () => {
+  it("lists Person records for the installed Person without an identity input", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       const client = new PersonClient({
@@ -308,7 +308,7 @@ describe("Person client", () => {
     });
   });
 
-  it("uses the same records command for a clean Layer 2 query", async () => {
+  it("uses the same records command for a readable-search query", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       let searchCalls = 0;
@@ -542,7 +542,7 @@ describe("Person client", () => {
     });
   });
 
-  it("rejects malformed clean record responses and invalid CLI limits", async () => {
+  it("rejects malformed Person record responses and invalid CLI limits", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       const client = new PersonClient({
@@ -590,7 +590,7 @@ describe("Person client", () => {
     });
   });
 
-  it("sends Slack link replay input without caller or route assertions", async () => {
+  it("sends Slack identity-link replay input without caller or route assertions", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       const challengeCode = "A".repeat(43);
@@ -651,9 +651,9 @@ describe("Person client", () => {
       });
 
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      const begun = await client.beginSlackLink();
+      const begun = await client.beginSlackIdentityLink();
       expect(begun.challenge_code).toBe(challengeCode);
-      await client.completeSlackLink({
+      await client.completeSlackIdentityLink({
         challenge_attempt_id: begun.challenge_attempt_id,
         challenge_message_ts: begun.challenge_message_ts,
         challenge_code: begun.challenge_code,
@@ -664,7 +664,7 @@ describe("Person client", () => {
           path: "/v2/integration-links/slack/challenges",
           body: {
             challenge_code_sha256:
-              organizationSlackLinkChallengeCodeSha256(challengeCode),
+              organizationPersonSlackIdentityLinkChallengeCodeSha256(challengeCode),
             request_id: "psb_00000000-0000-4000-8000-000000000113",
           },
         },
@@ -1032,7 +1032,71 @@ describe("Person client", () => {
     });
   });
 
-  it("starts an invited employee, opens the browser, and reports ready only after one authorized read", async () => {
+  it("lets the Authority distinguish expired unused invitations from existing identities", async () => {
+    await withHome(async (home) => {
+      const invitationPath = join(home, "expired-person-onboarding.json");
+      const loginGrant = "G".repeat(43);
+      writeFileSync(
+        invitationPath,
+        `${canonicalJson({
+          schema_version: 1,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: "https://authority.example",
+          login_grant: loginGrant,
+          expires_at: "2026-08-18T00:01:00.000Z",
+        })}\n`,
+        { mode: 0o600 },
+      );
+      chmodSync(invitationPath, 0o600);
+
+      for (const argv of [
+        ["login", "--invitation", invitationPath],
+        ["start", "--invitation", invitationPath],
+      ]) {
+        let stdout = "";
+        let stderr = "";
+        let browserOpened = false;
+        let authorityRequests = 0;
+        const begins: Record<string, unknown>[] = [];
+        const status = await runPersonClientCli(argv, {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          open_authorization_url: () => {
+            browserOpened = true;
+            return true;
+          },
+          fetch: async (input, init) => {
+            expect(new URL(String(input)).pathname).toBe("/v2/session/oidc/begin");
+            authorityRequests += 1;
+            begins.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+            return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
+          },
+        });
+
+        expect(status).toBe(1);
+        expect(stdout).toBe("");
+        expect(browserOpened).toBe(false);
+        expect(authorityRequests).toBe(2);
+        expect(begins[0]).toMatchObject({
+          kind: "identity_bootstrap",
+          login_grant: loginGrant,
+        });
+        expect(begins[1]).toMatchObject({ kind: "existing_identity_login" });
+        expect(begins[1]).not.toHaveProperty("login_grant");
+        expect(JSON.parse(stderr)).toMatchObject({
+          ok: false,
+          action: argv[0],
+          error: expect.stringContaining("no existing ECHO identity was found"),
+        });
+        expect(stderr).toContain("reissue");
+        expect(stderr).not.toContain(loginGrant);
+      }
+    });
+  });
+
+  it("lets the Authority accept an invitation despite modest client clock skew", async () => {
     await withHome(async (home) => {
       const invitationPath = join(home, "person-onboarding.json");
       const loginGrant = "G".repeat(43);
@@ -1043,7 +1107,7 @@ describe("Person client", () => {
           kind: "echo-person-onboarding-invitation",
           authority_url: "https://authority.example",
           login_grant: loginGrant,
-          expires_at: "2026-08-18T00:15:00.000Z",
+          expires_at: "2026-08-18T00:01:00.000Z",
         })}\n`,
         { mode: 0o600 },
       );
@@ -1446,7 +1510,7 @@ describe("Person client", () => {
     });
   });
 
-  it("recovers a consumed invitation once through existing-identity login", async () => {
+  it("recovers an expired consumed invitation through existing-identity login", async () => {
     await withHome(async (home) => {
       const invitationPath = join(home, "person-onboarding.json");
       writeFileSync(
@@ -1456,7 +1520,7 @@ describe("Person client", () => {
           kind: "echo-person-onboarding-invitation",
           authority_url: "https://authority.example",
           login_grant: "G".repeat(43),
-          expires_at: "2026-08-18T00:15:00.000Z",
+          expires_at: "2026-08-18T00:01:00.000Z",
         })}\n`,
         { mode: 0o600 },
       );
@@ -1503,8 +1567,88 @@ describe("Person client", () => {
       );
       expect(status).toBe(0);
       expect(begins).toHaveLength(2);
-      expect(stdout).toContain("The invitation was already consumed.");
+      expect(stdout).toContain(
+        "An existing ECHO identity was found.",
+      );
       expect(stdout).toContain('"phase":"installed"');
+    });
+  });
+
+  it("promptly asks for invitation reissue when recovery finds no bound identity", async () => {
+    await withHome(async (home) => {
+      const invitationPath = join(home, "expired-person-onboarding.json");
+      writeFileSync(
+        invitationPath,
+        `${canonicalJson({
+          schema_version: 1,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: "https://authority.example",
+          login_grant: "G".repeat(43),
+          expires_at: "2026-08-18T00:01:00.000Z",
+        })}\n`,
+        { mode: 0o600 },
+      );
+      chmodSync(invitationPath, 0o600);
+      const begins: Record<string, unknown>[] = [];
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(
+        ["login", "--invitation", invitationPath],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          fetch: async (input, init) => {
+            if (new URL(String(input)).pathname !== "/v2/session/oidc/begin") {
+              throw new Error("unexpected Authority request");
+            }
+            const request = JSON.parse(String(init?.body)) as Record<
+              string,
+              unknown
+            >;
+            begins.push(request);
+            if (begins.length === 1) {
+              return json(
+                { error: { code: "unauthorized", message: "request failed" } },
+                401,
+              );
+            }
+            const handoff = request.loopback_handoff as Record<string, string>;
+            queueMicrotask(() => {
+              void globalThis.fetch(handoff.url, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/x-www-form-urlencoded",
+                },
+                body: new URLSearchParams({
+                  token: handoff.token,
+                  error: "identity_not_bound",
+                }),
+              });
+            });
+            return json(
+              {
+                authorization_url:
+                  "https://identity.example/authorize?state=state",
+                expires_at: "2026-08-18T00:10:00.000Z",
+              },
+              201,
+            );
+          },
+        },
+      );
+
+      expect(status).toBe(1);
+      expect(begins.map((request) => request.kind)).toEqual([
+        "identity_bootstrap",
+        "existing_identity_login",
+      ]);
+      expect(stdout).toContain('"phase":"open-browser"');
+      expect(stdout).not.toContain('"phase":"installed"');
+      expect(stderr).toContain("no active ECHO identity");
+      expect(stderr).toContain("Select the invited Google account");
+      expect(stderr).toContain("reissue the invitation");
     });
   });
 
@@ -1597,7 +1741,7 @@ describe("Person client", () => {
         expect(request).toMatchObject({
           subject_principal_id: SESSION.principal_id,
           source_adapter_id: "granola",
-          source_instance_id: "founder-feed",
+          source_instance_id: "test-meeting-source",
         });
         expect(request).not.toHaveProperty("target_principal_id");
         expect(request).not.toHaveProperty("target_membership_id");
@@ -1609,12 +1753,12 @@ describe("Person client", () => {
           subject_principal_id: SESSION.principal_id,
           membership_id: SESSION.membership_id,
           source_adapter_id: "granola",
-          source_instance_id: "founder-feed",
+          source_instance_id: "test-meeting-source",
           exclusions: [
             {
               scope: "source",
               source_adapter_id: "granola",
-              source_instance_id: "founder-feed",
+              source_instance_id: "test-meeting-source",
             },
           ],
         });
@@ -1628,7 +1772,7 @@ describe("Person client", () => {
 
       await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(
-        client.exclusions("granola", "founder-feed"),
+        client.meetingIngestionExclusions("granola", "test-meeting-source"),
       ).resolves.toMatchObject({
         subject_principal_id: SESSION.principal_id,
         exclusions: [{ scope: "source" }],

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time clean-v1 Authority preparation plus resumable founder onboarding.
+# One-time clean-v1 Authority preparation plus resumable initial-owner onboarding.
 # This wrapper deliberately owns the two EC2 Compose profiles and only the
 # fixed clean-data paths below. It never reads Authority SQLite files.
 set -euo pipefail
@@ -24,7 +24,7 @@ RUNTIME_PROFILE_TOOL="$DEPLOY_DIR/../release/clean-v1-runtime-profile.py"
 if [[ -f "$DEPLOY_DIR/release/clean-v1-runtime-profile.py" ]]; then
   RUNTIME_PROFILE_TOOL="$DEPLOY_DIR/release/clean-v1-runtime-profile.py"
 fi
-FOUNDER_MAIN="services/organization-authority/dist/clean-founder-main.js"
+SETUP_COMMAND="services/organization-authority/dist/clean-founder-main.js"
 RUNTIME_UID=''
 RUNTIME_GID=''
 EXECUTOR_UID=''
@@ -383,8 +383,8 @@ doctor() {
   if ! safe_directory_target "$DATA_DIR"; then doctor_json false clean_data_path_invalid 'Remove or repair the unsafe clean-data path before preparing.'; return; fi
   if ! safe_directory_target "$PRIVATE_DIR"; then doctor_json false clean_private_path_invalid 'Remove or repair the unsafe clean private-input path before preparing.'; return; fi
   if ! safe_directory_target "$RELEASE_DIR"; then doctor_json false clean_release_path_invalid 'Remove or repair the unsafe clean release path before preparing.'; return; fi
-  if ! safe_directory_target "$RUNTIME_PROFILES_DIR"; then doctor_json false clean_runtime_profiles_path_invalid 'Remove or repair the unsafe clean runtime-profiles path before preparing.'; return; fi
-  if ! safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR"; then doctor_json false clean_runtime_environments_path_invalid 'Remove or repair the unsafe clean runtime-environments path before preparing.'; return; fi
+  if ! safe_directory_target "$RUNTIME_PROFILES_DIR"; then doctor_json false clean_runtime_profiles_path_invalid 'Remove or repair the unsafe deployment runtime-profiles path before preparing.'; return; fi
+  if ! safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR"; then doctor_json false clean_runtime_environments_path_invalid 'Remove or repair the unsafe deployment runtime-environments path before preparing.'; return; fi
   doctor_json true ready 'Run prepare with the same input directory.'
 }
 
@@ -622,9 +622,9 @@ require_image_present() {
     fail 'accepted Authority image is not present locally; run resume to pull it explicitly'
 }
 
-founder_status() {
+setup_status() {
   compose_clean run --rm --no-deps --pull never --entrypoint node authority \
-    "$FOUNDER_MAIN" status --state-dir /echo-clean/state
+    "$SETUP_COMMAND" status --state-dir /echo-clean/state
 }
 
 staged_candidate_present() {
@@ -637,13 +637,13 @@ staged_candidate_present() {
 
 next_step_from_status() {
   python3 -c 'import json, sys; value=json.load(sys.stdin); step=value.get("next_step"); assert isinstance(step, str); print(step)' \
-    <<<"$1" || fail 'clean founder status was not the expected safe JSON'
+    <<<"$1" || fail 'initial-owner setup status was not the expected safe JSON'
 }
 
 status_boolean() {
   local status_json="$1" field="$2"
   python3 -c 'import json, sys; value=json.load(sys.stdin); result=value.get(sys.argv[1]); assert type(result) is bool; print("true" if result else "false")' \
-    "$field" <<<"$status_json" || fail "clean founder status has no boolean $field"
+    "$field" <<<"$status_json" || fail "initial-owner setup status has no boolean $field"
 }
 
 start_runtime() {
@@ -803,8 +803,8 @@ prepare() {
   require_safe_directory_target "$DATA_DIR" 'clean data path'
   require_safe_directory_target "$PRIVATE_DIR" 'clean private-input path'
   require_safe_directory_target "$RELEASE_DIR" 'clean release path'
-  require_safe_directory_target "$RUNTIME_PROFILES_DIR" 'clean runtime-profiles path'
-  require_safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR" 'clean runtime-environments path'
+  require_safe_directory_target "$RUNTIME_PROFILES_DIR" 'deployment runtime-profiles path'
+  require_safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR" 'deployment runtime-environments path'
   install -d -m 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR" \
     "$RUNTIME_PROFILES_DIR" "$RUNTIME_ENVIRONMENTS_DIR"
   chmod 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR" \
@@ -879,7 +879,7 @@ setup_value() {
 
 bootstrap() {
   compose_clean run --rm --no-deps --entrypoint node authority \
-    "$FOUNDER_MAIN" bootstrap \
+    "$SETUP_COMMAND" bootstrap \
     --state-dir /echo-clean/state \
     --organization-name "$(setup_value organization_name)" \
     --owner-display-name "$(setup_value owner_display_name)" \
@@ -1002,17 +1002,17 @@ resume_bootstrap() {
   local slack_connected="$1"
   if [[ "$slack_connected" == true ]]; then
     compose_clean run --rm --no-deps --entrypoint node authority \
-      "$FOUNDER_MAIN" resume --state-dir /echo-clean/state
+      "$SETUP_COMMAND" resume --state-dir /echo-clean/state
     return
   fi
   compose_clean run --rm --no-deps --entrypoint node authority \
-    "$FOUNDER_MAIN" resume --state-dir /echo-clean/state \
+    "$SETUP_COMMAND" resume --state-dir /echo-clean/state \
     < "$PRIVATE_DIR/slack-bot-token"
 }
 
 install_credentials() {
   compose_clean run --rm --no-deps --entrypoint node authority \
-    "$FOUNDER_MAIN" credentials-install \
+    "$SETUP_COMMAND" credentials-install \
     --state-dir /echo-clean/state \
     --granola-credential-file /echo-clean/private/granola-credential-source \
     --granola-owner-email-file /echo-clean/private/granola-owner-email \
@@ -1021,7 +1021,7 @@ install_credentials() {
 
 install_credentials_quiet() {
   activation_compose_quiet run --rm --no-deps --entrypoint node authority \
-    "$FOUNDER_MAIN" credentials-install \
+    "$SETUP_COMMAND" credentials-install \
     --state-dir /echo-clean/state \
     --granola-credential-file /echo-clean/private/granola-credential-source \
     --granola-owner-email-file /echo-clean/private/granola-owner-email \
@@ -1193,7 +1193,7 @@ activate_provider_credentials() {
   require_runtime_private_file "$llm_active_destination" 'active LLM credential'
   require_image_present
   local status_json
-  status_json="$(founder_status)"
+  status_json="$(setup_status)"
   terminal_green "$status_json" || \
     fail 'provider credentials can activate only on a complete, healthy Authority using the accepted image'
 
@@ -1267,7 +1267,7 @@ activate_provider_credentials() {
 
 finalize() {
   compose_clean run --rm --no-deps --entrypoint node authority \
-    "$FOUNDER_MAIN" finalize --state-dir /echo-clean/state
+    "$SETUP_COMMAND" finalize --state-dir /echo-clean/state
 }
 
 slack_interactivity_request_url() {
@@ -1293,7 +1293,7 @@ resume() {
   ensure_image
   local status_json step loops=0
   while (( loops < 5 )); do
-    status_json="$(founder_status)"
+    status_json="$(setup_status)"
     step="$(next_step_from_status "$status_json")"
     case "$step" in
       run_bootstrap)
@@ -1306,17 +1306,17 @@ resume() {
         ;;
       complete_founder_browser_login)
         start_runtime
-        local founder_invitation="$DATA_DIR/state/onboarding/founder-person-invitation.json"
-        [[ -f "$founder_invitation" && ! -L "$founder_invitation" ]] || \
-          fail 'founder invitation is missing from the expected clean state path'
-        printf 'ACTION: Privately transfer %s to the founder machine, preserve mode 0600, then run echo-brain person login --invitation <transferred-absolute-path>.\n' "$founder_invitation"
-        print_status "$(founder_status)"
+        local initial_owner_invitation="$DATA_DIR/state/onboarding/founder-person-invitation.json"
+        [[ -f "$initial_owner_invitation" && ! -L "$initial_owner_invitation" ]] || \
+          fail 'initial-owner invitation is missing from the expected clean state path'
+        printf 'ACTION: Privately transfer %s to the initial-owner machine, preserve mode 0600, then run echo-brain person login --invitation <transferred-absolute-path>.\n' "$initial_owner_invitation"
+        print_status "$(setup_status)"
         return
         ;;
       complete_founder_slack_link)
         start_runtime
-        printf 'ACTION: On the founder machine, run echo-brain person slack-link and complete its one-time Slack code exchange.\n'
-        print_status "$(founder_status)"
+        printf 'ACTION: On the initial-owner machine, run echo-brain person slack-link and complete its one-time Slack code exchange.\n'
+        print_status "$(setup_status)"
         return
         ;;
       install_provider_credentials)
@@ -1328,18 +1328,18 @@ resume() {
         finalize
         start_runtime
         print_slack_interactivity_action
-        print_status "$(founder_status)"
+        print_status "$(setup_status)"
         return
         ;;
       ready_to_start)
         start_runtime
         printf 'CANARY: create one new Granola note with a unique marker; approve its Slack card; then run echo-brain person records --limit 20 and echo-brain person records --query <marker>. Rerun onboard-clean-v1.sh resume, then onboard-clean-v1.sh status; terminal green requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
-        print_status "$(founder_status)"
+        print_status "$(setup_status)"
         return
         ;;
       complete)
         start_runtime
-        status_json="$(founder_status)"
+        status_json="$(setup_status)"
         terminal_green "$status_json" || \
           fail 'durable canary evidence is complete, but Authority is not running, healthy, and on the accepted image'
         printf 'onboarding_complete=true\n'
@@ -1347,9 +1347,9 @@ resume() {
         return
         ;;
       recover_setup_plan)
-        fail 'clean founder state exists without a recoverable setup plan; stop and recover the clean state before retrying'
+        fail 'initial-owner setup state exists without a recoverable setup plan; stop and recover the clean state before retrying'
         ;;
-      *) fail "unexpected clean founder next_step: $step" ;;
+      *) fail "unexpected initial-owner setup next_step: $step" ;;
     esac
     ((loops += 1))
   done
@@ -1365,7 +1365,7 @@ status() {
   fi
   require_image_present
   local status_json
-  status_json="$(founder_status)"
+  status_json="$(setup_status)"
   print_status "$status_json"
 }
 

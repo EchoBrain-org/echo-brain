@@ -6,11 +6,11 @@ title: Component catalog
 owners:
   - unassigned
 component_ids:
-  - CMP-CORE-PIPELINE
-  - CMP-ADAPTERS
-  - CMP-LOCAL-RUNTIME
+  - CMP-MEETING-PROCESSING-CORE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-PERSON-CLIENT
   - CMP-IDENTITY-ACCESS
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERMISSIONS
   - CMP-PROTOCOLS-CRYPTO
   - CMP-OPERATIONS-RELEASE
@@ -27,11 +27,11 @@ and qualification proof.
 
 | Component | Primary source | Responsibility |
 | --- | --- | --- |
-| [Core pipeline](core-pipeline.md) | `services/organization-authority/src/processing/core/` | Provider-neutral decision pipeline and ports |
-| [Adapters](adapters.md) | `services/organization-authority/src/processing/adapters/` | Provider-specific sources, processors, approvals, and delivery |
-| [Local runtime](local-runtime.md) | `src/product/person-client/` | Thin Person CLI and private session state |
+| [Meeting processing core](meeting-processing-core.md) | `services/organization-authority/src/processing/core/` | Provider-neutral meeting processing rules and ports |
+| [Processing adapters](processing-adapters.md) | `services/organization-authority/src/processing/adapters/` | Provider-specific sources, processors, approvals, and delivery |
+| [Person client](person-client.md) | `src/product/person-client/` | Thin Person CLI and private session state |
 | [Identity and access](identity-access.md) | Person client plus Authority | Person sessions, membership, compatibility enrollment, and revocation state |
-| [Central organization](central-organization.md) | `services/organization-*` | Authority, integration policy, record, and retrieval ownership |
+| [Organization Authority](organization-authority.md) | `services/organization-authority/`; `packages/organization-{control-plane,record,retrieval}/` | Organization identity, policy, record, retrieval, and API authority |
 | [Permissions](permissions.md) | cross-cutting | Approval, admission, visibility, and read authorization |
 | [Protocols and cryptography](protocols-crypto.md) | `packages/*` | Signed documents, canonicalization, identifiers, and HTTP contracts |
 | [Operations and release](operations-release.md) | `deploy/`, `tools/`, `.github/` | Build, qualification, deployment, backup, restore, and release |

@@ -2,7 +2,7 @@
 schema_version: 1
 id: RB-OPERATIONS-003
 kind: runbook
-title: Protect canonical source and immutable clean-beta releases
+title: Protect canonical source and immutable releases
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-26
@@ -11,13 +11,13 @@ reviewed_ref: 2cadcfcddf550b851b3f8f4b6b48bcb29b9ee90c
 tested_at: null
 ---
 
-# RB-OPERATIONS-003: Protect canonical source and immutable clean-beta releases
+# RB-OPERATIONS-003: Protect canonical source and immutable releases
 
 ## Trigger, outcome, preconditions, and stop conditions
 
 Use this runbook before closing
 [#25](https://github.com/EchoBrain-org/echo-brain/issues/25) and before
-publishing the first clean beta. The outcome is an active GitHub ruleset that
+publishing the first release. The outcome is an active GitHub ruleset that
 protects `main`, requires independent review and Code Owner approval for the CI
 and release boundary, and makes every future release immutable. This procedure
 does not deploy a product or publish a release.
@@ -207,7 +207,7 @@ If verification fails, do not publish a beta and do not close issue #25.
 Correct the repository contract through a pull request or correct the settings
 from the owner account, then repeat the full readback.
 
-## Publish the first clean beta once
+## Publish the initial release once
 
 After issue #25 is closed and before the first beta is published:
 
@@ -215,7 +215,7 @@ After issue #25 is closed and before the first beta is published:
    green. Record its full SHA. Never use a moving tag.
 2. Build and validate the release record, Person-client artifact and onboarding
    kit, Authority image digest, and runtime profile from that exact commit.
-3. Create a draft release with a new clean-beta semantic-version tag pointing
+3. Create a draft release with a new semantic-version tag pointing
    directly at the selected full SHA. Do not publish yet.
 4. Attach every final artifact exactly once. Download the draft assets and
    verify names, sizes, SHA-256 digests, source SHA, Authority image digest,
@@ -231,7 +231,7 @@ After issue #25 is closed and before the first beta is published:
 
 GitHub recommends the draft, attach-all-assets, publish sequence in
 [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-There is no rollback that rewrites a published clean beta. If publication is
+There is no rollback that rewrites a published release. If publication is
 wrong, preserve it, stop deployment, fix the source through the protected pull
 request path, and publish a higher version.
 

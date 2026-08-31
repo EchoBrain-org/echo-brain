@@ -2,7 +2,7 @@ import type { BegunPersonOidcLogin } from "../application/person-identity-sessio
 import type {
   OidcAuthorizationCodeResult,
   PersonSessionOidcProvider,
-} from "../application/ports/person-session-runtime.js";
+} from "../application/ports/person-session-dependencies.js";
 
 export interface PersonSessionOidcAuthorizationProvider extends PersonSessionOidcProvider {
   buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string;
@@ -47,7 +47,7 @@ export class LazyPersonSessionOidcProvider implements PersonSessionOidcProvider 
 
   /**
    * The authorize endpoint is the first point at which OIDC metadata is
-   * needed. Keeping discovery here lets the clean server bind its local
+   * needed. Keeping discovery here lets the session server bind its local
    * listener and worker without contacting an identity provider at startup.
    */
   async buildAuthorizationUrl(attempt: BegunPersonOidcLogin): Promise<string> {

@@ -251,7 +251,7 @@ function decodeCursor(cursor: string | undefined): GranolaCursorState {
 /**
  * Classifies a persisted cursor without returning its provider pagination
  * token. A watermark is the durable boundary between the one-time history
- * walk and normal live polling.
+ * walk and normal incremental polling.
  */
 export function granolaCursorPhase(
   cursor: string | undefined,
@@ -265,9 +265,11 @@ export function granolaCursorPhase(
  * stored one default overlap ahead so the next request asks Granola for notes
  * updated after exactly `cutoffAt`.
  */
-export function createGranolaLiveOnlyCursor(cutoffAt: string): string {
+export function createGranolaPostCutoffCursor(cutoffAt: string): string {
   if (normalizedIso(cutoffAt) !== cutoffAt) {
-    throw new Error("Granola live-only cutoff must be a canonical ISO timestamp");
+    throw new Error(
+      "Granola post-cutoff timestamp must be a canonical ISO timestamp",
+    );
   }
   return encodeCursor({
     schema_version: 1,
@@ -280,10 +282,10 @@ export function createGranolaLiveOnlyCursor(cutoffAt: string): string {
 }
 
 /** Returns the stopped-time boundary without disclosing a pagination token. */
-export function granolaLiveOnlyCutoff(cursor: string): string {
+export function granolaPostCutoffTimestamp(cursor: string): string {
   const state = decodeCursor(cursor);
   if (state.watermark === null || state.page_cursor !== null || state.page_high_watermark !== null) {
-    throw new Error('Granola cursor is not a live-only activation cursor');
+    throw new Error("Granola cursor is not a post-cutoff activation cursor");
   }
   return new Date(
     new Date(state.watermark).getTime() - DEFAULT_GRANOLA_CURSOR_OVERLAP_MS,

@@ -1,66 +1,40 @@
 # Organization API
 
-**Status:** stable Person-session and Authority transport contract
+**Status:** internal Authority HTTP contract package
 
-This package owns the versioned ordinary transport DTOs for the narrow
-single-organization onboarding/access slice. It references signed organization
-protocol documents, but database rows and authority domain objects never become
-transport types.
+This package owns the versioned data-transfer types, route constants,
+validators, and canonical byte encoders used at the Organization Authority
+HTTP boundary. It contains no server, persistence, provider client, UI, secret,
+or private-key implementation.
 
-It also owns creation and verification of installation-signed access-lease and
-permission-check requests. Those requests are authenticated API commands, not
-durable organization trust facts. Permission checks derive one stable provider
-event digest from the exact Slack actor, action, approval resource, and adapter
-identity while allowing request IDs and timestamps to change on transport
-retries. The digest also binds the organization, enrollment, installation key,
-and live Slack bot/app identity. It is correlation evidence, not an
-authorization cache. The request carries only an opaque `approval_id`; raw
-product processing keys and meeting identifiers never cross the organization
-Authority boundary.
+## Current contract areas
 
-Access-lease request V1 remains the compatibility shape: it carries no
-requested lifetime, and the Authority issues its configured V1 lifetime of at
-most five minutes. V2 adds one installation-signed
-`requested_active_lease_ttl_ms`, an upper bound from one millisecond through
-30 minutes. The Authority may issue any positive lifetime at or below that
-signed bound. The current product asks for the full 30 minutes; older V1
-installations keep receiving and verifying five-minute leases. The signed
-access-state response shape is unchanged.
+- Person OIDC login, session refresh, and session revocation routes and DTOs.
+- Person Slack identity-link challenge requests, responses, and results.
+- Person-owned meeting-ingestion exclusions, including the bounded
+  administrator break-glass read contract.
+- Authority descriptors plus administrator membership, overview, and audit
+  DTOs.
+- Installation-authenticated Slack identity-link DTOs.
+- Installation-authenticated Slack-reaction approval permission-check DTOs for
+  the original, restricted-reviewer, and organization-member-readable policy
+  families.
 
-The permission-check decision is not itself signed. The request is
-installation-signed; `request_sha256` and `provider_event_sha256` bind the
-decision to that exact request but do not authenticate it. Authenticity comes
-from the transport -- the configured HTTPS origin associated with the pinned
-Authority descriptor. Callers verify the request binding regardless.
+Person Slack identity linking and installation Slack identity linking are
+different contracts. The Person flow proves a signed-in Person's Slack
+identity. The installation flow is signed by an enrolled installation and also
+carries its installation and adapter coordinates.
 
-## Organization record ingest
+Meeting-ingestion exclusion names describe the behavior: they prevent a
+selected source or meeting from being admitted. Existing HTTP paths, JSON
+fields, and wire `kind` values retain their versioned `member-exclusion`
+spelling for compatibility.
 
-`ORGANIZATION_API_RECORD_ENVELOPES_PATH` is the dedicated ingest route for the
-organization decision record. Its request DTO wraps one signed record envelope
-and nothing else; its success DTO wraps the authority-signed receipt. A
-replayed envelope returns the stored original receipt unchanged, so the
-submitter cannot distinguish a fresh append from a retry -- and does not need
-to.
+Slack-reaction approval permission-check requests are one-request
+authorization commands, not reusable grants. Decisions bind to the request and
+provider-event digests but are not themselves signed; callers authenticate the
+Authority over the configured HTTPS origin and compare both digests with the
+request they sent.
 
-This route is the single exemption to the shared body limit. The canonical
-record envelope is capped at 256 KiB; the exact request DTO adds the fixed
-20-byte `{"record_envelope":}` wrapper, so
-`MAX_ORGANIZATION_RECORD_API_BODY_BYTES` is 256 KiB + 20 bytes and bounds raw
-bytes before JSON parsing. An approved brief with verbatim evidence routinely
-exceeds 16 KiB. `MAX_ORGANIZATION_API_BODY_BYTES` is unchanged and still
-governs every other route.
-
-Ingest outcomes are terminal only when the response carries an exact code from
-`ORGANIZATION_RECORD_PERMANENT_REJECTION_CODES`. Everything else -- an expired
-lease, a transport fault -- is retryable, so the submitter keeps its frozen
-envelope instead of writing a permanent-rejection slot. Terminal classification
-is by code, never by matching message text.
-
-This is the one route whose payload carries meeting identifiers and approved
-brief content across the Authority boundary. That is deliberate: the record is
-the organization's log of what its people approved. The permission-check
-boundary above is unchanged -- it still carries only an opaque `approval_id`.
-
-The package contains no server implementation, authentication provider,
-persistence, log storage, UI, administrator secret, or private-key
-implementation.
+The package depends only on the federation and organization protocol packages.
+Database rows and Authority domain objects never become transport types.

@@ -4,8 +4,8 @@ id: INV-ADAPTERS-004
 kind: invariant
 title: Models select source-owned evidence references
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: fd762a45e8745eebf27f346317e97038be69de44

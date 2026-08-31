@@ -9,81 +9,81 @@ export { MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES } from "./validation-support.j
 export { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
 export {
   ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE,
-  ORGANIZATION_MEMBER_READABLE_APPROVAL_PRESENTATION_KIND,
   ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_TEXT,
   ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_VERSION,
   ORGANIZATION_MEMBER_READABLE_ELIGIBLE_MEMBERSHIP_TYPES,
   ORGANIZATION_MEMBER_READABLE_POLICY_ID,
-  ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE,
-  ORGANIZATION_MEMBER_READABLE_RECORD_SURFACE,
-  ORGANIZATION_MEMBER_READABLE_REACTION_PATTERN,
   ORGANIZATION_MEMBER_READABLE_RELEASE_DRAFT_KIND,
-  organizationMemberReadablePolicyContract,
-  organizationMemberReadablePolicyContractSha256,
-} from "./organization-member-readable-policy.js";
-export type { OrganizationMemberReadableItemKindV1 } from "./organization-member-readable-policy.js";
+  ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_APPROVAL_PRESENTATION_KIND,
+  ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_PATTERN,
+  ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_PRESENTATION_MODE,
+  ORGANIZATION_MEMBER_READABLE_SLACK_REACTION_RECORD_SURFACE,
+  organizationMemberReadableSlackReactionApprovalPolicyContract,
+  organizationMemberReadableSlackReactionApprovalPolicyContractSha256,
+} from "./organization-member-readable-slack-reaction-approval-policy.js";
+export type { OrganizationMemberReadableItemKindV1 } from "./organization-member-readable-slack-reaction-approval-policy.js";
 export {
   organizationMemberReadableReleaseDraftSha256,
   organizationMemberReadableSignalIdSha256,
   projectOrganizationMemberReadableReleaseDraft,
   validateOrganizationMemberReadableReleaseDraft,
-} from "./organization-member-release-draft.js";
+} from "./organization-member-readable-release-draft.js";
 export type {
   OrganizationMemberReadableReleaseDraftItemV1,
   OrganizationMemberReadableReleaseDraftV1,
-} from "./organization-member-release-draft.js";
+} from "./organization-member-readable-release-draft.js";
 export {
-  organizationMemberReadableApprovalPresentation,
-  organizationMemberReadableApprovalPresentationSha256,
-} from "./organization-member-approval-presentation.js";
-export type { OrganizationMemberReadableApprovalPresentationV1 } from "./organization-member-approval-presentation.js";
+  organizationMemberReadableSlackReactionApprovalPresentation,
+  organizationMemberReadableSlackReactionApprovalPresentationSha256,
+} from "./organization-member-readable-slack-reaction-approval-presentation.js";
+export type { OrganizationMemberReadableSlackReactionApprovalPresentationV1 } from "./organization-member-readable-slack-reaction-approval-presentation.js";
 export {
-  MAX_REVIEWER_CARD_TITLE_SCALARS,
-  MAX_REVIEWER_ITEM_TEXT_SCALARS,
-  MAX_REVIEWER_RELEASE_ITEMS,
-  MAX_REVIEWER_SIGNAL_ID_BYTES,
+  MAX_RESTRICTED_REVIEWER_CARD_TITLE_SCALARS,
+  MAX_RESTRICTED_REVIEWER_ITEM_TEXT_SCALARS,
+  MAX_RESTRICTED_REVIEWER_RELEASE_ITEMS,
+  MAX_RESTRICTED_REVIEWER_SIGNAL_ID_BYTES,
   RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
   RESTRICTED_REVIEWER_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_CONSEQUENCE_VERSION,
   RESTRICTED_REVIEWER_POLICY_ID,
-  RESTRICTED_REVIEWER_PRESENTATION_MODE,
-  RESTRICTED_REVIEWER_RECORD_SURFACE,
-  REVIEWER_REACTION_PATTERN,
-  REVIEWER_RELEASE_ITEM_KINDS,
-  assertReviewerPresentableText,
-  assertReviewerReactionPair,
-} from "./reviewer-restricted-policy.js";
-export type { ReviewerReleaseItemKindV1 } from "./reviewer-restricted-policy.js";
+  RESTRICTED_REVIEWER_RELEASE_ITEM_KINDS,
+  RESTRICTED_REVIEWER_SLACK_REACTION_PATTERN,
+  RESTRICTED_REVIEWER_SLACK_REACTION_PRESENTATION_MODE,
+  RESTRICTED_REVIEWER_SLACK_REACTION_RECORD_SURFACE,
+  assertRestrictedReviewerPresentableText,
+  assertRestrictedReviewerSlackReactionPair,
+} from "./restricted-reviewer-slack-reaction-approval-policy.js";
+export type { RestrictedReviewerReleaseItemKindV1 } from "./restricted-reviewer-slack-reaction-approval-policy.js";
 export {
-  REVIEWER_RELEASE_DRAFT_KIND,
-  projectReviewerReleaseDraft,
-  reviewerReleaseDraftSha256,
-  reviewerSignalIdSha256,
-  validateReviewerReleaseDraft,
-} from "./reviewer-release-draft.js";
+  RESTRICTED_REVIEWER_RELEASE_DRAFT_KIND,
+  projectRestrictedReviewerReleaseDraft,
+  restrictedReviewerReleaseDraftSha256,
+  restrictedReviewerSignalIdSha256,
+  validateRestrictedReviewerReleaseDraft,
+} from "./restricted-reviewer-release-draft.js";
 export type {
-  ProjectReviewerReleaseDraftInput,
-  ReviewerReleaseDraftItemV1,
-  ReviewerReleaseDraftSourceBriefV1,
-  ReviewerReleaseDraftSourceSignalV1,
-  ReviewerReleaseDraftV1,
-} from "./reviewer-release-draft.js";
+  ProjectRestrictedReviewerReleaseDraftInput,
+  RestrictedReviewerReleaseDraftItemV1,
+  RestrictedReviewerReleaseDraftSourceBriefV1,
+  RestrictedReviewerReleaseDraftSourceSignalV1,
+  RestrictedReviewerReleaseDraftV1,
+} from "./restricted-reviewer-release-draft.js";
 export {
-  REVIEWER_APPROVAL_PRESENTATION_KIND,
-  REVIEWER_APPROVAL_TRANSPORT,
-  reviewerApprovalPresentation,
-  reviewerApprovalPresentationSha256,
-} from "./reviewer-approval-presentation.js";
+  RESTRICTED_REVIEWER_SLACK_REACTION_APPROVAL_PRESENTATION_KIND,
+  RESTRICTED_REVIEWER_SLACK_REACTION_APPROVAL_TRANSPORT,
+  restrictedReviewerSlackReactionApprovalPresentation,
+  restrictedReviewerSlackReactionApprovalPresentationSha256,
+} from "./restricted-reviewer-slack-reaction-approval-presentation.js";
 export type {
-  ReviewerApprovalBlockV1,
-  ReviewerApprovalPresentationInput,
-  ReviewerApprovalPresentationV1,
-  ReviewerApprovalTransportV1,
-  ReviewerContextBlockV1,
-  ReviewerHeaderBlockV1,
-  ReviewerPlainTextV1,
-  ReviewerSectionBlockV1,
-} from "./reviewer-approval-presentation.js";
+  RestrictedReviewerSlackReactionApprovalBlockV1,
+  RestrictedReviewerSlackReactionApprovalPresentationInput,
+  RestrictedReviewerSlackReactionApprovalPresentationV1,
+  RestrictedReviewerSlackReactionApprovalTransportV1,
+  RestrictedReviewerSlackReactionContextBlockV1,
+  RestrictedReviewerSlackReactionHeaderBlockV1,
+  RestrictedReviewerSlackReactionPlainTextV1,
+  RestrictedReviewerSlackReactionSectionBlockV1,
+} from "./restricted-reviewer-slack-reaction-approval-presentation.js";
 export {
   isOrganizationProtocolValidationError,
   OrganizationProtocolValidationError,

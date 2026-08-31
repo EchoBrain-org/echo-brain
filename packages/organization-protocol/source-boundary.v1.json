@@ -15,6 +15,17 @@
   "runtime_assets": [
     "packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json"
   ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Organization Protocol public API",
+        "path": "packages/organization-protocol/src/index.ts",
+        "export": "createOrganizationRecordEnvelopeV4"
+      }
+    ],
+    "retired_source_paths": [],
+    "compatibility_entrypoints": []
+  },
   "layer_rules": [
     {
       "name": "organization-protocol-depends-only-on-federation-protocol",

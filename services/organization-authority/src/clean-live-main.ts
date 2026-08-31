@@ -1,3 +1,3 @@
-import { runCleanLiveCli } from "./composition/clean-live-cli.js";
+import { runOrganizationAuthorityServiceCli } from "./composition/organization-authority-service-cli.js";
 
-process.exitCode = await runCleanLiveCli(process.argv.slice(2));
+process.exitCode = await runOrganizationAuthorityServiceCli(process.argv.slice(2));

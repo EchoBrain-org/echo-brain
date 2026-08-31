@@ -109,7 +109,7 @@ function parseArguments(argv) {
     argv[2] !== "--output"
   ) {
     fail(
-      "usage: build-authority-staging-host-bundle.mjs --source-root <clean-repository-root> --output <new-private-bundle.tar.gz>",
+      "usage: build-authority-staging-host-bundle.mjs --source-root <unchanged-repository-root> --output <new-private-bundle.tar.gz>",
     );
   }
   const sourceRoot = resolve(argv[1]);
@@ -119,7 +119,7 @@ function parseArguments(argv) {
   if (existsSync(output) || existsSync(`${output}.manifest.json`))
     fail("output and its manifest must be new paths");
   if (output === sourceRoot || output.startsWith(`${sourceRoot}${sep}`))
-    fail("output must be outside the clean source root");
+    fail("output must be outside the source root");
   privateDirectory(dirname(output), "output directory");
   return Object.freeze({ sourceRoot, output });
 }

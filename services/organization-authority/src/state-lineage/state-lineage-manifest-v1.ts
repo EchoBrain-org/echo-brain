@@ -21,7 +21,7 @@ import type {
  * exist in any current schema: no migration in this repository creates it, and
  * this module deliberately adds none. Like the Authority initialization
  * manifest, these contracts are composition-owned migration mechanics, not
- * Authority protocol surface, so they live here rather than in a package
+ * Authority protocol surface, so they reside here rather than in a package
  * export.
  */
 
@@ -79,10 +79,10 @@ export const STATE_LINEAGE_ROLES_V1 = Object.freeze([
  * organization identity is carried only by the manifests.
  *
  * Six values are the shipped constants and must not be reassigned:
- * control-plane from services/organization-control-plane/src/persistence/
- * migrate.ts, record-log and record-derived from services/organization-record/
+ * control-plane from packages/organization-control-plane/src/persistence/
+ * migrate.ts, record-log and record-derived from packages/organization-record/
  * src/persistence/database-definition.ts, and the three retrieval planes from
- * services/organization-retrieval/src/persistence/database-definition.ts. Only
+ * packages/organization-retrieval/src/persistence/database-definition.ts. Only
  * `authority` is newly assigned here: no authority database written by the
  * current migrator carries any header application_id, so this value can be
  * satisfied only by a future initializer that writes it.

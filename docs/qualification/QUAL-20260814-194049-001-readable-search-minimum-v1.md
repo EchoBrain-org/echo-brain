@@ -4,7 +4,7 @@ id: QUAL-20260814-194049-001
 kind: qualification
 title: Readable-search Layers 1-3 minimum-V1 founder-live qualification
 component_ids:
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
   - CMP-OPERATIONS-RELEASE

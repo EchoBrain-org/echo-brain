@@ -6,7 +6,7 @@ import type {
   PersonSessionOidcConfiguration,
   PersonSessionOidcProvider,
   VerifiedOidcIdentityToken,
-} from '../../application/ports/person-session-runtime.js';
+} from '../../application/ports/person-session-dependencies.js';
 
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 15;
 const TERMINAL_CONFIGURATION_FAILURE = {

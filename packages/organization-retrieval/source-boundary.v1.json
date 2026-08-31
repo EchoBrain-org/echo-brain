@@ -1,0 +1,125 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/organization-retrieval",
+  "workspace": true,
+  "boundary_root": "packages/organization-retrieval",
+  "source_root": "packages/organization-retrieval/src",
+  "package_json": "packages/organization-retrieval/package.json",
+  "entry_points": [
+    "packages/organization-retrieval/src/readable-search-engine-v1.ts"
+  ],
+  "owned_source_paths": [
+    "packages/organization-retrieval/src/**"
+  ],
+  "allowed_internal_paths": [
+    "packages/organization-retrieval/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol"
+  ],
+  "allowed_external_packages": [
+    "better-sqlite3"
+  ],
+  "allowed_node_builtins": [
+    "crypto",
+    "fs",
+    "path"
+  ],
+  "runtime_assets": [
+    "packages/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql",
+    "packages/organization-retrieval/baselines/readable-search-lexical-baseline-v1.sql",
+    "packages/organization-retrieval/baselines/readable-search-content-baseline-v1.sql"
+  ],
+  "forbidden_repository_roots": [
+    "services/organization-authority",
+    "packages/organization-record",
+    "packages/organization-control-plane"
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Readable-search engine",
+        "path": "packages/organization-retrieval/src/readable-search-engine-v1.ts",
+        "export": "buildReadableSearchGenerationV1"
+      },
+      {
+        "name": "Readable-search contracts",
+        "path": "packages/organization-retrieval/src/application/readable-search-contracts.ts",
+        "export": "ReadableSearchPlane"
+      }
+    ],
+    "retired_source_paths": [
+      "packages/organization-retrieval/src/readable-search-runtime-v1.ts"
+    ],
+    "compatibility_entrypoints": [
+      {
+        "path": "packages/organization-retrieval/src/new-lineage-v1.ts",
+        "targets": [
+          "packages/organization-retrieval/src/readable-search-engine-v1.ts"
+        ]
+      }
+    ]
+  },
+  "layer_rules": [
+    {
+      "name": "readable-search-engine-owns-generation-lifecycle-and-query",
+      "from": "packages/organization-retrieval/src/readable-search-engine-v1.ts",
+      "allowed_imports": [
+        "packages/organization-retrieval/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "path"
+      ]
+    },
+    {
+      "name": "retrieval-compatibility-entrypoint-is-thin",
+      "from": "packages/organization-retrieval/src/new-lineage-v1.ts",
+      "allowed_imports": [
+        "packages/organization-retrieval/src/readable-search-engine-v1.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "retrieval-application-is-pure",
+      "from": "packages/organization-retrieval/src/application/**",
+      "allowed_imports": [
+        "packages/organization-retrieval/src/application/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "retrieval-persistence-owns-sqlite",
+      "from": "packages/organization-retrieval/src/persistence/**",
+      "allowed_imports": [
+        "packages/organization-retrieval/src/application/**",
+        "packages/organization-retrieval/src/persistence/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "path"
+      ]
+    }
+  ]
+}

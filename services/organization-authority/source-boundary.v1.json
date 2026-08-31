@@ -45,35 +45,256 @@
   ],
   "runtime_assets": [
     "services/organization-authority/baselines/authority-baseline-v1.sql",
-    "services/organization-authority/baselines/authority-live-source-v3.sql",
+    "services/organization-authority/baselines/authority-meeting-processing-v3.sql",
     "services/organization-authority/baselines/authority-private-approval-v2.sql"
   ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Organization Authority composition root",
+        "path": "services/organization-authority/src/composition/organization-authority-composition-root.ts",
+        "export": "openOrganizationAuthorityService"
+      },
+      {
+        "name": "Organization Authority runtime",
+        "path": "services/organization-authority/src/composition/organization-authority-runtime.ts",
+        "export": "openOrganizationAuthorityRuntime"
+      },
+      {
+        "name": "Organization Authority service lifecycle",
+        "path": "services/organization-authority/src/composition/organization-authority-service-lifecycle.ts",
+        "export": "startOrganizationAuthorityServiceLifecycle"
+      },
+      {
+        "name": "Organization Authority HTTP server",
+        "path": "services/organization-authority/src/presentation/organization-authority-http-server.ts",
+        "export": "createOrganizationAuthorityHttpServer"
+      },
+      {
+        "name": "Organization Authority database",
+        "path": "services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.ts",
+        "export": "openAuthorityDatabase"
+      },
+      {
+        "name": "Authority state-lineage initializer",
+        "path": "services/organization-authority/src/state-lineage/authority-state-lineage-initializer.ts",
+        "export": "initializeAuthorityStateLineageV1"
+      },
+      {
+        "name": "Organization Authority state bootstrap",
+        "path": "services/organization-authority/src/composition/organization-authority-state-bootstrap.ts",
+        "export": "bootstrapOrganizationAuthorityState"
+      },
+      {
+        "name": "Authority state-lineage verifier",
+        "path": "services/organization-authority/src/composition/verify-authority-state-lineage.ts",
+        "export": "verifyAuthorityStateLineage"
+      },
+      {
+        "name": "Admitted meeting-processing cycle",
+        "path": "services/organization-authority/src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.ts",
+        "export": "AdmittedMeetingProcessingCycleV1"
+      },
+      {
+        "name": "Reference meeting-processing cycle",
+        "path": "services/organization-authority/src/processing/reference/reference-meeting-processing-cycle.ts",
+        "export": "runReferenceMeetingProcessingCycle"
+      },
+      {
+        "name": "Answer-composition generation bundle",
+        "path": "services/organization-authority/src/composition/answer-composition-generation-bundle-v1.ts",
+        "export": "AnswerCompositionGenerationBundleV1"
+      },
+      {
+        "name": "Meeting source bundle",
+        "path": "services/organization-authority/src/composition/meeting-source-bundle-v1.ts",
+        "export": "MeetingSourceBundleV1"
+      },
+      {
+        "name": "Decision processor bundle",
+        "path": "services/organization-authority/src/composition/decision-processor-bundle-v1.ts",
+        "export": "DecisionProcessorBundleV1"
+      },
+      {
+        "name": "Approval workflow bundle",
+        "path": "services/organization-authority/src/composition/approval-workflow-bundle-v1.ts",
+        "export": "ApprovalWorkflowBundleV1"
+      },
+      {
+        "name": "Granola meeting source bundle",
+        "path": "services/organization-authority/src/composition/providers/granola/granola-meeting-source-bundle-v1.ts",
+        "export": "createGranolaMeetingSourceBundleV1"
+      },
+      {
+        "name": "OpenRouter answer-composition generation bundle",
+        "path": "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts",
+        "export": "createOpenRouterAnswerCompositionGenerationBundleV1"
+      },
+      {
+        "name": "OpenRouter decision processor bundle",
+        "path": "services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.ts",
+        "export": "createOpenRouterDecisionProcessorBundleV1"
+      },
+      {
+        "name": "Private Slack approval workflow bundle",
+        "path": "services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.ts",
+        "export": "createPrivateSlackApprovalWorkflowBundleV1"
+      },
+      {
+        "name": "Slack Person external-identity runtime bundle",
+        "path": "services/organization-authority/src/composition/providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
+        "export": "createSlackPersonExternalIdentityRuntimeBundleV1"
+      },
+      {
+        "name": "Private Slack approval interaction protocol",
+        "path": "services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.ts",
+        "export": "verifyPrivateSlackApprovalRequestV1"
+      },
+      {
+        "name": "Private Slack approval interaction handler",
+        "path": "services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-handler-v1.ts",
+        "export": "createPrivateSlackApprovalInteractionHandlerV1"
+      },
+      {
+        "name": "Private Slack approval HTTP adapter",
+        "path": "services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-http-adapter-v1.ts",
+        "export": "createPrivateSlackApprovalHttpAdapterV1"
+      },
+      {
+        "name": "Private Slack approval interaction HTTP port",
+        "path": "services/organization-authority/src/presentation/private-slack-approval-interaction-http-port-v1.ts",
+        "export": "PrivateSlackApprovalInteractionHttpPortV1"
+      },
+      {
+        "name": "Readable-search generation composition",
+        "path": "services/organization-authority/src/composition/readable-search-generation-composition.ts",
+        "export": "createReadableSearchGenerationReconcilerV1"
+      }
+    ],
+    "retired_source_paths": [
+      "services/organization-authority/src/application/ports/runtime-ports.ts",
+      "services/organization-authority/src/adapters/runtime/system-runtime-ports.ts",
+      "services/organization-authority/src/composition/granola-admitted-meeting-source-cursor-policy-v1.ts",
+      "services/organization-authority/src/composition/granola-meeting-source-admission-cli.ts",
+      "services/organization-authority/src/composition/granola-meeting-source-admission.ts",
+      "services/organization-authority/src/composition/granola-meeting-source-bundle-v1.ts",
+      "services/organization-authority/src/composition/openrouter-answer-composition-generation-bundle-v1.ts",
+      "services/organization-authority/src/composition/openrouter-decision-processor-admission-commitment.ts",
+      "services/organization-authority/src/composition/openrouter-decision-processor-bundle-v1.ts",
+      "services/organization-authority/src/composition/openrouter-decision-processor-config-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-block-kit-card-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-http-adapter-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interaction-handler-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interaction-protocol-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-terminal-coordinator-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-workflow-bundle-v1.ts",
+      "services/organization-authority/src/composition/private-slack-dm-approval-stager-v1.ts",
+      "services/organization-authority/src/composition/resolve-current-private-slack-connection-v1.ts",
+      "services/organization-authority/src/composition/resolve-meeting-owner-private-slack-approval-reviewer-v1.ts",
+      "services/organization-authority/src/composition/resolve-private-slack-approval-reviewer-target-v1.ts",
+      "services/organization-authority/src/composition/sqlite-private-slack-approval-assignment-state-v1.ts",
+      "services/organization-authority/src/composition/sqlite-private-slack-approval-terminal-authority-v1.ts",
+      "services/organization-authority/src/composition/sqlite-stable-private-approval-authority-fence-v1.ts",
+      "services/organization-authority/src/composition/slack-person-external-identity-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/slack-person-identity-link-workflow-v1.ts",
+      "services/organization-authority/src/composition/sqlite-slack-person-identity-link-repository-v1.ts",
+      "services/organization-authority/src/composition/staging-synthetic-private-dm-canary-client-v1.ts",
+      "services/organization-authority/src/composition/staging-synthetic-private-dm-canary-control-v1.ts",
+      "services/organization-authority/src/composition/staging-synthetic-private-dm-canary-v1.ts",
+      "services/organization-authority/src/processing/private-approval-records/private-slack-block-v4-record-writer-v1.ts",
+      "services/organization-authority/src/composition/open-clean-founder-live-runtime.ts",
+      "services/organization-authority/src/composition/open-clean-organization-authority-runtime.ts",
+      "services/organization-authority/src/composition/open-clean-live-runtime.ts",
+      "services/organization-authority/src/composition/clean-live-runtime.ts",
+      "services/organization-authority/src/processing/core/processing/run-core-cycle.ts",
+      "services/organization-authority/src/answer-composition/lean-answer-composition.ts",
+      "services/organization-authority/src/composition/clean-answer-composition-runtime.ts",
+      "services/organization-authority/src/composition/answer-composition-runtime.ts",
+      "services/organization-authority/src/composition/openrouter-answer-composition-runtime-v1.ts",
+      "services/organization-authority/src/answer-composition/openrouter-structured-output.ts",
+      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-runtime-commitments.ts",
+      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-source-boundary-v1.ts",
+      "services/organization-authority/src/composition/granola-admitted-meeting-source-boundary-v1.ts",
+      "services/organization-authority/src/application/ports/person-session-runtime.ts",
+      "services/organization-authority/src/composition/slack-person-external-identity-runtime.ts",
+      "services/organization-authority/src/composition/clean-readable-search-runtime.ts",
+      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts",
+      "services/organization-authority/src/adapters/persistence/sqlite/open-unmigrated-database.ts",
+      "services/organization-authority/src/state-lineage/new-lineage-genesis-v1.ts",
+      "services/organization-authority/src/composition/verify-clean-state-lineage.ts",
+      "services/organization-authority/src/presentation/clean-person-http-server.ts",
+      "services/organization-authority/src/composition/readable-search-runtime.ts",
+      "services/organization-authority/src/composition/authority-state-initializer.ts",
+      "services/organization-authority/src/processing/core/storage/core-state-store.ts",
+      "services/organization-authority/src/composition/decision-processor-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/openrouter-decision-processor-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/granola-meeting-source-runtime-v1.ts",
+      "services/organization-authority/src/composition/approval-runtime-bundle-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-runtime-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interaction-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interactions-application-v1.ts",
+      "services/organization-authority/src/composition/private-slack-approval-interaction-http-ingress-v1.ts",
+      "services/organization-authority/src/presentation/private-slack-approval-interactions-http-application-v1.ts"
+    ],
+    "compatibility_entrypoints": [
+      {
+        "path": "services/organization-authority/src/clean-reset-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/organization-authority-reset-cli.ts"
+        ]
+      },
+      {
+        "path": "services/organization-authority/src/clean-person-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts"
+        ]
+      },
+      {
+        "path": "services/organization-authority/src/clean-live-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/organization-authority-service-cli.ts"
+        ]
+      },
+      {
+        "path": "services/organization-authority/src/clean-granola-source-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/providers/granola/granola-meeting-source-admission-cli.ts"
+        ]
+      },
+      {
+        "path": "services/organization-authority/src/clean-founder-main.ts",
+        "targets": [
+          "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
+        ]
+      }
+    ]
+  },
   "layer_rules": [
     {
-      "name": "authority-clean-reset-entrypoint-calls-composition",
+      "name": "authority-legacy-reset-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-reset-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-reset-cli.ts"
+        "services/organization-authority/src/composition/organization-authority-reset-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-clean-person-entrypoint-calls-composition",
+      "name": "authority-legacy-person-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-person-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-person-cli.ts"
+        "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-clean-live-entrypoint-calls-composition",
+      "name": "authority-legacy-service-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-live-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-live-cli.ts"
+        "services/organization-authority/src/composition/organization-authority-service-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -90,20 +311,20 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-clean-granola-source-entrypoint-calls-composition",
+      "name": "authority-legacy-granola-source-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-granola-source-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-granola-source-cli.ts"
+        "services/organization-authority/src/composition/providers/granola/granola-meeting-source-admission-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-clean-founder-entrypoint-calls-composition",
+      "name": "authority-setup-compatibility-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-founder-main.ts",
       "allowed_imports": [
-        "services/organization-authority/src/composition/clean-founder-cli.ts"
+        "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -210,8 +431,8 @@
       ]
     },
     {
-      "name": "authority-runtime-adapters-implement-application-ports",
-      "from": "services/organization-authority/src/adapters/runtime/**",
+      "name": "authority-system-adapters-implement-application-ports",
+      "from": "services/organization-authority/src/adapters/system/**",
       "allowed_imports": [
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
@@ -275,7 +496,7 @@
       ]
     },
     {
-      "name": "authority-composition-may-wire-pre-processing-layers",
+      "name": "authority-composition-selects-concrete-implementations",
       "from": "services/organization-authority/src/composition/**",
       "allowed_imports": [
         "services/organization-authority/src/adapters/**",
@@ -286,22 +507,15 @@
         "services/organization-authority/src/presentation/**",
         "services/organization-authority/src/state-lineage/**",
         "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
-        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
-        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/**",
+        "services/organization-authority/src/processing/adapters/approval-delivery/slack/**",
         "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
-        "services/organization-authority/src/processing/authorization/**",
         "services/organization-authority/src/processing/core/contracts/adapter.ts",
         "services/organization-authority/src/processing/core/contracts/**",
         "services/organization-authority/src/processing/core/ports/adapters.ts",
         "services/organization-authority/src/processing/core/processing/brief.ts",
-        "services/organization-authority/src/processing/core/processing/run-core-cycle.ts",
-        "services/organization-authority/src/processing/clean-v1/**",
-        "services/organization-authority/src/processing/clean-v1-d2-d3/**",
-        "services/organization-authority/src/processing/clean-v1-record/**",
-        "services/organization-authority/src/processing/live/**",
-        "services/organization-authority/src/quality/**",
-        "services/organization-authority/src/processing/record/**",
-        "services/organization-authority/src/processing/storage/**"
+        "services/organization-authority/src/processing/admitted-meeting-processing/**",
+        "services/organization-authority/src/processing/adapters/approval-resolution/slack/**",
+        "services/organization-authority/src/quality/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -324,7 +538,7 @@
       ]
     },
     {
-      "name": "authority-lean-layer4-answer-composition-is-a-layer3-client",
+      "name": "authority-answer-composition-consumes-only-readable-search-release",
       "from": "services/organization-authority/src/answer-composition/**",
       "allowed_imports": [
         "services/organization-authority/src/answer-composition/**"
@@ -332,6 +546,17 @@
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
       ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-answer-composition-adapters-implement-generation-port",
+      "from": "services/organization-authority/src/adapters/answer-composition/**",
+      "allowed_imports": [
+        "services/organization-authority/src/adapters/answer-composition/**",
+        "services/organization-authority/src/answer-composition/**"
+      ],
+      "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
@@ -352,10 +577,10 @@
       ]
     },
     {
-      "name": "state-lineage-guard-is-unwired-and-read-only",
-      "from": "services/organization-authority/src/state-lineage/**",
+      "name": "state-lineage-guard-is-read-only",
+      "from": "services/organization-authority/src/state-lineage/state-lineage-preopen-guard.ts",
       "allowed_imports": [
-        "services/organization-authority/src/state-lineage/**"
+        "services/organization-authority/src/state-lineage/state-lineage-manifest-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
@@ -369,12 +594,39 @@
       ]
     },
     {
-      "name": "clean-live-only-source-cycle-is-provider-neutral",
-      "from": "services/organization-authority/src/processing/clean-v1/**",
+      "name": "state-lineage-manifest-contracts-are-pure",
+      "from": "services/organization-authority/src/state-lineage/state-lineage-manifest-v1.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-state-lineage-initializer-is-write-scoped",
+      "from": "services/organization-authority/src/state-lineage/authority-state-lineage-initializer.ts",
       "allowed_imports": [
-        "services/organization-authority/src/processing/clean-v1/**",
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/shared/slack/slack-web-api-client.ts"
+        "services/organization-authority/src/state-lineage/state-lineage-manifest-v1.ts",
+        "services/organization-authority/src/state-lineage/state-lineage-preopen-guard.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "fs",
+        "path"
+      ]
+    },
+    {
+      "name": "admitted-meeting-processing-is-provider-neutral",
+      "from": "services/organization-authority/src/processing/admitted-meeting-processing/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/admitted-meeting-processing/**",
+        "services/organization-authority/src/processing/core/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -386,24 +638,27 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "clean-d2-d3-coordinator-uses-only-selected-clean-ports",
-      "from": "services/organization-authority/src/processing/clean-v1-d2-d3/**",
+      "name": "private-slack-approval-delivery-adapter-uses-only-slack-transport",
+      "from": "services/organization-authority/src/processing/adapters/approval-delivery/slack/**",
       "allowed_imports": [
-        "services/organization-authority/src/processing/clean-v1-d2-d3/**",
-        "services/organization-authority/src/processing/clean-v1/**",
-        "services/organization-authority/src/processing/clean-v1-record/**",
-        "services/organization-authority/src/application/ports/runtime-ports.ts",
-        "services/organization-authority/src/composition/clean-live-runtime.ts",
-        "services/organization-authority/src/processing/core/**"
+        "services/organization-authority/src/processing/adapters/shared/slack/**"
       ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-control-plane",
-        "@echo-brain/organization-protocol",
-        "@echo-brain/organization-record"
-      ],
+      "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
+    },
+    {
+      "name": "reference-meeting-processing-is-not-production-core",
+      "from": "services/organization-authority/src/processing/reference/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/reference/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "crypto"
+      ]
     },
     {
       "name": "processing-core-is-tool-agnostic",
@@ -492,25 +747,16 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-clean-v1-record-writer-uses-only-clean-record-ports",
-      "from": "services/organization-authority/src/processing/clean-v1-record/**",
+      "name": "approval-resolution-slack-record-writer-uses-only-record-ports",
+      "from": "services/organization-authority/src/processing/adapters/approval-resolution/slack/**",
       "allowed_imports": [
-        "services/organization-authority/src/application/ports/runtime-ports.ts",
-        "services/organization-authority/src/processing/clean-v1-record/**"
+        "services/organization-authority/src/application/ports/organization-authority-signer.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-record"
       ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-serialized-authority-meeting-worker-is-generic",
-      "from": "services/organization-authority/src/processing/live/serialized-authority-meeting-worker.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     }

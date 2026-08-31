@@ -3,6 +3,8 @@ import { timestampMillis } from "./rules.js";
 
 export const PERSON_LOGIN_GRANT_LIFETIME_MS = 15 * 60 * 1000;
 export const OIDC_LOGIN_ATTEMPT_LIFETIME_MS = 10 * 60 * 1000;
+/** A small Authority-wide bound for unauthenticated, pending OIDC attempts. */
+export const MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS = 256;
 export const PERSON_ACCESS_CREDENTIAL_LIFETIME_MS = 12 * 60 * 60 * 1000;
 export const PERSON_SESSION_HARD_REAUTHENTICATION_MS = 7 * 24 * 60 * 60 * 1000;
 export const OIDC_ASSERTION_ISSUED_AT_SKEW_MS = 60 * 1000;

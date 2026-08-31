@@ -4,9 +4,9 @@ id: FP-IDENTITY-001
 kind: failure-pattern
 title: Enrollment and authorization derive different provider identities
 component_ids:
-  - CMP-ADAPTERS
+  - CMP-PROCESSING-ADAPTERS
   - CMP-IDENTITY-ACCESS
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 77b7744b46a912b9154c218b3a036e8552d7180e

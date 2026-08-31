@@ -4,7 +4,7 @@ id: QMAT-JOB-A-STOPPED-001
 kind: qualification-matrix
 title: Job A stopped-state proof matrix
 component_ids:
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERMISSIONS
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13

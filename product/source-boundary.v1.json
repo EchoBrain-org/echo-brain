@@ -28,7 +28,7 @@
       },
       {
         "identifier": "granola",
-        "root": "services/organization-authority/src/composition/*granola*.ts"
+        "root": "services/organization-authority/src/composition/providers/granola/"
       },
       {
         "identifier": "granola",
@@ -36,11 +36,11 @@
       },
       {
         "identifier": "granola",
-        "root": "services/organization-authority/src/composition/clean-founder-cli.ts"
+        "root": "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
       },
       {
         "identifier": "granola",
-        "root": "services/organization-authority/src/composition/clean-live-cli.ts"
+        "root": "services/organization-authority/src/composition/organization-authority-service-cli.ts"
       },
       {
         "identifier": "llm",
@@ -64,15 +64,15 @@
       },
       {
         "identifier": "openrouter",
-        "root": "services/organization-authority/src/answer-composition/openrouter-structured-output.ts"
+        "root": "services/organization-authority/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.ts"
       },
       {
         "identifier": "openrouter",
-        "root": "services/organization-authority/src/composition/*openrouter*.ts"
+        "root": "services/organization-authority/src/composition/providers/openrouter/"
       },
       {
         "identifier": "deepseek",
-        "root": "services/organization-authority/src/composition/clean-live-llm-processor-config.ts"
+        "root": "services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-config-v1.ts"
       },
       {
         "identifier": "slack",
@@ -80,31 +80,27 @@
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/composition/*slack*.ts"
+        "root": "services/organization-authority/src/composition/providers/slack/"
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/composition/private-owner-dm-approval-stager-v1.ts"
+        "root": "services/organization-authority/src/composition/staging/slack-private-approval/"
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/composition/*private-approval*.ts"
+        "root": "services/organization-authority/src/presentation/private-slack-approval-interaction-http-port-v1.ts"
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/presentation/private-approval-slack-interactions-http-application-v1.ts"
+        "root": "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts"
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/composition/clean-person-cli.ts"
+        "root": "services/organization-authority/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts"
       },
       {
         "identifier": "slack",
-        "root": "services/organization-authority/src/processing/clean-v1/private-slack-approval-card-poster-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/processing/clean-v1-record/private-slack-block-v4-record-writer-v1.ts"
+        "root": "services/organization-authority/src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.ts"
       },
       {
         "identifier": "synthetic-source",
@@ -112,7 +108,7 @@
       },
       {
         "identifier": "synthetic-source",
-        "root": "services/organization-authority/src/quality/synthetic-layer4-fixture-port-v1.ts"
+        "root": "services/organization-authority/src/quality/synthetic-answer-composition-fixture-port-v1.ts"
       },
       {
         "identifier": "synthetic-source",
@@ -129,37 +125,33 @@
     ],
     "provider_neutral_paths": [
       "services/organization-authority/src/processing/core/**",
-      "services/organization-authority/src/processing/live/**",
-      "services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts",
-      "services/organization-authority/src/processing/clean-v1/live-source-boundary.ts",
-      "services/organization-authority/src/processing/clean-v1/live-source-runtime-commitments.ts",
-      "services/organization-authority/src/processing/clean-v1/processor-admission-commitment.ts",
-      "services/organization-authority/src/processing/clean-v1/review-lineage-semantics.ts",
-      "services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts",
-      "services/organization-authority/src/answer-composition/lean-answer-composition.ts",
-      "services/organization-authority/src/composition/clean-live-runtime.ts",
-      "services/organization-authority/src/composition/open-clean-live-runtime.ts",
-      "services/organization-authority/src/composition/approval-runtime-bundle-v1.ts",
-      "services/organization-authority/src/composition/clean-layer4-runtime.ts",
-      "services/organization-authority/src/composition/clean-live-processor-runtime.ts",
-      "services/organization-authority/src/composition/clean-person-answer-route.ts",
-      "services/organization-authority/src/composition/clean-person-external-identity-runtime.ts",
-      "services/organization-authority/src/composition/clean-person-runtime.ts",
-      "services/organization-authority/src/composition/clean-readable-search-runtime.ts",
+      "services/organization-authority/src/processing/admitted-meeting-processing/**",
+      "services/organization-authority/src/processing/reference/**",
+      "services/organization-authority/src/answer-composition/retrieval-grounded-answer-composition.ts",
+      "services/organization-authority/src/composition/organization-authority-service-lifecycle.ts",
+      "services/organization-authority/src/composition/organization-authority-runtime.ts",
+      "services/organization-authority/src/composition/approval-workflow-bundle-v1.ts",
+      "services/organization-authority/src/composition/answer-composition-generation-bundle-v1.ts",
+      "services/organization-authority/src/composition/decision-processor-bundle-v1.ts",
+      "services/organization-authority/src/composition/meeting-source-bundle-v1.ts",
+      "services/organization-authority/src/composition/person-answer-route.ts",
+      "services/organization-authority/src/composition/person-external-identity-runtime.ts",
+      "services/organization-authority/src/composition/organization-authority-api-runtime.ts",
+      "services/organization-authority/src/composition/readable-search-generation-composition.ts",
       "services/organization-authority/src/presentation/person-external-identity-link-http-application.ts",
-      "services/organization-authority/src/presentation/clean-person-http-server.ts",
+      "services/organization-authority/src/presentation/organization-authority-http-server.ts",
       "services/organization-authority/src/presentation/private-approval-interaction-http-application-v1.ts",
-      "services/organization-record/src/application/approved-record-policy-projection-v1.ts",
-      "services/organization-record/src/application/person-policy-facts-v2.ts",
-      "services/organization-record/src/log/record-log-v4-append.ts",
-      "services/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts"
+      "packages/organization-record/src/application/record-policy-fact-projection-v1.ts",
+      "packages/organization-record/src/application/person-policy-facts-v2.ts",
+      "packages/organization-record/src/log/record-log-v4-append.ts",
+      "packages/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.ts"
     ],
     "provider_identifier_registry": [
       {
         "identifier": "openrouter",
         "transport_provider": true,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/openrouter-clean-layer4-runtime.ts"
+          "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts"
         ]
       },
       {
@@ -187,7 +179,7 @@
         "identifier": "deepseek",
         "transport_provider": false,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/clean-live-llm-processor-config.ts"
+          "services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-config-v1.ts"
         ]
       }
     ],

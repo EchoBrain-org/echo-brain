@@ -1,0 +1,30 @@
+/** Slack connection verification and Person-to-Slack identity linking. */
+export {
+  AUTHORITY_FILE_SECRET_BACKEND,
+  SLACK_DEFAULT_APPROVE_REACTION,
+  SLACK_DEFAULT_REJECT_REACTION,
+  SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+  type ActiveSlackOrganizationTool,
+  type BeginPersonSlackIdentityLinkChallengeInput,
+  type BegunSlackIdentityLinkChallenge,
+  type CompletePersonSlackIdentityLinkChallengeInput,
+  type CompletedPersonSlackIdentityLink,
+  type OrganizationSecretReference,
+  type OrganizationSecretStore,
+  type PendingPersonSlackIdentityLinkChallenge,
+  type PersonSlackIdentityLinkSession,
+} from "./application/slack-integration-contracts.js";
+export {
+  SlackIdentityProviderErrorV1,
+  SlackWebIdentityProviderV1,
+  type SlackIdentityProviderV1,
+} from "./adapters/slack/slack-web-identity-provider-v1.js";
+export { FileOrganizationSecretStore } from "./security/file-secret-store.js";
+export {
+  buildExternalHumanIdentityLinkContractV2,
+  validateExternalHumanIdentityLinkContractV2,
+  validateOrganizationToolConnectionContractV2,
+  validateOrganizationToolConnectionStateV2,
+  type OrganizationToolConnectionContractV2,
+  type OrganizationToolConnectionStateV2,
+} from "./application/person-slack-reaction-approval-contracts-v2.js";

@@ -40,24 +40,25 @@ Tokens are never printed by successful commands.
 - the append-only organization record; and
 - deterministic, permission-aware record reads and cited answers.
 
-The server starts only from the seven byte-pinned clean baselines. Historical
-migration runners and compatibility APIs are not shipped. Layer 3 is the sole
-release boundary. The only Layer 4 runtime is one synchronous Person `ask`
-path: one bounded plan, one Layer 3 batch, at most one answer call, and
+The server starts only from the seven byte-pinned baseline schemas. Historical
+migration runners and compatibility APIs are not shipped. Released retrieval
+is the sole content-release boundary. The answer-composition generation path is one
+synchronous Person `ask` path: one bounded plan, one released-retrieval batch,
+at most one answer call, and
 citations limited to that request's released atoms. It has no agents, tools,
-memory, streaming, or direct Layer 1/2 access.
+memory, streaming, or direct record or retrieval-store access.
 
 ## Repository layout
 
 ```text
-packages/                         Shared protocol and HTTP contracts
-services/organization-authority/ Deployable Authority and processing runtime
-services/organization-control-plane/
-services/organization-record/
-services/organization-retrieval/
+packages/                         Linked reusable modules and shared contracts
+services/organization-authority/ Deployable Authority and processing service
+packages/organization-control-plane/ Linked Authority control-plane module
+packages/organization-record/        Linked Authority record module
+packages/organization-retrieval/     Linked Authority retrieval module
 src/product/person-client/       Standalone Person CLI package
 deploy/organization-authority/   Container and EC2 deployment assets
-tests/                            Cross-workspace architecture/integration tests
+tests/                            Cross-workspace architecture and Person tests
 ```
 
 ## Development
@@ -75,8 +76,10 @@ Useful focused commands:
 npm run test:person
 npm run test:authority
 npm run test:protocols
-npm run test:integration
-npm run check:boundary
+npm run test:meeting-processing-core
+npm run test:reference-meeting-processing
+npm run test:architecture
+npm run check:architecture-boundaries
 ```
 
 `npm run check` performs boundary and documentation checks, TypeScript
@@ -110,9 +113,9 @@ echo-brain person <command> [options]
 ## Authority deployment
 
 Build the production container from `deploy/organization-authority/Dockerfile`.
-Clean operation uses `compose.clean-v1.yaml` locally and
-`compose.clean-v1.ec2.yaml` for the EC2 host shape. The accepted release and
-update workflows are documented under `deploy/release/`.
+The current `clean-v1` compatibility profile uses `compose.clean-v1.yaml`
+locally and `compose.clean-v1.ec2.yaml` for the EC2 host shape. The accepted
+release and update workflows are documented under `deploy/release/`.
 
 ### Local Authority exercise
 
@@ -175,7 +178,7 @@ does not enable meeting ingestion by itself.
 ### AWS staging slot
 
 The staging controller holds one fixed Cloudflare edge and retained EBS data
-volume around a disposable EC2 host. Its first-live onboarding and three
+volume around a disposable EC2 host. Its initial host onboarding and three
 retained-state host-replacement cycles have passed qualification; this does not
 claim a snapshot restore, GAP-01/#20 closure, or GAP-04 closure. The
 [staging sprint specification](docs/product/2026-08-26-disposable-authority-staging-sprint-v1.md)
@@ -282,13 +285,13 @@ does not permit reformatting a volume that already has a filesystem. Omit the
 flag only after the first host has reached ready.
 
 The initial token creation, SNS email confirmation, provider applications,
-founder login, observability deployment, and first canary remain explicit human
+initial-owner login, observability deployment, and first canary remain explicit human
 steps. V1 is single-operator: never run overlapping lifecycle commands for this
 slot from different terminals or machines. For failed-create, rollback, mount,
 and recovery procedures, follow the full staging specification rather than
 deleting or renaming the stack.
 
-### First-live onboarding input transfer
+### Initial host onboarding input transfer
 
 Do not SSH, copy credentials into a terminal, or open a root shell. The first
 staging onboarding input moves through one short-lived, KMS-encrypted and
@@ -391,8 +394,8 @@ before a credential transfer.
 - [ECHO-hosted Authority by default](docs/decisions/ADR-0008-echo-hosted-authority-by-default.md)
 - [Retained Authority data-volume boundary](docs/decisions/ADR-0009-retained-authority-data-volume-boundary.md)
 - [Workspace boundaries](docs/architecture/organization-workspace-boundaries.md)
-- [Product runtime boundary](docs/architecture/product-runtime.md)
+- [Person client architecture](docs/architecture/person-client-architecture.md)
 
 Typed ADR, RFC, invariant, and qualification evidence remains as design and
 verification history. Historical executable migrations are intentionally not
-part of the clean product.
+part of the current product.

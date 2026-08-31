@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createLeanAnswerComposition,
-  type Layer4StructuredGenerationInput,
-} from "../../src/answer-composition/lean-answer-composition.js";
+  createRetrievalGroundedAnswerComposition,
+  type StructuredGenerationInput,
+} from "../../src/answer-composition/retrieval-grounded-answer-composition.js";
 import type {
   AdapterConfig,
   AdapterConfigValidation,
@@ -24,10 +24,10 @@ import {
   syntheticMeetingSourceIdentityV1,
   syntheticMeetingQualityCorpusV1,
 } from "../../src/quality/synthetic-meeting-fixture-v1.js";
-import { SyntheticFixtureLayer4BatchReadPortV1 } from "../../src/quality/synthetic-layer4-fixture-port-v1.js";
+import { SyntheticFixtureReleasedRetrievalPortV1 } from "../../src/quality/synthetic-answer-composition-fixture-port-v1.js";
 
 const fixtureAnswerer = {
-  generate: async (input: Layer4StructuredGenerationInput) =>
+  generate: async (input: StructuredGenerationInput) =>
     input.user_prompt.includes("Only me")
       ? { status: "answered" as const, answer: "Only me.", citations: ["a1"] }
       : { status: "answered" as const, answer: "Organization members can read records.", citations: ["a1"] },
@@ -153,10 +153,10 @@ describe("synthetic meeting quality support", () => {
     await expect(source.pull({ cursor: "other-source:v1:unexpected" })).rejects.toThrow(/unsupported format/);
   });
 
-  it("releases the owner-only atom only to the owner before Layer 4 composition", async () => {
+  it("releases the owner-only atom only to the owner before answer composition", async () => {
     const atoms = syntheticMeetingQualityCorpusV1.layer4_atoms;
-    const ownerPort = new SyntheticFixtureLayer4BatchReadPortV1({ principal_id: "owner", atoms });
-    const memberPort = new SyntheticFixtureLayer4BatchReadPortV1({ principal_id: "member", atoms });
+    const ownerPort = new SyntheticFixtureReleasedRetrievalPortV1({ principal_id: "owner", atoms });
+    const memberPort = new SyntheticFixtureReleasedRetrievalPortV1({ principal_id: "member", atoms });
     const owner = await ownerPort.retrieve({ queries: ["approval visibility"] });
     const member = await memberPort.retrieve({ queries: ["approval visibility"] });
 
@@ -165,21 +165,21 @@ describe("synthetic meeting quality support", () => {
     expect(JSON.stringify(member)).not.toContain("Only me");
   });
 
-  it("keeps owner-only atom text out of a member Layer 4 answer prompt", async () => {
-    const layer3 = new SyntheticFixtureLayer4BatchReadPortV1({
+  it("keeps owner-only atom text out of a member answer prompt", async () => {
+    const releasedRetrieval = new SyntheticFixtureReleasedRetrievalPortV1({
       principal_id: "member",
       atoms: syntheticMeetingQualityCorpusV1.layer4_atoms,
     });
-    let answerInput: Layer4StructuredGenerationInput | undefined;
-    const answer = createLeanAnswerComposition({
+    let answerInput: StructuredGenerationInput | undefined;
+    const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: async () => ({ queries: [] }) },
       answerer: {
-        generate: vi.fn(async (input: Layer4StructuredGenerationInput) => {
+        generate: vi.fn(async (input: StructuredGenerationInput) => {
           answerInput = input;
           return { status: "answered", answer: "Team records can be shared with organization members.", citations: ["a1"] };
         }),
       },
-      layer3,
+      released_retrieval: releasedRetrieval,
       audit: { append: () => undefined },
       generation_adapter_id: "fixture-model-adapter",
       planner_model: "fixture/eval",

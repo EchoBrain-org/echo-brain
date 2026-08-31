@@ -56,7 +56,7 @@ An evidence receipt proves only its named assertions.
 For a behavior-changing PR, update the affected component and any applicable
 invariant, ADR/RFC, failure pattern, tests, qualification, or runbook. State
 whether the claim is source-tested, artifact-tested, deployed,
-founder-live-qualified, client-live-qualified, or released. Run
+internal-dogfood-qualified, customer-acceptance-qualified, or released. Run
 `npm run check:docs`; it checks IDs, relations, catalog coverage, links,
 qualification/evidence consistency, historical references, and known private
 material signatures.

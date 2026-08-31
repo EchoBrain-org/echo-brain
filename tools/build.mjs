@@ -13,16 +13,9 @@ import process from 'node:process';
 
 const repo = resolve(import.meta.dirname, '..');
 const personClient = join(repo, 'src', 'product', 'person-client');
-const compiledWorkspaces = [
-  ['packages', 'federation-protocol'],
-  ['packages', 'organization-protocol'],
-  ['packages', 'organization-api'],
-  ['services', 'organization-control-plane'],
-  ['services', 'organization-record'],
-  ['services', 'organization-retrieval'],
-  ['services', 'organization-authority'],
-  ['src', 'product', 'person-client'],
-];
+const compiledWorkspaces = JSON.parse(
+  readFileSync(join(repo, 'package.json'), 'utf8'),
+).workspaces.map((workspace) => workspace.split('/'));
 const personClientWorkspaces = [
   ['packages', 'federation-protocol'],
   ['packages', 'organization-protocol'],

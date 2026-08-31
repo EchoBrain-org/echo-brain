@@ -5,7 +5,7 @@ kind: invariant
 title: Incomplete provider identity is repaired by fresh atomic proof
 component_ids:
   - CMP-IDENTITY-ACCESS
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-08-13

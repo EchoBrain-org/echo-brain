@@ -15,7 +15,7 @@ export const AUTHORITY_BASELINE_SCHEMA_VERSION_V2 = 2;
 export const AUTHORITY_BASELINE_APPLICATION_ID_V2 =
   AUTHORITY_BASELINE_APPLICATION_ID_V1;
 /**
- * Fresh provider-neutral live-source lineage.  It is deliberately a new
+ * Fresh provider-neutral source-admission lineage. It is deliberately a new
  * empty-database baseline, never an upgrade of V1 or V2 state.
  */
 export const AUTHORITY_BASELINE_SCHEMA_VERSION_V3 = 3;
@@ -31,8 +31,8 @@ const PRIVATE_APPROVAL_SQL_V2_URL = new URL(
   "../../../../baselines/authority-private-approval-v2.sql",
   import.meta.url,
 );
-const LIVE_SOURCE_SQL_V3_URL = new URL(
-  "../../../../baselines/authority-live-source-v3.sql",
+const MEETING_PROCESSING_SQL_V3_URL = new URL(
+  "../../../../baselines/authority-meeting-processing-v3.sql",
   import.meta.url,
 );
 
@@ -60,11 +60,11 @@ export function authorityBaselineSha256V2(): Sha256Digest {
 
 /**
  * Provider-neutral V3 companion SQL. It replaces only the legacy
- * provider-specific live-source table family while retaining the frozen V1
+ * provider-specific source-admission table family while retaining the frozen V1
  * Authority identity/session foundation byte-for-byte.
  */
-export function authorityLiveSourceSqlV3(): string {
-  return readFileSync(LIVE_SOURCE_SQL_V3_URL, "utf8");
+export function authorityMeetingProcessingSqlV3(): string {
+  return readFileSync(MEETING_PROCESSING_SQL_V3_URL, "utf8");
 }
 
 /**
@@ -73,7 +73,7 @@ export function authorityLiveSourceSqlV3(): string {
  * source/approval state and its dependent private-approval tables.
  */
 export function authorityBaselineSqlV3(): string {
-  return `${authorityBaselineSqlV1()}\n${authorityLiveSourceSqlV3()}`;
+  return `${authorityBaselineSqlV1()}\n${authorityMeetingProcessingSqlV3()}`;
 }
 
 export function authorityBaselineSha256V3(): Sha256Digest {

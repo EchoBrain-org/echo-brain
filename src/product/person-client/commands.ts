@@ -7,7 +7,9 @@ import { PersonClient } from "./client.js";
 import { PersonAuthorityClientError } from "./authority-client.js";
 import { PersonClientSessionUnavailableError } from "./session-store.js";
 import { startPersonLoopbackHandoff } from "./browser-login-handoff.js";
-import { readPersonOnboardingInvitation } from "./onboarding-invitation.js";
+import {
+  readPersonOnboardingInvitation,
+} from "./onboarding-invitation.js";
 import { readPackagedPersonClientBuildIdentity } from "./package-identity.js";
 
 const MAXIMUM_INPUT_BYTES = 64 * 1024;
@@ -113,7 +115,7 @@ Commands:
   ask         Ask a question over records you may read.
   records     List records or search the current generation.
   employee    List, invite, reissue, or revoke an employee.
-  slack-link  Link the signed-in founder to Slack.
+  slack-link  Link the signed-in person to Slack.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -139,7 +141,7 @@ Ask one bounded question. ECHO searches only records you may read and returns a 
 `,
   records: `usage: echo-brain person records [--limit <1-100>] [--query <text>]
 
-Without --query, lists recent released records. With --query, searches the current Layer 2 generation.
+Without --query, lists recent released records. With --query, searches the current search index generation.
 `,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
@@ -266,7 +268,7 @@ async function completePersonLogin(input: {
   });
   try {
     let begun;
-    let recoveredConsumedInvitation = false;
+    let recoveredExistingInvitation = false;
     try {
       begun = await input.client.beginLogin(
         input.authority_url,
@@ -274,22 +276,34 @@ async function completePersonLogin(input: {
         { url: handoff.url, token: handoff.token },
       );
     } catch (error) {
-      // The Authority can complete an OIDC bootstrap even when a browser
-      // never reaches this short-lived local receiver. In that case its
-      // one-use invitation is consumed; retry once as the now-bound
-      // identity, never by exposing the session in the callback.
+      // A prior bootstrap may have completed even when its browser never
+      // reached this short-lived receiver. Try the now-bound identity once;
+      // an invitation is consumed only by a definitive bootstrap outcome.
       if (
         input.login_grant !== undefined &&
         error instanceof PersonAuthorityClientError &&
         error.code === "unauthorized" &&
         error.status === 401
       ) {
-        begun = await input.client.beginLogin(
-          input.authority_url,
-          undefined,
-          { url: handoff.url, token: handoff.token },
-        );
-        recoveredConsumedInvitation = true;
+        try {
+          begun = await input.client.beginLogin(
+            input.authority_url,
+            undefined,
+            { url: handoff.url, token: handoff.token },
+          );
+        } catch (recoveryError) {
+          if (
+            recoveryError instanceof PersonAuthorityClientError &&
+            recoveryError.code === "unauthorized" &&
+            recoveryError.status === 401
+          ) {
+            throw new Error(
+              "This ECHO invitation could not start and no existing ECHO identity was found. It may be in progress, expired, invalid, or already used. Ask the ECHO owner to reissue it if needed.",
+            );
+          }
+          throw recoveryError;
+        }
+        recoveredExistingInvitation = true;
       } else {
         throw error;
       }
@@ -304,24 +318,40 @@ async function completePersonLogin(input: {
       authorization_url: begun.authorization_url,
       expires_at: begun.expires_at,
       ...(browserOpened === undefined ? {} : { browser_opened: browserOpened }),
-      instruction: recoveredConsumedInvitation
+      instruction: recoveredExistingInvitation
         ? browserOpened === undefined
-          ? "The invitation was already consumed. Open authorization_url to finish sign-in as the existing identity."
+          ? "An existing ECHO identity was found. Open authorization_url to continue sign-in."
           : browserOpened
-            ? "The invitation was already consumed. Finish sign-in as the existing identity in the opened browser."
-            : "The invitation was already consumed. Open authorization_url to finish sign-in as the existing identity."
+            ? "An existing ECHO identity was found. Continue sign-in in the opened browser."
+            : "An existing ECHO identity was found. Open authorization_url to continue sign-in."
         : browserOpened === false
           ? "Open authorization_url to complete sign-in in your browser."
           : browserOpened === true
             ? "Complete sign-in in the opened browser."
             : "Open authorization_url to complete sign-in in your browser.",
     });
+    const handoffResult = await handoff.wait();
+    if (handoffResult.kind === "error") {
+      if (handoffResult.code === "identity_not_bound") {
+        throw new Error(
+          input.login_grant === undefined
+            ? "No existing ECHO identity was found. Ask the ECHO owner for an invitation."
+            : "The selected Google account has no active ECHO identity. Select the invited Google account, or ask the ECHO owner to reissue the invitation.",
+        );
+      }
+      if (handoffResult.code === "retryable") {
+        throw new Error(
+          "Person browser sign-in can be retried. Rerun the same command before the invitation expires.",
+        );
+      }
+      throw new Error("Person browser sign-in could not be completed");
+    }
     print(input.stdout, {
       ok: true,
       phase: "installed",
       ...(await input.client.installSession(
         input.authority_url,
-        await handoff.wait(),
+        handoffResult.session,
       )),
     });
   } finally {
@@ -550,7 +580,7 @@ export async function runPersonClientCli(
       case "exclusions":
         print(stdout, {
           ok: true,
-          result: await client.exclusions(
+          result: await client.meetingIngestionExclusions(
             requiredText(values, "source-adapter-id"),
             requiredText(values, "source-instance-id"),
           ),
@@ -561,7 +591,7 @@ export async function runPersonClientCli(
         const sourceAdapterId = requiredText(values, "source-adapter-id");
         const sourceInstanceId = requiredText(values, "source-instance-id");
         const externalId = values["meeting-external-id"];
-        await client.changeExclusion(
+        await client.changeMeetingIngestionExclusion(
           action === "exclude",
           typeof externalId === "string"
             ? {
@@ -580,11 +610,11 @@ export async function runPersonClientCli(
         break;
       }
       case "slack-link-begin":
-        print(stdout, { ok: true, ...(await client.beginSlackLink()) });
+        print(stdout, { ok: true, ...(await client.beginSlackIdentityLink()) });
         break;
       case "slack-link": {
-        const begun = await client.beginSlackLink();
-        // Retain the code and opaque challenge handles in memory. The founder
+        const begun = await client.beginSlackIdentityLink();
+        // Retain the code and opaque challenge handles in memory. The person
         // copies the code into Slack, then confirms with one empty line.
         print(stdout, {
           ok: true,
@@ -597,13 +627,13 @@ export async function runPersonClientCli(
         const acknowledgement = await readInteractiveLine();
         if (acknowledgement.trim().length !== 0) {
           throw new Error(
-            "Person Slack link confirmation must be an empty Enter acknowledgement",
+            "Person Slack identity-link confirmation must be an empty Enter acknowledgement",
           );
         }
         print(stdout, {
           ok: true,
           phase: "linked",
-          result: await client.completeSlackLink({
+          result: await client.completeSlackIdentityLink({
             challenge_attempt_id: begun.challenge_attempt_id,
             challenge_message_ts: begun.challenge_message_ts,
             challenge_code: begun.challenge_code,
@@ -614,7 +644,7 @@ export async function runPersonClientCli(
       case "slack-link-complete":
         print(stdout, {
           ok: true,
-          result: await client.completeSlackLink({
+          result: await client.completeSlackIdentityLink({
             challenge_attempt_id: requiredText(values, "challenge-attempt"),
             challenge_message_ts: requiredText(values, "challenge-message-ts"),
             challenge_code: (await readInput()).trim(),

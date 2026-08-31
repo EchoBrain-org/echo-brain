@@ -1,3 +1,3 @@
-import { runCleanFounderCli } from "./composition/clean-founder-cli.js";
+import { runOrganizationAuthoritySetupCli } from "./composition/organization-authority-setup-cli.js";
 
-process.exitCode = await runCleanFounderCli(process.argv.slice(2));
+process.exitCode = await runOrganizationAuthoritySetupCli(process.argv.slice(2));

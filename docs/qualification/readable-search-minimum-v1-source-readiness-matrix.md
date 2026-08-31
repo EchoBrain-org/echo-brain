@@ -4,7 +4,7 @@ id: QMAT-READABLE-SEARCH-MINIMUM-V1-001
 kind: qualification-matrix
 title: Readable-search minimum-V1 Layers 1-3 source-readiness matrix
 component_ids:
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
   - CMP-OPERATIONS-RELEASE
@@ -73,7 +73,7 @@ local source inspection, focused tests, or another report.
 | `RSMV1-013` | Membership, lease, installation, record-head, policy, and generation changes before final commit deny or return unavailable; changes after commit affect only the next request; audit failure sends no bytes. | Layer 3 final fence | `services/organization-authority/src/application/readable-search.ts`; `services/organization-authority/test/readable-search.test.ts`. |
 | `RSMV1-014` | The exact response digest and opaque returned bindings are audited for 180 days; raw query, text, terms, scores, segments, and counts never enter audit, logs, traces, metrics, cache, or an external provider. | Layer 3 audit | `services/organization-authority/src/application/readable-search.ts`; `services/organization-authority/test/readable-search.test.ts`; `services/organization-authority/test/readable-search-http.test.ts`. |
 | `RSMV1-015` | Internally consistent stale state remains offline until independently retained heads/receipts, Person state, policy facts, record head, active pointer, manifests, roots, and audit storage reconcile. | Restore operational gate | Required separate restore-reconciliation exact run with independently retained evidence. |
-| `RSMV1-016` | Serving code cannot import raw databases, broad derived accessors, builders, migrations, filesystem paths, or maintenance commands; builders cannot import current Person state; fact code cannot import content/index readers. | Cross-layer source boundary | `tests/architecture/source-independence.test.ts`; `tests/architecture/readable-search-binding-conformance.test.ts`; exact boundary-suite evidence must be attached to a committed source identity. |
+| `RSMV1-016` | Serving code cannot import raw databases, broad derived accessors, builders, migrations, filesystem paths, or maintenance commands; builders cannot import current Person state; fact code cannot import content/index readers. | Cross-layer source boundary | `tests/architecture/product-source-independence.test.ts`; `tests/architecture/readable-search-binding-conformance.test.ts`; exact boundary-suite evidence must be attached to a committed source identity. |
 | `RSMV1-017` | Shadow generations cannot alter Job A behavior. The search route has one serving substrate and never unions or falls back across A/B; Job A's reviewer-recent route stays log-backed unless separately reviewed. | Layer 2/3 cutover | `services/organization-authority/src/composition/readable-search.ts`; `services/organization-authority/test/readable-search-full-lifecycle.test.ts`; source-test evidence does not authorize cutover. |
 | `RSMV1-018` | A real reviewer-v2 record and a real organization-v3 record survive Authority restart and stopped generation rebuild; the exact reviewer sees both, a separately enrolled later member sees only the organization item, and no hidden segment/content access occurs. | Founder-live operational gate | Required separate founder-live exact run with explicit actor, machine, provider, and probe non-claims. |
 

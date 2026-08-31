@@ -1,0 +1,73 @@
+{
+  "name": "@echo-brain/organization-control-plane",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "echo-organization-control-plane-connect-slack": "dist/clean-slack-connect-main.js",
+    "echo-organization-control-plane-activate-person-slack-approval": "dist/clean-person-slack-approval-activate-main.js",
+    "echo-organization-control-plane-activate-person-slack-reaction-approval": "dist/clean-person-slack-reaction-approval-activate-main.js"
+  },
+  "exports": {
+    "./slack-approval-integration-v1": {
+      "types": "./dist/slack-approval-integration-v1.d.ts",
+      "import": "./dist/slack-approval-integration-v1.js"
+    },
+    "./slack-external-identity-integration-v1": {
+      "types": "./dist/slack-external-identity-integration-v1.d.ts",
+      "import": "./dist/slack-external-identity-integration-v1.js"
+    },
+    "./organization-control-database-v1": {
+      "types": "./dist/organization-control-database-v1.d.ts",
+      "import": "./dist/organization-control-database-v1.js"
+    },
+    "./record-visibility-policy-contracts-v1": {
+      "types": "./dist/record-visibility-policy-contracts-v1.d.ts",
+      "import": "./dist/record-visibility-policy-contracts-v1.js"
+    },
+    "./slack-connection-setup-v1": {
+      "types": "./dist/slack-connection-setup-v1.d.ts",
+      "import": "./dist/slack-connection-setup-v1.js"
+    },
+    "./legacy-slack-reaction-approval-activation-v1": {
+      "types": "./dist/legacy-slack-reaction-approval-activation-v1.d.ts",
+      "import": "./dist/legacy-slack-reaction-approval-activation-v1.js"
+    },
+    "./clean-runtime-v1": {
+      "types": "./dist/clean-runtime-v1.d.ts",
+      "import": "./dist/clean-runtime-v1.js"
+    },
+    "./new-lineage-genesis-v1": {
+      "types": "./dist/new-lineage-genesis-v1.d.ts",
+      "import": "./dist/new-lineage-genesis-v1.js"
+    },
+    "./clean-slack-identity-v1": {
+      "types": "./dist/clean-slack-identity-v1.d.ts",
+      "import": "./dist/clean-slack-identity-v1.js"
+    },
+    "./clean-founder-v1": {
+      "types": "./dist/clean-founder-v1.d.ts",
+      "import": "./dist/clean-founder-v1.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "baselines/**"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "test": "npm run build && vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "12.10.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

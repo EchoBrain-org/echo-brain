@@ -1,12 +1,20 @@
 # Adapters
 
-The authority provides the central SQLite repository, system clock/random
-sources, constant-time admin bearer authentication, and an explicitly enabled
-development-file signer. Migrations remain with this central deployable and
-never enter the local product artifact.
+This directory contains Organization Authority implementations of application
+ports and infrastructure boundaries:
 
-An outbound loopback administrator HTTP client and a private-file invitation
-adapter publish a pending secret-bearing envelope
-before registration, allowing an ambiguous network result to be retried with
-the same command and grant without ever sending raw grant bytes to the central
-authority.
+- `persistence/` owns Authority SQLite repositories and database opening;
+- `oidc/` owns OIDC transport and protocol integration;
+- `answer-composition/` owns provider-specific structured-generation adapters;
+- `system/` owns host-system adapters such as the Authority clock; and
+- `security/` owns private-file credentials, session cryptography, and the
+  file-backed Organization Authority signer.
+
+`security/file-organization-authority-signer.ts` names the component by its
+storage responsibility. Its persisted V1 key filename remains
+`authority-development-key.v1.json` for compatibility; that filename is not
+the component identity.
+
+Meeting-source, decision-processor, and delivery-provider adapters live under
+`processing/adapters/`. Provider-specific composition belongs in a named
+runtime bundle under `composition/`, never in a provider-neutral runtime root.

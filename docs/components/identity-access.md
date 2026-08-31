@@ -71,7 +71,7 @@ that belongs to [permissions](permissions.md).
 - [Organization control plane](../architecture/organization-control-plane.md)
 - Person-client boundary: [`src/product/person-client/`](../../src/product/person-client)
 - Authority: [`services/organization-authority/`](../../services/organization-authority)
-- Control plane: [`services/organization-control-plane/`](../../services/organization-control-plane)
+- Control plane: [`packages/organization-control-plane/`](../../packages/organization-control-plane)
 
 Identity documents must state the authoritative source for every identifier,
 nullability, required scope, time and revocation behavior, migration path, and

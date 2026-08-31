@@ -20,7 +20,7 @@ action. Duplicate, stale, malformed, and unauthorized actions fail closed.
 
 - One verified owner, one private DM, one explicit terminal action.
 - **Only me** means the final approver, which is the meeting owner in V1.
-- The existing public `slack_approval_channel_id` remains only for founder
+- The existing public `slack_approval_channel_id` remains only for initial-owner
   identity linking; it never receives approval cards.
 - Re-onboard the same Slack app with `im:write` and `im:history`, stage its
   signing secret privately, and configure Interactivity only after the active

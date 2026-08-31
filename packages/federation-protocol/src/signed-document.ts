@@ -57,7 +57,7 @@ export function verifySignedDocument(
   }
   if (document.integrity.key_id !== expectedKeyId) {
     throw new Error(
-      "signed document key does not match the active installation",
+      "signed document key id does not match the expected signer",
     );
   }
   if (p256KeyId(publicKeySpkiDer) !== expectedKeyId) {

@@ -6,8 +6,8 @@
     { "path": "./packages/organization-api" },
     { "path": "./src/product/person-client" },
     { "path": "./services/organization-authority" },
-    { "path": "./services/organization-control-plane" },
-    { "path": "./services/organization-record" },
-    { "path": "./services/organization-retrieval" }
+    { "path": "./packages/organization-control-plane" },
+    { "path": "./packages/organization-record" },
+    { "path": "./packages/organization-retrieval" }
   ]
 }

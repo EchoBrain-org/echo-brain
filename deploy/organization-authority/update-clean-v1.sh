@@ -19,8 +19,10 @@ CURRENT_RECORD="$RELEASE_STATE_DIR/current.clean-v1.json"
 CANDIDATE_RECORD="$RELEASE_STATE_DIR/candidate.clean-v1.json"
 RUNTIME_PROFILE_STATE_DIR="$RELEASE_STATE_DIR/runtime-profiles"
 ENVIRONMENT_STATE_DIR="$RELEASE_STATE_DIR/runtime-environments"
+CANARY_RECEIPT_DIR="$RELEASE_STATE_DIR/canary-receipts"
 ACTIVE_RUNTIME_PROFILE="$RELEASE_STATE_DIR/runtime-profile.active"
 OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.authority-operation-lock}"
+ROLLBACK_READER_CAPABILITY_LABEL='org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'
 OPERATION_LOCK_HELD=false
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -47,8 +49,8 @@ acquire_operation_lock() {
 [[ -x /usr/bin/python3 || -x "$(command -v python3)" ]] || fail 'python3 is required'
 [[ -f "$RELEASE_TOOL" ]] || fail 'clean-v1 release validator is missing'
 [[ -f "$RUNTIME_PROFILE_TOOL" ]] || fail 'clean-v1 runtime profile validator is missing'
-[[ -d "$RUNTIME_CONFIG_DIR" && ! -L "$RUNTIME_CONFIG_DIR" ]] || fail 'clean Authority runtime configuration directory is missing or unsafe'
-[[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Authority environment file is missing or unsafe'
+[[ -d "$RUNTIME_CONFIG_DIR" && ! -L "$RUNTIME_CONFIG_DIR" ]] || fail 'Authority runtime configuration directory is missing or unsafe'
+[[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'Authority deployment environment file is missing or unsafe'
 
 compose_clean() {
   docker compose --env-file "$ENV_FILE" \
@@ -63,7 +65,7 @@ validate_profile() { python3 "$RUNTIME_PROFILE_TOOL" validate "$1" >/dev/null; }
 
 ensure_state_directories() {
   python3 - "$RELEASE_STATE_DIR" "$RUNTIME_PROFILE_STATE_DIR" "$ENVIRONMENT_STATE_DIR" \
-    "$RELEASE_STATE_DIR/history" "$RELEASE_STATE_DIR/failed" <<'PY'
+    "$RELEASE_STATE_DIR/history" "$RELEASE_STATE_DIR/failed" "$CANARY_RECEIPT_DIR" <<'PY'
 import os, pathlib, stat, sys
 
 for index, raw in enumerate(sys.argv[1:]):
@@ -112,12 +114,12 @@ import pathlib, re, stat, sys
 path = pathlib.Path(sys.argv[1])
 state = path.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 values = {}
 for name in ('ECHO_CLEAN_AUTHORITY_UID', 'ECHO_CLEAN_AUTHORITY_GID'):
     rows = [line.split('=', 1)[1] for line in path.read_text(encoding='utf-8').splitlines() if line.startswith(name + '=')]
     if len(rows) != 1 or not re.fullmatch(r'[1-9][0-9]{0,9}', rows[0]) or int(rows[0]) > 4294967295:
-        raise SystemExit('clean Authority environment must contain one validated non-root ' + name)
+        raise SystemExit('Authority deployment environment must contain one validated non-root ' + name)
     values[name] = rows[0]
 print(values['ECHO_CLEAN_AUTHORITY_UID'] + ':' + values['ECHO_CLEAN_AUTHORITY_GID'])
 PY
@@ -137,7 +139,7 @@ verify_candidate_state_lineage() {
     --security-opt no-new-privileges --user "$runtime_identity" --workdir /app \
     --entrypoint node \
     --mount "type=bind,src=$STATE_DIR,dst=/echo-clean/state,readonly" \
-    "$image" --input-type=module -e 'import { verifyCleanStateLineage } from "./services/organization-authority/dist/composition/verify-clean-state-lineage.js"; verifyCleanStateLineage("/echo-clean/state");' || \
+    "$image" --input-type=module -e 'import { verifyAuthorityStateLineage } from "./services/organization-authority/dist/composition/verify-authority-state-lineage.js"; verifyAuthorityStateLineage("/echo-clean/state");' || \
     fail 'candidate Authority image rejected persisted state lineage; run an explicit replacement or migration procedure instead'
 }
 
@@ -147,13 +149,13 @@ import pathlib, re, stat, sys
 path = pathlib.Path(sys.argv[1])
 state = path.lstat()
 if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode) or state.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 rows = [line for line in path.read_text(encoding='utf-8').splitlines() if line.startswith('ECHO_CLEAN_AUTHORITY_IMAGE=')]
 if len(rows) != 1:
-    raise SystemExit('clean Authority environment must contain exactly one ECHO_CLEAN_AUTHORITY_IMAGE')
+    raise SystemExit('Authority deployment environment must contain exactly one ECHO_CLEAN_AUTHORITY_IMAGE')
 value = rows[0].split('=', 1)[1]
 if not re.fullmatch(r'[a-z0-9][a-z0-9.-]*(?:/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}', value):
-    raise SystemExit('clean Authority image is not an immutable digest reference')
+    raise SystemExit('Authority image is not an immutable digest reference')
 print(value)
 PY
 }
@@ -204,7 +206,7 @@ source, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 image, release_id, source_sha, profile_sha, profile_version = sys.argv[3:]
 state = source.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 lines = source.read_text(encoding='utf-8').splitlines()
 names = {
     'ECHO_CLEAN_AUTHORITY_IMAGE': image,
@@ -215,7 +217,7 @@ names = {
 }
 for name in names:
     if sum(line.startswith(name + '=') for line in lines) > 1:
-        raise SystemExit('clean Authority environment has duplicate ' + name)
+        raise SystemExit('Authority deployment environment has duplicate ' + name)
 payload = [line for line in lines if not any(line.startswith(name + '=') for name in names)]
 payload.extend(name + '=' + value for name, value in names.items())
 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -388,19 +390,31 @@ remove_release_tuple() {
 copy_record() {
   local source="$1" destination="$2" mode="$3"
   python3 - "$source" "$destination" "$mode" <<'PY'
-import os, pathlib, sys, tempfile
+import os, pathlib, stat, sys, tempfile
 source, destination, mode = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+if mode not in {'no-replace', 'replace', 'idempotent-immutable'}:
+    raise SystemExit('unsupported release record copy mode')
 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 os.chmod(destination.parent, 0o700)
 data = source.read_bytes()
 if mode == 'no-replace' and destination.exists():
     raise SystemExit('release record destination already exists')
+if mode == 'idempotent-immutable' and (destination.exists() or destination.is_symlink()):
+    state = destination.lstat()
+    if (
+        stat.S_ISLNK(state.st_mode) or
+        not stat.S_ISREG(state.st_mode) or
+        state.st_mode & 0o077 or
+        destination.read_bytes() != data
+    ):
+        raise SystemExit('existing immutable release record is unsafe or does not match')
+    raise SystemExit(0)
 fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'wb') as output:
         output.write(data); output.flush(); os.fsync(output.fileno())
-    if mode == 'no-replace':
+    if mode in {'no-replace', 'idempotent-immutable'}:
         os.link(temporary, destination)
         os.unlink(temporary)
     else:
@@ -430,8 +444,34 @@ PY
 archive_candidate_as_failed() {
   local id
   id="$(field "$CANDIDATE_RECORD" release-id)"
-  copy_record "$CANDIDATE_RECORD" "$RELEASE_STATE_DIR/failed/$id.json" no-replace || return 1
+  copy_record "$CANDIDATE_RECORD" "$RELEASE_STATE_DIR/failed/$id.json" idempotent-immutable || return 1
   remove_record "$CANDIDATE_RECORD"
+}
+
+service_is_stopped() {
+  local service="$1" id running
+  id="$(compose_clean ps -q "$service")" || return 1
+  [[ -n "$id" ]] || return 0
+  running="$(docker inspect --format '{{.State.Running}}' "$id")" || return 1
+  [[ "$running" != true ]]
+}
+
+candidate_runtime_is_stopped() {
+  service_is_stopped authority && service_is_stopped proxy
+}
+
+abort_first_deploy_candidate() {
+  # The persisted candidate tuple, rather than the active cache, is the only
+  # durable source of truth after an interrupted first activation. Restore it
+  # before Compose is consulted, then require any running runtime to prove it.
+  stored_release_tuple_matches "$CANDIDATE_RECORD"
+  activate_release_tuple "$CANDIDATE_RECORD" || return 1
+  if running_exact_release "$CANDIDATE_RECORD"; then
+    compose_clean down || return 1
+  elif ! candidate_runtime_is_stopped; then
+    return 1
+  fi
+  archive_candidate_as_failed
 }
 
 release_id_unused() {
@@ -453,6 +493,13 @@ running_container_id() {
 image_source_matches() {
   local image="$1" expected_source="$2"
   [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" == "$expected_source" ]]
+}
+
+accepted_image_can_read_staging_canary_state() {
+  local image format
+  image="$(field "$CURRENT_RECORD" authority-image)"
+  format='{{index .Config.Labels "'"$ROLLBACK_READER_CAPABILITY_LABEL"'"}}'
+  [[ "$(docker image inspect --format "$format" "$image")" == true ]]
 }
 
 running_exact_release() {
@@ -491,20 +538,23 @@ safe_setup_status() {
     status --state-dir /echo-clean/state
 }
 
-safe_public_descriptor_check() {
-  local host descriptor_url
-  host="$(python3 - "$ENV_FILE" <<'PY'
+authority_host() {
+  python3 - "$ENV_FILE" <<'PY'
 import pathlib, re, stat, sys
 path = pathlib.Path(sys.argv[1])
 state = path.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
-    raise SystemExit('clean Authority environment must be a private regular file')
+    raise SystemExit('Authority deployment environment must be a private regular file')
 rows = [line for line in path.read_text(encoding='utf-8').splitlines() if line.startswith('ECHO_CLEAN_AUTHORITY_HOST=')]
 if len(rows) != 1 or not re.fullmatch(r'[a-z0-9][a-z0-9.-]*[a-z0-9]', rows[0].split('=', 1)[1]):
-    raise SystemExit('clean Authority environment must contain one valid ECHO_CLEAN_AUTHORITY_HOST')
+    raise SystemExit('Authority deployment environment must contain one valid ECHO_CLEAN_AUTHORITY_HOST')
 print(rows[0].split('=', 1)[1])
 PY
-)"
+}
+
+safe_public_descriptor_check() {
+  local host descriptor_url
+  host="$(authority_host)"
   descriptor_url="https://$host/v1/authority-descriptor"
   compose_clean exec -T authority node -e '
 const url = process.argv[1];
@@ -526,6 +576,167 @@ Promise.all([
   })
   .catch(() => process.exit(1));
 ' "$descriptor_url" >/dev/null 2>&1
+}
+
+validate_staging_canary_receipt() {
+  local expected_release_id="$1" receipt="$2"
+  python3 - "$expected_release_id" "$receipt" <<'PY'
+import json, re, sys
+
+expected_release_id, raw = sys.argv[1:]
+if len(raw.encode("utf-8")) > 1024:
+    raise SystemExit(1)
+try:
+    receipt = json.loads(raw)
+except Exception:
+    raise SystemExit(1)
+if not isinstance(receipt, dict):
+    raise SystemExit(1)
+base = {"schema_version", "kind", "release_id", "approval_outcome"}
+if (
+    receipt.get("schema_version") != 1 or
+    receipt.get("kind") != "echo-staging-synthetic-private-dm-canary-receipt-v1" or
+    receipt.get("release_id") != expected_release_id or
+    receipt.get("approval_outcome") not in {"staged", "delivery_pending", "not_actionable", "not_staged"}
+):
+    raise SystemExit(1)
+if receipt["approval_outcome"] == "not_actionable":
+    if set(receipt) != base:
+        raise SystemExit(1)
+else:
+    if set(receipt) != base | {"approval_id"}:
+        raise SystemExit(1)
+    if not isinstance(receipt["approval_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", receipt["approval_id"]):
+        raise SystemExit(1)
+print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+staging_canary_receipt_path() {
+  printf '%s/%s.json\n' "$CANARY_RECEIPT_DIR" "$1"
+}
+
+persist_staging_canary_receipt() {
+  local release_id="$1" receipt="$2" destination
+  destination="$(staging_canary_receipt_path "$release_id")"
+  python3 - "$destination" "$receipt" <<'PY'
+import os, pathlib, stat, sys, tempfile
+
+destination, receipt = pathlib.Path(sys.argv[1]), (sys.argv[2] + "\n").encode("utf-8")
+parent_state = destination.parent.lstat()
+if stat.S_ISLNK(parent_state.st_mode) or not stat.S_ISDIR(parent_state.st_mode):
+    raise SystemExit("canary receipt directory is unsafe")
+if destination.exists() or destination.is_symlink():
+    state = destination.lstat()
+    if (
+        stat.S_ISLNK(state.st_mode) or
+        not stat.S_ISREG(state.st_mode) or
+        state.st_mode & 0o077 or
+        destination.read_bytes() != receipt
+    ):
+        raise SystemExit("existing canary receipt is unsafe or does not match")
+    raise SystemExit(0)
+fd, temporary = tempfile.mkstemp(prefix="." + destination.name + ".", dir=destination.parent)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        output.write(receipt)
+        output.flush()
+        os.fsync(output.fileno())
+    os.link(temporary, destination)
+    os.unlink(temporary)
+    directory = os.open(destination.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
+require_staged_canary_receipt() {
+  local record="$1" release_id receipt_path receipt normalized outcome
+  release_id="$(field "$record" release-id)"
+  receipt_path="$(staging_canary_receipt_path "$release_id")"
+  receipt="$(python3 - "$receipt_path" <<'PY'
+import pathlib, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+state = path.lstat()
+if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode) or state.st_mode & 0o077:
+    raise SystemExit("candidate canary receipt is unsafe")
+data = path.read_bytes()
+if len(data) > 1025:
+    raise SystemExit("candidate canary receipt is too large")
+try:
+    print(data.decode("utf-8").rstrip("\n"))
+except UnicodeDecodeError:
+    raise SystemExit("candidate canary receipt is not UTF-8")
+PY
+  )" || fail 'routine promotion requires a private-DM canary receipt for the exact staged candidate'
+  normalized="$(validate_staging_canary_receipt "$release_id" "$receipt")" || \
+    fail 'routine promotion requires a valid private-DM canary receipt for the exact staged candidate'
+  outcome="$(python3 - "$normalized" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1])["approval_outcome"])
+PY
+  )"
+  [[ "$outcome" == staged ]] || \
+    fail 'routine promotion requires a staged private-DM canary for the exact candidate'
+}
+
+run_staging_private_dm_canary() {
+  local record release_id host receipt normalized outcome
+  if [[ -f "$CANDIDATE_RECORD" ]]; then
+    record="$CANDIDATE_RECORD"
+    if [[ -f "$CURRENT_RECORD" ]]; then
+      validate "$CURRENT_RECORD"
+      accepted_image_can_read_staging_canary_state || \
+        fail 'staging canary requires the accepted Authority image to advertise staging-synthetic-meeting-canary rollback-read capability'
+    fi
+  elif [[ -f "$CURRENT_RECORD" ]]; then
+    record="$CURRENT_RECORD"
+  else
+    fail 'staging canary requires a staged candidate or accepted release'
+  fi
+  validate "$record"
+  active_runtime_profile_matches "$record"
+  active_materialized_profile_matches
+  active_environment_matches "$record"
+  running_exact_release "$record" || \
+    fail 'staging canary requires the exact selected release to be running'
+  host="$(authority_host)" || fail 'staging canary could not verify the Authority host'
+  [[ "$host" == "authority-staging.echobrain.org" ]] || \
+    fail 'staging canary is available only on the exact Authority staging host'
+  release_id="$(field "$record" release-id)"
+  receipt="$(compose_clean exec -T authority node \
+    services/organization-authority/dist/clean-live-main.js \
+    staging-private-dm-canary --release-id "$release_id")" || \
+    fail 'staging canary did not return a receipt'
+  normalized="$(validate_staging_canary_receipt "$release_id" "$receipt")" || \
+    fail 'staging canary returned an invalid receipt'
+  outcome="$(python3 - "$normalized" <<'PY'
+import json, sys
+print(json.loads(sys.argv[1])["approval_outcome"])
+PY
+  )"
+  case "$outcome" in
+    staged)
+      persist_staging_canary_receipt "$release_id" "$normalized" || \
+        fail 'staging canary receipt could not be persisted safely'
+      printf '%s\n' "$normalized"
+      ;;
+    delivery_pending)
+      printf '%s\n' "$normalized"
+      fail 'staging canary delivery is still pending; retry the canary command'
+      ;;
+    not_actionable|not_staged)
+      printf '%s\n' "$normalized"
+      fail "staging canary did not stage a private approval card: $outcome"
+      ;;
+  esac
 }
 
 start_and_check() {
@@ -553,6 +764,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   update-clean-v1.sh stage --release <canonical-release.json> --runtime-profile <canonical-profile.json>
+  update-clean-v1.sh canary
   update-clean-v1.sh promote --release <canonical-release.json> --canary-passed
   update-clean-v1.sh rollback
   update-clean-v1.sh status
@@ -566,7 +778,7 @@ trap 'release_operation_lock' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-ensure_state_directories || fail 'clean Authority release-state directories are missing or unsafe'
+ensure_state_directories || fail 'Authority release-state directories are missing or unsafe'
 case "$command" in
   stage)
     [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--runtime-profile' && -n "${5:-}" && $# -eq 5 ]] || usage
@@ -605,13 +817,17 @@ case "$command" in
       exit 0
     fi
     if [[ "$first_deploy" == true ]]; then
-      archive_candidate_as_failed || fail 'first deployment candidate failed and could not be marked failed; do not continue automatically'
       compose_clean down || fail 'first deployment failed and candidate stop could not be confirmed'
+      archive_candidate_as_failed || fail 'first deployment candidate was stopped but could not be marked failed; leave it staged and retry rollback'
       fail 'first deployment candidate failed health/setup checks; candidate was stopped and no release was accepted'
     fi
     restore_accepted "$CURRENT_RECORD" || fail 'candidate failed and rollback also failed; candidate remains staged so recovery can be retried'
     archive_candidate_as_failed || fail 'candidate recovery was verified but the candidate could not be marked failed; leave it staged and retry rollback'
     fail 'candidate failed health/setup checks; previous accepted release tuple was restored and verified'
+    ;;
+  canary)
+    [[ $# -eq 1 ]] || usage
+    run_staging_private_dm_canary
     ;;
   promote)
     [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--canary-passed' && $# -eq 4 ]] || usage
@@ -619,6 +835,7 @@ case "$command" in
     validate "$candidate"
     [[ -f "$CANDIDATE_RECORD" ]] || fail 'no staged candidate to promote'
     cmp -s "$candidate" "$CANDIDATE_RECORD" || fail 'promotion record does not match the staged candidate'
+    require_staged_canary_receipt "$CANDIDATE_RECORD"
     active_runtime_profile_matches "$CANDIDATE_RECORD"
     active_materialized_profile_matches
     active_environment_matches "$CANDIDATE_RECORD"
@@ -633,7 +850,7 @@ case "$command" in
       fi
       [[ "$(field "$candidate" baseline-class)" == "$(field "$CURRENT_RECORD" baseline-class)" ]] || fail 'candidate baseline is not compatible with the current release'
       stored_release_tuple_matches "$CURRENT_RECORD"
-      copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" no-replace
+      copy_record "$CURRENT_RECORD" "$RELEASE_STATE_DIR/history/$(field "$CURRENT_RECORD" release-id).json" idempotent-immutable
       copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" replace
     else
       copy_record "$CANDIDATE_RECORD" "$CURRENT_RECORD" no-replace || fail 'could not accept first deployment candidate'
@@ -646,8 +863,17 @@ case "$command" in
     ;;
   rollback)
     [[ $# -eq 1 ]] || usage
-    [[ -f "$CURRENT_RECORD" && -f "$CANDIDATE_RECORD" ]] || fail 'rollback requires an accepted current release and a staged candidate'
-    validate "$CURRENT_RECORD"; validate "$CANDIDATE_RECORD"
+    [[ -f "$CANDIDATE_RECORD" ]] || fail 'rollback requires a staged candidate'
+    validate "$CANDIDATE_RECORD"
+    if [[ ! -e "$CURRENT_RECORD" && ! -L "$CURRENT_RECORD" ]]; then
+      if ! abort_first_deploy_candidate; then
+        fail 'first deployment candidate is stopped or runtime image drifted; leave it staged and investigate before retrying rollback'
+      fi
+      printf '{"ok":true,"stage":"aborted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
+      exit 0
+    fi
+    [[ -f "$CURRENT_RECORD" ]] || fail 'accepted current release record is unsafe'
+    validate "$CURRENT_RECORD"
     if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
       remove_record "$CANDIDATE_RECORD"
       printf '{"ok":true,"stage":"already_promoted","baseline_compatibility_class":"clean-v1"}\n'

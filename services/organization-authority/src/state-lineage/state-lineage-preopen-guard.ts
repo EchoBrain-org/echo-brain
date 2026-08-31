@@ -20,7 +20,7 @@ import type {
 } from "./state-lineage-manifest-v1.js";
 
 /**
- * Read-only pre-open verifier for one new-lineage state directory.
+ * Read-only pre-open verifier for one versioned Authority state directory.
  *
  * The guard takes an explicit state directory and expectation — no default,
  * no discovery, no environment read — and either returns a verified coherence
@@ -216,7 +216,7 @@ function inspectDatabase(
     if (!tables.has(STATE_LINEAGE_MANIFEST_TABLE)) {
       refuse(
         "legacy_state",
-        `${label} has no ${STATE_LINEAGE_MANIFEST_TABLE} table and is not new-lineage state; no automatic upgrade exists`,
+        `${label} has no ${STATE_LINEAGE_MANIFEST_TABLE} table and is not versioned Authority state; no automatic upgrade exists`,
       );
     }
     const rows = database

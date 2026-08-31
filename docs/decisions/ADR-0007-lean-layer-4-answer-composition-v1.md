@@ -4,10 +4,10 @@ id: ADR-0007
 kind: decision
 title: Lean Layer 4 answer composition V1
 component_ids:
-  - CMP-ADAPTERS
+  - CMP-PROCESSING-ADAPTERS
   - CMP-PERMISSIONS
   - CMP-IDENTITY-ACCESS
-  - CMP-CENTRAL-ORGANIZATION
+  - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-23
 reviewed_at: 2026-08-23
 reviewed_ref: fe78f2c7e11cffaa4b00ec699dfe71f97edfa986

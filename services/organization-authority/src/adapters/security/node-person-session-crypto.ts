@@ -10,7 +10,7 @@ import type {
   PersonSessionPkceSealer,
   PersonSessionRandomPurpose,
   PersonSessionRandomSource,
-} from '../../application/ports/person-session-runtime.js';
+} from '../../application/ports/person-session-dependencies.js';
 
 const PKCE_SEAL_KEY_BYTES = 32;
 const PKCE_SEAL_NONCE_BYTES = 12;

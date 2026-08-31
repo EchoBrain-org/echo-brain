@@ -1,10 +1,10 @@
-import { runCleanResetCli } from "./composition/clean-reset-cli.js";
+import { runOrganizationAuthorityResetCli } from "./composition/organization-authority-reset-cli.js";
 
 try {
-  process.exitCode = runCleanResetCli(process.argv.slice(2));
+  process.exitCode = runOrganizationAuthorityResetCli(process.argv.slice(2));
 } catch (error) {
   process.stderr.write(
-    `${error instanceof Error ? error.message : "clean reset failed"}\n`,
+    `${error instanceof Error ? error.message : "Organization Authority reset failed"}\n`,
   );
   process.exitCode = 1;
 }

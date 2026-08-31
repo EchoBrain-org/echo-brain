@@ -79,7 +79,7 @@ function parseArguments(argv) {
     argv[2] !== "--output"
   ) {
     fail(
-      "usage: build-authority-recovery-helper-bundle.mjs --source-root <clean-repository-root> --output <new-bundle.tar.gz>",
+      "usage: build-authority-recovery-helper-bundle.mjs --source-root <unchanged-repository-root> --output <new-bundle.tar.gz>",
     );
   }
   const sourceRoot = resolve(argv[1]);
@@ -118,7 +118,7 @@ function requiredBuildPaths(sourceRoot) {
     "tools/verify-authority-recovery.mjs",
     "tools/clean-v1-release.mjs",
     "tools/clean-v1-runtime-profile.mjs",
-    "services/organization-authority/dist/composition/verify-clean-state-lineage.js",
+    "services/organization-authority/dist/composition/verify-authority-state-lineage.js",
   ];
   for (const path of paths) {
     const absolute = join(sourceRoot, path);

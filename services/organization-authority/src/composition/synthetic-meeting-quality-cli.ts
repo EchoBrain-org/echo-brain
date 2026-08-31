@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { createOpenRouterStructuredOutput } from "../answer-composition/openrouter-structured-output.js";
+import { createOpenRouterStructuredGenerationAdapter } from "../adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 import { readPrivateAuthorityCredential } from "../adapters/security/private-file-credentials.js";
 import {
   createLlmDecisionProcessor,
@@ -16,14 +16,14 @@ import {
   SyntheticMeetingSourceAdapterV1,
 } from "../quality/synthetic-meeting-fixture-v1.js";
 import {
-  OPENROUTER_CLEAN_LAYER4_ADAPTER_ID_V1,
-  OPENROUTER_CLEAN_LAYER4_MODEL_V1,
-  OPENROUTER_CLEAN_LAYER4_TIMEOUT_MS_V1,
-} from "./openrouter-clean-layer4-runtime.js";
-import { fixedCleanLlmProcessorConfigV1 } from "./clean-live-llm-processor-config.js";
+  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+} from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
+import { fixedOpenRouterDecisionProcessorConfigV1 } from "./providers/openrouter/openrouter-decision-processor-config-v1.js";
 
 const USAGE =
-  "usage: echo-organization-authority-synthetic-quality run " +
+  "usage: echo-organization-authority-synthetic-meeting-quality run " +
   "--corpus <absolute-path> --llm-credential-file <absolute-path>";
 
 export interface SyntheticMeetingQualityCliIoV1 {
@@ -34,7 +34,7 @@ const PROCESS_IO: SyntheticMeetingQualityCliIoV1 = {
   stdout: (line) => process.stdout.write(line),
 };
 
-type StructuredOutput = ReturnType<typeof createOpenRouterStructuredOutput>;
+type StructuredGeneration = ReturnType<typeof createOpenRouterStructuredGenerationAdapter>;
 
 /** Narrow seams keep tests offline while the default command uses real adapters. */
 export interface SyntheticMeetingQualityCliDependenciesV1 {
@@ -44,10 +44,10 @@ export interface SyntheticMeetingQualityCliDependenciesV1 {
     config: AdapterConfig,
     credential: string,
   ) => DecisionProcessorAdapter;
-  readonly create_structured_output?: (
+  readonly create_structured_generation?: (
     credential_reference: string,
     credential: string,
-  ) => StructuredOutput;
+  ) => StructuredGeneration;
 }
 
 interface ParsedFlagsV1 {
@@ -109,7 +109,7 @@ function failed(io: SyntheticMeetingQualityCliIoV1, failure: "usage" | "evaluati
 
 /**
  * Local-only composition for evaluating an invented replay corpus with the
- * same fixed OpenRouter models used by the clean runtime. It opens no state,
+ * same fixed OpenRouter models used by the selected Authority composition. It opens no state,
  * delivery, provider-source, or staging connection; OpenRouter is the sole
  * network dependency and its credential never appears in output.
  */
@@ -130,7 +130,7 @@ export async function runSyntheticMeetingQualityCommandV1(
     const credential = (dependencies.read_credential ?? readPrivateAuthorityCredential)(
       credentialReference,
     );
-    const processorConfig = fixedCleanLlmProcessorConfigV1(
+    const processorConfig = fixedOpenRouterDecisionProcessorConfigV1(
       "synthetic-quality-eval",
       credentialReference,
     );
@@ -141,14 +141,14 @@ export async function runSyntheticMeetingQualityCommandV1(
         })
       : dependencies.create_processor(processorConfig, credential);
     assertValidProcessor(processor, processorConfig);
-    const createStructuredOutput = dependencies.create_structured_output ??
+    const createStructuredGeneration = dependencies.create_structured_generation ??
       ((reference: string, resolvedCredential: string) =>
-        createOpenRouterStructuredOutput({
+        createOpenRouterStructuredGenerationAdapter({
           credential_ref: reference,
           credential_resolver: (candidate) =>
             candidate === reference ? resolvedCredential : undefined,
         }));
-    const model = createStructuredOutput(credentialReference, credential);
+    const model = createStructuredGeneration(credentialReference, credential);
     const meetings = await (dependencies.load_corpus ?? loadSyntheticReplayMeetingsV1)(
       flags.corpus_path,
     );
@@ -159,10 +159,11 @@ export async function runSyntheticMeetingQualityCommandV1(
         extraction_expectations: phaseOneSyntheticExtractionExpectationsV1,
         planner: model,
         answerer: model,
-        generation_adapter_id: OPENROUTER_CLEAN_LAYER4_ADAPTER_ID_V1,
-        planner_model: OPENROUTER_CLEAN_LAYER4_MODEL_V1,
-        answer_model: OPENROUTER_CLEAN_LAYER4_MODEL_V1,
-        timeout_ms: OPENROUTER_CLEAN_LAYER4_TIMEOUT_MS_V1,
+        generation_adapter_id:
+          OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+        planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+        answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+        timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
       });
     io.stdout(`${JSON.stringify(result)}\n`);
     return result.passed ? 0 : 1;

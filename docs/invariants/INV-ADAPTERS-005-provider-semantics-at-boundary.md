@@ -4,8 +4,8 @@ id: INV-ADAPTERS-005
 kind: invariant
 title: Provider semantics terminate at the adapter boundary
 component_ids:
-  - CMP-ADAPTERS
-  - CMP-CORE-PIPELINE
+  - CMP-PROCESSING-ADAPTERS
+  - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-29
 reviewed_at: 2026-08-29
 reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
@@ -94,12 +94,12 @@ The reviewed source is covered by:
 - `services/organization-authority/source-boundary.v1.json`;
 - `product/source-boundary.v1.json`;
 - `tests/architecture/workspace-boundaries.test.ts`;
-- `services/organization-authority/test/authority-live-source-baseline-v3.test.ts`;
-- `services/organization-authority/test/processing/clean-v1/live-only-source-cycle.test.ts`;
-- `services/organization-authority/test/open-clean-live-runtime.test.ts`;
-- `services/organization-authority/test/composition/openrouter-clean-live-processor-runtime.test.ts`;
-- `services/organization-authority/test/composition/openrouter-clean-layer4-runtime.test.ts`;
-- `services/organization-record/test/record-log-v4-append.test.ts`; and
+- `services/organization-authority/test/admitted-meeting-source-baseline-v3.test.ts`;
+- `services/organization-authority/test/processing/admitted-meeting-processing/meeting-processing-cycle-v1.test.ts`;
+- `services/organization-authority/test/organization-authority-private-approval-runtime.test.ts`;
+- `services/organization-authority/test/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.test.ts`;
+- `services/organization-authority/test/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.test.ts`;
+- `packages/organization-record/test/record-log-v4-append.test.ts`; and
 - the synthetic meeting-source adapter and evaluator tests.
 
 Before evaluation, the synthetic corpus validator rejects a non-exact top-level
@@ -110,8 +110,8 @@ atoms. The evaluator no longer silently drops an unknown required atom ID.
 Enforcement remains partial and this record does not claim full provider
 qualification. Static checks catch names and dependency edges but cannot prove
 that a generically named shared abstraction does not encode one provider's
-semantics or that a newly added neutral file was registered. The current
-founder onboarding and compatibility CLI intentionally select a concrete
+semantics or that a newly added neutral file was registered. Initial-owner
+onboarding and the compatibility CLI intentionally select a concrete
 Granola, OpenRouter, and Slack product profile; source admission is supplied by
 that profile rather than one universal onboarding command. Any change that
 moves a provider fact into a neutral layer requires an explicit invariant
