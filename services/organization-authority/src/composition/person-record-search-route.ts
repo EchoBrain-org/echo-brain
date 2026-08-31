@@ -13,7 +13,7 @@ import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/pe
 import {
   containsCanonicalReleaseId,
   isCanonicalReleaseId,
-} from "../application/canonical-release-id.js";
+} from "../answer-composition/canonical-release-id.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type {

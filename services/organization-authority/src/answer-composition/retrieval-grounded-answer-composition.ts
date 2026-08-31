@@ -3,7 +3,7 @@ import {
   canonicalSha256,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
-import { extractSingleCanonicalReleaseId } from "../application/canonical-release-id.js";
+import { extractSingleCanonicalReleaseId } from "./canonical-release-id.js";
 
 /** Lean V1 deliberately has one bounded plan, retrieval batch, and answer. */
 export const ANSWER_COMPOSITION_MAX_ADDITIONAL_QUERIES = 3;
