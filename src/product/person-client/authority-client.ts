@@ -339,7 +339,7 @@ function validatePersonRecordSearchRequest(value: unknown): {
     /[\p{Cc}\p{Zl}\p{Zp}]/u.test(request.query) ||
     [...request.query].length > 240 ||
     queryTerms.size < 1 ||
-    queryTerms.size > 16 ||
+    queryTerms.size > 32 ||
     [...queryTerms].some((term) => Buffer.byteLength(term, "utf8") > 64) ||
     (request.limit !== undefined &&
       (!Number.isSafeInteger(request.limit) ||
@@ -377,7 +377,7 @@ function validatePersonAnswerRequest(value: unknown): {
     /[\p{Cc}\p{Zl}\p{Zp}]/u.test(request.question) ||
     [...request.question].length > 240 ||
     questionTerms.size < 1 ||
-    questionTerms.size > 16 ||
+    questionTerms.size > 32 ||
     [...questionTerms].some((term) => Buffer.byteLength(term, "utf8") > 64)
   ) {
     throw new Error("ask request is invalid");

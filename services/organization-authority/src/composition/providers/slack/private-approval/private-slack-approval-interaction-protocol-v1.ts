@@ -335,13 +335,45 @@ function actionValue(value: unknown): {
   });
 }
 
-function selectedPolicy(value: unknown): PersonApprovalPolicyId {
-  // Slack can report an untouched initial radio option as null. The V1 card's
-  // immutable server-owned default is the narrowest policy, so this fallback
-  // can never broaden visibility.
-  if (value === null) return RESTRICTED_REVIEWER_PERSON_POLICY_ID;
-  const option = exactRecord(value, ["text", "value"]);
-  if (typeof option.text !== "object" || option.text === null) return invalid();
+function slackPlainText(value: unknown): void {
+  const record = exactRecord(
+    value,
+    ["type", "text"],
+    ["type", "text", "emoji"],
+  );
+  if (
+    record.type !== "plain_text" ||
+    (record.emoji !== undefined && typeof record.emoji !== "boolean") ||
+    typeof record.text !== "string" ||
+    record.text.length === 0 ||
+    record.text.length > 75 ||
+    record.text !== record.text.trim() ||
+    /[\u0000-\u001F\u007F]/.test(record.text)
+  ) {
+    return invalid();
+  }
+}
+
+function selectedPolicy(
+  value: unknown,
+  control: "radio_buttons" | "static_select",
+): PersonApprovalPolicyId {
+  // Both shipped card variants use the same immutable narrow default. Slack
+  // may report an untouched initial option as null, so preserve that default.
+  if (value === null) {
+    return RESTRICTED_REVIEWER_PERSON_POLICY_ID;
+  }
+  const option = exactRecord(
+    value,
+    ["text", "value"],
+    control === "static_select"
+      ? ["text", "value", "description"]
+      : ["text", "value"],
+  );
+  slackPlainText(option.text);
+  if (option.description !== undefined) {
+    slackPlainText(option.description);
+  }
   if (
     option.value !== RESTRICTED_REVIEWER_PERSON_POLICY_ID &&
     option.value !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
@@ -375,12 +407,14 @@ function completeState(input: {
     const keys = Object.keys(element);
     if (keys.length !== 1) return invalid();
     if (keys[0] === policyActionId) {
-      const radio = exactRecord(element[policyActionId], [
+      const selector = exactRecord(element[policyActionId], [
         "type",
         "selected_option",
       ]);
-      if (radio.type !== "radio_buttons") return invalid();
-      policy = selectedPolicy(radio.selected_option);
+      if (selector.type !== "radio_buttons" && selector.type !== "static_select") {
+        return invalid();
+      }
+      policy = selectedPolicy(selector.selected_option, selector.type);
       continue;
     }
     if (keys[0] === commentActionId) {
@@ -592,9 +626,14 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
 
     const inputAction = SLACK_CARD_INPUT_ACTION.exec(actionId)?.[1];
     if (inputAction === "policy" || inputAction === "comment") {
-      const expectedType =
-        inputAction === "policy" ? "radio_buttons" : "plain_text_input";
-      if (selected.type !== expectedType) return invalid();
+      if (
+        (inputAction === "policy" &&
+          selected.type !== "radio_buttons" &&
+          selected.type !== "static_select") ||
+        (inputAction === "comment" && selected.type !== "plain_text_input")
+      ) {
+        return invalid();
+      }
       return Object.freeze({
         schema_version: 1,
         kind: PRIVATE_SLACK_APPROVAL_INTERACTION_KIND,

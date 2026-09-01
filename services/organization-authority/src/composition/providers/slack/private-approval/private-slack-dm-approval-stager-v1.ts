@@ -16,7 +16,12 @@ import {
   type StagedPrivateApprovalPendingV1,
 } from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import type Database from "better-sqlite3";
-import { buildPrivateSlackApprovalBlockKitCardV1 } from "./private-slack-approval-block-kit-card-v1.js";
+import {
+  buildPrivateSlackApprovalBlockKitCardV1,
+  type PrivateSlackApprovalActionItemV1,
+  type PrivateSlackApprovalDecisionGroupV1,
+  type PrivateSlackApprovalReviewItemV1,
+} from "./private-slack-approval-block-kit-card-v1.js";
 import {
   type PrivateSlackApprovalReviewerTargetResolverInputV1,
   type PrivateSlackApprovalReviewerTargetResolverV1,
@@ -43,6 +48,11 @@ import {
 } from "../../../../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
 type Digest = ApprovalContractSha256;
+type CompiledDecisionBrief = ReturnType<typeof compileDecisionBrief>;
+type ReviewSignal =
+  | CompiledDecisionBrief["decisions"][number]
+  | CompiledDecisionBrief["actions"][number]
+  | CompiledDecisionBrief["rationales"][number];
 
 export interface PrivateSlackDmApprovalStagerV1Options {
   readonly authority: SqliteAuthorityMeetingProcessingStateV1;
@@ -75,8 +85,18 @@ interface PrivateCardAndSnapshotV1 {
   readonly approved_snapshot_sha256: Digest;
 }
 
+/**
+ * Read-only input for replaying the frozen Slack review projection.  This is
+ * intentionally narrower than staging: it has no reviewer, connection, or
+ * persistence authority.
+ */
+export interface PrivateSlackApprovalCardProjectionInputV1 {
+  readonly approval_id: string;
+  readonly meeting: ApprovalWorkflowStageInputV1["meeting"];
+  readonly decisions: ApprovalWorkflowStageInputV1["decisions"];
+}
+
 const MAX_TITLE = 150;
-const MAX_CONTEXT = 3_000;
 
 function legacyMeetingTitle(value: unknown): string {
   const normalized =
@@ -87,7 +107,7 @@ function legacyMeetingTitle(value: unknown): string {
   return selected.slice(0, MAX_TITLE).trim();
 }
 
-function isExactContextText(value: unknown): value is string {
+function isExactDisplayText(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.trim().length > 0 &&
@@ -96,57 +116,110 @@ function isExactContextText(value: unknown): value is string {
   );
 }
 
-function frozenApprovalContext(
-  brief: ReturnType<typeof compileDecisionBrief>,
+function evidenceReferenceText(
+  signal: ReviewSignal,
 ): string | undefined {
-  let context = [
-    `Review ${brief.decisions.length} decision${brief.decisions.length === 1 ? "" : "s"}, ${brief.actions.length} action${brief.actions.length === 1 ? "" : "s"}, and ${brief.rationales.length} rationale${brief.rationales.length === 1 ? "" : "s"} from this meeting.`,
-    "Frozen content:",
-  ].join("\n");
-  const append = (line: string): boolean => {
-    if (context.length + 1 + line.length > MAX_CONTEXT) return false;
-    context += `\n${line}`;
-    return true;
-  };
-  for (const signal of brief.decisions) {
-    if (
-      !isExactContextText(signal.text) ||
-      !append(`Decision (${signal.status}): ${signal.text}`)
-    ) {
-      return undefined;
-    }
+  const evidence = signal.evidence[0];
+  if (evidence === undefined || !isExactDisplayText(evidence.block_id)) {
+    return undefined;
   }
-  for (const signal of brief.actions) {
-    if (
-      !isExactContextText(signal.text) ||
-      (signal.owner !== null && !isExactContextText(signal.owner))
-    ) {
-      return undefined;
-    }
-    if (
-      !append(
-        `Action (owner: ${signal.owner ?? "unassigned"}; due: ${signal.due_at ?? "none"}): ${signal.text}`,
-      )
-    ) {
-      return undefined;
-    }
+  return `Transcript block ${evidence.block_id}`;
+}
+
+function reviewItem(
+  signal: ReviewSignal,
+): PrivateSlackApprovalReviewItemV1 | undefined {
+  const evidence_reference = evidenceReferenceText(signal);
+  if (!isExactDisplayText(signal.text) || evidence_reference === undefined) {
+    return undefined;
   }
-  for (const signal of brief.rationales) {
-    if (
-      !isExactContextText(signal.text) ||
-      signal.supports_signal_ids.some((id) => !isExactContextText(id))
-    ) {
-      return undefined;
+  return Object.freeze({ text: signal.text, evidence_reference });
+}
+
+function frozenReview(
+  brief: CompiledDecisionBrief,
+): {
+  readonly decision_groups: readonly PrivateSlackApprovalDecisionGroupV1[];
+  readonly ungrouped_actions?: readonly PrivateSlackApprovalActionItemV1[];
+  readonly ungrouped_rationales?: readonly PrivateSlackApprovalReviewItemV1[];
+} | undefined {
+  const decisionIds = new Set(brief.decisions.map((decision) => decision.id));
+  const decision_groups: PrivateSlackApprovalDecisionGroupV1[] = [];
+
+  for (const [index, decision] of brief.decisions.entries()) {
+    const item = reviewItem(decision);
+    if (item === undefined) return undefined;
+    const rationales: PrivateSlackApprovalReviewItemV1[] = [];
+    for (const rationale of brief.rationales) {
+      if (!rationale.supports_signal_ids.includes(decision.id)) continue;
+      const rationaleItem = reviewItem(rationale);
+      if (rationaleItem === undefined) return undefined;
+      rationales.push(rationaleItem);
     }
-    if (
-      !append(
-        `Rationale (supports: ${signal.supports_signal_ids.length === 0 ? "none" : signal.supports_signal_ids.join(", ")}): ${signal.text}`,
-      )
-    ) {
-      return undefined;
-    }
+    decision_groups.push(Object.freeze({
+      id: `decision-group-${index + 1}`,
+      decision: Object.freeze({ ...item, status: decision.status }),
+      rationales: Object.freeze(rationales),
+    }));
   }
-  return context;
+
+  const ungrouped_actions: PrivateSlackApprovalActionItemV1[] = [];
+  for (const action of brief.actions) {
+    const item = reviewItem(action);
+    if (item === undefined) return undefined;
+    ungrouped_actions.push(item);
+  }
+
+  const ungrouped_rationales: PrivateSlackApprovalReviewItemV1[] = [];
+  for (const rationale of brief.rationales) {
+    if (rationale.supports_signal_ids.some((id) => decisionIds.has(id))) continue;
+    const item = reviewItem(rationale);
+    if (item === undefined) return undefined;
+    ungrouped_rationales.push(item);
+  }
+
+  return Object.freeze({
+    decision_groups: Object.freeze(decision_groups),
+    ...(ungrouped_actions.length === 0
+      ? {}
+      : { ungrouped_actions: Object.freeze(ungrouped_actions) }),
+    ...(ungrouped_rationales.length === 0
+      ? {}
+      : { ungrouped_rationales: Object.freeze(ungrouped_rationales) }),
+  });
+}
+
+/**
+ * Projects the same complete approval card used by staging without performing
+ * any I/O. `undefined` means the exact DecisionSet cannot be safely rendered
+ * within the card's frozen limits.
+ */
+export function projectPrivateSlackApprovalCardV1(
+  input: PrivateSlackApprovalCardProjectionInputV1,
+): ReturnType<typeof buildPrivateSlackApprovalBlockKitCardV1> | undefined {
+  const brief = compileDecisionBrief(
+    "brf_replay",
+    input.meeting,
+    input.decisions,
+  );
+  const review = frozenReview(brief);
+  if (review === undefined) return undefined;
+  try {
+    return buildPrivateSlackApprovalBlockKitCardV1({
+      schema_version: 1,
+      approval_id: input.approval_id,
+      meeting_title: legacyMeetingTitle(input.meeting.title),
+      ...review,
+    });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("private approval Block Kit card ")
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function buildCardAndSnapshot(
@@ -161,9 +234,8 @@ function buildCardAndSnapshot(
   const payload = Object.freeze({
     brief,
     source: Object.freeze({
-      // The immutable meeting envelope is the provenance authority. This is
-      // normally identical to the admitted source, but deliberately
-      // remains truthful for a staging-only synthetic canary.
+      // The immutable meeting envelope is the provenance authority, even
+      // when its source differs from the current admission context.
       adapter_id: input.meeting.provenance.source.adapter_id,
       instance_id: input.meeting.provenance.source.instance_id,
       external_id: input.meeting.provenance.external_id,
@@ -185,17 +257,12 @@ function buildCardAndSnapshot(
   // The active controls must follow a complete projection of the exact brief
   // they authorize. An unrepresentable candidate is durably quarantined before
   // any post attempt instead of truncating an informed-consent view.
-  const approvalContext = frozenApprovalContext(brief);
-  if (approvalContext === undefined) return undefined;
-  const card = buildPrivateSlackApprovalBlockKitCardV1({
-    schema_version: 1,
+  const card = projectPrivateSlackApprovalCardV1({
     approval_id: input.candidate.approval_id,
-    // The title is display chrome, not authorized decision content. Keep its
-    // legacy deterministic normalization so long provider titles do not
-    // quarantine an otherwise complete approval package.
-    meeting_title: legacyMeetingTitle(input.meeting.title),
-    approval_context: approvalContext,
+    meeting: input.meeting,
+    decisions: input.decisions,
   });
+  if (card === undefined) return undefined;
   const approved_snapshot_sha256 = sha256(approved_snapshot);
   const frozen_card_sha256 = sha256({
     schema_version: 1,

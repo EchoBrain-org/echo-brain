@@ -779,7 +779,7 @@ first three steps:
 3. apply locale-independent lowercase to each run, then NFC again.
 
 Query analysis then preserves each term's first occurrence, removes later
-duplicates, and rejects zero terms, more than 16 unique terms, or any term
+duplicates, and rejects zero terms, more than 32 unique terms, or any term
 longer than 64 UTF-8 bytes. Document analysis retains every occurrence needed
 to compute term frequency, has no term-count limit, and deterministically
 omits an occurrence whose normalized term is longer than 64 UTF-8 bytes. Such
@@ -921,7 +921,7 @@ match = any-unique-query-term
 score = sum-matched-term-frequency
 order = [score-desc, log-position-desc, atom-order-asc, atom-id-asc]
 maximum_query_scalars = 240
-maximum_query_terms = 16
+maximum_query_terms = 32
 maximum_query_term_utf8_bytes = 64
 analyzer_source_sha256
 ```

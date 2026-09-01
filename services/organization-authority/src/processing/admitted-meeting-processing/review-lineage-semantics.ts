@@ -95,7 +95,11 @@ export function reviewInputSha256V1(input: {
     participants: semanticParticipantNames(input.meeting),
     content: input.meeting.content
       .filter((block) => block.text.trim().length > 0)
-      .map((block) => ({ kind: block.kind, text: block.text })),
+      .map((block) => ({
+        kind: block.kind,
+        text: block.text,
+        speaker_participant_id: block.speaker_participant_id ?? null,
+      })),
   });
 }
 

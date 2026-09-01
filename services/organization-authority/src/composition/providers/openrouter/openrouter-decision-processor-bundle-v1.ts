@@ -44,12 +44,9 @@ export function createOpenRouterDecisionProcessorBundleV1(input: {
     assert_admission_commitments(
       commitments: AdmittedMeetingProcessingCommitmentsV1,
     ): void {
-      if (commitments.processor.adapter_id !== "llm") {
-        throw new Error(
-          "OpenRouter decision-processor adapter differs from the admitted commitment",
-        );
-      }
       assertOpenRouterDecisionProcessorRuntimeCommitmentsV1({
+        adapter_id: commitments.processor.adapter_id,
+        version: commitments.processor.version,
         configuration_sha256: commitments.processor.configuration_sha256,
         credential_reference_sha256:
           commitments.processor.credential_reference_sha256,

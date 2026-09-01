@@ -32,9 +32,9 @@ describe('readable-search analyzer', () => {
       'decided',
     ]);
     expect(analyzeReadableSearchQuery('decisive')).toEqual(['decisive']);
-    expect(analyzeReadableSearchQuery(`decision ${Array.from({ length: 15 }, (_, index) => `term${index}`).join(' ')}`)).toHaveLength(20);
-    expect(() => analyzeReadableSearchQuery(`decision ${Array.from({ length: 16 }, (_, index) => `term${index}`).join(' ')}`)).toThrow(
-      'one through sixteen',
+    expect(analyzeReadableSearchQuery(`decision ${Array.from({ length: 31 }, (_, index) => `term${index}`).join(' ')}`)).toHaveLength(36);
+    expect(() => analyzeReadableSearchQuery(`decision ${Array.from({ length: 32 }, (_, index) => `term${index}`).join(' ')}`)).toThrow(
+      'one through thirty-two',
     );
   });
 
@@ -55,7 +55,7 @@ describe('readable-search analyzer', () => {
   });
 
   it('rejects an empty, non-NFC, or over-wide query while documents omit wide tokens', () => {
-    expect(() => analyzeReadableSearchQuery('...')).toThrow('one through sixteen');
+    expect(() => analyzeReadableSearchQuery('...')).toThrow('one through thirty-two');
     expect(() => analyzeReadableSearchQuery('e\u0301')).toThrow('must be NFC');
     expect(() => analyzeReadableSearchQuery('a'.repeat(65))).toThrow('exceeds 64');
     expect([...analyzeReadableSearchDocument(`keep ${'a'.repeat(65)}`).entries()]).toEqual([['keep', 1]]);

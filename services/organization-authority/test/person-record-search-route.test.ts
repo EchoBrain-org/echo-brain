@@ -507,7 +507,7 @@ describe("Person Layer 2 route", () => {
 
       const maximumCallerTermDecisionQuery = route.search({
         access_token: "owner-bearer",
-        query: `decision ${Array.from({ length: 15 }, (_, index) => `term${index}`).join(" ")}`,
+        query: `decision ${Array.from({ length: 31 }, (_, index) => `term${index}`).join(" ")}`,
       });
       expect(maximumCallerTermDecisionQuery.items).toHaveLength(10);
 
@@ -879,6 +879,10 @@ describe("Person Layer 2 route", () => {
     ["five queries", ["one", "two", "three", "four", "five"]],
     ["duplicate queries", ["one", "one"]],
     ["invalid query", [" leading space"]],
+    [
+      "query with 33 unique terms",
+      [Array.from({ length: 33 }, (_, index) => `term${index}`).join(" ")],
+    ],
   ])("rejects %s before retrieval or audit", (_name, queries) => {
     const value = setup();
     const search = vi.fn();

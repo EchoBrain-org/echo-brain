@@ -9,8 +9,9 @@ an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
 current provider-neutral Authority V4, private-approval control-plane V2, and
 record-log V2 state lineage. For populated state, `stage` pulls the immutable
-candidate and runs its exact verifier in an isolated read-only container before
-any runtime, configuration, or state mutation. While there are no live users,
+candidate and runs its state-lineage and admitted-processor verifiers in an
+isolated read-only container before any runtime, configuration, or state
+mutation. While there are no live users,
 run `onboard-clean-v1.sh
 replace-rehearsal --confirm-no-live-users`, then prepare the organization again
 with the new release record and matching profile. Do not point this updater at

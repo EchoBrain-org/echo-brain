@@ -64,8 +64,9 @@ that directly or transitively reaches any declared root. The typed
 `LLM_PROVIDER_IDS` source is checked against the registered transport-provider
 set; provider-client declarations not represented there fail, while the
 separately registered `deepseek` model namespace remains lexical evidence for
-the fixed OpenRouter model selection. Stale evidence and identifier leaks also
-fail the gate. Architecture tests include a bland three-hop composition bridge.
+the fixed OpenRouter answer-composition model selection. Stale evidence and
+identifier leaks also fail the gate. Architecture tests include a bland
+three-hop composition bridge.
 The source path stores generic source identity and opaque cursors,
 and the shared runtime receives explicit source, processor, Layer 4, approval,
 and external-identity bundles instead of selecting a provider.

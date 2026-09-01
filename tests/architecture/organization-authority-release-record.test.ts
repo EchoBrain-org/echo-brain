@@ -45,6 +45,7 @@ import {
   authorityBaselineSha256V3,
 } from "../../services/organization-authority/src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.js";
+import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import { initializeAuthorityStateLineageV1 } from "../../services/organization-authority/src/state-lineage/authority-state-lineage-initializer.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -79,6 +80,16 @@ const V4_LINEAGE_VERIFIER = join(
   "dist",
   "composition",
   "verify-authority-state-lineage.js",
+);
+const OPENROUTER_ADMISSION_VERIFIER = join(
+  REPO,
+  "services",
+  "organization-authority",
+  "dist",
+  "composition",
+  "providers",
+  "openrouter",
+  "verify-openrouter-decision-processor-admission-v1.js",
 );
 const roots: string[] = [];
 
@@ -352,6 +363,56 @@ function writeValidAuthorityV3Lineage(stateDirectory: string): void {
       return openOrganizationRecordDatabase(path);
     },
   });
+}
+
+function writeValidAuthorityV4LineageWithLegacyProcessorAdmission(
+  stateDirectory: string,
+): void {
+  const createdAt = "2026-08-22T00:00:00.000Z";
+  const initialized = bootstrapOrganizationAuthorityState({
+    state_directory: stateDirectory,
+    organization_display_name: "Legacy processor fixture",
+    owner_display_name: "Founder",
+    created_at: createdAt,
+    creating_artifact_revision: "legacy-processor-fixture",
+  });
+  const authority = openAuthorityDatabase(join(stateDirectory, "authority.sqlite"), {
+    fileMustExist: true,
+  });
+  try {
+    authority
+      .prepare(
+        `INSERT INTO authority_live_source_admission_v2 (
+          singleton, organization_id, principal_id, membership_id, membership_type,
+          source_adapter_id, source_adapter_version, source_adapter_instance_id,
+          normalizer_version, source_custodian_sha256,
+          source_custodian_assurance, source_custodian_observed_at,
+          source_credential_reference_sha256, initial_cursor, cutoff_at,
+          processor_adapter_id, processor_adapter_version, processor_instance_id,
+          processor_configuration_sha256, processor_credential_reference_sha256,
+          semantic_input_sha256, admitted_at
+        ) VALUES (
+          1, ?, ?, ?, 'owner', 'granola', '1.0.0', 'granola-1', '1.0.0', ?,
+          'owner_verified', ?, ?, 'granola:v1:live:zero', ?, 'llm',
+          '1.3.0+processing.legacy', 'llm-1', ?, ?, ?, ?
+        )`,
+      )
+      .run(
+        initialized.organization_id,
+        initialized.owner_principal_id,
+        initialized.owner_membership_id,
+        `sha256:${"a".repeat(64)}`,
+        createdAt,
+        `sha256:${"b".repeat(64)}`,
+        createdAt,
+        `sha256:${"c".repeat(64)}`,
+        `sha256:${"d".repeat(64)}`,
+        `sha256:${"e".repeat(64)}`,
+        createdAt,
+      );
+  } finally {
+    authority.close();
+  }
 }
 
 function writeRecord(value: unknown): string {
@@ -1263,6 +1324,12 @@ fi
     expect(dockerCalls).toContain("--input-type=module -e");
     expect(dockerCalls).toContain("verify-authority-state-lineage.js");
     expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
+    expect(dockerCalls).toContain(
+      "verify-openrouter-decision-processor-admission-v1.js",
+    );
+    expect(dockerCalls).toContain(
+      'verifyPersistedOpenRouterDecisionProcessorAdmissionV1("/echo-clean/state")',
+    );
     expect(dockerCalls.indexOf("pull ")).toBeLessThan(
       dockerCalls.indexOf("run "),
     );
@@ -1329,6 +1396,72 @@ fi
       "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
     );
     expect(result.stderr).toContain("otherwise use an explicit migration");
+    expect(existsSync(verifier)).toBe(true);
+    expect(existsSync(activation)).toBe(false);
+    expect(existsSync(join(releaseState, "candidate.clean-v1.json"))).toBe(false);
+    expect(readFileSync(envFile, "utf8")).toBe(initialEnvironment);
+  });
+
+  it("rejects a legacy processor admission before staging or activating the candidate", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-legacy-processor-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const releaseState = join(root, "release-state");
+    const stateDirectory = join(root, "state");
+    const verifier = join(root, "processor-verifier-called");
+    const activation = join(root, "compose-activation-called");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const profile = writeRuntimeProfile();
+    const candidate = writeRecord(releaseWithRuntimeProfile(profile));
+    writeValidAuthorityV4LineageWithLegacyProcessorAdmission(stateDirectory);
+    mkdirSync(bin);
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+if [[ "$1" == pull ]]; then exit 0; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
+  printf '%s\\n' '${"a".repeat(40)}'
+  exit 0
+fi
+if [[ "$1" == run ]]; then
+  touch "${verifier}"
+  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${V4_LINEAGE_VERIFIER}"; import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "${OPENROUTER_ADMISSION_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]); verifyPersistedOpenRouterDecisionProcessorAdmissionV1(process.argv[1]);' "${stateDirectory}"
+  exit $?
+fi
+if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
+  touch "${activation}"
+fi
+`,
+    );
+    chmodSync(docker, 0o755);
+    const initialEnvironment = [
+      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
+      "ECHO_CLEAN_AUTHORITY_UID=1000",
+      "ECHO_CLEAN_AUTHORITY_GID=1000",
+      "",
+    ].join("\n");
+    writeFileSync(envFile, initialEnvironment, { mode: 0o600 });
+
+    const result = run(
+      "bash",
+      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
+      {
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_CLEAN_ENV_FILE: envFile,
+        ECHO_CLEAN_RELEASE_STATE_DIR: releaseState,
+        ECHO_CLEAN_STATE_DIR: stateDirectory,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Candidate OpenRouter processor differs from the immutable admitted processor commitment",
+    );
+    expect(result.stderr).toContain(
+      "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
+    );
+    expect(result.stderr).toContain("live state requires an explicit processor-admission migration");
     expect(existsSync(verifier)).toBe(true);
     expect(existsSync(activation)).toBe(false);
     expect(existsSync(join(releaseState, "candidate.clean-v1.json"))).toBe(false);

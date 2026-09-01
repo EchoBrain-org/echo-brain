@@ -116,6 +116,28 @@ describe("admitted review lineage semantics", () => {
     }));
   });
 
+  it("changes the input hash when a cited speaker attribution changes", () => {
+    const first = meeting({
+      content: [{
+        id: "block-1",
+        kind: "note",
+        text: "Ship the beta.",
+        speaker_participant_id: "person-1",
+      }],
+    });
+    const changedSpeaker = meeting({
+      content: [{ ...first.content[0]!, speaker_participant_id: "person-2" }],
+    });
+
+    expect(reviewInputSha256V1({
+      meeting: changedSpeaker,
+      processor: PROCESSOR,
+    })).not.toBe(reviewInputSha256V1({
+      meeting: first,
+      processor: PROCESSOR,
+    }));
+  });
+
   it("treats reordered participants as the same review input", () => {
     const first = meeting();
     const reordered = meeting({ participants: [...first.participants].reverse() });

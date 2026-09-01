@@ -1,6 +1,6 @@
 import { ReadableSearchValidationError } from './readable-search-contracts.js';
 
-export const MAXIMUM_QUERY_TERMS = 16;
+export const MAXIMUM_QUERY_TERMS = 32;
 export const MAXIMUM_TERM_UTF8_BYTES = 64;
 
 /**
@@ -42,7 +42,7 @@ export function analyzeReadableSearchQuery(query: string): readonly string[] {
     }
   }
   if (unique.length === 0 || unique.length > MAXIMUM_QUERY_TERMS) {
-    throw new ReadableSearchValidationError('query must contain from one through sixteen unique terms');
+    throw new ReadableSearchValidationError('query must contain from one through thirty-two unique terms');
   }
   if (unique.some((term) => DECISION_TERM_FAMILY.has(term))) {
     const missingFamilyTerms = READABLE_SEARCH_DECISION_TERM_FAMILY.filter(
