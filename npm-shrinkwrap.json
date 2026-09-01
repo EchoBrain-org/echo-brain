@@ -3677,7 +3677,8 @@
         "echo-organization-authority-setup": "dist/clean-founder-main.js",
         "echo-organization-authority-state-bootstrap": "dist/clean-reset-main.js",
         "echo-organization-authority-synthetic-meeting-quality": "dist/synthetic-meeting-quality-main.js",
-        "echo-organization-authority-synthetic-quality": "dist/synthetic-meeting-quality-main.js"
+        "echo-organization-authority-synthetic-quality": "dist/synthetic-meeting-quality-main.js",
+        "echo-synthetic-demo": "dist/synthetic-demo-main.js"
       },
       "devDependencies": {
         "ajv": "8.20.0"

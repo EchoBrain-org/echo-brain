@@ -1037,6 +1037,7 @@ describe("workspace source boundaries", () => {
       "openai",
       "openrouter",
       "slack",
+      "synthetic-demo-source",
       "synthetic-source",
     ]);
 
@@ -1071,6 +1072,32 @@ describe("workspace source boundaries", () => {
     expect(compositionRule?.allowed_imports).toContain(
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
     );
+    expect(compositionRule?.allowed_imports).toContain(
+      "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/**",
+    );
+    expect(
+      manifest.layer_rules.find(
+        (rule) => rule.name === "processing-synthetic-demo-meeting-source",
+      ),
+    ).toMatchObject({
+      from: "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/synthetic-demo-meeting-source-v1.ts",
+      allowed_imports: [
+        "services/organization-authority/src/processing/core/index.ts",
+      ],
+      allowed_workspace_packages: ["@echo-brain/federation-protocol"],
+      allowed_node_builtins: ["fs/promises", "path"],
+    });
+    expect(
+      manifest.layer_rules.find(
+        (rule) =>
+          rule.name === "authority-synthetic-demo-entrypoint-calls-composition",
+      ),
+    ).toMatchObject({
+      from: "services/organization-authority/src/synthetic-demo-main.ts",
+      allowed_imports: [
+        "services/organization-authority/src/composition/synthetic-demo-organization-authority-cli.ts",
+      ],
+    });
     for (const concreteCompositionModule of [
       "services/organization-authority/src/composition/providers/granola/granola-admitted-meeting-source-cursor-policy-v1.ts",
       "services/organization-authority/src/composition/organization-authority-composition-root.ts",
@@ -1133,6 +1160,18 @@ describe("workspace source boundaries", () => {
       {
         identifier: "synthetic-source",
         root: "services/organization-authority/src/composition/synthetic-meeting-quality-cli.ts",
+      },
+      {
+        identifier: "synthetic-demo-source",
+        root: "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/",
+      },
+      {
+        identifier: "synthetic-demo-source",
+        root: "services/organization-authority/src/composition/providers/synthetic-demo/",
+      },
+      {
+        identifier: "synthetic-demo-source",
+        root: "services/organization-authority/src/synthetic-demo-main.ts",
       },
     ]));
 

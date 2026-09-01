@@ -1,0 +1,7 @@
+http://{$ECHO_DEMO_AUTHORITY_HOST:localhost} {
+	route {
+		reverse_proxy 127.0.0.1:39481 {
+			header_up X-Echo-Client-IP {http.request.header.CF-Connecting-IP}
+		}
+	}
+}

@@ -121,6 +121,18 @@
       {
         "identifier": "synthetic-source",
         "root": "services/organization-authority/src/synthetic-meeting-quality-main.ts"
+      },
+      {
+        "identifier": "synthetic-demo-source",
+        "root": "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/"
+      },
+      {
+        "identifier": "synthetic-demo-source",
+        "root": "services/organization-authority/src/composition/providers/synthetic-demo/"
+      },
+      {
+        "identifier": "synthetic-demo-source",
+        "root": "services/organization-authority/src/synthetic-demo-main.ts"
       }
     ],
     "provider_neutral_paths": [
