@@ -1098,6 +1098,7 @@ describe("Granola owner boundary", () => {
       " audrey@echobrain.org",
       "audrey@@echobrain.org",
       "audrey @echobrain.org",
+      "rené@echobrain.org",
       42,
     ]) {
       const candidate: AdapterConfig = {

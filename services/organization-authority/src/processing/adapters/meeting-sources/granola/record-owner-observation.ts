@@ -3,6 +3,7 @@ import {
   type GranolaListParams,
   type GranolaListResponse,
 } from "./granola-api-client.js";
+import { isCanonicalPersonEmail } from "../../../../shared/person-email-rules.js";
 
 /**
  * The ownership preflight is intentionally unable to fetch a note detail.
@@ -24,27 +25,13 @@ export interface GranolaRecordOwnerObservation {
 function normalizedOwnerEmail(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
-  if (
-    normalized.length === 0 ||
-    normalized.length > 254 ||
-    /\s/u.test(normalized)
-  ) {
-    return null;
-  }
-  const [local, domain, extra] = normalized.split("@");
-  return local !== undefined &&
-    local.length > 0 &&
-    domain !== undefined &&
-    domain.length > 0 &&
-    extra === undefined
-    ? normalized
-    : null;
+  return isCanonicalPersonEmail(normalized) ? normalized : null;
 }
 
 export function isCanonicalGranolaOwnerEmail(
   value: unknown,
 ): value is string {
-  return typeof value === "string" && normalizedOwnerEmail(value) === value;
+  return isCanonicalPersonEmail(value);
 }
 
 function granolaRecordOwnerEmail(owner: unknown): string | null {

@@ -33,9 +33,6 @@ export interface OpenStagingSyntheticPrivateDmCanaryControlV1Input {
   readonly operation_timeout_ms?: number;
 }
 
-type ApprovalOutcome =
-  "staged" | "delivery_pending" | "not_actionable" | "not_staged";
-
 function assertStagingControlInput(
   input: OpenStagingSyntheticPrivateDmCanaryControlV1Input,
 ): void {
@@ -107,7 +104,7 @@ function receipt(
       schema_version: 1,
       kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
       release_id: releaseId,
-      approval_outcome: result.kind as ApprovalOutcome,
+      approval_outcome: result.kind,
       ...(result.kind === "not_actionable"
         ? {}
         : { approval_id: result.approval_id }),

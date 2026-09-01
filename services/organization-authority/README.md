@@ -164,8 +164,8 @@ workspace:
 3. Put the signing secret from that same Slack app in a separate current-user
    `0600` regular file containing one value with no trailing newline. Do not
    reuse a signing secret from another Slack app.
-4. Use a wholly fresh provider-neutral V3 staging lineage. Do not upgrade or
-   reuse an earlier shared-channel rehearsal database, state directory, or
+4. Use a wholly fresh provider-neutral V4 staging lineage. Do not upgrade or
+   reuse an earlier V3 or shared-channel rehearsal database, state directory, or
    approval binding.
 
 Complete bootstrap, the initial-owner identity link, credential installation, and
@@ -351,20 +351,28 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-The provider-neutral fresh lineage uses schema version 3 for Authority.
+The provider-neutral fresh lineage uses schema version 4 for Authority. It
+retains the frozen V3 meeting-processing schema and adds one immutable
+approval-delivery quarantine table. A meeting whose complete approval package
+cannot be represented is fenced before any provider post, retained for audit,
+and no longer blocks later source meetings. A temporarily missing reviewer
+identity is not quarantined; its existing durable outbox stays queued for
+reconciliation.
 Control-plane and record-log remain at schema version 2, while record-derived
 and the three Layer-2 planes (`facts`, `lexical`, and `content`) remain at
-schema version 1. Each baseline
-applies only to a completely empty database. A V1 Authority, control-plane, or
-record-log lineage is refused rather than upgraded in place. Do not modify
-SQLite files, copy one state directory into another, or introduce a schema
-migration under this runbook. After the first user release, use only
+schema version 1. Each baseline applies only to a completely empty database.
+Authority V1-V3 and any other mismatched lineage are refused rather than
+upgraded in place. Do not modify SQLite files, copy one state directory into
+another, or introduce a schema migration under this runbook. After the first
+user release, use only
 baseline-preserving image replacements through the
 [release procedure](../../deploy/release/README.md).
 
-The initial-roster candidate changes the Authority baseline bytes and replaces
-earlier rehearsal state through clean re-onboarding. It is not a compatible
-image update for that discarded rehearsal lineage.
+The V4 approval-quarantine candidate changes the Authority baseline bytes and
+replaces earlier V3 rehearsal state through clean re-onboarding. It is not a
+compatible image update for that discarded rehearsal lineage. While there are
+still no live users, use the supported `replace-rehearsal` onboarding path; do
+not deploy the V4 runtime as an ordinary replacement over V3 state.
 
 ## Verification
 

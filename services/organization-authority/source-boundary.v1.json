@@ -45,6 +45,7 @@
   ],
   "runtime_assets": [
     "services/organization-authority/baselines/authority-baseline-v1.sql",
+    "services/organization-authority/baselines/authority-approval-delivery-quarantine-v4.sql",
     "services/organization-authority/baselines/authority-meeting-processing-v3.sql",
     "services/organization-authority/baselines/authority-private-approval-v2.sql"
   ],
@@ -334,7 +335,8 @@
       "name": "authority-domain-is-pure",
       "from": "services/organization-authority/src/domain/**",
       "allowed_imports": [
-        "services/organization-authority/src/domain/**"
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/shared/person-email-rules.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -661,10 +663,19 @@
       ]
     },
     {
+      "name": "authority-person-email-rules-are-pure",
+      "from": "services/organization-authority/src/shared/person-email-rules.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
       "name": "processing-core-is-tool-agnostic",
       "from": "services/organization-authority/src/processing/core/**",
       "allowed_imports": [
-        "services/organization-authority/src/processing/core/**"
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/shared/person-email-rules.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -732,7 +743,8 @@
       "name": "processing-granola-record-owner-observation-reads-only-the-api-client",
       "from": "services/organization-authority/src/processing/adapters/meeting-sources/granola/record-owner-observation.ts",
       "allowed_imports": [
-        "services/organization-authority/src/processing/adapters/meeting-sources/granola/granola-api-client.ts"
+        "services/organization-authority/src/processing/adapters/meeting-sources/granola/granola-api-client.ts",
+        "services/organization-authority/src/shared/person-email-rules.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],

@@ -6,7 +6,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import type { DurablePrivateApprovalTerminalV1 } from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV3 } from "../../../src/adapters/persistence/sqlite/baseline.js";
+import { applyAuthorityBaselineV4 } from "../../../src/adapters/persistence/sqlite/baseline.js";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "../../../src/composition/providers/openrouter/openrouter-decision-processor-config-v1.js";
 import { PrivateSlackApprovalTerminalCoordinatorV1 } from "../../../src/composition/providers/slack/private-approval/private-slack-approval-terminal-coordinator-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "../../../src/composition/providers/slack/private-approval/sqlite-private-slack-approval-assignment-state-v1.js";
@@ -97,7 +97,7 @@ const decisions: DecisionSet = {
 
 function database(): Database.Database {
   const value = new Database(":memory:");
-  applyAuthorityBaselineV3(value);
+  applyAuthorityBaselineV4(value);
   value
     .prepare(
       `INSERT INTO authority_metadata
@@ -597,6 +597,92 @@ describe("SQLite admitted meeting-processing state", () => {
       created: true,
       outbox: { state: "posting", post_started_at: ADVANCED_AT },
     });
+  });
+
+  it("durably fences an unrepresentable approval package without retrying delivery", async () => {
+    const value = database();
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
+      value,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
+      "llm",
+      () => ADVANCED_AT,
+    );
+    const current = await state.readAdmission();
+    const candidate = await state.stageCandidate({
+      admission: current,
+      meeting,
+      decisions,
+      review_policy: REVIEW_POLICY,
+    });
+    assertActionable(candidate);
+
+    const expected = {
+      candidate_id: candidate.candidate_id,
+      reason_code: "approval_package_unrepresentable",
+      quarantined_at: ADVANCED_AT,
+    } as const;
+    expect(
+      state.quarantineApprovalDelivery({
+        candidate_id: candidate.candidate_id,
+        reason_code: "approval_package_unrepresentable",
+      }),
+    ).toEqual(expected);
+    expect(
+      state.quarantineApprovalDelivery({
+        candidate_id: candidate.candidate_id,
+        reason_code: "approval_package_unrepresentable",
+      }),
+    ).toEqual(expected);
+    expect(state.readApprovalDeliveryQuarantine(candidate.candidate_id)).toEqual(
+      expected,
+    );
+    expect(state.listPendingApprovalDeliveries()).toEqual([]);
+    expect(state.approvalIsCurrent(candidate.approval_id)).toBe(false);
+    expect(state.readFrozenCandidateForApproval(candidate.approval_id)).toBeUndefined();
+    expect(() =>
+      state.prepareApprovalPost({
+        candidate_id: candidate.candidate_id,
+        frozen_card_sha256: `sha256:${"c".repeat(64)}`,
+        approved_snapshot: { candidate_id: candidate.candidate_id },
+      }),
+    ).toThrow(/approval delivery is quarantined/);
+    expect(state.readCandidateByApprovalId(candidate.approval_id)).toMatchObject({
+      state: "queued",
+    });
+
+    const revisedMeeting: MeetingDocument = {
+      ...meeting,
+      provenance: {
+        ...meeting.provenance,
+        canonical_revision: "sha256:note-2",
+      },
+      content: [
+        { id: "block-2", kind: "note", text: "Ship the revised onboarding." },
+      ],
+    };
+    const successor = await state.stageCandidate({
+      admission: current,
+      meeting: revisedMeeting,
+      decisions: {
+        ...decisions,
+        meeting_revision: revisedMeeting.provenance.canonical_revision,
+        signals: [{
+          ...decisions.signals[0]!,
+          text: revisedMeeting.content[0]!.text,
+          evidence: [{ meeting_id: revisedMeeting.id, block_id: "block-2" }],
+        }],
+      },
+      review_policy: REVIEW_POLICY,
+    });
+    assertActionable(successor);
+    expect(state.readCandidateByApprovalId(candidate.approval_id)).toMatchObject({
+      state: "superseded",
+      superseded_by_candidate_id: successor.candidate_id,
+    });
+    expect(state.listPendingApprovalDeliveries()).toHaveLength(1);
+    expect(state.listPendingApprovalDeliveries()[0]?.candidate_id).toBe(
+      successor.candidate_id,
+    );
   });
 
   it("lists only current actionable approvals that still need delivery", async () => {

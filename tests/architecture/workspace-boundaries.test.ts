@@ -475,6 +475,7 @@ describe("workspace source boundaries", () => {
   it("declares and ships all Authority state baseline SQL assets", () => {
     const expectedByRoot: Record<string, string[]> = {
       "services/organization-authority": [
+        "authority-approval-delivery-quarantine-v4.sql",
         "authority-baseline-v1.sql",
         "authority-meeting-processing-v3.sql",
         "authority-private-approval-v2.sql",

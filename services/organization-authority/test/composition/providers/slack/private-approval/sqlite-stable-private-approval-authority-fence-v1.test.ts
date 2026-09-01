@@ -5,7 +5,7 @@ import {
   type PrivateApprovalSlackCardBindingV1,
 } from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import { describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV3 } from "../../../../../src/adapters/persistence/sqlite/baseline.js";
+import { applyAuthorityBaselineV4 } from "../../../../../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../../../../../src/adapters/persistence/sqlite/open-authority-database.js";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../../../../src/composition/providers/slack/private-approval/resolve-private-slack-approval-reviewer-target-v1.js";
 import {
@@ -44,7 +44,7 @@ function fixture(): {
   readonly card: PrivateApprovalSlackCardBindingV1;
 } {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV3(database);
+  applyAuthorityBaselineV4(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(
@@ -289,6 +289,37 @@ describe("SQLite stable private approval Authority fence v1", () => {
           }),
         ),
       ).resolves.toBeUndefined();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("denies a click after the candidate is quarantined", async () => {
+    const { database, pending, card } = fixture();
+    try {
+      database
+        .prepare(
+          `INSERT INTO authority_live_approval_delivery_quarantines_v1 (
+             candidate_id, reason_code, quarantined_at
+           ) VALUES (?, 'approval_package_unrepresentable', ?)`,
+        )
+        .run(CANDIDATE_ID, NOW);
+      const fence = new SqliteStablePrivateApprovalAuthorityFenceV1(database);
+      await fence.withStablePrivateApprovalFence((stable) => {
+        expect(
+          stable.approvalIsCurrent({
+            approval_id: APPROVAL_ID,
+            candidate_sha256: CANDIDATE_SHA256,
+          }),
+        ).toBe(false);
+        expect(
+          stable.revalidatePrivateApprovalAuthorization({
+            pending,
+            card_binding: card,
+            lookup: lookup(),
+          }),
+        ).toBeUndefined();
+      });
     } finally {
       database.close();
     }

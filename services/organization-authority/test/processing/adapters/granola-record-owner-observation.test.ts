@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  isCanonicalGranolaOwnerEmail,
   observeGranolaRecordOwner,
   type GranolaApiClient,
   type GranolaListParams,
 } from "../../../src/processing/adapters/meeting-sources/granola/index.js";
+import { isCanonicalPersonEmail } from "../../../src/domain/person-session-rules.js";
 
 function client(options: {
   notes: Array<{ id: string; title?: string; owner?: unknown }>;
@@ -24,6 +26,19 @@ function client(options: {
 }
 
 describe("Granola record-owner observation", () => {
+  it("uses the same canonical person-email contract as the core", () => {
+    for (const [email, expected] of [
+      ["audrey@echobrain.org", true],
+      ["Audrey@echobrain.org", false],
+      ["rené@echobrain.org", false],
+      [" audrey@echobrain.org", false],
+      ["audrey@@echobrain.org", false],
+    ] as const) {
+      expect(isCanonicalGranolaOwnerEmail(email)).toBe(expected);
+      expect(isCanonicalPersonEmail(email)).toBe(expected);
+    }
+  });
+
   it("matches provider owner metadata in one bounded page without fetching content", async () => {
     const fixture = client({
       notes: [

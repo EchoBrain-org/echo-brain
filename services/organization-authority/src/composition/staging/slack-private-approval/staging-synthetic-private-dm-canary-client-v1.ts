@@ -5,12 +5,14 @@ const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 const APPROVAL_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_RECEIPT_BYTES = 1_024;
 const REQUEST_TIMEOUT_MS = 120_000;
-const OUTCOMES = new Set([
+const OUTCOMES = [
   "staged",
   "delivery_pending",
+  "quarantined",
   "not_actionable",
   "not_staged",
-]);
+] as const;
+type ApprovalOutcome = (typeof OUTCOMES)[number];
 
 export type StagingSyntheticPrivateDmCanaryReceiptV1 =
   | Readonly<{
@@ -23,12 +25,16 @@ export type StagingSyntheticPrivateDmCanaryReceiptV1 =
       schema_version: 1;
       kind: "echo-staging-synthetic-private-dm-canary-receipt-v1";
       release_id: string;
-      approval_outcome: "staged" | "delivery_pending" | "not_staged";
+      approval_outcome: Exclude<ApprovalOutcome, "not_actionable">;
       approval_id: string;
     }>;
 
 function invalidReceipt(): never {
   throw new Error("staging synthetic canary receipt is invalid");
+}
+
+function isApprovalOutcome(value: unknown): value is ApprovalOutcome {
+  return OUTCOMES.some((outcome) => outcome === value);
 }
 
 function parseReceipt(
@@ -49,7 +55,7 @@ function parseReceipt(
     receipt.schema_version !== 1 ||
     receipt.kind !== "echo-staging-synthetic-private-dm-canary-receipt-v1" ||
     receipt.release_id !== expectedReleaseId ||
-    !OUTCOMES.has(receipt.approval_outcome as string)
+    !isApprovalOutcome(receipt.approval_outcome)
   ) {
     invalidReceipt();
   }
@@ -96,8 +102,7 @@ function parseReceipt(
     schema_version: 1,
     kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
     release_id: expectedReleaseId,
-    approval_outcome: receipt.approval_outcome as
-      "staged" | "delivery_pending" | "not_staged",
+    approval_outcome: receipt.approval_outcome,
     approval_id: receipt.approval_id,
   });
 }

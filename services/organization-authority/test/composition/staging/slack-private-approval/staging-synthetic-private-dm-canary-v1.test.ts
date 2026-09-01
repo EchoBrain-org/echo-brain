@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV3 } from "../../../../src/adapters/persistence/sqlite/baseline.js";
+import { applyAuthorityBaselineV4 } from "../../../../src/adapters/persistence/sqlite/baseline.js";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "../../../../src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "../../../../src/composition/providers/openrouter/openrouter-decision-processor-config-v1.js";
 import { createGranolaPostCutoffCursor } from "../../../../src/processing/adapters/meeting-sources/granola/index.js";
@@ -26,7 +26,7 @@ const databases: Database.Database[] = [];
 
 function database(): Database.Database {
   const value = new Database(":memory:");
-  applyAuthorityBaselineV3(value);
+  applyAuthorityBaselineV4(value);
   value.prepare(
     `INSERT INTO authority_metadata VALUES (1, 'oau_test', 'org_test', 'Test', '{}', ?, ?)`,
   ).run(NOW, NOW);

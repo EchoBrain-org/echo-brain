@@ -268,6 +268,11 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
             AND candidate.candidate_semantic_sha256 = ?
             AND candidate.disposition = 'actionable'
             AND outbox.state != 'superseded'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM authority_live_approval_delivery_quarantines_v1 AS quarantine
+               WHERE quarantine.candidate_id = candidate.candidate_id
+            )
             AND head.candidate_id = candidate.candidate_id`,
       )
       .get(approvalId, candidateSha256) as CandidateRow | undefined;

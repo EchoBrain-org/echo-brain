@@ -55,13 +55,15 @@ afterEach(async () => {
 });
 
 describe("staging synthetic private-DM canary client", () => {
-  it("uses only the private socket and returns a bounded staged receipt", async () => {
+  it.each(["staged", "quarantined"] as const)(
+    "uses only the private socket and returns a bounded %s receipt",
+    async (approvalOutcome) => {
     const socket_path = await withSocket(
       JSON.stringify({
         schema_version: 1,
         kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
         release_id: RELEASE_ID,
-        approval_outcome: "staged",
+        approval_outcome: approvalOutcome,
         approval_id: "apr_private",
       }),
     );
@@ -75,10 +77,11 @@ describe("staging synthetic private-DM canary client", () => {
       schema_version: 1,
       kind: "echo-staging-synthetic-private-dm-canary-receipt-v1",
       release_id: RELEASE_ID,
-      approval_outcome: "staged",
+      approval_outcome: approvalOutcome,
       approval_id: "apr_private",
     });
-  });
+    },
+  );
 
   it("refuses a receipt for another release or a non-success socket response", async () => {
     const wrong_release_socket = await withSocket(

@@ -341,6 +341,8 @@ describe("admitted meeting-processing cycle", () => {
       "extraction",
       "approval_staging",
       "approval_staging",
+      "approval_staging",
+      "approval_staging",
     ]);
     const encoded = JSON.stringify(events);
     for (const forbidden of [
@@ -517,7 +519,7 @@ describe("admitted meeting-processing cycle", () => {
     }
   });
 
-  it("advances after a durable approval delivery becomes provider-ambiguous", async () => {
+  it("advances after a durable approval delivery remains pending", async () => {
     const current = admission();
     const state = new FakeState(current);
     const cycle = liveCycle({
@@ -538,6 +540,82 @@ describe("admitted meeting-processing cycle", () => {
         next_cursor: "granola:v1:next",
       },
     ]);
+  });
+
+  it("advances after a deterministic approval package is durably quarantined", async () => {
+    const current = admission();
+    const state = new FakeState(current);
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      processor: processor(),
+      state,
+      stager: stager({
+        kind: "quarantined",
+        reason_code: "approval_package_unrepresentable",
+      }),
+    });
+
+    await expect(cycle.runOnce()).resolves.toEqual({
+      kind: "quarantined",
+      reason_code: "approval_package_unrepresentable",
+      cursor_advanced: true,
+    });
+    expect(state.candidates).toHaveLength(1);
+    expect(state.advances).toEqual([
+      {
+        expected_cursor: current.source.cursor,
+        next_cursor: "granola:v1:next",
+      },
+    ]);
+  });
+
+  it("admits and advances the next meeting before surfacing an older delivery failure", async () => {
+    const current = admission();
+    const state = new FakeState(current);
+    const downstream: ApprovalWorkflowStagerV1 = {
+      stage: async () => ({ kind: "staged", stage_id: "stage-1" }),
+      reconcilePendingDeliveries: async () => {
+        throw new Error("older Slack delivery failed");
+      },
+      reconcileSuperseded: async () => {},
+    };
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      processor: processor(),
+      state,
+      stager: downstream,
+    });
+
+    await expect(cycle.runOnce()).rejects.toThrow("older Slack delivery failed");
+    expect(state.candidates).toHaveLength(1);
+    expect(state.advances).toEqual([
+      {
+        expected_cursor: current.source.cursor,
+        next_cursor: "granola:v1:next",
+      },
+    ]);
+  });
+
+  it("advances a durably queued candidate before surfacing its delivery exception", async () => {
+    const current = admission();
+    const state = new FakeState(current);
+    const downstream: ApprovalWorkflowStagerV1 = {
+      stage: async () => {
+        throw new Error("Slack transport threw");
+      },
+      reconcilePendingDeliveries: async () => {},
+      reconcileSuperseded: async () => {},
+    };
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      processor: processor(),
+      state,
+      stager: downstream,
+    });
+
+    await expect(cycle.runOnce()).rejects.toThrow("Slack transport threw");
+    expect(state.candidates).toHaveLength(1);
+    expect(state.advances).toHaveLength(1);
   });
 
   it("keeps a pending delivery durable when its source cursor fence drifts", async () => {

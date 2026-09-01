@@ -79,7 +79,9 @@ describe("private Slack DM approval stager V1", () => {
       connection_id: "con_1", connection_contract_sha256: DIGEST("6"), connection_state_sha256: DIGEST("7"),
       dm_channel: { workspace_id: "T01", enterprise_id: null, channel_id: "D01" }, created_at: NOW,
     };
+    let ownerLinked = false;
     const authority = {
+      readApprovalDeliveryQuarantine: () => undefined,
       readCandidateByApprovalId: () => current,
       prepareApprovalPost: (received: { frozen_card_sha256: Sha256; approved_snapshot: unknown }) => {
         operations.push("freeze");
@@ -124,18 +126,24 @@ describe("private Slack DM approval stager V1", () => {
         publish: async (received) => { operations.push("publish"); publishedCard = received.card; return { kind: "done" as const }; },
         tombstone: vi.fn(),
       },
-      resolve_reviewer_target: () => ({
+      resolve_reviewer_target: () => ownerLinked ? ({
         reviewer: { principal_id: "prn_1", membership_id: "mem_1", membership_type: "owner" },
         slack_target: {
           connection: { body: { organization_id: "org_1", connection_id: "con_1", provider_app_id: "A01", provider_bot_id: "B01", provider_bot_user_id: "U02", provider_tenant_id: "T01", provider_enterprise_id: null }, sha256: DIGEST("6") },
           connection_state: { body: {}, sha256: DIGEST("7") },
           current_slack_identity_link: assignment.assigned_owner_slack_identity_link,
         },
-      }) as never,
+      }) as never : undefined,
       canonical_sha256: canonicalSha256,
       now: () => NOW,
     });
 
+    await expect(stager.stage(reviewedInput)).resolves.toEqual({
+      kind: "delivery_pending",
+    });
+    expect(operations).toEqual([]);
+
+    ownerLinked = true;
     await expect(stager.stage(reviewedInput)).resolves.toEqual({ kind: "staged", stage_id: "apr_1" });
     expect(operations).toEqual([
       "freeze", "open-dm", "assignment", "marker", "marker-durable", "cp-pending", "publish", "authority-staged",
@@ -161,26 +169,23 @@ describe("private Slack DM approval stager V1", () => {
     expect(JSON.stringify(publishedCard.blocks.slice(actionsIndex))).toContain("Approve");
   });
 
-  it("fails before durable or provider I/O when every frozen signal cannot fit", async () => {
+  it("durably quarantines an approval package that cannot fit before provider I/O", async () => {
     const prepareApprovalPost = vi.fn();
     const openDirectMessage = vi.fn();
     const postMarker = vi.fn();
     const publish = vi.fn();
     const controlPlaneStage = vi.fn();
-    const oversizedInput = {
-      ...input,
-      decisions: {
-        ...input.decisions,
-        signals: [{
-          id: "decision-too-large", kind: "decision", text: "x".repeat(3_000),
-          subject: null, confidence: null, evidence: [], status: "decided",
-        }],
-      },
-    } as unknown as ApprovalWorkflowStageInputV1;
+    const quarantineApprovalDelivery = vi.fn(() => ({
+      candidate_id: input.candidate.candidate_id,
+      reason_code: "approval_package_unrepresentable" as const,
+      quarantined_at: NOW,
+    }));
     const stager = new PrivateSlackDmApprovalStagerV1({
       authority: {
+        readApprovalDeliveryQuarantine: () => undefined,
         readCandidateByApprovalId: () => outbox(),
         prepareApprovalPost,
+        quarantineApprovalDelivery,
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
       coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
@@ -200,9 +205,30 @@ describe("private Slack DM approval stager V1", () => {
       canonical_sha256: canonicalSha256,
     });
 
-    await expect(stager.stage(oversizedInput)).rejects.toThrow(
-      /complete frozen signal preview exceeds Slack's section limit/,
-    );
+    for (const [id, text] of [
+      ["decision-too-large", "x".repeat(3_000)],
+      ["decision-with-control", "cannot\u0000display"],
+    ] as const) {
+      const unrepresentableInput = {
+        ...input,
+        decisions: {
+          ...input.decisions,
+          signals: [{
+            id, kind: "decision", text,
+            subject: null, confidence: null, evidence: [], status: "decided",
+          }],
+        },
+      } as unknown as ApprovalWorkflowStageInputV1;
+      await expect(stager.stage(unrepresentableInput)).resolves.toEqual({
+        kind: "quarantined",
+        reason_code: "approval_package_unrepresentable",
+      });
+    }
+    expect(quarantineApprovalDelivery).toHaveBeenCalledTimes(2);
+    expect(quarantineApprovalDelivery).toHaveBeenLastCalledWith({
+      candidate_id: input.candidate.candidate_id,
+      reason_code: "approval_package_unrepresentable",
+    });
     expect(prepareApprovalPost).not.toHaveBeenCalled();
     expect(openDirectMessage).not.toHaveBeenCalled();
     expect(postMarker).not.toHaveBeenCalled();
@@ -210,7 +236,7 @@ describe("private Slack DM approval stager V1", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("revalidates the owner after CP staging before publishing the full card", async () => {
+  it("keeps target loss after CP staging as state drift before publishing the full card", async () => {
     let current = outbox();
     let ownerIsCurrent = true;
     const assignment = {
@@ -242,6 +268,7 @@ describe("private Slack DM approval stager V1", () => {
     const resolveTarget = vi.fn(() => (ownerIsCurrent ? target : undefined) as never);
     const stager = new PrivateSlackDmApprovalStagerV1({
       authority: {
+        readApprovalDeliveryQuarantine: () => undefined,
         readCandidateByApprovalId: () => current,
         prepareApprovalPost: (received: { frozen_card_sha256: Sha256; approved_snapshot: unknown }) => {
           current = { ...outbox("posting"), frozen_card_sha256: received.frozen_card_sha256, approved_snapshot_sha256: canonicalSha256(received.approved_snapshot) as Sha256 };
@@ -275,9 +302,14 @@ describe("private Slack DM approval stager V1", () => {
     expect(markControlPlaneStaged).not.toHaveBeenCalled();
   });
 
-  it("does not open or publish a fallback when owner proof is absent", async () => {
+  it("keeps a queued candidate pending when owner proof is absent", async () => {
     const openDirectMessage = vi.fn();
-    const authority = { readCandidateByApprovalId: () => outbox(), prepareApprovalPost: () => ({ outbox: outbox("posting"), created: true }) };
+    const prepareApprovalPost = vi.fn();
+    const authority = {
+      readApprovalDeliveryQuarantine: () => undefined,
+      readCandidateByApprovalId: () => outbox(),
+      prepareApprovalPost,
+    };
     const stager = new PrivateSlackDmApprovalStagerV1({
       authority: authority as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
@@ -287,7 +319,8 @@ describe("private Slack DM approval stager V1", () => {
       resolve_reviewer_target: () => undefined,
       canonical_sha256: canonicalSha256,
     });
-    await expect(stager.stage(input)).resolves.toEqual({ kind: "state_drift" });
+    await expect(stager.stage(input)).resolves.toEqual({ kind: "delivery_pending" });
+    expect(prepareApprovalPost).not.toHaveBeenCalled();
     expect(openDirectMessage).not.toHaveBeenCalled();
   });
 
@@ -295,6 +328,7 @@ describe("private Slack DM approval stager V1", () => {
     const assignmentStage = vi.fn();
     const stager = new PrivateSlackDmApprovalStagerV1({
       authority: {
+        readApprovalDeliveryQuarantine: () => undefined,
         readCandidateByApprovalId: () => outbox(),
         prepareApprovalPost: () => ({ outbox: outbox("posting"), created: true }),
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
