@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createRetrievalGroundedAnswerComposition,
   RetrievalGroundedAnswerCompositionError,
+  validateReleasedRetrievalQuery,
   type AnswerCompositionFailureDiagnosticV1,
   type ReleasedRetrievalBatch,
   type ReleasedRetrievalPort,
@@ -10,6 +11,15 @@ import {
 } from "../../src/answer-composition/retrieval-grounded-answer-composition.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
+
+it("accepts 32 unique retrieval terms and rejects 33", () => {
+  const query = (count: number) =>
+    Array.from({ length: count }, (_, index) => `term${index}`).join(" ");
+  expect(validateReleasedRetrievalQuery(query(32))).toBe(query(32));
+  expect(() => validateReleasedRetrievalQuery(query(33))).toThrow(
+    RetrievalGroundedAnswerCompositionError,
+  );
+});
 
 function release(atoms = true, queryCount = 1): ReleasedRetrievalBatch {
   return {
@@ -157,6 +167,55 @@ describe("retrieval-grounded answer composition", () => {
       citations: [expect.objectContaining({ atom_id: release().released_atoms[0]?.atom_id })],
     });
     expect(audit.append).toHaveBeenCalledOnce();
+  });
+
+  it("passes enriched decision text into Ask ECHO source context without expanding public citations", async () => {
+    let answerRequest: StructuredGenerationInput | undefined;
+    const enrichedDecisionText =
+      "Decision maker: Anika Patel\nDecision: Ship the customer dashboard on Tuesday.";
+    const released = release(true, 1);
+    const decisionAtom = Object.freeze({
+      ...released.released_atoms[0]!,
+      text: enrichedDecisionText,
+    });
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer: {
+        generate: vi.fn(async (input: StructuredGenerationInput) => {
+          answerRequest = input;
+          return {
+            status: "answered",
+            answer: "Anika Patel decided to ship the customer dashboard on Tuesday.",
+            citations: ["a1"],
+          };
+        }),
+      },
+      released_retrieval: {
+        retrieve: vi.fn(async () => ({
+          ...released,
+          released_atoms: [decisionAtom],
+        })),
+        revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+      },
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    const result = await answer.answer({ question: "What did the team decide?" });
+
+    expect(JSON.parse(answerRequest?.user_prompt ?? "")).toMatchObject({
+      sources: [{ citation_id: "a1", text: enrichedDecisionText }],
+    });
+    expect(result.citations).toEqual([
+      {
+        atom_id: decisionAtom.atom_id,
+        record_sha256: decisionAtom.record_sha256,
+        policy_id: decisionAtom.policy_id,
+      },
+    ]);
+    expect(JSON.stringify(result.citations)).not.toContain("Anika Patel");
   });
 
   it.each([

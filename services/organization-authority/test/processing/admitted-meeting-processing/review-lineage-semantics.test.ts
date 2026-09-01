@@ -116,6 +116,28 @@ describe("admitted review lineage semantics", () => {
     }));
   });
 
+  it("changes the input hash when a cited speaker attribution changes", () => {
+    const first = meeting({
+      content: [{
+        id: "block-1",
+        kind: "note",
+        text: "Ship the beta.",
+        speaker_participant_id: "person-1",
+      }],
+    });
+    const changedSpeaker = meeting({
+      content: [{ ...first.content[0]!, speaker_participant_id: "person-2" }],
+    });
+
+    expect(reviewInputSha256V1({
+      meeting: changedSpeaker,
+      processor: PROCESSOR,
+    })).not.toBe(reviewInputSha256V1({
+      meeting: first,
+      processor: PROCESSOR,
+    }));
+  });
+
   it("treats reordered participants as the same review input", () => {
     const first = meeting();
     const reordered = meeting({ participants: [...first.participants].reverse() });
@@ -129,15 +151,57 @@ describe("admitted review lineage semantics", () => {
     }));
   });
 
-  it("normalizes blank title and participant names exactly like the prompt", () => {
-    const blank = meeting({
-      title: "   ",
-      participants: [{ id: "person-1", display_name: "" }],
+  it("changes the input hash when participant ID/name associations change", () => {
+    const first = meeting();
+    const reassigned = meeting({
+      participants: [
+        { id: "person-1", display_name: "Grace" },
+        { id: "person-2", display_name: "Ada" },
+      ],
     });
-    const absent = meeting({
-      title: undefined,
-      participants: [],
+
+    expect(reviewInputSha256V1({
+      meeting: reassigned,
+      processor: PROCESSOR,
+    })).not.toBe(reviewInputSha256V1({
+      meeting: first,
+      processor: PROCESSOR,
+    }));
+  });
+
+  it("changes the input hash when rendered meeting time changes", () => {
+    const first = meeting({
+      time: {
+        actual_start_at: "2026-08-27T16:00:00.000Z",
+        actual_end_at: "2026-08-27T17:00:00.000Z",
+        scheduled_start_at: "2026-08-27T15:45:00.000Z",
+        scheduled_end_at: "2026-08-27T17:15:00.000Z",
+        timezone: "America/Los_Angeles",
+      },
     });
+    const changedTimes: NonNullable<MeetingDocument["time"]>[] = [
+      { ...first.time, actual_start_at: "2026-08-28T16:00:00.000Z" },
+      { ...first.time, actual_end_at: "2026-08-27T17:30:00.000Z" },
+      { ...first.time, scheduled_start_at: "2026-08-27T16:00:00.000Z" },
+      { ...first.time, scheduled_end_at: "2026-08-27T17:30:00.000Z" },
+      { ...first.time, timezone: "America/New_York" },
+    ];
+    const firstHash = reviewInputSha256V1({
+      meeting: first,
+      processor: PROCESSOR,
+    });
+
+    for (const time of changedTimes) {
+      expect(reviewInputSha256V1({
+        meeting: meeting({ time }),
+        processor: PROCESSOR,
+      })).not.toBe(firstHash);
+    }
+  });
+
+  it("normalizes a blank title exactly like the prompt", () => {
+    const blank = meeting({ title: "   " });
+    const absent = meeting({ title: undefined });
 
     expect(reviewInputSha256V1({
       meeting: blank,

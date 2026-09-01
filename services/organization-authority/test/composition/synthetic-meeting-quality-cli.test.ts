@@ -8,6 +8,7 @@ import {
   phaseOneSyntheticExtractionExpectationsV1,
 } from "../../src/quality/synthetic-meeting-quality-evaluator-v1.js";
 import { runSyntheticMeetingQualityCommandV1 } from "../../src/composition/synthetic-meeting-quality-cli.js";
+import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1 } from "../../src/composition/providers/openrouter/openrouter-decision-processor-config-v1.js";
 
 function replayMeeting(id: string): MeetingDocument {
   return {
@@ -135,7 +136,10 @@ describe("synthetic meeting quality command", () => {
       adapter_id: "llm",
       instance_id: "synthetic-quality-eval",
       credential_ref: "file:/tmp/private-openrouter-token",
-      settings: { provider: "openrouter", model: "deepseek/deepseek-v3.2" },
+      settings: {
+        provider: "openrouter",
+        model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
+      },
     });
     expect(output).toHaveLength(1);
     expect(output[0]).not.toContain("Adopt a two-stage release review");

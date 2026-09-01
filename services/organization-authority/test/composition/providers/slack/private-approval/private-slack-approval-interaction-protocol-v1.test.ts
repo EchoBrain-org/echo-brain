@@ -245,6 +245,81 @@ describe("private approval Slack interaction v1", () => {
     expect(rejectionStage(incomplete)).toBe("state");
   });
 
+  it("accepts both legacy radios and the new static-select policy state", () => {
+    const staticState = {
+      "policy-block": {
+        [POLICY_ACTION_ID]: {
+          type: "static_select",
+          selected_option: {
+            text: { type: "plain_text", text: "Only me" },
+            description: {
+              type: "plain_text",
+              text: "Only the approving reviewer can read this record.",
+              emoji: true,
+            },
+            value: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+          },
+        },
+      },
+      "comment-block": {
+        [COMMENT_ACTION_ID]: {
+          type: "plain_text_input",
+          value: "A one-line note.",
+        },
+      },
+    };
+    expect(parse(payload({ state: staticState }))).toMatchObject({
+      disposition: "resolution",
+      selected_policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+      comment: "A one-line note.",
+    });
+    expect(
+      parse(
+        payload({
+          state: {
+            ...staticState,
+            "policy-block": {
+              [POLICY_ACTION_ID]: {
+                type: "static_select",
+                selected_option: null,
+              },
+            },
+          },
+        }),
+      ),
+    ).toMatchObject({
+      disposition: "resolution",
+      selected_policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+    });
+    expect(
+      parse(
+        payload({
+          action_id: POLICY_ACTION_ID,
+          action_type: "static_select",
+          state: {},
+        }),
+      ),
+    ).toMatchObject({ disposition: "presentation_change", action: "policy" });
+    expect(() =>
+      parse(
+        payload({
+          state: {
+            ...staticState,
+            "policy-block": {
+              [POLICY_ACTION_ID]: {
+                type: "static_select",
+                selected_option: {
+                  text: { type: "plain_text", text: "Only me", emoji: "false" },
+                  value: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+                },
+              },
+            },
+          },
+        }),
+      ),
+    ).toThrow(PrivateSlackApprovalInteractionError);
+  });
+
   it("accepts Slack's null untouched comment and omitted workspace-only hints", () => {
     const value = payload({ comment: null });
     delete value.enterprise;

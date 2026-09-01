@@ -122,13 +122,14 @@ tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 ## Current composition
 
 The Organization Authority composition root concretely selects Granola as the
-meeting source, OpenRouter with the pinned DeepSeek processing version as the
+meeting source, OpenRouter with the pinned Claude Sonnet processing version as the
 decision processor, Slack for approval, interactions, identity, and the
 existing delivery capability, and Authority SQLite state. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
-planner/answer model. The other LLM transports are compiled alternatives, not
-active runtime dependencies. This is an allowed selecting composition profile,
-not evidence that every active provider has completed qualification.
+DeepSeek planner/answer model. The other LLM transports are compiled
+alternatives, not active runtime dependencies. This is an allowed selecting
+composition profile, not evidence that every active provider has completed
+qualification.
 
 The source-processing model remains separate from the permission-aware
 read/model path. It receives one admitted source revision through the processor

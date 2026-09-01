@@ -564,6 +564,23 @@ describe("Person answer HTTP mount", () => {
         kind: "echo-clean-person-answer-v1",
         generation_id: digest("generation"),
       });
+      const maximumQuestion = Array.from(
+        { length: 32 },
+        (_, index) => `term${index}`,
+      ).join(" ");
+      const maximum = await fetch(`${server.url}/v1/person/ask`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer bearer-only-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ question: maximumQuestion }),
+      });
+      expect(maximum.status).toBe(200);
+      expect(ask).toHaveBeenLastCalledWith({
+        access_token: "bearer-only-token",
+        question: maximumQuestion,
+      });
     } finally {
       await server.close();
     }
@@ -577,6 +594,17 @@ describe("Person answer HTTP mount", () => {
     };
     const configured = await startServer(application);
     try {
+      const tooManyTerms = await fetch(`${configured.url}/v1/person/ask`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer bearer-only-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          question: Array.from({ length: 33 }, (_, index) => `term${index}`).join(" "),
+        }),
+      });
+      expect(tooManyTerms.status).toBe(400);
       const invalid = await fetch(`${configured.url}/v1/person/ask`, {
         method: "POST",
         headers: {

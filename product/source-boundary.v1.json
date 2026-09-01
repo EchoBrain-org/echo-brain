@@ -72,7 +72,7 @@
       },
       {
         "identifier": "deepseek",
-        "root": "services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-config-v1.ts"
+        "root": "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts"
       },
       {
         "identifier": "slack",
@@ -179,7 +179,7 @@
         "identifier": "deepseek",
         "transport_provider": false,
         "source_evidence_paths": [
-          "services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-config-v1.ts"
+          "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts"
         ]
       }
     ],

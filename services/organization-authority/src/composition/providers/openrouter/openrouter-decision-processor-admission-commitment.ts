@@ -31,6 +31,8 @@ export function createOpenRouterDecisionProcessorAdmissionCommitmentV1(input: {
       // neither the value nor the reference itself is persisted by admission.
       void readPrivateAuthorityCredential(input.credential_reference);
       assertOpenRouterDecisionProcessorRuntimeCommitmentsV1({
+        adapter_id: "llm",
+        version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
         configuration_sha256: configurationSha256,
         credential_reference_sha256: credentialReferenceSha256,
         credential_reference: input.credential_reference,

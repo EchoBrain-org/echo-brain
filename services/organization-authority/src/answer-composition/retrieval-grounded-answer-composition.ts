@@ -274,7 +274,7 @@ export function validateReleasedRetrievalQuery(value: unknown): string {
     /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query) ||
     [...query].length > 240 ||
     terms.size < 1 ||
-    terms.size > 16 ||
+    terms.size > 32 ||
     [...terms].some((term) => Buffer.byteLength(term, "utf8") > 64)
   ) {
     throw new RetrievalGroundedAnswerCompositionError("query is not retrieval compatible");

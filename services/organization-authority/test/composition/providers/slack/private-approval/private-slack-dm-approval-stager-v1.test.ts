@@ -1,13 +1,21 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { StagedPrivateApprovalPendingV1 } from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
 import { describe, expect, it, vi } from "vitest";
-import { PrivateSlackDmApprovalStagerV1 } from "../../../../../src/composition/providers/slack/private-approval/private-slack-dm-approval-stager-v1.js";
+import {
+  PrivateSlackDmApprovalStagerV1,
+  projectPrivateSlackApprovalCardV1,
+} from "../../../../../src/composition/providers/slack/private-approval/private-slack-dm-approval-stager-v1.js";
 import type { ApprovalWorkflowStageInputV1 } from "../../../../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { SqliteAuthorityMeetingProcessingStateV1 } from "../../../../../src/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
 const DIGEST = (character: string) => `sha256:${character.repeat(64)}` as `sha256:${string}`;
 type Sha256 = `sha256:${string}`;
 const NOW = "2026-08-28T00:00:00.000Z";
+
+interface CapturedCard {
+  readonly text: string;
+  readonly blocks: readonly unknown[];
+}
 
 const input = {
   admission: {
@@ -20,7 +28,7 @@ const input = {
     disposition: "actionable", approval_id: "apr_1", stage_command_id: "psc_1", state: "queued",
   },
   meeting: {
-    id: "meeting-1", title: "Quarterly planning", participants: [], content: [], artifacts: [], capture: { state: "complete", components: [] },
+    id: "meeting-1", title: "Quarterly planning", participants: [{ id: "participant-1", display_name: "Meeting participant" }], content: [{ id: "transcript-1", kind: "transcript", text: "The decision was made.", speaker_participant_id: "participant-1" }], artifacts: [], capture: { state: "complete", components: [] },
     provenance: { external_id: "note-1", canonical_revision: "rev-1", source: { kind: "meeting-source", adapter_id: "granola", instance_id: "granola-1", version: "1" }, observed_at: NOW, normalizer_version: "1" }, extensions: {}, schema_version: 1,
   },
   decisions: { schema_version: 1, meeting_id: "meeting-1", meeting_revision: "rev-1", generated_at: NOW, processor: { kind: "decision-processor", adapter_id: "llm", instance_id: "llm-1", version: "1" }, signals: [] },
@@ -42,6 +50,18 @@ function outbox(state: "queued" | "posting" | "posted" | "staged" = "queued") {
   };
 }
 
+function topLevelBlocksByType(
+  card: CapturedCard,
+  type: string,
+): readonly Readonly<Record<string, unknown>>[] {
+  return card.blocks.filter((block): block is Readonly<Record<string, unknown>> =>
+    block !== null &&
+    typeof block === "object" &&
+    !Array.isArray(block) &&
+    (block as Readonly<Record<string, unknown>>).type === type
+  );
+}
+
 describe("private Slack DM approval stager V1", () => {
   it("binds null policy before publishing one verified-owner DM card", async () => {
     const operations: string[] = [];
@@ -52,15 +72,27 @@ describe("private Slack DM approval stager V1", () => {
         signals: [
           {
             id: "decision-1", kind: "decision", text: "Keep the owner-only default.",
-            subject: null, confidence: 0.9, evidence: [], status: "decided",
+            subject: null, confidence: 0.9, evidence: [{ meeting_id: "meeting-1", block_id: "transcript-1", quote: "The decision was made." }], status: "decided",
+          },
+          {
+            id: "decision-2", kind: "decision", text: "Keep the launch gated.",
+            subject: null, confidence: 0.9, evidence: [{ meeting_id: "meeting-1", block_id: "transcript-1" }], status: "proposed",
           },
           {
             id: "action-1", kind: "action", text: "Rehearse the private Slack approval flow.",
-            subject: null, confidence: 0.8, evidence: [], owner: "Audrey", due_at: null,
+            subject: null, confidence: 0.8, evidence: [{ meeting_id: "meeting-1", block_id: "transcript-1" }], owner: "Audrey", due_at: "2026-09-01T00:00:00.000Z",
           },
           {
             id: "rationale-1", kind: "rationale", text: "The owner must choose visibility before release.",
-            subject: null, confidence: 0.7, evidence: [], supports_signal_ids: ["decision-1"],
+            subject: null, confidence: 0.7, evidence: [{ meeting_id: "meeting-1", block_id: "transcript-1" }], supports_signal_ids: ["decision-1"],
+          },
+          {
+            id: "rationale-2", kind: "rationale", text: "The follow-up context was not linked to a decision.",
+            subject: null, confidence: 0.7, evidence: [{ meeting_id: "meeting-1", block_id: "transcript-1" }], supports_signal_ids: [],
+          },
+          {
+            id: "rationale-3", kind: "rationale", text: "The second decision still needs validation.",
+            subject: null, confidence: 0.7, evidence: [{ meeting_id: "meeting-1", block_id: "transcript-1" }], supports_signal_ids: ["decision-2"],
           },
         ],
       },
@@ -150,6 +182,11 @@ describe("private Slack DM approval stager V1", () => {
     ]);
     expect(stage).toHaveBeenCalledOnce();
     expect(JSON.stringify(preparedSnapshot)).toContain("Keep the owner-only default.");
+    expect(preparedSnapshot).toMatchObject({
+      schema_version: 2,
+      kind: "echo-approved-decision-snapshot-v2",
+      payload_contract_id: "organization-record-approval-payload-v1",
+    });
     if (publishedCard === undefined) throw new Error("expected a published approval card");
     const actionsIndex = publishedCard.blocks.findIndex(
       (block) =>
@@ -160,13 +197,52 @@ describe("private Slack DM approval stager V1", () => {
     );
     expect(actionsIndex).toBeGreaterThan(0);
     const informedContent = JSON.stringify(publishedCard.blocks.slice(0, actionsIndex));
-    expect(informedContent).toContain("Decision (decided): Keep the owner-only default.");
-    expect(informedContent).toContain("Action (owner: Audrey; due: none): Rehearse the private Slack approval flow.");
-    expect(informedContent).toContain("Rationale (supports: decision-1): The owner must choose visibility before release.");
-    expect(publishedCard.text).toContain("Decision (decided): Keep the owner-only default.");
-    expect(publishedCard.text).toContain("Action (owner: Audrey; due: none): Rehearse the private Slack approval flow.");
-    expect(publishedCard.text).toContain("Rationale (supports: decision-1): The owner must choose visibility before release.");
+    const decisionGroups = topLevelBlocksByType(publishedCard, "container");
+    expect(decisionGroups).toHaveLength(3);
+    const decisionGroup = JSON.stringify(decisionGroups[0]);
+    const secondDecisionGroup = JSON.stringify(decisionGroups[1]);
+    const otherItems = JSON.stringify(decisionGroups[2]);
+    expect(decisionGroup).toContain("1 · Keep the owner-only default.");
+    expect(decisionGroup).toContain("*Decision*");
+    expect(decisionGroup).toContain("Keep the owner-only default.");
+    expect(decisionGroup).toContain('"subtitle":{"type":"mrkdwn","text":"1 why"');
+    expect(decisionGroup).toContain("*Why*");
+    expect(decisionGroup).toContain("The owner must choose visibility before release.");
+    expect(decisionGroup).not.toContain("The second decision still needs validation.");
+    expect(decisionGroup).not.toContain("The follow-up context was not linked to a decision.");
+    expect(secondDecisionGroup).toContain("2 · Keep the launch gated.");
+    expect(secondDecisionGroup).toContain("Keep the launch gated.");
+    expect(secondDecisionGroup).toContain("The second decision still needs validation.");
+    expect(secondDecisionGroup).not.toContain("The owner must choose visibility before release.");
+    expect(otherItems).toContain("Next steps and context");
+    expect(otherItems).toContain("*Next steps*");
+    expect(otherItems).toContain("Rehearse the private Slack approval flow.");
+    expect(otherItems).not.toContain("Due:");
+    expect(otherItems).toContain("*Additional context*");
+    expect(otherItems).toContain("The follow-up context was not linked to a decision.");
+    expect(informedContent).not.toContain("Transcript block transcript-1");
+    expect(informedContent).not.toContain("maker:");
+    expect(informedContent).not.toContain("The decision was made.");
+    expect(informedContent).not.toContain("owner: Audrey");
+    expect(publishedCard.text).toContain("Keep the owner-only default.");
+    expect(publishedCard.text).not.toContain("maker:");
+    expect(publishedCard.text).not.toContain("Due:");
+    expect(publishedCard.text).toContain("Transcript block transcript-1");
+    expect(publishedCard.text).not.toContain("owner: Audrey");
+    expect(publishedCard.text).toContain("The owner must choose visibility before release.");
+    expect(publishedCard.text).toContain("The follow-up context was not linked to a decision.");
+    expect(publishedCard.text).toContain("Raw transcript and rejected suggestions are not released.");
+    expect(JSON.stringify(preparedSnapshot)).toContain(
+      '"due_at":"2026-09-01T00:00:00.000Z"',
+    );
     expect(JSON.stringify(publishedCard.blocks.slice(actionsIndex))).toContain("Approve");
+    expect(
+      projectPrivateSlackApprovalCardV1({
+        approval_id: "apr_1",
+        meeting: reviewedInput.meeting,
+        decisions: reviewedInput.decisions,
+      }),
+    ).toEqual(publishedCard);
   });
 
   it("durably quarantines an approval package that cannot fit before provider I/O", async () => {
@@ -215,7 +291,9 @@ describe("private Slack DM approval stager V1", () => {
           ...input.decisions,
           signals: [{
             id, kind: "decision", text,
-            subject: null, confidence: null, evidence: [], status: "decided",
+            subject: null, confidence: null,
+            evidence: [{ meeting_id: "meeting-1", block_id: "transcript-1" }],
+            status: "decided",
           }],
         },
       } as unknown as ApprovalWorkflowStageInputV1;

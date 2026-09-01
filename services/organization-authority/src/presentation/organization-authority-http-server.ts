@@ -368,7 +368,7 @@ function recordSearchInput(value: unknown): {
     /[\p{Cc}\p{Zl}\p{Zp}]/u.test(record.query) ||
     [...record.query].length > 240 ||
     queryTerms.size < 1 ||
-    queryTerms.size > 16 ||
+    queryTerms.size > 32 ||
     [...queryTerms].some((term) => Buffer.byteLength(term, "utf8") > 64) ||
     (record.limit !== undefined &&
       (!Number.isSafeInteger(record.limit) ||
@@ -408,7 +408,7 @@ function answerInput(value: unknown): { readonly question: string } {
     /[\p{Cc}\p{Zl}\p{Zp}]/u.test(question) ||
     [...question].length > 240 ||
     terms.size < 1 ||
-    terms.size > 16 ||
+    terms.size > 32 ||
     [...terms].some((term) => Buffer.byteLength(term, "utf8") > 64)
   ) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");

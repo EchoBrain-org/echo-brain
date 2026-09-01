@@ -694,6 +694,12 @@ async function clickCard(input: {
 }): Promise<Response> {
   const parts = cardParts(input.card.card);
   const terminal = input.action === "approve" ? parts.approve : parts.reject;
+  const selectedPolicy = (
+    parts.policyElement.options as ReadonlyArray<Record<string, unknown>>
+  ).find((option) => option.value === input.policy_id);
+  if (selectedPolicy === undefined) {
+    throw new Error("published card has no selected policy option");
+  }
   const trigger_id = "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD";
   const action_ts = "1712345680.123456";
   const payload = {
@@ -723,18 +729,8 @@ async function clickCard(input: {
       values: {
         [parts.policy.block_id as string]: {
           [parts.policyElement.action_id as string]: {
-            type: "radio_buttons",
-            selected_option: {
-              text: {
-                type: "plain_text",
-                text:
-                  input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
-                    ? "Only me"
-                    : "Team",
-                emoji: false,
-              },
-              value: input.policy_id,
-            },
+            type: parts.policyElement.type,
+            selected_option: selectedPolicy,
           },
         },
         [parts.comment.block_id as string]: {
@@ -1185,9 +1181,11 @@ describe("Organization Authority runtime private approval lane", () => {
       const card = fixture.poster.published[0]!;
       const parts = cardParts(card.card);
       const policyElement = parts.policyElement as {
+        type: string;
         initial_option: { value: string };
         options: readonly { value: string }[];
       };
+      expect(policyElement.type).toBe("static_select");
       expect(policyElement.initial_option.value).toBe(
         RESTRICTED_REVIEWER_PERSON_POLICY_ID,
       );
@@ -1196,7 +1194,7 @@ describe("Organization Authority runtime private approval lane", () => {
         ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
       ]);
       expect((parts.comment.element as { multiline: boolean }).multiline).toBe(
-        true,
+        false,
       );
       const replayTimestamp = String(Math.floor(Date.now() / 1_000));
       expect(

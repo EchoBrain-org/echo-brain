@@ -82,7 +82,7 @@ export function reviewLineageIdV1(input: {
   }).slice("sha256:".length)}`;
 }
 
-/** Mirrors the bounded material actually supplied to extraction. */
+/** Hashes every independent meeting field supplied to extraction. */
 export function reviewInputSha256V1(input: {
   readonly meeting: MeetingDocument;
   readonly processor: ReviewProcessorCommitmentV1;
@@ -92,10 +92,21 @@ export function reviewInputSha256V1(input: {
     kind: "echo-clean-live-review-input-v1",
     processor: input.processor,
     title: semanticTitle(input.meeting.title),
-    participants: semanticParticipantNames(input.meeting),
+    participants: extractionParticipants(input.meeting),
+    meeting_time: {
+      actual_start_at: input.meeting.time?.actual_start_at ?? null,
+      actual_end_at: input.meeting.time?.actual_end_at ?? null,
+      scheduled_start_at: input.meeting.time?.scheduled_start_at ?? null,
+      scheduled_end_at: input.meeting.time?.scheduled_end_at ?? null,
+      timezone: input.meeting.time?.timezone ?? null,
+    },
     content: input.meeting.content
       .filter((block) => block.text.trim().length > 0)
-      .map((block) => ({ kind: block.kind, text: block.text })),
+      .map((block) => ({
+        kind: block.kind,
+        text: block.text,
+        speaker_participant_id: block.speaker_participant_id ?? null,
+      })),
   });
 }
 
@@ -174,6 +185,22 @@ function semanticSignalBase(
     case "rationale":
       return base;
   }
+}
+
+function extractionParticipants(
+  meeting: MeetingDocument,
+): readonly Readonly<{
+  participant_id: string;
+  display_name: string;
+}>[] {
+  return meeting.participants
+    .map((participant) => ({
+      participant_id: participant.id,
+      display_name: participant.display_name ?? participant.id,
+    }))
+    .sort((left, right) =>
+      lexicalCompare(left.participant_id, right.participant_id),
+    );
 }
 
 function semanticParticipantNames(meeting: MeetingDocument): readonly string[] {

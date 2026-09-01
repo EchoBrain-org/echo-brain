@@ -465,6 +465,45 @@ describe("Person client", () => {
     });
   });
 
+  it("accepts 32 unique question terms and rejects 33 before the request", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      let asks = 0;
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          asks += 1;
+          return json({
+            schema_version: 1,
+            kind: "echo-clean-person-answer-v1",
+            generation_id: `sha256:${"a".repeat(64)}`,
+            record_head: {
+              position: 1,
+              record_sha256: `sha256:${"b".repeat(64)}`,
+            },
+            answer: "Bounded answer.",
+            citations: [],
+          });
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const question = (count: number) =>
+        Array.from({ length: count }, (_, index) => `term${index}`).join(" ");
+
+      await expect(client.ask(question(32))).resolves.toMatchObject({
+        answer: "Bounded answer.",
+      });
+      await expect(client.ask(question(33))).rejects.toThrow(
+        "ask request is invalid",
+      );
+      expect(asks).toBe(1);
+    });
+  });
+
   it("rejects invalid questions and malformed answer bindings before any answer is released", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
