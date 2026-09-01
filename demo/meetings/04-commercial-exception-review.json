@@ -1,0 +1,466 @@
+{
+  "schema_version": 1,
+  "id": "synthetic-demo-northstar-commercial-exception-2026-08-29",
+  "title": "Commercial exception review",
+  "description": "Internal review of the proposed evaluation pricing exception for Northstar.",
+  "lifecycle": "completed",
+  "provenance": {
+    "source": {
+      "kind": "meeting-source",
+      "adapter_id": "synthetic-demo-source",
+      "instance_id": "customer-demo",
+      "version": "1.0.0"
+    },
+    "external_id": "demo-northstar-rollout-04",
+    "canonical_revision": "demo-northstar-rollout-04-r1",
+    "observed_at": "2026-08-29T18:02:00.000Z",
+    "normalizer_version": "synthetic-demo-normalizer-v1",
+    "source_created_at": "2026-08-29T17:00:00.000Z",
+    "source_updated_at": "2026-08-29T18:02:00.000Z",
+    "metadata": {
+      "synthetic": true,
+      "scenario": "northstar-rollout"
+    }
+  },
+  "capture": {
+    "state": "complete",
+    "components": [
+      {
+        "kind": "metadata",
+        "state": "available"
+      },
+      {
+        "kind": "participants",
+        "state": "available"
+      },
+      {
+        "kind": "summary",
+        "state": "available",
+        "metadata": {
+          "provider": "source-ai"
+        }
+      },
+      {
+        "kind": "transcript",
+        "state": "available",
+        "metadata": {
+          "attributed_turns": 14
+        }
+      },
+      {
+        "kind": "artifacts",
+        "state": "empty"
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "maya-chen",
+      "display_name": "Maya Chen",
+      "identities": [
+        {
+          "kind": "email",
+          "value": "owner@example.test"
+        },
+        {
+          "kind": "source",
+          "value": "demo-user-maya-chen"
+        }
+      ],
+      "roles": [
+        "organizer",
+        "host",
+        "attendee",
+        "speaker"
+      ],
+      "response_status": "accepted",
+      "attendance": "attended",
+      "organization": {
+        "name": "ECHO",
+        "domain": "echo.example.test"
+      },
+      "is_external": false
+    },
+    {
+      "id": "celeste-brooks",
+      "display_name": "Celeste Brooks",
+      "identities": [
+        {
+          "kind": "email",
+          "value": "celeste.brooks@echo.example.test"
+        },
+        {
+          "kind": "source",
+          "value": "demo-user-celeste-brooks"
+        }
+      ],
+      "roles": [
+        "attendee",
+        "speaker"
+      ],
+      "response_status": "accepted",
+      "attendance": "attended",
+      "organization": {
+        "name": "ECHO",
+        "domain": "echo.example.test"
+      },
+      "is_external": false,
+      "metadata": {
+        "title": "VP Finance"
+      }
+    },
+    {
+      "id": "rob-ellis",
+      "display_name": "Rob Ellis",
+      "identities": [
+        {
+          "kind": "email",
+          "value": "rob.ellis@echo.example.test"
+        },
+        {
+          "kind": "source",
+          "value": "demo-user-rob-ellis"
+        }
+      ],
+      "roles": [
+        "attendee",
+        "speaker"
+      ],
+      "response_status": "accepted",
+      "attendance": "attended",
+      "organization": {
+        "name": "ECHO",
+        "domain": "echo.example.test"
+      },
+      "is_external": false,
+      "metadata": {
+        "title": "Account Executive"
+      }
+    },
+    {
+      "id": "dana-lewis",
+      "display_name": "Dana Lewis",
+      "identities": [
+        {
+          "kind": "email",
+          "value": "dana.lewis@echo.example.test"
+        },
+        {
+          "kind": "source",
+          "value": "demo-user-dana-lewis"
+        }
+      ],
+      "roles": [
+        "attendee",
+        "speaker"
+      ],
+      "response_status": "accepted",
+      "attendance": "attended",
+      "organization": {
+        "name": "ECHO",
+        "domain": "echo.example.test"
+      },
+      "is_external": false,
+      "metadata": {
+        "title": "Sales Operations"
+      }
+    }
+  ],
+  "content": [
+    {
+      "id": "summary-1",
+      "kind": "summary",
+      "text": "The team reviewed Rob's request for evaluation pricing across Northstar's planned 28-location deployment. Celeste approved a bounded $22 per-location rate for the first 10 locations during a 30-day evaluation only. She declined an open-ended exception and said standard pricing resumes unless Finance gives new approval. Rob will draft the order form by September 5.",
+      "sequence": 0,
+      "language": "en",
+      "confidence": 0.94,
+      "origin": "source_ai",
+      "source_external_id": "demo-northstar-commercial-exception-summary"
+    },
+    {
+      "id": "turn-01",
+      "kind": "transcript",
+      "text": "Thanks for making time. Rob asked for a quick finance read before he sends Northstar another proposal. The question is whether we can make the evaluation pricing work without accidentally setting their long-term price.",
+      "speaker_participant_id": "maya-chen",
+      "sequence": 1,
+      "started_at": "2026-08-29T17:00:08.000Z",
+      "ended_at": "2026-08-29T17:00:31.000Z",
+      "start_offset_ms": 8000,
+      "end_offset_ms": 31000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-01"
+    },
+    {
+      "id": "turn-02",
+      "kind": "transcript",
+      "text": "They are asking for twenty-two dollars per location. They want it across all twenty-eight sites because their procurement team says a single rate is easier to approve. If we give them that now, I think we keep momentum for the September plan.",
+      "speaker_participant_id": "rob-ellis",
+      "sequence": 2,
+      "started_at": "2026-08-29T17:00:35.000Z",
+      "ended_at": "2026-08-29T17:01:03.000Z",
+      "start_offset_ms": 35000,
+      "end_offset_ms": 63000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-02"
+    },
+    {
+      "id": "turn-03",
+      "kind": "transcript",
+      "text": "Before we get into price, the delivery plan is not twenty-eight locations at once. The operating plan is still a first group of ten, with a decision on expansion after the evaluation evidence is in.",
+      "speaker_participant_id": "dana-lewis",
+      "sequence": 3,
+      "started_at": "2026-08-29T17:01:09.000Z",
+      "ended_at": "2026-08-29T17:01:31.000Z",
+      "start_offset_ms": 69000,
+      "end_offset_ms": 91000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-03"
+    },
+    {
+      "id": "turn-04",
+      "kind": "transcript",
+      "text": "Right. I am not comfortable granting an exception for twenty-eight locations before we know whether the first ten are successful. That turns an evaluation concession into the default commercial position.",
+      "speaker_participant_id": "celeste-brooks",
+      "sequence": 4,
+      "started_at": "2026-08-29T17:01:38.000Z",
+      "ended_at": "2026-08-29T17:02:04.000Z",
+      "start_offset_ms": 98000,
+      "end_offset_ms": 124000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-04"
+    },
+    {
+      "id": "turn-05",
+      "kind": "transcript",
+      "text": "Could we at least put the twenty-two dollar rate in the full order form and say the later locations are activated when they are ready? That would save them from reopening procurement next month.",
+      "speaker_participant_id": "rob-ellis",
+      "sequence": 5,
+      "started_at": "2026-08-29T17:02:12.000Z",
+      "ended_at": "2026-08-29T17:02:36.000Z",
+      "start_offset_ms": 132000,
+      "end_offset_ms": 156000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-05"
+    },
+    {
+      "id": "turn-06",
+      "kind": "transcript",
+      "text": "No. That still gives them a commitment for the whole deployment. I can approve twenty-two dollars per location for the initial ten locations, and only for a thirty-day evaluation. Nothing beyond that is implied.",
+      "speaker_participant_id": "celeste-brooks",
+      "sequence": 6,
+      "started_at": "2026-08-29T17:02:43.000Z",
+      "ended_at": "2026-08-29T17:03:12.000Z",
+      "start_offset_ms": 163000,
+      "end_offset_ms": 192000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-06"
+    },
+    {
+      "id": "turn-07",
+      "kind": "transcript",
+      "text": "For the order form, I can make the evaluation term explicit and list ten activated locations. Do you want the other eighteen named anywhere, or should they stay out entirely?",
+      "speaker_participant_id": "dana-lewis",
+      "sequence": 7,
+      "started_at": "2026-08-29T17:03:19.000Z",
+      "ended_at": "2026-08-29T17:03:42.000Z",
+      "start_offset_ms": 199000,
+      "end_offset_ms": 222000,
+      "language": "en",
+      "confidence": 0.97,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-07"
+    },
+    {
+      "id": "turn-08",
+      "kind": "transcript",
+      "text": "Keep them out of the commercial commitment. You can describe a possible expansion discussion after the evaluation, but the order form must say standard pricing applies after thirty days unless Finance approves a new exception.",
+      "speaker_participant_id": "celeste-brooks",
+      "sequence": 8,
+      "started_at": "2026-08-29T17:03:50.000Z",
+      "ended_at": "2026-08-29T17:04:17.000Z",
+      "start_offset_ms": 230000,
+      "end_offset_ms": 257000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-08"
+    },
+    {
+      "id": "turn-09",
+      "kind": "transcript",
+      "text": "That will be a harder conversation with Northstar, but it is clear. We should also avoid calling this a rollout discount in any customer language, because it is tied to the evaluation.",
+      "speaker_participant_id": "maya-chen",
+      "sequence": 9,
+      "started_at": "2026-08-29T17:04:25.000Z",
+      "ended_at": "2026-08-29T17:04:49.000Z",
+      "start_offset_ms": 265000,
+      "end_offset_ms": 289000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-09"
+    },
+    {
+      "id": "turn-10",
+      "kind": "transcript",
+      "text": "Agreed. I will frame it as an evaluation rate for the first ten locations. If the evaluation goes well, I will come back with the evidence and request a separate expansion approval rather than promising the same number now.",
+      "speaker_participant_id": "rob-ellis",
+      "sequence": 10,
+      "started_at": "2026-08-29T17:04:57.000Z",
+      "ended_at": "2026-08-29T17:05:25.000Z",
+      "start_offset_ms": 297000,
+      "end_offset_ms": 325000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-10"
+    },
+    {
+      "id": "turn-11",
+      "kind": "transcript",
+      "text": "Please send me the draft before it goes out. I am looking for three things: ten locations, a thirty-day evaluation term, and the return to standard pricing. If any of those are missing, it is not the approved exception.",
+      "speaker_participant_id": "celeste-brooks",
+      "sequence": 11,
+      "started_at": "2026-08-29T17:05:33.000Z",
+      "ended_at": "2026-08-29T17:05:59.000Z",
+      "start_offset_ms": 333000,
+      "end_offset_ms": 359000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-11"
+    },
+    {
+      "id": "turn-12",
+      "kind": "transcript",
+      "text": "Rob, can you have that draft ready by September fifth? Dana can help with the location schedule, but you own getting the commercial language together and routing it to Celeste.",
+      "speaker_participant_id": "maya-chen",
+      "sequence": 12,
+      "started_at": "2026-08-29T17:06:06.000Z",
+      "ended_at": "2026-08-29T17:06:31.000Z",
+      "start_offset_ms": 366000,
+      "end_offset_ms": 391000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-12"
+    },
+    {
+      "id": "turn-13",
+      "kind": "transcript",
+      "text": "Yes, I will have the order form to Celeste by September fifth, with the evaluation language and no promise for the remaining locations.",
+      "speaker_participant_id": "rob-ellis",
+      "sequence": 13,
+      "started_at": "2026-08-29T17:06:38.000Z",
+      "ended_at": "2026-08-29T17:06:54.000Z",
+      "start_offset_ms": 398000,
+      "end_offset_ms": 414000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-13"
+    },
+    {
+      "id": "turn-14",
+      "kind": "transcript",
+      "text": "Good. We can support the evaluation, but I do not want anyone treating this as a precedent. Bring back a new request if the customer wants to expand after the thirty days.",
+      "speaker_participant_id": "celeste-brooks",
+      "sequence": 14,
+      "started_at": "2026-08-29T17:07:02.000Z",
+      "ended_at": "2026-08-29T17:07:21.000Z",
+      "start_offset_ms": 422000,
+      "end_offset_ms": 441000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-commercial-exception-turn-14"
+    }
+  ],
+  "artifacts": [],
+  "time": {
+    "scheduled_start_at": "2026-08-29T17:00:00.000Z",
+    "scheduled_end_at": "2026-08-29T17:30:00.000Z",
+    "actual_start_at": "2026-08-29T17:00:00.000Z",
+    "actual_end_at": "2026-08-29T17:07:30.000Z",
+    "timezone": "America/Los_Angeles",
+    "all_day": false
+  },
+  "context": {
+    "owner_participant_id": "maya-chen",
+    "calendar": {
+      "event_id": "demo-calendar-event-northstar-commercial-exception-2026-08-29",
+      "organizer_participant_id": "maya-chen"
+    },
+    "location": {
+      "kind": "virtual",
+      "name": "ECHO video meeting"
+    },
+    "scopes": [
+      {
+        "kind": "team",
+        "value": "sales",
+        "origin": "source"
+      },
+      {
+        "kind": "project",
+        "value": "northstar-rollout",
+        "origin": "adapter_config"
+      },
+      {
+        "kind": "customer",
+        "value": "northstar",
+        "origin": "source"
+      },
+      {
+        "kind": "topic",
+        "value": "commercial-exception",
+        "origin": "source"
+      }
+    ],
+    "labels": [
+      "synthetic",
+      "customer-demo",
+      "not-a-real-meeting",
+      "northstar",
+      "commercial"
+    ],
+    "language": "en",
+    "meeting_type": "internal-commercial-review",
+    "metadata": {
+      "synthetic": true
+    }
+  },
+  "governance": {
+    "sensitivity": "confidential",
+    "consent": [
+      {
+        "purpose": "transcription",
+        "status": "granted",
+        "recorded_at": "2026-08-29T17:00:00.000Z",
+        "source_reference": "synthetic-demo-consent"
+      },
+      {
+        "purpose": "analysis",
+        "status": "granted",
+        "recorded_at": "2026-08-29T17:00:00.000Z",
+        "source_reference": "synthetic-demo-consent"
+      }
+    ],
+    "redaction_state": "none",
+    "metadata": {
+      "synthetic": true
+    }
+  }
+}

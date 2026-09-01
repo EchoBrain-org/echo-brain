@@ -1,0 +1,397 @@
+{
+  "schema_version": 1,
+  "id": "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+  "title": "Implementation capacity triage",
+  "description": "Working session to align the Northstar implementation plan, customer language, and readiness gates.",
+  "lifecycle": "completed",
+  "provenance": {
+    "source": {
+      "kind": "meeting-source",
+      "adapter_id": "synthetic-demo-source",
+      "instance_id": "customer-demo",
+      "version": "1.0.0"
+    },
+    "external_id": "demo-northstar-rollout-03",
+    "canonical_revision": "demo-northstar-rollout-03-r1",
+    "observed_at": "2026-08-28T16:38:00.000Z",
+    "normalizer_version": "synthetic-demo-normalizer-v1",
+    "source_revision": "1",
+    "source_created_at": "2026-08-28T15:58:00.000Z",
+    "source_updated_at": "2026-08-28T16:34:00.000Z",
+    "source_url": "https://synthetic-demo.invalid/meetings/northstar-implementation-capacity-2026-08-28",
+    "metadata": {
+      "synthetic": true,
+      "scenario": "northstar-rollout"
+    }
+  },
+  "time": {
+    "scheduled_start_at": "2026-08-28T16:00:00.000Z",
+    "scheduled_end_at": "2026-08-28T16:30:00.000Z",
+    "actual_start_at": "2026-08-28T16:00:00.000Z",
+    "actual_end_at": "2026-08-28T16:34:00.000Z",
+    "timezone": "America/Los_Angeles",
+    "all_day": false
+  },
+  "capture": {
+    "state": "complete",
+    "components": [
+      { "kind": "metadata", "state": "available" },
+      { "kind": "participants", "state": "available" },
+      {
+        "kind": "summary",
+        "state": "available",
+        "metadata": { "provider": "synthetic-source-ai" }
+      },
+      {
+        "kind": "transcript",
+        "state": "available",
+        "metadata": { "turn_count": 14 }
+      },
+      {
+        "kind": "artifacts",
+        "state": "empty",
+        "reason": "No attachments were shared for this working session."
+      }
+    ],
+    "warnings": []
+  },
+  "participants": [
+    {
+      "id": "maya-chen",
+      "display_name": "Maya Chen",
+      "identities": [
+        { "kind": "email", "value": "owner@example.test" },
+        { "kind": "source", "value": "demo-user-maya-chen" }
+      ],
+      "roles": ["organizer", "host", "attendee", "speaker"],
+      "response_status": "accepted",
+      "attendance": "attended",
+      "organization": { "name": "ECHO", "domain": "echo.example.test" },
+      "is_external": false,
+      "metadata": { "title": "Program Lead" }
+    },
+    {
+      "id": "vera-kim",
+      "display_name": "Vera Kim",
+      "identities": [
+        { "kind": "email", "value": "vera.kim@echo.example.test" },
+        { "kind": "source", "value": "demo-user-vera-kim" }
+      ],
+      "roles": ["attendee", "speaker"],
+      "response_status": "accepted",
+      "attendance": "attended",
+      "organization": { "name": "ECHO", "domain": "echo.example.test" },
+      "is_external": false,
+      "metadata": { "title": "VP Customer Success" }
+    },
+    {
+      "id": "imani-cole",
+      "display_name": "Imani Cole",
+      "identities": [
+        { "kind": "email", "value": "imani.cole@echo.example.test" },
+        { "kind": "source", "value": "demo-user-imani-cole" }
+      ],
+      "roles": ["attendee", "speaker"],
+      "response_status": "accepted",
+      "attendance": "attended",
+      "organization": { "name": "ECHO", "domain": "echo.example.test" },
+      "is_external": false,
+      "metadata": { "title": "Implementation Lead" }
+    },
+    {
+      "id": "rob-ellis",
+      "display_name": "Rob Ellis",
+      "identities": [
+        { "kind": "email", "value": "rob.ellis@echo.example.test" },
+        { "kind": "source", "value": "demo-user-rob-ellis" }
+      ],
+      "roles": ["attendee", "speaker"],
+      "response_status": "accepted",
+      "attendance": "attended",
+      "organization": { "name": "ECHO", "domain": "echo.example.test" },
+      "is_external": false,
+      "metadata": { "title": "Account Executive" }
+    }
+  ],
+  "content": [
+    {
+      "id": "summary-01",
+      "kind": "summary",
+      "text": "The group aligned on protecting a September 16 onboarding window for Northstar's first 10 locations while the data-access paperwork and implementation readiness remain open. Adoption evidence will decide any later expansion. Vera asked the team to avoid describing the date as a full 28-location launch. Maya will correct the customer wording, Imani will reserve implementation capacity, and Vera will run a readiness review before the window is confirmed.",
+      "sequence": 0,
+      "language": "en",
+      "confidence": 0.93,
+      "origin": "source_ai",
+      "source_external_id": "demo-northstar-rollout-03-summary"
+    },
+    {
+      "id": "transcript-01",
+      "kind": "transcript",
+      "text": "We already agreed to start Northstar with 10 locations, and Legal and Security set two production gates. I want us to leave with language Sales can use without getting ahead of that work.",
+      "speaker_participant_id": "maya-chen",
+      "sequence": 1,
+      "started_at": "2026-08-28T16:00:18.000Z",
+      "ended_at": "2026-08-28T16:01:02.000Z",
+      "start_offset_ms": 18000,
+      "end_offset_ms": 62000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-01"
+    },
+    {
+      "id": "transcript-02",
+      "kind": "transcript",
+      "text": "Northstar is asking for a date today. If we say September 16 is the full launch, it gives their regional leads something concrete to plan around.",
+      "speaker_participant_id": "rob-ellis",
+      "sequence": 2,
+      "started_at": "2026-08-28T16:01:11.000Z",
+      "ended_at": "2026-08-28T16:02:05.000Z",
+      "start_offset_ms": 71000,
+      "end_offset_ms": 125000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-02"
+    },
+    {
+      "id": "transcript-03",
+      "kind": "transcript",
+      "text": "I can staff the first 10 locations in that week, assuming their site contacts are ready. I cannot put 28 locations through setup at the same time without taking people off the accounts already in flight.",
+      "speaker_participant_id": "imani-cole",
+      "sequence": 3,
+      "started_at": "2026-08-28T16:02:19.000Z",
+      "ended_at": "2026-08-28T16:03:32.000Z",
+      "start_offset_ms": 139000,
+      "end_offset_ms": 212000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-03"
+    },
+    {
+      "id": "transcript-04",
+      "kind": "transcript",
+      "text": "The signed data agreement and security-contact check are not complete yet, and the adoption threshold only tells us when we can expand later. We should not make the customer think those are formalities.",
+      "speaker_participant_id": "maya-chen",
+      "sequence": 4,
+      "started_at": "2026-08-28T16:03:44.000Z",
+      "ended_at": "2026-08-28T16:04:29.000Z",
+      "start_offset_ms": 224000,
+      "end_offset_ms": 269000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-04"
+    },
+    {
+      "id": "transcript-05",
+      "kind": "transcript",
+      "text": "I understand, but if I avoid a date entirely they will read that as hesitation. Could we call September 16 the target full launch and qualify it in the follow-up?",
+      "speaker_participant_id": "rob-ellis",
+      "sequence": 5,
+      "started_at": "2026-08-28T16:04:45.000Z",
+      "ended_at": "2026-08-28T16:05:41.000Z",
+      "start_offset_ms": 285000,
+      "end_offset_ms": 341000,
+      "language": "en",
+      "confidence": 0.97,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-05"
+    },
+    {
+      "id": "transcript-06",
+      "kind": "transcript",
+      "text": "No. That is the kind of phrase that gets repeated without the qualification. We need to be precise: September 16 is a conditional onboarding window for the initial 10 locations, not a full launch date.",
+      "speaker_participant_id": "vera-kim",
+      "sequence": 6,
+      "started_at": "2026-08-28T16:05:56.000Z",
+      "ended_at": "2026-08-28T16:07:11.000Z",
+      "start_offset_ms": 356000,
+      "end_offset_ms": 431000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-06"
+    },
+    {
+      "id": "transcript-07",
+      "kind": "transcript",
+      "text": "That works for delivery. I can hold the implementation pod for the first group through September 16, but I need the location list locked by the fourth so I can assign people and prepare the kickoff materials.",
+      "speaker_participant_id": "imani-cole",
+      "sequence": 7,
+      "started_at": "2026-08-28T16:07:25.000Z",
+      "ended_at": "2026-08-28T16:08:38.000Z",
+      "start_offset_ms": 445000,
+      "end_offset_ms": 518000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-07"
+    },
+    {
+      "id": "transcript-08",
+      "kind": "transcript",
+      "text": "I will rewrite the customer note. It will say we are holding the window for the initial cohort, subject to the signed data agreement and implementation-readiness checks. Expansion will be decided later using the four-week adoption results.",
+      "speaker_participant_id": "maya-chen",
+      "sequence": 8,
+      "started_at": "2026-08-28T16:08:52.000Z",
+      "ended_at": "2026-08-28T16:10:08.000Z",
+      "start_offset_ms": 532000,
+      "end_offset_ms": 608000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-08"
+    },
+    {
+      "id": "transcript-09",
+      "kind": "transcript",
+      "text": "Can I at least tell their executive sponsor that we are planning for 28 eventually? They are trying to coordinate their regional calendars.",
+      "speaker_participant_id": "rob-ellis",
+      "sequence": 9,
+      "started_at": "2026-08-28T16:10:24.000Z",
+      "ended_at": "2026-08-28T16:11:17.000Z",
+      "start_offset_ms": 624000,
+      "end_offset_ms": 677000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-09"
+    },
+    {
+      "id": "transcript-10",
+      "kind": "transcript",
+      "text": "You can talk about the long-term ambition, but do not announce a 28-location commitment or present it as scheduled. We do not have an operating plan for that scale yet.",
+      "speaker_participant_id": "vera-kim",
+      "sequence": 10,
+      "started_at": "2026-08-28T16:11:32.000Z",
+      "ended_at": "2026-08-28T16:12:37.000Z",
+      "start_offset_ms": 692000,
+      "end_offset_ms": 757000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-10"
+    },
+    {
+      "id": "transcript-11",
+      "kind": "transcript",
+      "text": "I will reserve the pod and send Maya the capacity assumptions by September 4. If the site list changes after that, we need to revisit the staffing plan rather than quietly absorb it.",
+      "speaker_participant_id": "imani-cole",
+      "sequence": 11,
+      "started_at": "2026-08-28T16:12:51.000Z",
+      "ended_at": "2026-08-28T16:13:55.000Z",
+      "start_offset_ms": 771000,
+      "end_offset_ms": 835000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-11"
+    },
+    {
+      "id": "transcript-12",
+      "kind": "transcript",
+      "text": "I will send the revised wording by September 3 and copy the account team. Rob, please use that instead of the draft from this morning.",
+      "speaker_participant_id": "maya-chen",
+      "sequence": 12,
+      "started_at": "2026-08-28T16:14:11.000Z",
+      "ended_at": "2026-08-28T16:15:04.000Z",
+      "start_offset_ms": 851000,
+      "end_offset_ms": 904000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-12"
+    },
+    {
+      "id": "transcript-13",
+      "kind": "transcript",
+      "text": "I will set a go/no-go review for September 12. We will check the data-handling status, the location list, and Imani's readiness before anyone confirms the onboarding window. Expansion is reviewed only after the four-week adoption evidence exists.",
+      "speaker_participant_id": "vera-kim",
+      "sequence": 13,
+      "started_at": "2026-08-28T16:15:19.000Z",
+      "ended_at": "2026-08-28T16:16:36.000Z",
+      "start_offset_ms": 919000,
+      "end_offset_ms": 996000,
+      "language": "en",
+      "confidence": 0.99,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-13"
+    },
+    {
+      "id": "transcript-14",
+      "kind": "transcript",
+      "text": "Understood. I will reset the expectation with Northstar and keep the executive sponsor focused on the first cohort for now.",
+      "speaker_participant_id": "rob-ellis",
+      "sequence": 14,
+      "started_at": "2026-08-28T16:16:52.000Z",
+      "ended_at": "2026-08-28T16:17:38.000Z",
+      "start_offset_ms": 1012000,
+      "end_offset_ms": 1058000,
+      "language": "en",
+      "confidence": 0.98,
+      "origin": "imported",
+      "source_external_id": "demo-northstar-rollout-03-turn-14"
+    }
+  ],
+  "artifacts": [],
+  "context": {
+    "owner_participant_id": "maya-chen",
+    "calendar": {
+      "event_id": "synthetic-calendar-event-northstar-implementation-capacity-2026-08-28",
+      "organizer_participant_id": "maya-chen"
+    },
+    "location": {
+      "kind": "virtual",
+      "name": "Video conference",
+      "join_reference": "synthetic-video-room-northstar-implementation-capacity"
+    },
+    "scopes": [
+      { "kind": "customer", "value": "Northstar", "origin": "source" },
+      { "kind": "project", "value": "Northstar rollout", "origin": "adapter_config" },
+      { "kind": "team", "value": "Customer Success", "origin": "source" }
+    ],
+    "labels": ["synthetic", "customer-demo", "northstar", "implementation"],
+    "language": "en",
+    "meeting_type": "working_session",
+    "metadata": {
+      "synthetic": true
+    }
+  },
+  "governance": {
+    "sensitivity": "internal",
+    "consent": [
+      {
+        "purpose": "recording",
+        "status": "granted",
+        "recorded_at": "2026-08-28T16:00:00.000Z",
+        "source_reference": "synthetic-meeting-consent"
+      },
+      {
+        "purpose": "transcription",
+        "status": "granted",
+        "recorded_at": "2026-08-28T16:00:00.000Z",
+        "source_reference": "synthetic-meeting-consent"
+      },
+      {
+        "purpose": "analysis",
+        "status": "granted",
+        "recorded_at": "2026-08-28T16:00:00.000Z",
+        "source_reference": "synthetic-meeting-consent"
+      },
+      {
+        "purpose": "distribution",
+        "status": "granted",
+        "recorded_at": "2026-08-28T16:00:00.000Z",
+        "source_reference": "synthetic-meeting-consent"
+      }
+    ],
+    "retention_until": "2027-08-28T16:34:00.000Z",
+    "redaction_state": "none",
+    "metadata": {
+      "synthetic": true,
+      "not_a_real_meeting": true
+    }
+  }
+}

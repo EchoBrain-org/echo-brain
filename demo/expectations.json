@@ -1,0 +1,544 @@
+{
+  "schema_version": 1,
+  "document_type": "echo-synthetic-customer-demo-expectations",
+  "runtime_input": false,
+  "warning": "Evaluation oracle only. Never send this file to ingestion, extraction, retrieval, or answer generation.",
+  "scenario": {
+    "id": "northstar-rollout",
+    "title": "Northstar rollout commitment",
+    "plain_language_story": "Northstar asks for all 28 locations on September 16. ECHO must combine four meetings to show what the company actually agreed, what is still required and when, and which approved fact remains private.",
+    "chronology": [
+      {
+        "date": "2026-08-24",
+        "chapter": 1,
+        "meeting_id": "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "question_settled": "How many locations should start, and what evidence allows later expansion?"
+      },
+      {
+        "date": "2026-08-26",
+        "chapter": 2,
+        "meeting_id": "synthetic-demo-northstar-data-handling-review-2026-08-26",
+        "question_settled": "What must be complete before the first locations receive production access?"
+      },
+      {
+        "date": "2026-08-28",
+        "chapter": 3,
+        "meeting_id": "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "question_settled": "What can Sales safely promise for September 16?"
+      },
+      {
+        "date": "2026-08-29",
+        "chapter": 4,
+        "meeting_id": "synthetic-demo-northstar-commercial-exception-2026-08-29",
+        "question_settled": "What private price applies to the same first 10 locations?"
+      }
+    ]
+  },
+  "source_identity": {
+    "kind": "meeting-source",
+    "adapter_id": "synthetic-demo-source",
+    "instance_id": "customer-demo",
+    "version": "1.0.0"
+  },
+  "meeting_expectations": [
+    {
+      "meeting_id": "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+      "title": "Revenue signal calibration",
+      "approval_policy": "team",
+      "required_decisions": [
+        {
+          "plain_language_fact": "Start with 10 locations and expand only after at least 8 of the 10 complete four consecutive weekly workflows without manual correction.",
+          "required_text_clauses": [
+            ["8", "10", "four", "manual correction"]
+          ],
+          "evidence_block_ids": [
+            "transcript-09"
+          ]
+        }
+      ],
+      "required_actions": [
+        {
+          "plain_language_fact": "Confirm the first 10 locations with Northstar and do not present the other 18 as committed.",
+          "required_text_clauses": [
+            ["confirm", "10 locations"],
+            ["18", "commit"]
+          ],
+          "due_date": "2026-09-04",
+          "evidence_block_ids": [
+            "transcript-10"
+          ]
+        },
+        {
+          "plain_language_fact": "Publish the adoption dashboard.",
+          "required_text_clauses": [
+            ["dashboard"]
+          ],
+          "due_date": "2026-09-11",
+          "evidence_block_ids": [
+            "transcript-11"
+          ]
+        }
+      ],
+      "required_rationales": [
+        {
+          "plain_language_fact": "Early interest is not enough evidence of repeat usage, and expanding too soon would turn an unproven pattern into a wider commitment.",
+          "required_text_clauses": [
+            ["commitment"]
+          ],
+          "evidence_block_ids": [
+            "transcript-03",
+            "transcript-07"
+          ]
+        }
+      ],
+      "must_not_be_current_decisions": [
+        {
+          "plain_language_fact": "All 28 locations are in scope from day one.",
+          "required_text_clauses": [
+            ["all 28 locations are in scope from day one"]
+          ],
+          "evidence_block_ids": [
+            "transcript-02"
+          ]
+        },
+        {
+          "plain_language_fact": "Expansion can start after only two weeks.",
+          "required_text_clauses": [
+            ["expansion can start after only two weeks"]
+          ],
+          "evidence_block_ids": [
+            "transcript-06"
+          ]
+        },
+        {
+          "plain_language_fact": "The first 10 should be described as a launch.",
+          "required_text_clauses": [
+            ["the first 10 should be described as a launch"]
+          ],
+          "evidence_block_ids": [
+            "transcript-08"
+          ]
+        }
+      ]
+    },
+    {
+      "meeting_id": "synthetic-demo-northstar-data-handling-review-2026-08-26",
+      "title": "Data handling review",
+      "approval_policy": "team",
+      "required_decisions": [
+        {
+          "plain_language_fact": "Production access cannot begin until the revised data-processing addendum is signed and a named Northstar security contact is verified.",
+          "required_text_clauses": [
+            ["addendum", "sign", "security contact"]
+          ],
+          "evidence_block_ids": [
+            "northstar-data-handling-review:transcript:9"
+          ]
+        },
+        {
+          "plain_language_fact": "Implementation planning may continue while the addendum is in signature, but production access cannot begin until the required conditions are complete.",
+          "required_text_clauses": [
+            ["implementation", "production"]
+          ],
+          "evidence_block_ids": [
+            "northstar-data-handling-review:transcript:6",
+            "northstar-data-handling-review:transcript:7"
+          ]
+        }
+      ],
+      "required_actions": [
+        {
+          "plain_language_fact": "Send the revised addendum to Northstar.",
+          "required_text_clauses": [
+            ["revised", "addendum"]
+          ],
+          "due_date": "2026-09-05",
+          "evidence_block_ids": [
+            "northstar-data-handling-review:transcript:6",
+            "northstar-data-handling-review:transcript:10"
+          ]
+        },
+        {
+          "plain_language_fact": "Verify the named security contact and escalation route.",
+          "required_text_clauses": [
+            ["verify", "escalation"]
+          ],
+          "due_date": "2026-09-08",
+          "evidence_block_ids": [
+            "northstar-data-handling-review:transcript:7"
+          ]
+        },
+        {
+          "plain_language_fact": "Send Priya's preferred escalation details.",
+          "required_text_clauses": [
+            ["Priya", "escalation"]
+          ],
+          "due_date": "2026-08-26",
+          "evidence_block_ids": [
+            "northstar-data-handling-review:transcript:11"
+          ]
+        }
+      ],
+      "required_rationales": [
+        {
+          "plain_language_fact": "The current agreement does not cover the usage data or incident-notification terms, and a shared mailbox is not an accountable security contact.",
+          "required_text_clauses": [
+            ["usage data", "incident"]
+          ],
+          "evidence_block_ids": [
+            "northstar-data-handling-review:transcript:2",
+            "northstar-data-handling-review:transcript:3"
+          ]
+        }
+      ],
+      "must_not_be_current_decisions": [
+        {
+          "plain_language_fact": "The existing agreement is enough for production access.",
+          "evidence_block_ids": [
+            "northstar-data-handling-review:transcript:1"
+          ]
+        }
+      ]
+    },
+    {
+      "meeting_id": "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+      "title": "Implementation capacity triage",
+      "approval_policy": "team",
+      "required_decisions": [
+        {
+          "plain_language_fact": "September 16 is a conditional onboarding window for the first 10 locations, not a full launch date or a commitment to all 28.",
+          "required_text_clauses": [
+            ["September 16", "onboarding", "10", "location"]
+          ],
+          "evidence_block_ids": [
+            "transcript-06",
+            "transcript-10"
+          ]
+        },
+        {
+          "plain_language_fact": "Confirm the onboarding window only after a September 12 readiness review; decide later expansion only after the four-week adoption evidence exists.",
+          "required_text_clauses": [
+            ["September 12", "readiness", "adoption"]
+          ],
+          "evidence_block_ids": [
+            "transcript-13"
+          ]
+        }
+      ],
+      "required_actions": [
+        {
+          "plain_language_fact": "Send corrected customer wording.",
+          "required_text_clauses": [
+            ["wording"]
+          ],
+          "due_date": "2026-09-03",
+          "evidence_block_ids": [
+            "transcript-12"
+          ]
+        },
+        {
+          "plain_language_fact": "Reserve the implementation team and send the capacity assumptions.",
+          "required_text_clauses": [
+            ["capacity assumptions"]
+          ],
+          "due_date": "2026-09-04",
+          "evidence_block_ids": [
+            "transcript-11"
+          ]
+        },
+        {
+          "plain_language_fact": "Run the go/no-go readiness review.",
+          "required_text_clauses": [
+            ["go/no-go"]
+          ],
+          "due_date": "2026-09-12",
+          "evidence_block_ids": [
+            "transcript-13"
+          ]
+        }
+      ],
+      "required_rationales": [
+        {
+          "plain_language_fact": "Calling September 16 a full launch would lose the qualification when repeated, and the company cannot staff or plan all 28 locations yet.",
+          "required_text_clauses": [
+            ["full launch", "28 locations"]
+          ],
+          "evidence_block_ids": [
+            "transcript-03",
+            "transcript-06",
+            "transcript-10"
+          ]
+        }
+      ],
+      "must_not_be_current_decisions": [
+        {
+          "plain_language_fact": "September 16 is the full launch for all 28 locations.",
+          "evidence_block_ids": [
+            "transcript-02",
+            "transcript-05"
+          ]
+        },
+        {
+          "plain_language_fact": "All 28 locations are already scheduled.",
+          "evidence_block_ids": [
+            "transcript-09"
+          ]
+        }
+      ]
+    },
+    {
+      "meeting_id": "synthetic-demo-northstar-commercial-exception-2026-08-29",
+      "title": "Commercial exception review",
+      "approval_policy": "only_me",
+      "required_decisions": [
+        {
+          "plain_language_fact": "Approve $22 per location for the first 10 locations for a 30-day evaluation only; standard pricing resumes afterward unless Finance approves a new exception.",
+          "required_text_clauses": [
+            ["$22", "10 locations", "30-day", "standard pricing"]
+          ],
+          "evidence_block_ids": [
+            "turn-06",
+            "turn-08",
+            "turn-11"
+          ]
+        },
+        {
+          "plain_language_fact": "Describe the first-10-location price as an evaluation rate, not a rollout discount.",
+          "required_text_clauses": [
+            ["evaluation rate", "rollout discount"]
+          ],
+          "evidence_block_ids": [
+            "turn-09",
+            "turn-10"
+          ]
+        }
+      ],
+      "required_actions": [
+        {
+          "plain_language_fact": "Send Celeste an order form limited to 10 locations and the 30-day evaluation terms.",
+          "required_text_clauses": [
+            ["order form", "Celeste"]
+          ],
+          "due_date": "2026-09-05",
+          "evidence_block_ids": [
+            "turn-12",
+            "turn-13"
+          ]
+        }
+      ],
+      "required_rationales": [
+        {
+          "plain_language_fact": "A price exception for all 28 locations before the evaluation succeeds would turn a short evaluation concession into the default price.",
+          "required_text_clauses": [
+            ["28 location", "default"]
+          ],
+          "evidence_block_ids": [
+            "turn-04"
+          ]
+        }
+      ],
+      "must_not_be_current_decisions": [
+        {
+          "plain_language_fact": "$22 per location applies to all 28 locations.",
+          "evidence_block_ids": [
+            "turn-02"
+          ]
+        },
+        {
+          "plain_language_fact": "The same exception is committed for later locations.",
+          "evidence_block_ids": [
+            "turn-05"
+          ]
+        }
+      ]
+    }
+  ],
+  "slack_approval_checks": {
+    "delivery_surface": "private_dm_only",
+    "required_on_each_card": [
+      "meeting title",
+      "decision, action, and rationale text",
+      "action dates",
+      "evidence excerpt or block reference",
+      "Only me and Team policy choices",
+      "Approve and Reject controls"
+    ],
+    "must_not_release": [
+      "raw transcript",
+      "rejected suggestions",
+      "fixture oracle content"
+    ]
+  },
+  "retrieval_cases": [
+    {
+      "id": "before-approval-rollout-question",
+      "principal": "normal_team_member",
+      "approval_state": "no meeting approved",
+      "question": "Can we promise Northstar that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
+      "expected_outcome": "insufficient_approved_information",
+      "required_citation_meeting_ids": [],
+      "must_not_reveal": [
+        "meeting titles",
+        "participants",
+        "dates",
+        "rollout facts",
+        "pricing",
+        "the existence of hidden records"
+      ]
+    },
+    {
+      "id": "after-team-approval-rollout-question",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "question": "Can we promise Northstar that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
+      "expected_outcome": "answered",
+      "required_answer_facts": [
+        "Do not promise all 28 locations for September 16.",
+        "September 16 is a conditional onboarding window for the first 10 locations.",
+        "Before production access, the revised addendum must be signed, the named security contact verified, and implementation readiness confirmed at the September 12 review.",
+        "Later expansion requires at least 8 of the first 10 locations to complete four consecutive weekly workflows without manual correction."
+      ],
+      "required_answer_fact_checks": [
+        {
+      "required_phrases": [
+        "28 locations",
+        "september 16",
+        "not promise"
+          ],
+          "required_citation_meeting_ids": [
+            "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+          ]
+        },
+        {
+          "required_phrases": [
+            "conditional",
+            "onboarding",
+            "10 locations"
+          ],
+          "required_citation_meeting_ids": [
+            "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+          ]
+        },
+        {
+          "required_phrases": [
+            "addendum",
+            "signed",
+            "security contact",
+            "verified",
+            "september 12",
+            "readiness"
+          ],
+          "required_citation_meeting_ids": [
+            "synthetic-demo-northstar-data-handling-review-2026-08-26",
+            "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+          ]
+        },
+        {
+          "required_phrases": [
+            "8",
+            "10",
+            "four consecutive",
+            "weekly workflows",
+            "manual correction"
+          ],
+          "required_citation_meeting_ids": [
+            "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+          ]
+        }
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26",
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "a private price exists",
+        "the rejected all-28 proposals as current decisions"
+      ]
+    },
+    {
+      "id": "team-member-private-price-question",
+      "principal": "normal_team_member",
+      "approval_state": "chapter 4 approved as Only me by a different principal",
+      "question": "What special price did Northstar receive?",
+      "expected_outcome": "insufficient_approved_information",
+      "required_citation_meeting_ids": [],
+      "must_not_reveal": [
+        "$22",
+        "10 locations",
+        "30 days",
+        "standard pricing",
+        "the existence of a private commercial record"
+      ]
+    },
+    {
+      "id": "approver-private-price-question",
+      "principal": "exact_owner_approver",
+      "approval_state": "chapter 4 approved as Only me by this principal",
+      "question": "What special price did Northstar receive?",
+      "expected_outcome": "answered",
+      "required_answer_facts": [
+        "$22 per location",
+        "first 10 locations only",
+        "30-day evaluation only",
+        "standard pricing afterward unless Finance approves a new exception"
+      ],
+      "required_answer_fact_checks": [
+        {
+      "required_phrases": [
+        "$22",
+        "per location"
+          ],
+          "required_citation_meeting_ids": [
+            "synthetic-demo-northstar-commercial-exception-2026-08-29"
+          ]
+        },
+        {
+          "required_phrases": [
+            "10 locations",
+            "only"
+          ],
+          "required_citation_meeting_ids": [
+            "synthetic-demo-northstar-commercial-exception-2026-08-29"
+          ]
+        },
+        {
+          "required_phrases": [
+            "30-day",
+            "evaluation",
+            "only"
+          ],
+          "required_citation_meeting_ids": [
+            "synthetic-demo-northstar-commercial-exception-2026-08-29"
+          ]
+        },
+        {
+          "required_phrases": [
+            "standard pricing",
+            "finance",
+            "exception"
+          ],
+          "required_citation_meeting_ids": [
+            "synthetic-demo-northstar-commercial-exception-2026-08-29"
+          ]
+        }
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-commercial-exception-2026-08-29"
+      ]
+    }
+  ],
+  "quality_gate": {
+    "answer_style": "plain language a customer can understand on first read",
+    "maximum_target_words_for_rollout_answer": 180,
+    "requirements": [
+      "Every material statement is supported by an approved record visible to the requester.",
+      "Every material statement cites the meeting that supports it.",
+      "Rejected or proposed alternatives are never presented as current decisions.",
+      "The answer distinguishes prerequisites for the first 10 from evidence needed for later expansion.",
+      "Private content is neither disclosed nor hinted at to an unauthorized requester.",
+      "The same question and record generation produce the same result."
+    ]
+  }
+}

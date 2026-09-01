@@ -1,0 +1,137 @@
+name: echo-synthetic-demo-v1
+
+x-authority-common: &authority-common
+  image: "${ECHO_DEMO_AUTHORITY_IMAGE:?set the immutable demo image digest}"
+  user: "${ECHO_DEMO_UID:?set the demo runtime UID}:${ECHO_DEMO_GID:?set the demo runtime GID}"
+  restart: "no"
+  stop_grace_period: 45s
+  ports:
+    - name: tunnel-origin
+      target: 80
+      published: "80"
+      host_ip: 127.0.0.1
+      protocol: tcp
+  labels:
+    io.echo-brain.demo-source-sha: "${ECHO_DEMO_SOURCE_SHA:?set the exact demo source SHA}"
+  healthcheck:
+    test:
+      - CMD
+      - node
+      - -e
+      - >-
+        fetch('http://127.0.0.1:39481/v1/authority-descriptor').then((response) => {
+          if (!response.ok) process.exit(1);
+        }).catch(() => process.exit(1));
+    interval: 5s
+    timeout: 5s
+    retries: 12
+    start_period: 5s
+
+x-proxy-common: &proxy-common
+  image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+  restart: "no"
+  environment:
+    ECHO_DEMO_AUTHORITY_HOST: "${ECHO_DEMO_AUTHORITY_HOST:?set the staging authority host}"
+  command:
+    - caddy
+    - run
+    - --config
+    - /etc/caddy/Caddyfile
+    - --adapter
+    - caddyfile
+  volumes:
+    - ${ECHO_DEMO_BUNDLE_ROOT:?set the extracted demo bundle root}/demo/staging/Caddyfile.synthetic-demo-v1:/etc/caddy/Caddyfile:ro
+
+services:
+  setup-authority:
+    <<: *authority-common
+    profiles: [setup]
+    entrypoint:
+      - node
+      - services/organization-authority/dist/clean-live-main.js
+    command:
+      - serve
+      - --state-dir
+      - /echo-demo/state
+      - --host
+      - 127.0.0.1
+      - --port
+      - "39481"
+      - --client-secret-file
+      - /echo-source-private/oidc-client-secret
+      - --slack-signing-secret-file
+      - /echo-source-private/slack-signing-secret
+    environment:
+      ECHO_CLEAN_AUTHORITY_HOST: "${ECHO_DEMO_AUTHORITY_HOST:?set the staging authority host}"
+      ECHO_CLEAN_RELEASE_ID: "${ECHO_DEMO_RELEASE_ID:?set the isolated demo release ID}"
+    volumes:
+      - ${ECHO_DEMO_DATA_ROOT:?set the isolated demo data root}:/echo-demo
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/oidc-config.json:/echo-source-private/oidc-config.json:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/oidc-client-secret:/echo-source-private/oidc-client-secret:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/slack-bot-token:/echo-source-private/slack-bot-token:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/slack-signing-secret:/echo-source-private/slack-signing-secret:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/granola-credential-source:/echo-source-private/granola-credential:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/granola-owner-email:/echo-source-private/granola-owner-email:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/llm-credential-source:/echo-source-private/llm-credential:ro
+
+  setup-proxy:
+    <<: *proxy-common
+    profiles: [setup]
+    depends_on:
+      setup-authority:
+        condition: service_healthy
+    network_mode: service:setup-authority
+
+  demo-authority:
+    <<: *authority-common
+    profiles: [demo]
+    entrypoint:
+      - node
+      - services/organization-authority/dist/synthetic-demo-main.js
+    command:
+      - serve
+      - --state-dir
+      - /echo-demo/state
+      - --meetings-dir
+      - /echo-demo/meetings
+      - --host
+      - 127.0.0.1
+      - --port
+      - "39481"
+      - --client-secret-file
+      - /echo-source-private/oidc-client-secret
+      - --slack-signing-secret-file
+      - /echo-source-private/slack-signing-secret
+    volumes:
+      - ${ECHO_DEMO_DATA_ROOT:?set the isolated demo data root}:/echo-demo
+      - ${ECHO_DEMO_DATA_ROOT:?set the isolated demo data root}/meetings:/echo-demo/meetings:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/oidc-config.json:/echo-source-private/oidc-config.json:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/oidc-client-secret:/echo-source-private/oidc-client-secret:ro
+      - ${ECHO_DEMO_CLEAN_ROOT:?set the accepted clean root}/clean-data/private/slack-signing-secret:/echo-source-private/slack-signing-secret:ro
+
+  demo-proxy:
+    <<: *proxy-common
+    profiles: [demo]
+    depends_on:
+      demo-authority:
+        condition: service_healthy
+    network_mode: service:demo-authority
+
+  slack-card-preview:
+    image: "${ECHO_DEMO_PREVIEW_IMAGE:-${ECHO_DEMO_AUTHORITY_IMAGE:?set the immutable demo image digest}}"
+    user: "${ECHO_DEMO_UID:?set the demo runtime UID}:${ECHO_DEMO_GID:?set the demo runtime GID}"
+    profiles: [preview]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      io.echo-brain.demo-source-sha: "${ECHO_DEMO_PREVIEW_SOURCE_SHA:-${ECHO_DEMO_SOURCE_SHA:?set the exact demo source SHA}}"
+    entrypoint:
+      - node
+      - /echo-demo/bundle/demo/staging/replay-slack-card-preview.mjs
+    volumes:
+      - ${ECHO_DEMO_BUNDLE_ROOT:?set the extracted demo bundle root}:/echo-demo/bundle:ro
+      - ${ECHO_DEMO_DATA_ROOT:?set the isolated demo data root}/state:/echo-demo/state:ro
+      - ${ECHO_DEMO_REPLAY_PATH:-/dev/null}:/echo-demo/replay.json:ro
