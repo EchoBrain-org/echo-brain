@@ -13,9 +13,10 @@ reviewed_ref: fe78f2c7e11cffaa4b00ec699dfe71f97edfa986
 decision_ids:
   - ADR-0006
   - ADR-0007
+  - ADR-0010
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Clean V1 current-Person Layer 1 listing and Layer 2 exact-generation search release, plus the Layer 4 request-local release and citation boundary
+enforcement_scope: Clean V1 current-Person Layer 1 listing and Layer 2 exact-generation search release, the ADR-0010 rebuild-time related-atom projection boundary, plus the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -46,6 +47,16 @@ possession from being mistaken for human permission. It covers clean V1 Layer 1
 listing, Layer 2 search, and the single composed Layer 4 `ask` path. It does not
 authorize any additional Layer 4 execution path.
 
+ADR-0010 adds one non-serving exception to the otherwise model-free lower
+layers: during construction of a fresh Layer 2 generation, an Authority-owned
+projector may receive only approved atom IDs, kinds, and text from one exact
+visibility segment and may propose untyped cross-record pairs. It cannot see a
+raw transcript, another segment, current Person state, or a query. Authority
+validates and stores only accepted endpoint pairs; neither proposal nor
+adjacency confers visibility. The Layer 3 answer path can expand no more than
+three released decision anchors with bounded adjacent atoms and makes no model
+call for that operation.
+
 ## Enforcement and failure behavior
 
 The Authority authenticates and resolves the Person, checks current membership
@@ -64,7 +75,8 @@ the request without releasing an answer.
 Focused Authority, retrieval, Person-client, architecture, and clean-runtime
 integration tests verify the two policy branches, exact-caller scope, final
 fence, audit digest, metadata, rejection non-disclosure, model-free Layer 1
-through Layer 3 read closures, bounded Layer 4 calls, one request snapshot,
+and query-serving Layer 3 closures, exact-segment rebuild-time projection,
+bounded Layer 3 adjacency, bounded Layer 4 calls, one request snapshot,
 request-local citation subsets, and answer-audit rows. The source boundary
 keeps the Layer 4 root narrow and rejects direct lower-layer imports.
 Enforcement remains partial until an exact deployed artifact completes the

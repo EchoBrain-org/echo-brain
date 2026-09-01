@@ -18,9 +18,9 @@ import {
 import {
   buildReadableSearchGenerationV1,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V2,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  readableSearchPlaneBaselineSha256V1,
+  readableSearchPlaneBaselineSha256,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,6 +31,11 @@ import {
 } from "../src/composition/organization-authority-setup-cli.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import {
+  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+} from "../src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
 
 const temporaryDirectories: string[] = [];
@@ -147,8 +152,10 @@ function readyStatusDependencies(
 
 interface DurableCanaryFixtureOptions {
   readonly cursor_version?: number;
+  readonly source_admitted?: boolean;
   readonly pointer_current?: boolean;
   readonly pointer_current_contract?: boolean;
+  readonly pointer_uses_disabled_projector_contract?: boolean;
   readonly layer1_result_count?: number | null;
   readonly layer2_result_count?: number | null;
   readonly layer1_owner_tuple?: "owner" | "other";
@@ -159,9 +166,24 @@ function buildInputForCanary(
   state: string,
   manifest: ReturnType<typeof readOrganizationAuthoritySetupManifest>,
   recordSha256: Sha256Digest,
+  projectorEnabled: boolean,
 ) {
-  const contract = readableSearchGenerationContractV1();
-  const plane = (role: string, schemaSha256: Sha256Digest) => {
+  const contract = readableSearchGenerationContractV1(
+    projectorEnabled
+      ? {
+          related_atom_projector: {
+            generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+            model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+            timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+          },
+        }
+      : {},
+  );
+  const plane = (
+    role: string,
+    schemaSha256: Sha256Digest,
+    databaseSchemaVersion: 1 | 2 = 1,
+  ) => {
     const manifestJson = canonicalJson({
       schema_version: 1,
       kind: "echo-state-lineage-database-manifest-v1",
@@ -169,13 +191,13 @@ function buildInputForCanary(
       authority_id: manifest.authority_id,
       organization_id: manifest.organization_id,
       state_lineage_id: manifest.state_lineage_id,
-      database_schema_version: 1,
+      database_schema_version: databaseSchemaVersion,
       schema_sha256: schemaSha256,
       created_at: "2026-08-22T12:00:00.000Z",
       creating_artifact_revision: "clean-founder-v1",
     });
     return {
-      database_schema_version: 1 as const,
+      database_schema_version: databaseSchemaVersion,
       schema_sha256: schemaSha256,
       manifest_json: manifestJson,
       manifest_sha256: sha256Digest(manifestJson),
@@ -190,15 +212,16 @@ function buildInputForCanary(
       planes: {
         facts: plane(
           "retrieval-facts",
-          readableSearchPlaneBaselineSha256V1(READABLE_SEARCH_FACTS_BASELINE_V1),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
+          2,
         ),
         content: plane(
           "retrieval-content",
-          readableSearchPlaneBaselineSha256V1(READABLE_SEARCH_CONTENT_BASELINE_V1),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V1),
         ),
         lexical: plane(
           "retrieval-lexical",
-          readableSearchPlaneBaselineSha256V1(READABLE_SEARCH_LEXICAL_BASELINE_V1),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V1),
         ),
       },
     },
@@ -288,14 +311,21 @@ function installDurableCanaryFixture(
   } finally {
     record.close();
   }
+  const sourceAdmitted = options.source_admitted ?? true;
   const built = buildReadableSearchGenerationV1(
-    buildInputForCanary(state, manifest, recordSha256),
+    buildInputForCanary(
+      state,
+      manifest,
+      recordSha256,
+      sourceAdmitted && !options.pointer_uses_disabled_projector_contract,
+    ),
   );
   const authority = new Database(join(state, "authority.sqlite"));
   try {
     const admissionSemanticSha256 = sha256Digest("founder-canary-admission");
-    authority
-      .prepare(
+    if (sourceAdmitted) {
+      authority
+        .prepare(
         `INSERT INTO authority_live_source_admission_v2
          (singleton, organization_id, principal_id, membership_id, membership_type,
           source_adapter_id, source_adapter_version, source_adapter_instance_id,
@@ -308,8 +338,8 @@ function installDurableCanaryFixture(
          VALUES (1, ?, ?, ?, 'owner', 'granola', '2.2.0', 'founder-granola-v1', '2.2.0',
                  ?, 'provider_record_owner_observed', ?, ?, 'granola:v1:live:admission', ?,
                  'llm', 'founder-llm-v1', '1.3.0+processing.a', ?, ?, ?, ?)`,
-      )
-      .run(
+        )
+        .run(
         manifest.organization_id,
         manifest.owner_principal_id,
         manifest.owner_membership_id,
@@ -320,15 +350,16 @@ function installDurableCanaryFixture(
         sha256Digest("processor-configuration"),
         sha256Digest("processor-credential"),
         admissionSemanticSha256,
-        issuedAt,
-      );
-    authority
-      .prepare(
+          issuedAt,
+        );
+      authority
+        .prepare(
         `INSERT INTO authority_live_source_progress_v2
          (singleton, admission_semantic_input_sha256, cursor, cursor_version, updated_at)
          VALUES (1, ?, 'granola:v1:live:canary', ?, ?)`,
-      )
-      .run(admissionSemanticSha256, options.cursor_version ?? 1, issuedAt);
+        )
+        .run(admissionSemanticSha256, options.cursor_version ?? 1, issuedAt);
+    }
     const pointerCurrent = options.pointer_current ?? true;
     const pointerContractCurrent = options.pointer_current_contract ?? true;
     authority
@@ -1025,6 +1056,24 @@ describe("Organization Authority setup coordinator", () => {
 
   it.each([
     ["complete", {}, true, true, true, true, true],
+    [
+      "expects the disabled projector contract before source admission",
+      { source_admitted: false },
+      false,
+      true,
+      true,
+      true,
+      true,
+    ],
+    [
+      "rejects a disabled projector contract after source admission",
+      { pointer_uses_disabled_projector_contract: true },
+      true,
+      true,
+      false,
+      false,
+      false,
+    ],
     ["requires a real source cursor advance", { cursor_version: 0 }, false, true, true, true, true],
     ["rejects a stale record-head pointer", { pointer_current: false }, true, true, false, false, false],
     ["rejects a stale retrieval contract", { pointer_current_contract: false }, true, true, false, false, false],

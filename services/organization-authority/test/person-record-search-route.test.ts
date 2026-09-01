@@ -16,8 +16,10 @@ import {
   buildReadableSearchGenerationV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  readableSearchPlaneBaselineSha256,
   readableSearchPlaneBaselineSha256V1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   warmReadableSearchActiveGenerationV1,
@@ -92,7 +94,11 @@ function realGenerationInput(
     position: 2,
     record_sha256: sha256Digest("restricted-record"),
   } as const;
-  const plane = (role: string, schema_sha256: Sha256Digest) => {
+  const plane = (
+    role: string,
+    schema_sha256: Sha256Digest,
+    database_schema_version: 1 | 2 = 1,
+  ) => {
     const manifest_json = canonicalJson({
       schema_version: 1,
       kind: "echo-state-lineage-database-manifest-v1",
@@ -100,13 +106,13 @@ function realGenerationInput(
       authority_id,
       organization_id,
       state_lineage_id,
-      database_schema_version: 1,
+      database_schema_version,
       schema_sha256,
       created_at: "2026-08-22T00:00:00.000Z",
       creating_artifact_revision: "test",
     });
     return {
-      database_schema_version: 1 as const,
+      database_schema_version,
       schema_sha256,
       manifest_json,
       manifest_sha256: sha256Digest(manifest_json),
@@ -121,9 +127,8 @@ function realGenerationInput(
       planes: {
         facts: plane(
           "retrieval-facts",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_FACTS_BASELINE_V1,
-          ),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
+          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
         ),
         content: plane(
           "retrieval-content",
@@ -868,6 +873,262 @@ describe("Person Layer 2 route", () => {
           )
           .get(),
       ).toEqual({ count: 1 });
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
+  it("places three authorized decision anchors before related facts and lexical fallback only for Layer 4 batches", () => {
+    const value = setup();
+    const item = (name: string, item_kind: "decision" | "action" | "rationale") => ({
+      atom_id: digest(`packet-${name}`),
+      record_position: 1,
+      record_sha256: digest(`packet-record-${name}`),
+      envelope_sha256: digest(`packet-envelope-${name}`),
+      item_kind,
+      text: `packet ${name}`,
+      policy_id: "organization-member-readable-person-v2" as const,
+    });
+    const lexical = [
+      item("first-decision", "decision"),
+      item("action", "action"),
+      item("second-decision", "decision"),
+      item("rationale", "rationale"),
+      item("third-decision", "decision"),
+    ];
+    const related = [
+      item("related-one", "rationale"),
+      lexical[2]!,
+      item("related-two", "action"),
+      ...Array.from({ length: 12 }, (_, index) =>
+        item(`related-extra-${String(index)}`, "rationale"),
+      ),
+    ];
+    const search = vi.fn(() => ({
+      generation_id: digest("generation"),
+      exact_head: {
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        position: 0,
+        record_sha256: null,
+      },
+      items: lexical,
+    }));
+    const expand = vi.fn(() => ({
+      generation_id: digest("generation"),
+      exact_head: {
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        position: 0,
+        record_sha256: null,
+      },
+      items: related,
+    }));
+    try {
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => authorization() },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
+        search_generation: search,
+        expand_related_atoms: expand,
+      });
+      const lexicalOnly = route.search({
+        access_token: "bearer-only",
+        query: "packet",
+      });
+      expect(lexicalOnly.items.map((value) => value.atom_id)).toEqual(
+        lexical.map((value) => value.atom_id),
+      );
+      expect(expand).not.toHaveBeenCalled();
+
+      const packet = route.searchBatch({
+        access_token: "bearer-only",
+        queries: ["packet"],
+        include_related_atom_packet: true,
+      });
+      expect(expand).toHaveBeenCalledWith({
+        state_directory: value.state_directory,
+        active_generation: {
+          generation_id: digest("generation"),
+          manifest_sha256: digest("manifest"),
+          retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+          exact_head: {
+            authority_id: "oau_clean",
+            organization_id: "org_clean",
+            state_lineage_id: "lineage_clean",
+            position: 0,
+            record_sha256: null,
+          },
+        },
+        reader: {
+          principal_id: "principal_reader",
+          membership_id: "membership_reader",
+        },
+        anchor_atom_ids: [
+          digest("packet-first-decision"),
+          digest("packet-second-decision"),
+          digest("packet-third-decision"),
+        ],
+        limit: 13,
+      });
+      expect(packet.response.items.map((value) => value.atom_id)).toEqual([
+        digest("packet-first-decision"),
+        digest("packet-second-decision"),
+        digest("packet-third-decision"),
+        digest("packet-related-one"),
+        digest("packet-related-two"),
+        ...Array.from({ length: 10 }, (_, index) =>
+          digest(`packet-related-extra-${String(index)}`),
+        ),
+        digest("packet-action"),
+      ]);
+      expect(packet.response.items).toHaveLength(16);
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
+  it.each([
+    ["returns a mismatched generation", digest("other-generation"), 0],
+    ["returns a mismatched head", digest("generation"), 1],
+  ])("does not release or audit when related expansion %s", (_name, generation_id, position) => {
+    const value = setup();
+    const item = {
+      atom_id: digest("expansion-anchor"),
+      record_position: 1,
+      record_sha256: digest("expansion-record"),
+      envelope_sha256: digest("expansion-envelope"),
+      item_kind: "decision" as const,
+      text: "expansion anchor",
+      policy_id: "organization-member-readable-person-v2" as const,
+    };
+    try {
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => authorization() },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
+        search_generation: () => ({
+          generation_id: digest("generation"),
+          exact_head: {
+            authority_id: "oau_clean",
+            organization_id: "org_clean",
+            state_lineage_id: "lineage_clean",
+            position: 0,
+            record_sha256: null,
+          },
+          items: [item],
+        }),
+        expand_related_atoms: () => ({
+          generation_id,
+          exact_head: {
+            authority_id: "oau_clean",
+            organization_id: "org_clean",
+            state_lineage_id: "lineage_clean",
+            position,
+            record_sha256: null,
+          },
+          items: [],
+        }),
+      });
+      expect(() =>
+        route.searchBatch({
+          access_token: "bearer-only",
+          queries: ["expansion"],
+          include_related_atom_packet: true,
+        }),
+      ).toThrow("exact-head readable-search generation is not available");
+      expect(
+        value.authority
+          .prepare(
+            "SELECT count(*) AS count FROM authority_person_read_decision_audit_v2",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
+  it("does not release or audit when authorization changes during related expansion", () => {
+    const value = setup();
+    let current = authorization();
+    const item = {
+      atom_id: digest("expansion-anchor"),
+      record_position: 1,
+      record_sha256: digest("expansion-record"),
+      envelope_sha256: digest("expansion-envelope"),
+      item_kind: "decision" as const,
+      text: "expansion anchor",
+      policy_id: "organization-member-readable-person-v2" as const,
+    };
+    try {
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => current },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
+        search_generation: () => ({
+          generation_id: digest("generation"),
+          exact_head: {
+            authority_id: "oau_clean",
+            organization_id: "org_clean",
+            state_lineage_id: "lineage_clean",
+            position: 0,
+            record_sha256: null,
+          },
+          items: [item],
+        }),
+        expand_related_atoms: () => {
+          current = { ...current, session_family_id: "replacement-session" };
+          return {
+            generation_id: digest("generation"),
+            exact_head: {
+              authority_id: "oau_clean",
+              organization_id: "org_clean",
+              state_lineage_id: "lineage_clean",
+              position: 0,
+              record_sha256: null,
+            },
+            items: [],
+          };
+        },
+      });
+      expect(() =>
+        route.searchBatch({
+          access_token: "bearer-only",
+          queries: ["expansion"],
+          include_related_atom_packet: true,
+        }),
+      ).toThrow("person authentication failed");
+      expect(
+        value.authority
+          .prepare(
+            "SELECT count(*) AS count FROM authority_person_read_decision_audit_v2",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
     } finally {
       value.record.close();
       value.authority.close();

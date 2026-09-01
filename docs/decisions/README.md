@@ -31,6 +31,7 @@ separately.
 | [ADR-0007](ADR-0007-lean-layer-4-answer-composition-v1.md)               | Lean Layer 4 answer composition V1               | accepted   |
 | [ADR-0008](ADR-0008-echo-hosted-authority-by-default.md)                 | ECHO-hosted Authority by default                  | accepted   |
 | [ADR-0009](ADR-0009-retained-authority-data-volume-boundary.md)          | Retained Authority data-volume boundary          | accepted   |
+| [ADR-0010](ADR-0010-disposable-related-atom-projection-v1.md)           | Disposable related-atom projection V1            | accepted   |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

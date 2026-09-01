@@ -40,6 +40,11 @@ import {
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
 import { runGranolaMeetingSourceAdmissionCli } from "./providers/granola/granola-meeting-source-admission-cli.js";
+import {
+  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+} from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
   assertPersonAuthorityCallback,
@@ -1148,6 +1153,36 @@ function activeGenerationPointer(
   });
 }
 
+/**
+ * Setup runs before provider credentials are installed, so it must derive the
+ * same non-secret projector contract that the admitted production runtime
+ * binds from its fixed OpenRouter bundle. Before admission projection remains
+ * disabled and the ordinary provider-free contract is expected.
+ */
+function expectedSetupCanaryRetrievalContract(
+  authority: Database.Database,
+) {
+  const sourceIsAdmitted =
+    authority
+      .prepare(
+        `SELECT 1
+           FROM authority_live_source_admission_v2
+          WHERE singleton = 1`,
+      )
+      .get() !== undefined;
+  return readableSearchGenerationContractV1(
+    sourceIsAdmitted
+      ? {
+          related_atom_projector: Object.freeze({
+            generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+            model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+            timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+          }),
+        }
+      : {},
+  );
+}
+
 function sameRecordHead(
   left: CurrentRecordHead,
   right: CurrentRecordHead,
@@ -1263,13 +1298,15 @@ function setupCanaryEvidence(
           LIMIT 1`,
       )
       .get() !== undefined;
+    const expectedRetrievalContract =
+      expectedSetupCanaryRetrievalContract(authority);
     const activeGenerationCurrent = pointerMatchesHead(
       initialPointer,
       initialHead,
       manifest.organization_id,
     ) &&
       initialPointer.retrieval_contract_sha256 ===
-        readableSearchGenerationContractV1().retrieval_contract_sha256;
+        expectedRetrievalContract.retrieval_contract_sha256;
     const ownerLayer1ReadAfterHead =
       activeGenerationCurrent &&
       initialHead.receipt_issued_at !== null &&

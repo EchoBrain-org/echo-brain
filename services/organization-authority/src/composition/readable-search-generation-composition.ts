@@ -22,13 +22,16 @@ import {
   READABLE_SEARCH_ADMISSION_BUDGET_V1,
   READABLE_SEARCH_READER_BEHAVIOR_V1,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V2,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+  readableSearchPlaneBaselineSha256,
   readableSearchPlaneBaselineSha256V1,
   warmReadableSearchActiveGenerationV1,
   type ReadableSearchAtomV1,
   type ReadableSearchLineagePlaneV1,
+  type ReadableSearchRelatedAtomPairV1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
@@ -43,9 +46,56 @@ import {
   type StateLineageRoleV1,
   type StateLineageRootManifestV1,
 } from "../state-lineage/state-lineage-manifest-v1.js";
+import {
+  MAX_RELATED_ATOM_CANDIDATES_V1,
+  MAX_RELATED_ATOM_LINKS_PER_ATOM_V1,
+  MAX_RELATED_ATOM_LINKS_TOTAL_V1,
+  MAX_RELATED_ATOM_SOURCE_ATOMS_V1,
+  MAX_RELATED_ATOM_SOURCE_TEXT_UTF8_BYTES_V1,
+  MIN_RELATED_ATOM_SUPPORTING_EXCERPT_LENGTH_V1,
+  RELATED_ATOM_PROJECTOR_CORE_RELEASE_SHA256_V1,
+  RELATED_ATOM_PROJECTOR_MAX_OUTPUT_TOKENS_V1,
+  projectRelatedAtomsV1,
+  type RelatedAtomStructuredGenerationPortV1,
+} from "./related-atom-projector-v1.js";
 
 export const READABLE_SEARCH_SOURCE_REVISION_V1 =
-  "organization-authority-clean-readable-search-v1" as const;
+  "organization-authority-clean-readable-search-v2" as const;
+
+/**
+ * This release is intentionally explicit in the retrieval contract. The
+ * generated pairs are disposable, but a prompt, validation, or bound change
+ * must rebuild them rather than leaving an old adjacency list current.
+ */
+export const READABLE_SEARCH_RELATED_ATOM_PROJECTOR_RELEASE_V1 = Object.freeze({
+  schema_version: 1,
+  kind: "echo-related-atom-projector-release-v1",
+  core_release_sha256: RELATED_ATOM_PROJECTOR_CORE_RELEASE_SHA256_V1,
+  cross_record_only: true,
+  source_atom_limit: MAX_RELATED_ATOM_SOURCE_ATOMS_V1,
+  source_text_utf8_bytes_limit: MAX_RELATED_ATOM_SOURCE_TEXT_UTF8_BYTES_V1,
+  minimum_supporting_excerpt_length:
+    MIN_RELATED_ATOM_SUPPORTING_EXCERPT_LENGTH_V1,
+  candidate_limit: MAX_RELATED_ATOM_CANDIDATES_V1,
+  links_per_atom_limit: MAX_RELATED_ATOM_LINKS_PER_ATOM_V1,
+  links_total_limit: MAX_RELATED_ATOM_LINKS_TOTAL_V1,
+  max_output_tokens: RELATED_ATOM_PROJECTOR_MAX_OUTPUT_TOKENS_V1,
+  source_selection:
+    "newest-record-position-desc-atom-order-asc-atom-id-asc-first-200",
+});
+
+/** Non-secret selected model profile for the disposable Layer 2 projector. */
+export interface ReadableSearchRelatedAtomProjectorProfileV1 {
+  readonly generation_adapter_id: string;
+  readonly model: string;
+  readonly timeout_ms: number;
+}
+
+/** Provider-neutral projector seam. It receives only already-approved atoms. */
+export interface ReadableSearchRelatedAtomProjectorBindingV1 {
+  readonly structured_output: RelatedAtomStructuredGenerationPortV1;
+  readonly profile: ReadableSearchRelatedAtomProjectorProfileV1;
+}
 
 const READABLE_SEARCH_ANALYZER_RELEASE_V3 = Object.freeze({
   schema_version: 3,
@@ -98,7 +148,9 @@ export interface ReadableSearchGenerationContractV1 {
 }
 
 /** One current-only contract shared by current generation publication and serving. */
-export function readableSearchGenerationContractV1():
+export function readableSearchGenerationContractV1(input: Readonly<{
+  readonly related_atom_projector?: ReadableSearchRelatedAtomProjectorProfileV1;
+}> = {}):
   ReadableSearchGenerationContractV1 {
   const organizationMemberPolicy =
     organizationMemberReadablePersonPolicyContractSha256();
@@ -118,6 +170,20 @@ export function readableSearchGenerationContractV1():
     unicode_version: process.versions.unicode ?? "unknown",
     icu_version: process.versions.icu ?? "unknown",
   });
+  const relatedAtomProjector =
+    input.related_atom_projector === undefined
+      ? Object.freeze({
+          state: "disabled" as const,
+          release: READABLE_SEARCH_RELATED_ATOM_PROJECTOR_RELEASE_V1,
+        })
+      : Object.freeze({
+          state: "enabled" as const,
+          release: READABLE_SEARCH_RELATED_ATOM_PROJECTOR_RELEASE_V1,
+          generation_adapter_id:
+            input.related_atom_projector.generation_adapter_id,
+          model: input.related_atom_projector.model,
+          timeout_ms: input.related_atom_projector.timeout_ms,
+        });
   return Object.freeze({
     retrieval_contract_sha256: canonicalSha256({
       schema_version: 1,
@@ -156,6 +222,7 @@ export function readableSearchGenerationContractV1():
       },
       admission_budget: READABLE_SEARCH_ADMISSION_BUDGET_V1,
       reader_behavior: READABLE_SEARCH_READER_BEHAVIOR_V1,
+      related_atom_projector: relatedAtomProjector,
     }),
     organization_member_policy_contract_sha256: organizationMemberPolicy,
     restricted_reviewer_policy_contract_sha256: restrictedReviewerPolicy,
@@ -170,6 +237,102 @@ export function readableSearchGenerationContractV1():
 interface ReconciliationSnapshotV1 {
   readonly record_head: ReadableSearchRecordHeadV1;
   readonly source_snapshot: RecordRetrievalSourceSnapshotV1;
+  /** Validated, policy-segment-local, disposable Layer 2 pairs. */
+  readonly related_atom_pairs?: readonly ReadableSearchRelatedAtomPairV1[];
+}
+
+function visibilitySegmentKey(atom: RecordRetrievalSourceSnapshotV1["atoms"][number]): string {
+  return canonicalJson({
+    policy_id: atom.policy_id,
+    policy_contract_sha256: atom.policy_contract_sha256,
+    reviewer_principal_id: atom.reviewer_principal_id,
+    reviewer_membership_id: atom.reviewer_membership_id,
+  });
+}
+
+/**
+ * Runs projection after the verified snapshot transaction has closed. Each
+ * request contains exactly one authorization-equivalent visibility segment,
+ * so a returned relationship can never bridge a private-review boundary.
+ */
+export async function projectSnapshotRelatedAtomsV1(input: {
+  readonly snapshot: ReconciliationSnapshotV1;
+  readonly projector: ReadableSearchRelatedAtomProjectorBindingV1;
+  readonly signal: AbortSignal;
+}): Promise<ReconciliationSnapshotV1> {
+  const segments = new Map<
+    string,
+    RecordRetrievalSourceSnapshotV1["atoms"][number][]
+  >();
+  for (const atom of input.snapshot.source_snapshot.atoms) {
+    const key = visibilitySegmentKey(atom);
+    const segment = segments.get(key);
+    if (segment === undefined) segments.set(key, [atom]);
+    else segment.push(atom);
+  }
+  const pairs: ReadableSearchRelatedAtomPairV1[] = [];
+  for (const atoms of segments.values()) {
+    input.signal.throwIfAborted();
+    // The search builder can retain more atoms than one bounded projection
+    // call. Keep its full lexical corpus, but choose the newest deterministic
+    // window for the disposable link pass.
+    const newestFirst = [...atoms]
+      .sort(
+        (left, right) =>
+          right.record_position - left.record_position ||
+          left.atom_order - right.atom_order ||
+          left.atom_id.localeCompare(right.atom_id),
+      );
+    const selected: typeof newestFirst = [];
+    let selectedTextBytes = 0;
+    for (const atom of newestFirst) {
+      if (selected.length === MAX_RELATED_ATOM_SOURCE_ATOMS_V1) break;
+      const textBytes = Buffer.byteLength(atom.text, "utf8");
+      if (
+        selectedTextBytes + textBytes >
+        MAX_RELATED_ATOM_SOURCE_TEXT_UTF8_BYTES_V1
+      ) {
+        break;
+      }
+      selected.push(atom);
+      selectedTextBytes += textBytes;
+    }
+    if (new Set(selected.map((atom) => atom.record_sha256)).size < 2) continue;
+    const projected = await projectRelatedAtomsV1({
+      atoms: selected.map((atom) =>
+        Object.freeze({
+          atom_id: atom.atom_id,
+          record_id: atom.record_sha256,
+          item_kind: atom.item_kind,
+          text: atom.text,
+        }),
+      ),
+      model: input.projector.profile.model,
+      structured_output: input.projector.structured_output,
+      timeout_ms: input.projector.profile.timeout_ms,
+      signal: input.signal,
+    });
+    const admittedAtomIds = new Map<string, Sha256Digest>(
+      selected.map((atom) => [atom.atom_id, atom.atom_id]),
+    );
+    for (const pair of projected) {
+      const leftAtomId = admittedAtomIds.get(pair.left_atom_id);
+      const rightAtomId = admittedAtomIds.get(pair.right_atom_id);
+      if (leftAtomId === undefined || rightAtomId === undefined) {
+        throw new Error("related atom projector returned an unadmitted atom ID");
+      }
+      pairs.push(
+        Object.freeze({
+          left_atom_id: leftAtomId,
+          right_atom_id: rightAtomId,
+        }),
+      );
+    }
+  }
+  return Object.freeze({
+    ...input.snapshot,
+    related_atom_pairs: Object.freeze(pairs),
+  });
 }
 
 function recordHead(database: Database.Database): ReadableSearchRecordHeadV1 {
@@ -195,6 +358,8 @@ function lineagePlane(
     "retrieval-facts" | "retrieval-content" | "retrieval-lexical"
   >,
   schemaSha256: Sha256Digest,
+  databaseSchemaVersion: 1 | 2 =
+    READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
 ): ReadableSearchLineagePlaneV1 {
   const body = validateStateLineageDatabaseManifestV1({
     schema_version: 1,
@@ -203,15 +368,13 @@ function lineagePlane(
     authority_id: root.authority_id,
     organization_id: root.organization_id,
     state_lineage_id: root.state_lineage_id,
-    database_schema_version:
-      READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+    database_schema_version: databaseSchemaVersion,
     schema_sha256: schemaSha256,
     created_at: root.created_at,
     creating_artifact_revision: root.creating_artifact_revision,
   });
   return Object.freeze({
-    database_schema_version:
-      READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+    database_schema_version: databaseSchemaVersion,
     schema_sha256: schemaSha256,
     manifest_json: canonicalJson(body),
     manifest_sha256: stateLineageDatabaseManifestSha256V1(body),
@@ -220,8 +383,9 @@ function lineagePlane(
 
 /**
  * Composes the verified record retrieval-source snapshot, immutable search
- * index builder, and the
- * single Authority publication pointer. It performs no provider IO.
+ * index builder, and the single Authority publication pointer. Optional
+ * provider IO stays behind the injected projector and runs only after the
+ * verified snapshot transaction has closed.
  */
 export function createReadableSearchGenerationReconcilerV1(input: {
   readonly state_directory: string;
@@ -231,9 +395,15 @@ export function createReadableSearchGenerationReconcilerV1(input: {
   readonly signer: FileOrganizationAuthoritySigner;
   /** Chosen with the active approval protocol; this runtime names no provider. */
   readonly policy_projectors: RecordPolicyFactProjectorRegistryV1;
+  /** Omitted only for pre-admission or provider-free local setup. */
+  readonly related_atom_projector?: ReadableSearchRelatedAtomProjectorBindingV1;
   readonly now?: () => string;
 }): ReadableSearchGenerationReconcilerV1<ReconciliationSnapshotV1> {
-  const contract = readableSearchGenerationContractV1();
+  const contract = readableSearchGenerationContractV1({
+    ...(input.related_atom_projector === undefined
+      ? {}
+      : { related_atom_projector: input.related_atom_projector.profile }),
+  });
   const descriptor = input.signer.inspectSync();
   const pinnedAuthority = verifyOrganizationAuthorityPin(
     descriptor,
@@ -243,9 +413,8 @@ export function createReadableSearchGenerationReconcilerV1(input: {
   const facts = lineagePlane(
     input.root,
     "retrieval-facts",
-    readableSearchPlaneBaselineSha256V1(
-      READABLE_SEARCH_FACTS_BASELINE_V1,
-    ),
+    readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
+    READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
   );
   const content = lineagePlane(
     input.root,
@@ -294,6 +463,16 @@ export function createReadableSearchGenerationReconcilerV1(input: {
         source_snapshot: sourceSnapshot,
       });
     },
+    ...(input.related_atom_projector === undefined
+      ? {}
+      : {
+          enrich_snapshot: (snapshot: ReconciliationSnapshotV1, signal: AbortSignal) =>
+            projectSnapshotRelatedAtomsV1({
+              snapshot,
+              projector: input.related_atom_projector!,
+              signal,
+            }),
+        }),
     build_generation: (snapshot) => {
       const envelopeByPosition = new Map(
         snapshot.source_snapshot.rows.map((row) => [
@@ -359,6 +538,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
         builder_artifact_sha256: contract.builder_artifact_sha256,
         sqlite_version: sqliteVersion,
         atoms,
+        related_atom_pairs: snapshot.related_atom_pairs,
       });
       return Object.freeze({
         generation_id: built.manifest.generation_id,

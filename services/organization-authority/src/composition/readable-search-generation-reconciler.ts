@@ -44,6 +44,14 @@ export interface ReadableSearchGenerationReconcilerV1Options<
   readonly read_record_head: () => ReadableSearchRecordHeadV1;
   /** Materializes the complete verified Layer 1 input and releases its read transaction. */
   readonly capture_snapshot: () => Snapshot;
+  /**
+   * Optionally derives disposable Layer 2 input after the verified record read
+   * transaction has closed. The returned snapshot must retain the exact head.
+   */
+  readonly enrich_snapshot?: (
+    snapshot: Snapshot,
+    signal: AbortSignal,
+  ) => Snapshot | Promise<Snapshot>;
   /** Builds and atomically renames immutable files, but never mutates the pointer. */
   readonly build_generation: (
     snapshot: Snapshot,
@@ -169,14 +177,29 @@ export class ReadableSearchGenerationReconcilerV1<
       return Object.freeze({ status: "current", record_head: observedHead });
     }
 
-    const snapshot = this.options.capture_snapshot();
+    const capturedSnapshot = this.options.capture_snapshot();
     const capturedHead = head(
-      snapshot.record_head,
+      capturedSnapshot.record_head,
       "readable-search captured record head",
     );
     if (!sameHead(capturedHead, observedHead)) {
       throw new Error(
         "readable-search snapshot did not capture the observed record head",
+      );
+    }
+    signal.throwIfAborted();
+
+    const snapshot =
+      this.options.enrich_snapshot === undefined
+        ? capturedSnapshot
+        : await this.options.enrich_snapshot(capturedSnapshot, signal);
+    const enrichedHead = head(
+      snapshot.record_head,
+      "readable-search enriched snapshot head",
+    );
+    if (!sameHead(enrichedHead, capturedHead)) {
+      throw new Error(
+        "readable-search enrichment changed its captured record head",
       );
     }
     signal.throwIfAborted();

@@ -34,7 +34,11 @@ behavior.
 5. The permission-pilot and A/B conformance tables restate the canonical
    invariants. They do not create additional invariants. Acceptance matrices,
    build orders, and failure tests are gates, not separate invariants.
-6. [Approval surface v2](2026-08-10-approval-surface-v2-direction.md)
+6. [ADR-0010](../decisions/ADR-0010-disposable-related-atom-projection-v1.md)
+   is the accepted, not-yet-implementation-claimed narrow extension for a
+   disposable Layer 2 related-atom projection and Layer 3 adjacent-fact
+   expansion.
+7. [Approval surface v2](2026-08-10-approval-surface-v2-direction.md)
    contains future product rules, not formally adopted invariants. They are
    recorded separately below.
 
@@ -173,6 +177,20 @@ its bounded reviewer and organization-member-readable implementation claims
 are limited to the exact two-policy path described above. Exact-run outcome
 and non-claims remain in the linked qualification report.
 
+### Accepted extension not yet claimed as implemented
+
+[ADR-0010](../decisions/ADR-0010-disposable-related-atom-projection-v1.md)
+authorizes a deliberately smaller graph surface than the broad deferred graph
+work: during construction of a new Layer 2 generation only, Authority may
+project validated, untyped cross-record atom pairs within one exact visibility
+segment. Layer 1 remains canonical, deterministic, and model-free. The model
+sees no raw transcript and has no query-time path. Layer 3 may expand up to
+three decision anchors with a bounded adjacent set under the already-authorized
+scope, then falls back to lexical results. Projection failure preserves the
+prior pointer; all projected data is regenerable. This is an accepted contract,
+not a retrospective claim about the `83819a5` lexical baseline or a global
+permission implementation.
+
 ### Approval-surface v2 rules not yet implemented
 
 These are directional product rules rather than adopted invariant numbers:
@@ -193,7 +211,8 @@ Job A implements only its approved narrow reviewer-policy approval mode.
 - discoverability, requests, grants, expiry/revocation effects, teams, roles,
   collections, and reverse `who`;
 - lexical retrieval beyond Job B's fixed local term-frequency operation,
-  vector retrieval, embeddings, graph-wide interpretation, facets/cursors,
+  vector retrieval, embeddings, graph-wide interpretation, typed relations,
+  facets/cursors,
   shared statistics, query caches, and online retrieval generations;
 - model composition, citations/grounding enforcement, agent/tool release, and
   Layer 4; and

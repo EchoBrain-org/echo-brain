@@ -5,6 +5,7 @@ import {
   PersonRecordReaderV1,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { expandReadableSearchRelatedAtomsV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
@@ -58,6 +59,8 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
   /** Present only after source admission; omitted during organization setup. */
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
+  /** Bound by the active rebuild runtime so serving accepts the same model profile. */
+  readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
   /** Metadata-only answer-composition failure observer for the API server log. */
   readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
   /** Present only when the signed private-approval surface is active. */
@@ -176,11 +179,13 @@ export async function startOrganizationAuthorityApiRuntime(
       organization_id: metadata.organization_id,
       state_lineage_id: lineage.root.state_lineage_id,
       retrieval_contract_sha256:
+        dependencies.readable_search_retrieval_contract_sha256 ??
         readableSearchGenerationContractV1().retrieval_contract_sha256,
       sessions,
       authority: database,
       record: recordDatabase,
       audit: readAudit,
+      expand_related_atoms: expandReadableSearchRelatedAtomsV1,
     });
     const server = createOrganizationAuthorityHttpServer({
       descriptor: metadata.descriptor,

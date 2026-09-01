@@ -11,9 +11,11 @@ import {
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
+  readableSearchPlaneBaselineSha256,
   readableSearchPlaneBaselineSha256V1,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
@@ -69,9 +71,9 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
       },
       "retrieval-facts": {
         database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_FACTS_BASELINE_V1,
+          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: readableSearchPlaneBaselineSha256(
+          READABLE_SEARCH_FACTS_BASELINE_V2,
         ),
       },
       "retrieval-lexical": {

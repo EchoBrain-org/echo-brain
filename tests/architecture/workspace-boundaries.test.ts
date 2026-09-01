@@ -492,6 +492,7 @@ describe("workspace source boundaries", () => {
       "packages/organization-retrieval": [
         "readable-search-content-baseline-v1.sql",
         "readable-search-facts-baseline-v1.sql",
+        "readable-search-facts-baseline-v2.sql",
         "readable-search-lexical-baseline-v1.sql",
       ],
     };
