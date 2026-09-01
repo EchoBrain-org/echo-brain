@@ -811,6 +811,51 @@ describe("admitted meeting-processing cycle", () => {
     });
   });
 
+  it("extracts again when a later revision changes only meeting time", async () => {
+    const current = admission();
+    const state = new FakeState(current);
+    const downstream = stager({ kind: "staged", stage_id: "stage-1" });
+    let extracts = 0;
+    const countingProcessor = processor((value) => {
+      extracts += 1;
+      return decisions(value);
+    });
+    const original: MeetingDocument = {
+      ...meeting(),
+      time: {
+        actual_start_at: "2026-08-22T16:00:00.000Z",
+        timezone: "America/Los_Angeles",
+      },
+    };
+    const first = liveCycle({
+      source: source({ meetings: [original] }),
+      processor: countingProcessor,
+      state,
+      stager: downstream,
+    });
+    await expect(first.runOnce()).resolves.toMatchObject({ kind: "staged" });
+
+    const revised: MeetingDocument = {
+      ...original,
+      provenance: {
+        ...original.provenance,
+        canonical_revision: "sha256:time-only-revision",
+      },
+      time: {
+        ...original.time,
+        actual_start_at: "2026-08-23T16:00:00.000Z",
+      },
+    };
+    const second = liveCycle({
+      source: source({ meetings: [revised] }),
+      processor: countingProcessor,
+      state,
+      stager: downstream,
+    });
+    await expect(second.runOnce()).resolves.toMatchObject({ kind: "staged" });
+    expect(extracts).toBe(2);
+  });
+
   it("retries queued, posting, and posted revisions with only their frozen snapshots", async () => {
     for (const stateName of ["queued", "posting", "posted"] as const) {
       const current = admission();
