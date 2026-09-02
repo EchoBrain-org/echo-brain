@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "synthetic-demo-northstar-commercial-exception-2026-08-29",
   "title": "Commercial exception review",
-  "description": "Internal review of the proposed evaluation pricing exception for Northstar.",
+  "description": "Internal review of the proposed evaluation pricing exception for Echo.",
   "lifecycle": "completed",
   "provenance": {
     "source": {
@@ -55,8 +55,8 @@
   },
   "participants": [
     {
-      "id": "maya-chen",
-      "display_name": "Maya Chen",
+      "id": "zhen",
+      "display_name": "Zhen",
       "identities": [
         {
           "kind": "email",
@@ -64,7 +64,7 @@
         },
         {
           "kind": "source",
-          "value": "demo-user-maya-chen"
+          "value": "demo-user-zhen"
         }
       ],
       "roles": [
@@ -82,16 +82,16 @@
       "is_external": false
     },
     {
-      "id": "celeste-brooks",
-      "display_name": "Celeste Brooks",
+      "id": "alex",
+      "display_name": "Alex",
       "identities": [
         {
           "kind": "email",
-          "value": "celeste.brooks@echo.example.test"
+          "value": "alex@echo.example.test"
         },
         {
           "kind": "source",
-          "value": "demo-user-celeste-brooks"
+          "value": "demo-user-alex"
         }
       ],
       "roles": [
@@ -110,16 +110,16 @@
       }
     },
     {
-      "id": "rob-ellis",
-      "display_name": "Rob Ellis",
+      "id": "colin-ellis",
+      "display_name": "Colin",
       "identities": [
         {
           "kind": "email",
-          "value": "rob.ellis@echo.example.test"
+          "value": "colin.ellis@echo.example.test"
         },
         {
           "kind": "source",
-          "value": "demo-user-rob-ellis"
+          "value": "demo-user-colin-ellis"
         }
       ],
       "roles": [
@@ -139,7 +139,7 @@
     },
     {
       "id": "dana-lewis",
-      "display_name": "Dana Lewis",
+      "display_name": "Dana",
       "identities": [
         {
           "kind": "email",
@@ -170,7 +170,7 @@
     {
       "id": "summary-1",
       "kind": "summary",
-      "text": "The team reviewed Rob's request for evaluation pricing across Northstar's planned 28-location deployment. Celeste approved a bounded $22 per-location rate for the first 10 locations during a 30-day evaluation only. She declined an open-ended exception and said standard pricing resumes unless Finance gives new approval. Rob will draft the order form by September 5.",
+      "text": "The team reviewed Colin's request for evaluation pricing across Echo's planned 28-location deployment. Alex approved a bounded $22 per-location rate for the first 10 locations during a 30-day evaluation only. She declined an open-ended exception and said standard pricing resumes unless Finance gives new approval. Colin will draft the order form by September 5.",
       "sequence": 0,
       "language": "en",
       "confidence": 0.94,
@@ -180,8 +180,8 @@
     {
       "id": "turn-01",
       "kind": "transcript",
-      "text": "Thanks for making time. Rob asked for a quick finance read before he sends Northstar another proposal. The question is whether we can make the evaluation pricing work without accidentally setting their long-term price.",
-      "speaker_participant_id": "maya-chen",
+      "text": "Thanks for making time. Colin asked for a quick finance read before he sends Echo another proposal. The question is whether we can make the evaluation pricing work without accidentally setting their long-term price.",
+      "speaker_participant_id": "zhen",
       "sequence": 1,
       "started_at": "2026-08-29T17:00:08.000Z",
       "ended_at": "2026-08-29T17:00:31.000Z",
@@ -196,7 +196,7 @@
       "id": "turn-02",
       "kind": "transcript",
       "text": "They are asking for twenty-two dollars per location. They want it across all twenty-eight sites because their procurement team says a single rate is easier to approve. If we give them that now, I think we keep momentum for the September plan.",
-      "speaker_participant_id": "rob-ellis",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 2,
       "started_at": "2026-08-29T17:00:35.000Z",
       "ended_at": "2026-08-29T17:01:03.000Z",
@@ -226,7 +226,7 @@
       "id": "turn-04",
       "kind": "transcript",
       "text": "Right. I am not comfortable granting an exception for twenty-eight locations before we know whether the first ten are successful. That turns an evaluation concession into the default commercial position.",
-      "speaker_participant_id": "celeste-brooks",
+      "speaker_participant_id": "alex",
       "sequence": 4,
       "started_at": "2026-08-29T17:01:38.000Z",
       "ended_at": "2026-08-29T17:02:04.000Z",
@@ -241,7 +241,7 @@
       "id": "turn-05",
       "kind": "transcript",
       "text": "Could we at least put the twenty-two dollar rate in the full order form and say the later locations are activated when they are ready? That would save them from reopening procurement next month.",
-      "speaker_participant_id": "rob-ellis",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 5,
       "started_at": "2026-08-29T17:02:12.000Z",
       "ended_at": "2026-08-29T17:02:36.000Z",
@@ -256,7 +256,7 @@
       "id": "turn-06",
       "kind": "transcript",
       "text": "No. That still gives them a commitment for the whole deployment. I can approve twenty-two dollars per location for the initial ten locations, and only for a thirty-day evaluation. Nothing beyond that is implied.",
-      "speaker_participant_id": "celeste-brooks",
+      "speaker_participant_id": "alex",
       "sequence": 6,
       "started_at": "2026-08-29T17:02:43.000Z",
       "ended_at": "2026-08-29T17:03:12.000Z",
@@ -286,7 +286,7 @@
       "id": "turn-08",
       "kind": "transcript",
       "text": "Keep them out of the commercial commitment. You can describe a possible expansion discussion after the evaluation, but the order form must say standard pricing applies after thirty days unless Finance approves a new exception.",
-      "speaker_participant_id": "celeste-brooks",
+      "speaker_participant_id": "alex",
       "sequence": 8,
       "started_at": "2026-08-29T17:03:50.000Z",
       "ended_at": "2026-08-29T17:04:17.000Z",
@@ -300,8 +300,8 @@
     {
       "id": "turn-09",
       "kind": "transcript",
-      "text": "That will be a harder conversation with Northstar, but it is clear. We should also avoid calling this a rollout discount in any customer language, because it is tied to the evaluation.",
-      "speaker_participant_id": "maya-chen",
+      "text": "That will be a harder conversation with Echo, but it is clear. We should also avoid calling this a rollout discount in any customer language, because it is tied to the evaluation.",
+      "speaker_participant_id": "zhen",
       "sequence": 9,
       "started_at": "2026-08-29T17:04:25.000Z",
       "ended_at": "2026-08-29T17:04:49.000Z",
@@ -316,7 +316,7 @@
       "id": "turn-10",
       "kind": "transcript",
       "text": "Agreed. I will frame it as an evaluation rate for the first ten locations. If the evaluation goes well, I will come back with the evidence and request a separate expansion approval rather than promising the same number now.",
-      "speaker_participant_id": "rob-ellis",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 10,
       "started_at": "2026-08-29T17:04:57.000Z",
       "ended_at": "2026-08-29T17:05:25.000Z",
@@ -331,7 +331,7 @@
       "id": "turn-11",
       "kind": "transcript",
       "text": "Please send me the draft before it goes out. I am looking for three things: ten locations, a thirty-day evaluation term, and the return to standard pricing. If any of those are missing, it is not the approved exception.",
-      "speaker_participant_id": "celeste-brooks",
+      "speaker_participant_id": "alex",
       "sequence": 11,
       "started_at": "2026-08-29T17:05:33.000Z",
       "ended_at": "2026-08-29T17:05:59.000Z",
@@ -345,8 +345,8 @@
     {
       "id": "turn-12",
       "kind": "transcript",
-      "text": "Rob, can you have that draft ready by September fifth? Dana can help with the location schedule, but you own getting the commercial language together and routing it to Celeste.",
-      "speaker_participant_id": "maya-chen",
+      "text": "Colin, can you have that draft ready by September fifth? Dana can help with the location schedule, but you own getting the commercial language together and routing it to Alex.",
+      "speaker_participant_id": "zhen",
       "sequence": 12,
       "started_at": "2026-08-29T17:06:06.000Z",
       "ended_at": "2026-08-29T17:06:31.000Z",
@@ -360,8 +360,8 @@
     {
       "id": "turn-13",
       "kind": "transcript",
-      "text": "Yes, I will have the order form to Celeste by September fifth, with the evaluation language and no promise for the remaining locations.",
-      "speaker_participant_id": "rob-ellis",
+      "text": "Yes, I will have the order form to Alex by September fifth, with the evaluation language and no promise for the remaining locations.",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 13,
       "started_at": "2026-08-29T17:06:38.000Z",
       "ended_at": "2026-08-29T17:06:54.000Z",
@@ -376,7 +376,7 @@
       "id": "turn-14",
       "kind": "transcript",
       "text": "Good. We can support the evaluation, but I do not want anyone treating this as a precedent. Bring back a new request if the customer wants to expand after the thirty days.",
-      "speaker_participant_id": "celeste-brooks",
+      "speaker_participant_id": "alex",
       "sequence": 14,
       "started_at": "2026-08-29T17:07:02.000Z",
       "ended_at": "2026-08-29T17:07:21.000Z",
@@ -398,10 +398,10 @@
     "all_day": false
   },
   "context": {
-    "owner_participant_id": "maya-chen",
+    "owner_participant_id": "zhen",
     "calendar": {
       "event_id": "demo-calendar-event-northstar-commercial-exception-2026-08-29",
-      "organizer_participant_id": "maya-chen"
+      "organizer_participant_id": "zhen"
     },
     "location": {
       "kind": "virtual",

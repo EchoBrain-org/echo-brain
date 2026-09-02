@@ -1,4 +1,4 @@
-# Northstar demo runbook
+# Echo demo runbook
 
 ## Outcome
 
@@ -26,7 +26,7 @@ logs, state databases, indexing commands, or an internal approval dashboard.
 - Use a fresh scenario/revision namespace when rerunning a previously terminal
   demo so the runtime does not correctly treat it as an idempotent replay.
 - Verify the Ask ECHO team user is an active organization member. That identity
-  plays Sam Ortiz, the account newcomer, in every team-visible ask. For the
+  plays Audrey, the account newcomer, in every team-visible ask. For the
   privacy proof, use that team user and the exact owner/approver as two distinct
   principals.
 
@@ -34,7 +34,7 @@ logs, state databases, indexing commands, or an internal approval dashboard.
 
 Use the exact same wording before and after approval:
 
-> Can we promise Northstar that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?
+> Can we promise Echo that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?
 
 The wording intentionally omits the meeting titles and internal phrases such as
 "adoption gate", "data-processing addendum", and "capacity triage".
@@ -75,7 +75,7 @@ Slack connection, and identity link. A startup result other than
 1. Validate all four JSON documents against the canonical MeetingDocument runtime
    validator and the configured synthetic source identity.
 2. Confirm every transcript block's speaker reference resolves to one participant.
-3. Confirm `maya-chen` has exactly one canonical email and is the
+3. Confirm `zhen` has exactly one canonical email and is the
    `context.owner_participant_id` in every meeting.
 4. Confirm the three Team meetings and the Only-me meeting use distinct stable
    external IDs and revisions.
@@ -91,18 +91,18 @@ Slack connection, and identity link. A startup result other than
 
 ## Customer-facing sequence
 
-### Step 1: introduce Sam and the old workflow
+### Step 1: introduce Audrey and the old workflow
 
 Say:
 
-> Sam Ortiz joined the Northstar account team this week and covers the call with
-> Northstar's executive sponsor in five minutes. The answer Sam needs is spread
-> across four ordinary meetings Sam did not attend. With a traditional meeting
-> tool, Sam would first need to know those meetings happened, guess their titles
+> Audrey joined the Echo account team this week and covers the call with
+> Echo's executive sponsor in five minutes. The answer Audrey needs is spread
+> across four ordinary meetings Audrey did not attend. With a traditional meeting
+> tool, Audrey would first need to know those meetings happened, guess their titles
 > or vocabulary, search them separately, and reconcile their conclusions — in the
 > next five minutes.
 
-Do not show another meeting product. Sam's situation supplies the comparison.
+Do not show another meeting product. Audrey's situation supplies the comparison.
 
 Value shown: the asker needs no meeting identity, no prior knowledge of
 existence, and no exact keywords.
@@ -130,7 +130,7 @@ next step's refusal read as governance rather than absence.
 
 ### Step 4: ask before approval
 
-In Ask ECHO, as Sam, ask the main question.
+In Ask ECHO, as Audrey, ask the main question.
 
 Required answer behavior:
 
@@ -171,14 +171,14 @@ tools assign the action work.
 
 ### Step 6: ask the same question after approval
 
-As Sam, ask the exact main question again.
+As Audrey, ask the exact main question again.
 
 The answer must communicate all of the following without inventing facts:
 
 - No, all 28 locations should not be promised for September 16.
 - September 16 is a conditional onboarding window for the first 10 locations.
 - Before the first 10 receive production access, the revised data-processing
-  addendum (DPA) must be signed, the Northstar security contact must be verified,
+  addendum (DPA) must be signed, the Echo security contact must be verified,
   and implementation readiness must pass the September 12 review.
 - Later expansion requires at least 8 of 10 locations to complete four
   consecutive weekly workflows without manual correction.
@@ -190,9 +190,9 @@ vocabularies into a current, actionable answer.
 
 ### Step 7: prove visibility enforcement
 
-As Sam, ask:
+As Audrey, ask:
 
-> What special price did Northstar receive?
+> What special price did Echo receive?
 
 Required answer: `Insufficient accessible evidence to answer this question.`,
 with no citations and no hint that a private price exists.
@@ -202,7 +202,7 @@ account.
 
 Required answer:
 
-> Northstar received a $22-per-location rate for the initial 10 locations during
+> Echo received a $22-per-location rate for the initial 10 locations during
 > the 30-day evaluation only. Standard pricing resumes afterward unless Finance
 > approves another exception.
 
@@ -248,9 +248,9 @@ Answer it directly rather than deflecting:
 
 Wording may vary, but the facts may not:
 
-> No. September 16 is a conditional onboarding window for Northstar's first 10
+> No. September 16 is a conditional onboarding window for Echo's first 10
 > locations, not a commitment to all 28. Before those 10 receive production
-> access, the revised data-processing addendum must be signed, Northstar's named
+> access, the revised data-processing addendum must be signed, Echo's named
 > security contact must be verified, and implementation readiness must pass the
 > September 12 review. Later expansion requires at least 8 of the first 10 to
 > complete four consecutive weekly workflows without manual correction.
