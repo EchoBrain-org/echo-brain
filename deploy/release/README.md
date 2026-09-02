@@ -220,8 +220,9 @@ not attempt to repair, infer, or migrate the state.
 
 The supported first-cohort employee path is one private macOS Apple-silicon
 kit plus that employee's one-use invitation. The kit carries the exact Person
-client and a pinned Node 22.22.1 runtime. The employee does not install Node,
-npm, Homebrew, or a repository checkout and does not edit `PATH`.
+client, the matching `ECHO.app` hotkey overlay, and a pinned Node 22.22.1
+runtime. The employee does not install Node, npm, Homebrew, or a repository
+checkout and does not edit `PATH`.
 
 From the accepted release record and exact Person-client artifact, create the
 kit on a reviewed macOS arm64 build machine running Node 22.22.1:
@@ -230,16 +231,18 @@ kit on a reviewed macOS arm64 build machine running Node 22.22.1:
 npm run kit:person-onboarding -- \
   --release /absolute/private/current.clean-v1.json \
   --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
+  --app /absolute/private/ECHO.app.zip \
   --output /absolute/private/echo-person-onboarding-clean-v1-20260824-001.tar.gz
 ```
 
-The builder binds the release record, client artifact, runtime version,
-platform, architecture, and Node binary hashes in the kit manifest. It emits
-the private archive and its SHA-256 receipt without replacing either. Keep the
-receipt with the owner-side delivery record and transfer the kit through an
-authenticated private channel. That channel is the first-cohort trust boundary:
-the kit is internally hash-bound but is not yet Apple-signed or independently
-signed by ECHO.
+The builder rejects an overlay whose embedded build identity does not match the
+release source SHA, exact Person-client version, macOS, and arm64. The manifest
+hash-binds that exact app archive alongside the release record, client artifact,
+runtime version, platform, architecture, and Node binary. It emits the private
+archive and its SHA-256 receipt without replacing either. Keep the receipt with
+the owner-side delivery record and transfer the kit through an authenticated
+private channel. That channel is the first-cohort trust boundary: the kit is
+internally hash-bound but is not yet independently signed by ECHO.
 
 Immediately before onboarding, the signed-in owner issues or reissues the
 employee's invitation and transfers that file privately. On the employee Mac:
@@ -250,13 +253,22 @@ employee's invitation and transfers that file privately. On the employee Mac:
 4. Complete Google sign-in in the browser that opens.
 
 The command verifies the kit, installs the versioned client under
-`~/Library/Application Support/ECHO`, copies the selected invitation into a
-temporary private file, completes the existing loopback login, and makes one
-bounded permission-aware record request. It prints `phase: "ready"` only after
-that request succeeds. Reinstalling the same kit preserves an existing Person
+`~/Library/Application Support/ECHO`, and validates then installs the matching
+overlay at `~/Applications/ECHO.app`. A different valid prior ECHO app is moved
+to a private backup before the new bundle is atomically switched into place;
+an invalid or non-ECHO bundle is left untouched. The command never launches or
+foregrounds the overlay. It copies the selected invitation into a temporary
+private file, completes the existing loopback login, and makes one bounded
+permission-aware record request. It prints `phase: "ready"` only after that
+request succeeds. Reinstalling the same kit preserves an existing Person
 session. If `Start ECHO.command` sees any existing session, it stops instead of
 silently applying a possibly different person's invitation; use the installed
 client for the current person, or log out before onboarding another person.
+
+This rehearsal's membership display name is carried in the server-issued
+session and shown by the overlay. It is a required session field, so use a
+fresh invitation and onboarding flow after this release instead of reusing an
+older local session.
 The invitation remains separate because it is employee-bound, short-lived, and
 may need reissue without rebuilding the release kit. Authority remains the
 source of truth for invitation validity so modest client clock skew cannot
@@ -318,9 +330,10 @@ funding notices, and registry access disabled, checks the exact Node/npm
 versions, installed package version, and non-secret packaged build identity
 against the release source commit, then runs
 `echo-brain person status`. That status output contains only the installed
-version, whether a local session exists, its safe owner/employee membership
-type, and the connected public Authority origin. It never prints the session,
-refresh token, invitation grant, or IDs.
+version, whether a local session exists, the server-issued membership display
+name and safe owner/employee membership type, and the connected public
+Authority origin. It never prints the session, refresh token, invitation grant,
+or IDs.
 
 The default per-user prefix is `$HOME/.local`, so the installed `echo-brain`
 normally lands in `$HOME/.local/bin`; the installer prints the one PATH command

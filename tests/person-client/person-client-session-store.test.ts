@@ -27,6 +27,7 @@ const SESSION = {
   organization_id: id("org", "000000000001"),
   principal_id: id("prn", "000000000002"),
   membership_id: id("mem", "000000000003"),
+  display_name: "Example Person",
   membership_type: "employee",
   identity_binding_id: id("oib", "000000000004"),
   session_family_id: id("psf", "000000000005"),

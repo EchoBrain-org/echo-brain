@@ -288,6 +288,8 @@ export interface OrganizationPersonSessionV2 {
   organization_id: string;
   principal_id: string;
   membership_id: string;
+  /** Server-owned name from the authenticated membership row. */
+  display_name: string;
   membership_type: 'owner' | 'employee';
   identity_binding_id: string;
   session_family_id: string;

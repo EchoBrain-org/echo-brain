@@ -58,6 +58,7 @@ const SESSION = {
   organization_id: ORGANIZATION_IDS.organization,
   principal_id: ORGANIZATION_IDS.principal,
   membership_id: ORGANIZATION_IDS.membership,
+  display_name: "Example Person",
   membership_type: "employee",
   identity_binding_id: fixtureId("oib", 1),
   session_family_id: fixtureId("psf", 1),
@@ -113,10 +114,40 @@ describe("Person client", () => {
         schema_version: 1,
         kind: "echo-person-client-status-v1",
         signed_in: false,
+        display_name: null,
         membership_type: null,
         connected_authority: null,
       });
       expect(stdout).not.toContain(home);
+    });
+  });
+
+  it("reports the server-issued membership name for an installed session", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+
+      let stdout = "";
+      const status = await runPersonClientCli(["status"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: () => true },
+        home_directory: home,
+        fetch: async () => {
+          throw new Error("status must not contact the Authority");
+        },
+      });
+
+      expect(status).toBe(0);
+      expect(JSON.parse(stdout)).toMatchObject({
+        signed_in: true,
+        display_name: "Example Person",
+      });
+      expect(stdout).not.toContain(ROTATED_SESSION.access_token);
+      expect(stdout).not.toContain(ROTATED_SESSION.refresh_token);
     });
   });
 
@@ -258,6 +289,30 @@ describe("Person client", () => {
       expect(client.sessionSummary().access_expires_at).toBe(
         ROTATED_SESSION.access_expires_at,
       );
+    });
+  });
+
+  it("accepts an updated server-owned membership name on refresh", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          expect(path).toBe("/v2/session/refresh");
+          return json({ ...ROTATED_SESSION, display_name: "Other Person" });
+        },
+      });
+      await client.installSession("https://authority.example", SESSION);
+
+      await expect(client.refresh()).resolves.toMatchObject({
+        display_name: "Other Person",
+      });
+      expect(client.sessionSummary().display_name).toBe("Other Person");
     });
   });
 

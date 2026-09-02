@@ -672,6 +672,7 @@ describe("Organization Authority API runtime", () => {
         Buffer.from(encoded!, "base64url").toString("utf8"),
       ) as Record<string, unknown>;
       expect(session.membership_id).toBe(initialized.owner_membership_id);
+      expect(session.display_name).toBe("Founder");
 
       const recoveryBegin = await fetch(`${origin}/v2/session/oidc/begin`, {
         method: "POST",
@@ -733,6 +734,7 @@ describe("Organization Authority API runtime", () => {
       expect(refreshed.status).toBe(200);
       const rotated = await json(refreshed);
       expect(rotated.refresh_token).not.toBe(session.refresh_token);
+      expect(rotated.display_name).toBe("Founder");
 
       const logout = await fetch(`${origin}/v2/session/revocations`, {
         method: "POST",

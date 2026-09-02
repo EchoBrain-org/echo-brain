@@ -29,6 +29,7 @@
     "authority:staging-onboarding-transfer": "node tools/authority-staging-onboarding-transfer.mjs",
     "profile:authority-deployment": "node tools/clean-v1-runtime-profile.mjs create",
     "profile:clean-v1-runtime": "npm run profile:authority-deployment --",
+    "build:echo-overlay": "node tools/build-echo-overlay.mjs",
     "pack:person-client": "node tools/pack-person-client.mjs",
     "bundle:person-client": "node deploy/release/create-offline-person-client-bundle.mjs",
     "kit:person-onboarding": "node deploy/release/create-person-onboarding-kit.mjs",

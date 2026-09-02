@@ -13,6 +13,7 @@ const SESSION = {
   organization_id: id('org', '000000000001'),
   principal_id: id('prn', '000000000002'),
   membership_id: id('mem', '000000000003'),
+  display_name: 'Example Person',
   membership_type: 'employee',
   identity_binding_id: id('oib', '000000000004'),
   session_family_id: id('psf', '000000000005'),
@@ -63,6 +64,12 @@ describe('Person session HTTP DTOs', () => {
         refresh_token: SESSION.access_token,
       }),
     ).toThrow(/inconsistent/);
+    expect(() =>
+      validateOrganizationPersonSession({
+        ...SESSION,
+        display_name: ' Example Person',
+      }),
+    ).toThrow(/display_name is invalid/);
     expect(() =>
       validateOrganizationPersonSessionRefreshRequest({ refresh_token: 'short' }),
     ).toThrow(/invalid/);

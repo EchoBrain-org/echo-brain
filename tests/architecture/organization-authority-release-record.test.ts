@@ -995,6 +995,7 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     const artifact = join(root, "client.tgz");
     const output = join(root, "employee-kit.tar.gz");
     const runtime = join(root, "node");
+    const appArchive = join(root, "ECHO.app.zip");
     const packageRoot = join(root, "package", "dist");
     mkdirSync(packageRoot, { recursive: true });
     writeFileSync(
@@ -1009,6 +1010,27 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     );
     writeFileSync(join(packageRoot, "main.js"), "process.stdout.write('fixture\\n');\n");
     expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
+    const appResources = join(root, "ECHO.app", "Contents", "Resources");
+    const appExecutable = join(root, "ECHO.app", "Contents", "MacOS", "ECHO");
+    mkdirSync(appResources, { recursive: true });
+    mkdirSync(dirname(appExecutable), { recursive: true });
+    writeFileSync(appExecutable, "fixture executable\\n");
+    writeFileSync(join(root, "ECHO.app", "Contents", "Info.plist"), "fixture plist\\n");
+    writeFileSync(
+      join(appResources, "build-identity.v1.json"),
+      JSON.stringify({
+        schema_version: 1,
+        kind: "echo-overlay-build-identity-v1",
+        product_version: version,
+        source_sha: sourceSha,
+        platform: "darwin",
+        architecture: "arm64",
+      }),
+    );
+    expect(spawnSync("zip", ["-qr", appArchive, "ECHO.app"], {
+      cwd: root,
+      encoding: "utf8",
+    }).status).toBe(0);
     const artifactSha = createHash("sha256")
       .update(readFileSync(artifact))
       .digest("hex");
@@ -1034,6 +1056,8 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       release,
       "--artifact",
       artifact,
+      "--app",
+      appArchive,
       "--runtime-node",
       runtime,
       "--output",
@@ -1063,6 +1087,9 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(members).toContain(
       "echo-person-onboarding-clean-v1-20260822-001/kit-manifest.v1.json",
     );
+    expect(members).toContain(
+      "echo-person-onboarding-clean-v1-20260822-001/ECHO.app.zip",
+    );
     const start = run("tar", [
       "-xOzf",
       output,
@@ -1070,11 +1097,40 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     ]).stdout;
     expect(start).toContain("person start");
     expect(start).toContain("Choose your ECHO invitation file");
+    expect(start).toContain('overlay_backups_root="$application_root/overlay-backups"');
+    expect(start).toContain('validate_overlay_identity "$staged_app"');
+    expect(start).toContain('/usr/bin/diff -qr "$staged_app" "$app_destination"');
+    expect(start).toContain('backup_slot="$(mktemp -d "$overlay_backups_root/previous.XXXXXXXX")"');
+    expect(start).not.toContain("/usr/bin/open");
+    const activation = start.indexOf("# Activate the already-validated desktop app and CLI as one recoverable pair.");
+    expect(activation).toBeGreaterThan(0);
+    expect(start.indexOf('wrapper_pending="$(mktemp "$bin_root/.echo-brain.XXXXXXXX")"')).toBeLessThan(activation);
+    expect(start.indexOf('mv "$wrapper_destination" "$wrapper_backup"', activation)).toBeLessThan(
+      start.indexOf('mv "$app_destination" "$app_backup"', activation),
+    );
+    expect(start).toContain("the prior app and command were restored");
+    expect(start).toContain("pair activation failed; the prior app and command were restored");
     expect(start).not.toContain("npm ");
     expect(start).not.toContain("export PATH");
     expect(members.join("\n")).not.toMatch(
       /server-state|slack-bot|granola-credential|llm-credential/i,
     );
+    const extracted = join(root, "kit-extracted");
+    mkdirSync(extracted);
+    expect(run("tar", ["-xzf", output, "-C", extracted]).status).toBe(0);
+    const kitRoot = join(extracted, "echo-person-onboarding-clean-v1-20260822-001");
+    const verified = run(process.execPath, [
+      join(kitRoot, "verify-person-onboarding-kit.mjs"),
+      kitRoot,
+    ]);
+    expect(verified.status).toBe(0);
+    writeFileSync(join(kitRoot, "ECHO.app.zip"), "tampered app archive\n");
+    const tampered = run(process.execPath, [
+      join(kitRoot, "verify-person-onboarding-kit.mjs"),
+      kitRoot,
+    ]);
+    expect(tampered.status).toBe(1);
+    expect(tampered.stderr).toContain("desktop app digest does not match");
   });
 
   it("rejects an employee-kit runtime for the wrong platform before publishing", () => {
@@ -1082,6 +1138,7 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     roots.push(root);
     const runtime = join(root, "node");
     const artifact = join(root, "client.tgz");
+    const appArchive = join(root, "ECHO.app.zip");
     const output = join(root, "employee-kit.tar.gz");
     const packageRoot = join(root, "package", "dist");
     mkdirSync(packageRoot, { recursive: true });
@@ -1096,6 +1153,24 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       }),
     );
     expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
+    const appResources = join(root, "ECHO.app", "Contents", "Resources");
+    const appExecutable = join(root, "ECHO.app", "Contents", "MacOS", "ECHO");
+    mkdirSync(appResources, { recursive: true });
+    mkdirSync(dirname(appExecutable), { recursive: true });
+    writeFileSync(appExecutable, "fixture executable\\n");
+    writeFileSync(join(root, "ECHO.app", "Contents", "Info.plist"), "fixture plist\\n");
+    writeFileSync(join(appResources, "build-identity.v1.json"), JSON.stringify({
+      schema_version: 1,
+      kind: "echo-overlay-build-identity-v1",
+      product_version: "0.1.0-internal.1",
+      source_sha: "a".repeat(40),
+      platform: "darwin",
+      architecture: "arm64",
+    }));
+    expect(spawnSync("zip", ["-qr", appArchive, "ECHO.app"], {
+      cwd: root,
+      encoding: "utf8",
+    }).status).toBe(0);
     const artifactSha = createHash("sha256")
       .update(readFileSync(artifact))
       .digest("hex");
@@ -1118,6 +1193,8 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       release,
       "--artifact",
       artifact,
+      "--app",
+      appArchive,
       "--runtime-node",
       runtime,
       "--output",
@@ -1125,6 +1202,63 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     ]);
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain("v22.22.1 for macOS arm64");
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it("rejects a desktop app archive whose build identity is not bound to the release", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-kit-overlay-reject-")));
+    roots.push(root);
+    const sourceSha = "a".repeat(40);
+    const version = "0.1.0-internal.1";
+    const artifact = join(root, "client.tgz");
+    const appArchive = join(root, "ECHO.app.zip");
+    const output = join(root, "employee-kit.tar.gz");
+    const packageRoot = join(root, "package", "dist");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "build-identity.v1.json"), JSON.stringify({
+      schema_version: 1,
+      kind: "echo-packaged-build-identity",
+      product_version: version,
+      source_sha: sourceSha,
+      source_kind: "materialized-commit",
+    }));
+    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
+    const appResources = join(root, "ECHO.app", "Contents", "Resources");
+    const appExecutable = join(root, "ECHO.app", "Contents", "MacOS", "ECHO");
+    mkdirSync(appResources, { recursive: true });
+    mkdirSync(dirname(appExecutable), { recursive: true });
+    writeFileSync(appExecutable, "fixture executable\\n");
+    writeFileSync(join(root, "ECHO.app", "Contents", "Info.plist"), "fixture plist\\n");
+    writeFileSync(join(appResources, "build-identity.v1.json"), JSON.stringify({
+      schema_version: 1,
+      kind: "echo-overlay-build-identity-v1",
+      product_version: version,
+      source_sha: "b".repeat(40),
+      platform: "darwin",
+      architecture: "arm64",
+    }));
+    expect(spawnSync("zip", ["-qr", appArchive, "ECHO.app"], {
+      cwd: root,
+      encoding: "utf8",
+    }).status).toBe(0);
+    const artifactSha = createHash("sha256").update(readFileSync(artifact)).digest("hex");
+    const release = writeRecord(record({
+      source_sha: sourceSha,
+      person_client: { ...record().person_client, version, artifact_sha256: artifactSha },
+    }));
+    const runtime = join(root, "node");
+    writeFileSync(runtime, "#!/usr/bin/env bash\\nprintf '%s\\n' '{\"version\":\"v22.22.1\",\"platform\":\"darwin\",\"architecture\":\"arm64\"}'\\n");
+    chmodSync(runtime, 0o755);
+    const rejected = run(process.execPath, [
+      ONBOARDING_KIT,
+      "--release", release,
+      "--artifact", artifact,
+      "--app", appArchive,
+      "--runtime-node", runtime,
+      "--output", output,
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("desktop app identity does not match");
     expect(existsSync(output)).toBe(false);
   });
 

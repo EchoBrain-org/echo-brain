@@ -49,6 +49,7 @@ export interface PersonClientSessionSummary {
   readonly organization_id: string;
   readonly principal_id: string;
   readonly membership_id: string;
+  readonly display_name: string;
   readonly membership_type: "owner" | "employee";
   readonly access_expires_at: string;
   readonly hard_reauthentication_at: string;
@@ -63,6 +64,7 @@ function summary(
     organization_id: stored.session.organization_id,
     principal_id: stored.session.principal_id,
     membership_id: stored.session.membership_id,
+    display_name: stored.session.display_name,
     membership_type: stored.session.membership_type,
     access_expires_at: stored.session.access_expires_at,
     hard_reauthentication_at: stored.session.hard_reauthentication_at,

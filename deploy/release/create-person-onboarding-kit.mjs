@@ -24,6 +24,7 @@ const repository = resolve(releaseDirectory, '..', '..');
 const releaseValidator = join(repository, 'tools', 'clean-v1-release.mjs');
 const verifier = join(releaseDirectory, 'verify-person-onboarding-kit.mjs');
 const starter = join(releaseDirectory, 'start-person-onboarding-kit.sh');
+const overlayIdentityPath = 'ECHO.app/Contents/Resources/build-identity.v1.json';
 
 function fail(message) {
   throw new Error(`Person onboarding kit: ${message}`);
@@ -145,6 +146,50 @@ function verifyArtifactIdentity(artifact, release) {
   ) fail('client artifact build identity does not match the release record');
 }
 
+function verifyOverlayIdentity(appArchive, release) {
+  const listed = run('unzip', ['-Z1', appArchive], 'desktop app archive cannot be read');
+  const entries = listed.split('\n').filter(Boolean);
+  if (
+    entries.length === 0 ||
+    entries.some((entry) =>
+      entry.startsWith('/') ||
+      entry.split('/').some((part) => part === '..') ||
+      (!entry.startsWith('ECHO.app/') && entry !== 'ECHO.app')
+    ) ||
+    !entries.includes('ECHO.app/Contents/MacOS/ECHO') ||
+    !entries.includes('ECHO.app/Contents/Info.plist') ||
+    !entries.includes(overlayIdentityPath)
+  ) fail('desktop app archive layout is invalid');
+  let identity;
+  try {
+    identity = JSON.parse(
+      run('unzip', ['-p', appArchive, overlayIdentityPath], 'desktop app identity cannot be read'),
+    );
+  } catch {
+    fail('desktop app identity is invalid JSON');
+  }
+  if (
+    identity === null ||
+    typeof identity !== 'object' ||
+    Array.isArray(identity) ||
+    JSON.stringify(Object.keys(identity).sort()) !==
+      JSON.stringify([
+        'architecture',
+        'kind',
+        'platform',
+        'product_version',
+        'schema_version',
+        'source_sha',
+      ]) ||
+    identity.schema_version !== 1 ||
+    identity.kind !== 'echo-overlay-build-identity-v1' ||
+    identity.product_version !== release.person_client.version ||
+    identity.source_sha !== release.source_sha ||
+    identity.platform !== 'darwin' ||
+    identity.architecture !== 'arm64'
+  ) fail('desktop app identity does not match the release record');
+}
+
 function runtimeIdentity(runtimeNode) {
   let value;
   try {
@@ -167,12 +212,13 @@ function runtimeIdentity(runtimeNode) {
 }
 
 function usage() {
-  return 'usage: create-person-onboarding-kit.mjs --release <canonical-release.json> --artifact <exact-client.tgz> [--runtime-node <node>] --output <new-kit.tar.gz>';
+  return 'usage: create-person-onboarding-kit.mjs --release <canonical-release.json> --artifact <exact-client.tgz> --app <ECHO.app.zip> [--runtime-node <node>] --output <new-kit.tar.gz>';
 }
 
 function main(argv) {
   let releasePath = '';
   let artifactPath = '';
+  let appPath = '';
   let runtimeNode = process.execPath;
   let outputPath = '';
   while (argv.length > 0) {
@@ -181,13 +227,15 @@ function main(argv) {
     if (typeof value !== 'string') fail(usage());
     if (option === '--release') releasePath = resolve(value);
     else if (option === '--artifact') artifactPath = resolve(value);
+    else if (option === '--app') appPath = resolve(value);
     else if (option === '--runtime-node') runtimeNode = resolve(value);
     else if (option === '--output') outputPath = resolve(value);
     else fail(usage());
   }
-  if (!releasePath || !artifactPath || !outputPath || !outputPath.endsWith('.tar.gz')) fail(usage());
+  if (!releasePath || !artifactPath || !appPath || !outputPath || !outputPath.endsWith('.tar.gz')) fail(usage());
   regularFile(releasePath, 'release record');
   regularFile(artifactPath, 'client artifact');
+  regularFile(appPath, 'desktop app archive');
   regularFile(runtimeNode, 'Node runtime', true);
   regularFile(releaseValidator, 'release validator');
   regularFile(verifier, 'kit verifier');
@@ -202,6 +250,7 @@ function main(argv) {
     fail('client artifact SHA-256 does not match the release record');
   }
   verifyArtifactIdentity(artifactPath, release);
+  verifyOverlayIdentity(appPath, release);
   const runtime = runtimeIdentity(runtimeNode);
   const manifest = {
     schema_version: 1,
@@ -210,6 +259,7 @@ function main(argv) {
     source_sha: release.source_sha,
     release_record_sha256: sha256(releasePath),
     person_client_artifact_sha256: sha256(artifactPath),
+    desktop_app_archive_sha256: sha256(appPath),
     runtime: {
       version: runtime.version,
       platform: runtime.platform,
@@ -229,6 +279,7 @@ function main(argv) {
     copyFileSync(starter, join(kitRoot, 'Start ECHO.command'));
     copyFileSync(releasePath, join(kitRoot, 'release.json'));
     copyFileSync(artifactPath, join(kitRoot, 'person-client.tgz'));
+    copyFileSync(appPath, join(kitRoot, 'ECHO.app.zip'));
     copyFileSync(runtimeNode, join(kitRoot, 'node'));
     copyFileSync(releaseValidator, join(kitRoot, 'clean-v1-release.mjs'));
     copyFileSync(verifier, join(kitRoot, 'verify-person-onboarding-kit.mjs'));
@@ -243,7 +294,7 @@ function main(argv) {
       'clean-v1-release.mjs',
       'verify-person-onboarding-kit.mjs',
     ]) chmodSync(join(kitRoot, executable), 0o755);
-    for (const privateFile of ['release.json', 'person-client.tgz', 'kit-manifest.v1.json']) {
+    for (const privateFile of ['release.json', 'person-client.tgz', 'ECHO.app.zip', 'kit-manifest.v1.json']) {
       chmodSync(join(kitRoot, privateFile), 0o600);
     }
     run('tar', ['-czf', pendingKit, '-C', stagingParent, kitName], 'could not create onboarding kit');
@@ -271,6 +322,7 @@ function main(argv) {
         `${kitName}/release.json`,
         `${kitName}/kit-manifest.v1.json`,
         `${kitName}/person-client.tgz`,
+        `${kitName}/ECHO.app.zip`,
         `${kitName}/node`,
         `${kitName}/clean-v1-release.mjs`,
         `${kitName}/verify-person-onboarding-kit.mjs`,
