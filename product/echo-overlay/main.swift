@@ -656,7 +656,10 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     override init() {
         panel = EchoPanel(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 500),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow],
+            // Non-activating: the panel takes keyboard focus without making ECHO the
+            // active app, the way Spotlight does. Plain NSApp.activate() is declined
+            // by cooperative activation whenever the last click was in another app.
+            styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -672,7 +675,6 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             if panel.isKeyWindow {
                 cancelAndHide()
             } else {
-                NSApp.activate()
                 panel.makeKeyAndOrderFront(nil)
                 focusComposer()
             }
@@ -691,7 +693,6 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             resetConversation()
         }
         placePanel()
-        NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
         focusComposer()
     }

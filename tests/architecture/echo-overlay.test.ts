@@ -100,6 +100,9 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("static let ember = NSColor(srgbRed: 234 / 255");
     expect(source).toContain("panel.appearance = NSAppearance(named: .darkAqua)");
     expect(source).toContain("panel.isMovableByWindowBackground = true");
+    expect(source).toContain(
+      "styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel]",
+    );
     expect(source).toContain("func summon()");
     expect(source).toContain("if panel.isKeyWindow {");
     expect(source).toContain("controller?.summon()");
