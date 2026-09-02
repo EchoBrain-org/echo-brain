@@ -103,25 +103,35 @@ function privateDirectory(path, label) {
 }
 
 function parseArguments(argv) {
+  const reuseIdentical = argv.includes("--reuse-identical");
+  const positional = argv.filter((value) => value !== "--reuse-identical");
   if (
-    argv.length !== 4 ||
-    argv[0] !== "--source-root" ||
-    argv[2] !== "--output"
+    positional.length !== 4 ||
+    positional[0] !== "--source-root" ||
+    positional[2] !== "--output"
   ) {
     fail(
-      "usage: build-authority-staging-host-bundle.mjs --source-root <unchanged-repository-root> --output <new-private-bundle.tar.gz>",
+      "usage: build-authority-staging-host-bundle.mjs --source-root <unchanged-repository-root> --output <new-private-bundle.tar.gz> [--reuse-identical]",
     );
   }
-  const sourceRoot = resolve(argv[1]);
-  const output = resolve(argv[3]);
+  const sourceRoot = resolve(positional[1]);
+  const output = resolve(positional[3]);
   if (!basename(output).endsWith(ARCHIVE_SUFFIX))
     fail("output must be a new .tar.gz path");
-  if (existsSync(output) || existsSync(`${output}.manifest.json`))
+  // The archive is byte-deterministic for a given commit, so an existing pair
+  // is either exactly what this run would write or something else entirely.
+  // `--reuse-identical` makes the first case a no-op, which is what lets a
+  // staging cycle re-run its own command instead of hand-clearing artifacts
+  // first. The second case still fails, so nothing is ever overwritten.
+  if (
+    !reuseIdentical &&
+    (existsSync(output) || existsSync(`${output}.manifest.json`))
+  )
     fail("output and its manifest must be new paths");
   if (output === sourceRoot || output.startsWith(`${sourceRoot}${sep}`))
     fail("output must be outside the source root");
   privateDirectory(dirname(output), "output directory");
-  return Object.freeze({ sourceRoot, output });
+  return Object.freeze({ sourceRoot, output, reuseIdentical });
 }
 
 function checkedCommit(sourceRoot) {
@@ -228,25 +238,61 @@ function inspectExtractedBundle(archive, files) {
   }
 }
 
-function makeBundle({ sourceRoot, output }) {
+/**
+ * Returns the already-written manifest when the pair on disk is exactly what
+ * this run would produce, and fails when either half is present but different.
+ * A half-written pair is a difference, not a match.
+ */
+function reusableManifest(output, archive, manifest) {
+  const manifestPath = `${output}.manifest.json`;
+  const archiveExists = existsSync(output);
+  const manifestExists = existsSync(manifestPath);
+  if (!archiveExists && !manifestExists) return undefined;
+  if (!archiveExists || !manifestExists)
+    fail("output and its manifest must be a complete matching pair");
+  regularFile(output, "existing output");
+  regularFile(manifestPath, "existing manifest");
+  const existingArchive = readFileSync(output);
+  const expectedManifest = `${JSON.stringify(manifest, null, 2)}\n`;
+  if (
+    sha256(existingArchive) !== sha256(archive) ||
+    readFileSync(manifestPath, "utf8") !== expectedManifest
+  )
+    fail("existing output differs from this source root");
+  return manifest;
+}
+
+function bundleManifest(sourceCommit, files, archive) {
+  return Object.freeze({
+    schema_version: 1,
+    kind: "echo-authority-staging-host-bundle-v1",
+    source_commit: sourceCommit,
+    files: files.map(({ path, sha256: digest, mode }) => ({
+      path,
+      sha256: digest,
+      mode: mode.toString(8).padStart(4, "0"),
+    })),
+    archive_sha256: sha256(archive),
+  });
+}
+
+function makeBundle({ sourceRoot, output, reuseIdentical = false }) {
   const sourceCommit = checkedCommit(sourceRoot);
   const files = bundleFiles(sourceRoot);
   const archive = deterministicArchive(files);
+  if (reuseIdentical) {
+    const reused = reusableManifest(
+      output,
+      archive,
+      bundleManifest(sourceCommit, files, archive),
+    );
+    if (reused !== undefined) return Object.freeze({ ...reused, reused: true });
+  }
   writeFileSync(output, archive, { mode: 0o600, flag: "wx" });
   chmodSync(output, 0o600);
   try {
     inspectExtractedBundle(output, files);
-    const manifest = Object.freeze({
-      schema_version: 1,
-      kind: "echo-authority-staging-host-bundle-v1",
-      source_commit: sourceCommit,
-      files: files.map(({ path, sha256: digest, mode }) => ({
-        path,
-        sha256: digest,
-        mode: mode.toString(8).padStart(4, "0"),
-      })),
-      archive_sha256: sha256(archive),
-    });
+    const manifest = bundleManifest(sourceCommit, files, archive);
     writeFileSync(
       `${output}.manifest.json`,
       `${JSON.stringify(manifest, null, 2)}\n`,

@@ -94,7 +94,9 @@ export function issuePersonOnboardingInvitation(
       expected_issuer: input.oidc.issuer,
       expected_email: input.expected_email,
     });
-    writePersonOnboardingInvitation(reservation, issued);
+    writePersonOnboardingInvitation(reservation, issued, {
+      expected_email: input.expected_email,
+    });
     return Object.freeze({
       output_path: reservation.output_path,
       expires_at: issued.expires_at,

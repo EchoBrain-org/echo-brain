@@ -269,6 +269,14 @@ export type OrganizationPersonOidcBeginRequestV2 =
         url: string;
         token: string;
       };
+      /**
+       * Optional address the client read from its own invitation artifact. The
+       * Authority never trusts it: it forwards the value as an OIDC
+       * `login_hint` only when the digest matches the grant's stored
+       * `expected_email_sha256`, and otherwise ignores it entirely. It can
+       * therefore only pre-select the account the invitation already names.
+       */
+      login_hint?: string;
     }
   | {
       kind: 'existing_identity_login';

@@ -16,6 +16,48 @@ import type {
   StoredPersonSessionFamily,
 } from "./authority-repository.js";
 
+/**
+ * Existing staging databases have no separate retry-count column. The first
+ * random UUID-body nibble namespaces its redemption claims: `0` is ordinary,
+ * `1` is a claimed one-retry attempt, and `2` is its pending reservation. The
+ * remaining UUID body is unchanged, so parallel attempts cannot collide and
+ * every value satisfies the frozen baseline's `olc_<uuid-v4>` CHECK.
+ */
+const OIDC_REDEMPTION_CLAIM_ID_PATTERN =
+  /^olc_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+type OidcRedemptionClaimNamespace = "ordinary" | "retry" | "reservation";
+
+function claimNamespaceNibble(namespace: OidcRedemptionClaimNamespace): string {
+  return namespace === "ordinary" ? "0" : namespace === "retry" ? "1" : "2";
+}
+
+export function namespaceOidcRedemptionClaimId(
+  redemptionClaimId: string,
+  namespace: OidcRedemptionClaimNamespace,
+): string {
+  if (!OIDC_REDEMPTION_CLAIM_ID_PATTERN.test(redemptionClaimId)) {
+    throw new Error("OIDC redemption claim id is invalid");
+  }
+  return `${redemptionClaimId.slice(0, 4)}${claimNamespaceNibble(namespace)}${redemptionClaimId.slice(5)}`;
+}
+
+export function isOidcRedemptionClaimInNamespace(
+  redemptionClaimId: string,
+  namespace: OidcRedemptionClaimNamespace,
+): boolean {
+  return (
+    OIDC_REDEMPTION_CLAIM_ID_PATTERN.test(redemptionClaimId) &&
+    redemptionClaimId[4] === claimNamespaceNibble(namespace)
+  );
+}
+
+export interface ClaimedOidcLoginAttempt {
+  attempt: StoredOidcLoginAttempt;
+  /** True only when the persisted one-retry reservation was atomically used. */
+  bootstrap_email_mismatch_retry_reserved: boolean;
+}
+
 /** The session-scoped subset of Authority persistence needed for Person sessions. */
 export interface PersonSessionReadTransaction {
   metadata(): StoredAuthorityMetadata;
@@ -63,8 +105,17 @@ export interface PersonSessionWriteTransaction extends PersonSessionReadTransact
   claimOidcLoginAttempt(
     stateSha256: Sha256Digest,
     redemptionClaimId: string,
-  ): StoredOidcLoginAttempt | undefined;
+  ): ClaimedOidcLoginAttempt | undefined;
   releaseOidcLoginAttemptClaim(
+    stateSha256: Sha256Digest,
+    redemptionClaimId: string,
+    preserveBootstrapEmailMismatchRetryReservation: boolean,
+  ): boolean;
+  /**
+   * Marks the sole allowed wrong-account retry without changing the frozen
+   * Authority schema. The next claim is tagged internally by the repository.
+   */
+  reserveOidcLoginAttemptBootstrapEmailMismatchRetry(
     stateSha256: Sha256Digest,
     redemptionClaimId: string,
   ): boolean;

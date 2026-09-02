@@ -33,6 +33,10 @@ import type {
   PersonSessionWriteTransaction,
 } from "./ports/person-session-repository.js";
 import {
+  isOidcRedemptionClaimInNamespace,
+  namespaceOidcRedemptionClaimId,
+} from "./ports/person-session-repository.js";
+import {
   isPersonMembershipWriteRepository,
   type PersonMembershipWriteTransaction,
 } from "./ports/person-membership-write.js";
@@ -61,7 +65,19 @@ export interface IssuedPersonLoginGrant extends AuthorityPersonMembershipBinding
 }
 
 export type BeginPersonOidcLoginInput =
-  | { kind: "identity_bootstrap"; login_grant: string }
+  | {
+      kind: "identity_bootstrap";
+      login_grant: string;
+      /**
+       * Untrusted address the client read from its own invitation artifact. It
+       * is forwarded to the provider as `login_hint` only when its digest
+       * equals the grant's stored `expected_email_sha256`; otherwise it is
+       * dropped without failing the request. A wrong hint therefore cannot
+       * change which account the Authority will accept, only which account the
+       * chooser offers first.
+       */
+      login_hint?: string;
+    }
   | { kind: "existing_identity_login" };
 
 export interface BegunPersonOidcLogin {
@@ -77,6 +93,8 @@ export interface BegunPersonOidcLogin {
   scope: "openid email";
   created_at: string;
   expires_at: string;
+  /** Present only when the client's hint matched the grant's stored digest. */
+  login_hint?: string;
 }
 
 export interface IssuedPersonSession extends AuthorityPersonMembershipBinding {
@@ -255,6 +273,12 @@ type AccessResolution =
 
 type CallbackWriteResult =
   | { kind: "issued"; session: IssuedPersonSession }
+  /**
+   * A verified, but wrong, bootstrap account has no credential or grant side
+   * effect. Its per-attempt reservation keeps the bounded pending attempt
+   * available for one deliberate restart with the invited account.
+   */
+  | { kind: "retry"; reason: "bootstrap_email_mismatch" }
   | { kind: "denied"; reason: PersonSessionOidcFailureReason };
 
 type RefreshWriteResult =
@@ -592,6 +616,14 @@ export class PersonIdentitySessionApplication {
       input.kind === "identity_bootstrap"
         ? this.digestSecret(input.login_grant)
         : null;
+    // Digest the candidate hint outside the transaction so a malformed value is
+    // simply absent rather than a failure mode of beginning a login.
+    const candidateHintSha256 =
+      input.kind === "identity_bootstrap" &&
+      input.login_hint !== undefined &&
+      isCanonicalPersonEmail(input.login_hint)
+        ? this.expectedEmailSha256(input.login_hint)
+        : undefined;
 
     const begun = this.repository.writeAtLinearization<
       BegunPersonOidcLogin | undefined
@@ -602,6 +634,7 @@ export class PersonIdentitySessionApplication {
           createdAt,
           OIDC_LOGIN_ATTEMPT_LIFETIME_MS,
         );
+        let verifiedLoginHint: string | undefined;
         if (input.kind === "identity_bootstrap") {
           if (loginGrantSha256 === null) throw personSessionUnauthorized();
           const grant = transaction.personLoginGrant(loginGrantSha256);
@@ -616,6 +649,15 @@ export class PersonIdentitySessionApplication {
             !this.hasActiveExactMembership(transaction, grant)
           ) {
             throw personSessionUnauthorized();
+          }
+          // The hint is echoed back only when it names the very account this
+          // grant was issued for. Comparing digests keeps the decision on the
+          // value the Authority already stores.
+          if (
+            candidateHintSha256 !== undefined &&
+            candidateHintSha256 === grant.expected_email_sha256
+          ) {
+            verifiedLoginHint = input.login_hint;
           }
           const existing = transaction.oidcLoginAttemptForLoginGrant(
             loginGrantSha256,
@@ -633,7 +675,11 @@ export class PersonIdentitySessionApplication {
             }
             if (
               existing.terminal_outcome !== null ||
-              existing.redemption_claim_id !== null ||
+              (existing.redemption_claim_id !== null &&
+                !isOidcRedemptionClaimInNamespace(
+                  existing.redemption_claim_id,
+                  "reservation",
+                )) ||
               !this.attemptUsesCurrentConfiguration(existing)
             ) {
               throw personSessionUnauthorized();
@@ -665,6 +711,9 @@ export class PersonIdentitySessionApplication {
               scope: "openid email",
               created_at: existing.created_at,
               expires_at: existing.expires_at,
+              ...(verifiedLoginHint === undefined
+                ? {}
+                : { login_hint: verifiedLoginHint }),
             };
           }
         } else if (input.kind !== "existing_identity_login") {
@@ -755,6 +804,9 @@ export class PersonIdentitySessionApplication {
           scope: "openid email",
           created_at: stored.created_at,
           expires_at: stored.expires_at,
+          ...(verifiedLoginHint === undefined
+            ? {}
+            : { login_hint: verifiedLoginHint }),
         };
       },
     );
@@ -773,19 +825,37 @@ export class PersonIdentitySessionApplication {
       this.diagnoseOidcFailure("attempt_unavailable");
       throw personSessionUnauthorized();
     }
-    const redemptionClaimId = this.localId("olc", "oidc_redemption_claim_id");
-    let attempt: StoredOidcLoginAttempt | undefined;
+    const generatedRedemptionClaimId = namespaceOidcRedemptionClaimId(
+      this.localId("olc", "oidc_redemption_claim_id"),
+      "ordinary",
+    );
+    let claimedAttempt:
+      | ReturnType<PersonSessionWriteTransaction["claimOidcLoginAttempt"]>
+      | undefined;
     try {
-      attempt = this.repository.writeAtLinearization(
+      claimedAttempt = this.repository.writeAtLinearization(
         () => this.runtime.clock.now(),
         (transaction) =>
-          transaction.claimOidcLoginAttempt(stateSha256, redemptionClaimId),
+          transaction.claimOidcLoginAttempt(
+            stateSha256,
+            generatedRedemptionClaimId,
+          ),
       );
     } catch {
       this.diagnoseOidcFailure("attempt_unavailable");
       throw personSessionUnauthorized();
     }
-    if (attempt === undefined) {
+    if (claimedAttempt === undefined) {
+      this.diagnoseOidcFailure("attempt_unavailable");
+      throw personSessionUnauthorized();
+    }
+    const attempt = claimedAttempt.attempt;
+    const redemptionClaimId = attempt.redemption_claim_id;
+    if (
+      redemptionClaimId === null ||
+      (redemptionClaimId !== generatedRedemptionClaimId &&
+        !isOidcRedemptionClaimInNamespace(redemptionClaimId, "retry"))
+    ) {
       this.diagnoseOidcFailure("attempt_unavailable");
       throw personSessionUnauthorized();
     }
@@ -832,6 +902,7 @@ export class PersonIdentitySessionApplication {
             transaction.releaseOidcLoginAttemptClaim(
               stateSha256,
               redemptionClaimId,
+              claimedAttempt.bootstrap_email_mismatch_retry_reserved,
             ),
         );
         if (!released) {
@@ -900,8 +971,6 @@ export class PersonIdentitySessionApplication {
               grant.consumed_at !== null ||
               grant.invalidated_at !== null ||
               grant.expected_issuer !== identity.issuer ||
-              identity.bootstrap_email_sha256 === null ||
-              grant.expected_email_sha256 !== identity.bootstrap_email_sha256 ||
               grant.oidc_configuration_sha256 !==
                 current.oidc_configuration_sha256 ||
               !isStrictlyBefore(observedAt, grant.expires_at)
@@ -912,6 +981,41 @@ export class PersonIdentitySessionApplication {
                 redemptionClaimId,
               );
               return { kind: "denied", reason: "bootstrap_binding_denied" };
+            }
+            // One verified wrong-account result is safe to retry. No
+            // credential has been issued and the authority has proved only
+            // that a different account was chosen. A reserved claim marker
+            // preserves that fact in the frozen schema, so the second wrong
+            // account terminalizes and consumes the grant. Every other denial
+            // below remains terminal as well.
+            if (identity.bootstrap_email_sha256 === null) {
+              this.completeDeniedAttempt(
+                transaction,
+                stateSha256,
+                redemptionClaimId,
+              );
+              return { kind: "denied", reason: "bootstrap_binding_denied" };
+            }
+            if (
+              grant.expected_email_sha256 !== identity.bootstrap_email_sha256
+            ) {
+              if (claimedAttempt.bootstrap_email_mismatch_retry_reserved) {
+                this.completeDeniedAttempt(
+                  transaction,
+                  stateSha256,
+                  redemptionClaimId,
+                );
+                return { kind: "denied", reason: "bootstrap_binding_denied" };
+              }
+              if (
+                !transaction.reserveOidcLoginAttemptBootstrapEmailMismatchRetry(
+                  stateSha256,
+                  redemptionClaimId,
+                )
+              ) {
+                return { kind: "denied", reason: "attempt_unavailable" };
+              }
+              return { kind: "retry", reason: "bootstrap_email_mismatch" };
             }
             const existing = transaction.activeOidcIdentityBinding(
               identity.issuer,
@@ -1020,6 +1124,10 @@ export class PersonIdentitySessionApplication {
           );
         },
       );
+      if (outcome.kind === "retry") {
+        releasedForRetry = true;
+        throw new PersonSessionOidcDiagnosticError(outcome.reason);
+      }
       if (outcome.kind === "denied") {
         throw new PersonSessionOidcDiagnosticError(outcome.reason);
       }

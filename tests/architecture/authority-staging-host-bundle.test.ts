@@ -67,10 +67,21 @@ function fixture() {
   return { root, output };
 }
 
-function build(sourceRoot: string, output: string) {
+function build(
+  sourceRoot: string,
+  output: string,
+  extraArguments: readonly string[] = [],
+) {
   return spawnSync(
     process.execPath,
-    [BUILDER, "--source-root", sourceRoot, "--output", output],
+    [
+      BUILDER,
+      "--source-root",
+      sourceRoot,
+      "--output",
+      output,
+      ...extraArguments,
+    ],
     { encoding: "utf8" },
   );
 }
@@ -210,6 +221,68 @@ describe("Authority staging host bundle", () => {
     const mode = build(subject.root, join(publicOutput, "private.tar.gz"));
     expect(mode.status).toBe(1);
     expect(mode.stderr).toContain("output directory must not be accessible");
+  });
+
+  it("reuses a byte-identical bundle and still refuses a differing one", () => {
+    const subject = fixture();
+    const output = join(subject.output, "bundle.tar.gz");
+    const first = build(subject.root, output);
+    expect(first.status).toBe(0);
+    const archiveDigest = sha256(output);
+    const manifestBefore = readFileSync(`${output}.manifest.json`, "utf8");
+
+    // The archive is deterministic for a commit, so a repeat of the same
+    // command is a no-op rather than a reason to hand-clear artifacts first.
+    const again = build(subject.root, output, ["--reuse-identical"]);
+    expect(again.status).toBe(0);
+    expect(JSON.parse(again.stdout)).toMatchObject({
+      kind: "echo-authority-staging-host-bundle-v1",
+      reused: true,
+      archive_sha256: archiveDigest,
+    });
+    expect(sha256(output)).toBe(archiveDigest);
+    expect(readFileSync(`${output}.manifest.json`, "utf8")).toBe(
+      manifestBefore,
+    );
+
+    // Reuse must never become overwrite: different bundled content at the same
+    // output path is still a hard failure.
+    const other = fixture();
+    writeFileSync(
+      join(other.root, "deploy/organization-authority/update-clean-v1.sh"),
+      "#!/usr/bin/env bash\nexit 0\n",
+      { mode: 0o755 },
+    );
+    execFileSync("git", ["-C", other.root, "add", "."]);
+    execFileSync("git", [
+      "-C",
+      other.root,
+      "-c",
+      "user.name=Bundle Test",
+      "-c",
+      "user.email=bundle@example.test",
+      "commit",
+      "-qm",
+      "changed",
+    ]);
+    const differing = build(other.root, output, ["--reuse-identical"]);
+    expect(differing.status).toBe(1);
+    expect(differing.stderr).toContain(
+      "existing output differs from this source root",
+    );
+    expect(sha256(output)).toBe(archiveDigest);
+  });
+
+  it("refuses to reuse a half-written archive and manifest pair", () => {
+    const subject = fixture();
+    const output = join(subject.output, "bundle.tar.gz");
+    expect(build(subject.root, output).status).toBe(0);
+    rmSync(`${output}.manifest.json`);
+    const half = build(subject.root, output, ["--reuse-identical"]);
+    expect(half.status).toBe(1);
+    expect(half.stderr).toContain(
+      "output and its manifest must be a complete matching pair",
+    );
   });
 
   it("rejects a symlinked required asset before it can be archived", () => {

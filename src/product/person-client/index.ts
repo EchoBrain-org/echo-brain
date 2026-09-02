@@ -28,7 +28,9 @@ export {
 export {
   readPersonOnboardingInvitation,
   writePersonOnboardingInvitation,
+  type PersonOnboardingInvitation,
   type PersonOnboardingInvitationV1,
+  type PersonOnboardingInvitationV2,
 } from "./onboarding-invitation.js";
 export {
   personSessionStorePaths,

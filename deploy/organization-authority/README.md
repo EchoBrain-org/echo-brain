@@ -55,6 +55,20 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 | `granola-credential`       | Organization Granola credential.                                                                                                    |
 | `llm-credential`           | Retained LLM provider credential.                                                                                                   |
 
+Check that directory before spending an AWS session on it:
+
+```
+npm run authority:staging-onboarding-transfer -- preflight --input <config.json>
+```
+
+`preflight` reads no file contents, makes no AWS call, and names every required
+file that is missing, empty, oversized, or not a private regular file. It also
+reports the aggregate byte limit with the exact bytes over it and an
+unexpected-file count without exposing unexpected filenames. It exits `2` when
+the input is not ready, so it can gate the rest of a run. Without it, a missing
+credential surfaces only after authentication, planning, and the archive step, as one opaque
+`input_directory_shape_invalid`.
+
 The secrets are never placed in command arguments or normal wrapper output.
 `prepare` installs byte-exact fixed server copies with mode `0600` under its
 mode-`0700` private data directory.

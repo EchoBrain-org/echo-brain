@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
@@ -16,6 +17,7 @@ import {
   validateStagingLifecycleInput,
 } from "../../tools/authority-staging.mjs";
 import type { StagingLifecycleReceipt } from "../../tools/authority-staging.mjs";
+import { organizationAuthorityPinSha256 } from "@echo-brain/organization-protocol";
 
 const DECLARED_LIFECYCLE_STATES = [
   "planned",
@@ -26,6 +28,11 @@ const DECLARED_LIFECYCLE_STATES = [
   "failed_create",
   "update_rolled_back",
   "unprotected",
+  "host_down",
+  "authority_unready",
+  "authority_unpinned",
+  "authority_pin_mismatch",
+  "failed",
 ] as const satisfies readonly StagingLifecycleReceipt["state"][];
 
 type MissingDeclaredLifecycleState = Exclude<
@@ -42,6 +49,43 @@ const CLI = fileURLToPath(
 );
 const SECRET_ARN =
   "arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/tunnel-abc";
+const AUTHORITY_DESCRIPTOR = (() => {
+  const { publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const publicKeySpkiDer = publicKey.export({ format: "der", type: "spki" });
+  return Object.freeze({
+    authority_descriptor: Object.freeze({
+      authority_id: "oau_00000000-0000-4000-8000-000000000001",
+      kind: "echo-organization-authority",
+      organization_id: "org_00000000-0000-4000-8000-000000000001",
+      schema_version: 1,
+      signing_key: Object.freeze({
+        algorithm: "ecdsa-p256-sha256-der-low-s",
+        key_id: `sha256:${createHash("sha256").update(publicKeySpkiDer).digest("hex")}`,
+        public_key_spki_der_base64: publicKeySpkiDer.toString("base64"),
+      }),
+    }),
+  });
+})();
+const WRONG_AUTHORITY_DESCRIPTOR = (() => {
+  const { publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const publicKeySpkiDer = publicKey.export({ format: "der", type: "spki" });
+  return Object.freeze({
+    authority_descriptor: Object.freeze({
+      authority_id: "oau_00000000-0000-4000-8000-000000000002",
+      kind: "echo-organization-authority",
+      organization_id: "org_00000000-0000-4000-8000-000000000002",
+      schema_version: 1,
+      signing_key: Object.freeze({
+        algorithm: "ecdsa-p256-sha256-der-low-s",
+        key_id: `sha256:${createHash("sha256").update(publicKeySpkiDer).digest("hex")}`,
+        public_key_spki_der_base64: publicKeySpkiDer.toString("base64"),
+      }),
+    }),
+  });
+})();
+const AUTHORITY_PIN = organizationAuthorityPinSha256(
+  AUTHORITY_DESCRIPTOR.authority_descriptor,
+);
 
 it("keeps every public lifecycle receipt state typechecked", () => {
   expect(ALL_DECLARED_LIFECYCLE_STATES_ARE_COVERED).toBe(true);
@@ -73,6 +117,12 @@ printf 'SESSION_TOKEN_ENV=%s\\n' "\${AWS_SESSION_TOKEN-unset}" >>"$FAKE_AWS_LOG"
 printf 'WEB_IDENTITY_ENV=%s\\n' "\${AWS_WEB_IDENTITY_TOKEN_FILE-unset}" >>"$FAKE_AWS_LOG"
 printf 'CONFIG_FILE_ENV=%s\\n' "\${AWS_CONFIG_FILE-unset}" >>"$FAKE_AWS_LOG"
 printf 'CREDENTIALS_FILE_ENV=%s\\n' "\${AWS_SHARED_CREDENTIALS_FILE-unset}" >>"$FAKE_AWS_LOG"
+printf 'ENDPOINT_ENV=%s\\n' "\${AWS_ENDPOINT_URL-unset}" >>"$FAKE_AWS_LOG"
+printf 'S3_ENDPOINT_ENV=%s\\n' "\${AWS_ENDPOINT_URL_S3-unset}" >>"$FAKE_AWS_LOG"
+printf 'CA_BUNDLE_ENV=%s\\n' "\${AWS_CA_BUNDLE-unset}" >>"$FAKE_AWS_LOG"
+printf 'HTTPS_PROXY_ENV=%s\\n' "\${HTTPS_PROXY-unset}" >>"$FAKE_AWS_LOG"
+printf 'NO_PROXY_ENV=%s\\n' "\${no_proxy-unset}" >>"$FAKE_AWS_LOG"
+printf 'IGNORE_ENDPOINT_ENV=%s\\n' "\${AWS_IGNORE_CONFIGURED_ENDPOINT_URLS-unset}" >>"$FAKE_AWS_LOG"
 printf 'TOKEN_ENV=%s\\nEND\\n' "\${ECHO_CLOUDFLARE_API_TOKEN-unset}" >>"$FAKE_AWS_LOG"
 case " $* " in
   *" cloudformation execute-change-set "*)
@@ -207,6 +257,10 @@ const INPUT = Object.freeze({
     sha256: "c".repeat(64),
   },
 });
+const ACCEPTED_INPUT = Object.freeze({
+  ...INPUT,
+  authorityPinSha256: AUTHORITY_PIN,
+});
 
 function stack(hostEnabled = false, terminationProtection = true) {
   return {
@@ -259,6 +313,10 @@ function dependencies(
     readonly updateFailureStatus?: string;
     readonly terminationProtectionFailures?: number;
     readonly slotInitExistingChange?: boolean;
+    readonly authorityDescriptor?:
+      "serving" | "unreachable" | "http_status" | "invalid" | "wrong_valid";
+    readonly descriptorUnavailableAttempts?: number;
+    readonly postExecuteHostReady?: boolean;
     readonly changeAction?: {
       readonly action: string;
       readonly logicalId: string;
@@ -368,7 +426,7 @@ function dependencies(
         throw new Error("simulated failure");
       }
       status = {
-        ...stack(plannedHostEnabled),
+        ...stack(plannedHostEnabled && options.postExecuteHostReady !== false),
         status:
           request.changeSetType === "CREATE"
             ? "CREATE_COMPLETE"
@@ -438,12 +496,56 @@ function dependencies(
       };
     },
   };
+  const descriptorRequests: string[] = [];
+  let descriptorAttempts = 0;
+  // A newly created host is not serving yet, so "unreachable" is the honest
+  // default for these fixtures. No lifecycle test should reach the network.
+  const fetchImpl = async (url: string) => {
+    descriptorRequests.push(url);
+    events.push("probe-authority-descriptor");
+    descriptorAttempts += 1;
+    if (descriptorAttempts <= (options.descriptorUnavailableAttempts ?? 0))
+      throw new Error("simulated connection refused");
+    if (options.authorityDescriptor === "serving") {
+      return {
+        status: 200,
+        json: async () => AUTHORITY_DESCRIPTOR,
+      } as unknown as Response;
+    }
+    if (options.authorityDescriptor === "wrong_valid") {
+      return {
+        status: 200,
+        json: async () => WRONG_AUTHORITY_DESCRIPTOR,
+      } as unknown as Response;
+    }
+    if (options.authorityDescriptor === "invalid")
+      return {
+        status: 200,
+        json: async () => ({}),
+      } as unknown as Response;
+    if (options.authorityDescriptor === "http_status") {
+      return {
+        status: 503,
+        json: async () => ({}),
+      } as unknown as Response;
+    }
+    throw new Error("simulated connection refused");
+  };
   return {
+    descriptorRequests,
     edgeInputs,
     events,
     plans,
     recoveredInstanceIds,
-    dependencies: { cloudFormation, cloudflareApiToken: TOKEN, edge, s3, ssm },
+    dependencies: {
+      cloudFormation,
+      cloudflareApiToken: TOKEN,
+      edge,
+      fetchImpl,
+      s3,
+      sleepImpl: async () => {},
+      ssm,
+    },
   };
 }
 
@@ -685,6 +787,355 @@ describe("Authority staging lifecycle", () => {
     });
     expect(receipt).toMatchObject({ initialize_blank_data_volume: true });
     expect(fixture.plans[0]?.parameters.InitializeBlankDataVolume).toBe("true");
+  });
+
+  it("separates machine readiness from Authority readiness in the executed up receipt", async () => {
+    const fixture = dependencies();
+    const receipt = await runAuthorityStaging("up", INPUT, {
+      ...fixture.dependencies,
+      execute: true,
+    });
+
+    // The wait condition only ever proved the host booted and the tunnel
+    // connected. Saying so, and separately saying whether the Authority is
+    // serving, is what removes the manual hunt through logs and counts.
+    expect(receipt).toMatchObject({
+      action: "up",
+      state: "executed",
+      host_ready: true,
+      authority_serving: false,
+      authority_descriptor: {
+        path: "/v1/authority-descriptor",
+        serving: false,
+        status: null,
+        failure_class: "unreachable",
+      },
+    });
+    expect(fixture.descriptorRequests).toEqual([
+      "https://staging.example.com/v1/authority-descriptor",
+    ]);
+  });
+
+  it("reports an accepted Authority and classifies a non-serving status", async () => {
+    const serving = dependencies({ authorityDescriptor: "serving" });
+    const receipt = await runAuthorityStaging("up", ACCEPTED_INPUT, {
+      ...serving.dependencies,
+      execute: true,
+    });
+    expect(receipt).toMatchObject({
+      authority_accepted: true,
+      authority_serving: true,
+      authority_descriptor: {
+        accepted: true,
+        serving: true,
+        status: 200,
+        failure_class: null,
+      },
+    });
+    expect(JSON.stringify(receipt)).not.toContain(
+      AUTHORITY_DESCRIPTOR.authority_descriptor.authority_id,
+    );
+    expect(JSON.stringify(receipt)).not.toContain(AUTHORITY_PIN);
+
+    const refusing = dependencies({ authorityDescriptor: "http_status" });
+    await expect(
+      runAuthorityStaging("up", INPUT, {
+        ...refusing.dependencies,
+        execute: true,
+      }),
+    ).resolves.toMatchObject({
+      authority_serving: false,
+      authority_descriptor: {
+        serving: false,
+        status: 503,
+        failure_class: "http_status",
+      },
+    });
+  });
+
+  it("does not treat an arbitrary 200 JSON body as an Authority descriptor", async () => {
+    const fixture = dependencies({ authorityDescriptor: "invalid" });
+    await expect(
+      runAuthorityStaging("up", INPUT, {
+        ...fixture.dependencies,
+        execute: true,
+      }),
+    ).resolves.toMatchObject({
+      authority_serving: false,
+      authority_descriptor: {
+        serving: false,
+        status: 200,
+        failure_class: "descriptor_invalid",
+      },
+    });
+  });
+
+  it("refuses a required Authority gate before any AWS work when no trusted pin is configured", async () => {
+    const fixture = dependencies({ authorityDescriptor: "serving" });
+    await expect(
+      runAuthorityStaging("up", INPUT, {
+        ...fixture.dependencies,
+        execute: true,
+        requireAuthority: true,
+      }),
+    ).rejects.toThrow("authority_descriptor_pin_required");
+    expect(fixture.events).toEqual([]);
+  });
+
+  it("refuses a valid but untrusted Authority without retrying it as a delayed start", async () => {
+    const fixture = dependencies({ authorityDescriptor: "wrong_valid" });
+    let failure: unknown;
+    try {
+      await runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        descriptorProbeAttempts: 3,
+        execute: true,
+        requireAuthority: true,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toHaveProperty("code", "authority_descriptor_pin_mismatch");
+    expect((failure as { receipt: unknown }).receipt).toMatchObject({
+      authority_accepted: false,
+      authority_serving: true,
+      authority_descriptor: {
+        accepted: false,
+        attempts: 1,
+        failure_class: "descriptor_pin_mismatch",
+        serving: true,
+      },
+      failure_class: "authority_descriptor_pin_mismatch",
+      state: "failed",
+    });
+    expect(fixture.descriptorRequests).toHaveLength(1);
+    expect(JSON.stringify(failure)).not.toContain(
+      WRONG_AUTHORITY_DESCRIPTOR.authority_descriptor.authority_id,
+    );
+    expect(JSON.stringify(failure)).not.toContain(AUTHORITY_PIN);
+  });
+
+  it("retries a delayed descriptor until the required Authority is serving", async () => {
+    const fixture = dependencies({
+      authorityDescriptor: "serving",
+      descriptorUnavailableAttempts: 1,
+    });
+    await expect(
+      runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        descriptorProbeAttempts: 2,
+        execute: true,
+        requireAuthority: true,
+      }),
+    ).resolves.toMatchObject({
+      authority_descriptor: { attempts: 2, serving: true },
+      authority_serving: true,
+    });
+    expect(
+      fixture.events.filter((event) => event === "execute-change-set"),
+    ).toHaveLength(1);
+    expect(fixture.descriptorRequests).toHaveLength(2);
+  });
+
+  it("refuses an executed up that was required to come back serving", async () => {
+    const fixture = dependencies();
+    let failure: unknown;
+    try {
+      await runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        descriptorProbeAttempts: 1,
+        execute: true,
+        requireAuthority: true,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toHaveProperty("code", "authority_descriptor_unready");
+    expect(failure).toHaveProperty("receipt");
+    expect((failure as { receipt: unknown }).receipt).toMatchObject({
+      action: "up",
+      authority_serving: false,
+      failure_class: "authority_descriptor_unready",
+      host_ready: true,
+      state: "failed",
+    });
+
+    const serving = dependencies({ authorityDescriptor: "serving" });
+    await expect(
+      runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...serving.dependencies,
+        execute: true,
+        requireAuthority: true,
+      }),
+    ).resolves.toMatchObject({ authority_serving: true });
+  });
+
+  it("retries a failed authority-required gate as a probe only once the host is enabled", async () => {
+    const fixture = dependencies();
+    await expect(
+      runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        descriptorProbeAttempts: 1,
+        execute: true,
+        requireAuthority: true,
+      }),
+    ).rejects.toThrow("authority_descriptor_unready");
+    const executionsBeforeRetry = fixture.events.filter(
+      (event) => event === "execute-change-set",
+    ).length;
+
+    const retried = await runAuthorityStaging("up", ACCEPTED_INPUT, {
+      ...fixture.dependencies,
+      descriptorProbeAttempts: 1,
+      execute: true,
+      fetchImpl: async () =>
+        ({ status: 200, json: async () => AUTHORITY_DESCRIPTOR }) as Response,
+      requireAuthority: true,
+    });
+    expect(retried).toMatchObject({
+      authority_serving: true,
+      host_ready: true,
+      verification_only: true,
+    });
+    expect(
+      fixture.events.filter((event) => event === "execute-change-set"),
+    ).toHaveLength(executionsBeforeRetry);
+    expect(fixture.events).not.toContain("ssm-quiesce-host");
+  });
+
+  it("does not require a local host bundle for an already-enabled probe-only retry", async () => {
+    const fixture = dependencies({
+      authorityDescriptor: "serving",
+      initialStack: stack(true),
+    });
+    const { hostSetup: _hostSetup, ...verificationInput } = ACCEPTED_INPUT;
+    await expect(
+      runAuthorityStaging("up", verificationInput, {
+        ...fixture.dependencies,
+        execute: true,
+        requireAuthority: true,
+      }),
+    ).resolves.toMatchObject({
+      authority_serving: true,
+      host_enabled: true,
+      verification_only: true,
+    });
+    expect(fixture.events).not.toContain("s3-upload-object");
+    expect(fixture.events).not.toContain("execute-change-set");
+  });
+
+  it("emits a safe failure receipt when the post-execution host-ready output is false", async () => {
+    const fixture = dependencies({ postExecuteHostReady: false });
+    let failure: unknown;
+    try {
+      await runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        execute: true,
+        requireAuthority: true,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toHaveProperty("code", "host_ready_unproven");
+    expect((failure as { receipt: unknown }).receipt).toMatchObject({
+      action: "up",
+      authority_serving: false,
+      failure_class: "host_ready_unproven",
+      host_enabled: false,
+      host_ready: false,
+      stack_status: "UPDATE_COMPLETE",
+      state: "failed",
+    });
+  });
+
+  it("makes status distinguish host-down from a host whose Authority is not serving", async () => {
+    const hostDown = dependencies();
+    await expect(
+      runAuthorityStaging("status", INPUT, {
+        ...hostDown.dependencies,
+        cloudflareApiToken: undefined,
+        edge: {
+          ...hostDown.dependencies.edge,
+          status: async () => {
+            throw new Error("Cloudflare must not be called for a stopped host");
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      authority_serving: false,
+      edge_checked: false,
+      host_enabled: false,
+      host_ready: false,
+      state: "host_down",
+    });
+    expect(hostDown.descriptorRequests).toHaveLength(0);
+
+    const authorityUnready = dependencies({ initialStack: stack(true) });
+    await expect(
+      runAuthorityStaging("status", INPUT, authorityUnready.dependencies),
+    ).resolves.toMatchObject({
+      authority_accepted: false,
+      authority_descriptor: { serving: false },
+      authority_serving: false,
+      edge_ready: true,
+      host_enabled: true,
+      host_ready: true,
+      state: "authority_unready",
+    });
+
+    const authorityUnpinned = dependencies({
+      authorityDescriptor: "serving",
+      initialStack: stack(true),
+    });
+    await expect(
+      runAuthorityStaging("status", INPUT, authorityUnpinned.dependencies),
+    ).resolves.toMatchObject({
+      authority_accepted: false,
+      authority_descriptor: {
+        accepted: false,
+        failure_class: "descriptor_pin_required",
+        serving: true,
+      },
+      authority_serving: true,
+      state: "authority_unpinned",
+    });
+
+    const authorityMismatch = dependencies({
+      authorityDescriptor: "wrong_valid",
+      initialStack: stack(true),
+    });
+    await expect(
+      runAuthorityStaging(
+        "status",
+        ACCEPTED_INPUT,
+        authorityMismatch.dependencies,
+      ),
+    ).resolves.toMatchObject({
+      authority_accepted: false,
+      authority_descriptor: {
+        accepted: false,
+        failure_class: "descriptor_pin_mismatch",
+        serving: true,
+      },
+      authority_serving: true,
+      state: "authority_pin_mismatch",
+    });
+
+    const authorityAccepted = dependencies({
+      authorityDescriptor: "serving",
+      initialStack: stack(true),
+    });
+    await expect(
+      runAuthorityStaging(
+        "status",
+        ACCEPTED_INPUT,
+        authorityAccepted.dependencies,
+      ),
+    ).resolves.toMatchObject({
+      authority_accepted: true,
+      authority_serving: true,
+      state: "ready",
+    });
   });
 
   it("refuses to execute a reviewed up plan for a different setup artifact", async () => {
@@ -979,6 +1430,12 @@ describe("Authority staging lifecycle", () => {
         edge: { ...INPUT.edge, tunnelName: "operator-selected-name" },
       }),
     ).toThrow("edge_property_not_allowed");
+    expect(() =>
+      validateStagingLifecycleInput({
+        ...INPUT,
+        authorityPinSha256: "not-a-sha256-digest",
+      }),
+    ).toThrow("authority_pin_invalid");
   });
 
   it("uses only the committed template and keeps AWS secret access write-only", async () => {
@@ -1137,7 +1594,7 @@ describe("Authority staging lifecycle", () => {
                 },
                 {
                   OutputKey: "StagingHostReady",
-                  OutputValue: "false",
+                  OutputValue: "true",
                 },
               ],
               StackStatus: "UPDATE_COMPLETE",
@@ -1179,7 +1636,7 @@ describe("Authority staging lifecycle", () => {
               OutputKey: "AuthorityTunnelTokenSecretArn",
               OutputValue: SECRET_ARN,
             },
-            { OutputKey: "StagingHostReady", OutputValue: "false" },
+            { OutputKey: "StagingHostReady", OutputValue: "true" },
           ],
           StackStatus: "UPDATE_COMPLETE",
         },
@@ -1390,12 +1847,16 @@ describe("Authority staging lifecycle", () => {
         writeFileSync(fake.log, "");
         await expect(testCase.run()).resolves.toEqual(testCase.expectedReceipt);
         const calls = readFileSync(fake.log, "utf8");
-        expect(calls).toContain(`ARG=--parameters\nARG={"commands":["set -eu",`);
+        expect(calls).toContain(
+          `ARG=--parameters\nARG={"commands":["set -eu",`,
+        );
         expect(calls).toContain(`${testCase.marker}\\\\n`);
         expect(calls).toContain(
           `ARG=--region\nARG=us-west-2\nARG=--document-name\nARG=AWS-RunShellScript\nARG=--instance-ids\nARG=${instanceId}`,
         );
-        expect(calls.match(/ARG=--command-id\nARG=command-123/g)).toHaveLength(2);
+        expect(calls.match(/ARG=--command-id\nARG=command-123/g)).toHaveLength(
+          2,
+        );
         expect(calls).toMatch(
           /ARG=ssm\nARG=send-command[\s\S]*ARG=ssm\nARG=wait\nARG=command-executed[\s\S]*ARG=ssm\nARG=get-command-invocation/,
         );
@@ -1417,7 +1878,10 @@ describe("Authority staging lifecycle", () => {
     const restore = useFakeAwsEnvironment(fake, {
       AWS_ACCESS_KEY_ID: "fake-ambient-access-key",
       AWS_CONFIG_FILE: "/private/tmp/wrong-aws-config",
+      AWS_CA_BUNDLE: "/private/tmp/wrong-ca.pem",
       AWS_DEFAULT_PROFILE: "wrong-default-profile",
+      AWS_ENDPOINT_URL: "https://wrong-endpoint.example",
+      AWS_ENDPOINT_URL_S3: "https://wrong-s3-endpoint.example",
       AWS_PROFILE: "wrong-profile",
       AWS_SECRET_ACCESS_KEY: "fake-ambient-secret-key",
       AWS_SESSION_TOKEN: "fake-ambient-session-token",
@@ -1427,7 +1891,9 @@ describe("Authority staging lifecycle", () => {
       FAKE_AWS_DESCRIBE_RESPONSE: undefined,
       FAKE_AWS_LOG: fake.log,
       FAKE_AWS_STDIN: fake.stdin,
+      HTTPS_PROXY: "https://wrong-proxy.example",
       PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+      no_proxy: "localhost",
     });
     try {
       const adapters = createAwsCliAdapters();
@@ -1452,6 +1918,12 @@ describe("Authority staging lifecycle", () => {
       expect(secretCall).toContain("WEB_IDENTITY_ENV=unset");
       expect(secretCall).toContain("CONFIG_FILE_ENV=unset");
       expect(secretCall).toContain("CREDENTIALS_FILE_ENV=unset");
+      expect(secretCall).toContain("ENDPOINT_ENV=unset");
+      expect(secretCall).toContain("S3_ENDPOINT_ENV=unset");
+      expect(secretCall).toContain("CA_BUNDLE_ENV=unset");
+      expect(secretCall).toContain("HTTPS_PROXY_ENV=unset");
+      expect(secretCall).toContain("NO_PROXY_ENV=unset");
+      expect(secretCall).toContain("IGNORE_ENDPOINT_ENV=true");
       expect(secretCall).not.toContain(TOKEN);
       expect(secretCall).not.toContain("connector-token-not-a-real-secret");
       expect(JSON.parse(readFileSync(fake.stdin, "utf8"))).toEqual({

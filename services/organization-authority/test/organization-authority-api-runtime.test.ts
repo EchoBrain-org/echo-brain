@@ -20,6 +20,7 @@ import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlit
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../src/adapters/system/system-authority-clock.js";
+import { isOidcRedemptionClaimInNamespace } from "../src/application/ports/person-session-repository.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import {
   initializePersonSessionCredentials,
@@ -46,30 +47,56 @@ function root(): string {
 
 class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
   private last: BegunPersonOidcLogin | undefined;
+  private retryableBeforeRedemption = false;
+  private terminalRedemptionFailure = false;
 
   constructor(
-    private readonly claims: Readonly<Record<string, unknown>> = {
+    private claims: Readonly<Record<string, unknown>> = {
       email: "founder@example.com",
       email_verified: true,
     },
   ) {}
+
+  setClaims(claims: Readonly<Record<string, unknown>>): void {
+    this.claims = claims;
+  }
+
+  setAttempt(attempt: BegunPersonOidcLogin): void {
+    this.last = attempt;
+  }
+
+  setRetryableBeforeRedemption(value: boolean): void {
+    this.retryableBeforeRedemption = value;
+  }
+
+  setTerminalRedemptionFailure(value: boolean): void {
+    this.terminalRedemptionFailure = value;
+  }
 
   buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
     this.last = attempt;
     return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
   }
 
-  async redeemAuthorizationCode(): Promise<{
-    kind: "verified";
-    token: {
-      issuer: string;
-      subject: string;
-      audience: string;
-      nonce: string;
-      issued_at: number;
-      claims: Readonly<Record<string, unknown>>;
-    };
-  }> {
+  async redeemAuthorizationCode(): Promise<
+    | { kind: "retryable_before_redemption" }
+    | { kind: "terminal_failure"; diagnostic_stage: "redemption" }
+    | {
+        kind: "verified";
+        token: {
+          issuer: string;
+          subject: string;
+          audience: string;
+          nonce: string;
+          issued_at: number;
+          claims: Readonly<Record<string, unknown>>;
+        };
+      }
+  > {
+    if (this.retryableBeforeRedemption)
+      return { kind: "retryable_before_redemption" };
+    if (this.terminalRedemptionFailure)
+      return { kind: "terminal_failure", diagnostic_stage: "redemption" };
     if (this.last === undefined) throw new Error("missing OIDC begin");
     return {
       kind: "verified",
@@ -179,7 +206,102 @@ describe("Organization Authority API runtime", () => {
     expect(closed).toBe(1);
   });
 
-  it("burns a bootstrap invitation when the verified email does not match", async () => {
+  it("forwards a matching invitation address as login_hint and ignores a wrong one", async () => {
+    const parent = root();
+    const initialized = bootstrapOrganizationAuthorityState({
+      state_directory: join(parent, "state"),
+      organization_display_name: "Founder Organization",
+      owner_display_name: "Founder",
+      created_at: new Date(Date.now() - 1_000).toISOString(),
+      creating_artifact_revision: "clean-login-hint-test",
+    });
+    const oidc = {
+      issuer: "https://issuer.example",
+      client_id: "founder-client",
+      redirect_uri: "https://authority.example/v2/session/oidc/callback",
+      tenant: { kind: "issuer" as const },
+      id_token_algorithms: ["RS256"],
+    };
+    const credentials = initializePersonSessionCredentials({
+      state_directory: initialized.state_directory,
+    });
+    const pkce = readPrivateAuthorityPersonSessionPkceKey(
+      credentials.pkce_sealing_key_reference,
+    );
+    const invitationDirectory = join(parent, "invitations");
+    mkdirSync(invitationDirectory, { mode: 0o700 });
+    chmodSync(invitationDirectory, 0o700);
+    const issue = (
+      name: string,
+    ): { login_grant: string; expected_email?: string } => {
+      const path = join(invitationDirectory, name);
+      issuePersonOnboardingInvitation({
+        state_directory: initialized.state_directory,
+        oidc,
+        pkce_sealing_key: pkce,
+        membership_id: initialized.owner_membership_id,
+        expected_email: "founder@example.com",
+        authority_url: "https://authority.example",
+        output_path: path,
+      });
+      return JSON.parse(readFileSync(path, "utf8")) as {
+        login_grant: string;
+        expected_email?: string;
+      };
+    };
+    const first = issue("founder.invitation.json");
+    // The address rides in the artifact so the client can name it and hint it.
+    expect(first.expected_email).toBe("founder@example.com");
+
+    const database = openAuthorityDatabase(
+      join(initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      const crypto = new NodePersonSessionCrypto(pkce);
+      const provider = new MockOidcProvider();
+      const sessions = new PersonIdentitySessionApplication(
+        new SqlitePersonSessionRepository(database),
+        oidc,
+        {
+          clock: new SystemAuthorityClock(),
+          random: crypto,
+          hash: crypto,
+          pkce_sealer: crypto,
+          oidc_provider: provider,
+        },
+      );
+      const matched = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: first.login_grant,
+        login_hint: "founder@example.com",
+      });
+      expect(matched.login_hint).toBe("founder@example.com");
+
+      // A hint the grant does not name must never reach the provider: it could
+      // otherwise pre-select an account the Authority is bound to reject, which
+      // is the exact way a one-time invitation gets spent.
+      const second = issue("second.invitation.json");
+      const mismatched = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: second.login_grant,
+        login_hint: "someone-else@example.com",
+      });
+      expect(mismatched.login_hint).toBeUndefined();
+
+      // A malformed hint is dropped, not a reason to fail beginning a login.
+      const third = issue("third.invitation.json");
+      const malformed = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: third.login_grant,
+        login_hint: "NOT AN EMAIL",
+      });
+      expect(malformed.login_hint).toBeUndefined();
+    } finally {
+      database.close();
+    }
+  });
+  it("retries a verified wrong bootstrap account without spending its invitation", async () => {
     const parent = root();
     const initialized = bootstrapOrganizationAuthorityState({
       state_directory: join(parent, "state"),
@@ -217,53 +339,385 @@ describe("Organization Authority API runtime", () => {
     const invitation = JSON.parse(readFileSync(invitationPath, "utf8")) as {
       login_grant: string;
     };
-    const database = openAuthorityDatabase(
-      join(initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
+    const parallelInvitationPath = join(
+      invitationDirectory,
+      "parallel-founder.invitation.json",
     );
+    issuePersonOnboardingInvitation({
+      state_directory: initialized.state_directory,
+      oidc,
+      pkce_sealing_key: pkce,
+      membership_id: initialized.owner_membership_id,
+      expected_email: "founder@example.com",
+      authority_url: "https://authority.example",
+      output_path: parallelInvitationPath,
+    });
+    const parallelInvitation = JSON.parse(
+      readFileSync(parallelInvitationPath, "utf8"),
+    ) as { login_grant: string };
+    const databasePath = join(initialized.state_directory, "authority.sqlite");
+    let database = openAuthorityDatabase(databasePath, { fileMustExist: true });
     try {
       const crypto = new NodePersonSessionCrypto(pkce);
-      const sessions = new PersonIdentitySessionApplication(
-        new SqlitePersonSessionRepository(database),
-        oidc,
-        {
-          clock: new SystemAuthorityClock(),
-          random: crypto,
-          hash: crypto,
-          pkce_sealer: crypto,
-          oidc_provider: new MockOidcProvider({
-            email: "someone-else@example.com",
-            email_verified: true,
-          }),
-        },
-      );
+      let provider = new MockOidcProvider({
+        email: "someone-else@example.com",
+        email_verified: true,
+      });
+      const diagnostics: string[] = [];
+      const createSessions = () =>
+        new PersonIdentitySessionApplication(
+          new SqlitePersonSessionRepository(database),
+          oidc,
+          {
+            clock: new SystemAuthorityClock(),
+            random: crypto,
+            hash: crypto,
+            pkce_sealer: crypto,
+            oidc_provider: provider,
+            diagnostics: {
+              oidcLoginDenied(reason) {
+                diagnostics.push(reason);
+              },
+            },
+          },
+        );
+      let sessions = createSessions();
       const begun = sessions.beginOidcLogin({
         kind: "identity_bootstrap",
         login_grant: invitation.login_grant,
       });
-      await expect(
-        sessions.completeOidcLogin({
+      provider.setAttempt(begun);
+      const firstWrongAccountFailure = await sessions
+        .completeOidcLogin({
           state: begun.state,
           authorization_code: "wrong-email-code",
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(diagnostics).toEqual(["bootstrap_email_mismatch"]);
+      expect(firstWrongAccountFailure).toBeInstanceOf(PersonOidcRetryableError);
+      expect(
+        database
+          .prepare("SELECT consumed_at FROM authority_person_login_grants")
+          .pluck()
+          .get(),
+      ).toBeNull();
+      expect(
+        isOidcRedemptionClaimInNamespace(
+          database
+            .prepare(
+              "SELECT redemption_claim_id FROM authority_oidc_login_attempts",
+            )
+            .pluck()
+            .get() as string,
+          "reservation",
+        ),
+      ).toBe(true);
+
+      // The retry marker must survive a real Authority process restart. A
+      // fresh repository and application then reattach the exact attempt.
+      database.close();
+      database = openAuthorityDatabase(databasePath, { fileMustExist: true });
+      provider = new MockOidcProvider({
+        email: "someone-else@example.com",
+        email_verified: true,
+      });
+      sessions = createSessions();
+      const restarted = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: invitation.login_grant,
+      });
+      expect(restarted).toMatchObject({
+        login_attempt_id: begun.login_attempt_id,
+        state: begun.state,
+        nonce: begun.nonce,
+      });
+
+      // The marker retains each attempt's UUID body. Two reservations may be
+      // pending together without violating the frozen UNIQUE claim column.
+      const parallelBegun = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: parallelInvitation.login_grant,
+      });
+      provider.setAttempt(parallelBegun);
+      await expect(
+        sessions.completeOidcLogin({
+          state: parallelBegun.state,
+          authorization_code: "parallel-wrong-email-code",
         }),
-      ).rejects.toMatchObject({
-        code: "unauthorized",
-        message: "person authentication failed",
+      ).rejects.toBeInstanceOf(PersonOidcRetryableError);
+      const reservationClaims = database
+        .prepare(
+          "SELECT redemption_claim_id FROM authority_oidc_login_attempts WHERE terminal_outcome IS NULL ORDER BY login_attempt_id",
+        )
+        .pluck()
+        .all() as string[];
+      expect(reservationClaims).toHaveLength(2);
+      expect(
+        reservationClaims.every((claim) =>
+          isOidcRedemptionClaimInNamespace(claim, "reservation"),
+        ),
+      ).toBe(true);
+      expect(new Set(reservationClaims).size).toBe(2);
+
+      const parallelProviderRetry = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: parallelInvitation.login_grant,
+      });
+      expect(parallelProviderRetry).toMatchObject({
+        login_attempt_id: parallelBegun.login_attempt_id,
+        state: parallelBegun.state,
+        nonce: parallelBegun.nonce,
+      });
+      provider.setAttempt(parallelProviderRetry);
+      // A provider failure known before code redemption must restore the same
+      // reservation, not silently buy another wrong-account attempt.
+      provider.setRetryableBeforeRedemption(true);
+      await expect(
+        sessions.completeOidcLogin({
+          state: parallelProviderRetry.state,
+          authorization_code: "provider-retry-before-redemption",
+        }),
+      ).rejects.toBeInstanceOf(PersonOidcRetryableError);
+      const parallelReservationAfterProviderRetry = database
+        .prepare(
+          "SELECT redemption_claim_id FROM authority_oidc_login_attempts WHERE login_attempt_id = ?",
+        )
+        .pluck()
+        .get(parallelBegun.login_attempt_id) as string;
+      expect(
+        isOidcRedemptionClaimInNamespace(
+          parallelReservationAfterProviderRetry,
+          "reservation",
+        ),
+      ).toBe(true);
+
+      const parallelSecondWrongAccount = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: parallelInvitation.login_grant,
+      });
+      expect(parallelSecondWrongAccount).toMatchObject({
+        login_attempt_id: parallelBegun.login_attempt_id,
+        state: parallelBegun.state,
+        nonce: parallelBegun.nonce,
+      });
+      provider.setAttempt(parallelSecondWrongAccount);
+      provider.setRetryableBeforeRedemption(false);
+      provider.setClaims({
+        email: "someone-else@example.com",
+        email_verified: true,
+      });
+      await expect(
+        sessions.completeOidcLogin({
+          state: parallelSecondWrongAccount.state,
+          authorization_code: "second-wrong-email-after-provider-retry",
+        }),
+      ).rejects.toMatchObject({ code: "unauthorized" });
+      expect(
+        database
+          .prepare(
+            "SELECT terminal_outcome FROM authority_oidc_login_attempts WHERE login_attempt_id = ?",
+          )
+          .pluck()
+          .get(parallelBegun.login_attempt_id),
+      ).toBe("denied");
+      expect(
+        database
+          .prepare(
+            `SELECT grant_row.consumed_at IS NOT NULL
+               FROM authority_oidc_login_attempts attempt
+               JOIN authority_person_login_grants grant_row
+                 ON grant_row.login_grant_sha256 = attempt.login_grant_sha256
+              WHERE attempt.login_attempt_id = ?`,
+          )
+          .pluck()
+          .get(parallelBegun.login_attempt_id),
+      ).toBe(1);
+
+      provider.setAttempt(restarted);
+      provider.setClaims({
+        email: "founder@example.com",
+        email_verified: true,
+      });
+      await expect(
+        sessions.completeOidcLogin({
+          state: restarted.state,
+          authorization_code: "correct-email-code",
+        }),
+      ).resolves.toMatchObject({
+        membership_id: initialized.owner_membership_id,
       });
       expect(
         database
           .prepare(
-            "SELECT consumed_at IS NOT NULL FROM authority_person_login_grants",
+            "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
           )
           .pluck()
           .get(),
-      ).toBe(1);
+      ).toBe(2);
       expect(
         database
           .prepare("SELECT count(*) FROM authority_person_session_families")
           .pluck()
           .get(),
-      ).toBe(0);
+      ).toBe(1);
+
+      // A malformed or unverified bootstrap identity is not a wrong-account
+      // retry: it remains terminal and spends this distinct invitation.
+      const invalidInvitationPath = join(
+        invitationDirectory,
+        "invalid-email.invitation.json",
+      );
+      issuePersonOnboardingInvitation({
+        state_directory: initialized.state_directory,
+        oidc,
+        pkce_sealing_key: pkce,
+        membership_id: initialized.owner_membership_id,
+        expected_email: "founder@example.com",
+        authority_url: "https://authority.example",
+        output_path: invalidInvitationPath,
+      });
+      const invalidInvitation = JSON.parse(
+        readFileSync(invalidInvitationPath, "utf8"),
+      ) as { login_grant: string };
+      provider.setClaims({
+        email: "founder@example.com",
+        email_verified: false,
+      });
+      const invalid = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: invalidInvitation.login_grant,
+      });
+      provider.setAttempt(invalid);
+      await expect(
+        sessions.completeOidcLogin({
+          state: invalid.state,
+          authorization_code: "unverified-email-code",
+        }),
+      ).rejects.toMatchObject({ code: "unauthorized" });
+      expect(
+        database
+          .prepare(
+            "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
+          )
+          .pluck()
+          .get(),
+      ).toBe(3);
+
+      // A second verified wrong account is terminal. The reservation is
+      // durable across the restart, while the grant and attempt remain one-use.
+      const cappedInvitationPath = join(
+        invitationDirectory,
+        "capped-retry.invitation.json",
+      );
+      issuePersonOnboardingInvitation({
+        state_directory: initialized.state_directory,
+        oidc,
+        pkce_sealing_key: pkce,
+        membership_id: initialized.owner_membership_id,
+        expected_email: "founder@example.com",
+        authority_url: "https://authority.example",
+        output_path: cappedInvitationPath,
+      });
+      const cappedInvitation = JSON.parse(
+        readFileSync(cappedInvitationPath, "utf8"),
+      ) as { login_grant: string };
+      provider.setClaims({
+        email: "someone-else@example.com",
+        email_verified: true,
+      });
+      const cappedFirst = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: cappedInvitation.login_grant,
+      });
+      provider.setAttempt(cappedFirst);
+      await expect(
+        sessions.completeOidcLogin({
+          state: cappedFirst.state,
+          authorization_code: "first-capped-wrong-email-code",
+        }),
+      ).rejects.toBeInstanceOf(PersonOidcRetryableError);
+      const cappedSecond = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: cappedInvitation.login_grant,
+      });
+      provider.setAttempt(cappedSecond);
+      await expect(
+        sessions.completeOidcLogin({
+          state: cappedSecond.state,
+          authorization_code: "second-capped-wrong-email-code",
+        }),
+      ).rejects.toMatchObject({ code: "unauthorized" });
+      expect(
+        database
+          .prepare(
+            "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
+          )
+          .pluck()
+          .get(),
+      ).toBe(4);
+      expect(
+        database
+          .prepare(
+            "SELECT terminal_outcome FROM authority_oidc_login_attempts ORDER BY rowid DESC LIMIT 1",
+          )
+          .pluck()
+          .get(),
+      ).toBe("denied");
+
+      // A replayed or otherwise terminally redeemed code after the first
+      // mismatch spends the invitation; it cannot clear the reservation and
+      // turn the next browser return into another wrong-account retry.
+      const replayedInvitationPath = join(
+        invitationDirectory,
+        "replayed-code.invitation.json",
+      );
+      issuePersonOnboardingInvitation({
+        state_directory: initialized.state_directory,
+        oidc,
+        pkce_sealing_key: pkce,
+        membership_id: initialized.owner_membership_id,
+        expected_email: "founder@example.com",
+        authority_url: "https://authority.example",
+        output_path: replayedInvitationPath,
+      });
+      const replayedInvitation = JSON.parse(
+        readFileSync(replayedInvitationPath, "utf8"),
+      ) as { login_grant: string };
+      const replayedFirst = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: replayedInvitation.login_grant,
+      });
+      provider.setAttempt(replayedFirst);
+      await expect(
+        sessions.completeOidcLogin({
+          state: replayedFirst.state,
+          authorization_code: "replayed-code-first-wrong-account",
+        }),
+      ).rejects.toBeInstanceOf(PersonOidcRetryableError);
+      const replayedRetry = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: replayedInvitation.login_grant,
+      });
+      provider.setAttempt(replayedRetry);
+      provider.setTerminalRedemptionFailure(true);
+      await expect(
+        sessions.completeOidcLogin({
+          state: replayedRetry.state,
+          authorization_code: "replayed-provider-code",
+        }),
+      ).rejects.toMatchObject({ code: "unauthorized" });
+      provider.setTerminalRedemptionFailure(false);
+      expect(
+        database
+          .prepare(
+            "SELECT count(*) FROM authority_person_login_grants WHERE consumed_at IS NOT NULL",
+          )
+          .pluck()
+          .get(),
+      ).toBe(5);
     } finally {
       database.close();
     }
@@ -382,7 +836,9 @@ describe("Organization Authority API runtime", () => {
       expect(expiredError).toMatchObject({ code: "unauthorized" });
       expect(
         database
-          .prepare("SELECT invalidated_at IS NOT NULL FROM authority_person_login_grants")
+          .prepare(
+            "SELECT invalidated_at IS NOT NULL FROM authority_person_login_grants",
+          )
           .pluck()
           .get(),
       ).toBe(1);
@@ -662,11 +1118,17 @@ describe("Organization Authority API runtime", () => {
       expect(callback.headers.get("content-type")).toContain("text/html");
       expect(callback.headers.get("cache-control")).toBe("no-store");
       const callbackPage = await callback.text();
-      expect(callbackPage).toContain(`action="http://127.0.0.1:39999/${"P".repeat(43)}"`);
-      expect(callbackPage).toContain('name="token" value="' + "T".repeat(43) + '"');
+      expect(callbackPage).toContain(
+        `action="http://127.0.0.1:39999/${"P".repeat(43)}"`,
+      );
+      expect(callbackPage).toContain(
+        'name="token" value="' + "T".repeat(43) + '"',
+      );
       expect(callbackPage).not.toContain("access_token");
       expect(callbackPage).not.toContain("refresh_token");
-      const encoded = /name="session" value="([A-Za-z0-9_-]+)"/.exec(callbackPage)?.[1];
+      const encoded = /name="session" value="([A-Za-z0-9_-]+)"/.exec(
+        callbackPage,
+      )?.[1];
       expect(encoded).toBeDefined();
       const session = JSON.parse(
         Buffer.from(encoded!, "base64url").toString("utf8"),
@@ -687,7 +1149,9 @@ describe("Organization Authority API runtime", () => {
         `${origin}/v2/session/oidc/callback?state=${encodeURIComponent(recoveryState!)}&code=code-2&iss=https%3A%2F%2Fissuer.example`,
       );
       expect(expiredDelivery.status).toBe(200);
-      expect(expiredDelivery.headers.get("content-type")).toContain("text/html");
+      expect(expiredDelivery.headers.get("content-type")).toContain(
+        "text/html",
+      );
       const expiredPage = await expiredDelivery.text();
       expect(expiredPage).toContain("Sign-in expired");
       expect(expiredPage).toContain("echo-brain person login");
@@ -716,14 +1180,11 @@ describe("Organization Authority API runtime", () => {
         body: JSON.stringify({ query: "pricing", unexpected: true }),
       });
       expect(malformedSearch.status).toBe(400);
-      const unauthenticatedSearch = await fetch(
-        `${origin}/v1/person/records`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ query: "pricing" }),
-        },
-      );
+      const unauthenticatedSearch = await fetch(`${origin}/v1/person/records`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "pricing" }),
+      });
       expect(unauthenticatedSearch.status).toBe(401);
 
       const refreshed = await fetch(`${origin}/v2/session/refresh`, {

@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   PersonClientSessionUnavailableError,
   PersonSessionStore,
@@ -67,6 +68,79 @@ describe("Person session store", () => {
 
       chmodSync(path, 0o644);
       expect(() => readPersonOnboardingInvitation(path)).toThrow("0600");
+    });
+  });
+
+  it("accepts exact v1 and v2 invitation shapes, never an additive v1 extension", () => {
+    withHome((home) => {
+      const path = join(home, "person-onboarding.json");
+      const base = {
+        kind: "echo-person-onboarding-invitation",
+        authority_url: "https://authority.example",
+        login_grant: "G".repeat(43),
+        expires_at: "2026-08-21T00:15:00.000Z",
+      } as const;
+      const write = (value: object) => {
+        writeFileSync(path, `${canonicalJson(value)}\n`, { mode: 0o600 });
+        chmodSync(path, 0o600);
+      };
+
+      write({ ...base, schema_version: 1 });
+      expect(readPersonOnboardingInvitation(path)).toMatchObject({
+        schema_version: 1,
+        login_grant: base.login_grant,
+      });
+
+      write({
+        ...base,
+        schema_version: 2,
+        expected_email: "founder@example.com",
+      });
+      expect(readPersonOnboardingInvitation(path)).toMatchObject({
+        schema_version: 2,
+        expected_email: "founder@example.com",
+      });
+
+      write({
+        ...base,
+        schema_version: 1,
+        expected_email: "founder@example.com",
+      });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+
+      write({ ...base, schema_version: 2 });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+
+      write({
+        ...base,
+        schema_version: 2,
+        expected_email: "Founder@example.com",
+      });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+
+      write({
+        ...base,
+        schema_version: 2,
+        expected_email: "founder;$(id)@example.com",
+      });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+
+      write({
+        ...base,
+        schema_version: 2,
+        expected_email: `${"a".repeat(65)}@example.com`,
+      });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+
+      write({
+        ...base,
+        schema_version: 2,
+        expected_email: `a@${"a".repeat(64)}.com`,
+      });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+
+      write({ ...base, schema_version: 1, unexpected: true });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
     });
   });
 

@@ -28,6 +28,7 @@ import {
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
 } from "@echo-brain/organization-control-plane/slack-connection-setup-v1";
 import { assertDisplayName } from "../domain/rules.js";
+import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
 import {
@@ -858,12 +859,19 @@ function usableInitialOwnerInvitation(
     if (!privateFilePresent(path)) return false;
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw) as unknown;
+    const keys =
+      parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? Object.keys(parsed).sort().join(",")
+        : undefined;
     if (
       parsed === null ||
       typeof parsed !== "object" ||
       Array.isArray(parsed) ||
-      Object.keys(parsed).sort().join(",") !==
-        "authority_url,expires_at,kind,login_grant,schema_version" ||
+      !(
+        keys === "authority_url,expires_at,kind,login_grant,schema_version" ||
+        keys ===
+          "authority_url,expected_email,expires_at,kind,login_grant,schema_version"
+      ) ||
       `${canonicalJson(parsed as never)}\n` !== raw
     ) return false;
     const invitation = parsed as {
@@ -872,9 +880,18 @@ function usableInitialOwnerInvitation(
       authority_url: unknown;
       login_grant: unknown;
       expires_at: unknown;
+      expected_email?: unknown;
     };
     if (
-      invitation.schema_version !== 1 ||
+      !(
+        (invitation.schema_version === 1 &&
+          keys === "authority_url,expires_at,kind,login_grant,schema_version") ||
+        (invitation.schema_version === 2 &&
+          keys ===
+            "authority_url,expected_email,expires_at,kind,login_grant,schema_version" &&
+          isCanonicalPersonEmail(invitation.expected_email) &&
+          invitation.expected_email === manifest.owner_email)
+      ) ||
       invitation.kind !== "echo-person-onboarding-invitation" ||
       invitation.authority_url !== manifest.authority_url ||
       typeof invitation.login_grant !== "string" ||
@@ -892,6 +909,7 @@ function usableInitialOwnerInvitation(
         `SELECT 1 FROM authority_person_login_grants
           WHERE login_grant_sha256 = ? AND organization_id = ?
             AND principal_id = ? AND membership_id = ? AND membership_type = 'owner'
+            AND expected_email_sha256 = ?
             AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at > ?
           LIMIT 1`,
       ).get(
@@ -899,6 +917,7 @@ function usableInitialOwnerInvitation(
         manifest.organization_id,
         manifest.owner_principal_id,
         manifest.owner_membership_id,
+        personLoginGrantExpectedEmailSha256(manifest.owner_email),
         new Date().toISOString(),
       ) !== undefined;
     } finally {

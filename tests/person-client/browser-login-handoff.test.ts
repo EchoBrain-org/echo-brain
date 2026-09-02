@@ -90,11 +90,39 @@ describe("Person loopback browser handoff", () => {
       });
 
       expect(response.status).toBe(400);
-      expect(await response.text()).toContain("Sign-in could not be completed");
+      const page = await response.text();
+      // The tab is the only surface most people read. It must say what went
+      // wrong and where to go next without claiming an unverified outcome.
+      expect(page).toContain("account named in the private invitation");
+      expect(page).not.toContain("spent");
+      expect(page).toContain("reissue");
+      expect(page).not.toContain("Sign-in could not be completed");
       await expect(handoff.wait()).resolves.toEqual({
         kind: "error",
         code: "identity_not_bound",
       });
+    } finally {
+      await handoff.close();
+    }
+  });
+  it("uses generic private-invitation wording on the identity-not-bound page", async () => {
+    const handoff = await startPersonLoopbackHandoff({});
+    try {
+      const response = await fetch(handoff.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          token: handoff.token,
+          error: "identity_not_bound",
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      const page = await response.text();
+      expect(page).toContain("account named in the private invitation");
+      expect(page).not.toContain("founder@example.com");
     } finally {
       await handoff.close();
     }
@@ -111,6 +139,14 @@ describe("Person loopback browser handoff", () => {
       });
 
       expect(response.status).toBe(400);
+      const retryablePage = await response.clone().text();
+      // A retryable failure retains the invitation and never renders private
+      // invitation metadata into the tab.
+      expect(retryablePage).toContain("can be retried");
+      expect(retryablePage).toContain("invitation remains usable");
+      expect(retryablePage).toContain(
+        "account named in the private invitation",
+      );
       await expect(handoff.wait()).resolves.toEqual({
         kind: "error",
         code: "retryable",

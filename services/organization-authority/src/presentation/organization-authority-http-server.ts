@@ -492,7 +492,13 @@ export function createOrganizationAuthorityHttpServer(
         }
         const begun = options.sessions.beginOidcLogin(
           input.kind === "identity_bootstrap"
-            ? { kind: input.kind, login_grant: input.login_grant }
+            ? {
+                kind: input.kind,
+                login_grant: input.login_grant,
+                ...(input.login_hint === undefined
+                  ? {}
+                  : { login_hint: input.login_hint }),
+              }
             : { kind: input.kind },
         );
         if (input.loopback_handoff !== undefined) {

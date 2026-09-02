@@ -133,6 +133,7 @@ export class PersonClient {
     authorityOrigin: string,
     loginGrant?: string,
     loopbackHandoff?: PersonOidcLoopbackHandoff,
+    loginHint?: string,
   ) {
     return await this.authority(authorityOrigin).beginOidcLogin(
       loginGrant === undefined
@@ -145,6 +146,7 @@ export class PersonClient {
         : {
             kind: "identity_bootstrap",
             login_grant: loginGrant,
+            ...(loginHint === undefined ? {} : { login_hint: loginHint }),
             ...(loopbackHandoff === undefined
               ? {}
               : { loopback_handoff: loopbackHandoff }),
@@ -340,6 +342,7 @@ export class PersonClient {
     const stored = await this.accessSession();
     return await this.issueEmployeeInvitation(
       outputPath,
+      input.email,
       () =>
         this.authority(stored.authority_origin).inviteEmployee(
           { name: input.name, email: input.email },
@@ -358,6 +361,7 @@ export class PersonClient {
     try {
       return await this.issueEmployeeInvitation(
         outputPath,
+        input.email,
         () =>
           this.authority(stored.authority_origin).reissueEmployee(
             { email: input.email },
@@ -389,6 +393,7 @@ export class PersonClient {
 
   private async issueEmployeeInvitation(
     outputPath: string,
+    expectedEmail: string,
     issue: () => Promise<{ login_grant: string; expires_at: string }>,
     authorityOrigin: string,
   ): Promise<{ output_path: string; expires_at: string }> {
@@ -396,11 +401,12 @@ export class PersonClient {
     // A different local writer can win after preflight. O_EXCL leaves its
     // file untouched; the owner can safely reissue the one-time grant.
     writePersonOnboardingInvitation(outputPath, {
-      schema_version: 1,
+      schema_version: 2,
       kind: "echo-person-onboarding-invitation",
       authority_url: authorityOrigin,
       login_grant: issued.login_grant,
       expires_at: issued.expires_at,
+      expected_email: expectedEmail,
     });
     return Object.freeze({ output_path: outputPath, expires_at: issued.expires_at });
   }

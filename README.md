@@ -187,12 +187,12 @@ matrix](docs/qualification/authority-staging-host-replacement-v1-matrix.md) and
 [qualification report](docs/qualification/QUAL-20260827-174106-001-authority-staging-host-replacement-v1.md)
 own the passed assertions and exact-run evidence.
 
-| Command     | Purpose                                                                                                                                         |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `slot-init` | Creates or repairs the retained AWS boundary, then creates or verifies its Cloudflare tunnel, ingress, DNS record, and connector-token deposit. |
-| `up`        | Creates a disposable host and attaches the retained data volume. It does not start an accepted release or prove application readiness.          |
-| `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain.                                          |
-| `status`    | Reads the lifecycle state. It reads AWS first and only checks Cloudflare when AWS is healthy.                                                   |
+| Command     | Purpose                                                                                                                                                                            |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slot-init` | Creates or repairs the retained AWS boundary, then creates or verifies its Cloudflare tunnel, ingress, DNS record, and connector-token deposit.                                    |
+| `up`        | Creates a disposable host and attaches the retained data volume. `--require-authority` additionally gates a retained-volume restart on the independently pinned public descriptor. |
+| `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain.                                                                             |
+| `status`    | Reads AWS, host, and public-descriptor observations separately. An edge observation alone is never proof that the host or Authority is ready.                                      |
 
 Prerequisites: an `echo-prod` IAM Identity Center session, `asm-exec`, the
 exact ARM64 Ubuntu AMI ID, and the ECR repository. Use neither `aws login` nor
@@ -271,12 +271,42 @@ npm run authority:staging -- down \
 npm run authority:staging -- up \
   --input /absolute/private/authority-staging/input.json
 npm run authority:staging -- up \
-  --input /absolute/private/authority-staging/input.json --execute
+  --input /absolute/private/authority-staging/input.json \
+  --require-authority --execute
 
 # Read only. In healthy state, this also checks the Cloudflare edge.
 npm run authority:staging -- status \
   --input /absolute/private/authority-staging/input.json
 ```
+
+The first `up` intentionally omits `--require-authority`: a fresh volume has
+not been onboarded yet. After the first accepted release reaches terminal green,
+a human must copy the independently trusted Authority `authority_pin_sha256`
+(the accepted bootstrap evidence names the same `sha256:` digest
+`authority_descriptor_sha256`) into the private lifecycle input:
+
+```json
+"authorityPinSha256": "sha256:<64-lowercase-hex-characters>"
+```
+
+Do not obtain that pin from the public endpoint being checked. With the pin in
+place, use `--require-authority` for every retained-volume restart. It refuses
+before AWS work if the pin is absent and treats a structurally valid descriptor
+with a different pin as a failure. `status` exposes `authority_serving` and
+`authority_accepted` separately; it is green only when the descriptor matches
+the pin. Its `authority_unpinned` and `authority_pin_mismatch` states are not
+green. If a required execute returns a failed machine-readable verification
+receipt, preserve the operation ID and repeat the same
+`up --execute --require-authority` command. While `StagingHostReady=true`, that
+retry is probe-only (`verification_only: true`): it does not upload a bundle,
+create or execute CloudFormation work, issue SSM work, or change the edge. Use
+`status` to distinguish `host_enabled`, `host_ready`, and `authority_serving`;
+none substitutes for the other.
+
+When `status` finds `StagingHostReady=false`, it returns `host_down` with
+`edge_checked: false` before resolving a Cloudflare token or querying the edge:
+edge readiness is unknown in that receipt because it cannot make a stopped host
+or Authority ready.
 
 Until the first `up` reaches ready, every reviewed retry must use a new
 `operationId` and retain `--initialize-blank-data-volume`. That flag permits
@@ -332,6 +362,14 @@ must contain exactly the nine mode-`0600` files accepted by
 `onboard-clean-v1.sh`; `archiveDir` must be an existing mode-`0700` directory
 outside the checkout. No secret values belong in this controller JSON.
 
+Before a transfer `plan`, run the read-only local preflight. It reads metadata
+only, makes no AWS call, and exits `2` until every required file is a private
+non-empty regular file, the aggregate is within the 40 MiB limit, and no extra
+leaves are present. It reports an unexpected-file count rather than filenames
+and the exact bytes over the aggregate limit when one applies.
+The controller then pins AWS calls to the `echo-prod` SSO profile and removes
+inherited credential, endpoint, proxy, and CA overrides before archive upload.
+
 ```json
 {
   "region": "us-west-2",
@@ -343,6 +381,10 @@ outside the checkout. No secret values belong in this controller JSON.
 ```
 
 ```bash
+# Do this before an AWS transfer call or archive creation.
+npm run authority:staging-onboarding-transfer -- preflight \
+  --input /absolute/private/staging-onboarding-transfer/input.json
+
 # Builds and verifies the deterministic private archive, uploads one exact
 # object version, and creates a reviewable IAM-grant-only change set.
 npm run authority:staging-onboarding-transfer -- plan \

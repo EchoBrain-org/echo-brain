@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -29,6 +30,7 @@ import {
   runOrganizationAuthoritySetupCli,
   type OrganizationAuthoritySetupCliDependencies,
 } from "../src/composition/organization-authority-setup-cli.js";
+import { runOrganizationAuthorityPersonAdministrationCli } from "../src/composition/organization-authority-person-administration-cli.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import {
@@ -524,6 +526,144 @@ describe("Organization Authority setup coordinator", () => {
       owner_membership_id: expect.stringMatching(/^mem_/),
       slack_connection_id: expect.stringMatching(/^con_/),
       granola_credential_file: join(state, "credentials", "granola-credential"),
+    });
+  });
+
+  it("keeps a default-path v2 owner invitation usable when bootstrap resumes", async () => {
+    // The production CLI requires the private invitation parent to be its
+    // canonical spelling. `tmpdir()` may expose a symlinked macOS path.
+    const state = join(realpathSync(dirname(stateDirectory())), "state");
+    const order: string[] = [];
+    let invitationIssues = 0;
+    const defaultPathDependencies: OrganizationAuthoritySetupCliDependencies = {
+      ...dependencies(order),
+      initialize_credentials: async (stateDirectory) => {
+        const status = await runOrganizationAuthorityPersonAdministrationCli(
+          ["credentials-init", "--state-dir", stateDirectory],
+          { stdout: () => undefined, stderr: () => undefined },
+        );
+        expect(status).toBe(0);
+      },
+      issue_invitation: async (input) => {
+        invitationIssues += 1;
+        const status = await runOrganizationAuthorityPersonAdministrationCli(
+          [
+            "invite",
+            "--state-dir",
+            input.state_directory,
+            "--oidc-config",
+            input.oidc_config_path,
+            "--pkce-key-file",
+            input.pkce_key_file,
+            "--membership-id",
+            input.membership_id,
+            "--expected-email",
+            input.expected_email,
+            "--authority-url",
+            input.authority_url,
+            "--out",
+            input.output_path,
+          ],
+          { stdout: () => undefined, stderr: () => undefined },
+        );
+        expect(status).toBe(0);
+      },
+    };
+    let stderr = "";
+    const io = {
+      stdout: () => undefined,
+      stderr: (value: string) => (stderr += value),
+      read_stdin: async () => "token",
+    };
+
+    const bootstrapStatus = await runOrganizationAuthoritySetupCli(
+      bootstrapArgs(state),
+      io,
+      defaultPathDependencies,
+    );
+    expect(bootstrapStatus, stderr).toBe(0);
+    const manifest = readOrganizationAuthoritySetupManifest(state);
+    expect(JSON.parse(readFileSync(manifest.invitation_path, "utf8"))).toMatchObject({
+      schema_version: 2,
+      expected_email: "founder@example.com",
+    });
+
+    expect(
+      await runOrganizationAuthoritySetupCli(
+        ["resume", "--state-dir", state],
+        io,
+        defaultPathDependencies,
+      ),
+    ).toBe(0);
+    expect(invitationIssues).toBe(1);
+
+    // A pre-v2 artifact remains a usable legacy invitation when its grant is
+    // otherwise valid. This protects a setup resumed after an older release.
+    const legacy = JSON.parse(
+      readFileSync(manifest.invitation_path, "utf8"),
+    ) as Record<string, unknown>;
+    delete legacy.expected_email;
+    legacy.schema_version = 1;
+    writeFileSync(
+      manifest.invitation_path,
+      `${canonicalJson(legacy)}\n`,
+      { mode: 0o600 },
+    );
+    chmodSync(manifest.invitation_path, 0o600);
+    let statusOutput = "";
+    expect(
+      await runOrganizationAuthoritySetupCli(
+        ["status", "--state-dir", state],
+        { ...io, stdout: (value) => (statusOutput += value) },
+      ),
+    ).toBe(0);
+    expect(JSON.parse(statusOutput)).toMatchObject({
+      founder_invitation_valid: true,
+    });
+
+    const mismatchedPath = join(dirname(manifest.invitation_path), "other.json");
+    expect(
+      await runOrganizationAuthorityPersonAdministrationCli(
+        [
+          "invite",
+          "--state-dir",
+          manifest.state_directory,
+          "--oidc-config",
+          manifest.oidc_config_path,
+          "--pkce-key-file",
+          manifest.pkce_key_file,
+          "--membership-id",
+          manifest.owner_membership_id,
+          "--expected-email",
+          "other@example.com",
+          "--authority-url",
+          manifest.authority_url,
+          "--out",
+          mismatchedPath,
+        ],
+        { stdout: () => undefined, stderr: () => undefined },
+      ),
+    ).toBe(0);
+    const mismatchedLegacy = JSON.parse(
+      readFileSync(mismatchedPath, "utf8"),
+    ) as Record<string, unknown>;
+    delete mismatchedLegacy.expected_email;
+    mismatchedLegacy.schema_version = 1;
+    writeFileSync(
+      manifest.invitation_path,
+      `${canonicalJson(mismatchedLegacy)}\n`,
+      { mode: 0o600 },
+    );
+    chmodSync(manifest.invitation_path, 0o600);
+    statusOutput = "";
+    expect(
+      await runOrganizationAuthoritySetupCli(
+        ["status", "--state-dir", state],
+        { ...io, stdout: (value) => (statusOutput += value) },
+      ),
+    ).toBe(0);
+    expect(JSON.parse(statusOutput)).toMatchObject({
+      founder_invitation_valid: false,
     });
   });
 

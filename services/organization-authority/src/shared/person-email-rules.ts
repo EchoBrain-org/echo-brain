@@ -3,8 +3,24 @@
  *
  * This is deliberately a narrow identity key, not a general RFC email parser:
  * callers persist and compare it exactly, so it must already be lowercase,
- * trimmed, printable ASCII, and contain one non-edge `@` separator.
+ * trimmed, bounded ASCII and use a conservative mailbox shape. This accepts
+ * ordinary dotted and plus-tagged work addresses, while excluding shell and
+ * display-name syntax that does not make a stable identity key.
  */
+const CANONICAL_PERSON_EMAIL =
+  /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+function hasBoundedMailboxParts(value: string): boolean {
+  const [localPart, domain] = value.split("@");
+  return (
+    localPart !== undefined &&
+    domain !== undefined &&
+    localPart.length <= 64 &&
+    domain.length <= 253 &&
+    domain.split(".").every((label) => label.length <= 63)
+  );
+}
+
 export function isCanonicalPersonEmail(value: unknown): value is string {
   if (
     typeof value !== "string" ||
@@ -12,14 +28,10 @@ export function isCanonicalPersonEmail(value: unknown): value is string {
     value.length > 254 ||
     value !== value.trim() ||
     value !== value.toLowerCase() ||
-    !/^[!-~]+$/.test(value)
+    !CANONICAL_PERSON_EMAIL.test(value) ||
+    !hasBoundedMailboxParts(value)
   ) {
     return false;
   }
-  const separator = value.indexOf("@");
-  return (
-    separator > 0 &&
-    separator === value.lastIndexOf("@") &&
-    separator < value.length - 1
-  );
+  return true;
 }
