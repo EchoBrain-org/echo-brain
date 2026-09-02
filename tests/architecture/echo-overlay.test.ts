@@ -70,10 +70,14 @@ describe("native ECHO hotkey overlay", () => {
   it("keeps the result surface simple while citation details are deferred", () => {
     const source = readFileSync(SOURCE, "utf8");
 
-    expect(source).toContain('NSButton(title: "Copy answer"');
+    expect(source).toContain('PillButton(title: "Copy answer"');
+    expect(source).toContain("private final class PillButton: NSButton");
+    expect(source).toContain("override func drawFocusRingMask()");
+    expect(source).not.toContain("bezelColor");
     expect(source).toContain("NSPasteboard.general.setString(answer, forType: .string)");
     expect(source).toContain('askButton.title = "Cancel"');
     expect(source).toContain('statusLabel.stringValue = "Thinking…"');
+    expect(source).toContain("private func setThinking(_ thinking: Bool)");
     expect(source).toContain('announce("ECHO is thinking.")');
     expect(source).toContain("resetCopyFeedback()");
     expect(source).toContain("refreshQuestionPresentation(preservingStatus: true)");
@@ -95,6 +99,8 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("static let goldBright = NSColor(srgbRed: 240 / 255");
     expect(source).toContain("static let ember = NSColor(srgbRed: 234 / 255");
     expect(source).toContain("panel.appearance = NSAppearance(named: .darkAqua)");
+    expect(source).toContain("panel.isMovableByWindowBackground = true");
+    expect(source).toContain("limitLabel.isHidden = !(nearLimit ||");
     expect(source).not.toContain("NSVisualEffectView");
     expect(source).not.toContain("root.material = .hudWindow");
   });
@@ -113,7 +119,11 @@ describe("native ECHO hotkey overlay", () => {
       "answerArea.heightAnchor.constraint(greaterThanOrEqualToConstant: 140)",
     );
     expect(source).toContain("header.setHuggingPriority(.required, for: .vertical)");
-    expect(source).toContain("promptRow.setHuggingPriority(.required, for: .vertical)");
+    expect(source).toContain(
+      "composerCard.bottomAnchor.constraint(equalTo: promptRow.bottomAnchor)",
+    );
+    expect(source).toContain("askButton.heightAnchor.constraint(equalToConstant: 46)");
+    expect(source).not.toContain("NSStackView(views: [composerCard, askButton])");
     expect(source).toContain("statusRow.setHuggingPriority(.required, for: .vertical)");
     expect(source).toContain(
       "emptyAnswerLabel.centerYAnchor.constraint(equalTo: answerArea.centerYAnchor)",
@@ -122,12 +132,15 @@ describe("native ECHO hotkey overlay", () => {
       "emptyAnswerLabel.topAnchor.constraint(greaterThanOrEqualTo: answerArea.topAnchor",
     );
     expect(source).toContain(
+      "NSAttributedString(string: answer.answer, attributes: Self.answerAttributes)",
+    );
+    expect(source).toContain(
       "answerView.scrollRangeToVisible(NSRange(location: 0, length: 0))",
     );
     // Content hugging is meaningless on NSStackView (no intrinsic size) and manual frame
     // surgery on the text view masks layout bugs instead of fixing them.
     expect(source).not.toMatch(
-      /(header|promptRow|statusRow|answerHeader)\.setContentHuggingPriority/,
+      /(header|statusRow|answerHeader)\.setContentHuggingPriority/,
     );
     expect(source).not.toContain("layoutAnswerText");
     expect(source).not.toContain("answerView.frame.size.height");
