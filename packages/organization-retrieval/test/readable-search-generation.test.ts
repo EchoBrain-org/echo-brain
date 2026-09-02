@@ -6,17 +6,20 @@ import { canonicalJson, sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   buildReadableSearchGenerationV1,
+  expandReadableSearchRelatedAtomsV1,
   READABLE_SEARCH_ADMISSION_BUDGET_V1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V2,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  readableSearchPlaneBaselineSha256,
   readableSearchPlaneBaselineSha256V1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   searchReadableSearchGenerationV1,
   warmReadableSearchActiveGenerationV1,
   type BuildReadableSearchGenerationV1Input,
   type ReadableSearchAtomV1,
+  type ReadableSearchRelatedAtomPairV1,
 } from "../src/readable-search-engine-v1.js";
 
 const digest = (value: string): `sha256:${string}` => sha256Digest(value);
@@ -29,7 +32,11 @@ function input(
   const organization_id = "org_test";
   const state_lineage_id = "lineage_test";
   const exactHeadAtom = atoms.find((atom) => atom.record_position === 2);
-  const plane = (role: string, schema_sha256: `sha256:${string}`) => {
+  const plane = (
+    role: string,
+    schema_sha256: `sha256:${string}`,
+    database_schema_version: 1 | 2 = 1,
+  ) => {
     const manifest_json = canonicalJson({
       schema_version: 1,
       kind: "echo-state-lineage-database-manifest-v1",
@@ -37,13 +44,13 @@ function input(
       authority_id,
       organization_id,
       state_lineage_id,
-      database_schema_version: 1,
+      database_schema_version,
       schema_sha256,
       created_at: "2026-08-22T00:00:00.000Z",
       creating_artifact_revision: "test",
     });
     return {
-      database_schema_version: 1 as const,
+      database_schema_version,
       schema_sha256,
       manifest_json,
       manifest_sha256: digest(manifest_json),
@@ -58,9 +65,8 @@ function input(
       planes: {
         facts: plane(
           "retrieval-facts",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_FACTS_BASELINE_V1,
-          ),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
+          2,
         ),
         content: plane(
           "retrieval-content",
@@ -142,6 +148,15 @@ function atomWith(
   const base = atom(id, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2);
   const value = { ...base, ...overrides };
   return { ...value, text_sha256: digest(value.text) };
+}
+
+function relatedPair(
+  left: ReadableSearchAtomV1,
+  right: ReadableSearchAtomV1,
+): ReadableSearchRelatedAtomPairV1 {
+  return left.atom_id < right.atom_id
+    ? { left_atom_id: left.atom_id, right_atom_id: right.atom_id }
+    : { left_atom_id: right.atom_id, right_atom_id: left.atom_id };
 }
 
 describe("immutable readable-search generation v1", () => {
@@ -342,6 +357,101 @@ describe("immutable readable-search generation v1", () => {
       expect(otherReader.items.map((item) => item.text)).toEqual([
         "searchable member",
       ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("stores a canonical segment-local pair and expands it from a warmed authorized anchor", () => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const anchor = atomWith("anchor", { atom_order: 0, text: "Decision: launch only after readiness review." });
+      const first = atomWith("first-related", { atom_order: 1, text: "The readiness review requires the signed addendum." });
+      const second = atomWith("second-related", { atom_order: 2, text: "The signed addendum gates production access." });
+      const built = buildReadableSearchGenerationV1({
+        ...input(directory, [anchor, first, second]),
+        related_atom_pairs: [relatedPair(anchor, second), relatedPair(anchor, first)],
+      });
+      const active_generation = {
+        generation_id: built.manifest.generation_id,
+        manifest_sha256: built.manifest_sha256,
+        retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
+        exact_head: built.manifest.exact_head,
+      };
+      warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation });
+      expect(expandReadableSearchRelatedAtomsV1({
+        state_directory: directory,
+        active_generation,
+        reader: { principal_id: "prn_reader", membership_id: "mem_reader" },
+        anchor_atom_ids: [anchor.atom_id],
+      }).items.map((item) => item.atom_id)).toEqual([first.atom_id, second.atom_id]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["self", (left: ReadableSearchAtomV1, _right: ReadableSearchAtomV1) => ({ left_atom_id: left.atom_id, right_atom_id: left.atom_id })],
+    ["reversed", (left: ReadableSearchAtomV1, right: ReadableSearchAtomV1) => {
+      const canonical = relatedPair(left, right);
+      return { left_atom_id: canonical.right_atom_id, right_atom_id: canonical.left_atom_id };
+    }],
+    ["dangling", (left: ReadableSearchAtomV1, _right: ReadableSearchAtomV1) => ({ left_atom_id: left.atom_id, right_atom_id: digest("missing") })],
+  ])("rejects a %s related pair before staging", (_name, pair) => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const left = atomWith("pair-left", { atom_order: 0 });
+      const right = atomWith("pair-right", { atom_order: 1 });
+      expect(() => buildReadableSearchGenerationV1({
+        ...input(directory, [left, right]),
+        related_atom_pairs: [pair(left, right)],
+      })).toThrow(/related atom pair/);
+      expect(existsSync(join(directory, "record-retrieval"))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a same-record related pair before staging", () => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const record_sha256 = digest("shared-pair-record");
+      const left = atomWith("same-record-left", {
+        record_sha256,
+        atom_order: 0,
+      });
+      const right = atomWith("same-record-right", {
+        record_sha256,
+        atom_order: 1,
+      });
+      expect(() =>
+        buildReadableSearchGenerationV1({
+          ...input(directory, [left, right]),
+          related_atom_pairs: [relatedPair(left, right)],
+        }),
+      ).toThrow("must cross source records");
+      expect(existsSync(join(directory, "record-retrieval"))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cross-policy and duplicate related pairs without exposing a restricted endpoint", () => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const member = atomWith("pair-member");
+      const reviewer = atom("pair-reviewer", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
+      const crossSegment = relatedPair(member, reviewer);
+      expect(() => buildReadableSearchGenerationV1({
+        ...input(directory, [member, reviewer]),
+        related_atom_pairs: [crossSegment],
+      })).toThrow("crosses policy segments");
+      const secondMember = atomWith("pair-second-member", { atom_order: 1 });
+      const duplicate = relatedPair(member, secondMember);
+      expect(() => buildReadableSearchGenerationV1({
+        ...input(directory, [member, secondMember]),
+        related_atom_pairs: [duplicate, duplicate],
+      })).toThrow("duplicate related atom pair");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

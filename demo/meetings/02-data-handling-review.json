@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "synthetic-demo-northstar-data-handling-review-2026-08-26",
   "title": "Data handling review",
-  "description": "Internal review of the data-handling prerequisites for the Northstar evaluation.",
+  "description": "Internal review of the data-handling prerequisites for the Echo evaluation.",
   "lifecycle": "completed",
   "provenance": {
     "source": {
@@ -49,8 +49,8 @@
   },
   "participants": [
     {
-      "id": "maya-chen",
-      "display_name": "Maya Chen",
+      "id": "zhen",
+      "display_name": "Zhen",
       "identities": [
         {
           "kind": "email",
@@ -68,7 +68,7 @@
     },
     {
       "id": "nina-alvarez",
-      "display_name": "Nina Alvarez",
+      "display_name": "Nina",
       "identities": [
         {
           "kind": "email",
@@ -89,7 +89,7 @@
     },
     {
       "id": "omar-haddad",
-      "display_name": "Omar Haddad",
+      "display_name": "Omar",
       "identities": [
         {
           "kind": "email",
@@ -109,12 +109,12 @@
       }
     },
     {
-      "id": "rob-ellis",
-      "display_name": "Rob Ellis",
+      "id": "colin-ellis",
+      "display_name": "Colin",
       "identities": [
         {
           "kind": "email",
-          "value": "rob.ellis@echo.example.test"
+          "value": "colin.ellis@echo.example.test"
         }
       ],
       "roles": ["attendee", "speaker"],
@@ -131,7 +131,7 @@
     },
     {
       "id": "leah-wong",
-      "display_name": "Leah Wong",
+      "display_name": "Leah",
       "identities": [
         {
           "kind": "email",
@@ -142,7 +142,7 @@
       "response_status": "accepted",
       "attendance": "attended",
       "organization": {
-        "name": "Northstar",
+        "name": "Echo",
         "domain": "northstar.example.test"
       },
       "is_external": true,
@@ -155,15 +155,15 @@
     {
       "id": "northstar-data-handling-review:summary",
       "kind": "summary",
-      "text": "The group reviewed prerequisites for Northstar production access. Nina said the existing agreement does not cover the usage data collected during the evaluation and declined to rely on it. The revised data-processing addendum must be signed, and Omar must verify a named Northstar security contact before production access can begin. Rob will send the addendum by September 5; Omar will verify the contact by September 8.",
+      "text": "The group reviewed prerequisites for Echo production access. Nina said the existing agreement does not cover the usage data collected during the evaluation and declined to rely on it. The revised data-processing addendum must be signed, and Omar must verify a named Echo security contact before production access can begin. Colin will send the addendum by September 5; Omar will verify the contact by September 8.",
       "origin": "source_ai",
       "language": "en"
     },
     {
       "id": "northstar-data-handling-review:transcript:0",
       "kind": "transcript",
-      "text": "Thanks for joining. We agreed to start Northstar with 10 locations. Before I give them an onboarding date, I want to be precise about what has to be true before anyone turns on production access.",
-      "speaker_participant_id": "maya-chen",
+      "text": "Thanks for joining. We agreed to start Echo with 10 locations. Before I give them an onboarding date, I want to be precise about what has to be true before anyone turns on production access.",
+      "speaker_participant_id": "zhen",
       "sequence": 0,
       "started_at": "2026-08-26T17:00:12.000Z",
       "ended_at": "2026-08-26T17:01:04.000Z",
@@ -176,7 +176,7 @@
       "id": "northstar-data-handling-review:transcript:1",
       "kind": "transcript",
       "text": "My read was that the existing agreement already lets us proceed. We are not changing the product; the customer just wants the operational dashboards turned on for the first locations.",
-      "speaker_participant_id": "rob-ellis",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 1,
       "started_at": "2026-08-26T17:01:10.000Z",
       "ended_at": "2026-08-26T17:02:08.000Z",
@@ -201,7 +201,7 @@
     {
       "id": "northstar-data-handling-review:transcript:3",
       "kind": "transcript",
-      "text": "From Security's side, I also need a named Northstar contact for incident escalation. A shared mailbox is not enough; someone needs to be accountable for receiving and routing a time-sensitive notice.",
+      "text": "From Security's side, I also need a named Echo contact for incident escalation. A shared mailbox is not enough; someone needs to be accountable for receiving and routing a time-sensitive notice.",
       "speaker_participant_id": "omar-haddad",
       "sequence": 3,
       "started_at": "2026-08-26T17:03:50.000Z",
@@ -214,7 +214,7 @@
     {
       "id": "northstar-data-handling-review:transcript:4",
       "kind": "transcript",
-      "text": "I can give you the right person. Our security operations manager is Priya Shah, and she can be the escalation contact. I will confirm the preferred address and phone number with her this afternoon.",
+      "text": "I can give you the right person. Our security operations manager is Priya, and she can be the escalation contact. I will confirm the preferred address and phone number with her this afternoon.",
       "speaker_participant_id": "leah-wong",
       "sequence": 4,
       "started_at": "2026-08-26T17:05:06.000Z",
@@ -227,7 +227,7 @@
     {
       "id": "northstar-data-handling-review:transcript:5",
       "kind": "transcript",
-      "text": "That helps. Rob, the short version is that the customer needs to sign the revised addendum, not merely acknowledge it. It should say what usage data we collect, how we may use it, and who gets called if there is an incident.",
+      "text": "That helps. Colin, the short version is that the customer needs to sign the revised addendum, not merely acknowledge it. It should say what usage data we collect, how we may use it, and who gets called if there is an incident.",
       "speaker_participant_id": "nina-alvarez",
       "sequence": 5,
       "started_at": "2026-08-26T17:06:12.000Z",
@@ -241,7 +241,7 @@
       "id": "northstar-data-handling-review:transcript:6",
       "kind": "transcript",
       "text": "Understood. I can send the revised addendum to Leah by September 5. Is it acceptable to schedule the implementation work while that is in signature, as long as we do not enable production yet?",
-      "speaker_participant_id": "rob-ellis",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 6,
       "started_at": "2026-08-26T17:07:39.000Z",
       "ended_at": "2026-08-26T17:08:47.000Z",
@@ -266,8 +266,8 @@
     {
       "id": "northstar-data-handling-review:transcript:8",
       "kind": "transcript",
-      "text": "I want to make sure I can explain this accurately to Northstar. Are those two items the only gates, or is there another review after they are complete?",
-      "speaker_participant_id": "maya-chen",
+      "text": "I want to make sure I can explain this accurately to Echo. Are those two items the only gates, or is there another review after they are complete?",
+      "speaker_participant_id": "zhen",
       "sequence": 8,
       "started_at": "2026-08-26T17:10:08.000Z",
       "ended_at": "2026-08-26T17:10:48.000Z",
@@ -292,8 +292,8 @@
     {
       "id": "northstar-data-handling-review:transcript:10",
       "kind": "transcript",
-      "text": "That is clear. Leah, I will send you the addendum by September 5 and copy Maya. Omar, I will include Priya's confirmed details in the same thread so you have one place to verify them.",
-      "speaker_participant_id": "rob-ellis",
+      "text": "That is clear. Leah, I will send you the addendum by September 5 and copy Zhen. Omar, I will include Priya's confirmed details in the same thread so you have one place to verify them.",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 10,
       "started_at": "2026-08-26T17:12:44.000Z",
       "ended_at": "2026-08-26T17:13:45.000Z",
@@ -319,7 +319,7 @@
       "id": "northstar-data-handling-review:transcript:12",
       "kind": "transcript",
       "text": "I will record the production boundary and the owners in the rollout tracker. We can keep the implementation conversations moving, but no one should describe production access as ready until Nina's and Omar's conditions are complete.",
-      "speaker_participant_id": "maya-chen",
+      "speaker_participant_id": "zhen",
       "sequence": 12,
       "started_at": "2026-08-26T17:15:10.000Z",
       "ended_at": "2026-08-26T17:16:22.000Z",
@@ -339,25 +339,25 @@
     "all_day": false
   },
   "context": {
-    "owner_participant_id": "maya-chen",
+    "owner_participant_id": "zhen",
     "calendar": {
       "event_id": "calendar-northstar-data-handling-review-2026-08-26",
-      "organizer_participant_id": "maya-chen"
+      "organizer_participant_id": "zhen"
     },
     "location": {
       "kind": "virtual",
-      "name": "Northstar rollout review",
+      "name": "Echo rollout review",
       "join_reference": "synthetic://northstar/data-handling-review"
     },
     "scopes": [
       {
         "kind": "project",
-        "value": "Northstar evaluation",
+        "value": "Echo evaluation",
         "origin": "source"
       },
       {
         "kind": "customer",
-        "value": "Northstar",
+        "value": "Echo",
         "origin": "source"
       },
       {

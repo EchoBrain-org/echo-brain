@@ -115,7 +115,7 @@ function processor(
   };
 }
 
-describe("Northstar pre-Slack evaluator", () => {
+describe("Echo pre-Slack evaluator", () => {
   it("runs the canonical four-meeting corpus offline without attribution scoring", async () => {
     const { meetings, oracle } = await fixture();
     const report = await evaluateNorthstarPreSlackExtractionV1({
@@ -209,7 +209,7 @@ describe("Northstar pre-Slack evaluator", () => {
         const maya = signals.find((item) =>
           item.kind === "action" && item.evidence.some((evidence) => evidence.block_id === "transcript-10"),
         ) as Extract<ExtractedSignal, { kind: "action" }>;
-        maya.text = "Confirm the first 10 locations with Northstar.";
+        maya.text = "Confirm the first 10 locations with Echo.";
       }),
     });
 
@@ -342,7 +342,7 @@ describe("Northstar pre-Slack evaluator", () => {
         const rob = signals.find((item) =>
           item.kind === "action" && item.evidence.some((evidence) => evidence.block_id === expectedEvidence[0]),
         ) as Extract<ExtractedSignal, { kind: "action" }>;
-        rob.text = "Copy Maya on the addendum email.";
+        rob.text = "Copy Zhen on the addendum email.";
         rob.evidence = rob.evidence.slice(0, 1);
       }),
     });
@@ -387,13 +387,13 @@ describe("Northstar pre-Slack evaluator", () => {
             item.kind === "action" && item.evidence.some((evidence) =>
               evidence.block_id === "northstar-data-handling-review:transcript:10"),
           )!;
-          rob.text = "Send the revised data-processing addendum to Northstar.";
+          rob.text = "Send the revised data-processing addendum to Echo.";
         }
         if (meeting.id === "synthetic-demo-northstar-implementation-capacity-2026-08-28") {
           const window = signals.find((item) =>
             item.kind === "decision" && item.evidence.some((evidence) => evidence.block_id === "transcript-06"),
           )!;
-          window.text = "September 16 is a conditional onboarding window for the initial 10 Northstar locations.";
+          window.text = "September 16 is a conditional onboarding window for the initial 10 Echo locations.";
         }
         if (meeting.id === "synthetic-demo-northstar-commercial-exception-2026-08-29") {
           const rationale = signals.find((item) =>

@@ -28,6 +28,7 @@
   ],
   "runtime_assets": [
     "packages/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql",
+    "packages/organization-retrieval/baselines/readable-search-facts-baseline-v2.sql",
     "packages/organization-retrieval/baselines/readable-search-lexical-baseline-v1.sql",
     "packages/organization-retrieval/baselines/readable-search-content-baseline-v1.sql"
   ],

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fast, no-write Northstar extraction gate. Build workspaces first so this
+ * Fast, no-write Echo extraction gate. Build workspaces first so this
  * wrapper runs the compiled production decision processor.
  */
 import { resolve } from "node:path";

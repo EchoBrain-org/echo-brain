@@ -6,7 +6,10 @@ import {
 import {
   clearReadableSearchActiveGenerationV1,
   searchReadableSearchGenerationV1,
+  type ReadableSearchActiveGenerationV1,
+  type ReadableSearchReaderV1,
   type ReadableSearchResultItemV1,
+  type ReadableSearchResultV1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
@@ -42,6 +45,24 @@ interface RecordHead {
 }
 
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
+const RELATED_ATOM_PACKET_MAX_ITEMS_V1 = 16;
+
+/**
+ * The Layer 2 related-atom reader is injected here so the Authority boundary
+ * remains independently testable while the disposable relationship plane is
+ * rebuilt. Its shape intentionally matches expandReadableSearchRelatedAtomsV1.
+ */
+export interface ExpandReadableSearchRelatedAtomsV1Input {
+  readonly state_directory: string;
+  readonly active_generation: ReadableSearchActiveGenerationV1;
+  readonly reader: ReadableSearchReaderV1;
+  readonly anchor_atom_ids: readonly Sha256Digest[];
+  readonly limit: number;
+}
+
+export type ExpandReadableSearchRelatedAtomsV1 = (
+  input: ExpandReadableSearchRelatedAtomsV1Input,
+) => ReadableSearchResultV1;
 
 /**
  * In-process Layer 3 input for a bounded answer-composition retrieval plan. This is not
@@ -57,6 +78,12 @@ export interface PersonRecordSearchBatchInputV1 {
    */
   readonly exact_release_id?: string;
   readonly limit?: number;
+  /**
+   * Server-only answer-composition request for the bounded decision packet.
+   * The HTTP search route and direct `searchBatch` callers retain lexical
+   * ordering unless Layer 4 explicitly asks for this plan.
+   */
+  readonly include_related_atom_packet?: true;
 }
 
 export type PersonRecordSearchReleaseAuthorizationV1 =
@@ -116,6 +143,8 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly record: Database.Database;
   readonly audit: SqlitePersonRecordReadAuditV1;
   readonly search_generation?: SearchGeneration;
+  /** Optional until the Layer 2 related-atom projector is installed. */
+  readonly expand_related_atoms?: ExpandReadableSearchRelatedAtomsV1;
 }
 
 function activeGeneration(
@@ -271,6 +300,30 @@ function asResponse(input: {
   });
 }
 
+function hasExpectedGenerationIdentity(input: {
+  readonly result: ReadableSearchResultV1;
+  readonly pointer: ActiveGenerationRow;
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly state_lineage_id: string;
+}): boolean {
+  return (
+    input.result.generation_id === input.pointer.generation_id &&
+    input.result.exact_head.authority_id === input.authority_id &&
+    input.result.exact_head.organization_id === input.organization_id &&
+    input.result.exact_head.state_lineage_id === input.state_lineage_id &&
+    input.result.exact_head.position === input.pointer.record_head_position &&
+    input.result.exact_head.record_sha256 === input.pointer.record_head_hash
+  );
+}
+
+function isUnavailableGenerationError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.endsWith("active-generation handle is unavailable")
+  );
+}
+
 /**
  * Resolves the current Person once, reads only an exact-head immutable Layer 2
  * generation, and commits the same compact release audit used by Layer 1.
@@ -338,22 +391,19 @@ export function createPersonRecordSearchRouteV1(
         }),
       );
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message ===
-          "retrieval active-generation handle is unavailable"
-      )
+      if (isUnavailableGenerationError(error))
         unavailable();
       throw error;
     }
     for (const result of results) {
       if (
-        result.generation_id !== pointer.generation_id ||
-        result.exact_head.authority_id !== options.authority_id ||
-        result.exact_head.organization_id !== options.organization_id ||
-        result.exact_head.state_lineage_id !== options.state_lineage_id ||
-        result.exact_head.position !== pointer.record_head_position ||
-        result.exact_head.record_sha256 !== pointer.record_head_hash
+        !hasExpectedGenerationIdentity({
+          result,
+          pointer,
+          authority_id: options.authority_id,
+          organization_id: options.organization_id,
+          state_lineage_id: options.state_lineage_id,
+        })
       ) {
         unavailable();
       }
@@ -371,6 +421,66 @@ export function createPersonRecordSearchRouteV1(
         if (item !== undefined && !merged.has(item.atom_id)) {
           merged.set(item.atom_id, item);
         }
+      }
+    }
+    const lexicalItems = [...merged.values()];
+    let items = lexicalItems;
+    if (
+      input.include_related_atom_packet === true &&
+      options.expand_related_atoms !== undefined
+    ) {
+      const anchors = lexicalItems.filter(
+        (item) => item.item_kind === "decision",
+      ).slice(0, 3);
+      if (anchors.length > 0) {
+        let related: ReadableSearchResultV1;
+        try {
+          related = options.expand_related_atoms({
+            state_directory: options.state_directory,
+            active_generation: {
+              generation_id: pointer.generation_id,
+              manifest_sha256: pointer.manifest_sha256,
+              retrieval_contract_sha256: pointer.retrieval_contract_sha256,
+              exact_head: {
+                authority_id: options.authority_id,
+                organization_id: options.organization_id,
+                state_lineage_id: options.state_lineage_id,
+                position: pointer.record_head_position,
+                record_sha256: pointer.record_head_hash,
+              },
+            },
+            reader: {
+              principal_id: authorization.principal_id,
+              membership_id: authorization.membership_id,
+            },
+            anchor_atom_ids: anchors.map((item) => item.atom_id),
+            limit: 13,
+          });
+        } catch (error) {
+          if (isUnavailableGenerationError(error))
+            unavailable();
+          throw error;
+        }
+        if (
+          !hasExpectedGenerationIdentity({
+            result: related,
+            pointer,
+            authority_id: options.authority_id,
+            organization_id: options.organization_id,
+            state_lineage_id: options.state_lineage_id,
+          })
+        ) {
+          unavailable();
+        }
+        const packet = new Map<Sha256Digest, ReadableSearchResultItemV1>();
+        for (const item of [
+          ...anchors,
+          ...related.items.slice(0, 13),
+          ...lexicalItems,
+        ]) {
+          if (!packet.has(item.atom_id)) packet.set(item.atom_id, item);
+        }
+        items = [...packet.values()];
       }
     }
     const released = options.sessions.authenticateAccess({
@@ -391,7 +501,6 @@ export function createPersonRecordSearchRouteV1(
         "person authentication failed",
       );
     }
-    const items = [...merged.values()];
     // This selector is a relevance narrowing only. It runs after the existing
     // generation, head, and second current-Person checks, and falls back to
     // the complete authorized result set when no exact evidence exists.
@@ -402,10 +511,14 @@ export function createPersonRecordSearchRouteV1(
         : items.filter((item) =>
             containsCanonicalReleaseId(item.text, exactReleaseId),
           );
+    const selectedItems = exactItems.length === 0 ? items : exactItems;
     const response = asResponse({
       generation_id: pointer.generation_id,
       record_head: head,
-      items: exactItems.length === 0 ? items : exactItems,
+      items:
+        input.include_related_atom_packet === true
+          ? selectedItems.slice(0, RELATED_ATOM_PACKET_MAX_ITEMS_V1)
+          : selectedItems,
     });
     const recordReadAuditRowSha256 = options.audit.append({
       read_mode: "layer2",

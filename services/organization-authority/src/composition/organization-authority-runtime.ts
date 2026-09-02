@@ -19,7 +19,10 @@ import type {
   ApprovalWorkflowProcessingV1,
   ApprovalWorkflowBundleV1,
 } from "./approval-workflow-bundle-v1.js";
-import type { AnswerCompositionGenerationBundleV1 } from "./answer-composition-generation-bundle-v1.js";
+import type {
+  AnswerCompositionGenerationBindingV1,
+  AnswerCompositionGenerationBundleV1,
+} from "./answer-composition-generation-bundle-v1.js";
 import type { DecisionProcessorBundleV1 } from "./decision-processor-bundle-v1.js";
 import type { MeetingSourceBundleV1 } from "./meeting-source-bundle-v1.js";
 import {
@@ -27,7 +30,11 @@ import {
   type OrganizationAuthorityProcessingCycleV1,
   type RunningOrganizationAuthorityServiceLifecycle,
 } from "./organization-authority-service-lifecycle.js";
-import { createReadableSearchGenerationReconcilerV1 } from "./readable-search-generation-composition.js";
+import {
+  createReadableSearchGenerationReconcilerV1,
+  readableSearchGenerationContractV1,
+  type ReadableSearchRelatedAtomProjectorBindingV1,
+} from "./readable-search-generation-composition.js";
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
@@ -103,6 +110,19 @@ type MeetingSourceAdapter = ConstructorParameters<
 type DecisionProcessorAdapter = ConstructorParameters<
   typeof AdmittedMeetingProcessingCycleV1
 >[0]["processor"];
+
+function relatedAtomProjectorBinding(
+  generation: AnswerCompositionGenerationBindingV1,
+): ReadableSearchRelatedAtomProjectorBindingV1 {
+  return Object.freeze({
+    structured_output: generation.structured_output,
+    profile: Object.freeze({
+      generation_adapter_id: generation.generation.generation_adapter_id,
+      model: generation.generation.planner_model,
+      timeout_ms: generation.generation.timeout_ms,
+    }),
+  });
+}
 /**
  * Narrow composition seams for deterministic local rehearsals. Production
  * callers leave this absent and retain the concrete provider adapters.
@@ -301,6 +321,15 @@ export async function openOrganizationAuthorityRuntime(
       stager: approvals.stager,
       source_cursor_policy: config.meeting_source_bundle.source_cursor_policy,
     });
+    // Bind once: answer composition and rebuild-time projection must use the
+    // same non-secret adapter/model selection for this running Authority.
+    const answerGeneration =
+      dependencies.api?.answer_composition_generation ??
+      config.answer_composition_generation_bundle.load();
+    const relatedAtomProjector = relatedAtomProjectorBinding(answerGeneration);
+    const readableSearchContract = readableSearchGenerationContractV1({
+      related_atom_projector: relatedAtomProjector.profile,
+    });
     const readableSearch = createReadableSearchGenerationReconcilerV1({
       state_directory: config.state_directory,
       root: lineage.root,
@@ -308,6 +337,7 @@ export async function openOrganizationAuthorityRuntime(
       record,
       signer,
       policy_projectors: config.record_policy_fact_projectors,
+      related_atom_projector: relatedAtomProjector,
     });
     const runtime = await startOrganizationAuthorityServiceLifecycle(
       { api, worker_interval_ms: config.worker_interval_ms },
@@ -319,9 +349,9 @@ export async function openOrganizationAuthorityRuntime(
         ),
         api: {
           ...dependencies.api,
-          answer_composition_generation:
-            dependencies.api?.answer_composition_generation ??
-            config.answer_composition_generation_bundle.load(),
+          answer_composition_generation: answerGeneration,
+          readable_search_retrieval_contract_sha256:
+            readableSearchContract.retrieval_contract_sha256,
           ...(dependencies.api?.answer_failure !== undefined
             ? { answer_failure: dependencies.api.answer_failure }
             : config.on_answer_composition_failure === undefined

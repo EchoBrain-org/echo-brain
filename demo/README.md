@@ -27,7 +27,7 @@ privacy, schema, or grounding failure.
 
 ## Scenario
 
-Northstar wants all 28 locations live on September 16. Four meetings settle
+Echo wants all 28 locations live on September 16. Four meetings settle
 different parts of the answer; no single meeting contains the complete truth.
 
 | Meeting | Approved knowledge | Policy |
@@ -37,8 +37,8 @@ different parts of the answer; no single meeting contains the complete truth.
 | Implementation capacity triage | September 16 is conditional onboarding for 10, not an all-28 launch. | Team |
 | Commercial exception review | The first 10 receive a private, time-bounded price exception. | Only me |
 
-Sam Ortiz, a team member who attended none of the meetings, asks the hero
-question. Maya Chen is the canonical meeting owner and receives the private
+Audrey, a team member who attended none of the meetings, asks the hero
+question. Zhen is the canonical meeting owner and receives the private
 approval cards. The authenticated human who approves a record is preserved as
 its V4 `final_approver`; ECHO does not infer a decision maker or action assignee
 from transcript speakers.

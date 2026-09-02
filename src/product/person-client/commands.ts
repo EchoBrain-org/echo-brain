@@ -522,6 +522,7 @@ export async function runPersonClientCli(
             kind: "echo-person-client-status-v1",
             installed_version: identity.product_version,
             signed_in: true,
+            display_name: session.display_name,
             membership_type: session.membership_type,
             connected_authority: session.authority_origin,
           });
@@ -534,6 +535,7 @@ export async function runPersonClientCli(
             kind: "echo-person-client-status-v1",
             installed_version: identity.product_version,
             signed_in: false,
+            display_name: null,
             membership_type: null,
             connected_authority: null,
           });

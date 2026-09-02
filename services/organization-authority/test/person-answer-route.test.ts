@@ -180,6 +180,7 @@ describe("Person answer route", () => {
           "launch owner",
         ],
         limit: 10,
+        include_related_atom_packet: true,
       });
       expect(value.search.revalidateBatchRelease).toHaveBeenCalledWith({
         access_token: "bearer-only-token",
@@ -244,6 +245,7 @@ describe("Person answer route", () => {
         ],
         exact_release_id: releaseId,
         limit: 10,
+        include_related_atom_packet: true,
       });
     } finally {
       value.database.close();
@@ -431,6 +433,7 @@ describe("Person answer route", () => {
         access_token: "bearer-only-token",
         queries: ["Which decisions did I make?"],
         limit: 10,
+        include_related_atom_packet: true,
       });
       expect(value.search.revalidateBatchRelease).toHaveBeenCalledOnce();
       expect(value.append).toHaveBeenCalledWith(expect.objectContaining({

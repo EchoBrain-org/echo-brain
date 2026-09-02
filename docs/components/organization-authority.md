@@ -18,6 +18,7 @@ decision_ids:
   - ADR-0006
   - ADR-0007
   - ADR-0008
+  - ADR-0010
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002

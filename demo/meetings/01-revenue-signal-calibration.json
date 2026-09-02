@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
   "title": "Revenue signal calibration",
-  "description": "Working session to align the Northstar evaluation scope with evidence of durable adoption.",
+  "description": "Working session to align the Echo evaluation scope with evidence of durable adoption.",
   "lifecycle": "completed",
   "provenance": {
     "source": {
@@ -50,8 +50,8 @@
   },
   "participants": [
     {
-      "id": "maya-chen",
-      "display_name": "Maya Chen",
+      "id": "zhen",
+      "display_name": "Zhen",
       "identities": [
         {
           "kind": "email",
@@ -59,7 +59,7 @@
         },
         {
           "kind": "source",
-          "value": "demo-user-maya-chen"
+          "value": "demo-user-zhen"
         }
       ],
       "roles": [
@@ -78,7 +78,7 @@
     },
     {
       "id": "anika-patel",
-      "display_name": "Anika Patel",
+      "display_name": "Anika",
       "identities": [
         {
           "kind": "email",
@@ -105,16 +105,16 @@
       }
     },
     {
-      "id": "rob-ellis",
-      "display_name": "Rob Ellis",
+      "id": "colin-ellis",
+      "display_name": "Colin",
       "identities": [
         {
           "kind": "email",
-          "value": "rob.ellis@echo.example.test"
+          "value": "colin.ellis@echo.example.test"
         },
         {
           "kind": "source",
-          "value": "demo-user-rob-ellis"
+          "value": "demo-user-colin-ellis"
         }
       ],
       "roles": [
@@ -134,7 +134,7 @@
     },
     {
       "id": "jules-martin",
-      "display_name": "Jules Martin",
+      "display_name": "Jules",
       "identities": [
         {
           "kind": "email",
@@ -165,7 +165,7 @@
     {
       "id": "summary-01",
       "kind": "summary",
-      "text": "The team aligned on a bounded Northstar evaluation: 10 locations first, with expansion tied to repeat operational use rather than initial sign-ins. Maya will confirm the first-location list by September 4, and Jules will publish the adoption dashboard by September 11.",
+      "text": "The team aligned on a bounded Echo evaluation: 10 locations first, with expansion tied to repeat operational use rather than initial sign-ins. Zhen will confirm the first-location list by September 4, and Jules will publish the adoption dashboard by September 11.",
       "sequence": 0,
       "language": "en",
       "origin": "source_ai",
@@ -174,8 +174,8 @@
     {
       "id": "transcript-01",
       "kind": "transcript",
-      "text": "Thanks for joining. I want to leave with customer-safe language for Northstar and a way to tell whether the evaluation is actually working.",
-      "speaker_participant_id": "maya-chen",
+      "text": "Thanks for joining. I want to leave with customer-safe language for Echo and a way to tell whether the evaluation is actually working.",
+      "speaker_participant_id": "zhen",
       "sequence": 1,
       "started_at": "2026-08-24T16:00:12.000Z",
       "ended_at": "2026-08-24T16:00:29.000Z",
@@ -190,7 +190,7 @@
       "id": "transcript-02",
       "kind": "transcript",
       "text": "They are excited. If we can tell them all 28 locations are in scope from day one, I think we keep the momentum and make the September story much easier.",
-      "speaker_participant_id": "rob-ellis",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 2,
       "started_at": "2026-08-24T16:00:31.000Z",
       "ended_at": "2026-08-24T16:00:49.000Z",
@@ -220,7 +220,7 @@
       "id": "transcript-04",
       "kind": "transcript",
       "text": "What would count as enough evidence? We need a threshold I can explain without turning this into an analytics lecture.",
-      "speaker_participant_id": "maya-chen",
+      "speaker_participant_id": "zhen",
       "sequence": 4,
       "started_at": "2026-08-24T16:01:21.000Z",
       "ended_at": "2026-08-24T16:01:35.000Z",
@@ -250,7 +250,7 @@
       "id": "transcript-06",
       "kind": "transcript",
       "text": "Eight out of 10 for four consecutive weeks is more conservative than I hoped. Is there a reason not to treat the first two weeks as a signal and begin expanding while we measure the rest?",
-      "speaker_participant_id": "rob-ellis",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 6,
       "started_at": "2026-08-24T16:02:08.000Z",
       "ended_at": "2026-08-24T16:02:26.000Z",
@@ -279,8 +279,8 @@
     {
       "id": "transcript-08",
       "kind": "transcript",
-      "text": "Could we call the first 10 a launch and leave the rest as a follow-on phase? That still gives Northstar a simple message.",
-      "speaker_participant_id": "rob-ellis",
+      "text": "Could we call the first 10 a launch and leave the rest as a follow-on phase? That still gives Echo a simple message.",
+      "speaker_participant_id": "colin-ellis",
       "sequence": 8,
       "started_at": "2026-08-24T16:02:54.000Z",
       "ended_at": "2026-08-24T16:03:07.000Z",
@@ -312,8 +312,8 @@
     {
       "id": "transcript-10",
       "kind": "transcript",
-      "text": "That works. I will confirm which 10 locations are in the first cohort with Northstar and bring the list back by September 4. I will not position the other 18 as committed scope.",
-      "speaker_participant_id": "maya-chen",
+      "text": "That works. I will confirm which 10 locations are in the first cohort with Echo and bring the list back by September 4. I will not position the other 18 as committed scope.",
+      "speaker_participant_id": "zhen",
       "sequence": 10,
       "started_at": "2026-08-24T16:03:46.000Z",
       "ended_at": "2026-08-24T16:04:08.000Z",
@@ -343,7 +343,7 @@
       "id": "transcript-12",
       "kind": "transcript",
       "text": "Please make the dashboard readable by Customer Success too. If the number is close, we will need to understand whether one location is blocked by training or whether the workflow itself is failing.",
-      "speaker_participant_id": "maya-chen",
+      "speaker_participant_id": "zhen",
       "sequence": 12,
       "started_at": "2026-08-24T16:04:36.000Z",
       "ended_at": "2026-08-24T16:04:57.000Z",
@@ -372,7 +372,7 @@
     {
       "id": "transcript-14",
       "kind": "transcript",
-      "text": "Good. Rob, please use the evaluation language in the next customer conversation. Maya and Jules have the two follow-ups; we will revisit expansion only when the evidence is in.",
+      "text": "Good. Colin, please use the evaluation language in the next customer conversation. Zhen and Jules have the two follow-ups; we will revisit expansion only when the evidence is in.",
       "speaker_participant_id": "anika-patel",
       "sequence": 14,
       "started_at": "2026-08-24T16:05:20.000Z",
@@ -395,10 +395,10 @@
     "all_day": false
   },
   "context": {
-    "owner_participant_id": "maya-chen",
+    "owner_participant_id": "zhen",
     "calendar": {
       "event_id": "demo-calendar-event-001",
-      "organizer_participant_id": "maya-chen"
+      "organizer_participant_id": "zhen"
     },
     "location": {
       "kind": "virtual",
@@ -408,12 +408,12 @@
     "scopes": [
       {
         "kind": "customer",
-        "value": "Northstar",
+        "value": "Echo",
         "origin": "source"
       },
       {
         "kind": "project",
-        "value": "Northstar evaluation",
+        "value": "Echo evaluation",
         "origin": "source"
       },
       {

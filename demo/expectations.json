@@ -5,8 +5,8 @@
   "warning": "Evaluation oracle only. Never send this file to ingestion, extraction, retrieval, or answer generation.",
   "scenario": {
     "id": "northstar-rollout",
-    "title": "Northstar rollout commitment",
-    "plain_language_story": "Northstar asks for all 28 locations on September 16. ECHO must combine four meetings to show what the company actually agreed, what is still required and when, and which approved fact remains private.",
+    "title": "Echo rollout commitment",
+    "plain_language_story": "Echo asks for all 28 locations on September 16. ECHO must combine four meetings to show what the company actually agreed, what is still required and when, and which approved fact remains private.",
     "chronology": [
       {
         "date": "2026-08-24",
@@ -58,7 +58,7 @@
       ],
       "required_actions": [
         {
-          "plain_language_fact": "Confirm the first 10 locations with Northstar and do not present the other 18 as committed.",
+          "plain_language_fact": "Confirm the first 10 locations with Echo and do not present the other 18 as committed.",
           "required_text_clauses": [
             ["confirm", "10 locations"],
             ["18", "commit"]
@@ -127,7 +127,7 @@
       "approval_policy": "team",
       "required_decisions": [
         {
-          "plain_language_fact": "Production access cannot begin until the revised data-processing addendum is signed and a named Northstar security contact is verified.",
+          "plain_language_fact": "Production access cannot begin until the revised data-processing addendum is signed and a named Echo security contact is verified.",
           "required_text_clauses": [
             ["addendum", "sign", "security contact"]
           ],
@@ -148,7 +148,7 @@
       ],
       "required_actions": [
         {
-          "plain_language_fact": "Send the revised addendum to Northstar.",
+          "plain_language_fact": "Send the revised addendum to Echo.",
           "required_text_clauses": [
             ["revised", "addendum"]
           ],
@@ -315,9 +315,9 @@
       ],
       "required_actions": [
         {
-          "plain_language_fact": "Send Celeste an order form limited to 10 locations and the 30-day evaluation terms.",
+          "plain_language_fact": "Send Alex an order form limited to 10 locations and the 30-day evaluation terms.",
           "required_text_clauses": [
-            ["order form", "Celeste"]
+            ["order form", "Alex"]
           ],
           "due_date": "2026-09-05",
           "evidence_block_ids": [
@@ -374,7 +374,7 @@
       "id": "before-approval-rollout-question",
       "principal": "normal_team_member",
       "approval_state": "no meeting approved",
-      "question": "Can we promise Northstar that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
+      "question": "Can we promise Echo that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
       "expected_outcome": "insufficient_approved_information",
       "required_citation_meeting_ids": [],
       "must_not_reveal": [
@@ -390,7 +390,7 @@
       "id": "after-team-approval-rollout-question",
       "principal": "normal_team_member",
       "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
-      "question": "Can we promise Northstar that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
+      "question": "Can we promise Echo that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
       "expected_outcome": "answered",
       "required_answer_facts": [
         "Do not promise all 28 locations for September 16.",
@@ -461,7 +461,7 @@
       "id": "team-member-private-price-question",
       "principal": "normal_team_member",
       "approval_state": "chapter 4 approved as Only me by a different principal",
-      "question": "What special price did Northstar receive?",
+      "question": "What special price did Echo receive?",
       "expected_outcome": "insufficient_approved_information",
       "required_citation_meeting_ids": [],
       "must_not_reveal": [
@@ -476,7 +476,7 @@
       "id": "approver-private-price-question",
       "principal": "exact_owner_approver",
       "approval_state": "chapter 4 approved as Only me by this principal",
-      "question": "What special price did Northstar receive?",
+      "question": "What special price did Echo receive?",
       "expected_outcome": "answered",
       "required_answer_facts": [
         "$22 per location",

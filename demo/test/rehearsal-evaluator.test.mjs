@@ -153,10 +153,10 @@ test("fails when a mapped fact is not present in the captured answer", () => {
 test("fails when one unrelated answer fragment is mapped to every fact with case-wide citations", () => {
   const result = passingResult();
   const answerCapture = result.answers.find((item) => item.case_id === "after-team-approval-rollout-question");
-  answerCapture.answer_text = "Northstar has an approved rollout plan.";
+  answerCapture.answer_text = "Echo has an approved rollout plan.";
   answerCapture.claims = answerCapture.claims.map((claim) => ({
     ...claim,
-    observed_text: "Northstar has an approved rollout plan.",
+    observed_text: "Echo has an approved rollout plan.",
     citation_meeting_ids: answerCapture.citation_meeting_ids
   }));
   const report = evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths });

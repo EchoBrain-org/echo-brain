@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * External-only evaluator for the Northstar rehearsal.
+ * External-only evaluator for the Echo rehearsal.
  *
  * This file deliberately has no imports from the product runtime. It consumes
  * a captured result after a run and the static expectations oracle.

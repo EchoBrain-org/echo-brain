@@ -61,6 +61,11 @@ import type {
 } from "../src/composition/approval-workflow-bundle-v1.js";
 import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
+import {
+  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+} from "../src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import type { StructuredGenerationPort } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
@@ -841,7 +846,17 @@ function createOwnerAndMemberSearchRoute(input: {
     organization_id: input.fixture.initialized.organization_id,
     state_lineage_id: input.fixture.initialized.state_lineage_id,
     retrieval_contract_sha256:
-      readableSearchGenerationContractV1().retrieval_contract_sha256,
+      // The active service binds its admitted answer-generation profile to the
+      // rebuild-time related-atom projector. This direct route fixture must
+      // read that same enabled generation, rather than the disabled setup
+      // contract used before source admission.
+      readableSearchGenerationContractV1({
+        related_atom_projector: {
+          generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+          model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+          timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+        },
+      }).retrieval_contract_sha256,
     sessions: {
       authenticateAccess: ({ access_token }) => {
         const authorization = byToken.get(access_token);

@@ -1,6 +1,6 @@
 # Ask ECHO query set
 
-These are questions about the state of the Northstar work, not about meeting
+These are questions about the state of the Echo work, not about meeting
 artifacts. Ask them only in Ask ECHO. Do not show a meeting browser, transcript
 search, fixture console, or internal approval UI.
 
@@ -18,10 +18,10 @@ category.
 
 ## Hero before-and-after query
 
-Sam Ortiz — new to the account and present at none of the four meetings — asks
+Audrey — new to the account and present at none of the four meetings — asks
 this exact question before approval and again after approval:
 
-> Can we promise Northstar that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?
+> Can we promise Echo that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?
 
 Why it matters:
 
@@ -38,17 +38,17 @@ This is the primary customer proof. Do not replace it with a narrower question.
 
 ## Supporting queries
 
-Use only the queries needed for the time available. Queries 1-4 are asked by Sam
+Use only the queries needed for the time available. Queries 1-4 are asked by Audrey
 Ortiz, the team-member persona, after the first three meetings are approved for
 Team. Query 5 is the paired privacy proof.
 
 ### 1. Customer-safe briefing
 
-> I am speaking with Northstar's executive sponsor in five minutes. What can I
+> I am speaking with Echo's executive sponsor in five minutes. What can I
 > safely promise for September 16, what must I avoid promising, and why?
 
 Shows: a ready-to-use company position, grounded in approved decisions and
-rationales rather than a list of meeting summaries. This is Sam's actual
+rationales rather than a list of meeting summaries. This is Audrey's actual
 situation — covering the sponsor call within days of joining the account — so it
 carries the emotional core of the demo.
 
@@ -63,7 +63,7 @@ Required answer shape:
 
 ### 2. Readiness and remaining work
 
-> What work remains on Northstar and when is it due? Separate what
+> What work remains on Echo and when is it due? Separate what
 > is needed for the September 16 onboarding window from what is needed for later
 > expansion.
 
@@ -87,7 +87,7 @@ before the September 16 onboarding window.
 
 ### 3. Expansion rule
 
-> When can Northstar move beyond the first 10 locations, what evidence will we
+> When can Echo move beyond the first 10 locations, what evidence will we
 > use, and what evidence supports that rule?
 
 Shows: durable decision memory with evidence and rationale, expressed without
@@ -103,7 +103,7 @@ Required answer facts:
 
 ### 4. Cross-functional action view
 
-> Give me the current Northstar commitments and deadlines. Include only
+> Give me the current Echo commitments and deadlines. Include only
 > approved information I am allowed to see.
 
 Shows: one permission-aware operating view across meetings and departments.
@@ -114,9 +114,9 @@ commercial decision exists.
 
 ### 5. Same question, different authorization
 
-Ask as Sam, the normal team member:
+Ask as Audrey, the normal team member:
 
-> What special price did Northstar receive?
+> What special price did Echo receive?
 
 Required answer: `Insufficient accessible evidence to answer this question.`,
 with no citation and no hint that a private price record exists.

@@ -141,6 +141,7 @@ export function createPersonAnswerRouteV1(
                 ? {}
                 : { exact_release_id: request.exact_release_id }),
               limit: 10,
+              include_related_atom_packet: true,
             }),
           );
           internalRelease = batch.release;

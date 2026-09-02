@@ -80,6 +80,8 @@ export interface BegunPersonOidcLogin {
 }
 
 export interface IssuedPersonSession extends AuthorityPersonMembershipBinding {
+  /** Exact active membership-row value. Never sourced from OIDC or a client. */
+  display_name: string;
   identity_binding_id: string;
   session_family_id: string;
   access_token: string;
@@ -292,6 +294,19 @@ function validateText(
   ) {
     throw new Error(`${label} is invalid`);
   }
+}
+
+function membershipDisplayName(value: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 200 ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new Error("membership display name is invalid");
+  }
+  return value;
 }
 
 function validateOidcConfiguration(
@@ -1645,6 +1660,15 @@ export class PersonIdentitySessionApplication {
     candidate: SessionCredentialCandidate,
     rotationSequence: number,
   ): { kind: "issued"; session: IssuedPersonSession } {
+    const membership = transaction.membership(family.membership_id);
+    if (
+      membership === undefined ||
+      membership.status !== "active" ||
+      !exactPersonTuple(membership, family)
+    ) {
+      throw new Error("session family membership is not active");
+    }
+    const displayName = membershipDisplayName(membership.display_name);
     const accessExpiresAt = earlierTimestamp(
       addPersonSessionMilliseconds(
         observedAt,
@@ -1676,6 +1700,7 @@ export class PersonIdentitySessionApplication {
         organization_id: family.organization_id,
         principal_id: family.principal_id,
         membership_id: family.membership_id,
+        display_name: displayName,
         membership_type: family.membership_type,
         identity_binding_id: binding.identity_binding_id,
         session_family_id: family.session_family_id,

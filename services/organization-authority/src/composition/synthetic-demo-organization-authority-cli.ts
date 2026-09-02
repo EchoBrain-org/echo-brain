@@ -155,6 +155,19 @@ async function runService(
     ),
     slack_connection_id: manifest.slack_connection_id,
     slack_identity_link_channel_id: manifest.slack_approval_channel_id,
+    on_answer_composition_failure: (event) => {
+      io.stderr(
+        `${canonicalJson({
+          schema_version: event.schema_version,
+          kind: event.kind,
+          stage: event.stage,
+          failure_class: event.failure_class,
+          elapsed_ms: event.elapsed_ms,
+          http_status: event.http_status,
+          finish_reason: event.finish_reason,
+        } as never)}\n`,
+      );
+    },
     ...(flags["--worker-interval-ms"] === undefined
       ? {}
       : { worker_interval_ms: positiveInteger(flags["--worker-interval-ms"]!) }),

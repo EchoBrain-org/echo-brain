@@ -28,11 +28,11 @@ import {
 } from "./application/analyzer.js";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V2,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  applyReadableSearchPlaneBaselineV1,
-  readableSearchPlaneBaselineSha256V1,
-  type ReadableSearchPlaneBaselineV1,
+  applyReadableSearchPlaneBaseline,
+  readableSearchPlaneBaselineSha256,
+  type ReadableSearchPlaneBaseline,
 } from "./persistence/baseline.js";
 import { openReadableSearchPlane } from "./persistence/open-readable-search-plane.js";
 
@@ -58,6 +58,7 @@ export const READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
   maximum_segments: 32,
   maximum_atom_text_utf8_bytes: 4_096,
   maximum_postings: 17_408,
+  maximum_related_atom_pairs: 4_096,
 });
 
 export const READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
@@ -68,7 +69,7 @@ export const READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
 });
 
 export interface ReadableSearchLineagePlaneV1 {
-  readonly database_schema_version: 1;
+  readonly database_schema_version: 1 | 2;
   readonly schema_sha256: Sha256Digest;
   /** Canonical state-lineage database manifest for this exact plane role. */
   readonly manifest_json: string;
@@ -116,6 +117,11 @@ export interface ReadableSearchAtomV1 {
   readonly reviewer_principal_id: string | null;
   readonly reviewer_membership_id: string | null;
 }
+/** One canonical, undirected link proposed by the disposable Layer 2 projector. */
+export interface ReadableSearchRelatedAtomPairV1 {
+  readonly left_atom_id: Sha256Digest;
+  readonly right_atom_id: Sha256Digest;
+}
 export interface ReadableSearchAnalyzerV1 {
   readonly analyzer_contract_sha256: Sha256Digest;
   readonly analyzer_source_sha256: Sha256Digest;
@@ -136,6 +142,8 @@ export interface BuildReadableSearchGenerationV1Input {
   readonly builder_artifact_sha256: Sha256Digest;
   readonly sqlite_version: string;
   readonly atoms: readonly ReadableSearchAtomV1[];
+  /** Must be canonical and policy-segment local; omitted means no expansion. */
+  readonly related_atom_pairs?: readonly ReadableSearchRelatedAtomPairV1[];
 }
 export interface ReadableSearchSegmentManifestV1 {
   readonly schema_version: 1;
@@ -150,6 +158,7 @@ export interface ReadableSearchSegmentManifestV1 {
   readonly content_root: Sha256Digest;
   readonly lexical_root: Sha256Digest;
   readonly fact_count: number;
+  readonly related_atom_pair_count: number;
   readonly content_count: number;
   readonly document_count: number;
   readonly posting_count: number;
@@ -274,10 +283,15 @@ function syncDirectory(path: string): void {
     closeSync(descriptor);
   }
 }
-function baselineFor(plane: Plane): ReadableSearchPlaneBaselineV1 {
-  if (plane === "facts") return READABLE_SEARCH_FACTS_BASELINE_V1;
+function baselineFor(plane: Plane): ReadableSearchPlaneBaseline {
+  if (plane === "facts") return READABLE_SEARCH_FACTS_BASELINE_V2;
   if (plane === "content") return READABLE_SEARCH_CONTENT_BASELINE_V1;
   return READABLE_SEARCH_LEXICAL_BASELINE_V1;
+}
+
+function baselineSchemaVersion(plane: Plane): 1 | 2 {
+  const baseline = baselineFor(plane);
+  return "schema_version" in baseline ? baseline.schema_version : 1;
 }
 
 function policyBranch(atom: ReadableSearchAtomV1): SegmentKind {
@@ -421,8 +435,7 @@ function stampLineageManifest(
   validDigest(metadata.schema_sha256, `${plane} schema_sha256`);
   validDigest(metadata.manifest_sha256, `${plane} manifest_sha256`);
   if (
-    metadata.schema_sha256 !==
-    readableSearchPlaneBaselineSha256V1(baselineFor(plane))
+    metadata.schema_sha256 !== readableSearchPlaneBaselineSha256(baselineFor(plane))
   )
     throw new Error(
       `${plane} lineage schema digest does not match frozen baseline`,
@@ -439,7 +452,7 @@ function stampLineageManifest(
     body.authority_id !== lineage.authority_id ||
     body.organization_id !== lineage.organization_id ||
     body.state_lineage_id !== lineage.state_lineage_id ||
-    body.database_schema_version !== 1 ||
+    body.database_schema_version !== baselineSchemaVersion(plane) ||
     body.schema_sha256 !== metadata.schema_sha256
   )
     throw new Error(`${plane} lineage manifest is not bound to the generation`);
@@ -463,13 +476,14 @@ function initializePlane(
   lineage: ReadableSearchLineageV1,
   analyzer: ReadableSearchAnalyzerV1,
 ): void {
-  applyReadableSearchPlaneBaselineV1(database, baselineFor(plane));
+  applyReadableSearchPlaneBaseline(database, baselineFor(plane));
   stampLineageManifest(database, plane, lineage);
   database
     .prepare(
-      `INSERT INTO retrieval_plane_metadata (singleton, schema_version, plane, organization_id, segment_id, segment_kind, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, analyzer_contract_sha256, finalized) VALUES (1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO retrieval_plane_metadata (singleton, schema_version, plane, organization_id, segment_id, segment_kind, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, analyzer_contract_sha256, finalized) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     )
     .run(
+      baselineSchemaVersion(plane),
       plane,
       lineage.organization_id,
       identity.segment_id,
@@ -494,6 +508,57 @@ function root(
 ): Sha256Digest {
   return canonicalSha256({ schema_version: 1, kind, segment_id, rows: values });
 }
+function relatedPairsBySegment(
+  input: BuildReadableSearchGenerationV1Input,
+): ReadonlyMap<Sha256Digest, readonly ReadableSearchRelatedAtomPairV1[]> {
+  const pairs = input.related_atom_pairs ?? [];
+  if (pairs.length > READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_related_atom_pairs)
+    throw new Error("readable-search generation exceeds maximum_related_atom_pairs");
+  const atomById = new Map(input.atoms.map((atom) => [atom.atom_id, atom]));
+  const result = new Map<Sha256Digest, ReadableSearchRelatedAtomPairV1[]>();
+  const seen = new Set<string>();
+  for (const pair of pairs) {
+    validDigest(pair.left_atom_id, "related left_atom_id");
+    validDigest(pair.right_atom_id, "related right_atom_id");
+    if (pair.left_atom_id >= pair.right_atom_id)
+      throw new Error("related atom pair must be canonical, non-self, and non-reversed");
+    const left = atomById.get(pair.left_atom_id);
+    const right = atomById.get(pair.right_atom_id);
+    if (left === undefined || right === undefined)
+      throw new Error("related atom pair has a dangling atom");
+    if (left.record_sha256 === right.record_sha256)
+      throw new Error("related atom pair must cross source records");
+    const leftSegment = segmentIdentity(
+      input.lineage,
+      left.policy_id,
+      left.policy_contract_sha256,
+      left.reviewer_principal_id,
+      left.reviewer_membership_id,
+    ).segment_id;
+    const rightSegment = segmentIdentity(
+      input.lineage,
+      right.policy_id,
+      right.policy_contract_sha256,
+      right.reviewer_principal_id,
+      right.reviewer_membership_id,
+    ).segment_id;
+    if (leftSegment !== rightSegment)
+      throw new Error("related atom pair crosses policy segments");
+    const identity = `${pair.left_atom_id}:${pair.right_atom_id}`;
+    if (seen.has(identity)) throw new Error("duplicate related atom pair");
+    seen.add(identity);
+    const segmentPairs = result.get(leftSegment);
+    if (segmentPairs === undefined) result.set(leftSegment, [pair]);
+    else segmentPairs.push(pair);
+  }
+  for (const segmentPairs of result.values())
+    segmentPairs.sort(
+      (left, right) =>
+        Buffer.compare(Buffer.from(left.left_atom_id), Buffer.from(right.left_atom_id)) ||
+        Buffer.compare(Buffer.from(left.right_atom_id), Buffer.from(right.right_atom_id)),
+    );
+  return result;
+}
 function buildSegment(
   staging: string,
   lineage: ReadableSearchLineageV1,
@@ -503,6 +568,7 @@ function buildSegment(
   reviewer_principal_id: string | null,
   reviewer_membership_id: string | null,
   atoms: readonly ReadableSearchAtomV1[],
+  relatedAtomPairs: readonly ReadableSearchRelatedAtomPairV1[],
 ): ReadableSearchGenerationManifestV1["segments"][number] {
   const identity = segmentIdentity(
     lineage,
@@ -601,9 +667,19 @@ function buildSegment(
           )
           .run(term, atom.atom_id, term_frequency);
     }
+    for (const pair of relatedAtomPairs)
+      facts
+        .prepare(
+          "INSERT INTO retrieval_related_atom_pair (left_atom_id, right_atom_id) VALUES (?, ?)",
+        )
+        .run(pair.left_atom_id, pair.right_atom_id);
     const factRows = rows(
       facts,
       "SELECT * FROM retrieval_permission_fact ORDER BY log_position, atom_order, atom_id",
+    );
+    const relatedAtomPairRows = rows(
+      facts,
+      "SELECT * FROM retrieval_related_atom_pair ORDER BY left_atom_id, right_atom_id",
     );
     const contentRows = rows(
       content,
@@ -618,9 +694,9 @@ function buildSegment(
       "SELECT * FROM retrieval_term_posting ORDER BY CAST(term AS BLOB), atom_id",
     );
     const facts_root = root(
-      "clean-readable-search-facts-root-v1",
+      "clean-readable-search-facts-root-v2",
       identity.segment_id,
-      factRows,
+      [{ facts: factRows, related_atom_pairs: relatedAtomPairRows }],
     );
     const content_root = root(
       "clean-readable-search-content-root-v1",
@@ -653,6 +729,7 @@ function buildSegment(
       content_root,
       lexical_root,
       fact_count: factRows.length,
+      related_atom_pair_count: relatedAtomPairRows.length,
       content_count: contentRows.length,
       document_count: documents.length,
       posting_count: postings.length,
@@ -686,12 +763,18 @@ function inputRoot(
       left.atom_order - right.atom_order ||
       Buffer.compare(Buffer.from(left.atom_id), Buffer.from(right.atom_id)),
   );
+  const related_atom_pairs = [...(input.related_atom_pairs ?? [])].sort(
+    (left, right) =>
+      Buffer.compare(Buffer.from(left.left_atom_id), Buffer.from(right.left_atom_id)) ||
+      Buffer.compare(Buffer.from(left.right_atom_id), Buffer.from(right.right_atom_id)),
+  );
   return canonicalSha256({
     schema_version: 1,
     kind: "clean-readable-search-input-root-v1",
     lineage: input.lineage,
     exact_head: input.exact_head,
     atoms,
+    related_atom_pairs,
   });
 }
 
@@ -788,6 +871,7 @@ export function buildReadableSearchGenerationV1(
       throw new Error("duplicate readable-search engine atom identity");
     seen.add(atom.atom_id);
   }
+  const relatedAtomPairs = relatedPairsBySegment(input);
   assertWithinAdmissionBudget(input);
   const root = join(input.state_directory, RETRIEVAL_DIRECTORY);
   const generations = join(root, GENERATIONS_DIRECTORY);
@@ -890,12 +974,21 @@ export function buildReadableSearchGenerationV1(
         group.reviewer_principal_id,
         group.reviewer_membership_id,
         group.atoms,
+        relatedAtomPairs.get(
+          segmentIdentity(
+            input.lineage,
+            group.policy_id,
+            group.policy_contract_sha256,
+            group.reviewer_principal_id,
+            group.reviewer_membership_id,
+          ).segment_id,
+        ) ?? [],
       ),
     );
     const roots = {
       facts_root: canonicalSha256({
         schema_version: 1,
-        kind: "clean-readable-search-generation-facts-root-v1",
+        kind: "clean-readable-search-generation-facts-root-v2",
         segments,
       }),
       content_root: canonicalSha256({
@@ -1025,6 +1118,16 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly limit?: number;
 }
 
+/** Expands direct, already-authorized related facts from at most three anchors. */
+export interface ExpandReadableSearchRelatedAtomsV1Input {
+  readonly state_directory: string;
+  readonly active_generation: ReadableSearchActiveGenerationV1;
+  readonly reader: ReadableSearchReaderV1;
+  readonly anchor_atom_ids: readonly Sha256Digest[];
+  /** Defaults to 16 and bounds the entire expansion, not each anchor. */
+  readonly limit?: number;
+}
+
 interface ReadableSearchFactRow {
   readonly atom_id: Sha256Digest;
   readonly authority_id: string;
@@ -1075,11 +1178,18 @@ interface ReadableSearchTermPostingRow {
   readonly term_frequency: number;
 }
 
+interface ReadableSearchRelatedAtomPairRow {
+  readonly left_atom_id: Sha256Digest;
+  readonly right_atom_id: Sha256Digest;
+}
+
 interface ReadableSearchSegmentRows {
   readonly manifest: ReadableSearchSegmentManifestV1;
   readonly facts: readonly ReadableSearchFactRow[];
+  readonly facts_by_atom: ReadonlyMap<Sha256Digest, ReadableSearchFactRow>;
   readonly content_by_atom: ReadonlyMap<Sha256Digest, ReadableSearchContentRow>;
   readonly postings: readonly ReadableSearchTermPostingRow[];
+  readonly related_atom_pairs: readonly ReadableSearchRelatedAtomPairRow[];
 }
 
 interface ValidatedActiveGenerationHandleV1 {
@@ -1256,6 +1366,7 @@ function assertSegmentManifest(
   validDigest(manifest.lexical_root, "segment lexical root");
   for (const [value, label] of [
     [manifest.fact_count, "fact_count"],
+    [manifest.related_atom_pair_count, "related_atom_pair_count"],
     [manifest.content_count, "content_count"],
     [manifest.document_count, "document_count"],
     [manifest.posting_count, "posting_count"],
@@ -1338,7 +1449,8 @@ function validateReadableSearchPlaneLineage(
   if (
     database.pragma("application_id", { simple: true }) !==
       baseline.application_id ||
-    database.pragma("user_version", { simple: true }) !== 1
+    database.pragma("user_version", { simple: true }) !==
+      baselineSchemaVersion(plane)
   )
     throw new Error(
       `readable-search engine ${plane} plane baseline identity is invalid`,
@@ -1375,8 +1487,8 @@ function validateReadableSearchPlaneLineage(
     lineageBody.authority_id !== manifest.authority_id ||
     lineageBody.organization_id !== manifest.organization_id ||
     lineageBody.state_lineage_id !== manifest.state_lineage_id ||
-    lineageBody.database_schema_version !== 1 ||
-    lineageBody.schema_sha256 !== readableSearchPlaneBaselineSha256V1(baseline)
+    lineageBody.database_schema_version !== baselineSchemaVersion(plane) ||
+    lineageBody.schema_sha256 !== readableSearchPlaneBaselineSha256(baseline)
   )
     throw new Error(
       `readable-search engine ${plane} plane lineage is not generation-bound`,
@@ -1388,7 +1500,7 @@ function validateReadableSearchPlaneLineage(
     .get() as Record<string, unknown> | undefined;
   if (
     metadata === undefined ||
-    metadata.schema_version !== 1 ||
+    metadata.schema_version !== baselineSchemaVersion(plane) ||
     metadata.plane !== plane ||
     metadata.organization_id !== manifest.organization_id ||
     metadata.segment_id !== segment.segment_id ||
@@ -1508,6 +1620,10 @@ function readAndValidateReadableSearchSegment(
       databases.get("facts")!,
       "SELECT * FROM retrieval_permission_fact ORDER BY log_position, atom_order, atom_id",
     ) as unknown as readonly ReadableSearchFactRow[];
+    const relatedAtomPairs = rows(
+      databases.get("facts")!,
+      "SELECT * FROM retrieval_related_atom_pair ORDER BY left_atom_id, right_atom_id",
+    ) as unknown as readonly ReadableSearchRelatedAtomPairRow[];
     const content = rows(
       databases.get("content")!,
       "SELECT * FROM retrieval_content_atom ORDER BY log_position, atom_order, atom_id",
@@ -1522,13 +1638,14 @@ function readAndValidateReadableSearchSegment(
     ) as unknown as readonly ReadableSearchTermPostingRow[];
     if (
       facts.length !== segment.fact_count ||
+      relatedAtomPairs.length !== segment.related_atom_pair_count ||
       content.length !== segment.content_count ||
       documents.length !== segment.document_count ||
       postings.length !== segment.posting_count ||
       rootForRead(
-        "clean-readable-search-facts-root-v1",
+        "clean-readable-search-facts-root-v2",
         segment.segment_id,
-        facts,
+        [{ facts, related_atom_pairs: relatedAtomPairs }],
       ) !== segment.facts_root ||
       rootForRead(
         "clean-readable-search-content-root-v1",
@@ -1584,11 +1701,25 @@ function readAndValidateReadableSearchSegment(
           "readable-search engine fact/content/lexical binding is invalid",
         );
     }
+    const factByAtom = new Map(facts.map((fact) => [fact.atom_id, fact]));
+    for (const pair of relatedAtomPairs) {
+      const left = factByAtom.get(pair.left_atom_id);
+      const right = factByAtom.get(pair.right_atom_id);
+      if (
+        pair.left_atom_id >= pair.right_atom_id ||
+        left === undefined ||
+        right === undefined ||
+        left.record_hash === right.record_hash
+      )
+        throw new Error("readable-search engine related atom pair is invalid");
+    }
     return {
       manifest: segment,
       facts,
+      facts_by_atom: factByAtom,
       content_by_atom: contentByAtom,
       postings,
+      related_atom_pairs: relatedAtomPairs,
     };
   } finally {
     for (const database of databases.values()) database.close();
@@ -1678,7 +1809,7 @@ function validateAndWarmReadableSearchGenerationV1(
   const expectedRoots = {
     facts_root: canonicalSha256({
       schema_version: 1,
-      kind: "clean-readable-search-generation-facts-root-v1",
+      kind: "clean-readable-search-generation-facts-root-v2",
       segments: manifest.segments,
     }),
     content_root: canonicalSha256({
@@ -1746,10 +1877,15 @@ function validateAndWarmReadableSearchGenerationV1(
     (sum, segment) => sum + segment.postings.length,
     0,
   );
+  const relatedAtomPairCount = validatedSegments.reduce(
+    (sum, segment) => sum + segment.related_atom_pairs.length,
+    0,
+  );
   if (
     seenAtoms.size > budget.maximum_atoms ||
     validatedSegments.length > budget.maximum_segments ||
     postingCount > budget.maximum_postings ||
+    relatedAtomPairCount > budget.maximum_related_atom_pairs ||
     validatedSegments.some((segment) =>
       [...segment.content_by_atom.values()].some(
         (item) =>
@@ -1833,6 +1969,100 @@ export function warmReadableSearchActiveGenerationV1(input: {
     reader: { principal_id: "warm-validator", membership_id: "warm-validator" },
     query: "warm",
     limit: 1,
+  });
+}
+
+/**
+ * Expands only links held by policy segments already admitted to this reader.
+ * It uses the warmed immutable handle and never opens a database on demand.
+ */
+export function expandReadableSearchRelatedAtomsV1(
+  input: ExpandReadableSearchRelatedAtomsV1Input,
+): ReadableSearchResultV1 {
+  text(input.reader.principal_id, "reader principal_id");
+  text(input.reader.membership_id, "reader membership_id");
+  if (
+    !Array.isArray(input.anchor_atom_ids) ||
+    input.anchor_atom_ids.length < 1 ||
+    input.anchor_atom_ids.length > 3
+  )
+    throw new Error("related atom expansion requires one through three anchors");
+  const anchors = new Set<Sha256Digest>();
+  for (const atomId of input.anchor_atom_ids) {
+    validDigest(atomId, "related atom expansion anchor");
+    if (anchors.has(atomId))
+      throw new Error("related atom expansion anchors must be unique");
+    anchors.add(atomId);
+  }
+  const limit = input.limit ?? 16;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16)
+    throw new Error("related atom expansion limit must be a safe integer from one through sixteen");
+  const handle = validatedActiveGenerationHandleV1;
+  if (
+    handle === null ||
+    handle.key !== activeGenerationKey(input.active_generation)
+  )
+    throw new Error("readable-search engine active-generation handle is unavailable");
+  const admitted = handle.segments.filter(
+    (segment) =>
+      segment.manifest.policy_id ===
+        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
+      (segment.manifest.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
+        segment.manifest.reviewer_principal_id === input.reader.principal_id &&
+        segment.manifest.reviewer_membership_id === input.reader.membership_id),
+  );
+  const segmentsByAnchor = new Map<Sha256Digest, ReadableSearchSegmentRows>();
+  for (const segment of admitted)
+    for (const fact of segment.facts)
+      if (anchors.has(fact.atom_id)) segmentsByAnchor.set(fact.atom_id, segment);
+  const expanded = new Set<Sha256Digest>();
+  const items: ReadableSearchResultItemV1[] = [];
+  for (const anchor of input.anchor_atom_ids) {
+    const segment = segmentsByAnchor.get(anchor);
+    if (segment === undefined) continue;
+    const candidates: Array<{
+      readonly fact: ReadableSearchFactRow;
+      readonly content: ReadableSearchContentRow;
+    }> = [];
+    for (const pair of segment.related_atom_pairs) {
+      const atomId =
+        pair.left_atom_id === anchor
+          ? pair.right_atom_id
+          : pair.right_atom_id === anchor
+            ? pair.left_atom_id
+            : null;
+      if (atomId === null || anchors.has(atomId) || expanded.has(atomId)) continue;
+      const fact = segment.facts_by_atom.get(atomId);
+      const content = segment.content_by_atom.get(atomId);
+      if (fact !== undefined && content !== undefined) candidates.push({ fact, content });
+    }
+    candidates.sort((left, right) =>
+      compareReadableSearchCandidates(
+        { score: 1, log_position: left.fact.log_position, atom_order: left.fact.atom_order, atom_id: left.fact.atom_id },
+        { score: 1, log_position: right.fact.log_position, atom_order: right.fact.atom_order, atom_id: right.fact.atom_id },
+      ),
+    );
+    for (const { fact, content } of candidates) {
+      if (items.length === limit) break;
+      expanded.add(fact.atom_id);
+      items.push(
+        Object.freeze({
+          atom_id: fact.atom_id,
+          record_position: fact.log_position,
+          record_sha256: fact.record_hash,
+          envelope_sha256: fact.envelope_sha256,
+          item_kind: content.item_kind,
+          text: content.text,
+          policy_id: fact.policy_id,
+        }),
+      );
+    }
+    if (items.length === limit) break;
+  }
+  return Object.freeze({
+    generation_id: handle.manifest.generation_id,
+    exact_head: handle.manifest.exact_head,
+    items: Object.freeze(items),
   });
 }
 
@@ -1920,7 +2150,10 @@ export function searchReadableSearchGenerationV1(
 export {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V2,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+  readableSearchPlaneBaselineSha256,
   readableSearchPlaneBaselineSha256V1,
 } from "./persistence/baseline.js";

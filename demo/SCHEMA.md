@@ -57,7 +57,7 @@ unknown keys rather than silently accepting a near-canonical shape.
 
 `context.owner_participant_id` is optional in the general canonical schema, but
 it is required for this demo because the runtime must resolve one private Slack
-approval recipient. Here it is always `maya-chen`, and that participant must have
+approval recipient. Here it is always `zhen`, and that participant must have
 exactly one canonical lowercase email identity. Replace only
 `owner@example.test` before a staging run.
 

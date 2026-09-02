@@ -186,6 +186,107 @@ describe("readable-search generation reconciliation", () => {
     ).toBe(1);
   });
 
+  it("enriches only a stale snapshot after capture and before the pure build", async () => {
+    const authority = database();
+    const current = head(2);
+    const order: string[] = [];
+    const captured = { record_head: current, related: [] as readonly string[] };
+    const enriched = { record_head: current, related: ["linked"] };
+    const enrich = vi.fn(async (snapshot: typeof captured, signal: AbortSignal) => {
+      order.push("enrich");
+      expect(snapshot).toBe(captured);
+      expect(signal.aborted).toBe(false);
+      return enriched;
+    });
+    const build = vi.fn((snapshot: typeof captured) => {
+      order.push("build");
+      expect(snapshot).toBe(enriched);
+      return {
+        generation_id: GENERATION,
+        manifest_sha256: MANIFEST,
+        retrieval_contract_sha256: CONTRACT,
+        record_head: current,
+      };
+    });
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
+      authority,
+      organization_id: ORGANIZATION_ID,
+      retrieval_contract_sha256: CONTRACT,
+      read_record_head: () => current,
+      capture_snapshot: () => {
+        order.push("capture");
+        return captured;
+      },
+      enrich_snapshot: enrich,
+      build_generation: build,
+      now: () => NOW,
+    });
+
+    await expect(
+      reconciler.reconcile(new AbortController().signal),
+    ).resolves.toMatchObject({ status: "published" });
+    expect(order).toEqual(["capture", "enrich", "build"]);
+    expect(enrich).toHaveBeenCalledOnce();
+    expect(build).toHaveBeenCalledOnce();
+
+    await expect(
+      reconciler.reconcile(new AbortController().signal),
+    ).resolves.toMatchObject({ status: "current" });
+    expect(enrich).toHaveBeenCalledOnce();
+  });
+
+  it("does not build or publish when asynchronous enrichment is cancelled", async () => {
+    const authority = database();
+    const current = head(1);
+    const controller = new AbortController();
+    const build = vi.fn();
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
+      authority,
+      organization_id: ORGANIZATION_ID,
+      retrieval_contract_sha256: CONTRACT,
+      read_record_head: () => current,
+      capture_snapshot: () => ({ record_head: current }),
+      enrich_snapshot: async (snapshot) => {
+        controller.abort();
+        return snapshot;
+      },
+      build_generation: build as never,
+      now: () => NOW,
+    });
+
+    await expect(reconciler.reconcile(controller.signal)).rejects.toThrow();
+    expect(build).not.toHaveBeenCalled();
+    expect(
+      authority
+        .prepare(
+          "SELECT count(*) FROM authority_readable_search_active_generation",
+        )
+        .pluck()
+        .get(),
+    ).toBe(0);
+  });
+
+  it("rejects enrichment that changes the captured record head", async () => {
+    const authority = database();
+    const current = head(1);
+    const build = vi.fn();
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
+      authority,
+      organization_id: ORGANIZATION_ID,
+      retrieval_contract_sha256: CONTRACT,
+      read_record_head: () => current,
+      capture_snapshot: () => ({ record_head: current }),
+      enrich_snapshot: async () => ({ record_head: head(2) }),
+      build_generation: build as never,
+      now: () => NOW,
+    });
+
+    await expect(
+      reconciler.reconcile(new AbortController().signal),
+    ).rejects.toThrow("enrichment changed its captured record head");
+    expect(build).not.toHaveBeenCalled();
+  });
+
   it("does not publish a completed generation when its captured head was superseded", async () => {
     const authority = database();
     const captured = head(2);
