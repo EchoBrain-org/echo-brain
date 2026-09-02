@@ -41,6 +41,24 @@ export const JOURNEY_STAGES_V1 = [
 ] as const;
 export type JourneyStageV1 = (typeof JOURNEY_STAGES_V1)[number];
 
+/**
+ * The only keys a later metric emitter may use as CloudWatch dimensions.
+ * Journey, request, person, user, meeting, candidate, and approval identifiers
+ * are deliberately excluded: they belong only in permitted run-detail logs.
+ */
+export const JOURNEY_METRIC_DIMENSION_KEYS_V1 = [
+  "environment",
+  "workflow",
+  "stage",
+  "outcome",
+  "failure_class",
+  "retryable",
+  "provider",
+  "model",
+] as const;
+export type JourneyMetricDimensionKeyV1 =
+  (typeof JOURNEY_METRIC_DIMENSION_KEYS_V1)[number];
+
 export const JOURNEY_EVENTS_V1 = ["started", "succeeded", "failed", "skipped"] as const;
 export type JourneyEventV1 = (typeof JOURNEY_EVENTS_V1)[number];
 
@@ -352,11 +370,19 @@ function validSequence(value: unknown, name: string, minimum: number): number {
 function normalizeContext(input: JourneyTelemetryContextInputV1): JourneyTelemetryContextV1 {
   if (!includes(JOURNEY_ENVIRONMENTS_V1, input.environment)) invalid("environment is invalid");
   if (!includes(JOURNEY_WORKFLOWS_V1, input.workflow)) invalid("workflow is invalid");
+  const releaseSha = nullableReleaseSha(input.release_sha);
+  const buildNumber = nullableBuildNumber(input.build_number);
+  if (input.environment === "staging" && releaseSha === null) {
+    invalid("staging release_sha is required");
+  }
+  if (input.environment === "staging" && buildNumber === null) {
+    invalid("staging build_number is required");
+  }
   return Object.freeze({
     environment: input.environment,
     workflow: input.workflow,
-    release_sha: nullableReleaseSha(input.release_sha),
-    build_number: nullableBuildNumber(input.build_number),
+    release_sha: releaseSha,
+    build_number: buildNumber,
   });
 }
 
@@ -376,6 +402,13 @@ function normalizeRetrieval(
 /** Returns null rather than exposing malformed or non-telemetry IDs. */
 export function parseJourneyIdV1(value: string): JourneyIdV1 | null {
   return typeof value === "string" && UUID_V4.test(value) ? (value as JourneyIdV1) : null;
+}
+
+/** Returns true only for finite, low-cardinality metric-dimension keys. */
+export function isJourneyMetricDimensionKeyV1(
+  value: unknown,
+): value is JourneyMetricDimensionKeyV1 {
+  return includes(JOURNEY_METRIC_DIMENSION_KEYS_V1, value);
 }
 
 /** Strict constructor. The fail-open API below catches its errors for product code. */
@@ -517,6 +550,10 @@ export function createJourneyTelemetryEventV1(input: {
   if (elapsed === null || ((event === "started" || event === "skipped") && elapsed !== 0)) {
     invalid("elapsed_ms is invalid for event");
   }
+  const queueAge = nullableCount(input.event.queue_age_ms, "queue_age_ms");
+  if (queueAge !== null && stage !== "meeting_approval_action_verify") {
+    invalid("queue_age_ms is only allowed for approval action verification");
+  }
   return Object.freeze({
     schema_version: JOURNEY_TELEMETRY_SCHEMA_VERSION_V1,
     kind: JOURNEY_TELEMETRY_KIND_V1,
@@ -535,7 +572,7 @@ export function createJourneyTelemetryEventV1(input: {
       return value;
     })(),
     elapsed_ms: elapsed,
-    queue_age_ms: nullableCount(input.event.queue_age_ms, "queue_age_ms"),
+    queue_age_ms: queueAge,
     retrieval,
     llm_usage: llmUsage,
   });

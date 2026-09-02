@@ -3,6 +3,8 @@ import {
   createJourneyIdV1,
   createJourneyTelemetryEventV1,
   createJourneyTelemetryV1,
+  isJourneyMetricDimensionKeyV1,
+  JOURNEY_METRIC_DIMENSION_KEYS_V1,
   parseJourneyIdV1,
   type JourneyTelemetryContextInputV1,
 } from "../../src/shared/journey-telemetry-v1.js";
@@ -270,6 +272,96 @@ describe("journey telemetry v1", () => {
         },
       }),
     ).toThrow("provider_latency_ms");
+
+    expect(() =>
+      createJourneyTelemetryEventV1({
+        journey_id: JOURNEY_ID,
+        sequence: 1,
+        observed_at: OBSERVED_AT,
+        context: askContext,
+        event: {
+          stage: "ask_validation",
+          event: "succeeded",
+          elapsed_ms: 1,
+          queue_age_ms: LONG_HUMAN_WAIT_MS,
+        },
+      }),
+    ).toThrow("queue_age_ms");
+    expect(() =>
+      createJourneyTelemetryEventV1({
+        journey_id: JOURNEY_ID,
+        sequence: 1,
+        observed_at: OBSERVED_AT,
+        context: { ...askContext, workflow: "meeting_approval" },
+        event: {
+          stage: "meeting_approval_action_queue",
+          event: "succeeded",
+          elapsed_ms: 1,
+          queue_age_ms: LONG_HUMAN_WAIT_MS,
+        },
+      }),
+    ).toThrow("queue_age_ms");
+  });
+
+  it("requires staging deploy identity while retaining local nullable context", () => {
+    expect(() =>
+      createJourneyTelemetryEventV1({
+        journey_id: JOURNEY_ID,
+        sequence: 1,
+        observed_at: OBSERVED_AT,
+        context: { environment: "staging", workflow: "ask" },
+        event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
+      }),
+    ).toThrow("staging release_sha");
+    expect(() =>
+      createJourneyTelemetryEventV1({
+        journey_id: JOURNEY_ID,
+        sequence: 1,
+        observed_at: OBSERVED_AT,
+        context: {
+          environment: "staging",
+          workflow: "ask",
+          release_sha: RELEASE_SHA,
+        },
+        event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
+      }),
+    ).toThrow("staging build_number");
+    expect(
+      createJourneyTelemetryEventV1({
+        journey_id: JOURNEY_ID,
+        sequence: 1,
+        observed_at: OBSERVED_AT,
+        context: { environment: "test", workflow: "ask" },
+        event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
+      }),
+    ).toMatchObject({ environment: "test", release_sha: null, build_number: null });
+  });
+
+  it("exports a finite metric-dimension allowlist without correlation identifiers", () => {
+    expect(JOURNEY_METRIC_DIMENSION_KEYS_V1).toEqual([
+      "environment",
+      "workflow",
+      "stage",
+      "outcome",
+      "failure_class",
+      "retryable",
+      "provider",
+      "model",
+    ]);
+    for (const allowed of JOURNEY_METRIC_DIMENSION_KEYS_V1) {
+      expect(isJourneyMetricDimensionKeyV1(allowed)).toBe(true);
+    }
+    for (const forbidden of [
+      "journey_id",
+      "request_id",
+      "user_id",
+      "person_id",
+      "meeting_id",
+      "candidate_id",
+      "approval_id",
+    ]) {
+      expect(isJourneyMetricDimensionKeyV1(forbidden)).toBe(false);
+    }
   });
 
   it("enforces stage-compatible outcomes and keeps intermediate stages outcome-free", () => {
@@ -284,7 +376,7 @@ describe("journey telemetry v1", () => {
         journey_id: JOURNEY_ID,
         sequence: 1,
         observed_at: OBSERVED_AT,
-        context: { environment: "staging", workflow: "meeting_approval" },
+        context: { ...askContext, workflow: "meeting_approval" },
         event: {
           stage: "meeting_search_publication",
           event: "succeeded",
@@ -298,7 +390,7 @@ describe("journey telemetry v1", () => {
         journey_id: JOURNEY_ID,
         sequence: 1,
         observed_at: OBSERVED_AT,
-        context: { environment: "staging", workflow: "meeting_approval" },
+        context: { ...askContext, workflow: "meeting_approval" },
         event: {
           stage: "meeting_terminal_persist",
           event: "succeeded",
@@ -312,7 +404,7 @@ describe("journey telemetry v1", () => {
         journey_id: JOURNEY_ID,
         sequence: 1,
         observed_at: OBSERVED_AT,
-        context: { environment: "staging", workflow: "meeting_approval" },
+        context: { ...askContext, workflow: "meeting_approval" },
         event: {
           stage: "meeting_approval_staging",
           event: "succeeded",
