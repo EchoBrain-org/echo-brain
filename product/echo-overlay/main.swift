@@ -4,8 +4,11 @@ import Foundation
 
 private let askTimeoutSeconds: TimeInterval = 145
 private let identityTimeoutSeconds: TimeInterval = 5
-private let maximumQuestionBytes = 64 * 1024
 private let maximumProcessOutputBytes = 128 * 1024
+private let maximumQuestionScalars = 240
+private let maximumQuestionUniqueTerms = 32
+private let maximumQuestionTermBytes = 64
+private let maximumRawQuestionUTF16Units = 4_096
 private let hotKeySignature: OSType = 0x4543484F // "ECHO"
 private let hotKeyIdentifier = EventHotKeyID(signature: hotKeySignature, id: 1)
 private let allowedCitationPolicies: Set<String> = [
@@ -44,8 +47,6 @@ private struct CliStatus: Decodable {
 
 private struct DisplayAnswer: Sendable {
     let answer: String
-    let citationCount: Int
-    let citationPolicies: [String]
 }
 
 private enum AskOutcome: Sendable {
@@ -298,15 +299,7 @@ private final class CliRunner: @unchecked Sendable {
             return .failure("The installed ECHO client returned an invalid response.")
         }
 
-        var seen = Set<String>()
-        let policies = envelope.result.citations.compactMap { citation in
-            seen.insert(citation.policy_id).inserted ? citation.policy_id : nil
-        }
-        return .success(DisplayAnswer(
-            answer: envelope.result.answer,
-            citationCount: envelope.result.citations.count,
-            citationPolicies: policies
-        ))
+        return .success(DisplayAnswer(answer: envelope.result.answer))
     }
 
     private static func parseFailure(_ data: Data) -> AskOutcome {
@@ -420,25 +413,159 @@ private final class EchoPanel: NSPanel {
     }
 }
 
+private let questionTermExpression = try! NSRegularExpression(pattern: "[\\p{L}\\p{N}]+")
+
+private struct QuestionValidation {
+    let question: String
+    let scalarCount: Int
+    let uniqueTermCount: Int
+    let message: String?
+
+    var isValid: Bool { message == nil }
+}
+
+private func normalizeQuestion(_ source: String) -> String {
+    let normalized = source.precomposedStringWithCanonicalMapping
+    var result = ""
+    var isReplacingInvalidRun = false
+    for scalar in normalized.unicodeScalars {
+        let isLineSeparator = scalar.value == 0x2028 || scalar.value == 0x2029
+        if CharacterSet.controlCharacters.contains(scalar) || isLineSeparator {
+            isReplacingInvalidRun = !result.isEmpty
+            continue
+        }
+        if isReplacingInvalidRun {
+            if !CharacterSet.whitespaces.contains(scalar) {
+                result.append(" ")
+            }
+            isReplacingInvalidRun = false
+        }
+        result.unicodeScalars.append(scalar)
+    }
+    return result.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func validateQuestion(_ source: String) -> QuestionValidation {
+    let question = normalizeQuestion(source)
+    let scalarCount = question.unicodeScalars.count
+    let range = NSRange(question.startIndex..., in: question)
+    let terms = Set(questionTermExpression.matches(in: question, range: range).compactMap { match -> String? in
+        guard let termRange = Range(match.range, in: question) else { return nil }
+        return String(question[termRange]).lowercased().precomposedStringWithCanonicalMapping
+    })
+    let uniqueTermCount = terms.count
+
+    let message: String?
+    if question.isEmpty {
+        message = "Ask a question to search your approved team context."
+    } else if uniqueTermCount == 0 {
+        message = "Include at least one word or number in the question."
+    } else if scalarCount > maximumQuestionScalars {
+        let excess = scalarCount - maximumQuestionScalars
+        message = "Keep the question to \(maximumQuestionScalars) characters. Remove \(excess) character\(excess == 1 ? "" : "s")."
+    } else if uniqueTermCount > maximumQuestionUniqueTerms {
+        let excess = uniqueTermCount - maximumQuestionUniqueTerms
+        message = "Keep the question to \(maximumQuestionUniqueTerms) unique terms. Remove or repeat \(excess) term\(excess == 1 ? "" : "s")."
+    } else if terms.contains(where: { $0.lengthOfBytes(using: .utf8) > maximumQuestionTermBytes }) {
+        message = "One term is too long. Split it into shorter words."
+    } else {
+        message = nil
+    }
+    return QuestionValidation(
+        question: question,
+        scalarCount: scalarCount,
+        uniqueTermCount: uniqueTermCount,
+        message: message
+    )
+}
+
+private final class QuestionTextView: NSTextView {
+    var onSubmit: (() -> Void)?
+    var placeholder = "Ask ECHO a question"
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty else { return }
+        let rect = NSRect(
+            x: textContainerInset.width + 8,
+            y: textContainerInset.height + 1,
+            width: max(0, bounds.width - textContainerInset.width * 2 - 16),
+            height: 22
+        )
+        placeholder.draw(
+            in: rect,
+            withAttributes: [
+                .font: font ?? NSFont.systemFont(ofSize: 15),
+                .foregroundColor: NSColor.placeholderTextColor,
+            ]
+        )
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == .command,
+              let key = event.charactersIgnoringModifiers?.lowercased()
+        else {
+            return super.performKeyEquivalent(with: event)
+        }
+        switch key {
+        case "a": selectAll(nil)
+        case "c": copy(nil)
+        case "x": cut(nil)
+        case "v": paste(nil)
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let key = event.charactersIgnoringModifiers
+        if (key == "\r" || key == "\n") && !event.modifierFlags.contains(.shift) {
+            if hasMarkedText() {
+                super.keyDown(with: event)
+                return
+            }
+            onSubmit?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
 @MainActor
-private final class OverlayController: NSObject, NSWindowDelegate {
+private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let runner = CliRunner()
     private let panel: EchoPanel
-    private let questionField = NSSearchField()
+    private let composer = QuestionTextView()
+    private let composerScrollView = NSScrollView()
     private let askButton = NSButton(title: "Ask", target: nil, action: nil)
+    private let copyButton = NSButton(title: "Copy answer", target: nil, action: nil)
     private let spinner = NSProgressIndicator()
-    private let identityLabel = NSTextField(labelWithString: "Checking signed-in user…")
-    private let statusLabel = NSTextField(labelWithString: "Ask ECHO a question")
+    private let identityLabel = NSTextField(labelWithString: "Signed in")
+    private let statusLabel = NSTextField(labelWithString: "Ready when you are")
+    private let limitLabel = NSTextField(
+        labelWithString: "0 / \(maximumQuestionScalars) characters · 0 / \(maximumQuestionUniqueTerms) terms"
+    )
+    private let emptyAnswerLabel = NSTextField(wrappingLabelWithString: "Ask a focused question and ECHO will synthesize the approved context you can access.")
     private let answerView = NSTextView()
-    private let citationLabel = NSTextField(labelWithString: "")
+    private let answerScrollView = NSScrollView()
+    private let answerHeader = NSStackView()
+    private var composerHeightConstraint: NSLayoutConstraint?
     private var activeAsk: RunningAsk?
     private var requestIdentifier: UUID?
     private var activeIdentityLookup: RunningAsk?
     private var identityRequestIdentifier: UUID?
+    private var identityText = "Signed in"
+    private var copyFeedbackWorkItem: DispatchWorkItem?
 
     override init() {
         panel = EchoPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 500),
             styleMask: [.titled, .closable, .resizable, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -450,18 +577,27 @@ private final class OverlayController: NSObject, NSWindowDelegate {
 
     func showPrompt() {
         cancelActiveAsk()
-        refreshIdentity()
-        questionField.stringValue = ""
-        questionField.isEnabled = true
-        askButton.isEnabled = true
-        statusLabel.stringValue = "Ask ECHO a question"
+        if activeIdentityLookup == nil { refreshIdentity() }
+        composer.string = ""
+        composer.needsDisplay = true
+        composer.isEditable = true
+        askButton.title = "Ask"
+        askButton.setAccessibilityLabel("Ask ECHO")
+        resetCopyFeedback()
+        copyButton.isEnabled = false
+        statusLabel.stringValue = "Ready when you are"
+        statusLabel.textColor = .secondaryLabelColor
         answerView.string = ""
-        citationLabel.stringValue = ""
+        answerHeader.isHidden = true
+        answerScrollView.isHidden = true
+        emptyAnswerLabel.isHidden = false
+        emptyAnswerLabel.stringValue = "Ask a focused question and ECHO will synthesize the approved context you can access."
         spinner.stopAnimation(nil)
+        refreshQuestionPresentation()
         panel.center()
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(questionField)
+        panel.makeFirstResponder(composer)
     }
 
     func cancelAndHide() {
@@ -475,29 +611,75 @@ private final class OverlayController: NSObject, NSWindowDelegate {
         cancelIdentityLookup()
     }
 
-    @objc private func submit() {
-        let question = questionField.stringValue
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty else {
-            statusLabel.stringValue = "Type a question first."
+    func windowDidResize(_ notification: Notification) {
+        updateComposerHeight()
+    }
+
+    func textDidChange(_ notification: Notification) {
+        refreshQuestionPresentation()
+    }
+
+    func textView(
+        _ textView: NSTextView,
+        shouldChangeTextIn affectedCharRange: NSRange,
+        replacementString: String?
+    ) -> Bool {
+        guard textView === composer, let replacementString else { return true }
+        let currentLength = (composer.string as NSString).length
+        let replacementLength = (replacementString as NSString).length
+        let resultingLength = currentLength - affectedCharRange.length + replacementLength
+        guard resultingLength <= maximumRawQuestionUTF16Units else {
+            let message = "That paste is too large. Keep the draft under \(maximumRawQuestionUTF16Units.formatted()) characters."
+            statusLabel.stringValue = message
+            statusLabel.textColor = .systemRed
+            announce(message)
+            return false
+        }
+        return true
+    }
+
+    @objc private func submitOrCancel() {
+        if activeAsk != nil {
+            cancelActiveAsk()
+            composer.isEditable = true
+            askButton.title = "Ask"
+            askButton.setAccessibilityLabel("Ask ECHO")
+            statusLabel.stringValue = "Cancelled"
+            statusLabel.textColor = .secondaryLabelColor
+            refreshQuestionPresentation(preservingStatus: true)
             return
         }
-        guard question.lengthOfBytes(using: .utf8) <= maximumQuestionBytes else {
-            statusLabel.stringValue = "The question is too long."
+
+        let validation = validateQuestion(composer.string)
+        guard validation.isValid else {
+            let message = validation.message ?? "Check the question and try again."
+            statusLabel.stringValue = message
+            statusLabel.textColor = .systemRed
+            announce(message)
             return
         }
+        if composer.string != validation.question { composer.string = validation.question }
 
         cancelActiveAsk()
+        resetCopyFeedback()
         let identifier = UUID()
         requestIdentifier = identifier
-        questionField.isEnabled = false
-        askButton.isEnabled = false
+        composer.isEditable = false
+        askButton.title = "Cancel"
+        askButton.setAccessibilityLabel("Cancel ECHO request")
+        askButton.isEnabled = true
+        copyButton.isEnabled = false
         answerView.string = ""
-        citationLabel.stringValue = ""
-        statusLabel.stringValue = "Asking ECHO…"
+        answerHeader.isHidden = true
+        answerScrollView.isHidden = true
+        emptyAnswerLabel.isHidden = false
+        emptyAnswerLabel.stringValue = "ECHO is checking the approved context available to you."
+        statusLabel.stringValue = "Thinking…"
+        statusLabel.textColor = .secondaryLabelColor
         spinner.startAnimation(nil)
+        announce("ECHO is thinking.")
 
-        activeAsk = runner.ask(question: question) { [weak self] outcome in
+        activeAsk = runner.ask(question: validation.question) { [weak self] outcome in
             Task { @MainActor in self?.handle(outcome, identifier: identifier) }
         }
     }
@@ -507,23 +689,33 @@ private final class OverlayController: NSObject, NSWindowDelegate {
         activeAsk = nil
         requestIdentifier = nil
         spinner.stopAnimation(nil)
-        questionField.isEnabled = true
+        composer.isEditable = true
+        askButton.title = "Ask"
+        askButton.setAccessibilityLabel("Ask ECHO")
         askButton.isEnabled = true
         switch outcome {
         case .success(let answer):
-            statusLabel.stringValue = "Done"
+            statusLabel.stringValue = "Answer ready"
+            statusLabel.textColor = .secondaryLabelColor
             answerView.string = answer.answer
-            let policies = answer.citationPolicies.isEmpty
-                ? "none"
-                : answer.citationPolicies.joined(separator: ", ")
-            citationLabel.stringValue = "Citations: \(answer.citationCount)\nPolicies: \(policies)"
+            answerHeader.isHidden = false
+            answerScrollView.isHidden = false
+            emptyAnswerLabel.isHidden = true
+            copyButton.isEnabled = true
+            announce("ECHO answer ready.")
         case .failure(let message):
-            statusLabel.stringValue = message
+            statusLabel.stringValue = "Couldn’t answer"
+            statusLabel.textColor = .systemRed
             answerView.string = ""
-            citationLabel.stringValue = ""
+            answerHeader.isHidden = true
+            answerScrollView.isHidden = true
+            emptyAnswerLabel.isHidden = false
+            emptyAnswerLabel.stringValue = message
+            announce(message)
         case .cancelled:
             break
         }
+        refreshQuestionPresentation(preservingStatus: true)
     }
 
     private func cancelActiveAsk() {
@@ -533,9 +725,43 @@ private final class OverlayController: NSObject, NSWindowDelegate {
         spinner.stopAnimation(nil)
     }
 
+    @objc private func copyAnswer() {
+        let answer = answerView.string
+        guard !answer.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(answer, forType: .string)
+        resetCopyFeedback()
+        copyButton.title = "Copied"
+        copyButton.setAccessibilityLabel("Answer copied")
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.copyButton.title = "Copy answer"
+            self?.copyButton.setAccessibilityLabel("Copy answer")
+        }
+        copyFeedbackWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: workItem)
+    }
+
+    private func resetCopyFeedback() {
+        copyFeedbackWorkItem?.cancel()
+        copyFeedbackWorkItem = nil
+        copyButton.title = "Copy answer"
+        copyButton.setAccessibilityLabel("Copy answer")
+    }
+
+    private func announce(_ message: String) {
+        NSAccessibility.post(
+            element: statusLabel,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+            ]
+        )
+    }
+
     private func refreshIdentity() {
         cancelIdentityLookup()
-        identityLabel.stringValue = "Checking signed-in user…"
+        identityLabel.stringValue = identityText
         let identifier = UUID()
         identityRequestIdentifier = identifier
         activeIdentityLookup = runner.identity { [weak self] outcome in
@@ -549,12 +775,13 @@ private final class OverlayController: NSObject, NSWindowDelegate {
         identityRequestIdentifier = nil
         switch outcome {
         case .signedIn(let firstName):
-            identityLabel.stringValue = "Signed in as \(firstName)"
+            identityText = "Signed in as \(firstName)"
         case .signedOut:
-            identityLabel.stringValue = "Not signed in"
+            identityText = "Not signed in"
         case .failure:
-            identityLabel.stringValue = "Signed-in user unavailable"
+            identityText = "Signed-in user unavailable"
         }
+        identityLabel.stringValue = identityText
     }
 
     private func cancelIdentityLookup() {
@@ -569,36 +796,90 @@ private final class OverlayController: NSObject, NSWindowDelegate {
         panel.level = .floating
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        panel.minSize = NSSize(width: 520, height: 300)
+        panel.minSize = NSSize(width: 600, height: 380)
+        panel.backgroundColor = .windowBackgroundColor
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
         panel.delegate = self
         panel.onCancel = { [weak self] in self?.cancelAndHide() }
     }
 
     private func configureContent() {
-        let root = NSView()
+        let root = NSVisualEffectView()
+        root.material = .hudWindow
+        root.blendingMode = .withinWindow
+        root.state = .active
         panel.contentView = root
 
-        identityLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        identityLabel.textColor = .labelColor
+        let titleLabel = NSTextField(labelWithString: "ECHO")
+        titleLabel.font = NSFont.systemFont(ofSize: 20, weight: .semibold)
+        titleLabel.setAccessibilityLabel("ECHO")
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        identityLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        identityLabel.textColor = .secondaryLabelColor
         identityLabel.lineBreakMode = .byTruncatingTail
+        identityLabel.setAccessibilityLabel("Signed-in user")
         identityLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        questionField.placeholderString = "Ask ECHO a question"
-        questionField.target = self
-        questionField.action = #selector(submit)
-        questionField.sendsWholeSearchString = true
-        questionField.sendsSearchStringImmediately = false
-        questionField.translatesAutoresizingMaskIntoConstraints = false
+        let header = NSStackView(views: [titleLabel, identityLabel])
+        header.orientation = .vertical
+        header.spacing = 3
+        header.alignment = .leading
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        composer.delegate = self
+        composer.font = NSFont.systemFont(ofSize: 15)
+        composer.textColor = .labelColor
+        composer.insertionPointColor = .controlAccentColor
+        composer.drawsBackground = false
+        composer.isRichText = false
+        composer.allowsUndo = true
+        composer.isAutomaticQuoteSubstitutionEnabled = false
+        composer.isAutomaticDashSubstitutionEnabled = false
+        composer.isAutomaticTextReplacementEnabled = false
+        composer.textContainerInset = NSSize(width: 8, height: 9)
+        composer.minSize = NSSize(width: 0, height: 42)
+        composer.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        composer.isVerticallyResizable = true
+        composer.isHorizontallyResizable = false
+        composer.textContainer?.widthTracksTextView = true
+        composer.textContainer?.lineFragmentPadding = 0
+        composer.onSubmit = { [weak self] in self?.submitOrCancel() }
+        composer.setAccessibilityLabel("Question for ECHO")
+        composer.setAccessibilityHelp("Press Return to ask. Press Shift-Return for a new line.")
+
+        composerScrollView.drawsBackground = false
+        composerScrollView.borderType = .noBorder
+        composerScrollView.hasVerticalScroller = false
+        composerScrollView.autohidesScrollers = true
+        composer.frame = composerScrollView.contentView.bounds
+        composer.autoresizingMask = [.width]
+        composerScrollView.documentView = composer
+        composerScrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        let composerCard = NSView()
+        composerCard.wantsLayer = true
+        composerCard.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        composerCard.layer?.cornerRadius = 12
+        composerCard.layer?.borderWidth = 1
+        composerCard.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor
+        composerCard.translatesAutoresizingMaskIntoConstraints = false
+        composerCard.addSubview(composerScrollView)
 
         askButton.target = self
-        askButton.action = #selector(submit)
+        askButton.action = #selector(submitOrCancel)
         askButton.keyEquivalent = "\r"
+        askButton.bezelStyle = .rounded
+        askButton.controlSize = .large
+        askButton.contentTintColor = .controlAccentColor
+        askButton.setAccessibilityLabel("Ask ECHO")
         askButton.translatesAutoresizingMaskIntoConstraints = false
 
-        let promptRow = NSStackView(views: [questionField, askButton])
+        let promptRow = NSStackView(views: [composerCard, askButton])
         promptRow.orientation = .horizontal
-        promptRow.spacing = 8
-        promptRow.alignment = .centerY
+        promptRow.spacing = 10
+        promptRow.alignment = .bottom
         promptRow.translatesAutoresizingMaskIntoConstraints = false
 
         spinner.style = .spinning
@@ -606,27 +887,45 @@ private final class OverlayController: NSObject, NSWindowDelegate {
         spinner.isDisplayedWhenStopped = false
         spinner.translatesAutoresizingMaskIntoConstraints = false
 
+        statusLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.setAccessibilityLabel("Question status")
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let statusRow = NSStackView(views: [spinner, statusLabel])
+        limitLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        limitLabel.textColor = .tertiaryLabelColor
+        limitLabel.alignment = .right
+        limitLabel.setAccessibilityLabel("Question limits")
+        limitLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let statusLeading = NSStackView(views: [spinner, statusLabel])
+        statusLeading.orientation = .horizontal
+        statusLeading.spacing = 7
+        statusLeading.alignment = .centerY
+        statusLeading.translatesAutoresizingMaskIntoConstraints = false
+
+        let statusRow = NSStackView(views: [statusLeading, limitLabel])
         statusRow.orientation = .horizontal
-        statusRow.spacing = 8
+        statusRow.spacing = 12
         statusRow.alignment = .centerY
+        statusRow.distribution = .fill
         statusRow.translatesAutoresizingMaskIntoConstraints = false
 
         answerView.isEditable = false
         answerView.isSelectable = true
         answerView.drawsBackground = false
-        answerView.font = NSFont.systemFont(ofSize: 14)
-        answerView.textContainerInset = NSSize(width: 8, height: 8)
+        answerView.font = NSFont.systemFont(ofSize: 14.5)
+        answerView.textColor = .labelColor
+        answerView.textContainerInset = NSSize(width: 4, height: 4)
         answerView.autoresizingMask = [.width]
+        answerView.setAccessibilityLabel("ECHO answer")
 
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.borderType = .bezelBorder
-        answerView.frame = scrollView.contentView.bounds
+        answerScrollView.hasVerticalScroller = true
+        answerScrollView.autohidesScrollers = true
+        answerScrollView.borderType = .noBorder
+        answerScrollView.drawsBackground = false
+        answerView.frame = answerScrollView.contentView.bounds
         answerView.minSize = .zero
         answerView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
@@ -635,43 +934,125 @@ private final class OverlayController: NSObject, NSWindowDelegate {
         answerView.isVerticallyResizable = true
         answerView.isHorizontallyResizable = false
         answerView.textContainer?.widthTracksTextView = true
-        scrollView.documentView = answerView
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        answerScrollView.documentView = answerView
+        answerScrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        citationLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        citationLabel.textColor = .secondaryLabelColor
-        citationLabel.maximumNumberOfLines = 2
-        citationLabel.translatesAutoresizingMaskIntoConstraints = false
+        let answerTitle = NSTextField(labelWithString: "Answer")
+        answerTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        answerTitle.translatesAutoresizingMaskIntoConstraints = false
 
-        root.addSubview(identityLabel)
+        copyButton.target = self
+        copyButton.action = #selector(copyAnswer)
+        copyButton.bezelStyle = .texturedRounded
+        copyButton.controlSize = .small
+        copyButton.isEnabled = false
+        copyButton.setAccessibilityLabel("Copy answer")
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        answerHeader.addArrangedSubview(answerTitle)
+        answerHeader.addArrangedSubview(spacer)
+        answerHeader.addArrangedSubview(copyButton)
+        answerHeader.orientation = .horizontal
+        answerHeader.spacing = 8
+        answerHeader.alignment = .centerY
+        answerHeader.isHidden = true
+        answerHeader.translatesAutoresizingMaskIntoConstraints = false
+
+        emptyAnswerLabel.font = NSFont.systemFont(ofSize: 14)
+        emptyAnswerLabel.textColor = .tertiaryLabelColor
+        emptyAnswerLabel.alignment = .center
+        emptyAnswerLabel.maximumNumberOfLines = 0
+        emptyAnswerLabel.setAccessibilityLabel("Answer placeholder")
+        emptyAnswerLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let answerArea = NSView()
+        answerArea.translatesAutoresizingMaskIntoConstraints = false
+        answerArea.addSubview(answerHeader)
+        answerArea.addSubview(answerScrollView)
+        answerArea.addSubview(emptyAnswerLabel)
+
+        let hintLabel = NSTextField(labelWithString: "Return to ask · Shift-Return for a new line · Esc to close")
+        hintLabel.font = NSFont.systemFont(ofSize: 11)
+        hintLabel.textColor = .tertiaryLabelColor
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        root.addSubview(header)
         root.addSubview(promptRow)
         root.addSubview(statusRow)
-        root.addSubview(scrollView)
-        root.addSubview(citationLabel)
+        root.addSubview(answerArea)
+        root.addSubview(hintLabel)
 
         NSLayoutConstraint.activate([
-            identityLabel.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
-            identityLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            identityLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 22),
+            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
+            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
 
-            promptRow.topAnchor.constraint(equalTo: identityLabel.bottomAnchor, constant: 8),
-            promptRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            promptRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            questionField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
+            promptRow.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 18),
+            promptRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
+            promptRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
+            composerScrollView.leadingAnchor.constraint(equalTo: composerCard.leadingAnchor, constant: 1),
+            composerScrollView.trailingAnchor.constraint(equalTo: composerCard.trailingAnchor, constant: -1),
+            composerScrollView.topAnchor.constraint(equalTo: composerCard.topAnchor, constant: 1),
+            composerScrollView.bottomAnchor.constraint(equalTo: composerCard.bottomAnchor, constant: -1),
+            composerCard.widthAnchor.constraint(greaterThanOrEqualToConstant: 410),
+            askButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 78),
 
-            statusRow.topAnchor.constraint(equalTo: promptRow.bottomAnchor, constant: 12),
-            statusRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            statusRow.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -16),
+            statusRow.topAnchor.constraint(equalTo: promptRow.bottomAnchor, constant: 8),
+            statusRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 25),
+            statusRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -25),
 
-            scrollView.topAnchor.constraint(equalTo: statusRow.bottomAnchor, constant: 12),
-            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            answerArea.topAnchor.constraint(equalTo: statusRow.bottomAnchor, constant: 18),
+            answerArea.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
+            answerArea.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
+            answerArea.bottomAnchor.constraint(equalTo: hintLabel.topAnchor, constant: -14),
 
-            citationLabel.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 10),
-            citationLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            citationLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            citationLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
+            answerHeader.topAnchor.constraint(equalTo: answerArea.topAnchor),
+            answerHeader.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor),
+            answerHeader.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor),
+            answerScrollView.topAnchor.constraint(equalTo: answerHeader.bottomAnchor, constant: 8),
+            answerScrollView.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor),
+            answerScrollView.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor),
+            answerScrollView.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor),
+            emptyAnswerLabel.topAnchor.constraint(equalTo: answerArea.topAnchor),
+            emptyAnswerLabel.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 38),
+            emptyAnswerLabel.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -38),
+            emptyAnswerLabel.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor),
+
+            hintLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 25),
+            hintLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -25),
+            hintLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
         ])
+        let composerHeight = composerCard.heightAnchor.constraint(equalToConstant: 46)
+        composerHeight.isActive = true
+        composerHeightConstraint = composerHeight
+    }
+
+    private func refreshQuestionPresentation(preservingStatus: Bool = false) {
+        let validation = validateQuestion(composer.string)
+        limitLabel.stringValue = "\(validation.scalarCount) / \(maximumQuestionScalars) characters · \(validation.uniqueTermCount) / \(maximumQuestionUniqueTerms) terms"
+        if activeAsk == nil {
+            askButton.isEnabled = validation.isValid && !validation.question.isEmpty
+            if let message = validation.message, !validation.question.isEmpty {
+                statusLabel.stringValue = message
+                statusLabel.textColor = .systemRed
+            } else if !preservingStatus && (statusLabel.stringValue == "Ready when you are" || statusLabel.stringValue == "Cancelled" || statusLabel.textColor == .systemRed) {
+                statusLabel.stringValue = "Ready when you are"
+                statusLabel.textColor = .secondaryLabelColor
+            }
+        }
+        updateComposerHeight()
+    }
+
+    private func updateComposerHeight() {
+        guard let textContainer = composer.textContainer,
+              let layoutManager = composer.layoutManager
+        else { return }
+        layoutManager.ensureLayout(for: textContainer)
+        let contentHeight = layoutManager.usedRect(for: textContainer).height + (composer.textContainerInset.height * 2)
+        composerHeightConstraint?.constant = min(max(46, ceil(contentHeight)), 132)
+        composerScrollView.hasVerticalScroller = contentHeight > 132
     }
 }
 
