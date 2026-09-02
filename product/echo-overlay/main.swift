@@ -665,9 +665,38 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         configureContent()
     }
 
+    /// Hotkey and menu entry point. A visible key panel toggles away; a visible
+    /// background panel comes forward; a hidden panel is shown.
+    func summon() {
+        if panel.isVisible {
+            if panel.isKeyWindow {
+                cancelAndHide()
+            } else {
+                NSApp.activate()
+                panel.makeKeyAndOrderFront(nil)
+                focusComposer()
+            }
+            return
+        }
+        showPrompt()
+    }
+
     func showPrompt() {
-        cancelActiveAsk()
         if activeIdentityLookup == nil { refreshIdentity() }
+        // Like Spotlight, a re-summoned panel keeps the last question and answer
+        // and selects the question so typing replaces it. A request that was in
+        // flight when the panel hid keeps running and lands when it lands.
+        let hasConversation = !composer.string.isEmpty || !answerView.string.isEmpty
+        if activeAsk == nil, !hasConversation {
+            resetConversation()
+        }
+        placePanel()
+        NSApp.activate()
+        panel.makeKeyAndOrderFront(nil)
+        focusComposer()
+    }
+
+    private func resetConversation() {
         composer.string = ""
         composer.needsDisplay = true
         composer.isEditable = true
@@ -686,10 +715,31 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         emptyAnswerLabel.stringValue = "Ask a focused question and ECHO will synthesize the approved context you can access."
         setThinking(false)
         refreshQuestionPresentation()
-        panel.center()
-        NSApp.activate()
-        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func focusComposer() {
         panel.makeFirstResponder(composer)
+        if composer.isEditable, !composer.string.isEmpty {
+            composer.selectAll(nil)
+        }
+    }
+
+    /// Sit on the screen that holds the pointer, centred, with the top edge a
+    /// fifth of the way down: where Spotlight lands, so a demo never has to hunt.
+    private func placePanel() {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        guard let screen else {
+            panel.center()
+            return
+        }
+        let area = screen.visibleFrame
+        let size = panel.frame.size
+        let x = max(area.minX, area.midX - size.width / 2)
+        let y = max(area.minY, area.maxY - area.height * 0.2 - size.height)
+        panel.setFrameOrigin(NSPoint(x: floor(x), y: floor(y)))
     }
 
     func cancelAndHide() {
@@ -1266,7 +1316,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showOverlay() {
-        controller?.showPrompt()
+        controller?.summon()
     }
 
     @objc private func askEcho() {

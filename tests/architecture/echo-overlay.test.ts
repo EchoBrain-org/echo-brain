@@ -100,6 +100,14 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("static let ember = NSColor(srgbRed: 234 / 255");
     expect(source).toContain("panel.appearance = NSAppearance(named: .darkAqua)");
     expect(source).toContain("panel.isMovableByWindowBackground = true");
+    expect(source).toContain("func summon()");
+    expect(source).toContain("if panel.isKeyWindow {");
+    expect(source).toContain("controller?.summon()");
+    expect(source).toContain("private func placePanel()");
+    expect(source).toContain("NSMouseInRect(mouse, $0.frame, false)");
+    expect(source).toContain("area.maxY - area.height * 0.2 - size.height");
+    expect(source).toContain("composer.selectAll(nil)");
+    expect(source).toContain("if activeAsk == nil, !hasConversation {");
     expect(source).toContain("limitLabel.isHidden = !(nearLimit ||");
     expect(source).not.toContain("NSVisualEffectView");
     expect(source).not.toContain("root.material = .hudWindow");
