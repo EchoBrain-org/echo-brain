@@ -1100,10 +1100,26 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(start).toContain('overlay_backups_root="$application_root/overlay-backups"');
     expect(start).toContain('validate_overlay_identity "$staged_app"');
     expect(start).toContain('/usr/bin/diff -qr "$staged_app" "$app_destination"');
+    expect(start).toContain(
+      '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
+    );
     expect(start).toContain('backup_slot="$(mktemp -d "$overlay_backups_root/previous.XXXXXXXX")"');
     expect(start).not.toContain("/usr/bin/open");
     const activation = start.indexOf("# Activate the already-validated desktop app and CLI as one recoverable pair.");
     expect(activation).toBeGreaterThan(0);
+    expect(
+      start.indexOf(
+        '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
+      ),
+    ).toBeGreaterThan(
+      start.indexOf('mv "$wrapper_pending" "$wrapper_destination"'),
+    );
+    expect(start).toContain(
+      "restore_prior_pair_after_retirement_failure",
+    );
+    expect(start).toContain(
+      "the prior app and command were restored",
+    );
     expect(start.indexOf('wrapper_pending="$(mktemp "$bin_root/.echo-brain.XXXXXXXX")"')).toBeLessThan(activation);
     expect(start.indexOf('mv "$wrapper_destination" "$wrapper_backup"', activation)).toBeLessThan(
       start.indexOf('mv "$app_destination" "$app_backup"', activation),

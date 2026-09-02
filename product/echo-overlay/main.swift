@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import Darwin
 import Foundation
 
 private let askTimeoutSeconds: TimeInterval = 145
@@ -9,6 +10,9 @@ private let maximumQuestionScalars = 240
 private let maximumQuestionUniqueTerms = 32
 private let maximumQuestionTermBytes = 64
 private let maximumRawQuestionUTF16Units = 4_096
+private let overlayBundleIdentifier = "org.echobrain.echo-overlay"
+private let overlayRetirementTimeoutSeconds: TimeInterval = 5
+private let overlayRetirementPollSeconds: TimeInterval = 0.05
 private let hotKeySignature: OSType = 0x4543484F // "ECHO"
 private let hotKeyIdentifier = EventHotKeyID(signature: hotKeySignature, id: 1)
 private let allowedCitationPolicies: Set<String> = [
@@ -673,7 +677,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     func summon() {
         if panel.isVisible {
             if panel.isKeyWindow {
-                cancelAndHide()
+                hidePanel()
             } else {
                 panel.makeKeyAndOrderFront(nil)
                 focusComposer()
@@ -743,15 +747,20 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         panel.setFrameOrigin(NSPoint(x: floor(x), y: floor(y)))
     }
 
-    func cancelAndHide() {
+    func hidePanel() {
+        cancelIdentityLookup()
+        panel.orderOut(nil)
+    }
+
+    func shutdown() {
         cancelActiveAsk()
         cancelIdentityLookup()
         panel.orderOut(nil)
     }
 
-    func windowWillClose(_ notification: Notification) {
-        cancelActiveAsk()
-        cancelIdentityLookup()
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hidePanel()
+        return false
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -963,7 +972,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = true
         panel.delegate = self
-        panel.onCancel = { [weak self] in self?.cancelAndHide() }
+        panel.onCancel = { [weak self] in self?.hidePanel() }
     }
 
     private func configureContent() {
@@ -1311,7 +1320,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        controller?.cancelAndHide()
+        controller?.shutdown()
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
     }
@@ -1385,10 +1394,43 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+@MainActor
+private func retireRunningOverlay() -> Bool {
+    let currentProcessIdentifier = ProcessInfo.processInfo.processIdentifier
+    let deadline = Date().addingTimeInterval(overlayRetirementTimeoutSeconds)
+    while true {
+        let runningApplications = NSRunningApplication.runningApplications(
+            withBundleIdentifier: overlayBundleIdentifier
+        ).filter { application in
+            application.processIdentifier != currentProcessIdentifier && !application.isTerminated
+        }
+        if runningApplications.isEmpty { return true }
+        for application in runningApplications {
+            _ = application.terminate()
+        }
+
+        let now = Date()
+        if now >= deadline { return false }
+        RunLoop.current.run(
+            until: min(deadline, now.addingTimeInterval(overlayRetirementPollSeconds))
+        )
+    }
+}
+
 @main
 private enum EchoOverlayMain {
     @MainActor
     static func main() {
+        if CommandLine.arguments.count == 2,
+           CommandLine.arguments[1] == "--quit-running-overlay" {
+            guard retireRunningOverlay() else {
+                FileHandle.standardError.write(
+                    Data("ECHO setup: the running ECHO application did not stop\n".utf8)
+                )
+                Darwin.exit(EXIT_FAILURE)
+            }
+            return
+        }
         let application = NSApplication.shared
         let delegate = AppDelegate()
         application.delegate = delegate

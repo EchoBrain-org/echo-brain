@@ -117,6 +117,32 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).not.toContain("root.material = .hudWindow");
   });
 
+  it("keeps an active Ask alive when the panel hides", () => {
+    const source = readFileSync(SOURCE, "utf8");
+    const hidePanel = source.match(
+      /func hidePanel\(\) \{([\s\S]*?)\n    \}/,
+    )?.[1];
+    const shutdown = source.match(
+      /func shutdown\(\) \{([\s\S]*?)\n    \}/,
+    )?.[1];
+
+    expect(hidePanel).toContain("cancelIdentityLookup()");
+    expect(hidePanel).toContain("panel.orderOut(nil)");
+    expect(hidePanel).not.toContain("cancelActiveAsk()");
+    expect(source).toContain("if panel.isKeyWindow {\n                hidePanel()");
+    expect(source).toContain(
+      "func windowShouldClose(_ sender: NSWindow) -> Bool {\n        hidePanel()\n        return false",
+    );
+    expect(source).toContain(
+      "panel.onCancel = { [weak self] in self?.hidePanel() }",
+    );
+    expect(source).toContain("func shutdown()");
+    expect(shutdown).toContain("cancelActiveAsk()");
+    expect(shutdown).toContain("cancelIdentityLookup()");
+    expect(source).toContain("controller?.shutdown()");
+    expect(source).not.toContain("cancelAndHide");
+  });
+
   it("lets the answer area absorb spare height instead of hand-laying-out text", () => {
     const source = readFileSync(SOURCE, "utf8");
 
@@ -160,6 +186,7 @@ describe("native ECHO hotkey overlay", () => {
   });
 
   it("builds as a permission-minimal macOS agent app", () => {
+    const source = readFileSync(SOURCE, "utf8");
     const plist = readFileSync(PLIST, "utf8");
     const builder = readFileSync(BUILDER, "utf8");
     const ci = readFileSync(CI, "utf8");
@@ -185,6 +212,30 @@ describe("native ECHO hotkey overlay", () => {
     );
     expect(installer).toContain('/usr/bin/diff -qr "$staged_app"');
     expect(installer).toContain("validate_overlay_identity");
+    expect(source).toContain("NSRunningApplication.runningApplications(");
+    expect(source).toContain("withBundleIdentifier: overlayBundleIdentifier");
+    expect(source).toContain("application.processIdentifier != currentProcessIdentifier");
+    expect(source).toContain("application.terminate()");
+    expect(source).toContain("overlayRetirementTimeoutSeconds");
+    expect(source).toContain('CommandLine.arguments[1] == "--quit-running-overlay"');
+    expect(installer).toContain(
+      '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
+    );
+    const retireRunningOverlay = installer.indexOf(
+      '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
+    );
+    expect(retireRunningOverlay).toBeGreaterThan(
+      installer.indexOf('mv "$wrapper_pending" "$wrapper_destination"'),
+    );
+    expect(installer).toContain(
+      "restore_prior_pair_after_retirement_failure",
+    );
+    expect(installer).toContain(
+      'mv "$app_backup" "$app_destination"',
+    );
+    expect(installer).toContain(
+      'mv "$wrapper_backup" "$wrapper_destination"',
+    );
     expect(installer).not.toContain("/usr/bin/open");
     expect(installer).not.toMatch(/LaunchAgent|launchctl/);
   });

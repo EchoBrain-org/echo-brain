@@ -263,6 +263,44 @@ if ! mv "$wrapper_pending" "$wrapper_destination"; then
   fi
   fail 'pair activation failed; the prior app and command were restored'
 fi
+
+restore_prior_pair_after_retirement_failure() {
+  local failed_app="$overlay_staging/failed-ECHO.app"
+  local failed_wrapper="$overlay_staging/failed-echo-brain"
+  if ! mv "$wrapper_destination" "$failed_wrapper"; then
+    fail 'overlay retirement failed and the new ECHO command could not be set aside'
+  fi
+  if ! mv "$app_destination" "$failed_app"; then
+    mv "$failed_wrapper" "$wrapper_destination" || \
+      fail 'overlay retirement failed and the new matched pair could not be restored'
+    fail 'overlay retirement failed; the new matched app and command remain installed'
+  fi
+  if ! mv "$app_backup" "$app_destination"; then
+    mv "$failed_app" "$app_destination" || \
+      fail 'overlay retirement failed and neither matched application could be restored'
+    mv "$failed_wrapper" "$wrapper_destination" || \
+      fail 'overlay retirement failed and the new ECHO command could not be restored'
+    fail 'overlay retirement failed; the new matched app and command remain installed'
+  fi
+  if [[ "$wrapper_was_present" == 1 ]] && ! mv "$wrapper_backup" "$wrapper_destination"; then
+    mv "$app_destination" "$app_backup" || \
+      fail 'overlay retirement failed and the prior application could not be set aside'
+    mv "$failed_app" "$app_destination" || \
+      fail 'overlay retirement failed and the new application could not be restored'
+    mv "$failed_wrapper" "$wrapper_destination" || \
+      fail 'overlay retirement failed and the new ECHO command could not be restored'
+    fail 'overlay retirement failed; the new matched app and command remain installed'
+  fi
+  fail 'the running ECHO application could not be stopped; the prior app and command were restored'
+}
+
+# A changed bundle cannot remain active while its prior process owns the status
+# item and exclusive hotkey. Run the new, validated bundle's scoped maintenance
+# mode only after the pair is installed; a refusal rolls both artifacts back.
+if [[ "$app_needs_activation" == 1 && "$app_was_present" == 1 ]] && \
+   ! "$app_destination/Contents/MacOS/ECHO" --quit-running-overlay; then
+  restore_prior_pair_after_retirement_failure
+fi
 if [[ "$app_needs_activation" == 1 && "$app_was_present" == 1 ]]; then
   overlay_backup="$app_backup"
 fi
