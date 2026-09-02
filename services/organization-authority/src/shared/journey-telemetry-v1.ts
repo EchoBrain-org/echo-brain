@@ -184,6 +184,7 @@ export interface JourneyStageEventInputV1 {
   readonly retryable?: boolean | null;
   readonly attempt?: number;
   readonly elapsed_ms: number;
+  /** Durable business wait, intentionally not capped like machine latency. */
   readonly queue_age_ms?: number | null;
   readonly retrieval?: JourneyRetrievalCountersInputV1 | null;
   readonly llm_usage?: JourneyLlmUsageInputV1 | null;
@@ -234,7 +235,7 @@ export interface JourneyTelemetryV1 {
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const GIT_COMMIT_SHA = /^[0-9a-f]{40}$/;
-const MAX_DURATION_MS = 31 * 24 * 60 * 60 * 1_000;
+const MAX_MACHINE_DURATION_MS = 31 * 24 * 60 * 60 * 1_000;
 const MAX_ATTEMPT = 100;
 const LLM_STAGES = new Set<JourneyStageV1>([
   "ask_planner",
@@ -316,7 +317,9 @@ function nullableCount(value: unknown, name: string): number | null {
 
 function nullableDuration(value: unknown, name: string): number | null {
   const normalized = nullableCount(value, name);
-  if (normalized !== null && normalized > MAX_DURATION_MS) invalid(`${name} is invalid`);
+  if (normalized !== null && normalized > MAX_MACHINE_DURATION_MS) {
+    invalid(`${name} is invalid`);
+  }
   return normalized;
 }
 
@@ -532,7 +535,7 @@ export function createJourneyTelemetryEventV1(input: {
       return value;
     })(),
     elapsed_ms: elapsed,
-    queue_age_ms: nullableDuration(input.event.queue_age_ms, "queue_age_ms"),
+    queue_age_ms: nullableCount(input.event.queue_age_ms, "queue_age_ms"),
     retrieval,
     llm_usage: llmUsage,
   });

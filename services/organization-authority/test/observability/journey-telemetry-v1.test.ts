@@ -10,6 +10,7 @@ import {
 const JOURNEY_ID = "1b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
 const OBSERVED_AT = "2026-09-02T12:34:56.000Z";
 const RELEASE_SHA = "f7018e16232aa11d24f9ecc880943b0bbb8c6ea2";
+const LONG_HUMAN_WAIT_MS = 45 * 24 * 60 * 60 * 1_000;
 const askContext: JourneyTelemetryContextInputV1 = {
   environment: "staging",
   workflow: "ask",
@@ -218,6 +219,57 @@ describe("journey telemetry v1", () => {
         },
       }).llm_usage,
     ).toMatchObject({ usage_status: "unavailable", input_tokens: null });
+  });
+
+  it("preserves long human wait while retaining machine-latency caps", () => {
+    const telemetry = createJourneyTelemetryV1(undefined, {
+      create_uuid: () => JOURNEY_ID,
+      now: () => OBSERVED_AT,
+    });
+    const resumed = telemetry.resumeJourney({
+      environment: "staging",
+      workflow: "meeting_approval",
+      release_sha: RELEASE_SHA,
+      build_number: 123,
+      journey_id: JOURNEY_ID,
+      previous_sequence: 7,
+    });
+
+    expect(
+      resumed?.emit({
+        stage: "meeting_approval_action_verify",
+        event: "succeeded",
+        elapsed_ms: 2,
+        queue_age_ms: LONG_HUMAN_WAIT_MS,
+      }),
+    ).toMatchObject({
+      sequence: 8,
+      queue_age_ms: LONG_HUMAN_WAIT_MS,
+    });
+
+    expect(() =>
+      createJourneyTelemetryEventV1({
+        journey_id: JOURNEY_ID,
+        sequence: 1,
+        observed_at: OBSERVED_AT,
+        context: askContext,
+        event: {
+          stage: "ask_validation",
+          event: "succeeded",
+          elapsed_ms: LONG_HUMAN_WAIT_MS,
+        },
+      }),
+    ).toThrow("elapsed_ms");
+    expect(() =>
+      strict({
+        llm_usage: {
+          provider: "openrouter",
+          model: "anthropic/claude-sonnet-4.6",
+          provider_latency_ms: LONG_HUMAN_WAIT_MS,
+          finish_reason: "unknown",
+        },
+      }),
+    ).toThrow("provider_latency_ms");
   });
 
   it("enforces stage-compatible outcomes and keeps intermediate stages outcome-free", () => {

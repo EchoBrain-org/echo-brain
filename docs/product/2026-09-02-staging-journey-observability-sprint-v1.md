@@ -4,6 +4,9 @@
 been claimed.
 **Grounded at:** `main` @
 `f7018e16232aa11d24f9ecc880943b0bbb8c6ea2`, inspected 2026-09-02.
+**Entry gate:** satisfied 2026-09-02 after PR #115 merged; the sprint branch
+was rebased directly onto `main` @
+`14f22359e7d6cd9ebe10d108d17be114c7838d75` before overlapping work resumed.
 **Scope:** staging-only observability for the two immediate product journeys:
 a retrieval-grounded Ask and a human-approved meeting decision. This sprint
 adds no production telemetry, dashboard, alert, retention, IAM, or deployment
