@@ -1123,6 +1123,19 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       join(kitRoot, "verify-person-onboarding-kit.mjs"),
       kitRoot,
     ]);
+    if (
+      process.version !== receipt.node_version ||
+      process.platform !== receipt.platform ||
+      process.arch !== receipt.architecture
+    ) {
+      expect(verified.status).toBe(1);
+      expect(verified.stderr).toContain(
+        process.version !== receipt.node_version
+          ? "Node runtime version does not match the kit"
+          : "this kit supports macOS on Apple silicon only",
+      );
+      return;
+    }
     expect(verified.status).toBe(0);
     writeFileSync(join(kitRoot, "ECHO.app.zip"), "tampered app archive\n");
     const tampered = run(process.execPath, [
