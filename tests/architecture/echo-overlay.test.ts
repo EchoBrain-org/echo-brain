@@ -85,6 +85,55 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).not.toContain('"Policies:');
   });
 
+  it("uses the ECHO brand palette", () => {
+    const source = readFileSync(SOURCE, "utf8");
+
+    expect(source).toContain("The warm dark palette published by echobrain.org");
+    expect(source).toContain("private enum EchoTheme");
+    expect(source).toContain("static let ink = NSColor(srgbRed: 36 / 255");
+    expect(source).toContain("static let text = NSColor(srgbRed: 240 / 255");
+    expect(source).toContain("static let goldBright = NSColor(srgbRed: 240 / 255");
+    expect(source).toContain("static let ember = NSColor(srgbRed: 234 / 255");
+    expect(source).toContain("panel.appearance = NSAppearance(named: .darkAqua)");
+    expect(source).not.toContain("NSVisualEffectView");
+    expect(source).not.toContain("root.material = .hudWindow");
+  });
+
+  it("lets the answer area absorb spare height instead of hand-laying-out text", () => {
+    const source = readFileSync(SOURCE, "utf8");
+
+    // The only flexible row is the answer area: a near-zero-priority spring claims the
+    // slack, every stack row hugs at required priority, and the empty-state label floats
+    // in the middle instead of pinning the area to its own height.
+    expect(source).toContain(
+      "answerArea.heightAnchor.constraint(equalToConstant: 10_000)",
+    );
+    expect(source).toContain("answerSpring.priority = NSLayoutConstraint.Priority(1)");
+    expect(source).toContain(
+      "answerArea.heightAnchor.constraint(greaterThanOrEqualToConstant: 140)",
+    );
+    expect(source).toContain("header.setHuggingPriority(.required, for: .vertical)");
+    expect(source).toContain("promptRow.setHuggingPriority(.required, for: .vertical)");
+    expect(source).toContain("statusRow.setHuggingPriority(.required, for: .vertical)");
+    expect(source).toContain(
+      "emptyAnswerLabel.centerYAnchor.constraint(equalTo: answerArea.centerYAnchor)",
+    );
+    expect(source).toContain(
+      "emptyAnswerLabel.topAnchor.constraint(greaterThanOrEqualTo: answerArea.topAnchor",
+    );
+    expect(source).toContain(
+      "answerView.scrollRangeToVisible(NSRange(location: 0, length: 0))",
+    );
+    // Content hugging is meaningless on NSStackView (no intrinsic size) and manual frame
+    // surgery on the text view masks layout bugs instead of fixing them.
+    expect(source).not.toMatch(
+      /(header|promptRow|statusRow|answerHeader)\.setContentHuggingPriority/,
+    );
+    expect(source).not.toContain("layoutAnswerText");
+    expect(source).not.toContain("answerView.frame.size.height");
+    expect(source).not.toContain("layoutManager.ensureLayout(for: textContainer)\n        let textHeight");
+  });
+
   it("builds as a permission-minimal macOS agent app", () => {
     const plist = readFileSync(PLIST, "utf8");
     const builder = readFileSync(BUILDER, "utf8");

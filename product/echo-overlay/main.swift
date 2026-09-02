@@ -16,6 +16,23 @@ private let allowedCitationPolicies: Set<String> = [
     "restricted-reviewer-person-v2",
 ]
 
+// The warm dark palette published by echobrain.org, applied with native macOS typography.
+private enum EchoTheme {
+    static let ink = NSColor(srgbRed: 36 / 255, green: 34 / 255, blue: 34 / 255, alpha: 1)
+    static let surface = NSColor(srgbRed: 29 / 255, green: 28 / 255, blue: 28 / 255, alpha: 1)
+    static let inkDeep = NSColor(srgbRed: 23 / 255, green: 22 / 255, blue: 22 / 255, alpha: 1)
+    static let inkWarm = NSColor(srgbRed: 48 / 255, green: 41 / 255, blue: 35 / 255, alpha: 1)
+    static let text = NSColor(srgbRed: 240 / 255, green: 236 / 255, blue: 230 / 255, alpha: 1)
+    static let mutedText = text.withAlphaComponent(0.66)
+    static let faintText = text.withAlphaComponent(0.55)
+    static let border = text.withAlphaComponent(0.12)
+    static let quietBorder = text.withAlphaComponent(0.08)
+    static let gold = NSColor(srgbRed: 211 / 255, green: 154 / 255, blue: 76 / 255, alpha: 1)
+    static let goldBright = NSColor(srgbRed: 240 / 255, green: 193 / 255, blue: 127 / 255, alpha: 1)
+    static let ember = NSColor(srgbRed: 234 / 255, green: 96 / 255, blue: 71 / 255, alpha: 1)
+    static let selection = gold.withAlphaComponent(0.36)
+}
+
 private struct CliCitation: Decodable {
     let policy_id: String
 }
@@ -496,7 +513,7 @@ private final class QuestionTextView: NSTextView {
             in: rect,
             withAttributes: [
                 .font: font ?? NSFont.systemFont(ofSize: 15),
-                .foregroundColor: NSColor.placeholderTextColor,
+                .foregroundColor: EchoTheme.faintText,
             ]
         )
     }
@@ -586,7 +603,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         resetCopyFeedback()
         copyButton.isEnabled = false
         statusLabel.stringValue = "Ready when you are"
-        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.textColor = EchoTheme.mutedText
         answerView.string = ""
         answerHeader.isHidden = true
         answerScrollView.isHidden = true
@@ -631,7 +648,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         guard resultingLength <= maximumRawQuestionUTF16Units else {
             let message = "That paste is too large. Keep the draft under \(maximumRawQuestionUTF16Units.formatted()) characters."
             statusLabel.stringValue = message
-            statusLabel.textColor = .systemRed
+            statusLabel.textColor = EchoTheme.ember
             announce(message)
             return false
         }
@@ -645,7 +662,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             askButton.title = "Ask"
             askButton.setAccessibilityLabel("Ask ECHO")
             statusLabel.stringValue = "Cancelled"
-            statusLabel.textColor = .secondaryLabelColor
+            statusLabel.textColor = EchoTheme.mutedText
             refreshQuestionPresentation(preservingStatus: true)
             return
         }
@@ -654,7 +671,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         guard validation.isValid else {
             let message = validation.message ?? "Check the question and try again."
             statusLabel.stringValue = message
-            statusLabel.textColor = .systemRed
+            statusLabel.textColor = EchoTheme.ember
             announce(message)
             return
         }
@@ -675,7 +692,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         emptyAnswerLabel.isHidden = false
         emptyAnswerLabel.stringValue = "ECHO is checking the approved context available to you."
         statusLabel.stringValue = "Thinking…"
-        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.textColor = EchoTheme.mutedText
         spinner.startAnimation(nil)
         announce("ECHO is thinking.")
 
@@ -696,8 +713,9 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         switch outcome {
         case .success(let answer):
             statusLabel.stringValue = "Answer ready"
-            statusLabel.textColor = .secondaryLabelColor
+            statusLabel.textColor = EchoTheme.mutedText
             answerView.string = answer.answer
+            answerView.scrollRangeToVisible(NSRange(location: 0, length: 0))
             answerHeader.isHidden = false
             answerScrollView.isHidden = false
             emptyAnswerLabel.isHidden = true
@@ -705,7 +723,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             announce("ECHO answer ready.")
         case .failure(let message):
             statusLabel.stringValue = "Couldn’t answer"
-            statusLabel.textColor = .systemRed
+            statusLabel.textColor = EchoTheme.ember
             answerView.string = ""
             answerHeader.isHidden = true
             answerScrollView.isHidden = true
@@ -796,8 +814,9 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         panel.level = .floating
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        panel.minSize = NSSize(width: 600, height: 380)
-        panel.backgroundColor = .windowBackgroundColor
+        panel.minSize = NSSize(width: 600, height: 470)
+        panel.appearance = NSAppearance(named: .darkAqua)
+        panel.backgroundColor = EchoTheme.ink
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.delegate = self
@@ -805,19 +824,19 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     private func configureContent() {
-        let root = NSVisualEffectView()
-        root.material = .hudWindow
-        root.blendingMode = .withinWindow
-        root.state = .active
+        let root = NSView()
+        root.wantsLayer = true
+        root.layer?.backgroundColor = EchoTheme.ink.cgColor
         panel.contentView = root
 
         let titleLabel = NSTextField(labelWithString: "ECHO")
         titleLabel.font = NSFont.systemFont(ofSize: 20, weight: .semibold)
+        titleLabel.textColor = EchoTheme.text
         titleLabel.setAccessibilityLabel("ECHO")
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
         identityLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        identityLabel.textColor = .secondaryLabelColor
+        identityLabel.textColor = EchoTheme.mutedText
         identityLabel.lineBreakMode = .byTruncatingTail
         identityLabel.setAccessibilityLabel("Signed-in user")
         identityLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -826,12 +845,17 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         header.orientation = .vertical
         header.spacing = 3
         header.alignment = .leading
+        header.setHuggingPriority(.required, for: .vertical)
         header.translatesAutoresizingMaskIntoConstraints = false
 
         composer.delegate = self
         composer.font = NSFont.systemFont(ofSize: 15)
-        composer.textColor = .labelColor
-        composer.insertionPointColor = .controlAccentColor
+        composer.textColor = EchoTheme.text
+        composer.insertionPointColor = EchoTheme.goldBright
+        composer.selectedTextAttributes = [
+            .backgroundColor: EchoTheme.selection,
+            .foregroundColor: EchoTheme.text,
+        ]
         composer.drawsBackground = false
         composer.isRichText = false
         composer.allowsUndo = true
@@ -860,10 +884,10 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
 
         let composerCard = NSView()
         composerCard.wantsLayer = true
-        composerCard.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        composerCard.layer?.backgroundColor = EchoTheme.inkDeep.cgColor
         composerCard.layer?.cornerRadius = 12
         composerCard.layer?.borderWidth = 1
-        composerCard.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor
+        composerCard.layer?.borderColor = EchoTheme.border.cgColor
         composerCard.translatesAutoresizingMaskIntoConstraints = false
         composerCard.addSubview(composerScrollView)
 
@@ -872,7 +896,8 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         askButton.keyEquivalent = "\r"
         askButton.bezelStyle = .rounded
         askButton.controlSize = .large
-        askButton.contentTintColor = .controlAccentColor
+        askButton.bezelColor = EchoTheme.goldBright
+        askButton.contentTintColor = EchoTheme.inkDeep
         askButton.setAccessibilityLabel("Ask ECHO")
         askButton.translatesAutoresizingMaskIntoConstraints = false
 
@@ -880,6 +905,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         promptRow.orientation = .horizontal
         promptRow.spacing = 10
         promptRow.alignment = .bottom
+        promptRow.setHuggingPriority(.required, for: .vertical)
         promptRow.translatesAutoresizingMaskIntoConstraints = false
 
         spinner.style = .spinning
@@ -888,13 +914,13 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         spinner.translatesAutoresizingMaskIntoConstraints = false
 
         statusLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.textColor = EchoTheme.mutedText
         statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.setAccessibilityLabel("Question status")
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
 
         limitLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        limitLabel.textColor = .tertiaryLabelColor
+        limitLabel.textColor = EchoTheme.faintText
         limitLabel.alignment = .right
         limitLabel.setAccessibilityLabel("Question limits")
         limitLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -910,13 +936,18 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         statusRow.spacing = 12
         statusRow.alignment = .centerY
         statusRow.distribution = .fill
+        statusRow.setHuggingPriority(.required, for: .vertical)
         statusRow.translatesAutoresizingMaskIntoConstraints = false
 
         answerView.isEditable = false
         answerView.isSelectable = true
         answerView.drawsBackground = false
         answerView.font = NSFont.systemFont(ofSize: 14.5)
-        answerView.textColor = .labelColor
+        answerView.textColor = EchoTheme.text
+        answerView.selectedTextAttributes = [
+            .backgroundColor: EchoTheme.selection,
+            .foregroundColor: EchoTheme.text,
+        ]
         answerView.textContainerInset = NSSize(width: 4, height: 4)
         answerView.autoresizingMask = [.width]
         answerView.setAccessibilityLabel("ECHO answer")
@@ -939,12 +970,15 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
 
         let answerTitle = NSTextField(labelWithString: "Answer")
         answerTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        answerTitle.textColor = EchoTheme.text
         answerTitle.translatesAutoresizingMaskIntoConstraints = false
 
         copyButton.target = self
         copyButton.action = #selector(copyAnswer)
         copyButton.bezelStyle = .texturedRounded
         copyButton.controlSize = .small
+        copyButton.bezelColor = EchoTheme.inkWarm
+        copyButton.contentTintColor = EchoTheme.mutedText
         copyButton.isEnabled = false
         copyButton.setAccessibilityLabel("Copy answer")
         copyButton.translatesAutoresizingMaskIntoConstraints = false
@@ -957,17 +991,23 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         answerHeader.orientation = .horizontal
         answerHeader.spacing = 8
         answerHeader.alignment = .centerY
+        answerHeader.setHuggingPriority(.required, for: .vertical)
         answerHeader.isHidden = true
         answerHeader.translatesAutoresizingMaskIntoConstraints = false
 
         emptyAnswerLabel.font = NSFont.systemFont(ofSize: 14)
-        emptyAnswerLabel.textColor = .tertiaryLabelColor
+        emptyAnswerLabel.textColor = EchoTheme.faintText
         emptyAnswerLabel.alignment = .center
         emptyAnswerLabel.maximumNumberOfLines = 0
         emptyAnswerLabel.setAccessibilityLabel("Answer placeholder")
         emptyAnswerLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let answerArea = NSView()
+        answerArea.wantsLayer = true
+        answerArea.layer?.backgroundColor = EchoTheme.surface.cgColor
+        answerArea.layer?.cornerRadius = 8
+        answerArea.layer?.borderWidth = 1
+        answerArea.layer?.borderColor = EchoTheme.quietBorder.cgColor
         answerArea.translatesAutoresizingMaskIntoConstraints = false
         answerArea.addSubview(answerHeader)
         answerArea.addSubview(answerScrollView)
@@ -975,7 +1015,9 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
 
         let hintLabel = NSTextField(labelWithString: "Return to ask · Shift-Return for a new line · Esc to close")
         hintLabel.font = NSFont.systemFont(ofSize: 11)
-        hintLabel.textColor = .tertiaryLabelColor
+        hintLabel.textColor = EchoTheme.faintText
+        hintLabel.setContentHuggingPriority(.required, for: .vertical)
+        hintLabel.setContentCompressionResistancePriority(.required, for: .vertical)
         hintLabel.translatesAutoresizingMaskIntoConstraints = false
 
         root.addSubview(header)
@@ -1007,18 +1049,20 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             answerArea.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
             answerArea.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
             answerArea.bottomAnchor.constraint(equalTo: hintLabel.topAnchor, constant: -14),
+            answerArea.heightAnchor.constraint(greaterThanOrEqualToConstant: 140),
 
-            answerHeader.topAnchor.constraint(equalTo: answerArea.topAnchor),
-            answerHeader.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor),
-            answerHeader.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor),
+            answerHeader.topAnchor.constraint(equalTo: answerArea.topAnchor, constant: 14),
+            answerHeader.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 16),
+            answerHeader.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -16),
             answerScrollView.topAnchor.constraint(equalTo: answerHeader.bottomAnchor, constant: 8),
-            answerScrollView.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor),
-            answerScrollView.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor),
-            answerScrollView.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor),
-            emptyAnswerLabel.topAnchor.constraint(equalTo: answerArea.topAnchor),
+            answerScrollView.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 12),
+            answerScrollView.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -12),
+            answerScrollView.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor, constant: -12),
+            emptyAnswerLabel.centerYAnchor.constraint(equalTo: answerArea.centerYAnchor),
+            emptyAnswerLabel.topAnchor.constraint(greaterThanOrEqualTo: answerArea.topAnchor, constant: 16),
             emptyAnswerLabel.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 38),
             emptyAnswerLabel.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -38),
-            emptyAnswerLabel.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor),
+            emptyAnswerLabel.bottomAnchor.constraint(lessThanOrEqualTo: answerArea.bottomAnchor, constant: -16),
 
             hintLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 25),
             hintLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -25),
@@ -1027,6 +1071,13 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         let composerHeight = composerCard.heightAnchor.constraint(equalToConstant: 46)
         composerHeight.isActive = true
         composerHeightConstraint = composerHeight
+
+        // The answer area is the only row that absorbs spare height. This near-zero
+        // priority spring asks for more height than the panel can give, so every other
+        // row settles at its fitting size and the answer takes whatever remains.
+        let answerSpring = answerArea.heightAnchor.constraint(equalToConstant: 10_000)
+        answerSpring.priority = NSLayoutConstraint.Priority(1)
+        answerSpring.isActive = true
     }
 
     private func refreshQuestionPresentation(preservingStatus: Bool = false) {
@@ -1036,10 +1087,10 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             askButton.isEnabled = validation.isValid && !validation.question.isEmpty
             if let message = validation.message, !validation.question.isEmpty {
                 statusLabel.stringValue = message
-                statusLabel.textColor = .systemRed
-            } else if !preservingStatus && (statusLabel.stringValue == "Ready when you are" || statusLabel.stringValue == "Cancelled" || statusLabel.textColor == .systemRed) {
+                statusLabel.textColor = EchoTheme.ember
+            } else if !preservingStatus && (statusLabel.stringValue == "Ready when you are" || statusLabel.stringValue == "Cancelled" || statusLabel.textColor == EchoTheme.ember) {
                 statusLabel.stringValue = "Ready when you are"
-                statusLabel.textColor = .secondaryLabelColor
+                statusLabel.textColor = EchoTheme.mutedText
             }
         }
         updateComposerHeight()
