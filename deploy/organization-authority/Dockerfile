@@ -26,9 +26,15 @@ RUN find packages services -type f \( -name '*.d.ts' -o -name '*.tsbuildinfo' \)
 FROM node:22.22.1-bookworm-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d
 
 ARG ECHO_SOURCE_SHA
+ARG ECHO_BUILD_NUMBER
 LABEL org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"
+LABEL org.echobrain.authority.build-number="${ECHO_BUILD_NUMBER}"
+LABEL org.echobrain.authority.telemetry.staging-journey-v1="true"
 LABEL org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    ECHO_STAGING_JOURNEY_TELEMETRY_V1="true" \
+    ECHO_SOURCE_SHA="${ECHO_SOURCE_SHA}" \
+    ECHO_BUILD_NUMBER="${ECHO_BUILD_NUMBER}"
 WORKDIR /app
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \

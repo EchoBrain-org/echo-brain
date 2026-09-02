@@ -701,19 +701,37 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(readdirSync(outside)).toEqual([]);
   });
 
-  it("binds Authority image source to the OCI revision label before startup", () => {
+  it("binds Authority image source and build identity to OCI metadata before startup", () => {
     const dockerfile = readFileSync(DOCKERFILE, "utf8");
     const update = readFileSync(UPDATE, "utf8");
     expect(dockerfile).toContain("ARG ECHO_SOURCE_SHA");
+    expect(dockerfile).toContain("ARG ECHO_BUILD_NUMBER");
     expect(dockerfile).toContain('org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"');
+    expect(dockerfile).toContain(
+      'org.echobrain.authority.build-number="${ECHO_BUILD_NUMBER}"',
+    );
+    expect(dockerfile).toContain(
+      'org.echobrain.authority.telemetry.staging-journey-v1="true"',
+    );
+    expect(dockerfile).toContain('ECHO_SOURCE_SHA="${ECHO_SOURCE_SHA}"');
+    expect(dockerfile).toContain('ECHO_BUILD_NUMBER="${ECHO_BUILD_NUMBER}"');
+    expect(dockerfile).toContain('ECHO_STAGING_JOURNEY_TELEMETRY_V1="true"');
     expect(dockerfile).toContain(
       'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1="true"',
     );
     expect(update).toContain("org.opencontainers.image.revision");
     expect(update).toContain("image_source_matches \"$expected\" \"$expected_source\"");
+    expect(update).toContain("running_staging_journey_telemetry_identity_matches");
+    expect(update).toContain("{{json .Config.Env}}");
+    expect(update).toContain(
+      'host="$(authority_host 2>/dev/null)" || return 1',
+    );
+    expect(update).toContain(
+      '[[ "$host" == "authority-staging.echobrain.org" ]] || return 0',
+    );
   });
 
-  it("builds an Authority image only from one clean committed source", () => {
+  it("builds an Authority image only from one clean committed source and build identity", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-image-build-"));
     roots.push(root);
     const repository = join(root, "repository");
@@ -751,7 +769,15 @@ describe("Organization Authority clean-v1 release record", () => {
       `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$ECHO_DOCKER_LOG"
 if [[ "$1" == image && "$2" == inspect ]]; then
-  printf '%s\\n' "$ECHO_FAKE_SOURCE_SHA"
+  if [[ "$4" == *'org.opencontainers.image.revision'* ]]; then
+    printf '%s\\n' "$ECHO_FAKE_SOURCE_SHA"
+  elif [[ "$4" == *'org.echobrain.authority.build-number'* ]]; then
+    printf '%s\\n' "$ECHO_FAKE_BUILD_NUMBER"
+  elif [[ "$4" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then
+    printf '%s\\n' "$ECHO_FAKE_TELEMETRY_CAPABILITY"
+  elif [[ "$4" == '{{json .Config.Env}}' ]]; then
+    printf '%s\\n' "$ECHO_FAKE_CONFIG_ENV"
+  fi
 fi
 `,
     );
@@ -760,26 +786,128 @@ fi
       PATH: `${bin}:${process.env.PATH}`,
       ECHO_DOCKER_LOG: dockerLog,
       ECHO_FAKE_SOURCE_SHA: sourceSha,
+      ECHO_FAKE_BUILD_NUMBER: "42",
+      ECHO_FAKE_TELEMETRY_CAPABILITY: "true",
+      ECHO_FAKE_CONFIG_ENV: JSON.stringify([
+        "NODE_ENV=production",
+        "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true",
+        `ECHO_SOURCE_SHA=${sourceSha}`,
+        "ECHO_BUILD_NUMBER=42",
+      ]),
     };
+    for (const args of [
+      ["echo-authority:test"],
+      ["echo-authority:test", "--build-number", "0"],
+      ["echo-authority:test", "--build-number", "01"],
+      ["echo-authority:test", "--build-number", "not-a-number"],
+      ["echo-authority:test", "--build-number", "9007199254740992"],
+    ]) {
+      const invalid = spawnSync(
+        process.execPath,
+        [join(tools, "build-authority-image.mjs"), ...args],
+        { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment } },
+      );
+      expect(invalid.status).toBe(1);
+      expect(invalid.stderr).toContain(
+        args.length === 1 ? "usage:" : "build number must be a canonical positive safe integer",
+      );
+    }
+    expect(existsSync(dockerLog)).toBe(false);
+
     const clean = spawnSync(
       process.execPath,
-      [join(tools, "build-authority-image.mjs"), "echo-authority:test"],
+      [
+        join(tools, "build-authority-image.mjs"),
+        "echo-authority:test",
+        "--build-number",
+        "42",
+      ],
       { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment } },
     );
     expect(clean.status).toBe(0);
     expect(JSON.parse(clean.stdout)).toEqual({
       image: "echo-authority:test",
       source_sha: sourceSha,
+      build_number: 42,
     });
-    expect(readFileSync(dockerLog, "utf8")).toContain(
-      `ECHO_SOURCE_SHA=${sourceSha}`,
+    const dockerCalls = readFileSync(dockerLog, "utf8").trim().split("\n");
+    expect(dockerCalls[0]).toBe(
+      `build --build-arg ECHO_SOURCE_SHA=${sourceSha} --build-arg ECHO_BUILD_NUMBER=42 -f ${join(realpathSync(repository), "deploy", "organization-authority", "Dockerfile")} -t echo-authority:test .`,
+    );
+    expect(dockerCalls).toContain(
+      "image inspect --format {{index .Config.Labels \"org.opencontainers.image.revision\"}} echo-authority:test",
+    );
+    expect(dockerCalls).toContain(
+      "image inspect --format {{index .Config.Labels \"org.echobrain.authority.build-number\"}} echo-authority:test",
+    );
+    expect(dockerCalls).toContain(
+      "image inspect --format {{index .Config.Labels \"org.echobrain.authority.telemetry.staging-journey-v1\"}} echo-authority:test",
+    );
+    expect(dockerCalls).toContain(
+      "image inspect --format {{json .Config.Env}} echo-authority:test",
+    );
+
+    const missingCapability = spawnSync(
+      process.execPath,
+      [
+        join(tools, "build-authority-image.mjs"),
+        "echo-authority:test",
+        "--build-number",
+        "42",
+      ],
+      {
+        cwd: repository,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...environment,
+          ECHO_FAKE_TELEMETRY_CAPABILITY: "false",
+        },
+      },
+    );
+    expect(missingCapability.status).toBe(1);
+    expect(missingCapability.stderr).toContain(
+      "does not declare staging journey telemetry V1",
+    );
+
+    const duplicateEnvironment = spawnSync(
+      process.execPath,
+      [
+        join(tools, "build-authority-image.mjs"),
+        "echo-authority:test",
+        "--build-number",
+        "42",
+      ],
+      {
+        cwd: repository,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...environment,
+          ECHO_FAKE_CONFIG_ENV: JSON.stringify([
+            "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true",
+            `ECHO_SOURCE_SHA=${sourceSha}`,
+            `ECHO_SOURCE_SHA=${"b".repeat(40)}`,
+            "ECHO_BUILD_NUMBER=42",
+          ]),
+        },
+      },
+    );
+    expect(duplicateEnvironment.status).toBe(1);
+    expect(duplicateEnvironment.stderr).toContain(
+      "does not exactly bind telemetry capability, source SHA, and build number",
     );
 
     const callsBeforeDirtyAttempt = readFileSync(dockerLog, "utf8");
     writeFileSync(join(repository, "tracked.txt"), "dirty\n");
     const dirty = spawnSync(
       process.execPath,
-      [join(tools, "build-authority-image.mjs"), "echo-authority:test"],
+      [
+        join(tools, "build-authority-image.mjs"),
+        "echo-authority:test",
+        "--build-number",
+        "42",
+      ],
       { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment } },
     );
     expect(dirty.status).toBe(1);
@@ -831,6 +959,210 @@ if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
     expect(existsSync(up)).toBe(false);
     expect(existsSync(join(state, "failed", "clean-v1-20260822-002.json"))).toBe(true);
     expect(readFileSync(envFile, "utf8")).toContain("d".repeat(64));
+  });
+
+  it("refuses startup when the Authority host cannot be validated", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-invalid-host-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const state = join(root, "release-state");
+    const up = join(root, "up-called");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const profile = writeRuntimeProfile();
+    const runtimeConfig = prepareRuntimeConfig(root, profile);
+    const candidate = writeRecord(
+      releaseWithRuntimeProfile(profile, {
+        release_id: "clean-v1-20260822-002",
+        authority_image: {
+          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
+        },
+      }),
+    );
+    mkdirSync(bin);
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
+`,
+    );
+    chmodSync(docker, 0o755);
+    writeFileSync(
+      envFile,
+      "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=INVALID HOST\n",
+      { mode: 0o600 },
+    );
+
+    const result = run(
+      "bash",
+      [
+        UPDATE,
+        "stage",
+        "--release",
+        candidate,
+        "--runtime-profile",
+        profile,
+      ],
+      {
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_CLEAN_ENV_FILE: envFile,
+        ECHO_CLEAN_RELEASE_STATE_DIR: state,
+        ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(existsSync(up)).toBe(false);
+  });
+
+  it("refuses telemetry-enabled image identity without its capability label", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-telemetry-identity-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const state = join(root, "release-state");
+    const up = join(root, "up-called");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const profile = writeRuntimeProfile();
+    const runtimeConfig = prepareRuntimeConfig(root, profile);
+    const candidate = writeRecord(
+      releaseWithRuntimeProfile(profile, {
+        release_id: "clean-v1-20260822-002",
+        authority_image: {
+          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
+        },
+      }),
+    );
+    mkdirSync(bin);
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.echobrain.authority.build-number'* ]]; then printf '42\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then printf 'enabled\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'{{json .Config.Env}}'* ]]; then printf '%s\\n' '${JSON.stringify([
+        "NODE_ENV=production",
+        "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true",
+        `ECHO_SOURCE_SHA=${"a".repeat(40)}`,
+        "ECHO_BUILD_NUMBER=42",
+      ])}'; exit 0; fi
+if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
+`,
+    );
+    chmodSync(docker, 0o755);
+    writeFileSync(
+      envFile,
+      "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n",
+      { mode: 0o600 },
+    );
+
+    const result = run(
+      "bash",
+      [
+        UPDATE,
+        "stage",
+        "--release",
+        candidate,
+        "--runtime-profile",
+        profile,
+      ],
+      {
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_CLEAN_ENV_FILE: envFile,
+        ECHO_CLEAN_RELEASE_STATE_DIR: state,
+        ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(existsSync(up)).toBe(false);
+    expect(existsSync(join(state, "failed", "clean-v1-20260822-002.json"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects a running container that overrides telemetry image identity", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-telemetry-runtime-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const state = join(root, "release-state");
+    const started = join(root, "container-started");
+    const descriptor = join(root, "descriptor-checked");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const profile = writeRuntimeProfile();
+    const runtimeConfig = prepareRuntimeConfig(root, profile);
+    const candidateRecord = releaseWithRuntimeProfile(profile, {
+      release_id: "clean-v1-20260822-002",
+      authority_image: {
+        reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
+      },
+    });
+    const candidate = writeRecord(candidateRecord);
+    const imageEnvironment = JSON.stringify(["NODE_ENV=production"]);
+    const overriddenEnvironment = JSON.stringify([
+      "NODE_ENV=production",
+      "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true",
+      `ECHO_SOURCE_SHA=${"a".repeat(40)}`,
+      "ECHO_BUILD_NUMBER=42",
+    ]);
+    mkdirSync(bin);
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then [[ -f "${started}" ]] && printf 'authority-container\\n'; exit 0; fi
+if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then [[ -f "${started}" ]] && printf 'proxy-container\\n'; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}"; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then printf 'enabled\\n'; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'{{json .Config.Env}}'* ]]; then printf '%s\\n' '${overriddenEnvironment}'; exit 0; fi
+if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"e".repeat(64)}\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.echobrain.authority.build-number'* ]]; then printf '42\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then exit 0; fi
+if [[ "$1" == image && "$*" == *'{{json .Config.Env}}'* ]]; then printf '%s\\n' '${imageEnvironment}'; exit 0; fi
+if [[ "$1" == image ]]; then printf '%s\\n' '${candidateRecord.authority_image.reference}'; exit 0; fi
+if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${started}"; exit 0; fi
+if [[ "$1" == compose && "$*" == *" exec "* ]]; then touch "${descriptor}"; exit 0; fi
+`,
+    );
+    chmodSync(docker, 0o755);
+    writeFileSync(
+      envFile,
+      "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n",
+      { mode: 0o600 },
+    );
+
+    const result = run(
+      "bash",
+      [
+        UPDATE,
+        "stage",
+        "--release",
+        candidate,
+        "--runtime-profile",
+        profile,
+      ],
+      {
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_CLEAN_ENV_FILE: envFile,
+        ECHO_CLEAN_RELEASE_STATE_DIR: state,
+        ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(existsSync(started)).toBe(true);
+    expect(existsSync(descriptor)).toBe(false);
+    expect(existsSync(join(state, "failed", "clean-v1-20260822-002.json"))).toBe(
+      true,
+    );
   });
 
   it("verifies an exact artifact before installing it and uses the product status surface", () => {
@@ -1448,6 +1780,7 @@ fi
     chmodSync(docker, 0o755);
     const initialEnvironment = [
       `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
+      "ECHO_CLEAN_AUTHORITY_HOST=authority.example.test",
       "ECHO_CLEAN_AUTHORITY_UID=1000",
       "ECHO_CLEAN_AUTHORITY_GID=1000",
       "",
@@ -1533,6 +1866,7 @@ fi
     chmodSync(docker, 0o755);
     const initialEnvironment = [
       `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
+      "ECHO_CLEAN_AUTHORITY_HOST=authority.example.test",
       "ECHO_CLEAN_AUTHORITY_UID=1000",
       "ECHO_CLEAN_AUTHORITY_GID=1000",
       "",
@@ -1600,6 +1934,7 @@ fi
     chmodSync(docker, 0o755);
     const initialEnvironment = [
       `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
+      "ECHO_CLEAN_AUTHORITY_HOST=authority.example.test",
       "ECHO_CLEAN_AUTHORITY_UID=1000",
       "ECHO_CLEAN_AUTHORITY_GID=1000",
       "",
@@ -1706,6 +2041,8 @@ if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then sed -n 's
 if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"e".repeat(64)}\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then exit 0; fi
 if [[ "$1" == image ]]; then printf '%s\\n' '${candidateRecord.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then
   release_id="$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}")"
@@ -1780,6 +2117,8 @@ if [[ "$1" == inspect && "$*" == *'io.echo-brain.release-id'* ]]; then [[ -f "${
 if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' "${envFile}"; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"f".repeat(64)}\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then exit 0; fi
 if [[ "$1" == image ]]; then printf '%s\\n' '${first.authority_image.reference}' '${next.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_id="$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}")"; printf '{"schema_version":1,"kind":"echo-staging-synthetic-private-dm-canary-receipt-v1","release_id":"%s",${outcomeFields}}\\n' "$release_id"; exit 0; fi
 `);
@@ -1989,6 +2328,8 @@ if [[ "$1" == inspect && "$*" == *'io.echo-brain.runtime-profile-sha256'* ]]; th
 if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"f".repeat(64)}\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'* ]]; then printf 'true\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
+if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then exit 0; fi
 if [[ "$1" == image ]]; then printf '%s\\n' '${accepted.authority_image.reference}' '${next.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then
   release_id="$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}")"

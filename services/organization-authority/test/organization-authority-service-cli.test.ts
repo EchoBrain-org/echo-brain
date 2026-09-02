@@ -72,6 +72,9 @@ const { runOrganizationAuthorityServiceCli } = await import(
 );
 
 afterEach(() => {
+  delete process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1;
+  delete process.env.ECHO_BUILD_NUMBER;
+  delete process.env.ECHO_SOURCE_SHA;
   runtimeState.worker_error = undefined;
   runtimeState.worker_telemetry = undefined;
   runtimeState.answer_composition_failure = undefined;
@@ -101,6 +104,77 @@ function start(io: { readonly stderr: (value: string) => void }) {
 }
 
 describe("admitted runtime CLI events", () => {
+  it("emits identity-bound liveness only for the exact staging Authority", async () => {
+    const releaseSha = "a".repeat(40);
+    process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
+    process.env.ECHO_SOURCE_SHA = releaseSha;
+    process.env.ECHO_BUILD_NUMBER = "33689731778";
+    runtimeState.authority_url = "https://authority-staging.echobrain.org";
+    const stagingStderr: string[] = [];
+    const staging = start({
+      stderr: (value) => {
+        stagingStderr.push(value);
+      },
+    });
+    await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    process.emit("SIGTERM");
+    await expect(staging).resolves.toBe(0);
+
+    const liveness = stagingStderr
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find(
+        (event) =>
+          event.kind === "echo-authority-journey-telemetry-liveness-v1",
+      );
+    expect(liveness).toMatchObject({
+      schema_version: 1,
+      kind: "echo-authority-journey-telemetry-liveness-v1",
+      environment: "staging",
+      release_sha: releaseSha,
+      build_number: 33_689_731_778,
+      event: "startup",
+    });
+    expect(new Date(String(liveness?.observed_at)).toISOString()).toBe(
+      liveness?.observed_at,
+    );
+
+    runtimeState.worker_error = undefined;
+    runtimeState.authority_url = "https://authority.example";
+    const nonStagingStderr: string[] = [];
+    const nonStaging = start({
+      stderr: (value) => {
+        nonStagingStderr.push(value);
+      },
+    });
+    await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    process.emit("SIGTERM");
+    await expect(nonStaging).resolves.toBe(0);
+    expect(nonStagingStderr.join("")).not.toContain(
+      "echo-authority-journey-telemetry-liveness-v1",
+    );
+  });
+
+  it("keeps staging available when immutable telemetry identity is invalid", async () => {
+    process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
+    process.env.ECHO_SOURCE_SHA = "not-a-source-sha";
+    process.env.ECHO_BUILD_NUMBER = "01";
+    runtimeState.authority_url = "https://authority-staging.echobrain.org";
+    const stderr: string[] = [];
+    const running = start({
+      stderr: (value) => {
+        stderr.push(value);
+      },
+    });
+    await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    process.emit("SIGTERM");
+
+    await expect(running).resolves.toBe(0);
+    expect(stderr.join("")).not.toContain(
+      "echo-authority-journey-telemetry-liveness-v1",
+    );
+    expect(stderr.join("")).toContain("echo-clean-live-runtime-ready-v1");
+  });
+
   it("keeps owner onboarding available when staging processing is still idle", async () => {
     const stderr: string[] = [];
     runtimeState.authority_url = "https://authority-staging.echobrain.org";

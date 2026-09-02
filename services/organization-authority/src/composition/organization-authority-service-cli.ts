@@ -8,6 +8,7 @@ import {
   STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js";
 import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js";
+import { createStagingJourneyTelemetryTransportFromEnvironmentV1 } from "./staging/observability/staging-journey-telemetry-transport-v1.js";
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -239,9 +240,17 @@ export async function runOrganizationAuthorityServiceCli(
         processing: runtime.processing,
       } as never)}\n`,
     );
+    const stagingJourneyTelemetry =
+      manifest.authority_url ===
+      STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1
+        ? createStagingJourneyTelemetryTransportFromEnvironmentV1(process.env, {
+            write: io.stderr,
+          })
+        : undefined;
     await new Promise<void>((resolve) => {
       let closing: Promise<void> | undefined;
       const close = (): void => {
+        stagingJourneyTelemetry?.close();
         closing ??=
           stagingCanaryControl === undefined
             ? runtime.close()

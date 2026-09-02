@@ -519,6 +519,7 @@
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/presentation/**",
         "services/organization-authority/src/state-lineage/**",
+        "services/organization-authority/src/shared/journey-telemetry-v1.ts",
         "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
         "services/organization-authority/src/processing/adapters/approval-delivery/slack/**",
         "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
