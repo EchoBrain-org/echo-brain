@@ -28,6 +28,7 @@ const ANSWER_COMPOSITION_WIRING_ROOTS = new Set([
   "services/organization-authority/src/composition/organization-authority-api-runtime.ts",
   "services/organization-authority/src/composition/organization-authority-composition-root.ts",
   "services/organization-authority/src/composition/organization-authority-runtime.ts",
+  "services/organization-authority/src/composition/synthetic-demo-organization-authority-cli.ts",
   "services/organization-authority/src/composition/synthetic-demo-organization-authority-composition-root-v1.ts",
 ]);
 const MODEL_IMPORT =
