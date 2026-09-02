@@ -5,9 +5,11 @@ import {
   RetrievalGroundedAnswerCompositionError,
   validateReleasedRetrievalQuery,
   type AnswerCompositionFailureDiagnosticV1,
+  type AnswerCompositionStageObservationV1,
   type ReleasedRetrievalBatch,
   type ReleasedRetrievalPort,
   type StructuredGenerationInput,
+  type StructuredGenerationPort,
 } from "../../src/answer-composition/retrieval-grounded-answer-composition.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -139,6 +141,143 @@ describe("retrieval-grounded answer composition", () => {
     );
     expect(JSON.stringify(auditEntries[0])).not.toContain("When is the launch");
     expect(JSON.stringify(auditEntries[0])).not.toContain("Tuesday, owned");
+  });
+
+  it("reports content-free stage latency separately from observed provider latency", async () => {
+    const observations: AnswerCompositionStageObservationV1[] = [];
+    let monotonicNow = 100;
+    const planner: StructuredGenerationPort = {
+      generate: vi.fn(),
+      generate_with_observation: vi.fn(async () => ({
+        value: { queries: [] },
+        usage: {
+          input_tokens: -1,
+          output_tokens: Number.NaN,
+          total_tokens: 20,
+          cached_input_tokens: null,
+          reasoning_tokens: null,
+        },
+        finish_reason: "stop" as const,
+        provider_latency_ms: null,
+      })),
+    };
+    const answerer: StructuredGenerationPort = {
+      generate: vi.fn(),
+      generate_with_observation: vi.fn(async () => ({
+        value: {
+          status: "answered",
+          answer: "Tuesday, owned by the product team.",
+          citations: ["a1", "a2"],
+        },
+        usage: {
+          input_tokens: 30,
+          output_tokens: 10,
+          total_tokens: 40,
+          cached_input_tokens: 5,
+          reasoning_tokens: 2,
+        },
+        finish_reason: "stop" as const,
+        provider_latency_ms: null,
+      })),
+    };
+    const composition = createRetrievalGroundedAnswerComposition({
+      planner,
+      answerer,
+      released_retrieval: {
+        retrieve: vi.fn(async (input) => release(true, input.queries.length)),
+        revalidate: vi.fn(async () => ({
+          checked_at: "2026-08-23T00:00:01.000Z",
+        })),
+      },
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "deepseek/deepseek-v3.2",
+      answer_model: "deepseek/deepseek-v3.2",
+      now_ms: () => monotonicNow++,
+      on_stage: (event) => observations.push(event),
+    });
+
+    await expect(
+      composition.answer({ question: "When is the launch?" }),
+    ).resolves.toMatchObject({ answer: "Tuesday, owned by the product team." });
+    expect(planner.generate).not.toHaveBeenCalled();
+    expect(answerer.generate).not.toHaveBeenCalled();
+    expect(observations.map((event) => event.stage)).toEqual([
+      "planner",
+      "context",
+      "answer",
+      "audit",
+    ]);
+    const plannerObservation = observations[0];
+    const answerObservation = observations[2];
+    expect(plannerObservation).toMatchObject({
+      event: "succeeded",
+      elapsed_ms: 2,
+      generation_usage: {
+        provider_latency_ms: 1,
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: 20,
+        finish_reason: "stop",
+      },
+    });
+    expect(answerObservation).toMatchObject({
+      event: "succeeded",
+      elapsed_ms: 2,
+      generation_usage: {
+        provider_latency_ms: 1,
+        input_tokens: 30,
+        output_tokens: 10,
+        total_tokens: 40,
+        cached_input_tokens: 5,
+        reasoning_tokens: 2,
+        finish_reason: "stop",
+      },
+    });
+  });
+
+  it("records an in-flight generation cancellation as failed rather than skipped", async () => {
+    const controller = new AbortController();
+    const observations: AnswerCompositionStageObservationV1[] = [];
+    const planner: StructuredGenerationPort = {
+      generate: vi.fn(),
+      generate_with_observation: vi.fn(async () => {
+        controller.abort();
+        throw new DOMException("private abort detail", "AbortError");
+      }),
+    };
+    const composition = createRetrievalGroundedAnswerComposition({
+      planner,
+      answerer: { generate: vi.fn() },
+      released_retrieval: {
+        retrieve: vi.fn(),
+        revalidate: vi.fn(),
+      },
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "deepseek/deepseek-v3.2",
+      answer_model: "deepseek/deepseek-v3.2",
+      on_stage: (event) => observations.push(event),
+    });
+
+    await expect(
+      composition.answer({
+        question: "When is the launch?",
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
+      stage: "planner",
+      event: "failed",
+      failure_class: "cancelled",
+      generation_usage: {
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+      },
+    });
+    expect(JSON.stringify(observations)).not.toContain("private abort detail");
   });
 
   it("accepts a non-OpenRouter adapter identifier and model form through the same core path", async () => {
