@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  MAX_RELATED_ATOM_CANDIDATES_V1,
   MAX_RELATED_ATOM_LINKS_PER_ATOM_V1,
   MAX_RELATED_ATOM_LINKS_TOTAL_V1,
   MAX_RELATED_ATOM_SOURCE_TEXT_UTF8_BYTES_V1,
@@ -73,7 +74,12 @@ describe("related atom projector V1", () => {
     expect(request.schema).toMatchObject({
       type: "object",
       required: ["relationships"],
+      properties: {
+        relationships: { maxItems: 6 },
+      },
     });
+    expect(MAX_RELATED_ATOM_CANDIDATES_V1).toBe(6);
+    expect(MAX_RELATED_ATOM_LINKS_TOTAL_V1).toBe(6);
   });
 
   it("skips unknown, self, same-record, unquoted, duplicate, and reversed candidates", async () => {
@@ -113,12 +119,6 @@ describe("related atom projector V1", () => {
           left_atom_id: "atom-decision",
           right_atom_id: "atom-adoption",
           left_supporting_excerpt: "not in the source",
-          right_supporting_excerpt: "adoption evidence",
-        },
-        {
-          left_atom_id: "atom-decision",
-          right_atom_id: "atom-adoption",
-          left_supporting_excerpt: "",
           right_supporting_excerpt: "adoption evidence",
         },
       ],
@@ -180,7 +180,7 @@ describe("related atom projector V1", () => {
       item_kind: "decision",
       text: `Fact ${index} governs the shared launch condition.`,
     }));
-    const relationships = boundedAtoms.slice(1).map((atom) => ({
+    const relationships = boundedAtoms.slice(1, 7).map((atom) => ({
       left_atom_id: "atom-0",
       right_atom_id: atom.atom_id,
       left_supporting_excerpt: "shared launch condition",
@@ -203,14 +203,48 @@ describe("related atom projector V1", () => {
     );
   });
 
-  it("caps otherwise-disjoint pairs at the segment total", async () => {
-    const boundedAtoms = Array.from({ length: 100 }, (_, index) => ({
+  it("admits the complete six-pair segment budget within the provider output bound", async () => {
+    const boundedAtoms = Array.from({ length: 12 }, (_, index) => ({
       atom_id: `atom-${index}`,
       record_id: `record-${index}`,
       item_kind: "decision",
       text: `Fact ${index} sets a material condition.`,
     }));
-    const relationships = Array.from({ length: 50 }, (_, index) => ({
+    const relationships = Array.from(
+      { length: MAX_RELATED_ATOM_CANDIDATES_V1 },
+      (_, index) => ({
+        left_atom_id: `atom-${index * 2}`,
+        right_atom_id: `atom-${index * 2 + 1}`,
+        left_supporting_excerpt: "material condition",
+        right_supporting_excerpt: "material condition",
+      }),
+    );
+    const structuredOutput = model({ relationships });
+
+    const result = await projectRelatedAtomsV1({
+      atoms: boundedAtoms,
+      model: "test-model",
+      structured_output: structuredOutput,
+    });
+
+    expect(result).toHaveLength(MAX_RELATED_ATOM_LINKS_TOTAL_V1);
+    const request = structuredOutput.generate.mock.calls[0]?.[0];
+    expect(request.schema).toMatchObject({
+      properties: {
+        relationships: { maxItems: 6 },
+      },
+    });
+    expect(request.max_output_tokens).toBe(2_000);
+  });
+
+  it("fails closed when a provider response exceeds the six-pair schema", async () => {
+    const boundedAtoms = Array.from({ length: 14 }, (_, index) => ({
+      atom_id: `atom-${index}`,
+      record_id: `record-${index}`,
+      item_kind: "decision",
+      text: `Fact ${index} sets a material condition.`,
+    }));
+    const relationships = Array.from({ length: 7 }, (_, index) => ({
       left_atom_id: `atom-${index * 2}`,
       right_atom_id: `atom-${index * 2 + 1}`,
       left_supporting_excerpt: "material condition",
@@ -223,7 +257,7 @@ describe("related atom projector V1", () => {
         model: "test-model",
         structured_output: model({ relationships }),
       }),
-    ).resolves.toHaveLength(MAX_RELATED_ATOM_LINKS_TOTAL_V1);
+    ).rejects.toThrow("response is invalid");
   });
 
   it("fails closed when the model response is not a relationship envelope", async () => {
