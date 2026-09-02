@@ -61,6 +61,11 @@ jobs:
           package_version="$(node -p 'require("./src/product/person-client/package.json").version')"
           test "$(node -p 'process.platform')" = darwin
           test "$(node -p 'process.arch')" = arm64
+          app_archive="$pack_dir/ECHO.app.zip"
+          npm run build:echo-overlay -- \
+            --source-sha "$GITHUB_SHA" \
+            --version "$package_version" \
+            --output "$app_archive"
 
           archive_list="$RUNNER_TEMP/echo-person-client-archive-files.txt"
           tar -tzf "$archive" > "$archive_list"
@@ -136,6 +141,7 @@ jobs:
           npm run kit:person-onboarding -- \
             --release "$release_record" \
             --artifact "$archive" \
+            --app "$app_archive" \
             --runtime-node "$(node -p 'process.execPath')" \
             --output "$kit"
           kit_extract="$RUNNER_TEMP/echo-person-onboarding-kit"

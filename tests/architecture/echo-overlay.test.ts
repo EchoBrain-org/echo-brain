@@ -6,6 +6,7 @@ const REPO = resolve(import.meta.dirname, "../..");
 const SOURCE = resolve(REPO, "product/echo-overlay/main.swift");
 const PLIST = resolve(REPO, "product/echo-overlay/Info.plist");
 const BUILDER = resolve(REPO, "tools/build-echo-overlay.mjs");
+const CI = resolve(REPO, ".github/workflows/ci.yml");
 const INSTALLER = resolve(
   REPO,
   "deploy/release/start-person-onboarding-kit.sh",
@@ -161,6 +162,7 @@ describe("native ECHO hotkey overlay", () => {
   it("builds as a permission-minimal macOS agent app", () => {
     const plist = readFileSync(PLIST, "utf8");
     const builder = readFileSync(BUILDER, "utf8");
+    const ci = readFileSync(CI, "utf8");
     const installer = readFileSync(INSTALLER, "utf8");
 
     expect(plist).toMatch(/<key>LSUIElement<\/key>\s*<true\/>/);
@@ -173,6 +175,11 @@ describe("native ECHO hotkey overlay", () => {
     expect(builder).toContain("'-warnings-as-errors'");
     expect(builder).toContain("'--options', 'runtime'");
     expect(builder).toContain("'--verify', '--deep', '--strict'");
+    expect(ci).toContain("npm run build:echo-overlay --");
+    expect(ci).toContain('--source-sha "$GITHUB_SHA"');
+    expect(ci).toContain('--version "$package_version"');
+    expect(ci).toContain('--output "$app_archive"');
+    expect(ci).toContain('--app "$app_archive"');
     expect(installer).toContain(
       'app_destination="$applications_root/ECHO.app"',
     );
