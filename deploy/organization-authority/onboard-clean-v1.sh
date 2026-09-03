@@ -1341,7 +1341,9 @@ resume() {
         ;;
       ready_to_start)
         start_runtime
-        printf 'CANARY: on the exact staging host, run ./update-clean-v1.sh canary; approve its private Slack card; then run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20 and "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY". Rerun onboard-clean-v1.sh resume, then onboard-clean-v1.sh status. The staging-only synthetic receipt is release-bound; terminal green still requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
+        printf 'HOST ACTION: On the exact staging host, run ./update-clean-v1.sh canary.\n'
+        printf 'FOUNDER ACTION: Approve its private Slack card, then on the initial-owner machine run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20 and "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY".\n'
+        printf 'HOST ACTION: On the exact staging host, rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status. The staging-only synthetic receipt is release-bound; terminal green still requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
         print_status "$(setup_status)"
         return
         ;;

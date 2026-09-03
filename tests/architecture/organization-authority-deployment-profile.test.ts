@@ -365,7 +365,9 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("authority_uses_accepted_image()");
     expect(source).toContain("terminal_green()");
     expect(source).toContain("onboarding_complete=true");
-    expect(source).toContain("Rerun onboard-clean-v1.sh resume, then onboard-clean-v1.sh status");
+    expect(source).toContain(
+      "rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status",
+    );
     expect(source).toContain("./update-clean-v1.sh canary");
     expect(source).toContain("SYNTHETIC STAGING CANARY");
     expect(source).not.toContain("Reject a second card");
@@ -481,7 +483,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
-  it("uses the kit-installed client for the founder canary reads", () => {
+  it("keeps host canary commands separate from kit-installed founder reads", () => {
     const fixture = preparedStatusFixture();
     try {
       const result = fixture.run("resume", {
@@ -489,6 +491,15 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       });
 
       expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        "HOST ACTION: On the exact staging host, run ./update-clean-v1.sh canary.\n",
+      );
+      expect(result.stdout).toContain(
+        'FOUNDER ACTION: Approve its private Slack card, then on the initial-owner machine run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20',
+      );
+      expect(result.stdout).toContain(
+        "HOST ACTION: On the exact staging host, rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status.",
+      );
       expect(result.stdout).toContain(
         '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20',
       );
@@ -500,6 +511,9 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       expect(result.stdout).not.toContain(
         'and echo-brain person records --query "SYNTHETIC STAGING CANARY"',
+      );
+      expect(result.stdout).not.toMatch(
+        /HOST ACTION:[^\n]*Library\/Application Support\/ECHO\/bin\/echo-brain/,
       );
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
