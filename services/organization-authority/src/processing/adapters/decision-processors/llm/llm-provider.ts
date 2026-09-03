@@ -233,6 +233,12 @@ export async function requestProviderJson(
       signal: AbortSignal.any(signals),
     });
   } catch (error) {
+    if (signal?.aborted === true) {
+      throw new DOMException(
+        `${providerLabel(provider)} request was cancelled`,
+        'AbortError',
+      );
+    }
     if (
       (error instanceof Error && error.name === 'TimeoutError') ||
       (error instanceof Error && error.name === 'AbortError')

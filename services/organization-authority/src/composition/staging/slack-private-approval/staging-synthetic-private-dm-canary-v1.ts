@@ -9,6 +9,14 @@ import {
   type StagingSyntheticMeetingCanaryInputV1,
   type StagingSyntheticMeetingCanaryResultV1,
 } from "../../../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
+import type {
+  MeetingApprovalJourneyRefV1,
+  MeetingApprovalJourneyTelemetryPortV1,
+} from "../../../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
+import type {
+  DecisionExtractionGenerationObservation,
+  DecisionSet,
+} from "../../../processing/core/contracts/decision.js";
 import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "../../../processing/admitted-meeting-processing/review-lineage-semantics.js";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 
@@ -19,6 +27,8 @@ export interface RunStagingSyntheticPrivateDmCanaryV1Input {
   readonly state: SqliteAuthorityMeetingProcessingStateV1;
   readonly processor: DecisionProcessorAdapter;
   readonly stager: ApprovalWorkflowStagerV1;
+  /** Optional staging-only observer. It never changes canary behavior. */
+  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
   readonly signal?: AbortSignal;
 }
 
@@ -49,6 +59,48 @@ function actionable(
   return value !== undefined && value.disposition === "actionable";
 }
 
+function observe<T>(operation: () => T, fallback: T): T {
+  try {
+    return operation();
+  } catch {
+    return fallback;
+  }
+}
+
+function bindCandidate(
+  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
+  journey: MeetingApprovalJourneyRefV1 | null,
+  candidate: { readonly candidate_id: string; readonly approval_id: string | null },
+): void {
+  if (journey === null) return;
+  observe(() => telemetry?.bindCandidate(journey, candidate), undefined);
+}
+
+/**
+ * A previously staged canary may outlive the disposable sidecar. Reconstruct
+ * the observational terminal from the Authority outbox without retrying any
+ * Slack or Control Plane operation.
+ */
+function reconcileDurableCardStaged(
+  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
+  approvalId: string,
+): void {
+  if (telemetry === undefined) return;
+  observe(() => {
+    if (!telemetry.hasTerminalStage(approvalId, "meeting_approval_staging")) {
+      const attempt = telemetry.beginStageForApproval(
+        approvalId,
+        "meeting_approval_staging",
+      );
+      telemetry.markCardStaged(approvalId);
+      telemetry.succeedStage(attempt, { outcome: "staged" });
+      return;
+    }
+    // Keep the human-wait anchor repairable independently of the stage event.
+    telemetry.markCardStaged(approvalId);
+  }, undefined);
+}
+
 /**
  * Runs one intentionally synthetic meeting through the admitted LLM and the
  * existing private-owner Slack approval stager. It never polls or advances the
@@ -60,10 +112,28 @@ export async function runStagingSyntheticPrivateDmCanaryV1(
   input.signal?.throwIfAborted();
   assertStagingAuthorityUrl(input.authority_url);
   const meeting = createStagingSyntheticMeetingCanaryV1(input.canary);
-  const existing = await input.state.readFrozenCandidateForSourceRevision({
-    external_id: meeting.provenance.external_id,
-    canonical_revision: meeting.provenance.canonical_revision,
-  });
+  const telemetry = input.journey_telemetry;
+  const sourceAttempt = observe(
+    () =>
+      telemetry?.beginOrResumeSource({
+        source_adapter_id: meeting.provenance.source.adapter_id,
+        source_instance_id: meeting.provenance.source.instance_id,
+        external_id: meeting.provenance.external_id,
+        canonical_revision: meeting.provenance.canonical_revision,
+      }) ?? null,
+    null,
+  );
+  let existing: Awaited<ReturnType<SqliteAuthorityMeetingProcessingStateV1["readFrozenCandidateForSourceRevision"]>>;
+  try {
+    existing = await input.state.readFrozenCandidateForSourceRevision({
+      external_id: meeting.provenance.external_id,
+      canonical_revision: meeting.provenance.canonical_revision,
+    });
+    observe(() => telemetry?.succeedStage(sourceAttempt), undefined);
+  } catch (error) {
+    observe(() => telemetry?.failStage(sourceAttempt, error), undefined);
+    throw error;
+  }
   input.signal?.throwIfAborted();
   const reusedFrozenExtraction = existing !== undefined;
   let frozen = existing;
@@ -77,28 +147,78 @@ export async function runStagingSyntheticPrivateDmCanaryV1(
     ) {
       throw new Error("staging synthetic canary processor differs from admission");
     }
-    const decisions = await input.processor.extract(
-      meeting,
-      {
-        processor_version: input.processor.identity.version,
-        input_fingerprint:
-          `staging-synthetic-canary:v1:${meeting.provenance.external_id}:` +
-          meeting.provenance.canonical_revision,
-      },
-      input.signal === undefined ? undefined : { signal: input.signal },
+    const extractionAttempt = observe(
+      () =>
+        sourceAttempt === null
+          ? null
+          : telemetry?.beginStage(sourceAttempt, "meeting_extraction") ?? null,
+      null,
     );
-    input.signal?.throwIfAborted();
-    assertCanonicalDecisionSet(decisions, meeting, input.processor.identity);
-    input.signal?.throwIfAborted();
-    await input.state.stageSyntheticCanaryCandidate(
-      {
-        admission,
+    const extractionStartedAt = Date.now();
+    let observation: DecisionExtractionGenerationObservation | null = null;
+    let decisions: DecisionSet;
+    try {
+      decisions = await input.processor.extract(
         meeting,
-        decisions,
-        review_policy: legacyRestrictedReviewerReviewPolicySnapshotV1,
-      },
-      input.canary,
+        {
+          processor_version: input.processor.identity.version,
+          input_fingerprint:
+            `staging-synthetic-canary:v1:${meeting.provenance.external_id}:` +
+            meeting.provenance.canonical_revision,
+          on_generation: (event) => {
+            observation = event;
+          },
+        },
+        input.signal === undefined ? undefined : { signal: input.signal },
+      );
+      input.signal?.throwIfAborted();
+      assertCanonicalDecisionSet(decisions, meeting, input.processor.identity);
+      observe(
+        () => telemetry?.succeedExtractionStage(
+          extractionAttempt,
+          observation,
+          Math.max(0, Date.now() - extractionStartedAt),
+        ),
+        undefined,
+      );
+    } catch (error) {
+      observe(
+        () => telemetry?.failExtractionStage(
+          extractionAttempt,
+          error,
+          observation,
+          Math.max(0, Date.now() - extractionStartedAt),
+        ),
+        undefined,
+      );
+      throw error;
+    }
+    const candidateAttempt = observe(
+      () =>
+        sourceAttempt === null
+          ? null
+          : telemetry?.beginStage(sourceAttempt, "meeting_candidate_persist") ?? null,
+      null,
     );
+    try {
+      const candidate = await input.state.stageSyntheticCanaryCandidate(
+        {
+          admission,
+          meeting,
+          decisions,
+          review_policy: legacyRestrictedReviewerReviewPolicySnapshotV1,
+        },
+        input.canary,
+      );
+      observe(
+        () => telemetry?.succeedStage(candidateAttempt, { outcome: candidate.disposition }),
+        undefined,
+      );
+      bindCandidate(telemetry, sourceAttempt, candidate);
+    } catch (error) {
+      observe(() => telemetry?.failStage(candidateAttempt, error), undefined);
+      throw error;
+    }
     input.signal?.throwIfAborted();
     frozen = await input.state.readFrozenCandidateForSourceRevision({
       external_id: meeting.provenance.external_id,
@@ -108,6 +228,11 @@ export async function runStagingSyntheticPrivateDmCanaryV1(
   }
   if (frozen === undefined) {
     throw new Error("staging synthetic canary was not durably frozen");
+  }
+  bindCandidate(telemetry, sourceAttempt, frozen);
+  if (reusedFrozenExtraction && sourceAttempt !== null) {
+    observe(() => telemetry?.skipStage(sourceAttempt, "meeting_extraction"), undefined);
+    observe(() => telemetry?.skipStage(sourceAttempt, "meeting_candidate_persist"), undefined);
   }
   if (!actionable(frozen)) {
     return {
@@ -122,6 +247,7 @@ export async function runStagingSyntheticPrivateDmCanaryV1(
     outbox.candidate_id === frozen.candidate_id &&
     outbox.state === "staged"
   ) {
+    reconcileDurableCardStaged(telemetry, frozen.approval_id);
     return {
       kind: "staged",
       approval_id: frozen.approval_id,

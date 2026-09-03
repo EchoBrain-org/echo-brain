@@ -105,6 +105,7 @@ export interface OrganizationAuthorityRuntimeConfig {
       readonly state: SqliteAuthorityMeetingProcessingStateV1;
       readonly processor: DecisionProcessorAdapter;
       readonly stager: Awaited<ReturnType<ApprovalWorkflowBundleV1["load"]>>["stager"];
+      readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
       readonly signal: AbortSignal;
     },
   ) => Promise<StagingSyntheticPrivateDmCanaryResultV1>;
@@ -480,6 +481,9 @@ export async function openOrganizationAuthorityRuntime(
                   state: sourceState,
                   processor,
                   stager: approvals.stager,
+                  ...(meetingApprovalJourneyTelemetry === undefined
+                    ? {}
+                    : { journey_telemetry: meetingApprovalJourneyTelemetry }),
                   signal:
                     options?.signal === undefined
                       ? signal

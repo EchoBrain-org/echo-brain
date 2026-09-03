@@ -125,7 +125,7 @@ function assertNotCancelled(
   operation: string,
 ): void {
   if (signal?.aborted === true) {
-    throw new AdapterError('timeout', `LLM ${operation} was cancelled`, true);
+    throw new DOMException(`LLM ${operation} was cancelled`, "AbortError");
   }
 }
 

@@ -455,6 +455,57 @@ describe("meeting approval journey telemetry v1", () => {
     expect(JSON.stringify(events)).not.toContain("search-private-sentinel");
   });
 
+  it("clears a completed durable search marker even after its telemetry attempt budget is exhausted", () => {
+    const state = openState(stateFile());
+    const recorder = telemetry(state, [], {
+      now: () => "2026-09-02T12:40:00.000Z",
+      now_ms: () => 100,
+    });
+    const intake = recorder.beginOrResumeSource(source(), SOURCE_STARTED)!;
+    recorder.bindCandidate(intake, {
+      candidate_id: "candidate-search-attempt-cap",
+      approval_id: "approval-search-attempt-cap",
+    });
+    recorder.markAwaitingSearch("approval-search-attempt-cap");
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const attempts = recorder.beginAwaitingSearch();
+      expect(attempts).toHaveLength(1);
+      recorder.failAwaitingSearch(attempts, new Error("search transport failed"));
+    }
+    const capped = recorder.beginAwaitingSearch();
+    expect(capped).toEqual([]);
+    recorder.completeAwaitingSearch(capped, "published");
+
+    expect(state.listApprovedRecordsAwaitingSearch()).toEqual([]);
+    recorder.close();
+  });
+
+  it("classifies an aborted extraction as cancelled", async () => {
+    const events: JourneyTelemetryEventV1[] = [];
+    const recorder = telemetry(openState(stateFile()), events, {
+      now: () => SOURCE_CLOSED,
+      now_ms: () => 17,
+    });
+    const intake = recorder.beginOrResumeSource(source(), SOURCE_STARTED)!;
+    const extraction = recorder.beginStage(intake, "meeting_extraction", SOURCE_STARTED);
+    recorder.failExtractionStage(
+      extraction,
+      new DOMException("operator cancelled", "AbortError"),
+      null,
+      0,
+    );
+    await flushObserver();
+
+    expect(events.at(-1)).toMatchObject({
+      stage: "meeting_extraction",
+      event: "failed",
+      failure_class: "cancelled",
+      retryable: false,
+    });
+    recorder.close();
+  });
+
   it("contains synchronous observer throws as well", async () => {
     const state = openState(stateFile());
     const recorder = openMeetingApprovalJourneyTelemetryV1(

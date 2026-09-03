@@ -413,6 +413,57 @@ describe('OpenRouter provider client', () => {
     },
   );
 
+  it('retains bounded token usage when the model refuses a completed generation', async () => {
+    const client = new OpenRouterClient({
+      credentialRef: 'env:OPENROUTER_API_KEY',
+      credentialResolver: () => 'openrouter-secret',
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: { refusal: 'private refusal text' },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: {
+              prompt_tokens: 40,
+              completion_tokens: 5,
+              total_tokens: 45,
+              prompt_tokens_details: { cached_tokens: 3 },
+              completion_tokens_details: { reasoning_tokens: 2 },
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    let failure: unknown;
+    try {
+      await client.generateStructured({
+        ...generationRequest,
+        model: 'openai/gpt-test',
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(StructuredGenerationAttemptError);
+    expect(failure).toMatchObject({
+      code: 'permanently_rejected',
+      retryable: false,
+      observation: {
+        inputTokens: 40,
+        outputTokens: 5,
+        totalTokens: 45,
+        cachedInputTokens: 3,
+        reasoningTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    expect(JSON.stringify(failure)).not.toContain('private refusal text');
+  });
+
   it('treats HTTP 200 provider errors as failures', async () => {
     const client = new OpenRouterClient({
       credentialRef: 'env:OPENROUTER_API_KEY',

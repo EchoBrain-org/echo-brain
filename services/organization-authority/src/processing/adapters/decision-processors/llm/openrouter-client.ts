@@ -132,10 +132,14 @@ export class OpenRouterClient implements LlmProviderClient {
     }
     const message = first['message'];
     if (isRecord(message) && nonEmptyString(message['refusal'])) {
-      throw new AdapterError(
+      throw new StructuredGenerationAttemptError(
         'permanently_rejected',
         'OpenRouter model refused the structured generation request',
         false,
+        {
+          ...attemptObservation,
+          ...(nonEmptyString(finishReason) ? { stopReason: finishReason } : {}),
+        },
       );
     }
     const content = isRecord(message) ? message['content'] : undefined;

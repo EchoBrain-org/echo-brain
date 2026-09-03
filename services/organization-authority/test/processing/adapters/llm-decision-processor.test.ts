@@ -1198,7 +1198,7 @@ describe('llm decision processor extraction', () => {
       instance.extract(meeting, extractionContext(instance), {
         signal: controller.signal,
       }),
-    ).rejects.toMatchObject({ code: 'timeout' });
+    ).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
 

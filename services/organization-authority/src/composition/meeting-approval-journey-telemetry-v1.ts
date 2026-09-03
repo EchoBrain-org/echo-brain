@@ -122,6 +122,16 @@ class MeetingApprovalJourneyTelemetryV1
 {
   private readonly now: () => string;
   private readonly nowMs: () => number;
+  /**
+   * A reconciliation outcome applies to the exact durable backlog snapshot
+   * observed before readable-search work starts. Entries without a span are
+   * retained here so an exhausted telemetry attempt budget cannot strand a
+   * durable marker forever.
+   */
+  private readonly awaitingSearchBatches = new WeakMap<
+    readonly MeetingApprovalJourneyStageAttemptV1[],
+    readonly MeetingApprovalJourneyRefV1[]
+  >();
 
   constructor(
     private readonly config: MeetingApprovalJourneyTelemetryConfigV1,
@@ -544,20 +554,23 @@ class MeetingApprovalJourneyTelemetryV1
 
   beginAwaitingSearch(): readonly MeetingApprovalJourneyStageAttemptV1[] {
     try {
-      return Object.freeze(
-        this.state
-          .listApprovedRecordsAwaitingSearch()
-          .map((pending) =>
-            this.beginStage(
-              { journey_id: pending.journey_id },
-              "meeting_search_publication",
-            ),
-          )
-          .filter(
-            (attempt): attempt is MeetingApprovalJourneyStageAttemptV1 =>
-              attempt !== null,
-          ),
+      const pending = this.state.listApprovedRecordsAwaitingSearch();
+      const attempts: MeetingApprovalJourneyStageAttemptV1[] = [];
+      for (const item of pending) {
+        const attempt = this.beginStage(
+          { journey_id: item.journey_id },
+          "meeting_search_publication",
+        );
+        if (attempt !== null) attempts.push(attempt);
+      }
+      const batch = Object.freeze(attempts);
+      this.awaitingSearchBatches.set(
+        batch,
+        Object.freeze(
+          pending.map((item) => Object.freeze({ journey_id: item.journey_id })),
+        ),
       );
+      return batch;
     } catch {
       // Global search reconciliation must never depend on run-detail telemetry.
       return Object.freeze([]);
@@ -569,15 +582,21 @@ class MeetingApprovalJourneyTelemetryV1
     outcome: "current" | "published" | "superseded",
   ): void {
     try {
+      const journeys = this.awaitingSearchBatches.get(attempts) ?? Object.freeze(
+        attempts.map((attempt) => Object.freeze({ journey_id: attempt.journey_id })),
+      );
       for (const attempt of attempts) {
         this.succeedStage(attempt, { outcome });
-        if (outcome !== "superseded") {
+      }
+      if (outcome !== "superseded") {
+        for (const journey of journeys) {
           this.state.completeApprovedRecordSearch(
-            attempt.journey_id,
+            journey.journey_id,
             this.captureClock().observed_at,
           );
         }
       }
+      this.awaitingSearchBatches.delete(attempts);
     } catch {
       // Global search reconciliation must never depend on run-detail telemetry.
     }
@@ -591,6 +610,7 @@ class MeetingApprovalJourneyTelemetryV1
       for (const attempt of attempts) {
         this.failStage(attempt, error);
       }
+      this.awaitingSearchBatches.delete(attempts);
     } catch {
       // Global search reconciliation must never depend on run-detail telemetry.
     }
