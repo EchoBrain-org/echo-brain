@@ -12,43 +12,13 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
+import {
+  isExpectedPersonEmail,
+  validateOrganizationAuthorityOrigin,
+} from "@echo-brain/organization-api";
 
 const MAXIMUM_INVITATION_BYTES = 8 * 1024;
 const LOGIN_GRANT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-
-/**
- * The client repeats the Authority's canonical-email rule rather than importing
- * it, because the person client ships as a standalone product artifact.
- */
-const CANONICAL_PERSON_EMAIL =
-  /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
-
-function hasBoundedMailboxParts(value: string): boolean {
-  const [localPart, domain] = value.split("@");
-  return (
-    localPart !== undefined &&
-    domain !== undefined &&
-    localPart.length <= 64 &&
-    domain.length <= 253 &&
-    domain.split(".").every((label) => label.length <= 63)
-  );
-}
-
-function isCanonicalPersonEmail(value: unknown): value is string {
-  if (
-    typeof value !== "string" ||
-    value.length < 3 ||
-    value.length > 254 ||
-    value !== value.trim() ||
-    value !== value.toLowerCase() ||
-    !CANONICAL_PERSON_EMAIL.test(value) ||
-    !hasBoundedMailboxParts(value)
-  ) {
-    return false;
-  }
-  return true;
-}
 
 export interface PersonOnboardingInvitationV1 {
   readonly schema_version: 1;
@@ -173,7 +143,7 @@ function validate(value: unknown): PersonOnboardingInvitation {
     typeof record.login_grant !== "string" ||
     typeof record.expires_at !== "string" ||
     (record.schema_version === 2 &&
-      !isCanonicalPersonEmail(record.expected_email))
+      !isExpectedPersonEmail(record.expected_email))
   ) {
     throw new Error("Person onboarding invitation is invalid");
   }

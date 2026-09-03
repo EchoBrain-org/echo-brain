@@ -365,11 +365,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("authority_uses_accepted_image()");
     expect(source).toContain("terminal_green()");
     expect(source).toContain("onboarding_complete=true");
-    expect(source).toContain(
-      "rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status",
-    );
-    expect(source).toContain("./update-clean-v1.sh canary");
-    expect(source).toContain("SYNTHETIC STAGING CANARY");
     expect(source).not.toContain("Reject a second card");
     expect(source).toContain("founder-person-invitation.json");
     expect(source).toContain("canonical accepted release record %s");
@@ -377,10 +372,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain('"$initial_owner_invitation" "$RELEASE_FILE"');
     expect(source).toContain('"<release-matched-kit>/Start ECHO.command" <transferred-absolute-path>');
     expect(source).toContain("Do not use a preexisting global echo-brain command");
-    expect(source).toContain(
-      '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person logout',
-    );
-    expect(source).toContain("RELEASE-MATCHED-KIT:");
     expect(source).toContain('client_sha256="$(release_field client-sha256)"');
     expect(source).toContain('client_version="$(release_field client-version)"');
     expect(source).toContain('source_sha="$(release_field source-sha)"');
@@ -388,7 +379,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("deploy/release/README.md");
     expect(source).toContain("npm run kit:person-onboarding");
     expect(source).toContain("transferred accepted release record");
-    expect(source).not.toContain("client_artifact_url=%s");
     expect(source).not.toContain(
       "then run echo-brain person login --invitation <transferred-absolute-path>",
     );

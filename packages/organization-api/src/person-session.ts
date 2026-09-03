@@ -16,7 +16,7 @@ import {
 
 const OPAQUE_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const LOOPBACK_HANDOFF_PATH_PATTERN = /^\/[A-Za-z0-9_-]{43}$/;
-const CANONICAL_PERSON_EMAIL =
+const EXPECTED_PERSON_EMAIL =
   /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 function hasBoundedMailboxParts(value: string): boolean {
@@ -34,23 +34,21 @@ function assertOpaqueSecret(value: unknown, label: string): void {
   assertPatternString(value, label, 43, OPAQUE_SECRET_PATTERN);
 }
 
-/**
- * The same narrow identity-key rule the Authority applies to a stored expected
- * email. A hint that is not canonical can never match the grant digest, so it
- * is rejected at the edge rather than carried into the session application.
- */
-function assertCanonicalEmail(value: unknown, label: string): void {
-  if (
-    typeof value !== 'string' ||
-    value.length < 3 ||
-    value.length > 254 ||
-    value !== value.trim() ||
-    value !== value.toLowerCase() ||
-    !CANONICAL_PERSON_EMAIL.test(value) ||
-    !hasBoundedMailboxParts(value)
-  ) {
-    fail(`${label} is invalid`);
-  }
+/** The mailbox shape shared by expected-email fields at public boundaries. */
+export function isExpectedPersonEmail(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length >= 3 &&
+    value.length <= 254 &&
+    value === value.trim() &&
+    value === value.toLowerCase() &&
+    EXPECTED_PERSON_EMAIL.test(value) &&
+    hasBoundedMailboxParts(value)
+  );
+}
+
+function assertExpectedPersonEmail(value: unknown, label: string): void {
+  if (!isExpectedPersonEmail(value)) fail(`${label} is invalid`);
 }
 
 function assertLoopbackHandoff(value: unknown, label: string): void {
@@ -115,7 +113,7 @@ export function validateOrganizationPersonOidcBeginRequest(
   }
   assertOpaqueSecret(record.login_grant, `${label} login_grant`);
   if (record.login_hint !== undefined) {
-    assertCanonicalEmail(record.login_hint, `${label} login_hint`);
+    assertExpectedPersonEmail(record.login_hint, `${label} login_hint`);
   }
   if (record.loopback_handoff !== undefined) {
     assertLoopbackHandoff(record.loopback_handoff, `${label} loopback_handoff`);

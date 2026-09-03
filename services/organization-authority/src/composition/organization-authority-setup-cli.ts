@@ -20,7 +20,8 @@ import Database from "better-sqlite3";
 import {
   assertFederationId,
   canonicalJson,
-  canonicalSha256,federationId,
+  canonicalSha256,
+  federationId,
 } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import {
@@ -29,8 +30,10 @@ import {
 } from "@echo-brain/organization-control-plane/slack-connection-setup-v1";
 import { assertDisplayName } from "../domain/rules.js";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
-import { isCanonicalPersonEmail ,
-  isExpectedPersonEmail,} from "../domain/person-session-rules.js";
+import {
+  isCanonicalPersonEmail,
+  isExpectedPersonEmail,
+} from "../domain/person-session-rules.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
 import {
   readPrivateAuthorityCredential,
@@ -54,7 +57,7 @@ import {
   runOrganizationAuthorityPersonAdministrationCli,
 } from "./organization-authority-person-administration-cli.js";
 import { reissueLegacyPersonOnboardingInvitation } from "./person-onboarding-service.js";
-import {verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
 import {
   isStagingSyntheticMeetingCanaryEnvelopeV1,
   stagingSyntheticMeetingCanaryInputFromEnvelopeV1,
@@ -253,10 +256,13 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   initialize_state: bootstrapOrganizationAuthorityState,
   initialize_credentials: async (stateDirectory) => {
     await captureCommand((stdout) =>
-      runOrganizationAuthorityPersonAdministrationCli(["credentials-init", "--state-dir", stateDirectory], {
-        stdout,
-        stderr: () => undefined,
-      },),
+      runOrganizationAuthorityPersonAdministrationCli(
+        ["credentials-init", "--state-dir", stateDirectory],
+        {
+          stdout,
+          stderr: () => undefined,
+        },
+      ),
     );
   },
   connect_slack: async (input) => {
@@ -283,14 +289,14 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       "verified_at",
     ] as const) {
       if (typeof result[field] !== "string") {
-        throw new Error("Slack connection did not return safe verification details",);
+        throw new Error("Slack connection did not return safe verification details");
       }
     }
     if (
       result.provider_enterprise_id !== null &&
       typeof result.provider_enterprise_id !== "string"
     ) {
-      throw new Error("Slack connection did not return safe verification details",);
+      throw new Error("Slack connection did not return safe verification details");
     }
     if (
       !Array.isArray(result.required_scopes) ||
@@ -303,7 +309,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       result.bot_membership_verified !== true ||
       result.bot_access_verified !== true
     ) {
-      throw new Error("Slack connection did not return complete channel verification",);
+      throw new Error("Slack connection did not return complete channel verification");
     }
     if (input.connection_id === undefined) {
       throw new Error(
@@ -542,9 +548,9 @@ function assertSetupSeed(seed: OrganizationAuthoritySetupSeedV1): void {
   try {
     assertFederationId(seed.authority_id, "oau", "setup authority_id");
     assertFederationId(seed.organization_id, "org", "setup organization_id");
-    assertFederationId(seed.owner_principal_id, "prn", "setup owner_principal_id",);
-    assertFederationId(seed.owner_membership_id, "mem", "setup owner_membership_id",);
-    assertFederationId(seed.slack_connection_id, "con", "setup slack_connection_id",);
+    assertFederationId(seed.owner_principal_id, "prn", "setup owner_principal_id");
+    assertFederationId(seed.owner_membership_id, "mem", "setup owner_membership_id");
+    assertFederationId(seed.slack_connection_id, "con", "setup slack_connection_id");
   } catch {
     throw new Error("organization setup seed is invalid");
   }
@@ -557,7 +563,7 @@ function assertSetupSeed(seed: OrganizationAuthoritySetupSeedV1): void {
   }
 }
 
-function validateManifest(value: unknown,): OrganizationAuthoritySetupManifestV1 {
+function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("organization setup manifest is invalid");
   }
@@ -625,7 +631,7 @@ function validateManifest(value: unknown,): OrganizationAuthoritySetupManifestV1
   return Object.freeze(manifest);
 }
 
-function readPrivateManifest(path: string,): OrganizationAuthoritySetupManifestV1 {
+function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV1 {
   const metadata = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -642,7 +648,7 @@ function readPrivateManifest(path: string,): OrganizationAuthoritySetupManifestV
   if (bytes.byteLength === 0 || bytes.byteLength > 16 * 1024) {
     throw new Error("organization setup manifest is invalid");
   }
-  const manifest = validateManifest(JSON.parse(bytes.toString("utf8")) as unknown,);
+  const manifest = validateManifest(JSON.parse(bytes.toString("utf8")) as unknown);
   if (`${canonicalJson(manifest as never)}\n` !== bytes.toString("utf8")) {
     throw new Error(
       "organization setup manifest is not canonically encoded"
@@ -689,8 +695,8 @@ function setupManifest(
     artifact_revision: input.artifact_revision,
     authority_url: input.authority_url,
     oidc_config_path: input.oidc_config_path,
-    pkce_key_file: join(credentialsDirectory, "person-session-pkce-sealing-key",),
-    invitation_path: join(input.state_directory, MANIFEST_DIRECTORY, INVITATION_FILENAME,),
+    pkce_key_file: join(credentialsDirectory, "person-session-pkce-sealing-key"),
+    invitation_path: join(input.state_directory, MANIFEST_DIRECTORY, INVITATION_FILENAME),
     slack_approval_channel_id: input.slack_approval_channel_id,
     slack_connection_id: seed.slack_connection_id,
     authority_id: seed.authority_id,
@@ -698,8 +704,8 @@ function setupManifest(
     state_lineage_id: seed.state_lineage_id,
     owner_principal_id: seed.owner_principal_id,
     owner_membership_id: seed.owner_membership_id,
-    granola_credential_file: join(credentialsDirectory, GRANOLA_CREDENTIAL_FILENAME,),
-    granola_owner_email_file: join(credentialsDirectory, GRANOLA_OWNER_EMAIL_FILENAME,),
+    granola_credential_file: join(credentialsDirectory, GRANOLA_CREDENTIAL_FILENAME),
+    granola_owner_email_file: join(credentialsDirectory, GRANOLA_OWNER_EMAIL_FILENAME),
     llm_credential_file: join(credentialsDirectory, LLM_CREDENTIAL_FILENAME),
     organization_name: input.organization_name,
     owner_display_name: input.owner_display_name,
@@ -751,7 +757,7 @@ function loadSetupManifest(stateDirectory: string): |{
   });
 }
 
-function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1,): void {
+function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1): void {
   const verified = verifyAuthorityStateLineage(manifest.state_directory);
   if (
     verified.root.authority_id !== manifest.setup_seed.authority_id ||
@@ -764,7 +770,7 @@ function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1,): vo
   }
 }
 
-function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV1,): void {
+function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV1): void {
   const source = siblingSetupPlanPath(manifest.state_directory);
   const destination = manifestPath(manifest.state_directory);
   if (existsSync(destination)) return;
@@ -913,7 +919,7 @@ function usableInitialOwnerInvitation(
     const database = new Database(join(manifest.state_directory, "authority.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    },);
+    });
     try {
       return (database.prepare(
         `SELECT 1 FROM authority_person_login_grants
@@ -962,7 +968,7 @@ function plannedSlackIsActive(
     const database = new Database(join(manifest.state_directory, "integrations.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    },);
+    });
     try {
       return (database
         .prepare(
@@ -1374,7 +1380,7 @@ function setupCanaryEvidence(
     authority = new Database(join(manifest.state_directory, "authority.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    },);
+    });
     record = new Database(join(manifest.state_directory, "record-log.sqlite"), {
       readonly: true,
       fileMustExist: true,
@@ -1481,7 +1487,7 @@ function initialOwnerSetupStatus(
     const authority = new Database(join(manifest.state_directory, "authority.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    },);
+    });
     let initialOwnerOidcBound = false;
     let granolaAdmissionProof: InitialOwnerSetupStatus["granola_admission_proof"];
     try {
@@ -1541,13 +1547,13 @@ function initialOwnerSetupStatus(
       const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
         `file:${manifest.granola_owner_email_file}`,
       );
-      void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`,);
+      void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`);
       granolaCredentialsValid = ownerEmail === manifest.owner_email;
     } catch {}
     const control = new Database(join(manifest.state_directory, "integrations.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    },);
+    });
     try {
       const initialOwnerSlackIdentityLinkActive = control.prepare(
         `SELECT 1 FROM organization_external_human_link_current AS link
@@ -1666,10 +1672,10 @@ async function bootstrap(
       );
     }
     const manifest = setupManifest(input, dependencies.now());
-    writeCanonicalPrivateFile(siblingSetupPlanPath(input.state_directory), manifest,);
+    writeCanonicalPrivateFile(siblingSetupPlanPath(input.state_directory), manifest);
     setup = Object.freeze({ manifest, location: "sibling" as const });
   } else if (!setupInputMatches(setup.manifest, input)) {
-    throw new Error("bootstrap arguments do not exactly match the durable setup plan",);
+    throw new Error("bootstrap arguments do not exactly match the durable setup plan");
   }
   const manifest = setup.manifest;
   if (!existsSync(input.state_directory)) {
@@ -1720,16 +1726,17 @@ async function bootstrap(
       : stage().invitation_file_present;
   if (!initialOwnerAlreadyBound && !invitationIsUsable()) {
     discardUnusableInvitation(invitationPath);
-    if (isExpectedPersonEmail(manifest.owner_email)) {await dependencies.issue_invitation({
-      state_directory: input.state_directory,
-      oidc_config_path: input.oidc_config_path,
-      pkce_key_file: manifest.pkce_key_file,
-      membership_id: manifest.owner_membership_id,
-      expected_email: input.owner_email,
-      authority_url: input.authority_url,
-      output_path: invitationPath,
-    });
-  } else {
+    if (isExpectedPersonEmail(manifest.owner_email)) {
+      await dependencies.issue_invitation({
+        state_directory: input.state_directory,
+        oidc_config_path: input.oidc_config_path,
+        pkce_key_file: manifest.pkce_key_file,
+        membership_id: manifest.owner_membership_id,
+        expected_email: input.owner_email,
+        authority_url: input.authority_url,
+        output_path: invitationPath,
+      });
+    } else {
       const oidc = readPersonOidcConfiguration(manifest.oidc_config_path);
       reissueLegacyPersonOnboardingInvitation({
         state_directory: manifest.state_directory,
@@ -1744,7 +1751,8 @@ async function bootstrap(
         authority_url: manifest.authority_url,
         output_path: invitationPath,
       });
-    }}
+    }
+  }
   const completedStage = stage();
   const completedFull = readInitialOwnerSetupStatus(manifest, dependencies);
   const nextStep = nextOrganizationAuthoritySetupStep({
@@ -1837,13 +1845,13 @@ function installProviderCredentials(
   input: CredentialInstallInput,
   io: CliIo,
 ): void {
-  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory,);
+  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory);
   verifySetupGenesis(manifest);
   if (
     manifest.granola_credential_file !==
       join(input.state_directory, "credentials", GRANOLA_CREDENTIAL_FILENAME) ||
     manifest.granola_owner_email_file !==
-      join(input.state_directory, "credentials", GRANOLA_OWNER_EMAIL_FILENAME,) ||
+      join(input.state_directory, "credentials", GRANOLA_OWNER_EMAIL_FILENAME) ||
     manifest.llm_credential_file !==
       join(input.state_directory, "credentials", LLM_CREDENTIAL_FILENAME)
   ) {
@@ -1898,7 +1906,7 @@ async function finalize(
   io: CliIo,
   dependencies: OrganizationAuthoritySetupCliDependencies,
 ): Promise<void> {
-  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory,);
+  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory);
   // This is a stopped-state publication gate, not merely a convenience
   // command. Prove genesis before a dependency can admit anything.
   verifySetupGenesis(manifest);

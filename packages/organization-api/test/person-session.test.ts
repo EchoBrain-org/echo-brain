@@ -1,4 +1,5 @@
 import {
+  isExpectedPersonEmail,
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse,
   validateOrganizationPersonSession,
@@ -25,6 +26,11 @@ const SESSION = {
 } as const;
 
 describe('Person session HTTP DTOs', () => {
+  it('exports the expected-email boundary rule', () => {
+    expect(isExpectedPersonEmail('founder@example.com')).toBe(true);
+    expect(isExpectedPersonEmail('Founder@example.com')).toBe(false);
+  });
+
   it('accepts only the two begin variants and exact issued pair', () => {
     expect(
       validateOrganizationPersonOidcBeginRequest({

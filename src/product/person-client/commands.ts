@@ -334,25 +334,22 @@ async function completePersonLogin(input: {
       input.expected_email === undefined || recoveredExistingInvitation
         ? ""
         : "Sign in with the account named in the private invitation. ";
+    const browserWasOpened = browserOpened === true;
     print(input.stdout, {
       ok: true,
       phase: "open-browser",
-      ...(browserOpened === true
+      ...(browserWasOpened
         ? {}
         : { authorization_url: manualAuthorizationUrl(begun.authorization_url) }),
       expires_at: begun.expires_at,
       ...(browserOpened === undefined ? {} : { browser_opened: browserOpened }),
       instruction: recoveredExistingInvitation
-        ? browserOpened === undefined
-          ? "An existing ECHO identity was found. Open authorization_url to continue sign-in."
-          : browserOpened
-            ? "An existing ECHO identity was found. Continue sign-in in the opened browser."
-            : "An existing ECHO identity was found. Open authorization_url to continue sign-in."
-        : browserOpened === false
-          ? `${expectedAccountNotice}Open authorization_url to complete sign-in in your browser.`
-          : browserOpened === true
-            ? `${expectedAccountNotice}Complete sign-in in the opened browser.`
-            : `${expectedAccountNotice}Open authorization_url to complete sign-in in your browser.`,
+        ? browserWasOpened
+          ? "An existing ECHO identity was found. Continue sign-in in the opened browser."
+          : "An existing ECHO identity was found. Open authorization_url to continue sign-in."
+        : browserWasOpened
+          ? `${expectedAccountNotice}Complete sign-in in the opened browser.`
+          : `${expectedAccountNotice}Open authorization_url to complete sign-in in your browser.`,
     });
     const handoffResult = await handoff.wait();
     if (handoffResult.kind === "error") {
@@ -476,12 +473,8 @@ export async function runPersonClientCli(
         await completePersonLogin({
           client,
           authority_url: authorityUrl,
-          ...(invitation === undefined
-            ? {}
-            : { login_grant: invitation.login_grant }),
-          ...(invitation?.expected_email === undefined
-            ? {}
-            : { expected_email: invitation.expected_email }),
+          login_grant: invitation?.login_grant,
+          expected_email: invitation?.expected_email,
           stdout,
           ...(dependencies.random_bytes === undefined
             ? {}
@@ -507,9 +500,7 @@ export async function runPersonClientCli(
           client,
           authority_url: invitation.authority_url,
           login_grant: invitation.login_grant,
-          ...(invitation.expected_email === undefined
-            ? {}
-            : { expected_email: invitation.expected_email }),
+          expected_email: invitation.expected_email,
           stdout,
           ...(dependencies.random_bytes === undefined
             ? {}

@@ -187,16 +187,14 @@ starts the runtime for browser login and Slack linking, stops it for credential
 installation and finalization, then starts it again. It never reads SQLite,
 prints secret values, or asks for generated IDs.
 
-When prompted for browser login, transfer the initial-owner invitation to the
-initial owner's current-user machine through a private channel, then run the exact
-path and command printed by `resume`. Install the exact Person client from the
-same release record first, using [the release installer](../release/README.md).
-The received invitation must be a current-user mode-`0600` file inside a
-mode-`0700` directory. Do not paste invitation contents into chat or a terminal.
-The wrapper prints the bounded synthetic private-DM staging canary plus the
-Slack, list, and search steps. After approving that card and completing both
-reads, rerun `resume`, then `status`: a terminal green result additionally
-requires a running healthy Authority container on the exact accepted image.
+At each pause, follow the exact actor-scoped action printed by `resume`. For
+browser login, privately transfer its named invitation and accepted release to
+the initial owner's machine and use the matching
+[release kit](../release/README.md). The invitation must be a current-user
+mode-`0600` file inside a mode-`0700` directory; never paste its contents into
+chat or a terminal. Continue until `resume` reports completion, then run
+`status`. Terminal green also requires a healthy Authority container on the
+exact accepted image.
 
 Use this Authority-state read-only progress check after the accepted image is
 present locally:

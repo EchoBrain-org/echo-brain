@@ -10,6 +10,7 @@ import {
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
+  isExpectedPersonEmail,
   isOrganizationApiValidationError,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
@@ -45,20 +46,6 @@ const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
 const PERSON_ANSWER_PATH_V1 = "/v1/person/ask";
-const CANONICAL_PERSON_EMAIL =
-  /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
-
-function hasBoundedMailboxParts(value: string): boolean {
-  const [localPart, domain] = value.split("@");
-  return (
-    localPart !== undefined &&
-    domain !== undefined &&
-    localPart.length <= 64 &&
-    domain.length <= 253 &&
-    domain.split(".").every((label) => label.length <= 63)
-  );
-}
-
 export interface EmployeeInvitationV1 {
   readonly login_grant: string;
   readonly expires_at: string;
@@ -595,13 +582,7 @@ function validateEmployeeRoster(value: unknown): EmployeeRosterV1 {
       "employee roster item is invalid",
     );
     if (
-      typeof employee.email !== "string" ||
-      employee.email.length < 3 ||
-      employee.email.length > 254 ||
-      employee.email !== employee.email.trim() ||
-      employee.email !== employee.email.toLowerCase() ||
-      !CANONICAL_PERSON_EMAIL.test(employee.email) ||
-      !hasBoundedMailboxParts(employee.email) ||
+      !isExpectedPersonEmail(employee.email) ||
       typeof employee.display_name !== "string" ||
       employee.display_name.length < 1 ||
       employee.display_name.length > 200 ||

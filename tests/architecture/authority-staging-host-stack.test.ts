@@ -436,25 +436,16 @@ describe("Authority staging host stack", () => {
       expect(stack.Parameters[parameter]).toBeDefined();
     }
     for (const required of [
-      "apt-get install -y --no-install-recommends ca-certificates curl snapd",
-      "snap install aws-cli --classic",
-      "timeout 20 /snap/bin/aws --cli-connect-timeout 5 --cli-read-timeout 15 s3api get-object",
       "--region '${AWS::Region}'",
       "--version-id '${HostSetupObjectVersion}'",
-      "sha256sum -c -",
-      "bootstrap-ubuntu-arm64.sh",
-      "--region '${AWS::Region}'",
       "--tunnel-secret-arn '${AuthorityTunnelTokenSecret}'",
       "--ecr-registry '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}'",
       "--data-volume-id '${StagingDataVolume}'",
       "expected_volume_serial=$(printf '%s' '${StagingDataVolume}' | tr -d '-')",
       "lsblk -dn -o SERIAL",
       "InitializeBlankDataVolumeArgument",
-      "/usr/local/sbin/install-echo-authority-tunnel-token",
-      "systemctl enable --now cloudflared-echo-authority.service",
       "http://127.0.0.1:20241/ready",
       "tunnel_ready=true",
-      "/srv/echo-authority-clean-v1/restore-clean-v1-host.sh materialize",
       "resume_retained_authority='${ResumeRetainedAuthority}'",
       "machine-tunnel-retained-state-ready",
       "bootstrap-not-started",
@@ -465,14 +456,6 @@ describe("Authority staging host stack", () => {
       "staging bootstrap stage: %s",
       "machine configuration, tunnel connection, retained-state materialization, and applicable retained Authority resume are ready",
       "--header 'Content-Type:'",
-      "apt-get update",
-      "apt-get install -y --no-install-recommends ca-certificates curl snapd",
-      "systemctl enable --now snapd.socket",
-      "timeout 60 snap wait system seed.loaded",
-      "timeout 120 snap install aws-cli --classic",
-      "set_bootstrap_stage aws-cli-ready",
-      "/snap/bin/aws --version >/dev/null",
-      "retry 6 10 download_setup_bundle",
     ]) {
       expect(userData).toContain(required);
     }

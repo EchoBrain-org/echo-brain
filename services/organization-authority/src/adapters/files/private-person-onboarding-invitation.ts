@@ -11,7 +11,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
+import {
+  isExpectedPersonEmail,
+  validateOrganizationAuthorityOrigin,
+} from "@echo-brain/organization-api";
 
 interface IssuedPersonOnboardingLoginGrant {
   readonly login_grant: string;
@@ -19,41 +22,6 @@ interface IssuedPersonOnboardingLoginGrant {
 }
 
 const MAX_PERSON_ONBOARDING_ARTIFACT_BYTES = 8 * 1024;
-
-/**
- * A file adapter owns its own input rules rather than reaching across a layer
- * boundary for them. This repeats the Authority's canonical-email definition
- * deliberately, so the artifact writer can refuse a value it should never
- * serialize.
- */
-const CANONICAL_PERSON_EMAIL =
-  /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
-
-function hasBoundedMailboxParts(value: string): boolean {
-  const [localPart, domain] = value.split("@");
-  return (
-    localPart !== undefined &&
-    domain !== undefined &&
-    localPart.length <= 64 &&
-    domain.length <= 253 &&
-    domain.split(".").every((label) => label.length <= 63)
-  );
-}
-
-function isCanonicalPersonEmail(value: unknown): value is string {
-  if (
-    typeof value !== "string" ||
-    value.length < 3 ||
-    value.length > 254 ||
-    value !== value.trim() ||
-    value !== value.toLowerCase() ||
-    !CANONICAL_PERSON_EMAIL.test(value) ||
-    !hasBoundedMailboxParts(value)
-  ) {
-    return false;
-  }
-  return true;
-}
 
 export interface PersonOnboardingInvitationV1 {
   schema_version: 1;
@@ -221,7 +189,7 @@ export function writePersonOnboardingInvitation(
     throw new Error("Person onboarding output reservation is unavailable");
   }
   const expectedEmail = options?.expected_email;
-  if (expectedEmail !== undefined && !isCanonicalPersonEmail(expectedEmail)) {
+  if (expectedEmail !== undefined && !isExpectedPersonEmail(expectedEmail)) {
     throw new Error("Person onboarding expected email is invalid");
   }
   const invitation: PersonOnboardingInvitation =
