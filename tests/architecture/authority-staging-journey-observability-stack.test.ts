@@ -48,14 +48,20 @@ function metricNames(widget: Record<string, unknown>): readonly string[] {
   const metrics = widget.properties as { readonly metrics?: unknown };
   const entries = Array.isArray(metrics.metrics) ? metrics.metrics : [];
   return entries.flatMap((entry) => {
-    if (Array.isArray(entry)) {
-      const value = entry[1];
-      return typeof value === "string" && value !== "." ? [value] : [];
+    // CloudWatch requires every metrics element to be an array. A metric-math
+    // or SEARCH expression is a single-element array wrapping the expression
+    // object; a plain metric is [namespace, name, ...dimensions].
+    if (!Array.isArray(entry)) return [];
+    const head = entry[0];
+    if (head !== null && typeof head === "object") {
+      const expression = (head as { readonly expression?: unknown }).expression;
+      if (typeof expression !== "string") return [];
+      return [...expression.matchAll(/MetricName="([^"]+)"/g)].map(
+        (match) => match[1]!,
+      );
     }
-    if (entry === null || typeof entry !== "object") return [];
-    const expression = (entry as { readonly expression?: unknown }).expression;
-    if (typeof expression !== "string") return [];
-    return [...expression.matchAll(/MetricName="([^"]+)"/g)].map((match) => match[1]!);
+    const value = entry[1];
+    return typeof value === "string" && value !== "." ? [value] : [];
   });
 }
 
@@ -200,6 +206,28 @@ describe("staging journey observability overview stack", () => {
         params: { operation: "list", render: true, page_size: 20 },
       },
     });
+
+    // CloudWatch rejects a dashboard whose `metrics` holds anything other than
+    // arrays: "Field metrics has to be an array of array of strings, with an
+    // optional metricRenderer object as last element". A bare expression object
+    // passes local JSON checks but fails at PutDashboard, so assert the shape
+    // here rather than discovering it during a live deploy.
+    const malformed = widgets
+      .filter((widget) => widget.type === "metric")
+      .flatMap((widget) => {
+        const properties = widget.properties as {
+          readonly metrics?: unknown;
+          readonly title?: string;
+        };
+        const entries = Array.isArray(properties.metrics)
+          ? properties.metrics
+          : [];
+        return entries
+          .map((entry, index) => ({ entry, index }))
+          .filter(({ entry }) => !Array.isArray(entry))
+          .map(({ index }) => `${properties.title ?? "untitled"}[${index}]`);
+      });
+    expect(malformed).toEqual([]);
 
     const metrics = widgets
       .filter((widget) => widget.type === "metric")
