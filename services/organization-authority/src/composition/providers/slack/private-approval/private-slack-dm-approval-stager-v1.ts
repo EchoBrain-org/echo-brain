@@ -46,6 +46,7 @@ import {
   SqliteAuthorityMeetingProcessingStateV1,
   type ApprovalWorkflowOutboxV1,
 } from "../../../../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+import type { MeetingApprovalJourneyTelemetryPortV1 } from "../../../../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
 type Digest = ApprovalContractSha256;
 type CompiledDecisionBrief = ReturnType<typeof compileDecisionBrief>;
@@ -74,6 +75,8 @@ export interface PrivateSlackDmApprovalStagerV1Options {
   readonly resolve_reviewer_target: PrivateSlackApprovalReviewerTargetResolverV1;
   /** This is a protocol boundary, not a card-specific hash implementation. */
   readonly canonical_sha256?: (value: unknown) => Digest;
+  /** Optional, fail-open staging journey observation. */
+  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
 }
 
 interface PrivateCardAndSnapshotV1 {
@@ -386,6 +389,21 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
     input: ApprovalWorkflowStageInputV1,
     context?: { readonly signal: AbortSignal },
   ): Promise<ApprovalWorkflowStageResultV1> {
+    const attempt = this.beginApprovalStaging(input.candidate.approval_id);
+    try {
+      const result = await this.stageInternal(input, context);
+      this.closeApprovalStaging(attempt, input.candidate.approval_id, result);
+      return result;
+    } catch (error) {
+      this.failApprovalStaging(attempt, error);
+      throw error;
+    }
+  }
+
+  private async stageInternal(
+    input: ApprovalWorkflowStageInputV1,
+    context?: { readonly signal: AbortSignal },
+  ): Promise<ApprovalWorkflowStageResultV1> {
     const existingQuarantine =
       this.options.authority.readApprovalDeliveryQuarantine(
         input.candidate.candidate_id,
@@ -574,6 +592,67 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       return { kind: "state_drift" };
     }
     return { kind: "staged", stage_id: durable.approval_id };
+  }
+
+  private beginApprovalStaging(approval_id: string) {
+    try {
+      return this.options.journey_telemetry?.beginStageForApproval(
+        approval_id,
+        "meeting_approval_staging",
+      ) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private closeApprovalStaging(
+    attempt: ReturnType<MeetingApprovalJourneyTelemetryPortV1["beginStageForApproval"]>,
+    approval_id: string,
+    result: ApprovalWorkflowStageResultV1,
+  ): void {
+    try {
+      switch (result.kind) {
+        case "staged":
+          // This durable timestamp begins the human wait. It must follow the
+          // Authority acknowledgement, never merely successful Slack publish.
+          this.options.journey_telemetry?.markCardStaged(approval_id);
+          this.options.journey_telemetry?.succeedStage(attempt, { outcome: "staged" });
+          return;
+        case "delivery_pending":
+          this.options.journey_telemetry?.succeedStage(attempt, { outcome: "delivery_pending" });
+          return;
+        case "quarantined":
+          this.options.journey_telemetry?.succeedStage(attempt, { outcome: "quarantined" });
+          return;
+        case "state_drift":
+          this.options.journey_telemetry?.failStage(
+            attempt,
+            new Error("approval staging state drift"),
+            { failure_class: "invalid_contract", retryable: false },
+          );
+          return;
+        case "revoked":
+          this.options.journey_telemetry?.failStage(
+            attempt,
+            new Error("approval staging authorization revoked"),
+            { failure_class: "authorization", retryable: false },
+          );
+          return;
+      }
+    } catch {
+      // Observation is never permitted to alter approval delivery.
+    }
+  }
+
+  private failApprovalStaging(
+    attempt: ReturnType<MeetingApprovalJourneyTelemetryPortV1["beginStageForApproval"]>,
+    error: unknown,
+  ): void {
+    try {
+      this.options.journey_telemetry?.failStage(attempt, error);
+    } catch {
+      // Observation is never permitted to alter approval delivery.
+    }
   }
 
   private async tombstoneKnown(

@@ -12,10 +12,12 @@ import {
   LlmDecisionProcessor,
   llmProcessingVersion,
 } from '../../../src/processing/adapters/decision-processors/llm/llm-decision-processor.js';
-import type {
-  LlmProviderClient,
-  LlmProviderId,
-  StructuredGenerationRequest,
+import {
+  StructuredGenerationAttemptError,
+  type LlmProviderClient,
+  type LlmProviderId,
+  type StructuredGenerationRequest,
+  type StructuredGenerationResult,
 } from '../../../src/processing/adapters/decision-processors/llm/llm-provider.js';
 import { adapterConformance } from '../../../../../tests/support/adapter-conformance.js';
 
@@ -80,14 +82,15 @@ class FakeLlmClient implements LlmProviderClient {
     private readonly models: readonly string[] = ['qwen3:4b'],
     private readonly failure?: Error,
     readonly provider: LlmProviderId = 'ollama',
+    private readonly result?: StructuredGenerationResult,
   ) {}
 
   async generateStructured(
     request: StructuredGenerationRequest,
-  ): Promise<{ content: string }> {
+  ): Promise<StructuredGenerationResult> {
     if (this.failure !== undefined) throw this.failure;
     this.requests.push(request);
-    return { content: this.content };
+    return this.result ?? { content: this.content };
   }
 
   async verifyModel(model: string): Promise<void> {
@@ -1023,6 +1026,170 @@ describe('llm decision processor extraction', () => {
     ).toBeUndefined();
   });
 
+  it('observes bounded provider usage and round-trip latency per extraction', async () => {
+    const observations: unknown[] = [];
+    const client = new FakeLlmClient(
+      validModelOutput,
+      ['openai/gpt-test'],
+      undefined,
+      'openrouter',
+      {
+        content: validModelOutput,
+        requestId: 'provider-request-id-must-not-escape',
+        inputTokens: 0,
+        outputTokens: 5,
+        totalTokens: 5,
+        cachedInputTokens: 0,
+        reasoningTokens: 2,
+        stopReason: 'provider-specific-finish',
+      },
+    );
+    const ticks = [100, 157];
+    const instance = new LlmDecisionProcessor(
+      {
+        adapter_id: 'llm',
+        instance_id: 'openrouter',
+        credential_ref: 'env:OPENROUTER_API_KEY',
+        settings: { provider: 'openrouter', model: 'openai/gpt-test' },
+      },
+      {
+        client,
+        now: () => '2026-07-17T18:00:00.000Z',
+        now_ms: () => ticks.shift() ?? 157,
+      },
+    );
+
+    await instance.extract(meeting, {
+      ...extractionContext(instance),
+      on_generation: (event) => observations.push(event),
+    });
+
+    expect(observations).toEqual([
+      {
+        outcome: 'succeeded',
+        provider: 'openrouter',
+        model: 'openai/gpt-test',
+        provider_latency_ms: 57,
+        input_tokens: 0,
+        output_tokens: 5,
+        total_tokens: 5,
+        cached_input_tokens: 0,
+        reasoning_tokens: 2,
+        finish_reason: 'other',
+      },
+    ]);
+  });
+
+  it('reports generation failures without usage and ignores observer failures', async () => {
+    const observations: unknown[] = [];
+    const failedClient = new FakeLlmClient(
+      validModelOutput,
+      ['openai/gpt-test'],
+      new AdapterError('temporarily_unavailable', 'provider detail', true),
+      'openrouter',
+    );
+    const ticks = [10, 33];
+    const failed = new LlmDecisionProcessor(
+      {
+        adapter_id: 'llm',
+        instance_id: 'openrouter',
+        credential_ref: 'env:OPENROUTER_API_KEY',
+        settings: { provider: 'openrouter', model: 'openai/gpt-test' },
+      },
+      {
+        client: failedClient,
+        now_ms: () => ticks.shift() ?? 33,
+      },
+    );
+
+    await expect(
+      failed.extract(meeting, {
+        ...extractionContext(failed),
+        on_generation: (event) => observations.push(event),
+      }),
+    ).rejects.toMatchObject({ code: 'temporarily_unavailable' });
+    expect(observations).toEqual([
+      {
+        outcome: 'failed',
+        provider: 'openrouter',
+        model: 'openai/gpt-test',
+        provider_latency_ms: 23,
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        cached_input_tokens: null,
+        reasoning_tokens: null,
+        finish_reason: null,
+      },
+    ]);
+
+    const instance = processor(new FakeLlmClient(validModelOutput));
+    await expect(
+      instance.extract(meeting, {
+        ...extractionContext(instance),
+        on_generation: () => {
+          throw new Error('observer unavailable');
+        },
+      }),
+    ).resolves.toMatchObject({ meeting_id: meeting.id });
+  });
+
+  it('observes bounded usage from a completed failed provider attempt', async () => {
+    const observations: unknown[] = [];
+    const failedClient = new FakeLlmClient(
+      validModelOutput,
+      ['openai/gpt-test'],
+      new StructuredGenerationAttemptError(
+        'temporarily_unavailable',
+        'provider response was truncated',
+        true,
+        {
+          inputTokens: 40,
+          outputTokens: 5,
+          totalTokens: 45,
+          cachedInputTokens: 3,
+          reasoningTokens: 2,
+          stopReason: 'length',
+        },
+      ),
+      'openrouter',
+    );
+    const ticks = [10, 33];
+    const failed = new LlmDecisionProcessor(
+      {
+        adapter_id: 'llm',
+        instance_id: 'openrouter',
+        credential_ref: 'env:OPENROUTER_API_KEY',
+        settings: { provider: 'openrouter', model: 'openai/gpt-test' },
+      },
+      {
+        client: failedClient,
+        now_ms: () => ticks.shift() ?? 33,
+      },
+    );
+
+    await expect(
+      failed.extract(meeting, {
+        ...extractionContext(failed),
+        on_generation: (event) => observations.push(event),
+      }),
+    ).rejects.toMatchObject({ code: 'temporarily_unavailable' });
+    expect(observations).toEqual([
+      {
+        outcome: 'failed',
+        provider: 'openrouter',
+        model: 'openai/gpt-test',
+        provider_latency_ms: 23,
+        input_tokens: 40,
+        output_tokens: 5,
+        total_tokens: 45,
+        cached_input_tokens: 3,
+        reasoning_tokens: 2,
+        finish_reason: 'length',
+      },
+    ]);
+  });
+
   it('fails closed on cancellation', async () => {
     const instance = processor(new FakeLlmClient(validModelOutput));
     const controller = new AbortController();
@@ -1031,7 +1198,7 @@ describe('llm decision processor extraction', () => {
       instance.extract(meeting, extractionContext(instance), {
         signal: controller.signal,
       }),
-    ).rejects.toMatchObject({ code: 'timeout' });
+    ).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
 

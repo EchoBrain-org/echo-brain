@@ -77,6 +77,20 @@ from service latency. It is never represented as an open machine span, an
 availability failure, or a normal latency alarm. The critical post-click
 machine interval is verified action through search publication.
 
+Implementation discovery made the two approval boundaries more precise. The
+`meeting_approval_action_verify` stage is the Slack signature, payload, and
+delivered-card lookup proof performed before the signed action is durably
+queued. The later stable membership, connection, identity, and authorization
+reproof culminates in `meeting_terminal_persist`: an approved or rejected
+Control Plane terminal, or a durable denied-action receipt. This preserves the
+real queue-before-final-reproof order without inventing a second stage.
+
+For an approval, `meeting_terminal_persist` therefore names the durable Control
+Plane terminal boundary. The approved V4 append remains the following
+`meeting_record_append` stage; the Authority terminal receipt is its
+idempotent local projection. Rejected and denied journeys explicitly skip the
+record-append and search-publication stages.
+
 ## Journey and event contract
 
 Each journey receives a randomly generated opaque `journey_id` at ingress or
@@ -85,6 +99,15 @@ approval boundary, and is included in structured events and run-detail logs.
 It is not a CloudWatch metric dimension. It must not be derived from a
 candidate, approval, meeting, Slack, person, release, or other durable business
 identifier.
+
+The deployed Authority and Control Plane business schemas are fresh-state-only
+and are not altered by this staging feature. Approval correlation is kept in a
+separate, disposable SQLite sidecar under the staging state directory. It
+contains only the random journey UUID, sequence/attempt state, bounded stage
+timestamps, and domain-separated SHA-256 join digests. Raw source, meeting,
+candidate, approval, person, and Slack identifiers are not stored in that
+sidecar or emitted. A missing or unreadable sidecar disables run detail and
+cannot block source processing, approval, append, search, startup, or shutdown.
 
 Every machine-stage event carries, at minimum:
 

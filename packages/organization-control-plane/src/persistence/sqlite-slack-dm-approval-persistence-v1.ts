@@ -157,6 +157,11 @@ export interface DeniedPrivateApprovalSignedActionV1 {
   readonly idempotent: boolean;
 }
 
+/** Content-free recovery projection for a durably denied signed action. */
+export interface DeniedPrivateApprovalRecoveryV1 {
+  readonly approval_id: string;
+}
+
 export interface PrivateApprovalTerminalAuditV1 {
   readonly schema_version: 1;
   readonly kind: typeof AUDIT_KIND;
@@ -476,6 +481,18 @@ export class SqliteSlackDmApprovalPersistenceV1 {
   listQueued(): readonly QueuedPrivateApprovalSignedActionV1[] {
     const rows = this.input.database.prepare(`SELECT receipt.normalized_receipt_json, receipt.normalized_receipt_sha256 FROM organization_private_approval_signed_action_receipts_v2 AS receipt LEFT JOIN organization_private_approval_terminal_evidence_v2 AS terminal ON terminal.signed_action_receipt_sha256 = receipt.normalized_receipt_sha256 LEFT JOIN organization_private_approval_denied_action_receipts_v2 AS denied ON denied.signed_action_receipt_sha256 = receipt.normalized_receipt_sha256 WHERE terminal.approval_id IS NULL AND denied.provider_action_key IS NULL ORDER BY receipt.received_at ASC, receipt.provider_receipt_id ASC`).all() as Array<{ normalized_receipt_json: string; normalized_receipt_sha256: string }>;
     return Object.freeze(rows.map(storedReceipt));
+  }
+
+  /**
+   * Recovery feed for signed actions that were durably denied before the
+   * optional Authority telemetry close could run. It intentionally returns
+   * only the approval ID needed for that content-free recovery.
+   */
+  listDenied(): readonly DeniedPrivateApprovalRecoveryV1[] {
+    const rows = this.input.database.prepare(`SELECT receipt.approval_id FROM organization_private_approval_denied_action_receipts_v2 AS denied JOIN organization_private_approval_signed_action_receipts_v2 AS receipt ON receipt.normalized_receipt_sha256 = denied.signed_action_receipt_sha256 WHERE NOT EXISTS (SELECT 1 FROM organization_private_approval_terminal_evidence_v2 AS terminal WHERE terminal.approval_id = receipt.approval_id) ORDER BY denied.denied_at ASC, receipt.provider_receipt_id ASC`).all() as Array<{ approval_id: string }>;
+    return Object.freeze(rows.map((row) => Object.freeze({
+      approval_id: identifier(row.approval_id, "denied recovery approval_id"),
+    })));
   }
 
   /** Consume an un-actionable receipt without creating a decision terminal. */

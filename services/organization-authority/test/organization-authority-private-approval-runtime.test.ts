@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -52,6 +53,9 @@ import {
 import {
   openOrganizationAuthorityRuntime,
 } from "../src/composition/organization-authority-runtime.js";
+import {
+  STAGING_MEETING_APPROVAL_JOURNEY_STATE_FILE_V1,
+} from "../src/composition/meeting-approval-journey-telemetry-v1.js";
 import type { MeetingSourceBundleV1 } from "../src/composition/meeting-source-bundle-v1.js";
 import type { AnswerCompositionGenerationBundleV1 } from "../src/composition/answer-composition-generation-bundle-v1.js";
 import type { DecisionProcessorBundleV1 } from "../src/composition/decision-processor-bundle-v1.js";
@@ -1139,6 +1143,16 @@ describe("Organization Authority runtime private approval lane", () => {
     const runtime = await openOrganizationAuthorityRuntime(
       {
         ...sharedConfig,
+        // Even an explicit staging marker must not enable telemetry on a
+        // non-staging Authority origin.
+        staging_meeting_approval_journey_telemetry_enabled: true,
+        meeting_approval_journey_telemetry: {
+          observer: () => undefined,
+          release_sha: "a".repeat(40),
+          build_number: 1,
+          extraction_provider: "openrouter",
+          extraction_model: "anthropic/claude-sonnet-4.6",
+        },
         meeting_source_bundle: sourceRuntime,
         decision_processor_bundle: processorRuntime,
         approval_workflow_bundle: approvalRuntime,
@@ -1152,6 +1166,14 @@ describe("Organization Authority runtime private approval lane", () => {
     );
     try {
       expect(runtime.processing).toBe("active");
+      expect(
+        existsSync(
+          join(
+            fixture.initialized.state_directory,
+            STAGING_MEETING_APPROVAL_JOURNEY_STATE_FILE_V1,
+          ),
+        ),
+      ).toBe(false);
       expect(ownershipContexts).toHaveLength(1);
       expect(openedContexts).toHaveLength(1);
       expect(openedContexts[0]).toBe(ownershipContexts[0]);

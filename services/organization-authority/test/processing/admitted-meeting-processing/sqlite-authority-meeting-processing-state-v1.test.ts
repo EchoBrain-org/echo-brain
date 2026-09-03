@@ -295,6 +295,7 @@ describe("SQLite admitted meeting-processing state", () => {
       canonical_revision: canary.provenance.canonical_revision,
     })).resolves.toMatchObject({
       candidate_id: candidateId,
+      durable_staged_at: ADVANCED_AT,
       admission: {
         source: {
           adapter_id: "synthetic-staging-canary",
@@ -358,6 +359,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => [],
+        listDenied: () => [],
         listTerminals: () => [terminal],
         finalize: async () => terminal,
         recordDenied: () => undefined,
@@ -998,6 +1000,7 @@ describe("SQLite admitted meeting-processing state", () => {
       review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
       review_policy_consequence_sha256: REVIEW_POLICY.policy_consequence_sha256,
     });
+    expect(state.readDurableCardStagedAt(candidate.approval_id)).toBeNull();
     await expect(
       state.stageCandidate({
         admission: current,
@@ -1033,6 +1036,7 @@ describe("SQLite admitted meeting-processing state", () => {
       state: "staged",
       approval_id: candidate.approval_id,
     });
+    expect(state.readDurableCardStagedAt(candidate.approval_id)).toBe(ADVANCED_AT);
     expect(state.readCandidateByApprovalId(candidate.approval_id)).toEqual(
       staged,
     );
@@ -1047,6 +1051,13 @@ describe("SQLite admitted meeting-processing state", () => {
         candidate_id: candidate.candidate_id,
       },
     });
+    value.exec("DROP TRIGGER authority_live_approval_outbox_v2_ordered_transition");
+    value
+      .prepare("UPDATE authority_live_approval_outbox_v2 SET updated_at = '2026-08-22 02:04:04'")
+      .run();
+    expect(() => state.readDurableCardStagedAt(candidate.approval_id)).toThrow(
+      "timestamp must be UTC milliseconds",
+    );
   });
 
   it("rejects a candidate policy that differs from the provider-neutral default", async () => {

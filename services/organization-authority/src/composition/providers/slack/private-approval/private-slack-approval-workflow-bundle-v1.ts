@@ -162,6 +162,9 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
         control_plane: controlPlane,
         poster,
         resolve_reviewer_target: resolveMeetingOwnerPrivateSlackApprovalReviewerV1,
+        ...(context.journey_telemetry === undefined
+          ? {}
+          : { journey_telemetry: context.journey_telemetry }),
       });
       const recordWriter = await createPrivateSlackBlockV4RecordWriterV1({
         append: context.record_append,
@@ -178,6 +181,9 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
         }),
         record_writer: recordWriter,
         poster,
+        ...(context.journey_telemetry === undefined
+          ? {}
+          : { journey_telemetry: context.journey_telemetry }),
       });
       const interactions = createPrivateSlackApprovalInteractionHandlerV1({
         signing_secret: readPrivateAuthoritySlackSigningSecret(
@@ -185,6 +191,13 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
         ),
         persistence: controlPlane,
         on_rejection: config.on_rejection,
+        ...(context.journey_telemetry === undefined
+          ? {}
+          : {
+              journey_telemetry: context.journey_telemetry,
+              read_durable_card_staged_at: (approvalId: string) =>
+                context.state.readDurableCardStagedAt(approvalId),
+            }),
       });
       return Object.freeze({
         stager,

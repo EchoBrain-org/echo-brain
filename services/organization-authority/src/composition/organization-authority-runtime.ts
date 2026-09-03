@@ -44,6 +44,15 @@ import type {
   StagingSyntheticMeetingCanaryInputV1,
   StagingSyntheticMeetingCanaryResultV1,
 } from "../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
+import {
+  openMeetingApprovalJourneyTelemetryV1,
+  type MeetingApprovalJourneyTelemetryConfigV1,
+} from "./meeting-approval-journey-telemetry-v1.js";
+import type {
+  MeetingApprovalJourneyStageAttemptV1,
+  MeetingApprovalJourneyTelemetryPortV1,
+} from "../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "./staging-authority-environment-v1.js";
 
 export interface OrganizationAuthorityRuntimeConfig {
   readonly state_directory: string;
@@ -77,6 +86,17 @@ export interface OrganizationAuthorityRuntimeConfig {
   /** Staging-only Ask telemetry; omitted from every production runtime. */
   readonly ask_journey_telemetry?:
     OrganizationAuthorityApiRuntimeDependencies["ask_journey_telemetry"];
+  /** Staging-only approval telemetry; omitted from every production runtime. */
+  readonly meeting_approval_journey_telemetry?: Omit<
+    MeetingApprovalJourneyTelemetryConfigV1,
+    "state_directory"
+  >;
+  /**
+   * Explicit staging composition proof. The deployable CLI supplies this only
+   * after its exact staging-authority-origin check; generic runtimes leave it
+   * absent even when a telemetry config was provided.
+   */
+  readonly staging_meeting_approval_journey_telemetry_enabled?: true;
   /** Provider-selected staging runner; the neutral runtime only supplies admitted state. */
   readonly run_staging_synthetic_private_dm_canary?: (
     input: {
@@ -85,6 +105,7 @@ export interface OrganizationAuthorityRuntimeConfig {
       readonly state: SqliteAuthorityMeetingProcessingStateV1;
       readonly processor: DecisionProcessorAdapter;
       readonly stager: Awaited<ReturnType<ApprovalWorkflowBundleV1["load"]>>["stager"];
+      readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
       readonly signal: AbortSignal;
     },
   ) => Promise<StagingSyntheticPrivateDmCanaryResultV1>;
@@ -165,6 +186,7 @@ class OrganizationAuthorityProcessingCoordinator
     private readonly source: AdmittedMeetingProcessingCycleV1,
     private readonly approvals: ApprovalWorkflowProcessingV1,
     private readonly readableSearch: ReadableSearchReconcilerV1,
+    private readonly journeyTelemetry?: MeetingApprovalJourneyTelemetryPortV1,
   ) {}
 
   setWorkerLifecycle(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void {
@@ -188,7 +210,46 @@ class OrganizationAuthorityProcessingCoordinator
   }
 
   async reconcileReadableSearchGeneration(signal: AbortSignal): Promise<void> {
-    await this.readableSearch.reconcile(signal);
+    let attempts: readonly MeetingApprovalJourneyStageAttemptV1[] = [];
+    try {
+      attempts = this.journeyTelemetry?.beginAwaitingSearch() ?? [];
+    } catch {
+      // Search publication is authoritative; run-detail telemetry is not.
+    }
+
+    try {
+      const result = await this.readableSearch.reconcile(signal);
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        "status" in result &&
+        (result.status === "current" ||
+          result.status === "published" ||
+          result.status === "superseded")
+      ) {
+        try {
+          this.journeyTelemetry?.completeAwaitingSearch(attempts, result.status);
+        } catch {
+          // Search publication is authoritative; run-detail telemetry is not.
+        }
+      } else {
+        try {
+          this.journeyTelemetry?.failAwaitingSearch(
+            attempts,
+            new TypeError("unrecognized readable-search reconciliation result"),
+          );
+        } catch {
+          // Search publication is authoritative; run-detail telemetry is not.
+        }
+      }
+    } catch (error) {
+      try {
+        this.journeyTelemetry?.failAwaitingSearch(attempts, error);
+      } catch {
+        // Search publication is authoritative; run-detail telemetry is not.
+      }
+      throw error;
+    }
   }
 }
 
@@ -267,6 +328,23 @@ export async function openOrganizationAuthorityRuntime(
     join(config.state_directory, "record-log.sqlite"),
     { fileMustExist: true },
   );
+  let meetingApprovalJourneyTelemetry:
+    | MeetingApprovalJourneyTelemetryPortV1
+    | undefined;
+  if (
+    config.authority_url === STAGING_AUTHORITY_ORIGIN_V1 &&
+    config.staging_meeting_approval_journey_telemetry_enabled === true &&
+    config.meeting_approval_journey_telemetry !== undefined
+  ) {
+    try {
+      meetingApprovalJourneyTelemetry = openMeetingApprovalJourneyTelemetryV1({
+        ...config.meeting_approval_journey_telemetry,
+        state_directory: config.state_directory,
+      });
+    } catch {
+      // Observability cannot prevent the Authority from starting.
+    }
+  }
   try {
     const sourceState = new SqliteAuthorityMeetingProcessingStateV1(
       authority,
@@ -319,6 +397,9 @@ export async function openOrganizationAuthorityRuntime(
       signer,
       coordinates,
       next_envelope_id: () => `env_${randomUUID()}`,
+      ...(meetingApprovalJourneyTelemetry === undefined
+        ? {}
+        : { journey_telemetry: meetingApprovalJourneyTelemetry }),
     };
     await config.approval_workflow_bundle.assert_existing_presentations_owned(
       approvalContext,
@@ -330,6 +411,9 @@ export async function openOrganizationAuthorityRuntime(
       state: sourceState,
       stager: approvals.stager,
       source_cursor_policy: config.meeting_source_bundle.source_cursor_policy,
+      ...(meetingApprovalJourneyTelemetry === undefined
+        ? {}
+        : { journey_telemetry: meetingApprovalJourneyTelemetry }),
     });
     // Bind once: answer composition and rebuild-time projection must use the
     // same non-secret adapter/model selection for this running Authority.
@@ -356,6 +440,7 @@ export async function openOrganizationAuthorityRuntime(
           sourceCycle,
           approvals.processing,
           readableSearch,
+          meetingApprovalJourneyTelemetry,
         ),
         api: {
           ...baseApiDependencies,
@@ -396,6 +481,9 @@ export async function openOrganizationAuthorityRuntime(
                   state: sourceState,
                   processor,
                   stager: approvals.stager,
+                  ...(meetingApprovalJourneyTelemetry === undefined
+                    ? {}
+                    : { journey_telemetry: meetingApprovalJourneyTelemetry }),
                   signal:
                     options?.signal === undefined
                       ? signal
@@ -404,13 +492,18 @@ export async function openOrganizationAuthorityRuntime(
               ),
           }),
       close: async () => {
-        await runtime.close();
-        record.close();
-        control.close();
-        authority.close();
+        try {
+          await runtime.close();
+        } finally {
+          meetingApprovalJourneyTelemetry?.close();
+          record.close();
+          control.close();
+          authority.close();
+        }
       },
     };
   } catch (error) {
+    meetingApprovalJourneyTelemetry?.close();
     record.close();
     control.close();
     authority.close();
