@@ -1071,6 +1071,9 @@ describe("workspace source boundaries", () => {
       (rule) => rule.name === "authority-composition-selects-concrete-implementations",
     );
     expect(compositionRule?.allowed_imports).toContain(
+      "services/organization-authority/src/shared/journey-telemetry-v1.ts",
+    );
+    expect(compositionRule?.allowed_imports).toContain(
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
     );
     expect(compositionRule?.allowed_imports).toContain(

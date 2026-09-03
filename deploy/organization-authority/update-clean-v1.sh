@@ -23,6 +23,7 @@ CANARY_RECEIPT_DIR="$RELEASE_STATE_DIR/canary-receipts"
 ACTIVE_RUNTIME_PROFILE="$RELEASE_STATE_DIR/runtime-profile.active"
 OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.authority-operation-lock}"
 ROLLBACK_READER_CAPABILITY_LABEL='org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'
+STAGING_JOURNEY_TELEMETRY_CAPABILITY_LABEL='org.echobrain.authority.telemetry.staging-journey-v1'
 OPERATION_LOCK_HELD=false
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -490,9 +491,88 @@ running_container_id() {
   printf '%s\n' "$id"
 }
 
+staging_journey_telemetry_environment_matches() {
+  local expected_source="$1" expected_build_number="$2" encoded_environment="$3"
+  python3 - "$expected_source" "$expected_build_number" "$encoded_environment" <<'PY'
+import json, re, sys
+
+source_sha, build_number, encoded_environment = sys.argv[1:]
+if not re.fullmatch(r'[0-9a-f]{40}', source_sha):
+    raise SystemExit(1)
+if not re.fullmatch(r'[1-9][0-9]*', build_number) or int(build_number) > 9007199254740991:
+    raise SystemExit(1)
+try:
+    environment = json.loads(encoded_environment)
+except (TypeError, ValueError):
+    raise SystemExit(1)
+if not isinstance(environment, list) or not all(isinstance(entry, str) for entry in environment):
+    raise SystemExit(1)
+source_entries = [entry for entry in environment if entry.startswith('ECHO_SOURCE_SHA=')]
+build_entries = [entry for entry in environment if entry.startswith('ECHO_BUILD_NUMBER=')]
+capability_entries = [entry for entry in environment if entry.startswith('ECHO_STAGING_JOURNEY_TELEMETRY_V1=')]
+if capability_entries != ['ECHO_STAGING_JOURNEY_TELEMETRY_V1=true']:
+    raise SystemExit(1)
+if source_entries != ['ECHO_SOURCE_SHA=' + source_sha]:
+    raise SystemExit(1)
+if build_entries != ['ECHO_BUILD_NUMBER=' + build_number]:
+    raise SystemExit(1)
+PY
+}
+
+staging_journey_telemetry_environment_disables() {
+  [[ "$1" != *enabled* ]]
+}
+
+image_staging_journey_telemetry_identity_matches() {
+  local image="$1" expected_source="$2" host capability_format telemetry_enabled_format capability build_number environment telemetry_enabled
+  host="$(authority_host 2>/dev/null)" || return 1
+  [[ "$host" == "authority-staging.echobrain.org" ]] || return 0
+  capability_format='{{index .Config.Labels "'"$STAGING_JOURNEY_TELEMETRY_CAPABILITY_LABEL"'"}}'
+  telemetry_enabled_format='{{range .Config.Env}}{{if eq . "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true"}}enabled{{end}}{{end}}'
+  capability="$(docker image inspect --format "$capability_format" "$image")" || return 1
+  # Images accepted before telemetry V1 remain rollback-compatible and emit no
+  # journey telemetry. New telemetry-capable images must prove both bindings.
+  case "$capability" in
+    true)
+      build_number="$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.build-number"}}' "$image")" || return 1
+      environment="$(docker image inspect --format '{{json .Config.Env}}' "$image")" || return 1
+      staging_journey_telemetry_environment_matches \
+        "$expected_source" "$build_number" "$environment"
+      ;;
+    ''|'<no value>')
+      telemetry_enabled="$(docker image inspect --format "$telemetry_enabled_format" "$image")" || return 1
+      staging_journey_telemetry_environment_disables "$telemetry_enabled"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+running_staging_journey_telemetry_identity_matches() {
+  local container="$1" image="$2" expected_source="$3" host capability_format telemetry_enabled_format capability build_number environment telemetry_enabled
+  host="$(authority_host 2>/dev/null)" || return 1
+  [[ "$host" == "authority-staging.echobrain.org" ]] || return 0
+  capability_format='{{index .Config.Labels "'"$STAGING_JOURNEY_TELEMETRY_CAPABILITY_LABEL"'"}}'
+  telemetry_enabled_format='{{range .Config.Env}}{{if eq . "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true"}}enabled{{end}}{{end}}'
+  capability="$(docker image inspect --format "$capability_format" "$image")" || return 1
+  case "$capability" in
+    true)
+      build_number="$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.build-number"}}' "$image")" || return 1
+      environment="$(docker inspect --format '{{json .Config.Env}}' "$container")" || return 1
+      staging_journey_telemetry_environment_matches \
+        "$expected_source" "$build_number" "$environment"
+      ;;
+    ''|'<no value>')
+      telemetry_enabled="$(docker inspect --format "$telemetry_enabled_format" "$container")" || return 1
+      staging_journey_telemetry_environment_disables "$telemetry_enabled"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 image_source_matches() {
   local image="$1" expected_source="$2"
-  [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" == "$expected_source" ]]
+  [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" == "$expected_source" ]] || return 1
+  image_staging_journey_telemetry_identity_matches "$image" "$expected_source"
 }
 
 accepted_image_can_read_staging_canary_state() {
@@ -517,7 +597,9 @@ running_exact_release() {
   image_id="$(docker inspect --format '{{.Image}}' "$authority_id")"
   [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
   docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id" | grep -Fqx "$expected" || return 1
-  image_source_matches "$image_id" "$expected_source"
+  image_source_matches "$image_id" "$expected_source" || return 1
+  running_staging_journey_telemetry_identity_matches \
+    "$authority_id" "$image_id" "$expected_source"
 }
 
 safe_descriptor_check() {

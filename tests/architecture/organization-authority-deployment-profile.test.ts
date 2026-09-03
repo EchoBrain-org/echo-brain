@@ -1329,6 +1329,19 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     );
   });
 
+  it("does not override immutable image identity in the Compose profiles", () => {
+    const composeProfiles = [
+      deploymentFile("compose.clean-v1.yaml"),
+      deploymentFile("compose.clean-v1.ec2.yaml"),
+    ];
+
+    for (const compose of composeProfiles) {
+      expect(compose).not.toContain("ECHO_SOURCE_SHA");
+      expect(compose).not.toContain("ECHO_BUILD_NUMBER");
+      expect(compose).not.toContain("ECHO_STAGING_JOURNEY_TELEMETRY_V1");
+    }
+  });
+
   it("does not make legacy machine lifecycle surfaces part of the clean profile", () => {
     const cleanFiles = [
       deploymentFile("compose.clean-v1.yaml"),
