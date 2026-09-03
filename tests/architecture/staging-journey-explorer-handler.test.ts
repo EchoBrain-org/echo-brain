@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const mod = require(
@@ -59,11 +59,19 @@ function event(
 }
 class Client {
   public readonly sent: unknown[] = [];
-  public constructor(private readonly replies: unknown[]) {}
-  public async send(command: unknown) {
+  public readonly sendOptions: unknown[] = [];
+  public constructor(
+    private readonly replies: Array<
+      | unknown
+      | ((command: unknown, options: unknown) => unknown)
+    >,
+  ) {}
+  public async send(command: unknown, options?: unknown) {
     this.sent.push(command);
+    this.sendOptions.push(options);
     const next = this.replies.shift();
     if (next instanceof Error) throw next;
+    if (typeof next === "function") return next(command, options);
     return next;
   }
 }
@@ -165,6 +173,7 @@ describe("staging Journey Explorer custom widget", () => {
       journeys: [expect.objectContaining({ journey_id: secondId })],
       next_cursor: null,
     });
+    expect(client.sent.some((command) => command instanceof Stop)).toBe(false);
   });
 
   it("rejects unknown, query, query-id, injection, and noncanonical inputs before querying", async () => {
@@ -513,5 +522,42 @@ describe("staging Journey Explorer custom widget", () => {
     const hidden = await handler(broken)({ operation: "list" });
     expect(hidden).toEqual({ error: "journey_explorer_unavailable" });
     expect(JSON.stringify(hidden)).not.toContain("secret");
+  });
+
+  it("bounds a stalled StopQuery without replacing the polling failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const pollingError = Object.assign(new Error("private poll failure"), {
+        code: "RESULT_LIMIT",
+      });
+      let stopSignal: AbortSignal | undefined;
+      const stalled = new Client([
+        { queryId: "stalled-stop" },
+        pollingError,
+        (_command: unknown, options: unknown) =>
+          new Promise((_resolve, reject) => {
+            stopSignal = (options as { abortSignal?: AbortSignal }).abortSignal;
+            stopSignal?.addEventListener(
+              "abort",
+              () => reject(new Error("private cleanup abort")),
+              { once: true },
+            );
+          }),
+      ]);
+      const result = handler(stalled)({ operation: "list" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stalled.sent).toHaveLength(3);
+      expect(stalled.sent[2]).toBeInstanceOf(Stop);
+      expect(stopSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(result).resolves.toEqual({ error: "result_limit_exceeded" });
+      expect(stopSignal?.aborted).toBe(true);
+      expect((stalled.sendOptions[2] as { abortSignal?: AbortSignal }).abortSignal).toBe(
+        stopSignal,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

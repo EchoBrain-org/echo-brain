@@ -11,6 +11,7 @@ const MAX_PAGE = 25;
 const LIST_LIMIT = 2500;
 const MAX_OFFSET = LIST_LIMIT;
 const DETAIL_LIMIT = 2500;
+const CLEANUP_TIMEOUT_MS = 1000;
 const MAX_MACHINE_DURATION = 31 * 24 * HOUR;
 const MAX_ATTEMPT = 100;
 const WORKFLOWS = new Set(["ask", "meeting_approval"]);
@@ -790,9 +791,25 @@ function createStagingJourneyExplorerHandlerV1(options) {
       }
       throw queryTimeoutError();
     } catch (caught) {
+      const abortController = new AbortController();
+      let cleanupTimer;
       try {
-        await options.logsClient.send(new commands.StopQueryCommand({ queryId }));
-      } catch {}
+        await Promise.race([
+          options.logsClient.send(new commands.StopQueryCommand({ queryId }), {
+            abortSignal: abortController.signal,
+          }),
+          new Promise((resolve) => {
+            cleanupTimer = setTimeout(() => {
+              abortController.abort();
+              resolve();
+            }, CLEANUP_TIMEOUT_MS);
+          }),
+        ]);
+      } catch {
+        // Best-effort cleanup must not replace the original query failure.
+      } finally {
+        clearTimeout(cleanupTimer);
+      }
       throw caught;
     }
   }
