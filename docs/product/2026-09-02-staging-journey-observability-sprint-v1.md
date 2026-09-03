@@ -23,9 +23,11 @@ CloudWatch is the staging telemetry system of record. It receives structured,
 content-free journey events and aggregate metrics. A CloudWatch overview is the
 initial aggregate dashboard. A thin, operator-only Journey Explorer may query
 CloudWatch for a run-level waterfall; it does not create a second telemetry
-ingestion path or grant AWS credentials to a browser. A Lambda-backed
-CloudWatch custom widget is an acceptable first Explorer surface if it meets
-the same read-only and privacy boundary.
+ingestion path or place application-managed AWS credentials in widget code. A
+Lambda-backed CloudWatch custom widget is an acceptable first Explorer surface
+if it meets the same read-only and privacy boundary. Its signed-in console
+operator uses an IAM Identity Center session to invoke only the exact Lambda;
+the widget receives no direct CloudWatch Logs permission.
 
 The event contract is deliberately portable. A later production rollout may
 reuse its event names, correlation rules, dashboard definitions, and Explorer
@@ -164,10 +166,12 @@ V1 schema. Model identities come from a versioned allowlist of models configured
 for staging. Release identity is a canonical Git commit SHA and build identity
 is a positive integer; neither field accepts an arbitrary caller string.
 
-The Journey Explorer is operator-only and read-only. Its browser client has no
-AWS credential or direct CloudWatch access. Query parameters, returned fields,
-and errors follow the same allowlist and redaction rules as emitted events.
-No telemetry surface may perform approval, retry, replay, mutation, or release
+The Journey Explorer is operator-only and read-only. It contains no
+application-managed or end-user AWS credential and has no direct CloudWatch
+Logs access. The signed-in console operator's Identity Center session
+authorizes only the Lambda invocation. Query parameters, returned fields, and
+errors follow the same allowlist and redaction rules as emitted events. No
+telemetry surface may perform approval, retry, replay, mutation, or release
 actions.
 
 Metric dimensions remain low cardinality: for example `workflow`, `stage`,
@@ -294,16 +298,55 @@ live proof is claimed in this phase.
 
 ### Phase 5 - Journey Explorer backend
 
-Build the operator-only read API or equivalent CloudWatch custom-widget
-backend. It lists recent journeys and returns a redacted run detail assembled
-from CloudWatch data, with pagination, bounded time ranges, and least-privilege
-IAM.
+Implemented locally, not deployed: the Phase 5 backend is the staging-only
+inline Node Lambda for a CloudWatch custom widget. It accepts only direct
+custom-widget events, not an API Gateway request, and exposes fixed
+`describe`, `list`, and `detail` operations. There is no function URL, API
+Gateway, browser CloudWatch access, user-supplied Logs Insights query,
+`queryId`, `SOURCE`, raw message, prompt, answer, or other content field.
 
-**PR boundary:** read-only backend, authorization, CloudWatch query layer,
-redaction tests, and no end-user UI.
+`list` uses only a fixed CloudWatch Logs Insights query shape over the exact
+staging Authority source log group. Its default lookback is eight hours, its
+maximum lookback is 14 days (the retained-log bound), and a page contains at
+most 25 journeys. `detail` accepts only a canonical lowercase UUID journey ID
+and uses a second fixed query shape. Both operations return a bounded
+`result_limit_exceeded` error rather than silently omitting a journey or
+returning partial detail when the 2,500-record result cap is saturated. All
+workflow, stage, event, outcome, failure-class, provider, model, finish-reason,
+and usage-status values are finite contract allowlists; arbitrary strings are
+rejected. Both query shapes require `environment=staging` and return only the
+redacted event fields needed for operation diagnosis.
 
-**Exit:** an authorized operator can retrieve recent runs and a complete,
-redacted correlated detail without a browser AWS credential.
+The detail projection carries schema/release provenance, sequence and attempt,
+machine-stage latency, provider latency, nullable token usage, retrieval
+counts, retry and failure metadata, and the separately labelled human-wait
+interval. It reports full journey wall-clock from first to terminal
+`observed_at`; service wall-clock excludes `queue_age_ms`; human wait remains a
+business interval rather than service latency. A non-retryable failed stage is
+a terminal failure; approved and superseded are not by themselves terminal
+journey results.
+
+The dedicated stack grants the Lambda execution role only `StartQuery` and
+`GetQueryResults` on the exact source log group, `StopQuery` where AWS requires
+an unscoped resource, and writes only to its own retained function log group.
+It creates a separate invoke-only customer managed policy for the exact Lambda
+function. That policy is intentionally unattached: `AWSReservedSSO` roles are
+Identity Center-protected, so Phase 6 must reference the customer managed
+policy from an approved Identity Center permission set before the widget is
+added or tested. The inline staging Lambda uses the Node runtime-provided AWS
+SDK v3; production portability and a bundled, version-pinned SDK remain a
+later production review.
+
+**PR boundary:** read-only backend, authorization artifact, CloudWatch query
+layer, redaction tests, and no end-user UI. No AWS deployment, live CloudWatch
+proof, permission-set assignment, staging rehearsal, or production work is
+claimed in this phase.
+
+**Exit:** local tests prove the fixed custom-widget invocation contract, the
+exact-function authorization artifact, and complete redacted recent-run and
+correlated-detail responses. Phase 5 does not claim an authorized live
+operator: the console operator's Identity Center permission-set assignment and
+live retrieval evidence are Phase 6 exit work.
 
 ### Phase 6 - Journey Explorer UI and rehearsal
 
@@ -330,7 +373,9 @@ The sprint is complete only when all of the following are true in staging:
 2. Every machine stage reports latency; every LLM attempt reports provider
    token values when available, model, attempt number, and finish status.
 3. The dashboard exposes aggregate health and the Explorer exposes one
-   redacted run-level waterfall without browser AWS credentials.
+   redacted run-level waterfall without application-managed or end-user AWS
+   credentials; the signed-in operator has only the required Identity Center
+   permission.
 4. Human wait is visible as a business interval and excluded from service
    latency and availability alarms.
 5. Dashboard metrics reconcile with raw events, and the staging rehearsal
@@ -347,7 +392,8 @@ The sprint is complete only when all of the following are true in staging:
   provider payloads for debugging.
 - A second telemetry database, metric streams, log subscription pipeline,
   OpenSearch, managed Grafana, or a data warehouse.
-- Browser-side AWS credentials or a mutating observability console.
+- Application-managed or end-user AWS credentials embedded in browser/widget
+  code, or a mutating observability console.
 - Automatic OpenTelemetry/ADOT or X-Ray migration. Those remain a later
   portability and tracing decision; this event contract must not preclude it.
 - Changes to Ask semantics, approval authorization, record durability,
