@@ -42,7 +42,12 @@ export interface StagingJourneyTelemetryTransportV1 {
   readonly enabled: boolean;
   /** Immutable deploy identity for future staging journey emitters. */
   readonly identity: StagingJourneyTelemetryIdentityV1 | null;
-  /** Safe to pass directly to createJourneyTelemetryV1. */
+  /**
+   * Begins liveness delivery after the Authority runtime opens.
+   * It is safe to call more than once and is inert after close.
+   */
+  start(): void;
+  /** Safe to pass directly to createJourneyTelemetryV1, including while liveness is inert. */
   readonly observer: JourneyTelemetryObserverV1;
   /** Stops liveness emission. Safe to call more than once. */
   close(): void;
@@ -83,6 +88,7 @@ function disabledTransport(): StagingJourneyTelemetryTransportV1 {
   return Object.freeze({
     enabled: false,
     identity: null,
+    start: () => undefined,
     observer: () => undefined,
     close: () => undefined,
   });
@@ -103,6 +109,7 @@ export function createStagingJourneyTelemetryTransportV1(
   const now = dependencies.now ?? (() => new Date().toISOString());
   const scheduler = dependencies.scheduler ?? defaultScheduler();
   let closed = false;
+  let started = false;
   let intervalId: unknown | undefined;
   let intervalScheduled = false;
 
@@ -174,20 +181,23 @@ export function createStagingJourneyTelemetryTransportV1(
     }
   };
 
-  emitLiveness("startup");
-  try {
-    intervalId = scheduler.set_interval(
-      () => emitLiveness("heartbeat"),
-      STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1,
-    );
-    intervalScheduled = true;
-  } catch {
-    // Liveness is useful, but failure to schedule it is never fatal.
-  }
-
   return Object.freeze({
     enabled: true,
     identity: immutableIdentity,
+    start(): void {
+      if (closed || started) return;
+      started = true;
+      emitLiveness("startup");
+      try {
+        intervalId = scheduler.set_interval(
+          () => emitLiveness("heartbeat"),
+          STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1,
+        );
+        intervalScheduled = true;
+      } catch {
+        // Liveness is useful, but failure to schedule it is never fatal.
+      }
+    },
     observer,
     close(): void {
       if (closed) return;

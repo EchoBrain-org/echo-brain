@@ -29,7 +29,7 @@ function liveness(event: "startup" | "heartbeat", observedAt: string) {
 }
 
 describe("staging journey telemetry transport v1", () => {
-  it("writes exact startup and fixed-cadence heartbeat JSON lines, then closes idempotently", () => {
+  it("stays inert until explicitly started, then writes liveness and closes idempotently", () => {
     const lines: string[] = [];
     const times = [STARTED_AT, HEARTBEAT_AT];
     let callback: (() => void) | undefined;
@@ -58,6 +58,10 @@ describe("staging journey telemetry transport v1", () => {
       release_sha: RELEASE_SHA,
       build_number: 42,
     });
+    expect(lines).toEqual([]);
+    expect(callback).toBeUndefined();
+
+    transport.start();
     expect(lines).toEqual([`${canonicalJson(liveness("startup", STARTED_AT))}\n`]);
     callback?.();
     expect(lines).toEqual([
@@ -70,6 +74,72 @@ describe("staging journey telemetry transport v1", () => {
     callback?.();
     expect(cleared).toEqual([intervalId]);
     expect(lines).toHaveLength(2);
+  });
+
+  it("makes close-before-start inert and prevents a later start from claiming liveness", () => {
+    const lines: string[] = [];
+    let scheduled = false;
+    const transport = createStagingJourneyTelemetryTransportV1(
+      { release_sha: RELEASE_SHA, build_number: 42 },
+      {
+        write: (line) => {
+          lines.push(line);
+        },
+        now: () => STARTED_AT,
+        scheduler: {
+          set_interval: () => {
+            scheduled = true;
+            return 1;
+          },
+          clear_interval: () => undefined,
+        },
+      },
+    );
+
+    transport.close();
+    transport.start();
+    transport.close();
+
+    expect(lines).toEqual([]);
+    expect(scheduled).toBe(false);
+  });
+
+  it("delivers journey events before start without emitting liveness", () => {
+    const lines: string[] = [];
+    const transport = createStagingJourneyTelemetryTransportV1(
+      { release_sha: RELEASE_SHA, build_number: 42 },
+      {
+        write: (line) => {
+          lines.push(line);
+        },
+        scheduler: {
+          set_interval: () => {
+            throw new Error("liveness must stay inert before start");
+          },
+          clear_interval: () => undefined,
+        },
+      },
+    );
+    const event = createJourneyTelemetryEventV1({
+      journey_id: JOURNEY_ID,
+      sequence: 1,
+      observed_at: HEARTBEAT_AT,
+      context: {
+        environment: "staging",
+        workflow: "ask",
+        release_sha: RELEASE_SHA,
+        build_number: 42,
+      },
+      event: {
+        stage: "ask_validation",
+        event: "succeeded",
+        elapsed_ms: 1,
+      },
+    });
+
+    transport.observer(event);
+
+    expect(lines).toEqual([`${canonicalJson(event)}\n`]);
   });
 
   it("fails open without starting telemetry for an invalid deploy identity", () => {
@@ -119,6 +189,7 @@ describe("staging journey telemetry transport v1", () => {
 
     identity.release_sha = "b".repeat(40);
     identity.build_number = 999;
+    transport.start();
     callback?.();
 
     expect(transport.identity).toEqual({
@@ -215,6 +286,8 @@ describe("staging journey telemetry transport v1", () => {
       },
     );
 
+    synchronous.start();
+    asynchronous.start();
     expect(() => synchronous.observer(validEvent)).not.toThrow();
     expect(() => asynchronous.observer(validEvent)).not.toThrow();
     await Promise.resolve();
@@ -235,6 +308,7 @@ describe("staging journey telemetry transport v1", () => {
       },
     });
 
+    transport.start();
     expect(() => transport.observer(null as never)).not.toThrow();
     expect(() => transport.observer(throwingInput)).not.toThrow();
   });
@@ -281,6 +355,7 @@ describe("staging journey telemetry transport v1", () => {
       llm_usage: { ...event.llm_usage, provider_response: "must-not-serialize" },
     } as JourneyTelemetryEventV1;
 
+    transport.start();
     transport.observer(injected);
 
     expect(lines[1]).toBe(`${canonicalJson(event)}\n`);

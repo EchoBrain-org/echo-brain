@@ -247,6 +247,10 @@ export async function runOrganizationAuthorityServiceCli(
             write: io.stderr,
           })
         : undefined;
+    // Liveness is deliberately activated only after openOrganizationAuthorityService
+    // and the optional staging canary control have both completed successfully.
+    // A failed or still-pending runtime open must not make staging look alive.
+    stagingJourneyTelemetry?.start();
     await new Promise<void>((resolve) => {
       let closing: Promise<void> | undefined;
       const close = (): void => {

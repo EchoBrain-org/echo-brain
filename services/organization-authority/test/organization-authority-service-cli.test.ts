@@ -14,6 +14,7 @@ const runtimeState = vi.hoisted(() => ({
     | AnswerCompositionFailureObserver
     | undefined,
   startup_error: undefined as Error | undefined,
+  open_gate: undefined as Promise<void> | undefined,
   slack_signing_secret_file: undefined as string | undefined,
   slack_connection_id: undefined as string | undefined,
   openrouter_credential_file: undefined as string | undefined,
@@ -51,6 +52,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly slack_connection_id: string;
     readonly openrouter_credential_file: string;
   }) => {
+    if (runtimeState.open_gate !== undefined) await runtimeState.open_gate;
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
     runtimeState.worker_error = config.on_worker_error;
     runtimeState.worker_telemetry = config.on_worker_telemetry;
@@ -79,6 +81,7 @@ afterEach(() => {
   runtimeState.worker_telemetry = undefined;
   runtimeState.answer_composition_failure = undefined;
   runtimeState.startup_error = undefined;
+  runtimeState.open_gate = undefined;
   runtimeState.slack_signing_secret_file = undefined;
   runtimeState.slack_connection_id = undefined;
   runtimeState.openrouter_credential_file = undefined;
@@ -173,6 +176,36 @@ describe("admitted runtime CLI events", () => {
       "echo-authority-journey-telemetry-liveness-v1",
     );
     expect(stderr.join("")).toContain("echo-clean-live-runtime-ready-v1");
+  });
+
+  it("does not claim staging liveness while runtime opening is pending or fails", async () => {
+    const releaseSha = "b".repeat(40);
+    process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
+    process.env.ECHO_SOURCE_SHA = releaseSha;
+    process.env.ECHO_BUILD_NUMBER = "42";
+    runtimeState.authority_url = "https://authority-staging.echobrain.org";
+    let releaseOpen: (() => void) | undefined;
+    runtimeState.open_gate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    const pendingStderr: string[] = [];
+    const pending = start({ stderr: (value) => pendingStderr.push(value) });
+
+    await Promise.resolve();
+    expect(pendingStderr).toEqual([]);
+
+    runtimeState.startup_error = new Error("runtime open failed");
+    releaseOpen?.();
+    await expect(pending).resolves.toBe(1);
+    expect(pendingStderr.join("")).not.toContain(
+      "echo-authority-journey-telemetry-liveness-v1",
+    );
+    expect(pendingStderr).toEqual([
+      `${canonicalJson({
+        schema_version: 1,
+        kind: "echo-clean-live-startup-failed-v1",
+      } as never)}\n`,
+    ]);
   });
 
   it("keeps owner onboarding available when staging processing is still idle", async () => {
