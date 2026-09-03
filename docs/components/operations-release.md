@@ -9,7 +9,7 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-09-02
-reviewed_ref: ec0ab8a10326d232c0e3805b5090691660788fce
+reviewed_ref: 70c7040d455f969bd570d4ca08e39e5c28c8a328
 decision_ids:
   - ADR-0004
   - ADR-0006
