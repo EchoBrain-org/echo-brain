@@ -859,15 +859,20 @@ function renderDetail(data, parsed, endpointArn) {
     `${range}${summary}${tokens}${humanWait}<p>${back}</p><p class="notice">The machine waterfall positions each event from its validated observed time and sizes its bar from elapsed_ms. Human wait and inter-stage gaps remain empty space; human wait is never drawn as machine work.</p><table><thead><tr><th>Sequence</th><th>Stage</th><th>Attempt</th><th>Event</th><th>Observed</th><th>Machine waterfall</th><th>Prior retries</th><th>Outcome</th><th>Failure boundary</th><th>LLM</th><th>Retrieval</th></tr></thead><tbody>${stages}</tbody></table>`,
   );
 }
-function renderError(code) {
+function renderError(code, operation) {
   const message =
     {
       invalid_request: "The requested explorer action was not valid.",
-      query_timeout: "The telemetry query timed out. Try a narrower range.",
+      query_timeout:
+        operation === "detail"
+          ? "The retained 14-day history query for this journey timed out, so no partial timeline is shown. Choose another journey or investigate its telemetry in CloudWatch Logs."
+          : "The telemetry query timed out. Try a narrower range.",
       result_limit_exceeded:
-        "The selected range returned too many events. Narrow the range.",
+        operation === "detail"
+          ? "The retained 14-day history for this journey returned too many events to verify safely. No partial timeline is shown. Choose another journey or investigate its telemetry in CloudWatch Logs."
+          : "The selected range returned too many events. Narrow the range.",
       journey_not_found:
-        "No validated journey was found in the selected range.",
+        "No validated journey was found in the retained 14-day staging history.",
       journey_history_incomplete:
         "The retained staging history does not contain this journey's canonical start, so no partial timeline is shown.",
       journey_explorer_unavailable:
@@ -1027,9 +1032,10 @@ function createStagingJourneyExplorerHandlerV1(options) {
       typeof event === "object" &&
       !Array.isArray(event) &&
       event.render === true;
+    let parsed;
     try {
-      const current = now(),
-        parsed = request(event, current);
+      const current = now();
+      parsed = request(event, current);
       if (parsed.operation === "describe")
         return {
           markdown:
@@ -1080,7 +1086,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
         : detail;
     } catch (caught) {
       const output = safe(caught);
-      return wantsRender ? renderError(output.error) : output;
+      return wantsRender ? renderError(output.error, parsed?.operation) : output;
     }
   };
 }

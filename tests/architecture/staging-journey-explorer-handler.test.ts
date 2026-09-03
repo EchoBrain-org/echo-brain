@@ -1089,7 +1089,7 @@ describe("staging Journey Explorer custom widget", () => {
     );
   });
 
-  it("fails closed instead of returning an oversized rendered timeline", async () => {
+  it("gives operation-specific recovery guidance for result limits", async () => {
     const client = new Client([
       { queryId: "large-detail" },
       {
@@ -1115,8 +1115,38 @@ describe("staging Journey Explorer custom widget", () => {
         render: true,
       }),
     );
-    expect(html).toContain("selected range returned too many events");
+    expect(html).toContain("retained 14-day history");
+    expect(html).toContain("No partial timeline is shown.");
+    expect(html).toContain("Choose another journey");
+    expect(html).toContain("CloudWatch Logs");
+    expect(html).not.toContain("Narrow the range.");
     expect(html).not.toContain(id);
+
+    const list = new Client([
+      { queryId: "large-list" },
+      { status: "Complete", results: Array.from({ length: 2_500 }, event) },
+    ]);
+    const listHtml = String(
+      await handler(list)({ operation: "list", render: true }),
+    );
+    expect(listHtml).toContain("selected range returned too many events");
+    expect(listHtml).toContain("Narrow the range.");
+    expect(listHtml).not.toContain("retained 14-day history");
+
+    const detailTimeout = new Client([
+      { queryId: "detail-timeout" },
+      { status: "Timeout" },
+    ]);
+    const timeoutHtml = String(
+      await handler(detailTimeout)({
+        operation: "detail",
+        journey_id: id,
+        render: true,
+      }),
+    );
+    expect(timeoutHtml).toContain("retained 14-day history query");
+    expect(timeoutHtml).toContain("no partial timeline is shown");
+    expect(timeoutHtml).not.toContain("narrower range");
   });
 
   it("requires a canonical factory endpoint and never accepts one from a request", async () => {
