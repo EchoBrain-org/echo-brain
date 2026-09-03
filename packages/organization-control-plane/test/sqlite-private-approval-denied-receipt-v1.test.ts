@@ -38,11 +38,13 @@ function schema(database: Database.Database) {
   `);
 }
 
-function seed(database: Database.Database) {
-  const value = receipt();
+function seed(
+  database: Database.Database,
+  value: PrivateApprovalSignedTerminalActionV1 = receipt(),
+) {
   const { received_at: _receivedAt, verified_at: _verifiedAt, ...semantic } = value;
   database.prepare(`INSERT INTO organization_private_approval_signed_action_receipts_v2 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    "sar_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", value.provider_action_key_sha256, value.request.raw_body_sha256, canonicalJson(value), canonicalSha256(semantic), value.approval_id, value.action_id, value.action, value.received_at, value.verified_at,
+    `sar_${value.provider_action_key_sha256.slice(7, 39)}`, value.provider_action_key_sha256, value.request.raw_body_sha256, canonicalJson(value), canonicalSha256(semantic), value.approval_id, value.action_id, value.action, value.received_at, value.verified_at,
   );
   return value;
 }
@@ -113,15 +115,48 @@ describe("private approval denied receipt persistence", () => {
     expect(first.listQueued()).toHaveLength(1);
     expect(first.recordDenied(value.provider_action_key_sha256, "state_drift")).toMatchObject({ idempotent: false, reason_code: "state_drift" });
     expect(first.listQueued()).toEqual([]);
+    expect(first.listDenied()).toEqual([
+      { approval_id: value.approval_id },
+    ]);
     expect(database.prepare(`SELECT count(*) AS count FROM organization_private_approval_terminal_evidence_v2`).get()).toEqual({ count: 0 });
     database.close();
 
     database = new Database(path);
     const reopened = persistence(database);
     expect(reopened.listQueued()).toEqual([]);
+    expect(reopened.listDenied()).toEqual([
+      { approval_id: value.approval_id },
+    ]);
     expect(reopened.recordDenied(value.provider_action_key_sha256, "state_drift")).toMatchObject({ idempotent: true });
     expect(() => reopened.recordDenied(value.provider_action_key_sha256, "authorization_denied")).toThrow(PrivateApprovalDeniedReceiptConflictError);
     expect(database.prepare(`SELECT count(*) AS count FROM organization_private_approval_terminal_evidence_v2`).get()).toEqual({ count: 0 });
     database.close();
+  });
+
+  it("excludes a late competing denial once the approval has terminal evidence", () => {
+    const database = new Database(":memory:");
+    try {
+      schema(database);
+      const approved = seed(database);
+      const competing = seed(database, {
+        ...approved,
+        provider_action_key_sha256: digest("d"),
+        request: {
+          ...approved.request,
+          signature_sha256: digest("e"),
+          raw_body_sha256: digest("f"),
+        },
+      });
+      const store = persistence(database);
+      database
+        .prepare(`INSERT INTO organization_private_approval_terminal_evidence_v2 VALUES (?, ?)`)
+        .run(approved.approval_id, digest("g"));
+
+      expect(store.recordDenied(competing.provider_action_key_sha256, "state_drift"))
+        .toMatchObject({ idempotent: false, reason_code: "state_drift" });
+      expect(store.listDenied()).toEqual([]);
+    } finally {
+      database.close();
+    }
   });
 });

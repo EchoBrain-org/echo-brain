@@ -103,6 +103,8 @@ export interface ActionableMeetingProcessingCandidateV1
   readonly approval_id: string;
   readonly stage_command_id: string;
   readonly state: "queued" | "posting" | "posted" | "staged" | "superseded";
+  /** Present only on a frozen staged outbox snapshot. */
+  readonly durable_staged_at?: string | null;
 }
 
 /** An immutable source revision that intentionally creates no approval card. */
@@ -301,6 +303,17 @@ function inputFingerprint(
     processor.identity.instance_id,
     processor.identity.version,
   ])}`;
+}
+
+function canonicalDurableTimestamp(
+  value: string | null | undefined,
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    return new Date(value).toISOString() === value ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function rebindDecisionsToRevision(
@@ -519,7 +532,7 @@ export class AdmittedMeetingProcessingCycleV1 {
     const { admission, batch, meeting, reviewPolicy, frozen, journey } = intake;
     if (frozen !== undefined) {
       this.bindCandidate(journey, frozen);
-      this.skipHistoricalFrozenStages(journey);
+      this.reconcileFrozenCandidateStages(journey, frozen);
       if (frozen.disposition !== "actionable") {
         this.skipApprovalStages(journey);
       }
@@ -540,6 +553,9 @@ export class AdmittedMeetingProcessingCycleV1 {
               batch.next_cursor,
               signal,
             );
+          }
+          if (frozen.disposition === "actionable" && frozen.state === "staged") {
+            this.reconcileStagedApproval(journey, frozen);
           }
           if (frozen.disposition === "no_signals") {
             await this.options.stager.reconcileSuperseded(
@@ -885,11 +901,49 @@ export class AdmittedMeetingProcessingCycleV1 {
     });
   }
 
-  private skipHistoricalFrozenStages(
+  private reconcileFrozenCandidateStages(
     journey: MeetingApprovalJourneyRefV1 | null,
+    candidate: MeetingProcessingCandidateV1,
   ): void {
     this.skipStageIfMissing(journey, "meeting_extraction");
-    this.skipStageIfMissing(journey, "meeting_candidate_persist");
+    if (journey === null) return;
+    this.safely(() => {
+      const telemetry = this.options.journey_telemetry;
+      if (
+        telemetry === undefined ||
+        telemetry.hasTerminalJourneyStage(journey, "meeting_candidate_persist")
+      ) {
+        return;
+      }
+      const attempt = telemetry.beginStage(journey, "meeting_candidate_persist");
+      telemetry.succeedStage(attempt, { outcome: candidate.disposition });
+    });
+  }
+
+  /**
+   * A staged candidate is the durable proof that both the Control Plane handoff
+   * and Authority acknowledgement completed. Rebuild only the optional journey
+   * observations after a crash, without replaying provider delivery.
+   */
+  private reconcileStagedApproval(
+    journey: MeetingApprovalJourneyRefV1 | null,
+    candidate: ActionableMeetingProcessingCandidateV1,
+  ): void {
+    if (journey === null) return;
+    this.safely(() => {
+      const telemetry = this.options.journey_telemetry;
+      if (telemetry === undefined) return;
+      if (!telemetry.hasTerminalJourneyStage(journey, "meeting_approval_staging")) {
+        const attempt = telemetry.beginStage(journey, "meeting_approval_staging");
+        telemetry.succeedStage(attempt, { outcome: "staged" });
+      }
+      // This marker is independently idempotent and repairs a crash after the
+      // durable staged acknowledgement but before the optional wait clock.
+      telemetry.markCardStaged(
+        candidate.approval_id,
+        canonicalDurableTimestamp(candidate.durable_staged_at),
+      );
+    });
   }
 
   private skipApprovalStages(

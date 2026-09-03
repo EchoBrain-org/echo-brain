@@ -150,7 +150,8 @@ export interface MeetingApprovalJourneyTelemetryPortV1 {
     stage: MeetingApprovalJourneyStageV1,
   ): boolean;
 
-  markCardStaged(approval_id: string): void;
+  /** Uses a durable staging time when recovery can prove one. */
+  markCardStaged(approval_id: string, observed_at?: string): void;
   queueAgeMs(approval_id: string, observed_at: string): number | null;
 
   markAwaitingSearch(approval_id: string): void;

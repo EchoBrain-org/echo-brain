@@ -17,6 +17,7 @@ import {
   PrivateApprovalFinalizationConflictError,
   PrivateApprovalFinalizationDeniedError,
   type ApprovalContractSha256,
+  type DeniedPrivateApprovalRecoveryV1,
   type DurablePrivateApprovalTerminalV1,
   type PrivateApprovalDeniedReceiptReasonV1,
   type QueuedPrivateApprovalSignedActionV1,
@@ -43,6 +44,7 @@ type Awaitable<T> = T | Promise<T>;
 /** The strictly minimal durable Control Plane worker port. */
 export interface PrivateSlackApprovalTerminalControlPlaneV1 {
   listQueued(): readonly QueuedPrivateApprovalSignedActionV1[];
+  listDenied(): readonly DeniedPrivateApprovalRecoveryV1[];
   listTerminals(): readonly DurablePrivateApprovalTerminalV1[];
   finalize(
     providerActionKeySha256: ApprovalContractSha256,
@@ -107,14 +109,17 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
 
   /** Complete previously finalized terminals before accepting new work. */
   async recoverV4Appends(signal: AbortSignal): Promise<void> {
+    this.reconcileDurableDenials(signal);
     await this.materializeDurableTerminals(signal);
   }
 
   /** Drain signed actions, terminalizing non-retryable denials durably. */
   async observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void> {
+    this.reconcileDurableDenials(signal);
     for (const queued of this.options.control_plane.listQueued()) {
       signal.throwIfAborted();
       const approvalId = queued.receipt.approval_id;
+      this.synthesizeActionQueueSuccessIfMissing(approvalId);
       const terminalAttempt = this.beginTerminalStage(approvalId);
       try {
         const terminal = await this.options.control_plane.finalize(
@@ -243,6 +248,48 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     return this.beginStageForApproval(approvalId, "meeting_terminal_persist");
   }
 
+  /**
+   * A queued receipt is durable proof of completed ingress. Record that fact
+   * before finalization so a process restart cannot leave the action queue
+   * permanently represented only by an interrupted telemetry attempt.
+   */
+  private synthesizeActionQueueSuccessIfMissing(approvalId: string): void {
+    if (this.hasTerminalStage(approvalId, "meeting_approval_action_queue")) return;
+    const attempt = this.beginStageForApproval(
+      approvalId,
+      "meeting_approval_action_queue",
+    );
+    this.succeedStage(attempt);
+  }
+
+  /**
+   * Denied receipts leave no Control Plane decision terminal by design, but
+   * they are nevertheless a durable terminal outcome for the signed action.
+   * Recover their optional journey close without invoking finalization again.
+   */
+  private reconcileDurableDenials(signal: AbortSignal): void {
+    signal.throwIfAborted();
+    if (this.options.journey_telemetry === undefined) return;
+    try {
+      for (const denied of this.options.control_plane.listDenied()) {
+        signal.throwIfAborted();
+        const approvalId = denied.approval_id;
+        this.synthesizeActionQueueSuccessIfMissing(approvalId);
+        if (!this.hasTerminalStage(approvalId, "meeting_terminal_persist")) {
+          const attempt = this.beginStageForApproval(
+            approvalId,
+            "meeting_terminal_persist",
+          );
+          this.succeedStage(attempt, { outcome: "denied" });
+        }
+        this.skipRejectedOrDeniedDownstreamStages(approvalId);
+      }
+    } catch {
+      // This optional staging feed must never change the approval worker.
+      signal.throwIfAborted();
+    }
+  }
+
   private synthesizeTerminalSuccessIfMissing(
     terminal: DurablePrivateApprovalTerminalV1,
   ): void {
@@ -271,7 +318,11 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
 
   private hasTerminalStage(
     approvalId: string,
-    stage: "meeting_terminal_persist" | "meeting_record_append" | "meeting_search_publication",
+    stage:
+      | "meeting_approval_action_queue"
+      | "meeting_terminal_persist"
+      | "meeting_record_append"
+      | "meeting_search_publication",
   ): boolean {
     try {
       return this.options.journey_telemetry?.hasTerminalStage(approvalId, stage) ?? false;
@@ -282,7 +333,10 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
 
   private beginStageForApproval(
     approvalId: string,
-    stage: "meeting_terminal_persist" | "meeting_record_append",
+    stage:
+      | "meeting_approval_action_queue"
+      | "meeting_terminal_persist"
+      | "meeting_record_append",
   ): MeetingApprovalJourneyStageAttemptV1 | null {
     try {
       return this.options.journey_telemetry?.beginStageForApproval(approvalId, stage) ?? null;

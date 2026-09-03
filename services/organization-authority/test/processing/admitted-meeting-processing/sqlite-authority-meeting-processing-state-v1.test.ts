@@ -295,6 +295,7 @@ describe("SQLite admitted meeting-processing state", () => {
       canonical_revision: canary.provenance.canonical_revision,
     })).resolves.toMatchObject({
       candidate_id: candidateId,
+      durable_staged_at: ADVANCED_AT,
       admission: {
         source: {
           adapter_id: "synthetic-staging-canary",
@@ -358,6 +359,7 @@ describe("SQLite admitted meeting-processing state", () => {
     const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => [],
+        listDenied: () => [],
         listTerminals: () => [terminal],
         finalize: async () => terminal,
         recordDenied: () => undefined,

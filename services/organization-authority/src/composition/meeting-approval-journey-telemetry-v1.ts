@@ -513,13 +513,13 @@ class MeetingApprovalJourneyTelemetryV1
     });
   }
 
-  markCardStaged(approval_id: string): void {
+  markCardStaged(approval_id: string, observed_at?: string): void {
     try {
       const journey = this.state.readForApproval(approval_id);
       if (journey !== null) {
         this.state.markCardStaged(
           journey.journey_id,
-          this.captureClock().observed_at,
+          observed_at ?? this.captureClock().observed_at,
         );
       }
     } catch {

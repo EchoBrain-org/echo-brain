@@ -68,6 +68,7 @@ export {
   SqliteSlackDmApprovalPersistenceV1,
   validatePrivateApprovalSlackCardBindingV1,
   type DeniedPrivateApprovalSignedActionV1,
+  type DeniedPrivateApprovalRecoveryV1,
   type DurablePrivateApprovalTerminalV1,
   type EnqueuePrivateApprovalInteractionResultV1,
   type EnqueuePrivateApprovalInteractionV1,

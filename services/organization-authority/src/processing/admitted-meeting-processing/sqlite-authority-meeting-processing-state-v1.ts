@@ -66,6 +66,7 @@ interface CandidateRow {
   readonly approval_id: string | null;
   readonly stage_command_id: string | null;
   readonly state: "queued" | "posting" | "posted" | "staged" | "superseded" | "coalesced" | "no_signals";
+  readonly durable_staged_at: string | null;
 }
 
 interface LineageHeadRow {
@@ -707,6 +708,8 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
                 outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
                 outbox.post_started_at,
+                CASE WHEN outbox.state = 'staged' THEN outbox.updated_at
+                     ELSE NULL END AS durable_staged_at,
                 outbox.control_approval_sha256,
                 outbox.superseded_by_candidate_id, outbox.superseded_at,
                 outbox.tombstoned_at
@@ -1232,7 +1235,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
                 candidate.review_policy_consequence_sha256,
                 candidate.disposition, outbox.approval_id,
                 outbox.stage_command_id,
-                COALESCE(outbox.state, candidate.disposition) AS state
+                COALESCE(outbox.state, candidate.disposition) AS state,
+                CASE WHEN outbox.state = 'staged' THEN outbox.updated_at
+                     ELSE NULL END AS durable_staged_at
            FROM authority_live_source_candidates_v2 AS candidate
            LEFT JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
@@ -1295,6 +1300,8 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
                 outbox.frozen_card_sha256,
                 outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
                 outbox.post_started_at,
+                CASE WHEN outbox.state = 'staged' THEN outbox.updated_at
+                     ELSE NULL END AS durable_staged_at,
                 outbox.control_approval_sha256,
                 outbox.superseded_by_candidate_id, outbox.superseded_at,
                 outbox.tombstoned_at

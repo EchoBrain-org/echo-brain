@@ -200,6 +200,7 @@ describe("private Slack approval terminal coordinator v1", () => {
     const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => queued,
+        listDenied: () => [],
         listTerminals: () => [],
         finalize: async (key) => {
           if (key === digest("denied")) {
@@ -241,6 +242,7 @@ describe("private Slack approval terminal coordinator v1", () => {
     const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => [{ receipt: { approval_id: APPROVAL_ID, provider_action_key_sha256: digest("approved") } }] as any,
+        listDenied: () => [],
         listTerminals: () => [],
         finalize: async () => value,
         recordDenied: () => undefined,
@@ -252,10 +254,142 @@ describe("private Slack approval terminal coordinator v1", () => {
     });
 
     await coordinator.observeAndFinalizePendingApprovals(new AbortController().signal);
-    expect(journey.events).toEqual([
+    expect(journey.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "begin", stage: "meeting_approval_action_queue" }),
+      expect.objectContaining({ kind: "succeed", stage: "meeting_approval_action_queue" }),
       expect.objectContaining({ kind: "begin", stage: "meeting_terminal_persist" }),
       expect.objectContaining({ kind: "succeed", stage: "meeting_terminal_persist", outcome: "approved" }),
-    ]);
+    ]));
+  });
+
+  it("reconciles a durably queued action before terminal finalization after restart", async () => {
+    const value = terminal("approved");
+    const harness = authorityHarness(value);
+    const journey = telemetryHarness();
+    let queueWasObservedBeforeFinalize = false;
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
+      control_plane: {
+        listQueued: () => [{ receipt: { approval_id: APPROVAL_ID, provider_action_key_sha256: digest("queued-after-restart") } }] as any,
+        listDenied: () => [],
+        listTerminals: () => [],
+        finalize: async () => {
+          queueWasObservedBeforeFinalize = journey.events.some(
+            (event) => event.kind === "succeed" && event.stage === "meeting_approval_action_queue",
+          );
+          return value;
+        },
+        recordDenied: () => undefined,
+      },
+      authority: harness.authority,
+      record_writer: { appendApproved: async () => { throw new Error("unreachable"); } } as never,
+      poster: { renderTerminal: async () => ({ kind: "done" as const }) },
+      journey_telemetry: journey.telemetry,
+    });
+
+    await coordinator.observeAndFinalizePendingApprovals(new AbortController().signal);
+    expect(queueWasObservedBeforeFinalize).toBe(true);
+    expect(journey.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "succeed", stage: "meeting_approval_action_queue" }),
+      expect.objectContaining({ kind: "succeed", stage: "meeting_terminal_persist", outcome: "approved" }),
+    ]));
+  });
+
+  it("reconciles a durably denied receipt after restart without finalizing it again", async () => {
+    const value = terminal("approved");
+    const harness = authorityHarness(value);
+    const journey = telemetryHarness();
+    let finalizations = 0;
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
+      control_plane: {
+        listQueued: () => [],
+        listDenied: () => [{ approval_id: APPROVAL_ID }],
+        listTerminals: () => [],
+        finalize: async () => {
+          finalizations += 1;
+          return value;
+        },
+        recordDenied: () => undefined,
+      },
+      authority: harness.authority,
+      record_writer: { appendApproved: async () => { throw new Error("denied must not append"); } } as never,
+      poster: { renderTerminal: async () => ({ kind: "done" as const }) },
+      journey_telemetry: journey.telemetry,
+    });
+
+    await coordinator.recoverV4Appends(new AbortController().signal);
+    expect(finalizations).toBe(0);
+    expect(journey.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "succeed", stage: "meeting_approval_action_queue" }),
+      expect.objectContaining({ kind: "succeed", stage: "meeting_terminal_persist", outcome: "denied" }),
+      expect.objectContaining({ kind: "skip", stage: "meeting_record_append" }),
+      expect.objectContaining({ kind: "skip", stage: "meeting_search_publication" }),
+    ]));
+    const queueSuccess = journey.events.findIndex(
+      (event) => event.kind === "succeed" && event.stage === "meeting_approval_action_queue",
+    );
+    const deniedSuccess = journey.events.findIndex(
+      (event) => event.kind === "succeed" && event.stage === "meeting_terminal_persist" && event.outcome === "denied",
+    );
+    const firstDownstreamSkip = journey.events.findIndex(
+      (event) => event.kind === "skip",
+    );
+    expect(queueSuccess).toBeGreaterThanOrEqual(0);
+    expect(deniedSuccess).toBeGreaterThan(queueSuccess);
+    expect(firstDownstreamSkip).toBeGreaterThan(deniedSuccess);
+  });
+
+  it("keeps denied-receipt recovery staging-only and fail-open", async () => {
+    const value = terminal("approved");
+    const harness = authorityHarness(value);
+    let readsWithoutTelemetry = 0;
+    const withoutTelemetry = new PrivateSlackApprovalTerminalCoordinatorV1({
+      control_plane: {
+        listQueued: () => [],
+        listDenied: () => {
+          readsWithoutTelemetry += 1;
+          throw new Error("denied feed must not be read without telemetry");
+        },
+        listTerminals: () => [],
+        finalize: async () => value,
+        recordDenied: () => undefined,
+      },
+      authority: harness.authority,
+      record_writer: { appendApproved: async () => { throw new Error("unreachable"); } } as never,
+      poster: { renderTerminal: async () => ({ kind: "done" as const }) },
+    });
+    await expect(
+      withoutTelemetry.recoverV4Appends(new AbortController().signal),
+    ).resolves.toBeUndefined();
+    expect(readsWithoutTelemetry).toBe(0);
+
+    let readsWithTelemetry = 0;
+    const withTelemetry = new PrivateSlackApprovalTerminalCoordinatorV1({
+      control_plane: {
+        listQueued: () => [],
+        listDenied: () => {
+          readsWithTelemetry += 1;
+          throw new Error("denied telemetry feed unavailable");
+        },
+        listTerminals: () => [],
+        finalize: async () => value,
+        recordDenied: () => undefined,
+      },
+      authority: harness.authority,
+      record_writer: { appendApproved: async () => { throw new Error("unreachable"); } } as never,
+      poster: { renderTerminal: async () => ({ kind: "done" as const }) },
+      journey_telemetry: telemetryHarness().telemetry,
+    });
+    await expect(
+      withTelemetry.recoverV4Appends(new AbortController().signal),
+    ).resolves.toBeUndefined();
+    expect(readsWithTelemetry).toBe(1);
+
+    const aborted = new AbortController();
+    aborted.abort(new Error("recovery cancelled"));
+    await expect(withTelemetry.recoverV4Appends(aborted.signal)).rejects.toThrow(
+      "recovery cancelled",
+    );
+    expect(readsWithTelemetry).toBe(1);
   });
 
   it("appends only an approved terminal, records it, and renders the DM idempotently", async () => {
@@ -267,6 +401,7 @@ describe("private Slack approval terminal coordinator v1", () => {
     const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => [],
+        listDenied: () => [],
         listTerminals: () => [value],
         finalize: async () => value,
         recordDenied: () => undefined,
@@ -307,6 +442,15 @@ describe("private Slack approval terminal coordinator v1", () => {
         expect.objectContaining({ kind: "awaiting", approvalId: APPROVAL_ID }),
       ]),
     );
+    expect(
+      journey.events.some(
+        (event) =>
+          (event.kind === "succeed" && event.outcome === "denied") ||
+          (event.kind === "skip" &&
+            (event.stage === "meeting_record_append" ||
+              event.stage === "meeting_search_publication")),
+      ),
+    ).toBe(false);
   });
 
   it("records a rejected terminal after supersession without calling V4 and retries an uncertain card update", async () => {
@@ -318,6 +462,7 @@ describe("private Slack approval terminal coordinator v1", () => {
     const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => [],
+        listDenied: () => [],
         listTerminals: () => [value],
         finalize: async () => value,
         recordDenied: () => undefined,
@@ -360,6 +505,7 @@ describe("private Slack approval terminal coordinator v1", () => {
     const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => [],
+        listDenied: () => [],
         listTerminals: () => [value],
         finalize: async () => value,
         recordDenied: () => undefined,
@@ -401,7 +547,7 @@ describe("private Slack approval terminal coordinator v1", () => {
       },
     } as never;
     const withoutTelemetry = new PrivateSlackApprovalTerminalCoordinatorV1({
-      control_plane: { listQueued: () => [], listTerminals: () => [value], finalize: async () => value, recordDenied: () => undefined },
+      control_plane: { listQueued: () => [], listDenied: () => [], listTerminals: () => [value], finalize: async () => value, recordDenied: () => undefined },
       authority: harness.authority,
       record_writer: write,
       poster: { renderTerminal: async () => ({ kind: "done" as const }) },
@@ -423,7 +569,7 @@ describe("private Slack approval terminal coordinator v1", () => {
       },
     });
     const recovered = new PrivateSlackApprovalTerminalCoordinatorV1({
-      control_plane: { listQueued: () => [], listTerminals: () => [value], finalize: async () => value, recordDenied: () => undefined },
+      control_plane: { listQueued: () => [], listDenied: () => [], listTerminals: () => [value], finalize: async () => value, recordDenied: () => undefined },
       authority: harness.authority,
       record_writer: write,
       poster: { renderTerminal: async () => ({ kind: "done" as const }) },
@@ -452,6 +598,7 @@ describe("private Slack approval terminal coordinator v1", () => {
     const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
       control_plane: {
         listQueued: () => [{ receipt: { approval_id: APPROVAL_ID, provider_action_key_sha256: digest("approved") } }] as any,
+        listDenied: () => [],
         listTerminals: () => [value],
         finalize: async () => value,
         recordDenied: () => undefined,

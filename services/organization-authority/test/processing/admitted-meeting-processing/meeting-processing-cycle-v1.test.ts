@@ -38,6 +38,7 @@ import type {
 } from "../../../src/processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
 const CUT_OFF = "2026-08-22T02:03:04.005Z";
+const DURABLE_STAGED_AT = "2026-08-22T02:05:04.005Z";
 const SOURCE = {
   kind: "meeting-source" as const,
   adapter_id: "granola",
@@ -297,6 +298,10 @@ class FakeJourneyTelemetry implements MeetingApprovalJourneyTelemetryPortV1 {
   readonly events: string[] = [];
   readonly bindings: Array<{ candidate_id: string; approval_id: string | null }> = [];
   readonly usages: Array<{ provider_latency_ms: number; had_observation: boolean }> = [];
+  readonly cardStaged: Array<{
+    readonly approval_id: string;
+    readonly observed_at: string | undefined;
+  }> = [];
   private readonly terminalStages = new Set<string>();
   private readonly journeysBySource = new Map<string, string>();
   private nextAttempt = 0;
@@ -451,7 +456,10 @@ class FakeJourneyTelemetry implements MeetingApprovalJourneyTelemetryPortV1 {
     this.failStage(attempt);
   }
 
-  markCardStaged(): void { this.call(); }
+  markCardStaged(approvalId: string, observedAt?: string): void {
+    this.call();
+    this.cardStaged.push({ approval_id: approvalId, observed_at: observedAt });
+  }
   queueAgeMs(): number | null { this.call(); return null; }
   markAwaitingSearch(): void { this.call(); }
   beginAwaitingSearch(): readonly MeetingApprovalJourneyStageAttemptV1[] { this.call(); return []; }
@@ -623,7 +631,7 @@ describe("admitted meeting-processing cycle", () => {
     ]);
   });
 
-  it("closes frozen historical extraction and persistence once across restarts", async () => {
+  it("reconciles frozen candidate persistence from its durable no-signal disposition", async () => {
     const telemetry = new FakeJourneyTelemetry();
     const current = admission();
     const observed = meeting();
@@ -659,7 +667,8 @@ describe("admitted meeting-processing cycle", () => {
       await expect(cycle.runOnce()).resolves.toMatchObject({ kind: "already_processed" });
     }
     expect(telemetry.events.filter((event) => event === "meeting_extraction:skipped")).toHaveLength(1);
-    expect(telemetry.events.filter((event) => event === "meeting_candidate_persist:skipped")).toHaveLength(1);
+    expect(telemetry.events.filter((event) => event === "meeting_candidate_persist:succeeded:no_signals")).toHaveLength(1);
+    expect(telemetry.events).not.toContain("meeting_candidate_persist:skipped");
   });
 
   it("keeps processing fail-open when journey telemetry throws", async () => {
@@ -1296,7 +1305,7 @@ describe("admitted meeting-processing cycle", () => {
     }
   });
 
-  it("skips staged revisions before extraction and processes a changed revision", async () => {
+  it("reconciles a durably staged candidate and wait clock after a restart", async () => {
     const current = admission();
     const state = new FakeState(current);
     const originalMeeting = meeting();
@@ -1315,12 +1324,14 @@ describe("admitted meeting-processing cycle", () => {
       approval_id: "apr_staged",
       stage_command_id: "pas_staged",
       state: "staged",
+      durable_staged_at: DURABLE_STAGED_AT,
       admission: current,
       meeting: originalMeeting,
       decisions: decisions(originalMeeting),
     });
     let extracts = 0;
     let stages = 0;
+    const telemetry = new FakeJourneyTelemetry();
     const countingProcessor = processor((value) => {
       extracts += 1;
       return decisions(value);
@@ -1350,11 +1361,19 @@ describe("admitted meeting-processing cycle", () => {
       processor: countingProcessor,
       state,
       stager: downstream,
+      journey_telemetry: telemetry,
     });
     await expect(repeated.runOnce()).resolves.toEqual({
       kind: "already_processed",
       cursor_advanced: false,
     });
+    expect(telemetry.events).toEqual(expect.arrayContaining([
+      "meeting_candidate_persist:succeeded:actionable",
+      "meeting_approval_staging:succeeded:staged",
+    ]));
+    expect(telemetry.cardStaged).toEqual([
+      { approval_id: "apr_staged", observed_at: DURABLE_STAGED_AT },
+    ]);
 
     const revisedMeeting: MeetingDocument = {
       ...originalMeeting,

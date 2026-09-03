@@ -254,14 +254,17 @@ describe("meeting approval journey telemetry v1", () => {
     });
 
     const restartEvents: JourneyTelemetryEventV1[] = [];
-    const now = [SOURCE_CARD_STAGED, SOURCE_CARD_STAGED, ACTION_CLOSED];
+    const now = ["2026-09-02T13:00:00.000Z", ACTION_CLOSED];
     const monotonic = [80, 124];
     const restarted = telemetry(openState(path, SECOND_JOURNEY_ID), restartEvents, {
       now: () => now.shift() ?? ACTION_CLOSED,
       now_ms: () => monotonic.shift() ?? 124,
     });
     expect(restarted.readForApproval("approval-private-sentinel")).toEqual({ journey_id: JOURNEY_ID });
-    restarted.markCardStaged("approval-private-sentinel");
+    restarted.markCardStaged(
+      "approval-private-sentinel",
+      SOURCE_CARD_STAGED,
+    );
     expect(
       restarted.queueAgeMs("approval-private-sentinel", ACTION_STARTED.observed_at),
     ).toBe(60_000);
