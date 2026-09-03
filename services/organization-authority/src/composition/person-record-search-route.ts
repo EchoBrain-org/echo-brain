@@ -84,6 +84,8 @@ export interface PersonRecordSearchBatchInputV1 {
    * ordering unless Layer 4 explicitly asks for this plan.
    */
   readonly include_related_atom_packet?: true;
+  /** Internal, fail-open seam used to close the Ask authorization stage. */
+  readonly on_authorized?: () => void;
 }
 
 export type PersonRecordSearchReleaseAuthorizationV1 =
@@ -354,6 +356,11 @@ export function createPersonRecordSearchRouteV1(
       access_token: input.access_token,
     });
     assertExpectedOrganization(authorization);
+    try {
+      input.on_authorized?.();
+    } catch {
+      // Observability cannot alter authorization or retrieval behavior.
+    }
     const head = recordHead(options.record);
     const pointer = activeGeneration(options.authority);
     if (

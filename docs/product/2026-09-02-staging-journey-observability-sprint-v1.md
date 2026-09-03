@@ -39,9 +39,9 @@ approved for production.
 
 ```text
 request ingress
-  -> validate and authorize
+  -> validate
   -> plan LLM
-  -> released retrieval
+  -> authorize and run released retrieval
   -> context construction
   -> answer LLM
   -> revalidate
@@ -53,6 +53,9 @@ The journey begins at the Ask boundary and ends when the service produces the
 terminal response or terminal failure. Each machine stage emits a terminal
 event even when a later stage is skipped. Planner and answer LLM calls record
 separate attempts rather than folding retries into one opaque duration.
+Authorization is observed where the existing Layer 3 release authenticates the
+bearer, after the content-only planner has produced its bounded query plan. The
+telemetry work does not reorder that product path.
 
 ### Human-approved meeting decision
 

@@ -17,7 +17,13 @@ import type {
   PersonRecordSearchBatchApplicationV1,
   PersonRecordSearchBatchReleaseV1,
 } from "../src/composition/person-record-search-route.js";
+import {
+  createAskJourneyTelemetryFactoryV1,
+  type AskJourneyTelemetryFactoryV1,
+} from "../src/composition/ask-journey-telemetry-v1.js";
+import type { AnswerCompositionGenerationProfileV1 } from "../src/composition/answer-composition-generation-bundle-v1.js";
 import { AuthorityOperationError } from "../src/domain/errors.js";
+import type { JourneyTelemetryEventV1 } from "../src/shared/journey-telemetry-v1.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type {
   PersonAnswerHttpApplicationV1,
@@ -30,6 +36,12 @@ const GENERATION = Object.freeze({
   generation_adapter_id: "test-structured-output",
   planner_model: "test-planner",
   answer_model: "test-answer",
+  timeout_ms: 60_000,
+});
+const STAGING_GENERATION = Object.freeze({
+  generation_adapter_id: "openrouter",
+  planner_model: "deepseek/deepseek-v3.2",
+  answer_model: "deepseek/deepseek-v3.2",
   timeout_ms: 60_000,
 });
 
@@ -92,9 +104,12 @@ function searchResponse() {
 
 function setup(input: {
   readonly model?: StructuredGenerationPort;
+  readonly generation?: AnswerCompositionGenerationProfileV1;
+  readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   readonly revalidate?: () => PersonAccessAuthorization;
   readonly on_failure?: (event: AnswerCompositionFailureEventV1) => void;
   readonly source_text?: string;
+  readonly query_hit_counts?: readonly number[];
 }) {
   const database = openAuthorityDatabase(":memory:");
   applyAuthorityBaselineV1(database);
@@ -102,6 +117,7 @@ function setup(input: {
   const witness = release();
   const search: PersonRecordSearchBatchApplicationV1 = {
     searchBatch: vi.fn((_value) => {
+      _value.on_authorized?.();
       events.push("batch");
       const response = searchResponse();
       const sourceText = input.source_text;
@@ -118,7 +134,9 @@ function setup(input: {
                 ),
               }),
         release: witness,
-        query_hit_counts: Object.freeze(_value.queries.map(() => 2)),
+        query_hit_counts: Object.freeze(
+          input.query_hit_counts ?? _value.queries.map(() => 2),
+        ),
       });
     }),
     revalidateBatchRelease: vi.fn(() => {
@@ -153,11 +171,36 @@ function setup(input: {
     state_lineage_id: "lineage_clean",
     search,
     model,
-    generation: GENERATION,
+    generation: input.generation ?? GENERATION,
     audit,
+    ...(input.ask_journey_telemetry === undefined
+      ? {}
+      : { ask_journey_telemetry: input.ask_journey_telemetry }),
     ...(input.on_failure === undefined ? {} : { on_failure: input.on_failure }),
   });
   return { database, events, search, append, modelInputs, route };
+}
+
+function stagingTelemetry(
+  events: JourneyTelemetryEventV1[],
+  uuid: string,
+  buildNumber: number,
+): AskJourneyTelemetryFactoryV1 {
+  let monotonicNow = 3_000;
+  return createAskJourneyTelemetryFactoryV1({
+    observer: (event) => {
+      events.push(event);
+    },
+    release_sha: "d".repeat(40),
+    build_number: buildNumber,
+    planner_model: "deepseek/deepseek-v3.2",
+    answer_model: "deepseek/deepseek-v3.2",
+    clock: {
+      now: () => "2026-09-02T17:00:02.000Z",
+      create_uuid: () => uuid,
+    },
+    now_ms: () => monotonicNow++,
+  });
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -222,6 +265,410 @@ describe("Person answer route", () => {
       expect(value.append.mock.calls[0]?.[0].response_sha256).toBe(
         canonicalSha256(response as never),
       );
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("emits one content-free staging journey with stage latency and per-call token usage", async () => {
+    const telemetry: JourneyTelemetryEventV1[] = [];
+    let monotonicNow = 1_000;
+    let observedCalls = 0;
+    const model: StructuredGenerationPort = {
+      generate: vi.fn(async () => {
+        throw new Error("the value-only path must remain unused in staging");
+      }),
+      generate_with_observation: vi.fn(async () => {
+        observedCalls += 1;
+        return {
+          value:
+            observedCalls === 1
+              ? { queries: ["launch date", "launch owner"] }
+              : {
+                  status: "answered",
+                  answer: "Tuesday, owned by the product team.",
+                  citations: ["a1", "a2"],
+                },
+          usage:
+            observedCalls === 1
+              ? {
+                  input_tokens: 101,
+                  output_tokens: 17,
+                  total_tokens: 118,
+                  cached_input_tokens: 41,
+                  reasoning_tokens: 7,
+                }
+              : {
+                  input_tokens: 211,
+                  output_tokens: 29,
+                  total_tokens: 240,
+                  cached_input_tokens: 53,
+                  reasoning_tokens: 11,
+                },
+          finish_reason: "stop" as const,
+          provider_latency_ms: observedCalls === 1 ? 13 : 17,
+        };
+      }),
+    };
+    const journeyFactory = createAskJourneyTelemetryFactoryV1({
+      observer: (event) => {
+        telemetry.push(event);
+      },
+      release_sha: "a".repeat(40),
+      build_number: 42,
+      planner_model: "deepseek/deepseek-v3.2",
+      answer_model: "deepseek/deepseek-v3.2",
+      clock: {
+        now: () => "2026-09-02T17:00:00.000Z",
+        create_uuid: () => "123e4567-e89b-42d3-a456-426614174000",
+      },
+      now_ms: () => monotonicNow++,
+    });
+    const value = setup({
+      model,
+      generation: STAGING_GENERATION,
+      ask_journey_telemetry: journeyFactory,
+    });
+    const question = "QUESTION-DO-NOT-LOG-journey-success";
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "BEARER-DO-NOT-LOG-journey-success",
+          question,
+        }),
+      ).resolves.toMatchObject({
+        answer: "Tuesday, owned by the product team.",
+      });
+
+      await vi.waitFor(() => expect(telemetry).toHaveLength(10));
+      expect(model.generate).not.toHaveBeenCalled();
+      expect(model.generate_with_observation).toHaveBeenCalledTimes(2);
+      expect(telemetry.map((event) => event.stage)).toEqual([
+        "ask_validation",
+        "ask_validation",
+        "ask_planner",
+        "ask_authorization",
+        "ask_retrieval",
+        "ask_context",
+        "ask_answer",
+        "ask_revalidation",
+        "ask_audit",
+        "ask_response",
+      ]);
+      expect(telemetry.map((event) => event.sequence)).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+      ]);
+      expect(telemetry[0]).toMatchObject({
+        stage: "ask_validation",
+        event: "started",
+        sequence: 1,
+        elapsed_ms: 0,
+      });
+      expect(telemetry[1]).toMatchObject({
+        stage: "ask_validation",
+        event: "succeeded",
+        sequence: 2,
+      });
+      expect(
+        telemetry.every(
+          (event) =>
+            Number.isSafeInteger(event.elapsed_ms) && event.elapsed_ms >= 0,
+        ),
+      ).toBe(true);
+      expect(
+        telemetry.every(
+          (event) =>
+            event.journey_id ===
+              "123e4567-e89b-42d3-a456-426614174000" &&
+            event.release_sha === "a".repeat(40) &&
+            event.build_number === 42 &&
+            event.environment === "staging" &&
+            event.workflow === "ask",
+        ),
+      ).toBe(true);
+      expect(
+        telemetry.find((event) => event.stage === "ask_planner"),
+      ).toMatchObject({
+        event: "succeeded",
+        elapsed_ms: expect.any(Number),
+        retrieval: { planned_query_count: 3 },
+        llm_usage: {
+          usage_status: "reported",
+          provider: "openrouter",
+          model: "deepseek/deepseek-v3.2",
+          provider_latency_ms: 13,
+          input_tokens: 101,
+          output_tokens: 17,
+          total_tokens: 118,
+          cached_input_tokens: 41,
+          reasoning_tokens: 7,
+          finish_reason: "stop",
+        },
+      });
+      expect(
+        telemetry.find((event) => event.stage === "ask_answer"),
+      ).toMatchObject({
+        event: "succeeded",
+        retrieval: {
+          planned_query_count: 3,
+          query_hit_count: 6,
+          released_atom_count: 2,
+          context_atom_count: 2,
+          citation_count: 2,
+        },
+        llm_usage: {
+          input_tokens: 211,
+          output_tokens: 29,
+          total_tokens: 240,
+          cached_input_tokens: 53,
+          reasoning_tokens: 11,
+        },
+      });
+      expect(
+        telemetry.find((event) => event.stage === "ask_response"),
+      ).toMatchObject({
+        event: "succeeded",
+        outcome: "answered",
+        elapsed_ms: expect.any(Number),
+        retrieval: {
+          planned_query_count: 3,
+          query_hit_count: 6,
+          released_atom_count: 2,
+          context_atom_count: 2,
+          citation_count: 2,
+        },
+      });
+
+      const serialized = JSON.stringify(telemetry);
+      for (const forbidden of [
+        question,
+        "BEARER-DO-NOT-LOG-journey-success",
+        "The launch is Tuesday.",
+        "The product team owns the launch.",
+        "Tuesday, owned by the product team.",
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("closes the failed staging journey and skips every unattempted stage", async () => {
+    const telemetry: JourneyTelemetryEventV1[] = [];
+    let monotonicNow = 2_000;
+    const providerSecret = "PROVIDER-SECRET-DO-NOT-LOG-journey-failure";
+    const providerFailure = Object.assign(new Error(providerSecret), {
+      diagnostic: {
+        failure_class: "adapter_finish",
+        http_status: 200,
+        adapter_id: "openrouter",
+        finish_reason: "length",
+        adapter_request_id: null,
+      },
+      generation_observation: {
+        usage: {
+          input_tokens: 73,
+          output_tokens: 9,
+          total_tokens: 82,
+          cached_input_tokens: 21,
+          reasoning_tokens: 4,
+        },
+        provider_latency_ms: 19,
+      },
+    });
+    const model: StructuredGenerationPort = {
+      generate: vi.fn(),
+      generate_with_observation: vi.fn(async () => {
+        throw providerFailure;
+      }),
+    };
+    const value = setup({
+      model,
+      generation: STAGING_GENERATION,
+      ask_journey_telemetry: createAskJourneyTelemetryFactoryV1({
+        observer: (event) => {
+          telemetry.push(event);
+        },
+        release_sha: "b".repeat(40),
+        build_number: 43,
+        planner_model: "deepseek/deepseek-v3.2",
+        answer_model: "deepseek/deepseek-v3.2",
+        clock: {
+          now: () => "2026-09-02T17:00:01.000Z",
+          create_uuid: () => "223e4567-e89b-42d3-a456-426614174000",
+        },
+        now_ms: () => monotonicNow++,
+      }),
+    });
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "BEARER-DO-NOT-LOG-journey-failure",
+          question: "QUESTION-DO-NOT-LOG-journey-failure",
+        }),
+      ).rejects.toMatchObject({
+        code: "unavailable",
+        message: "answer composition is unavailable",
+      });
+
+      await vi.waitFor(() => expect(telemetry).toHaveLength(10));
+      expect(telemetry.map(({ stage, event }) => [stage, event])).toEqual([
+        ["ask_validation", "started"],
+        ["ask_validation", "succeeded"],
+        ["ask_planner", "failed"],
+        ["ask_authorization", "skipped"],
+        ["ask_retrieval", "skipped"],
+        ["ask_context", "skipped"],
+        ["ask_answer", "skipped"],
+        ["ask_revalidation", "skipped"],
+        ["ask_audit", "skipped"],
+        ["ask_response", "failed"],
+      ]);
+      expect(telemetry[2]).toMatchObject({
+        failure_class: "provider_rejected",
+        retryable: false,
+        llm_usage: {
+          usage_status: "reported",
+          provider: "openrouter",
+          model: "deepseek/deepseek-v3.2",
+          input_tokens: 73,
+          output_tokens: 9,
+          total_tokens: 82,
+          cached_input_tokens: 21,
+          reasoning_tokens: 4,
+          provider_latency_ms: 19,
+          finish_reason: "length",
+        },
+      });
+      expect(telemetry.at(-1)).toMatchObject({
+        stage: "ask_response",
+        event: "failed",
+        failure_class: "provider_rejected",
+        retryable: false,
+      });
+      const serialized = JSON.stringify(telemetry);
+      expect(serialized).not.toContain(providerSecret);
+      expect(serialized).not.toContain("BEARER-DO-NOT-LOG-journey-failure");
+      expect(serialized).not.toContain("QUESTION-DO-NOT-LOG-journey-failure");
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("marks a malformed released retrieval as failed instead of successful", async () => {
+    const telemetry: JourneyTelemetryEventV1[] = [];
+    const value = setup({
+      generation: STAGING_GENERATION,
+      ask_journey_telemetry: stagingTelemetry(
+        telemetry,
+        "323e4567-e89b-42d3-a456-426614174000",
+        45,
+      ),
+      query_hit_counts: [2],
+    });
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "bearer-only-token",
+          question: "When is the launch?",
+        }),
+      ).rejects.toMatchObject({ code: "unavailable" });
+
+      await vi.waitFor(() => expect(telemetry).toHaveLength(10));
+      expect(
+        telemetry.find((event) => event.stage === "ask_authorization"),
+      ).toMatchObject({ event: "succeeded" });
+      expect(
+        telemetry.find((event) => event.stage === "ask_retrieval"),
+      ).toMatchObject({
+        event: "failed",
+        failure_class: "invalid_contract",
+        retryable: false,
+      });
+      expect(
+        telemetry.find((event) => event.stage === "ask_context"),
+      ).toMatchObject({ event: "skipped", outcome: "skipped" });
+      expect(telemetry.at(-1)).toMatchObject({
+        stage: "ask_response",
+        event: "failed",
+        failure_class: "invalid_contract",
+      });
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("marks malformed final revalidation as failed before audit", async () => {
+    const telemetry: JourneyTelemetryEventV1[] = [];
+    const value = setup({
+      generation: STAGING_GENERATION,
+      ask_journey_telemetry: stagingTelemetry(
+        telemetry,
+        "423e4567-e89b-42d3-a456-426614174000",
+        46,
+      ),
+      revalidate: () => ({
+        ...authorization(),
+        checked_at: "not-a-timestamp",
+      }),
+    });
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "bearer-only-token",
+          question: "When is the launch?",
+        }),
+      ).rejects.toMatchObject({ code: "unavailable" });
+
+      await vi.waitFor(() => expect(telemetry).toHaveLength(10));
+      expect(
+        telemetry.find((event) => event.stage === "ask_answer"),
+      ).toMatchObject({ event: "succeeded" });
+      expect(
+        telemetry.find((event) => event.stage === "ask_revalidation"),
+      ).toMatchObject({
+        event: "failed",
+        failure_class: "invalid_contract",
+        retryable: false,
+      });
+      expect(
+        telemetry.find((event) => event.stage === "ask_audit"),
+      ).toMatchObject({ event: "skipped", outcome: "skipped" });
+      expect(telemetry.at(-1)).toMatchObject({
+        stage: "ask_response",
+        event: "failed",
+        failure_class: "invalid_contract",
+      });
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("keeps the answer path available when the staging observer throws", async () => {
+    const observer = vi.fn(() => {
+      throw new Error("telemetry transport unavailable");
+    });
+    const value = setup({
+      ask_journey_telemetry: createAskJourneyTelemetryFactoryV1({
+        observer,
+        release_sha: "c".repeat(40),
+        build_number: 44,
+        planner_model: "deepseek/deepseek-v3.2",
+        answer_model: "deepseek/deepseek-v3.2",
+      }),
+      generation: STAGING_GENERATION,
+    });
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "bearer-only-token",
+          question: "When is the launch?",
+        }),
+      ).resolves.toMatchObject({
+        answer: "Tuesday, owned by the product team.",
+      });
+      await vi.waitFor(() => expect(observer).toHaveBeenCalled());
     } finally {
       value.database.close();
     }

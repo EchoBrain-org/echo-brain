@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createOpenRouterStructuredGenerationAdapter,
   OpenRouterStructuredGenerationError,
@@ -13,7 +13,9 @@ const structuredRequest = {
   timeout_ms: 1_000,
 } as const;
 
-async function caught(adapter: ReturnType<typeof createOpenRouterStructuredGenerationAdapter>) {
+async function caught(
+  adapter: ReturnType<typeof createOpenRouterStructuredGenerationAdapter>,
+) {
   try {
     await adapter.generate(structuredRequest);
   } catch (error) {
@@ -23,13 +25,27 @@ async function caught(adapter: ReturnType<typeof createOpenRouterStructuredGener
   throw new Error("expected OpenRouter adapter to fail");
 }
 
+async function observed(
+  adapter: ReturnType<typeof createOpenRouterStructuredGenerationAdapter>,
+) {
+  const generate = adapter.generate_with_observation;
+  if (generate === undefined)
+    throw new Error("expected OpenRouter observation support");
+  return generate(structuredRequest);
+}
+
 describe("OpenRouter structured generation", () => {
   it("uses JSON-schema output with the configured bounds", async () => {
-    const calls: Array<{ readonly input: RequestInfo | URL; readonly init: RequestInit | undefined }> = [];
+    const calls: Array<{
+      readonly input: RequestInfo | URL;
+      readonly init: RequestInit | undefined;
+    }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       calls.push({ input, init });
       return new Response(
-        JSON.stringify({ choices: [{ message: { content: '{"queries":[]}' } }] }),
+        JSON.stringify({
+          choices: [{ message: { content: '{"queries":[]}' } }],
+        }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     };
@@ -45,13 +61,141 @@ describe("OpenRouter structured generation", () => {
     ).resolves.toEqual({ queries: [] });
     expect(calls).toHaveLength(1);
     const request = calls[0]?.init;
-    expect(request?.headers).toMatchObject({ authorization: "Bearer secret-not-in-errors" });
+    expect(request?.headers).toMatchObject({
+      authorization: "Bearer secret-not-in-errors",
+    });
     expect(typeof request?.body).toBe("string");
     expect(JSON.parse(request?.body as string)).toMatchObject({
       stream: false,
       max_tokens: 300,
       response_format: { type: "json_schema" },
       provider: { require_parameters: true, data_collection: "deny" },
+    });
+  });
+
+  it("returns only safe successful generation metadata alongside the parsed value", async () => {
+    const nowMs = vi
+      .fn<() => number>()
+      .mockReturnValueOnce(100)
+      .mockReturnValueOnce(125);
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-observation",
+      fetch_impl: (async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: "stop",
+                message: {
+                  content: '{"queries":[]}',
+                  reasoning: "private-reasoning-must-not-be-observed",
+                },
+                reasoning_details:
+                  "private-reasoning-details-must-not-be-observed",
+              },
+            ],
+            usage: {
+              prompt_tokens: 11,
+              completion_tokens: 7,
+              total_tokens: 18,
+              prompt_tokens_details: { cached_tokens: 3 },
+              completion_tokens_details: { reasoning_tokens: 2 },
+              provider_content: "private-content-must-not-be-observed",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+      now_ms: nowMs,
+    });
+
+    const result = await observed(adapter);
+
+    expect(result).toEqual({
+      value: { queries: [] },
+      usage: {
+        input_tokens: 11,
+        output_tokens: 7,
+        total_tokens: 18,
+        cached_input_tokens: 3,
+        reasoning_tokens: 2,
+      },
+      finish_reason: "stop",
+      provider_latency_ms: 25,
+    });
+    expect(nowMs).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(result)).not.toContain(
+      "private-reasoning-must-not-be-observed",
+    );
+    expect(JSON.stringify(result)).not.toContain(
+      "private-reasoning-details-must-not-be-observed",
+    );
+    expect(JSON.stringify(result)).not.toContain(
+      "private-content-must-not-be-observed",
+    );
+    expect(JSON.stringify(result)).not.toContain("secret-not-in-observation");
+  });
+
+  it("normalizes missing or malformed successful usage metadata to null", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-observation",
+      fetch_impl: (async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{"queries":[]}' } }],
+            usage: {
+              prompt_tokens: -1,
+              completion_tokens: 3.5,
+              total_tokens: "12",
+              prompt_tokens_details: {
+                cached_tokens: Number.MAX_SAFE_INTEGER + 1,
+              },
+              completion_tokens_details: { reasoning_tokens: null },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+
+    await expect(observed(adapter)).resolves.toEqual({
+      value: { queries: [] },
+      usage: {
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        cached_input_tokens: null,
+        reasoning_tokens: null,
+      },
+      finish_reason: null,
+      provider_latency_ms: expect.any(Number),
+    });
+  });
+
+  it("normalizes entirely missing successful usage metadata to null", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-observation",
+      fetch_impl: (async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{"queries":[]}' } }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+
+    await expect(observed(adapter)).resolves.toEqual({
+      value: { queries: [] },
+      usage: {
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        cached_input_tokens: null,
+        reasoning_tokens: null,
+      },
+      finish_reason: null,
+      provider_latency_ms: expect.any(Number),
     });
   });
 
@@ -109,6 +253,13 @@ describe("OpenRouter structured generation", () => {
                 message: { content: "private generated content" },
               },
             ],
+            usage: {
+              prompt_tokens: 31,
+              completion_tokens: 13,
+              total_tokens: 44,
+              prompt_tokens_details: { cached_tokens: 7 },
+              completion_tokens_details: { reasoning_tokens: 5 },
+            },
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         )) as typeof fetch,
@@ -123,6 +274,16 @@ describe("OpenRouter structured generation", () => {
       adapter_id: "openrouter",
       finish_reason: "length",
       adapter_request_id: "gen-abcdefgh12345678",
+    });
+    expect(error.generation_observation).toEqual({
+      usage: {
+        input_tokens: 31,
+        output_tokens: 13,
+        total_tokens: 44,
+        cached_input_tokens: 7,
+        reasoning_tokens: 5,
+      },
+      provider_latency_ms: expect.any(Number),
     });
     expect(JSON.stringify(error)).not.toContain("private generated content");
   });
@@ -204,7 +365,7 @@ describe("OpenRouter structured generation", () => {
           ok: true,
           status: 200,
           headers: new Headers(),
-          json: async () => {
+          text: async () => {
             throw new DOMException("private stalled body", "TimeoutError");
           },
         }) as unknown as Response) as typeof fetch,
