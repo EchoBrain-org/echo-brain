@@ -155,7 +155,7 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
 
     expect(Object.fromEntries(counts)).toEqual({
       ask_answer: { succeeded: 1, failed: 0, skipped: 0 },
-      ask_planner: { succeeded: 1, failed: 1, skipped: 0 },
+      ask_planner: { succeeded: 0, failed: 1, skipped: 0 },
       ask_response: { succeeded: 1, failed: 0, skipped: 0 },
       ask_retrieval: { succeeded: 1, failed: 1, skipped: 0 },
       ask_validation: { succeeded: 2, failed: 0, skipped: 0 },
@@ -166,14 +166,14 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
       meeting_extraction: { succeeded: 4, failed: 0, skipped: 0 },
       meeting_record_append: { succeeded: 2, failed: 0, skipped: 2 },
       meeting_search_publication: { succeeded: 1, failed: 0, skipped: 2 },
-      meeting_source_intake: { succeeded: 4, failed: 0, skipped: 0 },
+      meeting_source_intake: { succeeded: 4, failed: 1, skipped: 0 },
       meeting_terminal_persist: { succeeded: 4, failed: 0, skipped: 0 },
     });
 
     const nonSkipped = events.filter((event) => event.event !== "skipped");
-    expect(nonSkipped.filter((event) => event.event === "failed")).toHaveLength(2);
-    expect(nonSkipped.filter((event) => event.event === "failed").length / nonSkipped.length).toBeCloseTo(2 / 39);
-    expect(counts.get("ask_planner")!.failed / (counts.get("ask_planner")!.failed + counts.get("ask_planner")!.succeeded)).toBe(0.5);
+    expect(nonSkipped.filter((event) => event.event === "failed")).toHaveLength(3);
+    expect(nonSkipped.filter((event) => event.event === "failed").length / nonSkipped.length).toBeCloseTo(3 / 39);
+    expect(counts.get("ask_planner")!.failed / (counts.get("ask_planner")!.failed + counts.get("ask_planner")!.succeeded)).toBe(1);
     expect(counts.get("ask_retrieval")!.failed / (counts.get("ask_retrieval")!.failed + counts.get("ask_retrieval")!.succeeded)).toBe(0.5);
 
     const sourceLatencies = events
@@ -325,27 +325,65 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
     }
   });
 
-  it("reconciles LLM tokens, retries, funnel outcomes, pending work, and liveness", () => {
+  it("reconciles LLM tokens, closed-attempt retry rates, funnel outcomes, pending work, and liveness", () => {
     const { asOf, records } = fixture();
     const events = journeys(records);
     const llmAttempts = closed(events).filter((event) => event.llm_usage !== null);
     const reported = llmAttempts.filter((event) => event.llm_usage?.usage_status === "reported");
-    expect(llmAttempts).toHaveLength(7);
+    expect(llmAttempts).toHaveLength(6);
     expect(reported).toHaveLength(4);
     expect(reported.reduce((total, event) => total + (event.llm_usage?.total_tokens ?? 0), 0)).toBe(105);
     expect(reported.reduce((total, event) => total + (event.llm_usage?.total_tokens ?? 0), 0) / reported.length).toBe(26.25);
-    expect(reported.length / llmAttempts.length).toBeCloseTo(4 / 7);
-    const retryStarts = events.filter(
-      (event) => event.event === "started" && event.attempt > 1,
+    expect(reported.length / llmAttempts.length).toBeCloseTo(4 / 6);
+    const askStarts = events.filter(
+      (event) => event.workflow === "ask" && event.event === "started",
     );
-    expect(retryStarts).toHaveLength(1);
-    expect(retryStarts).toMatchObject([
+    expect(askStarts.map(({ attempt, journey_id, sequence, stage }) => ({
+      attempt,
+      journey_id,
+      sequence,
+      stage,
+    }))).toEqual([
+      { attempt: 1, journey_id: "11111111-1111-4111-8111-111111111111", sequence: 1, stage: "ask_validation" },
+      { attempt: 1, journey_id: "22222222-2222-4222-8222-222222222222", sequence: 1, stage: "ask_validation" },
+    ]);
+    const askPlannerClosedAttempts = closed(events).filter(
+      (event) => event.workflow === "ask" && event.stage === "ask_planner",
+    );
+    expect(askPlannerClosedAttempts).toMatchObject([
       {
-        attempt: 2,
+        attempt: 1,
+        event: "failed",
         journey_id: "11111111-1111-4111-8111-111111111111",
-        stage: "ask_planner",
       },
     ]);
+    expect(events.filter(
+      (event) => event.workflow === "ask" && event.attempt > 1,
+    )).toEqual([]);
+    const sourceStageEvents = events.filter(
+      (event) =>
+        event.workflow === "meeting_approval" &&
+        event.journey_id === "33333333-3333-4333-8333-333333333333" &&
+        event.stage === "meeting_source_intake",
+    );
+    expect(sourceStageEvents.map(({ attempt, event, retryable }) => ({
+      attempt,
+      event,
+      retryable,
+    }))).toEqual([
+      { attempt: 1, event: "started", retryable: null },
+      { attempt: 1, event: "failed", retryable: true },
+      { attempt: 2, event: "started", retryable: null },
+      { attempt: 2, event: "succeeded", retryable: null },
+    ]);
+    const sourceClosedAttempts = sourceStageEvents.filter(
+      (event) => event.event === "succeeded" || event.event === "failed",
+    );
+    const sourceRetryAttempts = sourceClosedAttempts.filter(
+      (event) => event.attempt > 1,
+    );
+    expect(sourceRetryAttempts).toHaveLength(1);
+    expect(100 * sourceRetryAttempts.length / sourceClosedAttempts.length).toBe(50);
 
     const succeeded = closed(events).filter((event) => event.event === "succeeded");
     const funnel = (stage: string, outcome?: string) => succeeded.filter(

@@ -328,18 +328,20 @@ describe("staging journey observability overview stack", () => {
     const rates = queries.find((query) => query.includes("failure_rate_pct"));
     expect(rates).toBeDefined();
     if (rates === undefined) throw new Error("stage-rate query is required");
-    expect(rates).toContain('filter event in ["started", "succeeded", "failed"]');
+    expect(rates).toContain('filter event in ["succeeded", "failed"]');
     expect(rates).toContain('sum(if(event = "failed", 1, 0))');
-    expect(rates).toContain('sum(if(event = "started" and attempt > 1, 1, 0))');
+    expect(rates).toContain('sum(if(attempt > 1, 1, 0))');
     expect(rates).toContain("succeeded_attempts / closed_attempts");
     expect(rates).toContain("failed_attempts / closed_attempts");
-    expect(rates).toContain("retry_attempts / started_attempts");
+    expect(rates).toContain("retry_attempts / closed_attempts");
     expect(rates).toContain(
       "display workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
     );
     expect(rates).not.toContain(
       "fields workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
     );
+    expect(rates).not.toContain("started_attempts");
+    expect(rates).not.toContain('event = "started"');
     expect(rates).not.toContain("ask_response");
     expect(rates).not.toContain("meeting_terminal_persist");
   });
