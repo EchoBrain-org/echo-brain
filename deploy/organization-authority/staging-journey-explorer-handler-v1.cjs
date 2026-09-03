@@ -13,6 +13,7 @@ const MAX_OFFSET = LIST_LIMIT;
 const DETAIL_LIMIT = 2500;
 const CLEANUP_TIMEOUT_MS = 1000;
 const START_RECOVERY_TIMEOUT_MS = 1000;
+const MAX_RENDERED_BYTES = 1024 * 1024;
 const MAX_MACHINE_DURATION = 31 * 24 * HOUR;
 const MAX_ATTEMPT = 100;
 const WORKFLOWS = new Set(["ask", "meeting_approval"]);
@@ -164,6 +165,8 @@ const TIME_RANGE_KEYS = new Set([
   "relativeStart",
   "zoom",
 ]);
+const ENDPOINT_ARN =
+  /^arn:(aws|aws-us-gov|aws-cn):lambda:([a-z0-9-]+):([0-9]{12}):function:customWidget-echo-staging-journey-explorer-v1$/;
 const BASE =
   "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms";
 const LIST_QUERY =
@@ -670,12 +673,15 @@ function request(event, now) {
     "cursor",
     "journey_id",
     "widgetContext",
+    "render",
   ]);
   for (const [key, value] of Object.entries(event))
     if (!allowed.has(key) || value === null) throw error("event");
+  if (event.render !== undefined && typeof event.render !== "boolean")
+    throw error("render");
   if (event.describe === true) {
     context(event.widgetContext);
-    return { operation: "describe" };
+    return { operation: "describe", render: event.render === true };
   }
   if (event.describe !== undefined) throw error("describe");
   const operation = event.operation === undefined ? "list" : event.operation;
@@ -708,13 +714,26 @@ function request(event, now) {
       uuid(event.journey_id) === null
     )
       throw error("detail");
-    return { operation, start, end, journeyId: event.journey_id };
+    return {
+      operation,
+      start,
+      end,
+      journeyId: event.journey_id,
+      render: event.render === true,
+    };
   }
   if (event.journey_id !== undefined) throw error("list");
   const pageSize =
     event.page_size === undefined ? 20 : uint(event.page_size, 1);
   if (pageSize === null || pageSize > MAX_PAGE) throw error("page");
-  return { operation, start, end, pageSize, offset: saved ? saved.offset : 0 };
+  return {
+    operation,
+    start,
+    end,
+    pageSize,
+    offset: saved ? saved.offset : 0,
+    render: event.render === true,
+  };
 }
 function safe(errorValue) {
   return {
@@ -732,14 +751,137 @@ function safe(errorValue) {
               : "journey_explorer_unavailable",
   };
 }
+function endpoint(value) {
+  return typeof value === "string" && ENDPOINT_ARN.test(value) ? value : null;
+}
+function escapeHtml(value) {
+  return String(value).replace(
+    /[&<>"']/g,
+    (character) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        character
+      ],
+  );
+}
+function reported(value) {
+  return value === null || value === undefined
+    ? "not reported"
+    : escapeHtml(value);
+}
+function milliseconds(value) {
+  return value === null || value === undefined
+    ? "not reported"
+    : `${escapeHtml(value)} ms`;
+}
+function rendered(value) {
+  if (Buffer.byteLength(value, "utf8") > MAX_RENDERED_BYTES)
+    throw resultLimitError();
+  return value;
+}
+function action(endpointArn, label, payload) {
+  // CloudWatch requires the cwdb-action to be the immediately following
+  // sibling of the element that invokes it. Payload values here come only from
+  // validated UUIDs, bounded cursors, and parsed time/page values.
+  return `<button type="button" class="journey-action">${escapeHtml(label)}</button><cwdb-action action="call" display="widget" endpoint="${endpointArn}">${JSON.stringify(payload)}</cwdb-action>`;
+}
+function frame(title, body) {
+  return `<style>.journey-explorer{font-family:Arial,sans-serif;color:#111}.journey-explorer table{border-collapse:collapse;width:100%}.journey-explorer th,.journey-explorer td{border-bottom:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}.journey-explorer .notice{color:#555}.journey-explorer .journey-action{margin:4px 0}.journey-explorer .waterfall-track{background:#eee;border-radius:3px;height:8px;min-width:180px;overflow:hidden;position:relative}.journey-explorer .waterfall-bar{background:#0972d3;display:block;height:100%;min-width:2px;position:absolute}.journey-explorer .failure-boundary{background:#fff1f0}.journey-explorer .human-wait{border-left:4px solid #8b5cf6;padding-left:8px}</style><section class="journey-explorer"><h2>${escapeHtml(title)}</h2><p class="notice">Content-free telemetry only. Prompts, answers, meeting content, identities, and raw provider data are intentionally excluded.</p>${body}</section>`;
+}
+function renderList(data, parsed, endpointArn) {
+  const range = `<p class="notice">Selected range: ${escapeHtml(new Date(parsed.start).toISOString())} to ${escapeHtml(new Date(parsed.end).toISOString())}. Results may be partial; widen the dashboard range to find earlier or later stages.</p>`;
+  const rows = data.journeys
+    .map((item) => {
+      const status =
+        item.terminal_outcome || item.pending_outcome || "in progress";
+      return `<tr><td>${escapeHtml(item.journey_id)}</td><td>${escapeHtml(item.workflow)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(status)}</td><td>${escapeHtml(item.closed_event_count)}</td><td>${escapeHtml(item.first_observed_at)}<br>to ${escapeHtml(item.last_observed_at)}</td><td>${action(endpointArn, "View timeline", { operation: "detail", journey_id: item.journey_id, from: parsed.start, to: parsed.end, render: true })}</td></tr>`;
+    })
+    .join("");
+  const next = data.next_cursor
+    ? `<p>${action(endpointArn, "Next page", { operation: "list", cursor: data.next_cursor, page_size: parsed.pageSize, render: true })}</p>`
+    : "";
+  return frame(
+    "Staging Journey Explorer",
+    `${range}<table><thead><tr><th>Journey</th><th>Workflow</th><th>Status</th><th>Outcome</th><th>Closed events</th><th>Observed range</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No validated journeys in this selected range.</td></tr>'}</tbody></table>${next}`,
+  );
+}
+function tokenSummary(stages) {
+  const attempts = stages.filter((item) => item.llm.usage_status !== null);
+  if (attempts.length === 0)
+    return "No LLM attempts were observed in the selected range.";
+  const withTotal = attempts.filter((item) => item.llm.total_tokens !== null);
+  if (withTotal.length === 0)
+    return `Total tokens were not reported for any of ${escapeHtml(attempts.length)} observed LLM attempts.`;
+  const total = withTotal.reduce(
+    (sum, item) => sum + BigInt(item.llm.total_tokens),
+    0n,
+  );
+  return `${escapeHtml(total.toString())} total tokens across ${escapeHtml(withTotal.length)} observed LLM attempts with totals; ${escapeHtml(attempts.length - withTotal.length)} observed LLM attempts did not report a total.`;
+}
+function machineWaterfall(item, origin, span) {
+  const observed = iso(item.observed_at);
+  const started = observed - item.elapsed_ms;
+  const left = Math.max(0, Math.min(100, (100 * (started - origin)) / span));
+  const width = Math.max(
+    0,
+    Math.min(100 - left, (100 * item.elapsed_ms) / span),
+  );
+  return `<div class="waterfall-track" aria-label="${escapeHtml(`${item.elapsed_ms} ms machine latency at ${item.observed_at}`)}"><span class="waterfall-bar" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"></span></div>${milliseconds(item.elapsed_ms)}`;
+}
+function renderDetail(data, parsed, endpointArn) {
+  const range = `<p class="notice">Selected range: ${escapeHtml(new Date(parsed.start).toISOString())} to ${escapeHtml(new Date(parsed.end).toISOString())}. This timeline may be partial; widen the dashboard range to include all stages.</p>`;
+  const origin = Math.min(
+    ...data.stages.map((item) => iso(item.observed_at) - item.elapsed_ms),
+  );
+  const end = Math.max(...data.stages.map((item) => iso(item.observed_at)));
+  const span = Math.max(1, end - origin);
+  const stages = data.stages
+    .map((item) => {
+      const llm = item.llm;
+      const retrieval = item.retrieval;
+      const rowClass =
+        item.event === "failed" ? ' class="failure-boundary"' : "";
+      return `<tr${rowClass}><td>${escapeHtml(item.sequence)}</td><td>${escapeHtml(item.stage)}</td><td>${escapeHtml(item.attempt)}</td><td>${escapeHtml(item.event)}</td><td>${escapeHtml(item.observed_at)}</td><td>${machineWaterfall(item, origin, span)}</td><td>${escapeHtml(Math.max(0, item.attempt - 1))}</td><td>${escapeHtml(item.outcome || "not reported")}</td><td>${escapeHtml(item.failure_class || "not reported")}</td><td>provider: ${reported(llm.provider)}<br>model: ${reported(llm.model)}<br>usage: ${reported(llm.usage_status)}<br>finish: ${reported(llm.finish_reason)}<br>provider latency: ${milliseconds(llm.provider_latency_ms)}<br>input tokens: ${reported(llm.input_tokens)}<br>output tokens: ${reported(llm.output_tokens)}<br>total tokens: ${reported(llm.total_tokens)}<br>cached input tokens: ${reported(llm.cached_input_tokens)}<br>reasoning tokens: ${reported(llm.reasoning_tokens)}</td><td>planned queries: ${reported(retrieval.planned_query_count)}<br>query hits: ${reported(retrieval.query_hit_count)}<br>released atoms: ${reported(retrieval.released_atom_count)}<br>context atoms: ${reported(retrieval.context_atom_count)}<br>citations: ${reported(retrieval.citation_count)}</td></tr>`;
+    })
+    .join("");
+  const workflows = [...new Set(data.stages.map((item) => item.workflow))];
+  const summary = `<dl><dt>Journey</dt><dd>${escapeHtml(data.journey_id)}</dd><dt>Workflow observed</dt><dd>${workflows.length === 0 ? "not reported" : workflows.map(escapeHtml).join(", ")}</dd><dt>Status</dt><dd>${escapeHtml(data.status)}</dd><dt>Outcome</dt><dd>${escapeHtml(data.terminal_outcome || "not reported")}</dd><dt>Failure class</dt><dd>${escapeHtml(data.terminal_failure_class || "not reported")}</dd><dt>Full wall-clock</dt><dd>${milliseconds(data.full_wall_clock_ms)}</dd><dt>Service wall-clock</dt><dd>${milliseconds(data.service_wall_clock_ms)}</dd></dl>`;
+  const tokens = `<p><strong>LLM token total:</strong> ${tokenSummary(data.stages)}</p>`;
+  const humanWait = `<p class="human-wait"><strong>Human approval wait:</strong> ${milliseconds(data.human_wait_ms)}. This business interval is separate from the machine-stage bars and excluded from service wall-clock.</p>`;
+  const back = action(endpointArn, "Back to recent runs", {
+    operation: "list",
+    from: parsed.start,
+    to: parsed.end,
+    render: true,
+  });
+  return frame(
+    "Journey timeline",
+    `${range}${summary}${tokens}${humanWait}<p>${back}</p><p class="notice">The machine waterfall positions each event from its validated observed time and sizes its bar from elapsed_ms. Human wait and inter-stage gaps remain empty space; human wait is never drawn as machine work.</p><table><thead><tr><th>Sequence</th><th>Stage</th><th>Attempt</th><th>Event</th><th>Observed</th><th>Machine waterfall</th><th>Prior retries</th><th>Outcome</th><th>Failure boundary</th><th>LLM</th><th>Retrieval</th></tr></thead><tbody>${stages}</tbody></table>`,
+  );
+}
+function renderError(code) {
+  const message =
+    {
+      invalid_request: "The requested explorer action was not valid.",
+      query_timeout: "The telemetry query timed out. Try a narrower range.",
+      result_limit_exceeded:
+        "The selected range returned too many events. Narrow the range.",
+      journey_not_found:
+        "No validated journey was found in the selected range.",
+      journey_explorer_unavailable:
+        "The Journey Explorer is temporarily unavailable.",
+    }[code] || "The Journey Explorer is temporarily unavailable.";
+  return frame("Staging Journey Explorer", `<p>${message}</p>`);
+}
 function createStagingJourneyExplorerHandlerV1(options) {
+  const endpointArn = options && endpoint(options.endpointArn);
   if (
     !options ||
     !options.logsClient ||
     typeof options.logsClient.send !== "function" ||
-    options.logGroupName !== LOG_GROUP
+    options.logGroupName !== LOG_GROUP ||
+    endpointArn === null
   )
-    throw new TypeError("exact staging Logs client configuration is required");
+    throw new TypeError("exact staging explorer configuration is required");
   const commands = options.commands || sdk(),
     now = typeof options.now === "function" ? options.now : () => Date.now(),
     clock =
@@ -877,13 +1019,18 @@ function createStagingJourneyExplorerHandlerV1(options) {
     }
   }
   return async (event) => {
+    const wantsRender =
+      event &&
+      typeof event === "object" &&
+      !Array.isArray(event) &&
+      event.render === true;
     try {
       const current = now(),
         parsed = request(event, current);
       if (parsed.operation === "describe")
         return {
           markdown:
-            "# Staging Journey Explorer\n\nRead-only staging telemetry. Select a dashboard time range, list journeys, then request a canonical UUID detail timeline.",
+            "# Staging Journey Explorer\n\nRead-only staging telemetry. Select a dashboard time range, list journeys, then request a canonical UUID detail timeline.\n\n## Parameters\n\n```yaml\noperation: list # list or detail\nrender: true # render the safe interactive view\npage_size: 20 # list only, 1-25\njourney_id: 00000000-0000-4000-8000-000000000000 # detail only\nfrom: 2026-09-02T00:00:00.000Z # optional bounded range\nto: 2026-09-02T08:00:00.000Z # optional bounded range\ncursor: opaque-cursor # list pagination only\n```",
         };
       if (parsed.operation === "list") {
         const results = await run(
@@ -899,7 +1046,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
             parsed.offset + parsed.pageSize,
           ),
           next = parsed.offset + journeys.length;
-        return {
+        const data = {
           journeys,
           next_cursor:
             next < items.length
@@ -911,6 +1058,9 @@ function createStagingJourneyExplorerHandlerV1(options) {
                 })
               : null,
         };
+        return parsed.render
+          ? rendered(renderList(data, parsed, endpointArn))
+          : data;
       }
       const results = await run(
         detailQuery(parsed.journeyId),
@@ -922,9 +1072,12 @@ function createStagingJourneyExplorerHandlerV1(options) {
       const detail = timeline(results, parsed.journeyId);
       if (detail.stages.length === 0) throw notFoundError();
       if (!detail.history_complete) throw incompleteHistoryError();
-      return detail;
+      return parsed.render
+        ? rendered(renderDetail(detail, parsed, endpointArn))
+        : detail;
     } catch (caught) {
-      return safe(caught);
+      const output = safe(caught);
+      return wantsRender ? renderError(output.error) : output;
     }
   };
 }
@@ -950,6 +1103,7 @@ exports.handler = async (event) => {
       commands: client,
       logGroupName: process.env.STAGING_JOURNEY_LOG_GROUP_NAME_V1,
       queryDeadlineMs,
+      endpointArn: process.env.STAGING_JOURNEY_EXPLORER_ENDPOINT_ARN_V1,
     });
   }
   return cached(event);

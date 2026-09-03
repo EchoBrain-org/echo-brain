@@ -11,7 +11,7 @@ const mod = require(
 ) as {
   createStagingJourneyExplorerHandlerV1(
     options: Record<string, unknown>,
-  ): (event: unknown) => Promise<Record<string, unknown>>;
+  ): (event: unknown) => Promise<Record<string, unknown> | string>;
 };
 class Start {
   public constructor(public readonly input: Record<string, unknown>) {}
@@ -28,6 +28,8 @@ const commands = {
   StopQueryCommand: Stop,
 };
 const group = "/echo-brain/authority/authority-staging.echobrain.org";
+const endpoint =
+  "arn:aws:lambda:us-west-2:012345678901:function:customWidget-echo-staging-journey-explorer-v1";
 const now = Date.parse("2026-09-02T12:00:00.000Z");
 const id = "11111111-1111-4111-8111-111111111111";
 function row(
@@ -89,6 +91,7 @@ function handler(client: Client, more: Record<string, unknown> = {}) {
     logsClient: client,
     commands,
     logGroupName: group,
+    endpointArn: endpoint,
     now: () => now,
     monotonicNow: () => 0,
     pause: async () => undefined,
@@ -163,6 +166,7 @@ describe("staging Journey Explorer custom widget", () => {
         expect.objectContaining({ journey_id: id, status: "complete" }),
       ],
     });
+    if (typeof result === "string") throw new Error("expected raw list data");
     expect(result.next_cursor).toEqual(expect.any(String));
     const start = client.sent[0] as Start;
     expect(start.input).toMatchObject({
@@ -298,6 +302,7 @@ describe("staging Journey Explorer custom widget", () => {
         expect.objectContaining({ sequence: 4 }),
       ],
     });
+    if (typeof result === "string") throw new Error("expected raw detail data");
     expect(JSON.stringify(result)).not.toContain("never");
     expect(JSON.stringify(result)).not.toContain("attacker");
     expect(
@@ -762,5 +767,307 @@ describe("staging Journey Explorer custom widget", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("renders only on strict render:true and places exact trusted custom-widget actions immediately after buttons", async () => {
+    const secondId = "22222222-2222-4222-8222-222222222222";
+    const client = new Client([
+      { queryId: "q" },
+      {
+        status: "Complete",
+        results: [
+          event({ secret: "<script>never</script>" }),
+          event({
+            journey_id: secondId,
+            observed_at: "2026-09-02T11:58:00.000Z",
+          }),
+        ],
+      },
+    ]);
+    const html = await handler(client)({
+      operation: "list",
+      page_size: 1,
+      render: true,
+      widgetContext: widgetContext(now - 60_000, now),
+    });
+    expect(typeof html).toBe("string");
+    expect(html).toContain("Results may be partial");
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toMatch(/\son[a-z]+=/i);
+    expect(html).not.toContain("href=");
+    expect(html).not.toContain("never");
+    const actions = [
+      ...String(html).matchAll(
+        /<button[^>]*>([^<]+)<\/button><cwdb-action action="call" display="widget" endpoint="([^"]+)">(.*?)<\/cwdb-action>/g,
+      ),
+    ];
+    expect(actions).toHaveLength(2);
+    for (const [, , actionEndpoint, payload] of actions) {
+      expect(actionEndpoint).toBe(endpoint);
+      expect(() => JSON.parse(payload)).not.toThrow();
+    }
+    expect(actions.map((item) => item[1])).toEqual([
+      "View timeline",
+      "Next page",
+    ]);
+    const view = JSON.parse(actions[0]![3]!);
+    expect(view).toEqual({
+      operation: "detail",
+      journey_id: id,
+      from: now - 60_000,
+      to: now,
+      render: true,
+    });
+    const next = JSON.parse(actions[1]![3]!);
+    expect(next).toMatchObject({
+      operation: "list",
+      page_size: 1,
+      render: true,
+      cursor: expect.any(String),
+    });
+
+    const renderedError = await handler(new Client([]))({
+      operation: "list",
+      render: true,
+      endpointArn: "attacker-controlled",
+    });
+    expect(renderedError).toContain("not valid");
+    expect(renderedError).not.toContain("attacker");
+    await expect(
+      handler(new Client([]))({ operation: "list", render: "true" }),
+    ).resolves.toEqual({ error: "invalid_request" });
+  });
+
+  it("renders paginated list and timeline from the same validated results with safe retry, latency, and token semantics", async () => {
+    const secondId = "22222222-2222-4222-8222-222222222222";
+    const firstPage = new Client([
+      { queryId: "q" },
+      {
+        status: "Complete",
+        results: [
+          event(),
+          event({
+            journey_id: secondId,
+            observed_at: "2026-09-02T11:58:00.000Z",
+          }),
+        ],
+      },
+    ]);
+    const pageOne = String(
+      await handler(firstPage)({
+        operation: "list",
+        page_size: 1,
+        render: true,
+      }),
+    );
+    const nextPayload = JSON.parse(
+      pageOne.match(
+        /Next page<\/button><cwdb-action[^>]*>(.*?)<\/cwdb-action>/,
+      )![1]!,
+    );
+    const secondPage = new Client([
+      { queryId: "q-next" },
+      {
+        status: "Complete",
+        results: [
+          event(),
+          event({
+            journey_id: secondId,
+            observed_at: "2026-09-02T11:58:00.000Z",
+          }),
+        ],
+      },
+    ]);
+    const pageTwo = String(await handler(secondPage)(nextPayload));
+    expect(pageTwo).toContain(secondId);
+    expect(pageTwo).not.toContain("Next page</button>");
+
+    const detailClient = new Client([
+      { queryId: "detail" },
+      {
+        status: "Complete",
+        results: [
+          event({
+            sequence: 1,
+            stage: "ask_validation",
+            event: "started",
+            outcome: null,
+            elapsed_ms: 0,
+            observed_at: "2026-09-02T11:58:00.000Z",
+          }),
+          event({
+            sequence: 2,
+            stage: "ask_answer",
+            outcome: null,
+            attempt: 3,
+            elapsed_ms: 0,
+            llm_provider: "openrouter",
+            llm_model: "anthropic/claude-sonnet-4.6",
+            llm_usage_status: "reported",
+            llm_provider_latency_ms: 0,
+            llm_input_tokens: 0,
+            llm_output_tokens: 0,
+            llm_total_tokens: 0,
+            llm_finish_reason: "completed",
+            observed_at: "2026-09-02T11:58:01.000Z",
+          }),
+          event({
+            sequence: 3,
+            stage: "ask_planner",
+            event: "succeeded",
+            outcome: null,
+            attempt: 2,
+            elapsed_ms: 1,
+            llm_provider: "openrouter",
+            llm_model: "anthropic/claude-sonnet-4.6",
+            llm_usage_status: "unavailable",
+            llm_provider_latency_ms: 1,
+            llm_finish_reason: "unknown",
+            observed_at: "2026-09-02T11:58:01.500Z",
+          }),
+          event({
+            sequence: 4,
+            event: "failed",
+            outcome: null,
+            retryable: false,
+            failure_class: "timeout",
+            elapsed_ms: 4,
+            observed_at: "2026-09-02T11:58:02.000Z",
+          }),
+        ],
+      },
+    ]);
+    const detail = String(
+      await handler(detailClient)({
+        operation: "detail",
+        journey_id: id,
+        render: true,
+      }),
+    );
+    expect(detail).toContain("<dd>complete</dd>");
+    expect(detail).toContain("<dd>failed</dd>");
+    expect(detail).toContain("<dd>timeout</dd>");
+    expect(detail).toContain("0 ms");
+    expect(detail).toContain('class="waterfall-track"');
+    expect(detail).toContain(
+      'class="waterfall-bar" style="left:0.000%;width:0.000%"',
+    );
+    expect(detail).toContain(
+      'class="waterfall-bar" style="left:99.800%;width:0.200%"',
+    );
+    expect(detail).toContain('class="failure-boundary"');
+    expect(detail).toContain(
+      "LLM token total:</strong> 0 total tokens across 1 observed LLM attempts with totals; 1 observed LLM attempts did not report a total.",
+    );
+    expect(detail).toContain(
+      "Human approval wait:</strong> not reported. This business interval is separate from the machine-stage bars",
+    );
+    expect(detail).toContain("total tokens: 0");
+    expect(detail).toContain("usage: unavailable");
+    expect(detail).toContain("total tokens: not reported");
+    expect(detail).toContain("cached input tokens: not reported");
+    expect(detail).toContain(">2</td><td>not reported</td>");
+    expect(detail).toMatch(
+      /Back to recent runs<\/button><cwdb-action action="call" display="widget" endpoint="arn:aws:lambda:us-west-2:012345678901:function:customWidget-echo-staging-journey-explorer-v1">(.*?)<\/cwdb-action>/,
+    );
+    const back = JSON.parse(
+      detail.match(
+        /Back to recent runs<\/button><cwdb-action[^>]*>(.*?)<\/cwdb-action>/,
+      )![1]!,
+    );
+    expect(back).toMatchObject({ operation: "list", render: true });
+  });
+
+  it("renders approval human wait separately and never folds it into a machine bar", async () => {
+    const meeting = (
+      values: Record<string, string | number | boolean | null>,
+    ) => event({ workflow: "meeting_approval", outcome: null, ...values });
+    const client = new Client([
+      { queryId: "meeting-detail" },
+      {
+        status: "Complete",
+        results: [
+          meeting({
+            sequence: 1,
+            stage: "meeting_source_intake",
+            event: "started",
+            elapsed_ms: 0,
+            observed_at: "2026-09-02T10:00:00.000Z",
+          }),
+          meeting({
+            sequence: 2,
+            stage: "meeting_approval_action_verify",
+            event: "succeeded",
+            elapsed_ms: 10,
+            queue_age_ms: 300_000,
+            observed_at: "2026-09-02T10:05:00.000Z",
+          }),
+          meeting({
+            sequence: 3,
+            stage: "meeting_search_publication",
+            event: "succeeded",
+            outcome: "published",
+            elapsed_ms: 30,
+            observed_at: "2026-09-02T10:05:00.050Z",
+          }),
+        ],
+      },
+    ]);
+
+    const html = String(
+      await handler(client)({
+        operation: "detail",
+        journey_id: id,
+        render: true,
+      }),
+    );
+    expect(html).toContain("Human approval wait:</strong> 300000 ms");
+    expect(html).toContain("Full wall-clock</dt><dd>300050 ms");
+    expect(html).toContain("Service wall-clock</dt><dd>50 ms");
+    expect(html).toContain("human wait is never drawn as machine work");
+    expect(html).not.toContain('aria-label="300000 ms machine latency"');
+    expect(html).toContain(
+      'class="waterfall-bar" style="left:99.980%;width:0.003%"',
+    );
+  });
+
+  it("fails closed instead of returning an oversized rendered timeline", async () => {
+    const client = new Client([
+      { queryId: "large-detail" },
+      {
+        status: "Complete",
+        results: Array.from({ length: 2_000 }, (_, index) =>
+          event({ sequence: index + 1 }),
+        ),
+      },
+    ]);
+
+    const html = String(
+      await handler(client)({
+        operation: "detail",
+        journey_id: id,
+        render: true,
+      }),
+    );
+    expect(html).toContain("selected range returned too many events");
+    expect(html).not.toContain(id);
+  });
+
+  it("requires a canonical factory endpoint and never accepts one from a request", async () => {
+    expect(() =>
+      mod.createStagingJourneyExplorerHandlerV1({
+        logsClient: new Client([]),
+        commands,
+        logGroupName: group,
+        endpointArn: "arn:aws:lambda:us-west-2:012345678901:function:other",
+      }),
+    ).toThrow("exact staging explorer configuration");
+    await expect(
+      handler(new Client([]))({
+        operation: "list",
+        endpointArn: endpoint,
+      }),
+    ).resolves.toEqual({ error: "invalid_request" });
   });
 });

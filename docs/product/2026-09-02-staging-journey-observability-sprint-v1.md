@@ -25,9 +25,10 @@ initial aggregate dashboard. A thin, operator-only Journey Explorer may query
 CloudWatch for a run-level waterfall; it does not create a second telemetry
 ingestion path or place application-managed AWS credentials in widget code. A
 Lambda-backed CloudWatch custom widget is an acceptable first Explorer surface
-if it meets the same read-only and privacy boundary. Its signed-in console
-operator uses an IAM Identity Center session to invoke only the exact Lambda;
-the widget receives no direct CloudWatch Logs permission.
+if it meets the same read-only and privacy boundary. The widget's added IAM
+policy permits only invocation of the exact Lambda; the effective Identity
+Center permission set is reviewed separately, and the widget receives no direct
+CloudWatch Logs permission.
 
 The event contract is deliberately portable. A later production rollout may
 reuse its event names, correlation rules, dashboard definitions, and Explorer
@@ -168,11 +169,11 @@ is a positive integer; neither field accepts an arbitrary caller string.
 
 The Journey Explorer is operator-only and read-only. It contains no
 application-managed or end-user AWS credential and has no direct CloudWatch
-Logs access. The signed-in console operator's Identity Center session
-authorizes only the Lambda invocation. Query parameters, returned fields, and
-errors follow the same allowlist and redaction rules as emitted events. No
-telemetry surface may perform approval, retry, replay, mutation, or release
-actions.
+Logs access. The companion policy grants only exact-Lambda invocation; Phase 6
+must separately review the effective staging-only Identity Center permission
+set for broader access. Query parameters, returned fields, and errors follow
+the same allowlist and redaction rules as emitted events. No telemetry surface
+may perform approval, retry, replay, mutation, or release actions.
 
 Metric dimensions remain low cardinality: for example `workflow`, `stage`,
 `outcome`, provider, model family, and environment. `journey_id`, request
@@ -344,8 +345,10 @@ aborts the SDK request, waits up to one additional second for a valid late
 query ID, and, if one arrives in that window, awaits one separately bounded
 `StopQuery` attempt before returning. Without an ID the remote outcome is
 unknown; no cleanup is launched after the Lambda response.
-It creates a separate invoke-only customer managed policy for the exact Lambda
-function. That policy is intentionally unattached: `AWSReservedSSO` roles are
+It creates the fixed `customWidget-echo-staging-journey-explorer-v1` Lambda and
+the separate, invoke-only `echo-staging-journey-explorer-invoke-v1` customer
+managed policy at path `/` for that exact function. That policy is intentionally
+unattached: `AWSReservedSSO` roles are
 Identity Center-protected, so Phase 6 must reference the customer managed
 policy from an approved Identity Center permission set before the widget is
 added or tested. The inline staging Lambda uses the Node runtime-provided AWS
@@ -365,19 +368,53 @@ live retrieval evidence are Phase 6 exit work.
 
 ### Phase 6 - Journey Explorer UI and rehearsal
 
-Create the operator UI: recent Ask and approval runs, safe outcome summary,
-waterfall by stage and attempt, LLM token totals, retries, retrieval counts,
-human-wait segment, and clearly redacted failure boundary. Rehearse one Ask
-and one approval against staging and record the evidence that dashboard totals
-and run detail agree. This is the first AWS live staging rehearsal for the
-journey overview; it is explicitly deferred from Phase 4.
+Locally implemented and locally tested, not deployed: the Phase 6 custom-widget
+renderer is embedded in the Phase 4 staging overview dashboard. It gives the
+operator a recent Ask/approval list and selected-run detail with safe outcome
+summary, chronological stage-and-attempt waterfall, LLM token totals, retries,
+retrieval counts, redacted failure classification, machine-latency bars
+positioned by validated observation time and sized by `elapsed_ms`, and a
+separately labelled human-wait interval shown as an empty gap rather than
+machine work. A reported numeric token value of `0` remains
+zero; an unavailable value remains `null` and is never converted to zero.
 
-**PR boundary:** UI/custom widget, operator documentation, and staging
-rehearsal evidence only.
+The dashboard endpoint is static, not operator supplied:
+`arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:customWidget-echo-staging-journey-explorer-v1`.
+The dashboard widget is intended for an authorized, signed-in IAM Identity
+Center console operator. Effective access is established only after a reviewed,
+dedicated staging-only permission set references
+`echo-staging-journey-explorer-invoke-v1` at path `/`. That managed policy
+grants only exact-Lambda invocation; the effective permission set must be
+reviewed separately for broader access. The widget has no direct CloudWatch
+Logs permission, public dashboard sharing, function URL, API Gateway,
+application-managed credential, end-user credential, or production target.
 
-**Exit:** an operator can perform either golden journey and use the UI to find
-every underlying stage, latency, token value or `null`, retry, and terminal
-outcome.
+The UI preserves the backend's fail-closed boundary: its selected range is
+bounded by the retained 14-day staging log window; fixed list and detail queries
+fail with `result_limit_exceeded` at the 2,500-event cap rather than returning
+partial data; unknown or noncanonical events are rejected; and a bounded
+renderer response fails with safe fixed error markup rather than exposing raw
+events or truncating a waterfall. It displays only the content-free allowlisted
+projection: correlation and schema provenance, timing, nullable token usage,
+retrieval/retry counts, and failure metadata. It never displays prompts,
+answers, meeting material, raw log messages, provider payloads, or stack traces.
+
+**Live work still pending:** inspect staging-only change sets, deploy the
+Explorer backend before the overview, reference the managed policy from the
+dedicated staging-only permission set, explicitly trust the custom widget in
+the CloudWatch console, and rehearse one Ask plus one approval. Record only
+content-free evidence that the overview aggregates and the selected Explorer
+details reconcile. This is the first AWS live staging rehearsal for the journey
+overview; it remains explicitly deferred from Phase 4.
+
+**PR boundary:** local UI/custom widget and operator documentation. No AWS
+deployment, permission-set assignment, widget trust, live query, live
+rehearsal evidence, sprint exit, or production work is claimed in this phase.
+
+**Exit (pending):** an authorized staging operator can perform either golden
+journey and use the UI to find every underlying stage, machine latency, token
+value or `null`, retry, human wait, and terminal outcome; the recorded Ask and
+approval evidence reconciles with the overview without exposing content.
 
 ## Sprint exit
 

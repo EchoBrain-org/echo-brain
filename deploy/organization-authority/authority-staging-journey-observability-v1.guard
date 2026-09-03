@@ -116,3 +116,8 @@ rule dashboard_is_owned_by_this_stack_and_has_a_literal_body {
     Resources.StagingJourneyOverviewDashboard.Properties.DashboardName == { "Fn::Sub": "${AWS::StackName}-overview" }
     Resources.StagingJourneyOverviewDashboard.Properties.DashboardBody.'Fn::Sub' exists
 }
+
+rule dashboard_includes_only_the_static_staging_journey_explorer_entrypoint {
+    Resources.StagingJourneyOverviewDashboard.Properties.DashboardBody.'Fn::Sub' == /.*"type":"custom","x":0,"y":42,"width":24,"height":18,"properties":\{"endpoint":"arn:\$\{AWS::Partition\}:lambda:\$\{AWS::Region\}:\$\{AWS::AccountId\}:function:customWidget-echo-staging-journey-explorer-v1","title":"Staging Journey Explorer","updateOn":\{"refresh":true,"resize":false,"timeRange":true\},"params":\{"operation":"list","render":true,"page_size":20\}\}\}\]\}$/
+    Resources.StagingJourneyOverviewDashboard.Properties.DashboardBody.'Fn::Sub' != /.*"type":"custom".*"type":"custom".*/
+}

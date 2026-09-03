@@ -38,7 +38,7 @@ for the change-set review, deployment, notification rehearsal, controlled
 outage, and recovery checks. This intentionally creates one small observable
 loop, not a dashboard or tracing platform.
 
-### Staging journey overview and Explorer - separate stacks, not deployed
+### Staging journey overview and Explorer - separate stacks, locally implemented and not deployed
 
 The journey overview is implemented locally as the separate Phase 4
 staging-only stack `authority-staging-journey-observability-v1.template.json`.
@@ -59,49 +59,73 @@ dashboard layout, quick-detection thresholds, and Explorer operational boundary
 are in
 [RB-OPERATIONS-001](../../docs/operations/RB-OPERATIONS-001-authority-observability.md#staging-journey-overview-design---phase-4-not-yet-deployed).
 
-Phase 5 also locally implements the separate
-`authority-staging-journey-explorer-v1.template.json` backend for a CloudWatch
-custom widget. It is not a deployment instruction or live-proof claim. The
-inline Node Lambda exposes only direct custom-widget `describe`, bounded
-recent-journey `list`, and UUID-scoped `detail` operations. Its fixed Logs
-Insights query shapes select only the exact staging Authority log group and
-filter `environment=staging`; callers cannot supply a query, query ID, source,
-raw message, prompt, answer, or other content. List defaults to eight hours,
-never exceeds the 14-day retained-log range, and returns at most 25 journeys
-per page. Its pending summary retains the latest approved or superseded
-milestone even when a later event is non-terminal.
-Detail accepts only a canonical lowercase UUID and always queries the bounded
-14-day retained history, rather than the dashboard's selected list range. It
-returns only an allowlisted redacted projection of latency, nullable tokens,
-retrieval metadata, retry/failure metadata, and full/service/human-wait timing.
-It requires the canonical sequence-one `ask_validation` or
-`meeting_source_intake` started event; otherwise it returns the content-free
+Phases 5 and 6 locally implement the separate
+`authority-staging-journey-explorer-v1.template.json` backend and its
+CloudWatch custom-widget renderer. It is not a deployment instruction or
+live-proof claim. The stack creates the fixed
+`customWidget-echo-staging-journey-explorer-v1` Lambda and the fixed
+`echo-staging-journey-explorer-invoke-v1` invoke-only customer managed policy
+at path `/`. The inline Node Lambda exposes only direct custom-widget
+`describe`, bounded recent-journey `list`, UUID-scoped `detail`, and the
+strictly rendered operator surface. Its fixed Logs Insights query shapes select
+only the exact staging Authority log group and filter `environment=staging`;
+callers cannot supply a query, query ID, source, raw message, prompt, answer,
+or other content. List defaults to eight hours, never exceeds the 14-day
+retained-log range, and returns at most 25 journeys per page. Its pending
+summary retains the latest approved or superseded milestone even when a later
+event is non-terminal. Detail accepts only a canonical lowercase UUID and
+always queries the bounded 14-day retained history rather than the dashboard's
+selected list range. It requires the canonical sequence-one `ask_validation`
+or `meeting_source_intake` started event; otherwise it returns the content-free
 `journey_history_incomplete` error instead of claiming a clipped timeline or
-wall-clock. Both fixed queries return the bounded `result_limit_exceeded` error
-instead of silently omitting data if their 2,500-record cap is reached.
+wall-clock. The response is an allowlisted redacted projection of latency,
+nullable tokens, retrieval metadata, retry/failure metadata, and
+full/service/human-wait timing. The UI positions each machine-stage bar from
+its validated observation time and sizes it from `elapsed_ms`; human wait is a
+separately labelled empty gap, never machine work. Numeric token zero remains
+zero; unavailable token usage remains `null`. Both fixed queries fail with
+`result_limit_exceeded` at their 2,500-record cap. Unknown/noncanonical detail
+events and an oversized renderer response fail closed instead of yielding
+partial or raw data.
 
 There is no public endpoint, API Gateway, function URL, application-managed or
 end-user AWS credential, or direct widget access to CloudWatch Logs. The
-signed-in console operator's Identity Center session authorizes only the
-Lambda invocation. The Lambda role can start and read query results only on the
-exact source log group's two AWS-documented IAM ARN forms (with and without
-the trailing `:*`) and write only to its own retained function logs.
-`StopQuery` remains scoped to `*` because it consumes an opaque query ID; the
-handler never accepts a caller-supplied ID and can only obtain one from its
-exact-source `StartQuery`. Cancellation is bounded and best-effort. If
-`StartQuery` times out, the handler aborts the SDK request, waits up to one
+signed-in console operator invokes the Lambda through the companion
+exact-function policy; the effective Identity Center permission set must be
+separately reviewed for broader access. The Lambda role can start and read
+query results only on the exact source log group's two AWS-documented IAM ARN
+forms (with and without the trailing `:*`) and write only its own retained
+function logs. `StopQuery` alone is scoped to `*` because it consumes an opaque
+query ID; the handler never accepts a caller-supplied ID and obtains one only
+from its exact-source `StartQuery`. Cancellation is bounded and best-effort.
+If `StartQuery` times out, the handler aborts the SDK request, waits up to one
 additional second for a valid late query ID, and, when one arrives in that
 window, awaits one separately bounded `StopQuery` attempt before returning.
 Without an ID the remote outcome is unknown, and the handler launches no
-post-response cleanup that Lambda could freeze. The companion
+post-response cleanup that Lambda could freeze. The
 invoke-only customer managed policy is deliberately unattached because
-`AWSReservedSSO` roles are Identity Center-protected. Phase 6 must attach the
-policy by referencing it from an approved Identity Center permission set before
-adding or testing the widget. The staging inline Lambda uses the Node
+`AWSReservedSSO` roles are Identity Center-protected. It must be referenced
+from a dedicated staging-only Identity Center permission set rather than
+attached to a reserved role. The Phase 6 overview widget uses the static
+endpoint
+`arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:customWidget-echo-staging-journey-explorer-v1`;
+its intended audience is an authorized, signed-in Identity Center console
+operator after the reviewed staging-only assignment, with no direct Logs
+permission or public sharing. The staging inline Lambda uses the Node
 runtime-provided AWS SDK v3; production bundling and portability remain a
-separate review. No AWS deployment, live query, staging rehearsal, or
-production work is claimed here; Phase 6 owns the UI plus staging deployment
-and rehearsal.
+separate review.
+
+Before any live work, create and inspect staging-only change sets with
+`--profile echo-prod`; do not use `aws login`, root credentials, SSH, or a
+shared or production permission set. Deploy the Explorer backend first using
+`CAPABILITY_NAMED_IAM`, then inspect and deploy the overview that references
+its fixed Lambda endpoint. Only after the backend policy exists may the
+authorized operator add it by customer-managed-policy reference to the
+dedicated staging-only permission set. Explicitly trust the widget in the
+CloudWatch console, keep the dashboard unshared, and rehearse one real staging
+Ask plus one staging approval. No AWS deployment, live query, permission-set
+assignment, widget trust, rehearsal evidence, sprint exit, or production work
+is claimed here.
 
 The confidential OIDC client must allow
 `https://<authority-host>/v2/session/oidc/callback`. Create one private input
