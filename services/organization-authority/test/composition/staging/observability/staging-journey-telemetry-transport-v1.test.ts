@@ -161,7 +161,16 @@ describe("staging journey telemetry transport v1", () => {
 
     transport.observer(event);
 
-    expect(lines).toEqual([`${canonicalJson(event)}\n`]);
+    expect(lines[0]).toBe(`${canonicalJson(event)}\n`);
+    expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({
+      StageSucceeded: 1,
+      StageClosedLatencyMs: 1,
+      workflow: "ask",
+      stage: "ask_validation",
+    });
+    expect(lines.join("\n")).not.toContain(
+      STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
+    );
   });
 
   it("fails open without starting telemetry for an invalid deploy identity", () => {
