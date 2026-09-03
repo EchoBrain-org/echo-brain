@@ -314,6 +314,18 @@ export function createAskJourneyTelemetryFactoryV1(input: {
         }
       }
 
+      // The journey boundary is explicit but does not close validation. The
+      // route's validation success or failure follows as sequence two.
+      try {
+        journey?.emit({
+          stage: "ask_validation",
+          event: "started",
+          elapsed_ms: 0,
+        });
+      } catch {
+        // The shared emitter is fail-open; this guard protects foreign mocks.
+      }
+
       const recorder: AskJourneyTelemetryRecorderV1 = {
         journey_id: journey?.journey_id ?? null,
         startTimer: safeNow,

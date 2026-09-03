@@ -340,10 +340,11 @@ describe("Person answer route", () => {
         answer: "Tuesday, owned by the product team.",
       });
 
-      await vi.waitFor(() => expect(telemetry).toHaveLength(9));
+      await vi.waitFor(() => expect(telemetry).toHaveLength(10));
       expect(model.generate).not.toHaveBeenCalled();
       expect(model.generate_with_observation).toHaveBeenCalledTimes(2);
       expect(telemetry.map((event) => event.stage)).toEqual([
+        "ask_validation",
         "ask_validation",
         "ask_planner",
         "ask_authorization",
@@ -355,8 +356,19 @@ describe("Person answer route", () => {
         "ask_response",
       ]);
       expect(telemetry.map((event) => event.sequence)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
       ]);
+      expect(telemetry[0]).toMatchObject({
+        stage: "ask_validation",
+        event: "started",
+        sequence: 1,
+        elapsed_ms: 0,
+      });
+      expect(telemetry[1]).toMatchObject({
+        stage: "ask_validation",
+        event: "succeeded",
+        sequence: 2,
+      });
       expect(
         telemetry.every(
           (event) =>
@@ -500,8 +512,9 @@ describe("Person answer route", () => {
         message: "answer composition is unavailable",
       });
 
-      await vi.waitFor(() => expect(telemetry).toHaveLength(9));
+      await vi.waitFor(() => expect(telemetry).toHaveLength(10));
       expect(telemetry.map(({ stage, event }) => [stage, event])).toEqual([
+        ["ask_validation", "started"],
         ["ask_validation", "succeeded"],
         ["ask_planner", "failed"],
         ["ask_authorization", "skipped"],
@@ -512,7 +525,7 @@ describe("Person answer route", () => {
         ["ask_audit", "skipped"],
         ["ask_response", "failed"],
       ]);
-      expect(telemetry[1]).toMatchObject({
+      expect(telemetry[2]).toMatchObject({
         failure_class: "provider_rejected",
         retryable: false,
         llm_usage: {
@@ -562,7 +575,7 @@ describe("Person answer route", () => {
         }),
       ).rejects.toMatchObject({ code: "unavailable" });
 
-      await vi.waitFor(() => expect(telemetry).toHaveLength(9));
+      await vi.waitFor(() => expect(telemetry).toHaveLength(10));
       expect(
         telemetry.find((event) => event.stage === "ask_authorization"),
       ).toMatchObject({ event: "succeeded" });
@@ -608,7 +621,7 @@ describe("Person answer route", () => {
         }),
       ).rejects.toMatchObject({ code: "unavailable" });
 
-      await vi.waitFor(() => expect(telemetry).toHaveLength(9));
+      await vi.waitFor(() => expect(telemetry).toHaveLength(10));
       expect(
         telemetry.find((event) => event.stage === "ask_answer"),
       ).toMatchObject({ event: "succeeded" });

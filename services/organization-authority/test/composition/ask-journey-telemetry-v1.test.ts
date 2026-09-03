@@ -43,8 +43,14 @@ describe("Ask journey telemetry", () => {
     });
     recorder.complete("answered", recorder.startTimer());
 
-    await vi.waitFor(() => expect(events).toHaveLength(9));
+    await vi.waitFor(() => expect(events).toHaveLength(10));
     expect(events[0]).toMatchObject({
+      stage: "ask_validation",
+      event: "started",
+      sequence: 1,
+      elapsed_ms: 0,
+    });
+    expect(events[1]).toMatchObject({
       stage: "ask_planner",
       event: "succeeded",
       llm_usage: {
@@ -61,7 +67,7 @@ describe("Ask journey telemetry", () => {
       },
     });
     expect(events.map((event) => event.sequence)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
     ]);
   });
 
