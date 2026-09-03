@@ -90,11 +90,23 @@ function fixture() {
     join(root, "docs/components/test.md"),
     [
       common("CMP-TEST", "component"),
+      "playbook_ids:",
+      "  - PB-TEST-001",
       "qualification_ids:",
       "  - QMAT-TEST-001",
       "  - QUAL-20260813-120000-001",
       "---",
       "# Test component",
+      "",
+    ].join("\n"),
+  );
+  write(
+    join(root, "docs/operations/PB-TEST-001.md"),
+    [
+      common("PB-TEST-001", "playbook"),
+      "tested_at: null",
+      "---",
+      "# Test playbook",
       "",
     ].join("\n"),
   );
@@ -149,6 +161,7 @@ function fixture() {
   for (const path of [
     "docs/components/README.md",
     "docs/components/test.md",
+    "docs/operations/PB-TEST-001.md",
     "docs/qualification/evidence-index.md",
     "docs/qualification/matrix.md",
     "docs/qualification/QUAL-20260813-120000-001.md",
@@ -377,6 +390,24 @@ describe("documentation validator", () => {
     );
     expect(validate(root)).toContain(
       "qualification_ids has stale backlink QUAL-20260813-120000-001; QUAL-20260813-120000-001 does not reference CMP-TEST",
+    );
+  });
+  it("requires component reverse backlinks for playbooks", () => {
+    const { root } = fixture();
+    edit(root, "docs/components/test.md", (source) =>
+      source.replace("playbook_ids:\n  - PB-TEST-001\n", ""),
+    );
+    expect(validate(root)).toContain(
+      "CMP-TEST is missing playbook_ids backlink PB-TEST-001",
+    );
+  });
+  it("rejects stale component playbook backlinks", () => {
+    const { root } = fixture();
+    edit(root, "docs/operations/PB-TEST-001.md", (source) =>
+      source.replace("component_ids:\n  - CMP-TEST", "component_ids: []"),
+    );
+    expect(validate(root)).toContain(
+      "playbook_ids has stale backlink PB-TEST-001; PB-TEST-001 does not reference CMP-TEST",
     );
   });
   it("requires superseded decision status when superseded_by is nonempty", () => {

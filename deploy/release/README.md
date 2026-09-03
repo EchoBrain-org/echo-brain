@@ -167,14 +167,18 @@ advertise `org.echobrain.authority.state-capability.staging-synthetic-meeting-ca
 before the candidate can create synthetic canary state, so the rollback image
 can read that state if recovery is needed.
 
-Approve the resulting private card. Then use the packaged Person client to
-search for that exact release ID and ask one cited question before making the
-existing human promotion confirmation explicit:
+On the designated canary Mac, build and install the candidate release's
+verified offline bundle using
+[Advanced client-only install or reinstall](#advanced-client-only-install-or-reinstall).
+Its default installer exposes the exact candidate binary at
+`$HOME/.local/bin/echo-brain`. Approve the resulting private card, then use
+that binary to search for the exact release ID and ask one cited question
+before making the human promotion confirmation explicit:
 
 ```sh
 ./update-clean-v1.sh canary
-echo-brain person records --query '<candidate-release-id> private owner approval delivery'
-echo-brain person ask --question 'What did we decide for synthetic staging release <candidate-release-id>?'
+"$HOME/.local/bin/echo-brain" person records --query '<candidate-release-id> private owner approval delivery'
+"$HOME/.local/bin/echo-brain" person ask --question 'What did we decide for synthetic staging release <candidate-release-id>?'
 ./update-clean-v1.sh promote --release /absolute/private/candidate-release.json --canary-passed
 ```
 

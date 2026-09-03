@@ -177,6 +177,10 @@ does not enable meeting ingestion by itself.
 
 ### AWS staging slot
 
+Coding agents select the lane from
+[PB-OPERATIONS-001](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
+before any staging, onboarding, or deploy command.
+
 The staging controller holds one fixed Cloudflare edge and retained EBS data
 volume around a disposable EC2 host. Its initial host onboarding and three
 retained-state host-replacement cycles have passed qualification; this does not

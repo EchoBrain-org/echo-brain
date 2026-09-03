@@ -66,6 +66,7 @@ const RELATIONS = new Map([
   ["invariant_ids", new Set(["invariant"])],
   ["decision_ids", new Set(["decision"])],
   ["failure_pattern_ids", new Set(["failure-pattern"])],
+  ["playbook_ids", new Set(["playbook"])],
   ["runbook_ids", new Set(["runbook"])],
   ["qualification_ids", new Set(["qualification", "qualification-matrix"])],
 ]);
@@ -74,6 +75,7 @@ const COMPONENT_BACKLINK_FIELDS = new Map([
   ["invariant", "invariant_ids"],
   ["decision", "decision_ids"],
   ["failure-pattern", "failure_pattern_ids"],
+  ["playbook", "playbook_ids"],
   ["runbook", "runbook_ids"],
   ["qualification", "qualification_ids"],
   ["qualification-matrix", "qualification_ids"],

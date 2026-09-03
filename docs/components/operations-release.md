@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-27
-reviewed_ref: f0d2f95214246501bfcca59b156a30105fce947d
+reviewed_at: 2026-09-02
+reviewed_ref: ec0ab8a10326d232c0e3805b5090691660788fce
 decision_ids:
   - ADR-0004
   - ADR-0006
@@ -27,6 +27,8 @@ runbook_ids:
   - RB-OPERATIONS-001
   - RB-OPERATIONS-002
   - RB-OPERATIONS-003
+playbook_ids:
+  - PB-OPERATIONS-001
 qualification_ids:
   - QMAT-JOB-A-STOPPED-001
   - QUAL-20260813-174902-001
@@ -73,6 +75,7 @@ identity no longer matches.
 ## Current references
 
 - [Operations records](../operations/README.md)
+- [Authority operator-lane playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md)
 - [Minimal Authority observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md)
 - [Authority root-volume recovery-floor runbook](../operations/RB-OPERATIONS-002-authority-recovery-floor.md)
 - [Canonical source and immutable release runbook](../operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md)

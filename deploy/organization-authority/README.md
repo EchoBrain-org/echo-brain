@@ -1,5 +1,10 @@
 # Organization Authority deployment
 
+Coding agents follow
+[PB-OPERATIONS-001](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
+before local exercise, staging, onboarding, or deploy. Do not add a
+tool-specific procedure.
+
 This is the deployable Organization Authority. Its current `clean-v1`
 compatibility profile uses a new `clean-data/` directory, never imports
 previous Authority state, and uses both EC2 Compose profiles automatically.
