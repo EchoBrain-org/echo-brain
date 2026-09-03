@@ -490,17 +490,28 @@ describe("staging Journey Explorer custom widget", () => {
       handler(serviceTimeout)({ operation: "list" }),
     ).resolves.toEqual({ error: "query_timeout" });
     let clock = 0;
-    const slow = new Client([{ queryId: "slow" }, { status: "Running" }, {}]);
+    const pauses: number[] = [];
+    const slow = new Client([
+      { queryId: "slow" },
+      { status: "Running" },
+      { status: "Running" },
+      { status: "Running" },
+      { status: "Running" },
+      { status: "Running" },
+      {},
+    ]);
     await expect(
       handler(slow, {
-        monotonicNow: () => {
-          clock += 1_000;
-          return clock;
+        monotonicNow: () => clock,
+        pause: async (durationMs: number) => {
+          pauses.push(durationMs);
+          clock += durationMs;
         },
-        queryDeadlineMs: 1_000,
+        queryDeadlineMs: 1_100,
       })({ operation: "list" }),
     ).resolves.toEqual({ error: "query_timeout" });
-    expect(slow.sent[1]).toBeInstanceOf(Stop);
+    expect(pauses).toEqual([250, 250, 250, 250, 100]);
+    expect(slow.sent.at(-1)).toBeInstanceOf(Stop);
     const pollingError = Object.assign(new Error("private poll failure"), {
       code: "RESULT_LIMIT",
     });
@@ -556,6 +567,67 @@ describe("staging Journey Explorer custom widget", () => {
       expect((stalled.sendOptions[2] as { abortSignal?: AbortSignal }).abortSignal).toBe(
         stopSignal,
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds an abort-ignoring poll and cancels the query as timed out", async () => {
+    vi.useFakeTimers();
+    try {
+      let getSignal: AbortSignal | undefined;
+      const stalled = new Client([
+        { queryId: "stalled-poll" },
+        (_command: unknown, options: unknown) => {
+          getSignal = (options as { abortSignal?: AbortSignal }).abortSignal;
+          return new Promise(() => undefined);
+        },
+        {},
+      ]);
+      const result = handler(stalled)({ operation: "list" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stalled.sent).toHaveLength(2);
+      expect(stalled.sent[1]).toBeInstanceOf(Get);
+      expect(getSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(12_000);
+      await expect(result).resolves.toEqual({ error: "query_timeout" });
+      expect(getSignal?.aborted).toBe(true);
+      expect((stalled.sendOptions[1] as { abortSignal?: AbortSignal }).abortSignal).toBe(
+        getSignal,
+      );
+      expect(stalled.sent[2]).toBeInstanceOf(Stop);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds an abort-ignoring StartQuery to the remaining budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const clockSamples = [0, 950];
+      let startSignal: AbortSignal | undefined;
+      const stalled = new Client([
+        (_command: unknown, options: unknown) => {
+          startSignal = (options as { abortSignal?: AbortSignal }).abortSignal;
+          return new Promise(() => undefined);
+        },
+      ]);
+      const result = handler(stalled, {
+        monotonicNow: () => clockSamples.shift() ?? 950,
+        queryDeadlineMs: 1_000,
+      })({ operation: "list" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stalled.sent).toHaveLength(1);
+      expect(stalled.sent[0]).toBeInstanceOf(Start);
+      expect(startSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(startSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toEqual({ error: "query_timeout" });
+      expect(startSignal?.aborted).toBe(true);
+      expect(stalled.sent).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

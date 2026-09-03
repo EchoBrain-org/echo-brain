@@ -748,15 +748,46 @@ function createStagingJourneyExplorerHandlerV1(options) {
     pause =
       typeof options.pause === "function"
         ? options.pause
-        : () => new Promise((resolve) => setTimeout(resolve, 250)),
+        : (durationMs) =>
+            new Promise((resolve) => setTimeout(resolve, durationMs)),
     deadlineMs =
       Number.isSafeInteger(options.queryDeadlineMs) &&
       options.queryDeadlineMs >= 1000 &&
       options.queryDeadlineMs <= 12000
         ? options.queryDeadlineMs
         : 12000;
+  async function sendBounded(command, timeoutMs, timeoutError) {
+    const abortController = new AbortController();
+    let timer;
+    const request = Promise.resolve().then(() =>
+      options.logsClient.send(command, { abortSignal: abortController.signal }),
+    );
+    const settled = request.then(
+      (value) => ({ ok: true, value }),
+      (failure) => ({ ok: false, failure }),
+    );
+    try {
+      const outcome = await Promise.race([
+        settled,
+        new Promise((resolve) => {
+          timer = setTimeout(() => {
+            abortController.abort();
+            resolve(null);
+          }, timeoutMs);
+        }),
+      ]);
+      if (outcome === null) throw timeoutError();
+      if (!outcome.ok) throw outcome.failure;
+      return outcome.value;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   async function run(queryString, start, end, limit) {
-    const started = await options.logsClient.send(
+    const deadline = clock() + deadlineMs;
+    const startRemaining = deadline - clock();
+    if (startRemaining <= 0) throw queryTimeoutError();
+    const started = await sendBounded(
       new commands.StartQueryCommand({
         logGroupName: LOG_GROUP,
         startTime: Math.floor(start / 1000),
@@ -764,6 +795,8 @@ function createStagingJourneyExplorerHandlerV1(options) {
         queryString,
         limit,
       }),
+      startRemaining,
+      queryTimeoutError,
     );
     if (
       !started ||
@@ -774,10 +807,13 @@ function createStagingJourneyExplorerHandlerV1(options) {
       throw new Error("query id");
     const queryId = started.queryId;
     try {
-      const deadline = clock() + deadlineMs;
-      for (let polls = 0; polls < 50 && clock() < deadline; polls += 1) {
-        const result = await options.logsClient.send(
+      for (let polls = 0; polls < 50; polls += 1) {
+        const remaining = deadline - clock();
+        if (remaining <= 0) throw queryTimeoutError();
+        const result = await sendBounded(
           new commands.GetQueryResultsCommand({ queryId }),
+          remaining,
+          queryTimeoutError,
         );
         if (result && result.status === "Complete")
           return Array.isArray(result.results) ? result.results : [];
@@ -787,28 +823,20 @@ function createStagingJourneyExplorerHandlerV1(options) {
           ["Failed", "Cancelled", "Unknown"].includes(result.status)
         )
           throw new Error("query");
-        await pause();
+        const pauseRemaining = deadline - clock();
+        if (pauseRemaining <= 0) throw queryTimeoutError();
+        await pause(Math.min(250, pauseRemaining));
       }
       throw queryTimeoutError();
     } catch (caught) {
-      const abortController = new AbortController();
-      let cleanupTimer;
       try {
-        await Promise.race([
-          options.logsClient.send(new commands.StopQueryCommand({ queryId }), {
-            abortSignal: abortController.signal,
-          }),
-          new Promise((resolve) => {
-            cleanupTimer = setTimeout(() => {
-              abortController.abort();
-              resolve();
-            }, CLEANUP_TIMEOUT_MS);
-          }),
-        ]);
+        await sendBounded(
+          new commands.StopQueryCommand({ queryId }),
+          CLEANUP_TIMEOUT_MS,
+          () => new Error("cleanup timed out"),
+        );
       } catch {
         // Best-effort cleanup must not replace the original query failure.
-      } finally {
-        clearTimeout(cleanupTimer);
       }
       throw caught;
     }
