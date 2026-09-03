@@ -305,13 +305,19 @@ success, meeting search `current` or `published`, meeting rejection or denial,
 and non-retryable failure as journey-terminal boundaries.
 
 End-to-end timing is a Logs Insights derivation over one correlated journey.
-Full journey wall-clock is terminal `observed_at` minus the first observed
-journey time and therefore includes approval wait. Service wall-clock subtracts
-the one measured `queue_age_ms` approval interval; Ask subtracts zero. Neither
-measure sums stage durations, so retries and inter-stage gaps remain visible.
-The query includes only journeys with a recognized terminal success or
-non-retryable failure, exposes the included count, and keeps incomplete
-journeys out of p50/p95/p99 calculations.
+The dashboard uses the supported
+[`parseDate(fieldName, format [, timezone])`](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax-operations-functions.html)
+function to convert the canonical ISO-UTC `observed_at` value to milliseconds.
+It requires that the selected dashboard range contains the canonical journey
+start (`event = started` and `sequence = 1`) as well as a recognized terminal
+success or non-retryable failure. A range that cuts off the start is excluded
+from both wall-clock and completed-journey token totals, rather than reporting
+a shortened journey. Full journey wall-clock is terminal `observed_at` minus
+that canonical start and therefore includes approval wait. Service wall-clock
+subtracts the one measured `queue_age_ms` approval interval only after the
+query proves it cannot go negative; a contradictory partial or malformed
+journey is excluded rather than clamped. Ask subtracts zero. Neither measure
+sums stage durations, so retries and inter-stage gaps remain visible.
 
 Human wait is intentionally different: it is the `queue_age_ms` from approval
 card staging to verified human action. It appears as a separately labelled

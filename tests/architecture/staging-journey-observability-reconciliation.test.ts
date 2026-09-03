@@ -29,6 +29,7 @@ interface JourneyEvent {
   readonly outcome: string | null;
   readonly queue_age_ms: number | null;
   readonly retryable: boolean | null;
+  readonly sequence: number;
   readonly stage: string;
   readonly workflow: "ask" | "meeting_approval";
 }
@@ -94,6 +95,12 @@ function journeyEndEvent(events: readonly JourneyEvent[]): JourneyEvent | undefi
       (left, right) =>
         Date.parse(right.observed_at) - Date.parse(left.observed_at),
     )[0];
+}
+
+function canonicalJourneyStartEvent(
+  events: readonly JourneyEvent[],
+): JourneyEvent | undefined {
+  return events.find((event) => event.event === "started" && event.sequence === 1);
 }
 
 function percentile(values: readonly number[], percent: number): number {
@@ -183,13 +190,10 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
     const endToEnd = new Map<string, number>();
     const serviceEndToEnd = new Map<string, number>();
     for (const [journeyId, events] of grouped) {
-      const start = events
-        .filter((event) => event.event === "started")
-        .map((event) => Date.parse(event.observed_at))
-        .sort((left, right) => left - right)[0];
+      const start = canonicalJourneyStartEvent(events);
       const end = journeyEndEvent(events);
       if (start !== undefined && end !== undefined) {
-        const wallClock = Date.parse(end.observed_at) - start;
+        const wallClock = Date.parse(end.observed_at) - Date.parse(start.observed_at);
         const humanWait = Math.max(
           0,
           ...events.map((event) => event.queue_age_ms ?? 0),
@@ -275,6 +279,50 @@ describe("staging journey observability Phase 4 reconciliation fixture", () => {
       ask: { p50: 9, p95: 55, p99: 55 },
       meeting_approval: { p50: 25, p95: 50, p99: 50 },
     });
+  });
+
+  it("excludes a selected-range fragment without the canonical start from wall-clock and token totals", () => {
+    const approvalJourney = byJourney(journeys(fixture().records)).get(
+      "33333333-3333-4333-8333-333333333333",
+    )!;
+    const tokenBearingFragment = approvalJourney.filter(
+      (event) => Date.parse(event.observed_at) >= Date.parse("2026-09-02T02:00:00.010Z"),
+    );
+    const lateFragment = approvalJourney.filter(
+      (event) => Date.parse(event.observed_at) >= Date.parse("2026-09-02T02:10:00.020Z"),
+    );
+
+    expect(journeyEndEvent(tokenBearingFragment)).toMatchObject({
+      outcome: "published",
+      stage: "meeting_search_publication",
+    });
+    expect(
+      tokenBearingFragment.reduce(
+        (total, event) => total + (event.llm_usage?.total_tokens ?? 0),
+        0,
+      ),
+    ).toBe(15);
+    expect(canonicalJourneyStartEvent(tokenBearingFragment)).toBeUndefined();
+    expect(canonicalJourneyStartEvent(lateFragment)).toBeUndefined();
+
+    const legacyFirst = lateFragment
+      .map((event) => Date.parse(event.observed_at))
+      .sort((left, right) => left - right)[0]!;
+    const legacyEnd = Date.parse(journeyEndEvent(lateFragment)!.observed_at);
+    const humanWait = Math.max(0, ...lateFragment.map((event) => event.queue_age_ms ?? 0));
+    expect(legacyEnd - legacyFirst - humanWait).toBe(-599_970);
+
+    for (const fragment of [tokenBearingFragment, lateFragment]) {
+      const canonicalStart = canonicalJourneyStartEvent(fragment);
+      const terminal = journeyEndEvent(fragment);
+      const eligible =
+        canonicalStart !== undefined &&
+        terminal !== undefined &&
+        Date.parse(terminal.observed_at) >= Date.parse(canonicalStart.observed_at) &&
+        Date.parse(terminal.observed_at) - Date.parse(canonicalStart.observed_at) >=
+          Math.max(0, ...fragment.map((event) => event.queue_age_ms ?? 0));
+      expect(eligible).toBe(false);
+    }
   });
 
   it("reconciles LLM tokens, retries, funnel outcomes, pending work, and liveness", () => {

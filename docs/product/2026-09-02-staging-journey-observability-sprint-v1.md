@@ -260,10 +260,14 @@ attempt,
 usage coverage, retries, worker heartbeat,
 approved-work-stuck count, and the meeting funnel. True end-to-end latency is
 derived in Logs Insights from a correlated journey's canonical `observed_at`
-values, never by summing stage durations. Full approval wall-clock includes
-human wait; a second service wall-clock subtracts the separately labelled
-`queue_age_ms` interval so it never enters service-latency or availability
-calculations.
+values, using its supported `parseDate` datetime function, never by summing
+stage durations. The aggregate views require the canonical start event
+(`started`, sequence `1`) and a recognized terminal event in the selected
+time range. A partial range is excluded from both wall-clock and
+completed-journey token totals. Full approval wall-clock includes human wait;
+a second service wall-clock subtracts the separately labelled `queue_age_ms`
+interval only when that result is non-negative, so it never enters
+service-latency or availability calculations as a clamped partial value.
 
 **PR boundary:** staging-only telemetry metric emission, dashboard/query/IaC
 definitions, and dashboard reconciliation tests or documented fixture proof.
