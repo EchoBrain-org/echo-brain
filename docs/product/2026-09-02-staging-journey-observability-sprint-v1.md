@@ -309,13 +309,19 @@ Gateway, browser CloudWatch access, user-supplied Logs Insights query,
 staging Authority source log group. Its default lookback is eight hours, its
 maximum lookback is 14 days (the retained-log bound), and a page contains at
 most 25 journeys. `detail` accepts only a canonical lowercase UUID journey ID
-and uses a second fixed query shape. Both operations return a bounded
+and uses a second fixed query shape over the bounded 14-day retained history,
+not the selected list range. It requires the canonical sequence-one
+`ask_validation` or `meeting_source_intake` started event and otherwise returns
+the content-free `journey_history_incomplete` error rather than reporting a
+clipped timeline or wall-clock. Both operations return a bounded
 `result_limit_exceeded` error rather than silently omitting a journey or
 returning partial detail when the 2,500-record result cap is saturated. All
 workflow, stage, event, outcome, failure-class, provider, model, finish-reason,
 and usage-status values are finite contract allowlists; arbitrary strings are
 rejected. Both query shapes require `environment=staging` and return only the
 redacted event fields needed for operation diagnosis.
+For pending meeting summaries, the latest approved or superseded milestone is
+retained independently of a later non-terminal event.
 
 The detail projection carries schema/release provenance, sequence and attempt,
 machine-stage latency, provider latency, nullable token usage, retrieval
@@ -326,9 +332,11 @@ business interval rather than service latency. A non-retryable failed stage is
 a terminal failure; approved and superseded are not by themselves terminal
 journey results.
 
-The dedicated stack grants the Lambda execution role only `StartQuery` and
-`GetQueryResults` on the exact source log group, `StopQuery` where AWS requires
-an unscoped resource, and writes only to its own retained function log group.
+The dedicated stack grants the Lambda execution role `StartQuery` only on the
+exact source log group and writes only to its own retained function log group.
+AWS requires `GetQueryResults` and `StopQuery` to use an unscoped resource
+because they consume an opaque query ID, but the handler never accepts a
+caller-supplied ID and obtains one only from its exact-source `StartQuery`.
 It creates a separate invoke-only customer managed policy for the exact Lambda
 function. That policy is intentionally unattached: `AWSReservedSSO` roles are
 Identity Center-protected, so Phase 6 must reference the customer managed

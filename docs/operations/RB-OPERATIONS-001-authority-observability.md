@@ -368,13 +368,19 @@ The handler accepts only three fixed operations:
 1. `describe` returns safe widget metadata.
 2. `list` runs a fixed query for recent redacted journeys. The default time
    range is eight hours, the maximum is the 14-day retained-log boundary, and
-   a page has at most 25 journeys.
+   a page has at most 25 journeys. Its pending summary retains the latest
+   approved or superseded milestone even when a later event is non-terminal.
 3. `detail` accepts one canonical lowercase UUID journey ID and runs a fixed
-   correlated-event query.
+   correlated-event query over the bounded 14-day retained history, not the
+   dashboard's selected list range. It requires the canonical sequence-one
+   `ask_validation` or `meeting_source_intake` started event; otherwise it
+   returns `journey_history_incomplete` and does not report a clipped timeline
+   or wall-clock.
 
 Both queries have a 2,500-record cap and return `result_limit_exceeded` if it
 is saturated instead of silently omitting a journey or showing a partial
-waterfall. Narrow the dashboard time range before retrying that safe error.
+waterfall. Narrow the dashboard time range before retrying that safe error for
+`list`; a `detail` request already uses the full bounded retained history.
 
 The client cannot supply Logs Insights text, a query ID, `SOURCE`, a raw log
 message, prompt, answer, source content, or other event content. Every query

@@ -68,18 +68,26 @@ Insights query shapes select only the exact staging Authority log group and
 filter `environment=staging`; callers cannot supply a query, query ID, source,
 raw message, prompt, answer, or other content. List defaults to eight hours,
 never exceeds the 14-day retained-log range, and returns at most 25 journeys
-per page.
-Detail accepts only a canonical lowercase UUID, returns only an allowlisted
-redacted projection of latency, nullable tokens, retrieval metadata,
-retry/failure metadata, and full/service/human-wait timing. Both fixed queries
-return the bounded `result_limit_exceeded` error instead of silently omitting
-data if their 2,500-record cap is reached.
+per page. Its pending summary retains the latest approved or superseded
+milestone even when a later event is non-terminal.
+Detail accepts only a canonical lowercase UUID and always queries the bounded
+14-day retained history, rather than the dashboard's selected list range. It
+returns only an allowlisted redacted projection of latency, nullable tokens,
+retrieval metadata, retry/failure metadata, and full/service/human-wait timing.
+It requires the canonical sequence-one `ask_validation` or
+`meeting_source_intake` started event; otherwise it returns the content-free
+`journey_history_incomplete` error instead of claiming a clipped timeline or
+wall-clock. Both fixed queries return the bounded `result_limit_exceeded` error
+instead of silently omitting data if their 2,500-record cap is reached.
 
 There is no public endpoint, API Gateway, function URL, application-managed or
 end-user AWS credential, or direct widget access to CloudWatch Logs. The
 signed-in console operator's Identity Center session authorizes only the
-Lambda invocation. The Lambda role can query only the exact source log group
-and write only its own retained function logs. The companion
+Lambda invocation. The Lambda role can start a query only on the exact source
+log group and write only its own retained function logs. AWS scopes
+`GetQueryResults` and `StopQuery` to `*` because each consumes an opaque query
+ID; the handler never accepts a caller-supplied ID and can only obtain one from
+its exact-source `StartQuery`. The companion
 invoke-only customer managed policy is deliberately unattached because
 `AWSReservedSSO` roles are Identity Center-protected. Phase 6 must attach the
 policy by referencing it from an approved Identity Center permission set before

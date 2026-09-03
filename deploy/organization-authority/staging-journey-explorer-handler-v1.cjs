@@ -109,6 +109,10 @@ const STAGES_BY_WORKFLOW = {
     "meeting_search_publication",
   ]),
 };
+const CANONICAL_START_BY_WORKFLOW = {
+  ask: "ask_validation",
+  meeting_approval: "meeting_source_intake",
+};
 const OUTCOMES_BY_STAGE = {
   ask_response: new Set([
     "answered",
@@ -202,6 +206,11 @@ function queryTimeoutError() {
 function notFoundError() {
   const value = new Error("journey not found");
   value.code = "NOT_FOUND";
+  return value;
+}
+function incompleteHistoryError() {
+  const value = new Error("journey history is incomplete");
+  value.code = "INCOMPLETE_HISTORY";
   return value;
 }
 function uint(value, min = 0, max = Number.MAX_SAFE_INTEGER) {
@@ -480,6 +489,7 @@ function summarize(rows) {
       closed_event_count: 0,
       terminal: null,
       pending_outcome: null,
+      pending_outcome_at: null,
     };
     if (item.observed_ms < current.first) {
       current.first = item.observed_ms;
@@ -489,8 +499,14 @@ function summarize(rows) {
       current.last = item.observed_ms;
       current.last_observed_at = item.observed_at;
       current.workflow = item.workflow;
-      if (item.outcome === "approved" || item.outcome === "superseded")
-        current.pending_outcome = item.outcome;
+    }
+    if (
+      (item.outcome === "approved" || item.outcome === "superseded") &&
+      (current.pending_outcome_at === null ||
+        item.observed_ms >= current.pending_outcome_at)
+    ) {
+      current.pending_outcome = item.outcome;
+      current.pending_outcome_at = item.observed_ms;
     }
     if (item.event !== "started") current.closed_event_count += 1;
     const done = terminal(item);
@@ -535,6 +551,12 @@ function timeline(rows, id) {
           : earliest,
       null,
     ),
+    canonicalStart =
+      first !== null &&
+      first.stage === CANONICAL_START_BY_WORKFLOW[first.workflow] &&
+      first.event === "started" &&
+      first.sequence === 1 &&
+      first.attempt === 1,
     final = stages.reduce(
       (latest, item) =>
         terminal(item) !== null &&
@@ -545,16 +567,20 @@ function timeline(rows, id) {
     ),
     complete = final ? terminal(final) : null,
     full =
-      !first || !final ? null : iso(final.observed_at) - iso(first.observed_at),
+      !canonicalStart || !final
+        ? null
+        : iso(final.observed_at) - iso(first.observed_at),
     waitValues = stages
       .map((item) => item.queue_age_ms)
       .filter((value) => value !== null),
     wait = waitValues.length === 0 ? null : Math.max(...waitValues);
   return {
     journey_id: id,
-    status: final ? "complete" : "pending",
-    terminal_outcome: complete ? complete.outcome : null,
-    terminal_failure_class: complete ? complete.failure_class : null,
+    history_complete: canonicalStart,
+    status: !canonicalStart ? "incomplete" : final ? "complete" : "pending",
+    terminal_outcome: canonicalStart && complete ? complete.outcome : null,
+    terminal_failure_class:
+      canonicalStart && complete ? complete.failure_class : null,
     full_wall_clock_ms: full,
     service_wall_clock_ms:
       full === null ? null : Math.max(0, full - (wait === null ? 0 : wait)),
@@ -699,6 +725,8 @@ function safe(errorValue) {
             ? "result_limit_exceeded"
             : errorValue && errorValue.code === "NOT_FOUND"
               ? "journey_not_found"
+              : errorValue && errorValue.code === "INCOMPLETE_HISTORY"
+                ? "journey_history_incomplete"
               : "journey_explorer_unavailable",
   };
 }
@@ -764,7 +792,8 @@ function createStagingJourneyExplorerHandlerV1(options) {
   }
   return async (event) => {
     try {
-      const parsed = request(event, now());
+      const current = now(),
+        parsed = request(event, current);
       if (parsed.operation === "describe")
         return {
           markdown:
@@ -799,13 +828,14 @@ function createStagingJourneyExplorerHandlerV1(options) {
       }
       const results = await run(
         detailQuery(parsed.journeyId),
-        parsed.start,
-        parsed.end,
+        Math.max(0, current - MAX_RANGE),
+        current,
         DETAIL_LIMIT,
       );
       if (results.length >= DETAIL_LIMIT) throw resultLimitError();
       const detail = timeline(results, parsed.journeyId);
       if (detail.stages.length === 0) throw notFoundError();
+      if (!detail.history_complete) throw incompleteHistoryError();
       return detail;
     } catch (caught) {
       return safe(caught);

@@ -352,6 +352,15 @@ describe("staging Journey Explorer custom widget", () => {
         status: "Complete",
         results: [
           event({
+            sequence: 1,
+            stage: "ask_validation",
+            event: "started",
+            outcome: null,
+            elapsed_ms: 0,
+            observed_at: "2026-09-02T11:58:59.000Z",
+          }),
+          event({
+            sequence: 2,
             event: "failed",
             retryable: false,
             failure_class: "unavailable",
@@ -372,6 +381,13 @@ describe("staging Journey Explorer custom widget", () => {
       {
         status: "Complete",
         results: [
+          event({
+            workflow: "meeting_approval",
+            stage: "meeting_record_append",
+            event: "succeeded",
+            outcome: null,
+            observed_at: "2026-09-02T11:59:02.000Z",
+          }),
           event({
             workflow: "meeting_approval",
             stage: "meeting_terminal_persist",
@@ -396,6 +412,36 @@ describe("staging Journey Explorer custom widget", () => {
           terminal_outcome: null,
         }),
       ],
+    });
+  });
+
+  it("queries retained history for detail and rejects a time-clipped journey without its canonical start", async () => {
+    const client = new Client([
+      { queryId: "q" },
+      {
+        status: "Complete",
+        results: [
+          event({
+            sequence: 2,
+            observed_at: "2026-09-02T11:59:00.000Z",
+          }),
+        ],
+      },
+    ]);
+    await expect(
+      handler(client)({
+        operation: "detail",
+        journey_id: id,
+        from: now - 60_000,
+        to: now,
+      }),
+    ).resolves.toEqual({ error: "journey_history_incomplete" });
+    const start = client.sent[0] as Start;
+    expect(start.input).toMatchObject({
+      logGroupName: group,
+      startTime: Math.floor((now - 14 * 24 * 60 * 60 * 1_000) / 1_000),
+      endTime: Math.ceil(now / 1_000),
+      limit: 2500,
     });
   });
 
