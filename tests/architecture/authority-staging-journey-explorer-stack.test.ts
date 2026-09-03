@@ -88,7 +88,7 @@ describe("staging Journey Explorer backend stack", () => {
     });
   });
 
-  it("grants the execution role only exact-source query start, query lookup/cancellation, and own-log writes", () => {
+  it("grants the execution role only exact-source query access, query cancellation, and own-log writes", () => {
     const role = resource(template(), "JourneyExplorerExecutionRole");
     expect(role.Properties?.AssumeRolePolicyDocument).toEqual({
       Version: "2012-10-17",
@@ -117,19 +117,13 @@ describe("staging Journey Explorer backend stack", () => {
         },
       },
       {
-        Sid: "StartQueryExactStagingJourneyLogGroup",
+        Sid: "QueryExactStagingJourneyLogGroup",
         Effect: "Allow",
-        Action: "logs:StartQuery",
+        Action: ["logs:StartQuery", "logs:GetQueryResults"],
         Resource: {
           "Fn::Sub":
             "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${StagingLogGroupName}",
         },
-      },
-      {
-        Sid: "ReadOwnStartedLogsInsightsQuery",
-        Effect: "Allow",
-        Action: "logs:GetQueryResults",
-        Resource: "*",
       },
       {
         Sid: "CancelTimedOutLogsInsightsQuery",
@@ -142,7 +136,7 @@ describe("staging Journey Explorer backend stack", () => {
     expect(serialized).not.toMatch(
       /logs:(?:Unmask|GetLogRecord|FilterLogEvents|DescribeLogGroups|PutQueryDefinition)/,
     );
-    expect(serialized.match(/"Resource":"\*"/g)).toHaveLength(2);
+    expect(serialized.match(/"Resource":"\*"/g)).toHaveLength(1);
   });
 
   it("deploys the exact reviewed source as one bounded, non-public custom-widget Lambda", () => {

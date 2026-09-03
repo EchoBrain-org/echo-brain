@@ -332,11 +332,11 @@ business interval rather than service latency. A non-retryable failed stage is
 a terminal failure; approved and superseded are not by themselves terminal
 journey results.
 
-The dedicated stack grants the Lambda execution role `StartQuery` only on the
-exact source log group and writes only to its own retained function log group.
-AWS requires `GetQueryResults` and `StopQuery` to use an unscoped resource
-because they consume an opaque query ID, but the handler never accepts a
-caller-supplied ID and obtains one only from its exact-source `StartQuery`.
+The dedicated stack grants the Lambda execution role `StartQuery` and
+`GetQueryResults` only on the exact source log group and writes only to its own
+retained function log group. `StopQuery` alone uses an unscoped resource because
+it consumes an opaque query ID; the handler never accepts a caller-supplied ID
+and obtains one only from its exact-source `StartQuery`.
 It creates a separate invoke-only customer managed policy for the exact Lambda
 function. That policy is intentionally unattached: `AWSReservedSSO` roles are
 Identity Center-protected, so Phase 6 must reference the customer managed

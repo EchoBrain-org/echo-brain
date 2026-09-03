@@ -97,16 +97,10 @@ rule exact_read_only_execution_role {
                         "Resource": { "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${JourneyExplorerFunctionLogGroup}:*" }
                     },
                     {
-                        "Sid": "StartQueryExactStagingJourneyLogGroup",
+                        "Sid": "QueryExactStagingJourneyLogGroup",
                         "Effect": "Allow",
-                        "Action": "logs:StartQuery",
+                        "Action": [ "logs:StartQuery", "logs:GetQueryResults" ],
                         "Resource": { "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${StagingLogGroupName}" }
-                    },
-                    {
-                        "Sid": "ReadOwnStartedLogsInsightsQuery",
-                        "Effect": "Allow",
-                        "Action": "logs:GetQueryResults",
-                        "Resource": "*"
                     },
                     {
                         "Sid": "CancelTimedOutLogsInsightsQuery",
