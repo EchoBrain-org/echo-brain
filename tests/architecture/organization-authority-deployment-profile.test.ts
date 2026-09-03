@@ -463,6 +463,49 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
+  it("uses the kit-installed client for the founder Slack handoff", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const result = fixture.run("resume", {
+        ECHO_FAKE_SETUP_STATUS:
+          '{"next_step":"complete_founder_slack_link"}',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person slack-link',
+      );
+      expect(result.stdout).not.toContain("run echo-brain person slack-link");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the kit-installed client for the founder canary reads", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const result = fixture.run("resume", {
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"ready_to_start"}',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20',
+      );
+      expect(result.stdout).toContain(
+        '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY"',
+      );
+      expect(result.stdout).not.toContain(
+        "run echo-brain person records --limit 20",
+      );
+      expect(result.stdout).not.toContain(
+        'and echo-brain person records --query "SYNTHETIC STAGING CANARY"',
+      );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("reports a complete canary safely when the Authority is stopped or drifted", () => {
     const fixture = preparedStatusFixture();
     try {
