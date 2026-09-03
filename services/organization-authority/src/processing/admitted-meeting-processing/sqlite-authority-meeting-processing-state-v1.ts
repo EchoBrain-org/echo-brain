@@ -721,6 +721,25 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       .get(approvalId) as ApprovalWorkflowOutboxV1 | undefined;
   }
 
+  /**
+   * Returns only the durable Authority acknowledgement time used to restore
+   * an optional staging-side human-wait observation. This deliberately avoids
+   * loading the frozen approval snapshot or any presentation content.
+   */
+  readDurableCardStagedAt(approvalId: string): string | null {
+    const row = this.database
+      .prepare(
+        `SELECT updated_at
+           FROM authority_live_approval_outbox_v2
+          WHERE approval_id = ?
+            AND state = 'staged'`,
+      )
+      .get(approvalId) as { readonly updated_at: string } | undefined;
+    if (row === undefined) return null;
+    assertCanonicalUtcMillis(row.updated_at);
+    return row.updated_at;
+  }
+
   readApprovalDeliveryQuarantine(
     candidateId: string,
   ): ApprovalDeliveryQuarantineV1 | undefined {

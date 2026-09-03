@@ -67,6 +67,17 @@ function observe<T>(operation: () => T, fallback: T): T {
   }
 }
 
+function canonicalDurableTimestamp(
+  value: string | null | undefined,
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    return new Date(value).toISOString() === value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function bindCandidate(
   telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
   journey: MeetingApprovalJourneyRefV1 | null,
@@ -84,20 +95,26 @@ function bindCandidate(
 function reconcileDurableCardStaged(
   telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
   approvalId: string,
+  durableStagedAt: string | null | undefined,
 ): void {
   if (telemetry === undefined) return;
   observe(() => {
+    const stagedAt = canonicalDurableTimestamp(durableStagedAt);
     if (!telemetry.hasTerminalStage(approvalId, "meeting_approval_staging")) {
       const attempt = telemetry.beginStageForApproval(
         approvalId,
         "meeting_approval_staging",
       );
-      telemetry.markCardStaged(approvalId);
+      if (stagedAt !== undefined) {
+        telemetry.markCardStaged(approvalId, stagedAt);
+      }
       telemetry.succeedStage(attempt, { outcome: "staged" });
       return;
     }
     // Keep the human-wait anchor repairable independently of the stage event.
-    telemetry.markCardStaged(approvalId);
+    if (stagedAt !== undefined) {
+      telemetry.markCardStaged(approvalId, stagedAt);
+    }
   }, undefined);
 }
 
@@ -241,13 +258,12 @@ export async function runStagingSyntheticPrivateDmCanaryV1(
       reused_frozen_extraction: reusedFrozenExtraction,
     };
   }
-  const outbox = input.state.readCandidateByApprovalId(frozen.approval_id);
-  if (
-    outbox !== undefined &&
-    outbox.candidate_id === frozen.candidate_id &&
-    outbox.state === "staged"
-  ) {
-    reconcileDurableCardStaged(telemetry, frozen.approval_id);
+  if (frozen.state === "staged") {
+    reconcileDurableCardStaged(
+      telemetry,
+      frozen.approval_id,
+      frozen.durable_staged_at,
+    );
     return {
       kind: "staged",
       approval_id: frozen.approval_id,

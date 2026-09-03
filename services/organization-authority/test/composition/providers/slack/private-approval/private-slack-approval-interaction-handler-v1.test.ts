@@ -35,6 +35,9 @@ function journeyTelemetry(input: {
         events.push("queue-age");
         return input.queue_age_ms ?? null;
       },
+      markCardStaged: (_approvalId: string, observedAt?: string) => {
+        events.push(`card-staged:${observedAt ?? "now"}`);
+      },
       succeedStage: (attempt: { readonly stage: string } | null, details?: unknown) => {
         events.push(`succeed:${attempt?.stage}:${JSON.stringify(details ?? {})}`);
         if (input.throw_on === "succeed") throw new Error("telemetry succeed failed");
@@ -210,6 +213,94 @@ describe("private Slack interactions application V1", () => {
       "begin:meeting_approval_action_queue",
       "succeed:meeting_approval_action_queue:{}",
     ]);
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("restores a durable staged wait anchor before a click measures queue age", async () => {
+    const telemetry = journeyTelemetry({ queue_age_ms: 42_000 });
+    const readStagedAt = vi.fn(() => "2026-08-28T21:18:00.000Z");
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: {
+        enqueue: () => ({
+          disposition: "resolution" as const,
+          receipt: {} as never,
+          receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+          idempotent: false,
+        }),
+      },
+      now_unix_seconds: () => NOW,
+      now: () => "2026-08-28T22:00:00.000Z",
+      journey_telemetry: telemetry.telemetry as never,
+      read_durable_card_staged_at: readStagedAt,
+    });
+
+    await expect(application.accept(request(raw()))).resolves.toBe("accepted");
+    expect(readStagedAt).toHaveBeenCalledWith(CARD.approval_id);
+    expect(telemetry.events).toContain("card-staged:2026-08-28T21:18:00.000Z");
+    expect(telemetry.events.indexOf("card-staged:2026-08-28T21:18:00.000Z"))
+      .toBeLessThan(telemetry.events.indexOf("queue-age"));
+  });
+
+  it("does not read the durable wait anchor before HMAC and parser success", async () => {
+    const readStagedAt = vi.fn(() => "2026-08-28T21:18:00.000Z");
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: { enqueue: vi.fn() },
+      now_unix_seconds: () => NOW,
+      journey_telemetry: journeyTelemetry({}).telemetry as never,
+      read_durable_card_staged_at: readStagedAt,
+    });
+
+    await expect(application.accept(request(raw(), "wrong-secret"))).rejects.toMatchObject({
+      code: "unauthorized",
+    });
+    await expect(application.accept(request(raw({ state: {} })))).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+    expect(readStagedAt).not.toHaveBeenCalled();
+  });
+
+  it("does not read the durable wait anchor when staging telemetry is absent", async () => {
+    const readStagedAt = vi.fn(() => "2026-08-28T21:18:00.000Z");
+    const enqueue = vi.fn(() => ({
+      disposition: "resolution" as const,
+      receipt: {} as never,
+      receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+      idempotent: false,
+    }));
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: { enqueue },
+      now_unix_seconds: () => NOW,
+      read_durable_card_staged_at: readStagedAt,
+    });
+
+    await expect(application.accept(request(raw()))).resolves.toBe("accepted");
+    expect(readStagedAt).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("keeps durable enqueue and acknowledgement fail-open when wait recovery throws", async () => {
+    const enqueue = vi.fn(() => ({
+      disposition: "resolution" as const,
+      receipt: {} as never,
+      receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+      idempotent: false,
+    }));
+    const readStagedAt = vi.fn(() => {
+      throw new Error("telemetry sidecar unavailable");
+    });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: { enqueue },
+      now_unix_seconds: () => NOW,
+      journey_telemetry: journeyTelemetry({}).telemetry as never,
+      read_durable_card_staged_at: readStagedAt,
+    });
+
+    await expect(application.accept(request(raw()))).resolves.toBe("accepted");
+    expect(readStagedAt).toHaveBeenCalledWith(CARD.approval_id);
     expect(enqueue).toHaveBeenCalledOnce();
   });
 

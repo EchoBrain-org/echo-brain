@@ -939,10 +939,12 @@ export class AdmittedMeetingProcessingCycleV1 {
       }
       // This marker is independently idempotent and repairs a crash after the
       // durable staged acknowledgement but before the optional wait clock.
-      telemetry.markCardStaged(
-        candidate.approval_id,
-        canonicalDurableTimestamp(candidate.durable_staged_at),
+      const durableStagedAt = canonicalDurableTimestamp(
+        candidate.durable_staged_at,
       );
+      if (durableStagedAt !== undefined) {
+        telemetry.markCardStaged(candidate.approval_id, durableStagedAt);
+      }
     });
   }
 

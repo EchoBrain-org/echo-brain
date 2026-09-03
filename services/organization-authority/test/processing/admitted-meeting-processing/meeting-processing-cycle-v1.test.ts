@@ -1402,6 +1402,51 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toEqual([]);
   });
 
+  it("does not invent a restart-time wait anchor without a durable staged timestamp", async () => {
+    const current = admission();
+    const state = new FakeState(current);
+    const originalMeeting = meeting();
+    state.seedFrozenCandidate({
+      candidate_id: "cnd_staged-without-anchor",
+      candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+      review_lineage_id: "rli_test",
+      review_input_sha256: `sha256:${"c".repeat(64)}`,
+      review_semantic_sha256: `sha256:${"d".repeat(64)}`,
+      review_policy_id: REVIEW_POLICY.policy_id,
+      review_policy_contract_sha256: REVIEW_POLICY.policy_contract_sha256,
+      review_policy_consequence_text: REVIEW_POLICY.policy_consequence_text,
+      review_policy_consequence_sha256:
+        REVIEW_POLICY.policy_consequence_sha256,
+      disposition: "actionable",
+      approval_id: "apr_staged-without-anchor",
+      stage_command_id: "pas_staged-without-anchor",
+      state: "staged",
+      durable_staged_at: null,
+      admission: current,
+      meeting: originalMeeting,
+      decisions: decisions(originalMeeting),
+    });
+    const telemetry = new FakeJourneyTelemetry();
+    const downstream = stager({ kind: "staged", stage_id: "unused" });
+    const repeated = liveCycle({
+      source: source({
+        meetings: [originalMeeting],
+        next_cursor: current.source.cursor,
+      }),
+      processor: processor(),
+      state,
+      stager: downstream,
+      journey_telemetry: telemetry,
+    });
+
+    await expect(repeated.runOnce()).resolves.toEqual({
+      kind: "already_processed",
+      cursor_advanced: false,
+    });
+    expect(downstream.calls).toBe(0);
+    expect(telemetry.cardStaged).toEqual([]);
+  });
+
   it("does not advance no-signal meetings when the Authority cursor fence drifts or is revoked", async () => {
     for (const result of ["state_drift", "revoked"] as const) {
       const state = new FakeState(admission(), result);

@@ -133,7 +133,7 @@ afterEach(() => {
   }
 });
 
-function journeyTelemetry() {
+function journeyTelemetry(now = NOW) {
   const root = mkdtempSync(join(tmpdir(), "echo-synthetic-canary-journey-"));
   telemetryRoots.push(root);
   const state = openMeetingApprovalJourneyStateV1(join(root, "journey.sqlite"), {
@@ -153,7 +153,7 @@ function journeyTelemetry() {
     },
     {
       state,
-      now: () => NOW,
+      now: () => now,
       now_ms: () => 10,
     },
   );
@@ -289,6 +289,81 @@ describe("staging synthetic private-DM canary", () => {
       .pluck()
       .get() as string;
     expect(telemetry.queueAgeMs(approval, NOW)).toBe(0);
+    telemetry.close();
+  });
+
+  it("uses the durable canary staged timestamp when recovery starts later", async () => {
+    const value = database();
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
+      value,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
+      "llm",
+      () => NOW,
+    );
+    const processor = new SyntheticCanaryProcessor();
+    const stager = new RecordingStager(state);
+    const base = {
+      authority_url: "https://authority-staging.echobrain.org",
+      canary: canaryInput,
+      state,
+      processor,
+      stager,
+    } as const;
+    await expect(runStagingSyntheticPrivateDmCanaryV1(base)).resolves.toMatchObject({
+      kind: "staged",
+      reused_frozen_extraction: false,
+    });
+    const recoveryNow = "2026-08-30T13:00:00.000Z";
+    const { telemetry } = journeyTelemetry(recoveryNow);
+    await expect(runStagingSyntheticPrivateDmCanaryV1({
+      ...base,
+      journey_telemetry: telemetry,
+    })).resolves.toMatchObject({ kind: "staged", reused_frozen_extraction: true });
+    const approval = value
+      .prepare("SELECT approval_id FROM authority_live_approval_outbox_v2")
+      .pluck()
+      .get() as string;
+    expect(telemetry.queueAgeMs(approval, recoveryNow)).toBe(3_600_000);
+    telemetry.close();
+  });
+
+  it("does not invent a recovery-time canary wait anchor from an invalid durable timestamp", async () => {
+    const value = database();
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
+      value,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
+      "llm",
+      () => NOW,
+    );
+    const processor = new SyntheticCanaryProcessor();
+    const stager = new RecordingStager(state);
+    const base = {
+      authority_url: "https://authority-staging.echobrain.org",
+      canary: canaryInput,
+      state,
+      processor,
+      stager,
+    } as const;
+    await expect(runStagingSyntheticPrivateDmCanaryV1(base)).resolves.toMatchObject({
+      kind: "staged",
+      reused_frozen_extraction: false,
+    });
+    value.exec("DROP TRIGGER authority_live_approval_outbox_v2_ordered_transition");
+    value
+      .prepare("UPDATE authority_live_approval_outbox_v2 SET updated_at = '2026-08-30 12:00:00'")
+      .run();
+    const recoveryNow = "2026-08-30T13:00:00.000Z";
+    const { telemetry } = journeyTelemetry(recoveryNow);
+
+    await expect(runStagingSyntheticPrivateDmCanaryV1({
+      ...base,
+      journey_telemetry: telemetry,
+    })).resolves.toMatchObject({ kind: "staged", reused_frozen_extraction: true });
+    const approval = value
+      .prepare("SELECT approval_id FROM authority_live_approval_outbox_v2")
+      .pluck()
+      .get() as string;
+    expect(telemetry.queueAgeMs(approval, recoveryNow)).toBeNull();
     telemetry.close();
   });
 

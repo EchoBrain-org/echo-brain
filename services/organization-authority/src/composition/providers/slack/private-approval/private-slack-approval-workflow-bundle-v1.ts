@@ -193,7 +193,11 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
         on_rejection: config.on_rejection,
         ...(context.journey_telemetry === undefined
           ? {}
-          : { journey_telemetry: context.journey_telemetry }),
+          : {
+              journey_telemetry: context.journey_telemetry,
+              read_durable_card_staged_at: (approvalId: string) =>
+                context.state.readDurableCardStagedAt(approvalId),
+            }),
       });
       return Object.freeze({
         stager,

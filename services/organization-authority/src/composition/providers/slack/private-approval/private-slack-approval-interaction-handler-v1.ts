@@ -37,6 +37,8 @@ export interface PrivateSlackApprovalInteractionHandlerInputV1 {
   /** Clock for request freshness and durable receipt timestamps. */
   readonly now_unix_seconds?: () => number;
   readonly now?: () => string;
+  /** Staging-only durable wait-anchor lookup. It returns no Slack content. */
+  readonly read_durable_card_staged_at?: (approval_id: string) => string | null;
   /**
    * Optional staging-only journey telemetry. This must never affect Slack's
    * acknowledgement or durable receipt semantics.
@@ -83,6 +85,20 @@ function approvalQueueAgeMs(
     return telemetry?.queueAgeMs(approvalId, observedAt) ?? null;
   } catch {
     return null;
+  }
+}
+
+function restoreDurableCardStaged(
+  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
+  readStagedAt: ((approval_id: string) => string | null) | undefined,
+  approvalId: string,
+): void {
+  if (telemetry === undefined || readStagedAt === undefined) return;
+  try {
+    const stagedAt = readStagedAt(approvalId);
+    if (stagedAt !== null) telemetry.markCardStaged(approvalId, stagedAt);
+  } catch {
+    // Durable wait recovery is staging-only and cannot affect interaction ack.
   }
 }
 
@@ -207,6 +223,11 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
       let queueAttempt: MeetingApprovalJourneyStageAttemptV1 | null = null;
       try {
         const observedAt = canonicalNow(now);
+        restoreDurableCardStaged(
+          input.journey_telemetry,
+          input.read_durable_card_staged_at,
+          interaction.approval_id,
+        );
         const verificationAttempt = beginApprovalJourneyStage(
           input.journey_telemetry,
           interaction.approval_id,
