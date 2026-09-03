@@ -25,8 +25,9 @@ materialize: reconstruct only the root-volume environment and runtime-profile
 resume:      materialize, then run the installed onboarding wrapper and require
              terminal-green status.
 
-An entirely unprepared retained volume is a successful no-op. A partial,
-candidate, symlinked, permission-unsafe, or tuple-drifted volume is refused.
+For an entirely unprepared retained volume, materialize is a successful no-op
+but resume is refused. A partial, candidate, symlinked, permission-unsafe, or
+tuple-drifted volume is refused.
 USAGE
   exit 2
 }
@@ -326,9 +327,10 @@ else
   restored=false
 fi
 
-if [[ $COMMAND == materialize || $restored == false ]]; then
+if [[ $COMMAND == materialize ]]; then
   exit 0
 fi
+[[ $restored == true ]] || fail 'retained host resume requires an accepted release tuple'
 
 [[ -x $ONBOARD_TOOL && ! -L $ONBOARD_TOOL ]] || fail 'installed onboarding wrapper is missing or unsafe'
 "$ONBOARD_TOOL" resume

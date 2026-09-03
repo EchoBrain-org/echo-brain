@@ -361,12 +361,18 @@ function buildParameters(
   hostEnabled,
   setupArtifact = undefined,
   initializeBlankDataVolume = false,
+  resumeRetainedAuthority = false,
 ) {
   const parameters = {
     ...input.stack.parameters,
     HostEnabled: hostEnabled ? "true" : "false",
     InitializeBlankDataVolume:
       hostEnabled && initializeBlankDataVolume ? "true" : "false",
+    // An ordinary up deliberately only materializes retained state. The
+    // accepted Authority resumes only for the independently pinned retained
+    // restart, before CloudFormation signals ready.
+    ResumeRetainedAuthority:
+      hostEnabled && resumeRetainedAuthority ? "true" : "false",
   };
   if (hostEnabled) {
     if (setupArtifact !== undefined) {
@@ -389,6 +395,7 @@ function changeSetRequest(
   hostEnabled,
   setupArtifact,
   initializeBlankDataVolume = false,
+  resumeRetainedAuthority = false,
 ) {
   return Object.freeze({
     capabilities: Object.freeze(["CAPABILITY_IAM"]),
@@ -401,6 +408,7 @@ function changeSetRequest(
       hostEnabled,
       setupArtifact,
       initializeBlankDataVolume,
+      resumeRetainedAuthority,
     ),
     region: input.region,
     stackName: input.stack.name,
@@ -535,6 +543,7 @@ async function planStack(
   dependencies,
   setupArtifact,
   initializeBlankDataVolume = false,
+  resumeRetainedAuthority = false,
 ) {
   const existing = await describeExactStack(input, dependencies);
   const createChangeSet = adapterFunction(dependencies, "createChangeSet");
@@ -546,6 +555,7 @@ async function planStack(
       hostEnabled,
       setupArtifact,
       initializeBlankDataVolume,
+      resumeRetainedAuthority,
     ),
   );
   const plan = checkedChangeSet(planned);
@@ -561,6 +571,7 @@ async function reviewedPlanStack(
   hostEnabled,
   dependencies,
   initializeBlankDataVolume = false,
+  resumeRetainedAuthority = false,
 ) {
   const existing = await describeExactStack(input, dependencies);
   const describeChangeSet = adapterFunction(dependencies, "describeChangeSet");
@@ -571,6 +582,7 @@ async function reviewedPlanStack(
     hostEnabled,
     undefined,
     initializeBlankDataVolume,
+    resumeRetainedAuthority,
   );
   const plan = assertChangeBoundary(
     checkedChangeSet(await describeChangeSet(expected)),
@@ -1035,6 +1047,8 @@ async function runUp(
   // The descriptor schema proves liveness only. A retained-volume recovery
   // must also prove it is the independently accepted Authority before any AWS
   // action begins.
+  if (requireAuthority && initializeBlankDataVolume)
+    refuse("require_authority_conflicts_with_blank_data_volume");
   if (requireAuthority && input.authorityPinSha256 === undefined)
     refuse("authority_descriptor_pin_required");
   const current = await initializedProtectedStack(input, dependencies);
@@ -1084,6 +1098,7 @@ async function runUp(
         true,
         dependencies,
         initializeBlankDataVolume,
+        requireAuthority,
       )
     : await planStack(
         input,
@@ -1092,6 +1107,7 @@ async function runUp(
         dependencies,
         setupArtifact,
         initializeBlankDataVolume,
+        requireAuthority,
       );
   if (!execute)
     return lifecycleReceipt(input, "up", "planned", {
@@ -1927,9 +1943,9 @@ function parseCli(argv) {
     refuse("initialize_blank_data_volume_requires_up");
   if (requireAuthority && action !== "up")
     refuse("require_authority_requires_up");
-  // A plan makes no AWS change, so there is nothing to be serving yet.
-  if (requireAuthority && !execute)
-    refuse("require_authority_requires_execute");
+  // This is a reviewed host-bootstrap intent. A plan does not probe the
+  // descriptor, but must bind the same resume parameter that its execute will
+  // require from CloudFormation.
   if (requireAuthority && initializeBlankDataVolume)
     refuse("require_authority_conflicts_with_blank_data_volume");
   let input;

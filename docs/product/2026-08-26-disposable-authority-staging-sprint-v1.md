@@ -181,9 +181,14 @@ both facts separately in its receipt: `host_ready` for machine-and-connector
 readiness, and `authority_serving` with a classified `authority_descriptor`
 observation for the application. The observation is reported, not enforced,
 because a genuinely fresh slot has no onboarded Authority yet and calling that a
-failure would be untrue. `up --execute --require-authority` inverts that for the
-`down`/`up` cycle over a prepared retained volume, where the accepted release is
-expected back and "still not serving" is a real failure. It additionally
+failure would be untrue. `up --require-authority` binds the reviewed
+retained-host bootstrap to resume the accepted Authority after materialization
+and before CloudFormation signals ready; its matching
+`up --execute --require-authority` then inverts that for the `down`/`up`
+cycle over a prepared retained volume, where the accepted release is
+expected back and "still not serving" is a real failure. The flag is present
+on both the reviewed plan and its unchanged-operation-ID execute so their
+CloudFormation parameters match. It additionally
 requires the private input's independently trusted `authorityPinSha256`, the
 accepted Authority `authority_pin_sha256` digest (emitted in bootstrap evidence
 as `authority_descriptor_sha256`). The controller validates the response
@@ -293,11 +298,13 @@ operation attempts a proved host remount and existing-container restart if the
 CloudFormation update fails after quiescence; an unproved recovery blocks the
 rehearsal and requires operator inspection before another lifecycle command.
 This phase is allowed only for the prepared retained volume from Phase 3, with its
-accepted digest-pinned release already recorded. After each `up` materializes
-the host, first prove that the setup bundle manifest's `source_commit` equals
-the accepted release record's `source-sha`, then deliberately resume that
-accepted release. Record sanitized elapsed time and compare the public and local
-descriptors only then. Do not treat a
+accepted digest-pinned release already recorded. Each reviewed
+`up --require-authority` change set makes the host first prove that the setup
+bundle manifest's `source_commit` equals the accepted release record's
+`source-sha`, then resumes that accepted release before the host signals
+CloudFormation readiness. A plain `up` remains materialize-only for operator
+inspection or rehearsal replacement. Record sanitized elapsed time and compare
+the public and local descriptors only then. Do not treat a
 fresh blank volume or fresh onboarding as a repeated-up timing rehearsal.
 
 Record sanitized timing and outcome receipts. The receipt identifies command

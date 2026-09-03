@@ -190,7 +190,7 @@ own the passed assertions and exact-run evidence.
 | Command     | Purpose                                                                                                                                                                            |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slot-init` | Creates or repairs the retained AWS boundary, then creates or verifies its Cloudflare tunnel, ingress, DNS record, and connector-token deposit.                                    |
-| `up`        | Creates a disposable host and attaches the retained data volume. `--require-authority` additionally gates a retained-volume restart on the independently pinned public descriptor. |
+| `up`        | Creates a disposable host and attaches the retained data volume. `--require-authority` binds a retained restart to resume the accepted Authority before CloudFormation signals ready, then gates it on the independently pinned public descriptor. |
 | `down`      | Stops the host safely and removes only disposable host resources. The edge and retained volume remain.                                                                             |
 | `status`    | Reads AWS, host, and public-descriptor observations separately. An edge observation alone is never proof that the host or Authority is ready.                                      |
 
@@ -269,7 +269,8 @@ npm run authority:staging -- down \
 
 # After down, set another new operationId. Later up omits initialization.
 npm run authority:staging -- up \
-  --input /absolute/private/authority-staging/input.json
+  --input /absolute/private/authority-staging/input.json \
+  --require-authority
 npm run authority:staging -- up \
   --input /absolute/private/authority-staging/input.json \
   --require-authority --execute
@@ -295,8 +296,12 @@ before AWS work if the pin is absent and treats a structurally valid descriptor
 with a different pin as a failure. `status` exposes `authority_serving` and
 `authority_accepted` separately; it is green only when the descriptor matches
 the pin. Its `authority_unpinned` and `authority_pin_mismatch` states are not
-green. If a required execute returns a failed machine-readable verification
-receipt, preserve the operation ID and repeat the same
+green. Pass `--require-authority` on both the reviewed plan and its unchanged
+operation-ID execute: it makes CloudFormation run
+`restore-clean-v1-host.sh resume` after materialization and before its ready
+signal. An ordinary `up` remains materialize-only so an operator can inspect
+or replace a rehearsal without starting it. If a required execute returns a
+failed machine-readable verification receipt, preserve the operation ID and repeat the same
 `up --execute --require-authority` command. While `StagingHostReady=true`, that
 retry is probe-only (`verification_only: true`): it does not upload a bundle,
 create or execute CloudFormation work, issue SSM work, or change the edge. Use

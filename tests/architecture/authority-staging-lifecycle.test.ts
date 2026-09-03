@@ -330,11 +330,16 @@ function dependencies(
     readonly onStackFailure?: "DO_NOTHING";
     readonly parameters: Record<string, string>;
   }> = [];
+  const reviewedPlans: Array<{
+    readonly onStackFailure?: "DO_NOTHING";
+    readonly parameters: Record<string, string>;
+  }> = [];
   let status = options.initialStack ?? stack(false);
   let terminationProtectionFailures =
     options.terminationProtectionFailures ?? 0;
   let executeFailures = options.executeFailure === true ? 1 : 0;
   let plannedHostEnabled = false;
+  let storedResumeRetainedAuthority: string | undefined;
   const plan = (request: {
     readonly parameters: Record<string, string>;
     readonly changeSetType: "CREATE" | "UPDATE";
@@ -386,6 +391,8 @@ function dependencies(
         `plan:${request.changeSetType}:${request.parameters.HostEnabled}`,
       );
       plans.push(request);
+      storedResumeRetainedAuthority =
+        request.parameters.ResumeRetainedAuthority;
       return plan(request);
     },
     describeChangeSet: async (request: {
@@ -397,7 +404,13 @@ function dependencies(
       events.push(
         `review:${request.changeSetType}:${request.parameters.HostEnabled}`,
       );
-      return plan(request);
+      reviewedPlans.push(request);
+      const result = plan(request);
+      return storedResumeRetainedAuthority === undefined ||
+        storedResumeRetainedAuthority ===
+          request.parameters.ResumeRetainedAuthority
+        ? result
+        : { ...result, matchesExpected: false };
     },
     executeChangeSet: async (request: {
       readonly changeSetType: "CREATE" | "UPDATE";
@@ -536,6 +549,7 @@ function dependencies(
     edgeInputs,
     events,
     plans,
+    reviewedPlans,
     recoveredInstanceIds,
     dependencies: {
       cloudFormation,
@@ -777,6 +791,7 @@ describe("Authority staging lifecycle", () => {
     expect(fixture.plans[0]?.parameters.InitializeBlankDataVolume).toBe(
       "false",
     );
+    expect(fixture.plans[0]?.parameters.ResumeRetainedAuthority).toBe("false");
   });
 
   it("requires an explicit audited flag before an initial blank volume can be formatted", async () => {
@@ -787,7 +802,86 @@ describe("Authority staging lifecycle", () => {
     });
     expect(receipt).toMatchObject({ initialize_blank_data_volume: true });
     expect(fixture.plans[0]?.parameters.InitializeBlankDataVolume).toBe("true");
+    expect(fixture.plans[0]?.parameters.ResumeRetainedAuthority).toBe("false");
   });
+
+  it("resumes an accepted retained Authority in the host bootstrap before the required public gate", async () => {
+    const fixture = dependencies({ authorityDescriptor: "serving" });
+    await expect(
+      runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        requireAuthority: true,
+      }),
+    ).resolves.toMatchObject({ action: "up", state: "planned" });
+    expect(fixture.plans[0]?.parameters).toMatchObject({
+      InitializeBlankDataVolume: "false",
+      ResumeRetainedAuthority: "true",
+    });
+    expect(fixture.events).not.toContain("probe-authority-descriptor");
+
+    await expect(
+      runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        execute: true,
+        requireAuthority: true,
+      }),
+    ).resolves.toMatchObject({
+      authority_accepted: true,
+      authority_serving: true,
+      host_ready: true,
+    });
+    expect(fixture.reviewedPlans[0]?.parameters).toMatchObject({
+      InitializeBlankDataVolume: "false",
+      ResumeRetainedAuthority: "true",
+    });
+    expect(fixture.events.indexOf("execute-change-set")).toBeLessThan(
+      fixture.events.indexOf("probe-authority-descriptor"),
+    );
+  });
+
+  it("refuses a blank-volume initialization that also requests retained Authority resume before AWS work", async () => {
+    const fixture = dependencies();
+    await expect(
+      runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        execute: true,
+        initializeBlankDataVolume: true,
+        requireAuthority: true,
+      }),
+    ).rejects.toThrow("require_authority_conflicts_with_blank_data_volume");
+    expect(fixture.events).toEqual([]);
+  });
+
+  it.each([
+    ["required plan with ordinary execute", true, false],
+    ["ordinary plan with required execute", false, true],
+  ])(
+    "refuses %s before CloudFormation execution when the reviewed resume intent differs",
+    async (_label, plannedRequireAuthority, executedRequireAuthority) => {
+      const fixture = dependencies({ authorityDescriptor: "serving" });
+      await expect(
+        runAuthorityStaging("up", ACCEPTED_INPUT, {
+          ...fixture.dependencies,
+          requireAuthority: plannedRequireAuthority,
+        }),
+      ).resolves.toMatchObject({ state: "planned" });
+      expect(fixture.plans[0]?.parameters.ResumeRetainedAuthority).toBe(
+        plannedRequireAuthority ? "true" : "false",
+      );
+
+      await expect(
+        runAuthorityStaging("up", ACCEPTED_INPUT, {
+          ...fixture.dependencies,
+          execute: true,
+          requireAuthority: executedRequireAuthority,
+        }),
+      ).rejects.toThrow("change_set_not_reviewable");
+      expect(fixture.reviewedPlans[0]?.parameters.ResumeRetainedAuthority).toBe(
+        executedRequireAuthority ? "true" : "false",
+      );
+      expect(fixture.events).not.toContain("execute-change-set");
+    },
+  );
 
   it("separates machine readiness from Authority readiness in the executed up receipt", async () => {
     const fixture = dependencies();
