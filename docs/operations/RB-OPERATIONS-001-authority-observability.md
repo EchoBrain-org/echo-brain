@@ -359,9 +359,11 @@ deployed. They are staging-only and accept only
 The backend is invoked directly by a CloudWatch custom widget. It is not a
 public service: there is no function URL, API Gateway route,
 application-managed or end-user AWS credential, direct widget permission to
-CloudWatch Logs, or mutation operation. The signed-in console operator's
-Identity Center session authorizes only invocation of the exact Lambda after
-the Phase 6 permission-set assignment.
+CloudWatch Logs, or mutation operation. After the Phase 6 permission-set
+assignment, the companion policy grants the signed-in console operator only
+invocation of the exact Lambda. It does not establish the scope of other
+policies in that session; Phase 6 must review the effective permission set
+separately.
 
 The handler accepts only three fixed operations:
 
@@ -402,23 +404,112 @@ the workflow reaches a recognized terminal boundary.
 The Lambda execution role may start and read queries only against that exact
 source log group, stop a query only through the AWS-required unscoped action,
 and write only to its dedicated 14-day retained function log group. The stack
-also creates an exact-function `lambda:InvokeFunction` customer managed policy.
+also creates the fixed `customWidget-echo-staging-journey-explorer-v1` Lambda
+and the exact-function `lambda:InvokeFunction` customer managed policy
+`echo-staging-journey-explorer-invoke-v1` at path `/`.
 Query cancellation is bounded and best-effort. If `StartQuery` times out, the
 handler aborts its SDK request and waits up to one additional second for a
 valid late query ID. An ID received in that window gets one separately bounded
 `StopQuery` attempt before the handler returns. Without an ID, the remote
 outcome is unknown and no post-response cleanup is launched.
 It is intentionally unattached: the `AWSReservedSSO` roles used by operators
-are Identity Center-protected and must not be edited directly. Before a widget
-is added or invoked, Phase 6 must reference this customer managed policy from
-an approved Identity Center permission set. The inline staging Lambda relies on
-the Node runtime-provided AWS SDK v3; a portable production bundle and pinned
-SDK version are deferred to a future production review.
+Center-protected and must not be edited directly. Before a widget is added or
+invoked, Phase 6 must reference this policy from a dedicated staging-only
+Identity Center permission set. The inline staging Lambda relies on the Node
+runtime-provided AWS SDK v3; a portable production bundle and pinned SDK
+version are deferred to a future production review.
 
-No AWS deployment, permission-set assignment, live CloudWatch query, live
-widget use, Ask/approval rehearsal, or production change is claimed by Phase
-5. Phase 6 remains responsible for the UI, the approved permission-set
-reference, staging deployment, and the one Ask plus one approval rehearsal.
+#### Staging Journey Explorer UI - Phase 6, locally implemented and not deployed
+
+The Phase 6 renderer is locally implemented and locally tested in the Phase 4
+staging overview dashboard, but no AWS deployment, permission-set assignment,
+widget trust, live query, Ask/approval rehearsal, or sprint exit has occurred.
+The dashboard passes a static endpoint, not an operator-supplied ARN:
+
+```text
+arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:customWidget-echo-staging-journey-explorer-v1
+```
+
+The UI is read-only and intended for an authorized operator. A signed-in IAM
+Identity Center console operator may invoke that Lambda after its dedicated
+staging-only permission set references
+`echo-staging-journey-explorer-invoke-v1` at path `/`. That managed policy
+grants only exact-Lambda invocation; the effective permission set must be
+separately reviewed for broader access. The widget has no direct CloudWatch
+Logs permission, public dashboard sharing, function URL, API Gateway route,
+application-managed credential, end-user credential, production target, or
+mutation operation.
+
+The list surface shows recent Ask and approval journeys. Selected detail shows
+safe outcome, a chronological stage-and-attempt waterfall whose bars are
+positioned by validated observation time and sized by `elapsed_ms`, LLM token
+totals, retries, retrieval counts, redacted failure metadata, and human wait as
+a separate business interval and empty gap rather than machine work. A numeric
+token count of `0` means the provider reported zero; `null` means usage was
+unavailable and is never treated as zero. The content-free allowlist permits
+only correlation/schema provenance, timing, nullable usage, retrieval/retry
+metadata, and failure classification.
+It excludes raw events, prompts, answers, meeting material, provider payloads,
+stack traces, and other source content.
+
+The renderer inherits the query safety boundary. The selected range may not
+exceed the retained 14-day staging window; a fixed query that reaches its
+2,500-event cap returns `result_limit_exceeded` instead of partial list or
+detail; unknown/noncanonical events are rejected; and a renderer response that
+would exceed its bounded safe size returns fixed error markup rather than
+truncating data or exposing raw logs. Operators should narrow the range and
+retry a `result_limit_exceeded` response.
+
+##### Pending staging-only change-set and rehearsal checklist
+
+This checklist is deliberately not live evidence. Use an IAM Identity Center
+operator session obtained with `aws sso login --profile echo-prod`; do not use
+`aws login`, root credentials, SSH, an interactive root shell, a production
+target, or a shared permission set. Prefer the AWS MCP server when it is
+available. Stop before execution if account, Region, source log group, resource
+set, or permission-set scope is not clearly staging-only.
+
+1. Confirm the account and Region with a read-only identity check, for example:
+
+   ```sh
+   aws sts get-caller-identity --profile echo-prod
+   ```
+
+2. Create and inspect a change set for
+   `authority-staging-journey-explorer-v1.template.json` first. Use
+   `--profile echo-prod`, the staging Region, a fresh change-set name, and
+   `CAPABILITY_NAMED_IAM`. Confirm that it creates or changes only the dedicated
+   Explorer Lambda, its retained log group and execution role, and the fixed
+   `echo-staging-journey-explorer-invoke-v1` policy. Do not execute a change set
+   with an unexpected resource, a non-staging source log group, or a broader
+   Logs or invoke permission.
+3. Only after that backend change set has been approved and executed, have the
+   authorized IAM Identity Center administrator reference the named policy at
+   path `/` from a dedicated staging-only permission set. Review the effective
+   permission set and its account assignments for broader or non-staging
+   access; the narrow managed policy alone does not prove the session is narrow.
+   Do not edit an `AWSReservedSSO` role directly. Record the permission-set
+   review without copying IDs, credentials, or content into this runbook.
+4. Create and inspect the overview change set second, also with
+   `--profile echo-prod`. Confirm it remains the existing staging-only overview
+   resource set and its custom widget references only the static Explorer ARN
+   above. It must not add direct Logs permissions to the operator or dashboard,
+   enable public sharing, or touch production.
+5. After both staging stacks and the permission-set reference are verified,
+   explicitly trust the custom widget in the CloudWatch console while signed in
+   as the authorized operator. Keep dashboard sharing disabled.
+6. Run exactly one real staging Ask and one real staging approval. For each,
+   use the Explorer to find the correlated, redacted journey and confirm its
+   stage/attempt sequence, machine latency, token value or `null`, retry and
+   retrieval metadata, human wait where applicable, and terminal outcome agree
+   with the overview aggregates. Record only content-free correlation and
+   aggregate evidence. Stop and investigate any missing, partial, unredacted,
+   cross-environment, or inconsistent result.
+
+No AWS deployment, permission-set assignment, widget trust, live CloudWatch
+query, Ask/approval rehearsal, or production change is claimed by Phases 5 or
+6 until this checklist has been completed and its staging-only evidence has
+been reviewed.
 
 ### 6. Rehearse the sanitized worker-failure signal
 

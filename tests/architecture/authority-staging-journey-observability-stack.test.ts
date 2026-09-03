@@ -168,17 +168,38 @@ describe("staging journey observability overview stack", () => {
     const dashboard = dashboardBody(stack);
     expect(dashboard).toMatchObject({ start: "-PT8H", periodOverride: "inherit" });
     const widgets = dashboard.widgets as Record<string, unknown>[];
-    expect(widgets).toHaveLength(12);
+    expect(widgets).toHaveLength(13);
     expect(widgets.filter((widget) => widget.type === "alarm")).toHaveLength(1);
     expect(widgets.filter((widget) => widget.type === "log")).toHaveLength(4);
-    const nonTextWidgets = widgets.filter((widget) => widget.type !== "text");
-    expect(nonTextWidgets).toHaveLength(11);
-    for (const widget of nonTextWidgets) {
+    expect(widgets.filter((widget) => widget.type === "custom")).toHaveLength(
+      1,
+    );
+    const regionalWidgets = widgets.filter(
+      (widget) => widget.type !== "text" && widget.type !== "custom",
+    );
+    expect(regionalWidgets).toHaveLength(11);
+    for (const widget of regionalWidgets) {
       expect(widget.properties).toMatchObject({ region: "placeholder" });
     }
     const rawBody = dashboardBodyTemplate(stack);
-    expect(rawBody.match(/"region":/g)).toHaveLength(nonTextWidgets.length);
+    expect(rawBody.match(/"region":/g)).toHaveLength(regionalWidgets.length);
     expect(rawBody).not.toContain('"region":""');
+
+    const explorer = widgets.find((widget) => widget.type === "custom");
+    expect(explorer).toEqual({
+      type: "custom",
+      x: 0,
+      y: 42,
+      width: 24,
+      height: 18,
+      properties: {
+        endpoint:
+          "arn:placeholder:lambda:placeholder:placeholder:function:customWidget-echo-staging-journey-explorer-v1",
+        title: "Staging Journey Explorer",
+        updateOn: { refresh: true, resize: false, timeRange: true },
+        params: { operation: "list", render: true, page_size: 20 },
+      },
+    });
 
     const metrics = widgets
       .filter((widget) => widget.type === "metric")
