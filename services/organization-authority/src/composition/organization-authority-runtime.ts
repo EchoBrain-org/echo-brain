@@ -74,6 +74,9 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly on_answer_composition_failure?: (
     event: AnswerCompositionFailureEventV1,
   ) => void;
+  /** Staging-only Ask telemetry; omitted from every production runtime. */
+  readonly ask_journey_telemetry?:
+    OrganizationAuthorityApiRuntimeDependencies["ask_journey_telemetry"];
   /** Provider-selected staging runner; the neutral runtime only supplies admitted state. */
   readonly run_staging_synthetic_private_dm_canary?: (
     input: {
@@ -211,6 +214,13 @@ export async function openOrganizationAuthorityRuntime(
       `file:${config.pkce_key_file}`,
     ),
   };
+  const baseApiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
+    ...dependencies.api,
+    ...(dependencies.api?.ask_journey_telemetry !== undefined ||
+    config.ask_journey_telemetry === undefined
+      ? {}
+      : { ask_journey_telemetry: config.ask_journey_telemetry }),
+  };
   const authority = openAuthorityDatabase(
     join(config.state_directory, "authority.sqlite"),
     { fileMustExist: true },
@@ -229,7 +239,7 @@ export async function openOrganizationAuthorityRuntime(
       { api, worker_interval_ms: config.worker_interval_ms },
       {
         processing: new IdleOrganizationAuthorityProcessing(),
-        api: dependencies.api,
+        api: baseApiDependencies,
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
       },
@@ -242,7 +252,7 @@ export async function openOrganizationAuthorityRuntime(
       { api, worker_interval_ms: config.worker_interval_ms },
       {
         processing: dependencies.active_processing,
-        api: dependencies.api,
+        api: baseApiDependencies,
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
       },
@@ -348,7 +358,7 @@ export async function openOrganizationAuthorityRuntime(
           readableSearch,
         ),
         api: {
-          ...dependencies.api,
+          ...baseApiDependencies,
           answer_composition_generation: answerGeneration,
           readable_search_retrieval_contract_sha256:
             readableSearchContract.retrieval_contract_sha256,

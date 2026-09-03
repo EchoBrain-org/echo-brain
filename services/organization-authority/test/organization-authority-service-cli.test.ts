@@ -18,6 +18,7 @@ const runtimeState = vi.hoisted(() => ({
   slack_signing_secret_file: undefined as string | undefined,
   slack_connection_id: undefined as string | undefined,
   openrouter_credential_file: undefined as string | undefined,
+  ask_journey_telemetry: undefined as object | undefined,
   authority_url: "https://authority.example",
   processing: "active" as "active" | "idle_until_finalize",
 }));
@@ -48,6 +49,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly on_answer_composition_failure?: AnswerCompositionFailureObserver;
+    readonly ask_journey_telemetry?: object;
     readonly slack_signing_secret_file: string;
     readonly slack_connection_id: string;
     readonly openrouter_credential_file: string;
@@ -58,6 +60,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.worker_telemetry = config.on_worker_telemetry;
     runtimeState.answer_composition_failure =
       config.on_answer_composition_failure;
+    runtimeState.ask_journey_telemetry = config.ask_journey_telemetry;
     runtimeState.slack_signing_secret_file = config.slack_signing_secret_file;
     runtimeState.slack_connection_id = config.slack_connection_id;
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
@@ -85,6 +88,7 @@ afterEach(() => {
   runtimeState.slack_signing_secret_file = undefined;
   runtimeState.slack_connection_id = undefined;
   runtimeState.openrouter_credential_file = undefined;
+  runtimeState.ask_journey_telemetry = undefined;
   runtimeState.authority_url = "https://authority.example";
   runtimeState.processing = "active";
 });
@@ -140,6 +144,7 @@ describe("admitted runtime CLI events", () => {
     expect(new Date(String(liveness?.observed_at)).toISOString()).toBe(
       liveness?.observed_at,
     );
+    expect(runtimeState.ask_journey_telemetry).toBeDefined();
 
     runtimeState.worker_error = undefined;
     runtimeState.authority_url = "https://authority.example";
@@ -152,6 +157,7 @@ describe("admitted runtime CLI events", () => {
     await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
     process.emit("SIGTERM");
     await expect(nonStaging).resolves.toBe(0);
+    expect(runtimeState.ask_journey_telemetry).toBeUndefined();
     expect(nonStagingStderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );
@@ -172,6 +178,7 @@ describe("admitted runtime CLI events", () => {
     process.emit("SIGTERM");
 
     await expect(running).resolves.toBe(0);
+    expect(runtimeState.ask_journey_telemetry).toBeUndefined();
     expect(stderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );

@@ -36,6 +36,7 @@ import type {
   PersonExternalIdentityRuntimeBundleV1,
   OpenedPersonExternalIdentityRuntimeV1,
 } from "./person-external-identity-runtime.js";
+import type { AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 
 export interface OrganizationAuthorityApiRuntimeConfig {
   readonly state_directory: string;
@@ -63,6 +64,8 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
   /** Metadata-only answer-composition failure observer for the API server log. */
   readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
+  /** Staging-only request-local Ask journey factory. */
+  readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   /** Present only when the signed private-approval surface is active. */
   readonly private_approval_interaction_ingress?:
     PrivateApprovalInteractionHttpApplicationV1;
@@ -212,6 +215,12 @@ export async function startOrganizationAuthorityApiRuntime(
               model: dependencies.answer_composition_generation.structured_output,
               generation: dependencies.answer_composition_generation.generation,
               audit: new SqlitePersonAnswerCompositionAuditV1(database),
+              ...(dependencies.ask_journey_telemetry === undefined
+                ? {}
+                : {
+                    ask_journey_telemetry:
+                      dependencies.ask_journey_telemetry,
+                  }),
               ...(dependencies.answer_failure === undefined
                 ? {}
                 : { on_failure: dependencies.answer_failure }),

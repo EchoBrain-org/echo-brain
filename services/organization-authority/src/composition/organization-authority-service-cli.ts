@@ -9,6 +9,8 @@ import {
 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js";
 import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js";
 import { createStagingJourneyTelemetryTransportFromEnvironmentV1 } from "./staging/observability/staging-journey-telemetry-transport-v1.js";
+import { createAskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
+import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -124,6 +126,9 @@ export async function runOrganizationAuthorityServiceCli(
   argv: readonly string[],
   io: OrganizationAuthorityServiceCliIo = PROCESS_IO,
 ): Promise<number> {
+  let stagingJourneyTelemetry: ReturnType<
+    typeof createStagingJourneyTelemetryTransportFromEnvironmentV1
+  > | undefined;
   try {
     if (argv[0] === "staging-private-dm-canary") {
       const receipt = await requestStagingSyntheticPrivateDmCanaryV1({
@@ -150,6 +155,24 @@ export async function runOrganizationAuthorityServiceCli(
     }
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
+    stagingJourneyTelemetry =
+      manifest.authority_url ===
+      STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1
+        ? createStagingJourneyTelemetryTransportFromEnvironmentV1(process.env, {
+            write: io.stderr,
+          })
+        : undefined;
+    const askJourneyTelemetry =
+      stagingJourneyTelemetry?.identity === null ||
+      stagingJourneyTelemetry?.identity === undefined
+        ? undefined
+        : createAskJourneyTelemetryFactoryV1({
+            observer: stagingJourneyTelemetry.observer,
+            release_sha: stagingJourneyTelemetry.identity.release_sha,
+            build_number: stagingJourneyTelemetry.identity.build_number,
+            planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+            answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+          });
     const runtime = await openOrganizationAuthorityService({
       state_directory: stateDirectory,
       host,
@@ -209,6 +232,9 @@ export async function runOrganizationAuthorityServiceCli(
           } as never)}\n`,
         );
       },
+      ...(askJourneyTelemetry === undefined
+        ? {}
+        : { ask_journey_telemetry: askJourneyTelemetry }),
       ...(parsed["--worker-interval-ms"] === undefined
         ? {}
         : {
@@ -240,13 +266,6 @@ export async function runOrganizationAuthorityServiceCli(
         processing: runtime.processing,
       } as never)}\n`,
     );
-    const stagingJourneyTelemetry =
-      manifest.authority_url ===
-      STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1
-        ? createStagingJourneyTelemetryTransportFromEnvironmentV1(process.env, {
-            write: io.stderr,
-          })
-        : undefined;
     // Liveness is deliberately activated only after openOrganizationAuthorityService
     // and the optional staging canary control have both completed successfully.
     // A failed or still-pending runtime open must not make staging look alive.
@@ -269,6 +288,7 @@ export async function runOrganizationAuthorityServiceCli(
     });
     return 0;
   } catch {
+    stagingJourneyTelemetry?.close();
     io.stderr(`${LEGACY_CLEAN_LIVE_STARTUP_FAILURE_EVENT_V1}\n`);
     return 1;
   }

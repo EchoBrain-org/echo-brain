@@ -706,13 +706,16 @@ describe("Person Layer 2 route", () => {
       expect(employeeResult.response.items).toEqual([
         expect.objectContaining({ atom_id: sha256Digest("exact-member-atom") }),
       ]);
+      const unauthorizedOnAuthorized = vi.fn();
       expect(() =>
         route.searchBatch({
           access_token: "unauthorized",
           queries: [query],
           exact_release_id: releaseId,
+          on_authorized: unauthorizedOnAuthorized,
         }),
       ).toThrow("person authentication failed");
+      expect(unauthorizedOnAuthorized).not.toHaveBeenCalled();
 
       const fallback = route.searchBatch({
         access_token: "owner",
@@ -826,12 +829,17 @@ describe("Person Layer 2 route", () => {
         audit: new SqlitePersonRecordReadAuditV1(value.authority),
         search_generation: search,
       });
+      const onAuthorized = vi.fn(() => {
+        throw new Error("telemetry observer unavailable");
+      });
       const batch = route.searchBatch({
         access_token: "bearer-only",
         queries: ["original", "focused", "third"],
+        on_authorized: onAuthorized,
       });
 
       expect(authenticateCount).toBe(2);
+      expect(onAuthorized).toHaveBeenCalledOnce();
       expect(search).toHaveBeenCalledTimes(3);
       for (const call of search.mock.calls) {
         expect(call[0]).toMatchObject({
