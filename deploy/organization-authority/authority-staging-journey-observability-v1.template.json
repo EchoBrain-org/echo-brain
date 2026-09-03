@@ -1,0 +1,150 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Staging-only CloudWatch overview for content-free Authority journey telemetry.",
+  "Parameters": {
+    "StagingLogGroupName": {
+      "Type": "String",
+      "Default": "/echo-brain/authority/authority-staging.echobrain.org",
+      "AllowedValues": [
+        "/echo-brain/authority/authority-staging.echobrain.org"
+      ],
+      "ConstraintDescription": "must be the one owned Authority staging runtime log group"
+    },
+    "AlertTopicArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:aws[a-zA-Z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$",
+      "ConstraintDescription": "must be the existing same-account SNS alert topic ARN"
+    }
+  },
+  "Resources": {
+    "WorkerCycleCompletedMetricFilter": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "StagingLogGroupName"
+        },
+        "FilterPattern": "{ ($.kind = \"echo-clean-live-worker-cycle-v1\") && ($.event = \"succeeded\") }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "EchoBrain/StagingJourneyV1",
+            "MetricName": "WorkerCycleCompleted",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "WorkerSilenceAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "Staging Authority worker completed fewer than one cycle in two of the last three minutes.",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ],
+        "Namespace": "EchoBrain/StagingJourneyV1",
+        "MetricName": "WorkerCycleCompleted",
+        "Statistic": "Sum",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "DatapointsToAlarm": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching"
+      }
+    },
+    "AskRetrievalFailureAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "At least two staging Ask retrieval failures occurred in five minutes.",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ],
+        "Namespace": "EchoBrain/StagingJourneyV1",
+        "MetricName": "AskRetrievalFailure",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Threshold": 2,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "ApprovedSearchStuckAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "At least one approved staging meeting record remains awaiting readable-search publication.",
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopicArn"
+          }
+        ],
+        "Namespace": "EchoBrain/StagingJourneyV1",
+        "MetricName": "ApprovedSearchStuckCount",
+        "Statistic": "Maximum",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "DatapointsToAlarm": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "StagingJourneyOverviewDashboard": {
+      "Type": "AWS::CloudWatch::Dashboard",
+      "Properties": {
+        "DashboardName": {
+          "Fn::Sub": "${AWS::StackName}-overview"
+        },
+        "DashboardBody": {
+          "Fn::Sub": "{\"start\":\"-PT8H\",\"periodOverride\":\"inherit\",\"widgets\":[{\"type\":\"text\",\"x\":0,\"y\":0,\"width\":24,\"height\":2,\"properties\":{\"markdown\":\"# Staging journey overview\\nContent-free, staging-only telemetry. Full journey wall-clock includes human approval wait; service wall-clock subtracts that separately measured wait. Machine-stage latency never includes human wait.\"}},{\"type\":\"alarm\",\"x\":0,\"y\":2,\"width\":24,\"height\":4,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Staging journey alarms\",\"alarms\":[\"arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${WorkerSilenceAlarm}\",\"arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AskRetrievalFailureAlarm}\",\"arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${ApprovedSearchStuckAlarm}\"]}},{\"type\":\"metric\",\"x\":0,\"y\":6,\"width\":12,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Journey health and stage outcomes\",\"view\":\"timeSeries\",\"period\":300,\"stat\":\"Sum\",\"metrics\":[[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"ask\",\"stage\",\"ask_response\",\"outcome\",\"answered\",{\"label\":\"Ask answered\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"ask\",\"stage\",\"ask_response\",\"outcome\",\"insufficient_evidence\",{\"label\":\"Ask insufficient evidence\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"ask\",\"stage\",\"ask_response\",\"outcome\",\"authorship_unsupported\",{\"label\":\"Ask authorship unsupported\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"ask\",\"stage\",\"ask_response\",\"outcome\",\"completed\",{\"label\":\"Ask completed\"}],[\"EchoBrain/StagingJourneyV1\",\"AskRetrievalFailure\",{\"label\":\"Ask retrieval failures\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_terminal_persist\",\"outcome\",\"approved\",{\"label\":\"Meeting approved\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_terminal_persist\",\"outcome\",\"rejected\",{\"label\":\"Meeting rejected\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_terminal_persist\",\"outcome\",\"denied\",{\"label\":\"Meeting denied\"}],{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"StageFailed\\\"', 'Sum', 300)\",\"id\":\"stage_failures\",\"label\":\"Stage failures by workflow and stage\"}]}},{\"type\":\"metric\",\"x\":12,\"y\":6,\"width\":12,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Liveness and approved-search backlog\",\"view\":\"timeSeries\",\"period\":60,\"metrics\":[[\"EchoBrain/StagingJourneyV1\",\"JourneyTelemetryAlive\",{\"stat\":\"Sum\",\"label\":\"Telemetry heartbeat\"}],[\"EchoBrain/StagingJourneyV1\",\"WorkerCycleCompleted\",{\"stat\":\"Sum\",\"label\":\"Worker cycles completed\"}],[\"EchoBrain/StagingJourneyV1\",\"ApprovedSearchPendingCount\",{\"stat\":\"Maximum\",\"label\":\"Approved search pending\"}],[\"EchoBrain/StagingJourneyV1\",\"ApprovedSearchStuckCount\",{\"stat\":\"Maximum\",\"label\":\"Approved search stuck\"}],[\"EchoBrain/StagingJourneyV1\",\"ApprovedSearchOldestAgeMs\",{\"stat\":\"Maximum\",\"yAxis\":\"right\",\"label\":\"Oldest pending age (ms)\"}],[\"EchoBrain/StagingJourneyV1\",\"ApprovedSearchBacklogCheck\",{\"stat\":\"Sum\",\"label\":\"Backlog checks\"}]]}},{\"type\":\"metric\",\"x\":0,\"y\":12,\"width\":24,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Machine-stage latency percentiles (no human wait)\",\"view\":\"timeSeries\",\"period\":300,\"metrics\":[{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"StageClosedLatencyMs\\\"', 'p50', 300)\",\"id\":\"stage_latency_p50\",\"label\":\"Stage latency p50 by workflow and stage\"},{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"StageClosedLatencyMs\\\"', 'p95', 300)\",\"id\":\"stage_latency_p95\",\"label\":\"Stage latency p95 by workflow and stage\"},{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"StageClosedLatencyMs\\\"', 'p99', 300)\",\"id\":\"stage_latency_p99\",\"label\":\"Stage latency p99 by workflow and stage\"}]}},{\"type\":\"metric\",\"x\":0,\"y\":18,\"width\":12,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"LLM tokens, coverage, and provider latency\",\"view\":\"timeSeries\",\"period\":300,\"metrics\":[{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,stage,provider,model} MetricName=\\\"LlmTotalTokens\\\"', 'Sum', 300)\",\"id\":\"tokens_by_step\",\"label\":\"Total tokens by step, provider, and model\"},{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,stage,provider,model} MetricName=\\\"LlmProviderLatencyMs\\\"', 'p95', 300)\",\"id\":\"provider_latency_by_step\",\"label\":\"Provider latency p95 by step, provider, and model\",\"yAxis\":\"right\"},{\"expression\":\"SUM(SEARCH('{EchoBrain/StagingJourneyV1,stage,provider,model} MetricName=\\\"LlmTotalTokens\\\"', 'Sum', 300))\",\"id\":\"token_total\",\"label\":\"All reported total tokens\",\"visible\":false},{\"expression\":\"SUM(SEARCH('{EchoBrain/StagingJourneyV1,stage,provider,model} MetricName=\\\"LlmTotalTokensAvailable\\\"', 'Sum', 300))\",\"id\":\"total_available\",\"label\":\"Attempts with total tokens\",\"visible\":false},{\"expression\":\"SUM(SEARCH('{EchoBrain/StagingJourneyV1,stage,provider,model} MetricName=\\\"LlmUsageReported\\\"', 'Sum', 300))\",\"id\":\"usage_reported\",\"label\":\"Attempts with reported usage\",\"visible\":false},{\"expression\":\"SUM(SEARCH('{EchoBrain/StagingJourneyV1,stage,provider,model} MetricName=\\\"LlmAttempt\\\"', 'Sum', 300))\",\"id\":\"llm_attempts\",\"label\":\"LLM attempts\",\"visible\":false},{\"expression\":\"token_total/total_available\",\"id\":\"tokens_per_total_reported_attempt\",\"label\":\"Tokens per total-token-available attempt\"},{\"expression\":\"100*usage_reported/llm_attempts\",\"id\":\"usage_coverage_pct\",\"label\":\"Usage coverage %\",\"yAxis\":\"right\"}]}},{\"type\":\"metric\",\"x\":12,\"y\":18,\"width\":12,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Retrieval counts and approval human wait\",\"view\":\"timeSeries\",\"period\":300,\"metrics\":[{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"RetrievalPlannedQueries\\\"', 'Sum', 300)\",\"id\":\"retrieval_planned\",\"label\":\"Planned queries by workflow and stage\"},{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"RetrievalQueryHits\\\"', 'Sum', 300)\",\"id\":\"retrieval_hits\",\"label\":\"Query hits by workflow and stage\"},{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"RetrievalReleasedAtoms\\\"', 'Sum', 300)\",\"id\":\"retrieval_released\",\"label\":\"Released atoms by workflow and stage\"},{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"RetrievalContextAtoms\\\"', 'Sum', 300)\",\"id\":\"retrieval_context\",\"label\":\"Context atoms by workflow and stage\"},{\"expression\":\"SEARCH('{EchoBrain/StagingJourneyV1,workflow,stage} MetricName=\\\"RetrievalCitations\\\"', 'Sum', 300)\",\"id\":\"retrieval_citations\",\"label\":\"Citations by workflow and stage\"},[\"EchoBrain/StagingJourneyV1\",\"ApprovalHumanWaitMs\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_approval_action_verify\",{\"id\":\"human_wait_p50\",\"stat\":\"p50\",\"label\":\"Human wait p50 (ms)\",\"yAxis\":\"right\"}],[\"EchoBrain/StagingJourneyV1\",\"ApprovalHumanWaitMs\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_approval_action_verify\",{\"id\":\"human_wait_p95\",\"stat\":\"p95\",\"label\":\"Human wait p95 (ms)\",\"yAxis\":\"right\"}]]}},{\"type\":\"metric\",\"x\":0,\"y\":24,\"width\":24,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Meeting approval funnel\",\"view\":\"timeSeries\",\"period\":300,\"stat\":\"Sum\",\"metrics\":[[\"EchoBrain/StagingJourneyV1\",\"StageSucceeded\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_source_intake\",{\"label\":\"Source intake\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_candidate_persist\",\"outcome\",\"actionable\",{\"label\":\"Candidate actionable\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_approval_staging\",\"outcome\",\"staged\",{\"label\":\"Approval staged\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_terminal_persist\",\"outcome\",\"approved\",{\"label\":\"Approved decision\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_terminal_persist\",\"outcome\",\"rejected\",{\"label\":\"Rejected decision\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_terminal_persist\",\"outcome\",\"denied\",{\"label\":\"Denied decision\"}],[\"EchoBrain/StagingJourneyV1\",\"StageSucceeded\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_record_append\",{\"label\":\"Record appended\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_search_publication\",\"outcome\",\"current\",{\"label\":\"Search current\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_search_publication\",\"outcome\",\"published\",{\"label\":\"Search published\"}],[\"EchoBrain/StagingJourneyV1\",\"TerminalOutcome\",\"workflow\",\"meeting_approval\",\"stage\",\"meeting_search_publication\",\"outcome\",\"superseded\",{\"label\":\"Search superseded (still pending)\"}]]}},{\"type\":\"log\",\"x\":0,\"y\":30,\"width\":12,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Recent safe journey failure boundaries\",\"view\":\"table\",\"query\":\"SOURCE '${StagingLogGroupName}' | fields @timestamp, workflow, stage, failure_class, retryable, attempt, elapsed_ms | filter kind = \\\"echo-authority-journey-stage-v1\\\" and event = \\\"failed\\\" | sort @timestamp desc | limit 25\"}},{\"type\":\"log\",\"x\":12,\"y\":30,\"width\":12,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Full and service wall-clock p50/p95/p99\",\"view\":\"table\",\"query\":\"SOURCE '${StagingLogGroupName}' | fields journey_id, workflow, stage, event, outcome, retryable, observed_at, queue_age_ms | filter kind = \\\"echo-authority-journey-stage-v1\\\" | fields parseDate(observed_at, \\\"yyyy-MM-dd'T'HH:mm:ss.SSSX\\\", \\\"UTC\\\") as observed_at_ms, journey_id, workflow, stage, event, outcome, retryable, queue_age_ms | stats min(observed_at_ms) as first_observed_at_ms, max(queue_age_ms) as human_wait_ms, max(if((event = \\\"failed\\\" and retryable = false) or (workflow = \\\"ask\\\" and stage = \\\"ask_response\\\" and event = \\\"succeeded\\\") or (workflow = \\\"meeting_approval\\\" and stage = \\\"meeting_search_publication\\\" and event = \\\"succeeded\\\" and outcome in [\\\"current\\\", \\\"published\\\"]) or (workflow = \\\"meeting_approval\\\" and stage = \\\"meeting_terminal_persist\\\" and event = \\\"succeeded\\\" and outcome in [\\\"rejected\\\", \\\"denied\\\"]), observed_at_ms, 0)) as terminal_observed_at_ms by journey_id, workflow | filter terminal_observed_at_ms > 0 | fields workflow, terminal_observed_at_ms - first_observed_at_ms as journey_wall_clock_ms, terminal_observed_at_ms - first_observed_at_ms - coalesce(human_wait_ms, 0) as service_wall_clock_ms | stats count(*) as completed_journeys, pct(journey_wall_clock_ms, 50) as p50_wall_clock_ms, pct(journey_wall_clock_ms, 95) as p95_wall_clock_ms, pct(journey_wall_clock_ms, 99) as p99_wall_clock_ms, pct(service_wall_clock_ms, 50) as p50_service_wall_clock_ms, pct(service_wall_clock_ms, 95) as p95_service_wall_clock_ms, pct(service_wall_clock_ms, 99) as p99_service_wall_clock_ms by workflow | sort workflow asc | limit 25\"}},{\"type\":\"log\",\"x\":0,\"y\":36,\"width\":12,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Completed journey LLM-token totals p50/p95/p99\",\"view\":\"table\",\"query\":\"SOURCE '${StagingLogGroupName}' | fields journey_id, workflow, stage, event, outcome, retryable, observed_at, llm_usage.total_tokens as total_tokens | filter kind = \\\"echo-authority-journey-stage-v1\\\" | fields parseDate(observed_at, \\\"yyyy-MM-dd'T'HH:mm:ss.SSSX\\\", \\\"UTC\\\") as observed_at_ms, journey_id, workflow, stage, event, outcome, retryable, total_tokens | stats max(if((event = \\\"failed\\\" and retryable = false) or (workflow = \\\"ask\\\" and stage = \\\"ask_response\\\" and event = \\\"succeeded\\\") or (workflow = \\\"meeting_approval\\\" and stage = \\\"meeting_search_publication\\\" and event = \\\"succeeded\\\" and outcome in [\\\"current\\\", \\\"published\\\"]) or (workflow = \\\"meeting_approval\\\" and stage = \\\"meeting_terminal_persist\\\" and event = \\\"succeeded\\\" and outcome in [\\\"rejected\\\", \\\"denied\\\"]), observed_at_ms, 0)) as terminal_observed_at_ms, sum(total_tokens) as journey_total_tokens, sum(if(ispresent(total_tokens), 1, 0)) as total_token_samples by journey_id, workflow | filter terminal_observed_at_ms > 0 and total_token_samples > 0 | stats count(*) as completed_journeys_with_tokens, avg(journey_total_tokens) as avg_total_tokens, pct(journey_total_tokens, 50) as p50_total_tokens, pct(journey_total_tokens, 95) as p95_total_tokens, pct(journey_total_tokens, 99) as p99_total_tokens by workflow | sort workflow asc | limit 25\"}},{\"type\":\"log\",\"x\":12,\"y\":36,\"width\":12,\"height\":6,\"properties\":{\"region\":\"${AWS::Region}\",\"title\":\"Per-stage success, failure, and retry rates\",\"view\":\"table\",\"query\":\"SOURCE '${StagingLogGroupName}' | fields workflow, stage, event, attempt | filter kind = \\\"echo-authority-journey-stage-v1\\\" | filter event in [\\\"started\\\", \\\"succeeded\\\", \\\"failed\\\"] | stats sum(if(event = \\\"succeeded\\\" or event = \\\"failed\\\", 1, 0)) as closed_attempts, sum(if(event = \\\"succeeded\\\", 1, 0)) as succeeded_attempts, sum(if(event = \\\"failed\\\", 1, 0)) as failed_attempts, sum(if(event = \\\"started\\\", 1, 0)) as started_attempts, sum(if(event = \\\"started\\\" and attempt > 1, 1, 0)) as retry_attempts by workflow, stage | filter closed_attempts > 0 | fields workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts as success_rate_pct, 100 * failed_attempts / closed_attempts as failure_rate_pct, 100 * retry_attempts / started_attempts as retry_rate_pct | sort workflow asc, stage asc | limit 30\"}}]}"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "StagingJourneyOverviewDashboardName": {
+      "Description": "CloudWatch dashboard for staging journey telemetry.",
+      "Value": {
+        "Ref": "StagingJourneyOverviewDashboard"
+      }
+    },
+    "WorkerSilenceAlarmName": {
+      "Description": "Alarm for a missing successful staging worker cycle.",
+      "Value": {
+        "Ref": "WorkerSilenceAlarm"
+      }
+    },
+    "AskRetrievalFailureAlarmName": {
+      "Description": "Alarm for repeated staging Ask retrieval failures.",
+      "Value": {
+        "Ref": "AskRetrievalFailureAlarm"
+      }
+    },
+    "ApprovedSearchStuckAlarmName": {
+      "Description": "Alarm for approved staging work stuck before search publication.",
+      "Value": {
+        "Ref": "ApprovedSearchStuckAlarm"
+      }
+    }
+  }
+}

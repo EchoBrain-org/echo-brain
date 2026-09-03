@@ -29,8 +29,21 @@ import type {
 
 export const STAGING_MEETING_APPROVAL_JOURNEY_STATE_FILE_V1 =
   "staging-meeting-approval-journeys-v1.sqlite" as const;
+export const STAGING_APPROVED_SEARCH_STUCK_THRESHOLD_MS_V1 = 5 * 60 * 1_000;
 
 const MAX_MACHINE_DURATION_MS = 31 * 24 * 60 * 60 * 1_000;
+
+/** Content-free point-in-time health derived from the disposable sidecar. */
+export interface MeetingApprovalSearchBacklogSnapshotV1 {
+  readonly observed_at: string;
+  readonly pending_count: number;
+  readonly stuck_count: number;
+  readonly oldest_age_ms: number | null;
+}
+
+export type MeetingApprovalSearchBacklogObserverV1 = (
+  snapshot: MeetingApprovalSearchBacklogSnapshotV1,
+) => void | Promise<void>;
 
 export interface MeetingApprovalJourneyTelemetryConfigV1 {
   readonly state_directory: string;
@@ -39,6 +52,7 @@ export interface MeetingApprovalJourneyTelemetryConfigV1 {
   readonly build_number: number;
   readonly extraction_provider: JourneyLlmProviderV1;
   readonly extraction_model: JourneyLlmModelV1;
+  readonly approved_search_backlog_observer?: MeetingApprovalSearchBacklogObserverV1;
 }
 
 export interface MeetingApprovalJourneyTelemetryDependenciesV1 {
@@ -546,6 +560,7 @@ class MeetingApprovalJourneyTelemetryV1
           journey.journey_id,
           this.captureClock().observed_at,
         );
+        this.observeApprovedSearchBacklog();
       }
     } catch {
       // Search correlation is optional telemetry state.
@@ -555,6 +570,7 @@ class MeetingApprovalJourneyTelemetryV1
   beginAwaitingSearch(): readonly MeetingApprovalJourneyStageAttemptV1[] {
     try {
       const pending = this.state.listApprovedRecordsAwaitingSearch();
+      this.observeApprovedSearchBacklog(pending);
       const attempts: MeetingApprovalJourneyStageAttemptV1[] = [];
       for (const item of pending) {
         const attempt = this.beginStage(
@@ -599,6 +615,8 @@ class MeetingApprovalJourneyTelemetryV1
       this.awaitingSearchBatches.delete(attempts);
     } catch {
       // Global search reconciliation must never depend on run-detail telemetry.
+    } finally {
+      this.observeApprovedSearchBacklog();
     }
   }
 
@@ -613,6 +631,41 @@ class MeetingApprovalJourneyTelemetryV1
       this.awaitingSearchBatches.delete(attempts);
     } catch {
       // Global search reconciliation must never depend on run-detail telemetry.
+    } finally {
+      this.observeApprovedSearchBacklog();
+    }
+  }
+
+  private observeApprovedSearchBacklog(
+    knownPending?: ReturnType<
+      MeetingApprovalJourneyStateV1["listApprovedRecordsAwaitingSearch"]
+    >,
+  ): void {
+    const observer = this.config.approved_search_backlog_observer;
+    if (observer === undefined) return;
+    try {
+      const observed_at = this.captureClock().observed_at;
+      const observedAtMs = Date.parse(observed_at);
+      const pending =
+        knownPending ?? this.state.listApprovedRecordsAwaitingSearch();
+      let oldestAgeMs: number | null = null;
+      let stuckCount = 0;
+      for (const entry of pending) {
+        const rawAge = observedAtMs - Date.parse(entry.marked_at);
+        const age = Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, rawAge));
+        oldestAgeMs = oldestAgeMs === null ? age : Math.max(oldestAgeMs, age);
+        if (age >= STAGING_APPROVED_SEARCH_STUCK_THRESHOLD_MS_V1)
+          stuckCount += 1;
+      }
+      const snapshot = Object.freeze({
+        observed_at,
+        pending_count: pending.length,
+        stuck_count: stuckCount,
+        oldest_age_ms: oldestAgeMs,
+      } satisfies MeetingApprovalSearchBacklogSnapshotV1);
+      void Promise.resolve(observer(snapshot)).catch(() => undefined);
+    } catch {
+      // Backlog health is telemetry-only and remains fail-open.
     }
   }
 

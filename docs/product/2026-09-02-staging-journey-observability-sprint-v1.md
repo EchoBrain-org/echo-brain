@@ -247,19 +247,46 @@ timelines; human wait is explicitly separate from post-click machine latency.
 
 ### Phase 4 - CloudWatch overview
 
-Create aggregate metrics, Logs Insights queries, alarms, and a
-CloudFormation-managed staging dashboard. The overview includes success and
-failure rates, p50/p95/p99 stage and end-to-end latency, token totals and
-tokens-per-request, retries, worker heartbeat, approved-work-stuck count, and
-the meeting funnel.
+The implemented local formatter, transport, and
+`authority-staging-journey-observability-v1.template.json` create aggregate
+EMF metrics, Logs Insights queries, three alarms, and a CloudFormation-managed
+staging dashboard. The template selects only the exact staging Authority log
+group and creates no production resource or deployment path. EMF is emitted
+beside canonical raw journey logs; `WorkerCycleCompleted` is the dedicated
+stack's only log metric filter. The overview includes success and failure
+rates, p50/p95/p99 stage, full end-to-end, and wait-excluded service latency,
+token totals by step and completed request, tokens per total-token-available
+attempt,
+usage coverage, retries, worker heartbeat,
+approved-work-stuck count, and the meeting funnel. True end-to-end latency is
+derived in Logs Insights from a correlated journey's canonical `observed_at`
+values, never by summing stage durations. Full approval wall-clock includes
+human wait; a second service wall-clock subtracts the separately labelled
+`queue_age_ms` interval so it never enters service-latency or availability
+calculations.
 
-**PR boundary:** telemetry metric emission, dashboard/query/IaC definitions,
-and dashboard reconciliation tests or documented fixture proof.
+**PR boundary:** staging-only telemetry metric emission, dashboard/query/IaC
+definitions, and dashboard reconciliation tests or documented fixture proof.
+The EMF metric dictionary uses only low-cardinality contract dimensions: stage
+metrics use `workflow,stage`; outcomes add `outcome`; failures add
+`failure_class`; LLM metrics use `stage,provider,model`; retrieval and human
+wait use `workflow,stage`; and liveness, worker-cycle, retrieval-failure, and
+approved-search backlog metrics have no dimensions. It excludes journey IDs,
+release identity, build identity, and all business identifiers. Reported LLM
+token values are never substituted with zero when unavailable. The stuck-work
+signal is an explicit content-free pending-approved-search gauge and oldest-age
+observation, not a best-effort cross-event dashboard join.
 
 **Exit:** dashboard aggregates reconcile with raw journey events. Initial
 alarms cover worker silence, retrieval failures, and approved work stuck before
-search publication; latency and token anomaly thresholds wait for a measured
-staging baseline.
+search publication. The quick-detection thresholds are a successful worker
+cycle missing in two of three one-minute periods, two Ask retrieval failures in
+five minutes, and an approved-search stuck gauge of at least one after five
+minutes for two of three one-minute periods. Latency and token anomaly
+thresholds wait for a measured staging baseline. Dashboard queries and
+recent-run views are bounded by the existing 14-day staging log retention. The
+code/template are locally implemented and verified; no AWS stack deployment or
+live proof is claimed in this phase.
 
 ### Phase 5 - Journey Explorer backend
 
@@ -280,7 +307,8 @@ Create the operator UI: recent Ask and approval runs, safe outcome summary,
 waterfall by stage and attempt, LLM token totals, retries, retrieval counts,
 human-wait segment, and clearly redacted failure boundary. Rehearse one Ask
 and one approval against staging and record the evidence that dashboard totals
-and run detail agree.
+and run detail agree. This is the first AWS live staging rehearsal for the
+journey overview; it is explicitly deferred from Phase 4.
 
 **PR boundary:** UI/custom widget, operator documentation, and staging
 rehearsal evidence only.

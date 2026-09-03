@@ -6,13 +6,20 @@ import { MeetingProcessingWorkerLifecycleV1 } from "../src/processing/admitted-m
 type WorkerErrorObserver = (error: Error) => void;
 type AnswerCompositionFailureObserver = (event: object) => void;
 type WorkerTelemetryObserver = (event: object) => void;
+type ApprovedSearchBacklogObserver = (event: {
+  readonly observed_at: string;
+  readonly pending_count: number;
+  readonly stuck_count: number;
+  readonly oldest_age_ms: number | null;
+}) => void | Promise<void>;
 
 const runtimeState = vi.hoisted(() => ({
   worker_error: undefined as WorkerErrorObserver | undefined,
   worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
+  approved_search_backlog: undefined as
+    ApprovedSearchBacklogObserver | undefined,
   answer_composition_failure: undefined as
-    | AnswerCompositionFailureObserver
-    | undefined,
+    AnswerCompositionFailureObserver | undefined,
   startup_error: undefined as Error | undefined,
   open_gate: undefined as Promise<void> | undefined,
   slack_signing_secret_file: undefined as string | undefined,
@@ -43,12 +50,15 @@ vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
   }),
 }));
 
-vi.mock("../src/composition/organization-authority-person-administration-cli.js", () => ({
-  readPersonOidcConfiguration: () => ({
-    client_authentication: "none",
-    configuration: {},
+vi.mock(
+  "../src/composition/organization-authority-person-administration-cli.js",
+  () => ({
+    readPersonOidcConfiguration: () => ({
+      client_authentication: "none",
+      configuration: {},
+    }),
   }),
-}));
+);
 
 vi.mock("../src/composition/organization-authority-composition-root.js", () => ({
   openOrganizationAuthorityService: async (config: {
@@ -56,7 +66,9 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly on_answer_composition_failure?: AnswerCompositionFailureObserver;
     readonly ask_journey_telemetry?: object;
-    readonly meeting_approval_journey_telemetry?: object;
+    readonly meeting_approval_journey_telemetry?: {
+      readonly approved_search_backlog_observer?: ApprovedSearchBacklogObserver;
+    };
     readonly staging_meeting_approval_journey_telemetry_enabled?: true;
     readonly slack_signing_secret_file: string;
     readonly slack_connection_id: string;
@@ -66,6 +78,9 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
     runtimeState.worker_error = config.on_worker_error;
     runtimeState.worker_telemetry = config.on_worker_telemetry;
+    runtimeState.approved_search_backlog =
+      config.meeting_approval_journey_telemetry
+        ?.approved_search_backlog_observer;
     runtimeState.answer_composition_failure =
       config.on_answer_composition_failure;
     runtimeState.ask_journey_telemetry = config.ask_journey_telemetry;
@@ -91,9 +106,10 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
 vi.mock(
   "../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js",
   async (importOriginal) => {
-    const actual = await importOriginal<
-      typeof import("../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js")
-    >();
+    const actual =
+      await importOriginal<
+        typeof import("../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js")
+      >();
     return {
       ...actual,
       createStagingJourneyTelemetryTransportFromEnvironmentV1(
@@ -119,9 +135,8 @@ vi.mock(
   },
 );
 
-const { runOrganizationAuthorityServiceCli } = await import(
-  "../src/composition/organization-authority-service-cli.js"
-);
+const { runOrganizationAuthorityServiceCli } =
+  await import("../src/composition/organization-authority-service-cli.js");
 
 afterEach(() => {
   delete process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1;
@@ -129,6 +144,7 @@ afterEach(() => {
   delete process.env.ECHO_SOURCE_SHA;
   runtimeState.worker_error = undefined;
   runtimeState.worker_telemetry = undefined;
+  runtimeState.approved_search_backlog = undefined;
   runtimeState.answer_composition_failure = undefined;
   runtimeState.startup_error = undefined;
   runtimeState.open_gate = undefined;
@@ -174,6 +190,7 @@ describe("admitted runtime CLI events", () => {
 
     const running = start({ stderr: () => undefined });
     await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    expect(runtimeState.approved_search_backlog).toBeDefined();
     process.emit("SIGTERM");
     await vi.waitFor(() =>
       expect(runtimeState.shutdown_events).toEqual(["runtime-close-started"]),
@@ -201,6 +218,13 @@ describe("admitted runtime CLI events", () => {
       },
     });
     await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    expect(runtimeState.approved_search_backlog).toBeDefined();
+    runtimeState.approved_search_backlog?.({
+      observed_at: "2026-09-02T12:35:56.000Z",
+      pending_count: 1,
+      stuck_count: 0,
+      oldest_age_ms: 60_000,
+    });
     process.emit("SIGTERM");
     await expect(staging).resolves.toBe(0);
 
@@ -229,6 +253,18 @@ describe("admitted runtime CLI events", () => {
     expect(
       runtimeState.staging_meeting_approval_journey_telemetry_enabled,
     ).toBe(true);
+    expect(
+      stagingStderr
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find(
+          (event) => event.kind === "echo-authority-approved-search-backlog-v1",
+        ),
+    ).toMatchObject({
+      environment: "staging",
+      pending_count: 1,
+      stuck_count: 0,
+      oldest_age_ms: 60_000,
+    });
 
     runtimeState.worker_error = undefined;
     runtimeState.authority_url = "https://authority.example";

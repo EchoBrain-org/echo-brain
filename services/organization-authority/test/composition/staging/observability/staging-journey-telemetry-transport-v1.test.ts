@@ -7,9 +7,11 @@ import {
 import {
   createStagingJourneyTelemetryTransportV1,
   createStagingJourneyTelemetryTransportFromEnvironmentV1,
+  STAGING_APPROVED_SEARCH_BACKLOG_KIND_V1,
   STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1,
   STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
 } from "../../../../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
+import { STAGING_JOURNEY_METRICS_NAMESPACE_V1 } from "../../../../src/composition/staging/observability/staging-journey-metrics-v1.js";
 
 const RELEASE_SHA = "f7018e16232aa11d24f9ecc880943b0bbb8c6ea2";
 const STARTED_AT = "2026-09-02T12:34:56.000Z";
@@ -45,7 +47,9 @@ describe("staging journey telemetry transport v1", () => {
         scheduler: {
           set_interval: (received, intervalMs) => {
             callback = received;
-            expect(intervalMs).toBe(STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1);
+            expect(intervalMs).toBe(
+              STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1,
+            );
             return intervalId;
           },
           clear_interval: (id) => cleared.push(id),
@@ -62,18 +66,36 @@ describe("staging journey telemetry transport v1", () => {
     expect(callback).toBeUndefined();
 
     transport.start();
-    expect(lines).toEqual([`${canonicalJson(liveness("startup", STARTED_AT))}\n`]);
-    callback?.();
-    expect(lines).toEqual([
+    expect(lines[0]).toBe(
       `${canonicalJson(liveness("startup", STARTED_AT))}\n`,
+    );
+    expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({
+      _aws: {
+        Timestamp: Date.parse(STARTED_AT),
+        CloudWatchMetrics: [
+          {
+            Namespace: STAGING_JOURNEY_METRICS_NAMESPACE_V1,
+            Dimensions: [[]],
+            Metrics: [{ Name: "JourneyTelemetryAlive", Unit: "Count" }],
+          },
+        ],
+      },
+      JourneyTelemetryAlive: 1,
+    });
+    callback?.();
+    expect(lines[2]).toBe(
       `${canonicalJson(liveness("heartbeat", HEARTBEAT_AT))}\n`,
-    ]);
+    );
+    expect(JSON.parse(lines[3] ?? "{}")).toMatchObject({
+      _aws: { Timestamp: Date.parse(HEARTBEAT_AT) },
+      JourneyTelemetryAlive: 1,
+    });
 
     transport.close();
     transport.close();
     callback?.();
     expect(cleared).toEqual([intervalId]);
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(4);
   });
 
   it("makes close-before-start inert and prevents a later start from claiming liveness", () => {
@@ -163,7 +185,17 @@ describe("staging journey telemetry transport v1", () => {
 
     expect(transport.enabled).toBe(false);
     expect(transport.identity).toBeNull();
-    expect(() => transport.observer({} as JourneyTelemetryEventV1)).not.toThrow();
+    expect(() =>
+      transport.observer({} as JourneyTelemetryEventV1),
+    ).not.toThrow();
+    expect(() =>
+      transport.approved_search_backlog_observer({
+        observed_at: STARTED_AT,
+        pending_count: 0,
+        stuck_count: 0,
+        oldest_age_ms: null,
+      }),
+    ).not.toThrow();
     expect(() => transport.close()).not.toThrow();
     expect(lines).toEqual([]);
     expect(scheduled).toBe(false);
@@ -196,7 +228,14 @@ describe("staging journey telemetry transport v1", () => {
       release_sha: RELEASE_SHA,
       build_number: 42,
     });
-    expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({
+    const heartbeat = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find(
+        (value) =>
+          value.kind === STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1 &&
+          value.event === "heartbeat",
+      );
+    expect(heartbeat).toMatchObject({
       release_sha: RELEASE_SHA,
       build_number: 42,
       event: "heartbeat",
@@ -352,15 +391,24 @@ describe("staging journey telemetry transport v1", () => {
     const injected = {
       ...event,
       request_content: "must-not-serialize",
-      llm_usage: { ...event.llm_usage, provider_response: "must-not-serialize" },
+      llm_usage: {
+        ...event.llm_usage,
+        provider_response: "must-not-serialize",
+      },
     } as JourneyTelemetryEventV1;
 
     transport.start();
     transport.observer(injected);
 
-    expect(lines[1]).toBe(`${canonicalJson(event)}\n`);
-    expect(lines[1]).not.toContain("must-not-serialize");
-    expect(JSON.parse(lines[1] ?? "{}")).toEqual(event);
+    expect(lines[2]).toBe(`${canonicalJson(event)}\n`);
+    expect(lines[2]).not.toContain("must-not-serialize");
+    expect(JSON.parse(lines[2] ?? "{}")).toEqual(event);
+    for (const metricLine of lines.slice(3)) {
+      expect(metricLine).not.toContain("must-not-serialize");
+      expect(metricLine).not.toContain(JOURNEY_ID);
+      expect(metricLine).not.toContain(RELEASE_SHA);
+      expect(JSON.parse(metricLine)).toHaveProperty("_aws.CloudWatchMetrics");
+    }
 
     for (const mismatched of [
       { ...event, environment: "production" },
@@ -369,6 +417,75 @@ describe("staging journey telemetry transport v1", () => {
     ]) {
       transport.observer(mismatched as JourneyTelemetryEventV1);
     }
+    expect(lines).toHaveLength(5);
+  });
+
+  it("writes validated content-free approved-search backlog diagnostics and metrics", () => {
+    const lines: string[] = [];
+    const transport = createStagingJourneyTelemetryTransportV1(
+      { release_sha: RELEASE_SHA, build_number: 42 },
+      {
+        write: (line) => {
+          lines.push(line);
+        },
+        now: () => STARTED_AT,
+        scheduler: { set_interval: () => 1, clear_interval: () => undefined },
+      },
+    );
+    lines.length = 0;
+
+    transport.approved_search_backlog_observer({
+      observed_at: HEARTBEAT_AT,
+      pending_count: 2,
+      stuck_count: 1,
+      oldest_age_ms: 600_000,
+    });
+
+    expect(JSON.parse(lines[0] ?? "{}")).toEqual({
+      schema_version: 1,
+      kind: STAGING_APPROVED_SEARCH_BACKLOG_KIND_V1,
+      observed_at: HEARTBEAT_AT,
+      environment: "staging",
+      pending_count: 2,
+      stuck_count: 1,
+      oldest_age_ms: 600_000,
+    });
+    expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({
+      _aws: {
+        Timestamp: Date.parse(HEARTBEAT_AT),
+        CloudWatchMetrics: [
+          {
+            Namespace: STAGING_JOURNEY_METRICS_NAMESPACE_V1,
+            Dimensions: [[]],
+          },
+        ],
+      },
+      ApprovedSearchPendingCount: 2,
+      ApprovedSearchStuckCount: 1,
+      ApprovedSearchOldestAgeMs: 600_000,
+      ApprovedSearchBacklogCheck: 1,
+    });
+    const serialized = lines.join("");
+    expect(serialized).not.toContain(JOURNEY_ID);
+    expect(serialized).not.toContain(RELEASE_SHA);
+
+    expect(() =>
+      transport.approved_search_backlog_observer({
+        observed_at: "invalid",
+        pending_count: 0,
+        stuck_count: 1,
+        oldest_age_ms: null,
+      }),
+    ).not.toThrow();
+    expect(lines).toHaveLength(2);
+
+    transport.close();
+    transport.approved_search_backlog_observer({
+      observed_at: HEARTBEAT_AT,
+      pending_count: 0,
+      stuck_count: 0,
+      oldest_age_ms: null,
+    });
     expect(lines).toHaveLength(2);
   });
 });
