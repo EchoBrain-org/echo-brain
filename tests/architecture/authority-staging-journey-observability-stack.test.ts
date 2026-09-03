@@ -263,6 +263,7 @@ describe("staging journey observability overview stack", () => {
 
     const wallClock = queries.find((query) => query.includes("p50_wall_clock_ms"));
     expect(wallClock).toBeDefined();
+    if (wallClock === undefined) throw new Error("wall-clock query is required");
     expect(wallClock).toContain("observed_at");
     expect(wallClock).toContain("parseDate(observed_at");
     expect(wallClock).toContain('event = "started" and sequence = 1');
@@ -303,6 +304,8 @@ describe("staging journey observability overview stack", () => {
     expect(wallClock).not.toMatch(/sum\(elapsed_ms\)/i);
     expect(queries.join("\n")).not.toMatch(/sum\(elapsed_ms\)/i);
     const tokenTotals = queries.find((query) => query.includes("journey_total_tokens"));
+    expect(tokenTotals).toBeDefined();
+    if (tokenTotals === undefined) throw new Error("token-total query is required");
     expect(tokenTotals).toContain("llm_usage.total_tokens as total_tokens");
     expect(tokenTotals).toContain(
       'filter kind = "echo-authority-journey-stage-v1" | fields parseDate',
@@ -323,6 +326,8 @@ describe("staging journey observability overview stack", () => {
     expect(tokenTotals).not.toContain("superseded");
     expect(tokenTotals).toContain("p95_total_tokens");
     const rates = queries.find((query) => query.includes("failure_rate_pct"));
+    expect(rates).toBeDefined();
+    if (rates === undefined) throw new Error("stage-rate query is required");
     expect(rates).toContain('filter event in ["started", "succeeded", "failed"]');
     expect(rates).toContain('sum(if(event = "failed", 1, 0))');
     expect(rates).toContain('sum(if(event = "started" and attempt > 1, 1, 0))');
