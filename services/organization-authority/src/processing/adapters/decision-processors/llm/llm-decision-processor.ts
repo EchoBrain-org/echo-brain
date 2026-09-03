@@ -6,6 +6,7 @@ import {
   type AdapterHealth,
   type AdapterOperationContext,
   type DecisionExtractionContext,
+  type DecisionExtractionGenerationObservation,
   type DecisionProcessorAdapter,
   type DecisionSet,
   type EvidenceSpan,
@@ -23,6 +24,8 @@ import {
   type LlmCredentialResolver,
   type LlmProviderClient,
   type LlmProviderId,
+  StructuredGenerationAttemptError,
+  type StructuredGenerationResult,
 } from './llm-provider.js';
 import { OllamaClient, DEFAULT_OLLAMA_BASE_URL } from './ollama-client.js';
 import { OpenAiClient } from './openai-client.js';
@@ -122,7 +125,7 @@ function assertNotCancelled(
   operation: string,
 ): void {
   if (signal?.aborted === true) {
-    throw new AdapterError('timeout', `LLM ${operation} was cancelled`, true);
+    throw new DOMException(`LLM ${operation} was cancelled`, "AbortError");
   }
 }
 
@@ -685,12 +688,15 @@ export interface LlmDecisionProcessorOptions {
   credentialResolver?: LlmCredentialResolver;
   fetchImpl?: typeof fetch;
   now?: () => string;
+  /** Test seam for the provider-call elapsed time only. */
+  now_ms?: () => number;
 }
 
 export class LlmDecisionProcessor implements DecisionProcessorAdapter {
   readonly identity: DecisionProcessorAdapter['identity'];
   private readonly client: LlmProviderClient;
   private readonly now: () => string;
+  private readonly nowMs: () => number;
 
   constructor(
     private readonly config: AdapterConfig,
@@ -703,7 +709,41 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       version: llmProcessingVersion(config),
     });
     this.now = options.now ?? (() => new Date().toISOString());
+    this.nowMs = options.now_ms ?? (() => performance.now());
     this.client = options.client ?? createProviderClient(config, options);
+  }
+
+  private providerElapsedMs(startedAt: number | null): number {
+    let endedAt: number | null;
+    try {
+      const value = this.nowMs();
+      endedAt = Number.isFinite(value) ? value : null;
+    } catch {
+      endedAt = null;
+    }
+    if (startedAt === null || endedAt === null) return 0;
+    const elapsed = Math.max(0, Math.round(endedAt - startedAt));
+    return Number.isSafeInteger(elapsed) ? elapsed : 0;
+  }
+
+  private providerStartedAt(): number | null {
+    try {
+      const value = this.nowMs();
+      return Number.isFinite(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private observeGeneration(
+    context: DecisionExtractionContext,
+    event: DecisionExtractionGenerationObservation,
+  ): void {
+    try {
+      context.on_generation?.(Object.freeze(event));
+    } catch {
+      // Telemetry is observational: never let an observer alter extraction.
+    }
   }
 
   private get model(): string {
@@ -869,13 +909,67 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       );
     }
     const renderedMeeting = renderMeeting(meeting);
-    const response = await this.client.generateStructured({
+    const startedAt = this.providerStartedAt();
+    let response: StructuredGenerationResult;
+    try {
+      response = await this.client.generateStructured({
+        model: this.model,
+        systemPrompt: SYSTEM_PROMPT,
+        userPrompt: renderedMeeting.prompt,
+        schema: EXTRACTION_FORMAT,
+        maxOutputTokens: configuredMaxOutputTokens(this.config),
+        ...(operation?.signal === undefined
+          ? {}
+          : { signal: operation.signal }),
+      });
+    } catch (error) {
+      const observation =
+        error instanceof StructuredGenerationAttemptError
+          ? error.observation
+          : undefined;
+      const finishReason =
+        observation?.stopReason === 'stop' ||
+        observation?.stopReason === 'length' ||
+        observation?.stopReason === 'content_filter' ||
+        observation?.stopReason === 'error'
+          ? observation.stopReason
+          : typeof observation?.stopReason === 'string'
+            ? 'other'
+            : null;
+      this.observeGeneration(context, {
+        outcome: 'failed',
+        provider: this.client.provider,
+        model: this.model,
+        provider_latency_ms: this.providerElapsedMs(startedAt),
+        input_tokens: observation?.inputTokens ?? null,
+        output_tokens: observation?.outputTokens ?? null,
+        total_tokens: observation?.totalTokens ?? null,
+        cached_input_tokens: observation?.cachedInputTokens ?? null,
+        reasoning_tokens: observation?.reasoningTokens ?? null,
+        finish_reason: finishReason,
+      });
+      throw error;
+    }
+    const finishReason =
+      response.stopReason === 'stop' ||
+      response.stopReason === 'length' ||
+      response.stopReason === 'content_filter' ||
+      response.stopReason === 'error'
+        ? response.stopReason
+        : typeof response.stopReason === 'string'
+          ? 'other'
+          : null;
+    this.observeGeneration(context, {
+      outcome: 'succeeded',
+      provider: this.client.provider,
       model: this.model,
-      systemPrompt: SYSTEM_PROMPT,
-      userPrompt: renderedMeeting.prompt,
-      schema: EXTRACTION_FORMAT,
-      maxOutputTokens: configuredMaxOutputTokens(this.config),
-      ...(operation?.signal === undefined ? {} : { signal: operation.signal }),
+      provider_latency_ms: this.providerElapsedMs(startedAt),
+      input_tokens: response.inputTokens ?? null,
+      output_tokens: response.outputTokens ?? null,
+      total_tokens: response.totalTokens ?? null,
+      cached_input_tokens: response.cachedInputTokens ?? null,
+      reasoning_tokens: response.reasoningTokens ?? null,
+      finish_reason: finishReason,
     });
     assertNotCancelled(operation?.signal, 'extraction');
 

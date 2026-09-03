@@ -3,7 +3,10 @@ import { AnthropicClient } from '../../../src/processing/adapters/decision-proce
 import { OllamaClient } from '../../../src/processing/adapters/decision-processors/llm/ollama-client.js';
 import { OpenAiClient } from '../../../src/processing/adapters/decision-processors/llm/openai-client.js';
 import { OpenRouterClient } from '../../../src/processing/adapters/decision-processors/llm/openrouter-client.js';
-import type { StructuredGenerationRequest } from '../../../src/processing/adapters/decision-processors/llm/llm-provider.js';
+import {
+  StructuredGenerationAttemptError,
+  type StructuredGenerationRequest,
+} from '../../../src/processing/adapters/decision-processors/llm/llm-provider.js';
 
 const generationRequest: StructuredGenerationRequest = {
   model: 'provider-model',
@@ -262,7 +265,13 @@ describe('OpenRouter provider client', () => {
                 finish_reason: 'stop',
               },
             ],
-            usage: { prompt_tokens: 40, completion_tokens: 5 },
+            usage: {
+              prompt_tokens: 40,
+              completion_tokens: 5,
+              total_tokens: 45,
+              prompt_tokens_details: { cached_tokens: 3 },
+              completion_tokens_details: { reasoning_tokens: 2 },
+            },
           }),
           { status: 200 },
         );
@@ -296,6 +305,9 @@ describe('OpenRouter provider client', () => {
       requestId: 'gen_123',
       inputTokens: 40,
       outputTokens: 5,
+      totalTokens: 45,
+      cachedInputTokens: 3,
+      reasoningTokens: 2,
       stopReason: 'stop',
     });
   });
@@ -323,6 +335,133 @@ describe('OpenRouter provider client', () => {
     await expect(
       client.verifyModel('openai/gpt-test'),
     ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    {
+      finishReason: 'length',
+      code: 'temporarily_unavailable',
+      retryable: true,
+    },
+    {
+      finishReason: 'content_filter',
+      code: 'permanently_rejected',
+      retryable: false,
+    },
+    {
+      finishReason: 'error',
+      code: 'temporarily_unavailable',
+      retryable: true,
+    },
+  ])(
+    'retains only bounded usage when the provider finishes with $finishReason',
+    async ({ finishReason, code, retryable }) => {
+      const client = new OpenRouterClient({
+        credentialRef: 'env:OPENROUTER_API_KEY',
+        credentialResolver: () => 'openrouter-secret',
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              id: 'generation-id-must-not-escape',
+              choices: [
+                {
+                  message: { content: 'response-content-must-not-escape' },
+                  finish_reason: finishReason,
+                },
+              ],
+              usage: {
+                prompt_tokens: 40,
+                completion_tokens: 5,
+                total_tokens: 45,
+                prompt_tokens_details: { cached_tokens: 3 },
+                completion_tokens_details: { reasoning_tokens: 2 },
+              },
+            }),
+            { status: 200 },
+          ),
+      });
+
+      let failure: unknown;
+      try {
+        await client.generateStructured({
+          ...generationRequest,
+          model: 'openai/gpt-test',
+        });
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toBeInstanceOf(StructuredGenerationAttemptError);
+      expect(failure).toMatchObject({
+        code,
+        retryable,
+        observation: {
+          inputTokens: 40,
+          outputTokens: 5,
+          totalTokens: 45,
+          cachedInputTokens: 3,
+          reasoningTokens: 2,
+          stopReason: finishReason,
+        },
+      });
+      expect(JSON.stringify(failure)).not.toContain(
+        'response-content-must-not-escape',
+      );
+      expect(JSON.stringify(failure)).not.toContain(
+        'generation-id-must-not-escape',
+      );
+    },
+  );
+
+  it('retains bounded token usage when the model refuses a completed generation', async () => {
+    const client = new OpenRouterClient({
+      credentialRef: 'env:OPENROUTER_API_KEY',
+      credentialResolver: () => 'openrouter-secret',
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: { refusal: 'private refusal text' },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: {
+              prompt_tokens: 40,
+              completion_tokens: 5,
+              total_tokens: 45,
+              prompt_tokens_details: { cached_tokens: 3 },
+              completion_tokens_details: { reasoning_tokens: 2 },
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    let failure: unknown;
+    try {
+      await client.generateStructured({
+        ...generationRequest,
+        model: 'openai/gpt-test',
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(StructuredGenerationAttemptError);
+    expect(failure).toMatchObject({
+      code: 'permanently_rejected',
+      retryable: false,
+      observation: {
+        inputTokens: 40,
+        outputTokens: 5,
+        totalTokens: 45,
+        cachedInputTokens: 3,
+        reasoningTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    expect(JSON.stringify(failure)).not.toContain('private refusal text');
   });
 
   it('treats HTTP 200 provider errors as failures', async () => {

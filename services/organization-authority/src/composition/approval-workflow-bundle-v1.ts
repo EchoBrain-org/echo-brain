@@ -4,6 +4,7 @@ import type { OrganizationRecordAppenderV4 } from "@echo-brain/organization-reco
 import type { ApprovalWorkflowStagerV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
+import type { MeetingApprovalJourneyTelemetryPortV1 } from "../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
 /** The approval-only phases used by the shared admitted-processing lifecycle. */
 export interface ApprovalWorkflowProcessingV1 {
@@ -25,6 +26,8 @@ export interface ApprovalWorkflowContextV1 {
     readonly state_lineage_id: string;
   };
   readonly next_envelope_id: () => string;
+  /** Present only in the explicitly configured staging runtime. */
+  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
 }
 
 export interface ApprovalWorkflowComponentsV1 {

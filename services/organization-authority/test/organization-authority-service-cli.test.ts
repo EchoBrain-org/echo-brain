@@ -19,8 +19,14 @@ const runtimeState = vi.hoisted(() => ({
   slack_connection_id: undefined as string | undefined,
   openrouter_credential_file: undefined as string | undefined,
   ask_journey_telemetry: undefined as object | undefined,
+  meeting_approval_journey_telemetry: undefined as object | undefined,
+  staging_meeting_approval_journey_telemetry_enabled: undefined as
+    | true
+    | undefined,
   authority_url: "https://authority.example",
   processing: "active" as "active" | "idle_until_finalize",
+  shutdown_events: [] as string[],
+  runtime_close_gate: undefined as Promise<void> | undefined,
 }));
 
 vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
@@ -50,6 +56,8 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
     readonly on_answer_composition_failure?: AnswerCompositionFailureObserver;
     readonly ask_journey_telemetry?: object;
+    readonly meeting_approval_journey_telemetry?: object;
+    readonly staging_meeting_approval_journey_telemetry_enabled?: true;
     readonly slack_signing_secret_file: string;
     readonly slack_connection_id: string;
     readonly openrouter_credential_file: string;
@@ -61,16 +69,55 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.answer_composition_failure =
       config.on_answer_composition_failure;
     runtimeState.ask_journey_telemetry = config.ask_journey_telemetry;
+    runtimeState.meeting_approval_journey_telemetry =
+      config.meeting_approval_journey_telemetry;
+    runtimeState.staging_meeting_approval_journey_telemetry_enabled =
+      config.staging_meeting_approval_journey_telemetry_enabled;
     runtimeState.slack_signing_secret_file = config.slack_signing_secret_file;
     runtimeState.slack_connection_id = config.slack_connection_id;
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
     return {
       address: { address: "127.0.0.1", port: 43179 },
       processing: runtimeState.processing,
-      close: async () => undefined,
+      close: async () => {
+        runtimeState.shutdown_events.push("runtime-close-started");
+        await runtimeState.runtime_close_gate;
+        runtimeState.shutdown_events.push("runtime-close-finished");
+      },
     };
   },
 }));
+
+vi.mock(
+  "../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import("../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js")
+    >();
+    return {
+      ...actual,
+      createStagingJourneyTelemetryTransportFromEnvironmentV1(
+        environment: Readonly<Record<string, string | undefined>>,
+        dependencies: Parameters<
+          typeof actual.createStagingJourneyTelemetryTransportFromEnvironmentV1
+        >[1],
+      ) {
+        const transport =
+          actual.createStagingJourneyTelemetryTransportFromEnvironmentV1(
+            environment,
+            dependencies,
+          );
+        return {
+          ...transport,
+          close() {
+            runtimeState.shutdown_events.push("telemetry-transport-closed");
+            transport.close();
+          },
+        };
+      },
+    };
+  },
+);
 
 const { runOrganizationAuthorityServiceCli } = await import(
   "../src/composition/organization-authority-service-cli.js"
@@ -89,8 +136,12 @@ afterEach(() => {
   runtimeState.slack_connection_id = undefined;
   runtimeState.openrouter_credential_file = undefined;
   runtimeState.ask_journey_telemetry = undefined;
+  runtimeState.meeting_approval_journey_telemetry = undefined;
+  runtimeState.staging_meeting_approval_journey_telemetry_enabled = undefined;
   runtimeState.authority_url = "https://authority.example";
   runtimeState.processing = "active";
+  runtimeState.shutdown_events = [];
+  runtimeState.runtime_close_gate = undefined;
 });
 
 function start(io: { readonly stderr: (value: string) => void }) {
@@ -111,6 +162,32 @@ function start(io: { readonly stderr: (value: string) => void }) {
 }
 
 describe("admitted runtime CLI events", () => {
+  it("closes telemetry only after the authority runtime has finished", async () => {
+    process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
+    process.env.ECHO_SOURCE_SHA = "a".repeat(40);
+    process.env.ECHO_BUILD_NUMBER = "1";
+    runtimeState.authority_url = "https://authority-staging.echobrain.org";
+    let releaseRuntimeClose: (() => void) | undefined;
+    runtimeState.runtime_close_gate = new Promise<void>((resolve) => {
+      releaseRuntimeClose = resolve;
+    });
+
+    const running = start({ stderr: () => undefined });
+    await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+    process.emit("SIGTERM");
+    await vi.waitFor(() =>
+      expect(runtimeState.shutdown_events).toEqual(["runtime-close-started"]),
+    );
+
+    releaseRuntimeClose!();
+    await expect(running).resolves.toBe(0);
+    expect(runtimeState.shutdown_events).toEqual([
+      "runtime-close-started",
+      "runtime-close-finished",
+      "telemetry-transport-closed",
+    ]);
+  });
+
   it("emits identity-bound liveness only for the exact staging Authority", async () => {
     const releaseSha = "a".repeat(40);
     process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
@@ -145,6 +222,13 @@ describe("admitted runtime CLI events", () => {
       liveness?.observed_at,
     );
     expect(runtimeState.ask_journey_telemetry).toBeDefined();
+    expect(runtimeState.meeting_approval_journey_telemetry).toMatchObject({
+      release_sha: releaseSha,
+      build_number: 33_689_731_778,
+    });
+    expect(
+      runtimeState.staging_meeting_approval_journey_telemetry_enabled,
+    ).toBe(true);
 
     runtimeState.worker_error = undefined;
     runtimeState.authority_url = "https://authority.example";
@@ -158,6 +242,10 @@ describe("admitted runtime CLI events", () => {
     process.emit("SIGTERM");
     await expect(nonStaging).resolves.toBe(0);
     expect(runtimeState.ask_journey_telemetry).toBeUndefined();
+    expect(runtimeState.meeting_approval_journey_telemetry).toBeUndefined();
+    expect(
+      runtimeState.staging_meeting_approval_journey_telemetry_enabled,
+    ).toBeUndefined();
     expect(nonStagingStderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );
@@ -179,6 +267,10 @@ describe("admitted runtime CLI events", () => {
 
     await expect(running).resolves.toBe(0);
     expect(runtimeState.ask_journey_telemetry).toBeUndefined();
+    expect(runtimeState.meeting_approval_journey_telemetry).toBeUndefined();
+    expect(
+      runtimeState.staging_meeting_approval_journey_telemetry_enabled,
+    ).toBeUndefined();
     expect(stderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );

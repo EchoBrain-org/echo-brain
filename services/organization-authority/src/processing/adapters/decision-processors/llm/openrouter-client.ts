@@ -7,11 +7,41 @@ import {
   optionalPositiveInteger,
   type HostedLlmClientOptions,
   type LlmProviderClient,
+  StructuredGenerationAttemptError,
+  type StructuredGenerationFailureObservation,
   type StructuredGenerationRequest,
   type StructuredGenerationResult,
 } from './llm-provider.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+
+function generationUsageObservation(
+  payload: Record<string, unknown>,
+): StructuredGenerationFailureObservation {
+  const usage = isRecord(payload['usage']) ? payload['usage'] : {};
+  const promptTokenDetails = isRecord(usage['prompt_tokens_details'])
+    ? usage['prompt_tokens_details']
+    : {};
+  const completionTokenDetails = isRecord(usage['completion_tokens_details'])
+    ? usage['completion_tokens_details']
+    : {};
+  const inputTokens = optionalPositiveInteger(usage['prompt_tokens']);
+  const outputTokens = optionalPositiveInteger(usage['completion_tokens']);
+  const totalTokens = optionalPositiveInteger(usage['total_tokens']);
+  const cachedInputTokens = optionalPositiveInteger(
+    promptTokenDetails['cached_tokens'],
+  );
+  const reasoningTokens = optionalPositiveInteger(
+    completionTokenDetails['reasoning_tokens'],
+  );
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+  };
+}
 
 export class OpenRouterClient implements LlmProviderClient {
   readonly provider = 'openrouter' as const;
@@ -60,6 +90,7 @@ export class OpenRouterClient implements LlmProviderClient {
         'returned an invalid response',
       );
     }
+    const attemptObservation = generationUsageObservation(payload);
     if (isRecord(payload['error'])) {
       throw invalidProviderResponse(
         this.provider,
@@ -76,31 +107,39 @@ export class OpenRouterClient implements LlmProviderClient {
     }
     const finishReason = first['finish_reason'];
     if (finishReason === 'length') {
-      throw new AdapterError(
+      throw new StructuredGenerationAttemptError(
         'temporarily_unavailable',
         'OpenRouter response reached the configured output-token limit',
         true,
+        { ...attemptObservation, stopReason: finishReason },
       );
     }
     if (finishReason === 'content_filter') {
-      throw new AdapterError(
+      throw new StructuredGenerationAttemptError(
         'permanently_rejected',
         'OpenRouter rejected the structured generation request',
         false,
+        { ...attemptObservation, stopReason: finishReason },
       );
     }
     if (finishReason === 'error') {
-      throw invalidProviderResponse(
-        this.provider,
+      throw new StructuredGenerationAttemptError(
+        'temporarily_unavailable',
         'response generation failed',
+        true,
+        { ...attemptObservation, stopReason: finishReason },
       );
     }
     const message = first['message'];
     if (isRecord(message) && nonEmptyString(message['refusal'])) {
-      throw new AdapterError(
+      throw new StructuredGenerationAttemptError(
         'permanently_rejected',
         'OpenRouter model refused the structured generation request',
         false,
+        {
+          ...attemptObservation,
+          ...(nonEmptyString(finishReason) ? { stopReason: finishReason } : {}),
+        },
       );
     }
     const content = isRecord(message) ? message['content'] : undefined;
@@ -110,17 +149,13 @@ export class OpenRouterClient implements LlmProviderClient {
         'response did not contain message content',
       );
     }
-    const usage = isRecord(payload['usage']) ? payload['usage'] : {};
-    const inputTokens = optionalPositiveInteger(usage['prompt_tokens']);
-    const outputTokens = optionalPositiveInteger(usage['completion_tokens']);
     const requestId =
       response.headers.get('x-request-id') ??
       (nonEmptyString(payload['id']) ? payload['id'] : undefined);
     return {
       content,
       ...(requestId === undefined ? {} : { requestId }),
-      ...(inputTokens === undefined ? {} : { inputTokens }),
-      ...(outputTokens === undefined ? {} : { outputTokens }),
+      ...attemptObservation,
       ...(nonEmptyString(finishReason) ? { stopReason: finishReason } : {}),
     };
   }
