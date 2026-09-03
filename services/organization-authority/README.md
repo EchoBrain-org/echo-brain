@@ -7,8 +7,10 @@ permission-aware Person reads and answer composition. It has no compatibility ru
 Authority state: start with a new state directory and do not reuse legacy
 state, credentials, or volumes.
 
-For the production Compose profile and host preparation, use the
-[deployment README](../../deploy/organization-authority/README.md). The
+For any deployed staging initial-owner setup, do not run the lower-level setup
+commands in this service reference. Start with the
+[deployment README](../../deploy/organization-authority/README.md) and its
+`onboard-clean-v1.sh doctor`, `prepare`, then `resume` flow. The
 [organization onboarding and employee rollout](../../docs/product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md)
 defines the supported operator and employee flow.
 
