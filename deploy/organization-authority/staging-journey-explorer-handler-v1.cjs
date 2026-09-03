@@ -541,7 +541,8 @@ function timeline(rows, id) {
     const raw = row(fields),
       item = stage(raw),
       details = item === null ? null : nested(raw, item);
-    if (!item || !details || item.journey_id !== id) continue;
+    if (!item || !details || item.journey_id !== id)
+      throw new Error("detail query result violated the telemetry contract");
     const { observed_ms: _observedMs, ...publicItem } = item;
     stages.push(Object.assign(publicItem, details));
   }

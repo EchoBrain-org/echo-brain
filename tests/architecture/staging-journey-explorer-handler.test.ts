@@ -250,28 +250,7 @@ describe("staging Journey Explorer custom widget", () => {
           }),
           event({
             sequence: 3,
-            stage: "ask_answer",
-            outcome: null,
-            llm_provider: "attacker-provider",
-            llm_model: "attacker-model",
-            llm_usage_status: "reported",
-            llm_provider_latency_ms: 2,
-            llm_finish_reason: "completed",
-            observed_at: "2026-09-02T11:59:01.000Z",
-          }),
-          event({
-            sequence: 4,
             observed_at: "2026-09-02T11:59:02.000Z",
-          }),
-          event({
-            sequence: 5,
-            outcome: "approved",
-            observed_at: "2026-09-02T11:59:03.000Z",
-          }),
-          event({
-            sequence: 6,
-            build_number: 0,
-            observed_at: "2026-09-02T11:59:04.000Z",
           }),
         ],
       },
@@ -299,18 +278,54 @@ describe("staging Journey Explorer custom widget", () => {
             input_tokens: null,
           }),
         }),
-        expect.objectContaining({ sequence: 4 }),
+        expect.objectContaining({ sequence: 3 }),
       ],
     });
     if (typeof result === "string") throw new Error("expected raw detail data");
     expect(JSON.stringify(result)).not.toContain("never");
-    expect(JSON.stringify(result)).not.toContain("attacker");
     expect(
       (result.stages as readonly Record<string, unknown>[]).map(
         (item) => item.sequence,
       ),
-    ).toEqual([1, 2, 4]);
+    ).toEqual([1, 2, 3]);
     expect(JSON.stringify(result)).not.toContain("observed_ms");
+  });
+
+  it("fails closed when any detail row violates the telemetry contract", async () => {
+    const invalidRows = [
+      event(),
+      event({
+        sequence: 2,
+        stage: "ask_answer",
+        outcome: null,
+        llm_provider: "attacker-provider",
+        llm_model: "attacker-model",
+        llm_usage_status: "reported",
+        llm_provider_latency_ms: 2,
+        llm_finish_reason: "completed",
+        observed_at: "2026-09-02T11:59:01.000Z",
+      }),
+    ];
+    const raw = new Client([
+      { queryId: "raw-invalid" },
+      { status: "Complete", results: invalidRows },
+    ]);
+    await expect(
+      handler(raw)({ operation: "detail", journey_id: id }),
+    ).resolves.toEqual({ error: "journey_explorer_unavailable" });
+
+    const rendered = new Client([
+      { queryId: "rendered-invalid" },
+      { status: "Complete", results: invalidRows },
+    ]);
+    const html = await handler(rendered)({
+      operation: "detail",
+      journey_id: id,
+      render: true,
+    });
+    expect(html).toContain("temporarily unavailable");
+    expect(html).not.toContain("attacker");
+    expect(html).not.toContain("Journey timeline");
   });
 
   it("separates approval human wait from full and service wall-clock latency", async () => {
