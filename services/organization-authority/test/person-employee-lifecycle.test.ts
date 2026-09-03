@@ -12,6 +12,8 @@ import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } f
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
+import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 
 const roots: string[] = [];
@@ -185,6 +187,59 @@ describe("Person employee lifecycle", () => {
       });
       expect(secondEmployee.status).toBe(201);
 
+      // The durable store can contain historical provider identities that are
+      // broader than the current new-invite mailbox rule. Seed that exact
+      // compatibility shape after startup, so lineage verification still
+      // covers the booted state.
+      const legacyEmail = "alice@localhost";
+      const seededEmail = "alice-seed@example.com";
+      const rejectedLegacyInvite = await fetch(`${origin}/v1/person/employees`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Alice Legacy", email: legacyEmail }),
+      });
+      expect(rejectedLegacyInvite.status).toBe(400);
+      const seededLegacyEmployee = await fetch(`${origin}/v1/person/employees`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Alice Legacy", email: seededEmail }),
+      });
+      expect(seededLegacyEmployee.status).toBe(201);
+      const legacyDatabase = openAuthorityDatabase(
+        join(initialized.state_directory, "authority.sqlite"),
+        { fileMustExist: true },
+      );
+      try {
+        expect(
+          legacyDatabase
+            .prepare(
+              `UPDATE authority_memberships
+                  SET employee_email = ?, employee_email_sha256 = ?
+                WHERE membership_type = 'employee' AND employee_email = ?`,
+            )
+            .run(
+              legacyEmail,
+              personLoginGrantExpectedEmailSha256(legacyEmail),
+              seededEmail,
+            ).changes,
+        ).toBe(1);
+      } finally {
+        legacyDatabase.close();
+      }
+      const legacyRoster = await fetch(`${origin}/v1/person/employees`, {
+        headers: { authorization: `Bearer ${founderAccess}` },
+      });
+      expect(legacyRoster.status).toBe(200);
+      expect((await json(legacyRoster)).employees).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            email: legacyEmail,
+            membership_status: "active",
+            invitation_state: "pending",
+          }),
+        ]),
+      );
+
       const duplicate = await fetch(`${origin}/v1/person/employees`, {
         method: "POST",
         headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
@@ -240,6 +295,19 @@ describe("Person employee lifecycle", () => {
       });
       expect(employeeWriteDenied.status).toBe(401);
 
+      const legacyReissue = await fetch(`${origin}/v1/person/employees`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
+        body: JSON.stringify({ email: legacyEmail }),
+      });
+      expect(legacyReissue.status).toBe(201);
+      provider.email = legacyEmail;
+      const legacyEmployee = await login(
+        origin,
+        (await json(legacyReissue)).login_grant as string,
+      );
+      expect(legacyEmployee.access_token).toEqual(expect.any(String));
+
       const redeemedRoster = await fetch(`${origin}/v1/person/employees`, {
         headers: { authorization: `Bearer ${founderAccess}` },
       });
@@ -259,6 +327,12 @@ describe("Person employee lifecycle", () => {
             membership_status: "active",
             invitation_state: "pending",
           },
+          {
+            email: legacyEmail,
+            display_name: "Alice Legacy",
+            membership_status: "active",
+            invitation_state: "redeemed",
+          },
         ]),
       );
 
@@ -268,6 +342,12 @@ describe("Person employee lifecycle", () => {
         body: JSON.stringify({ email: "jane@example.com" }),
       });
       expect(revoke.status).toBe(204);
+      const legacyRevoke = await fetch(`${origin}/v1/person/employees`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
+        body: JSON.stringify({ email: legacyEmail }),
+      });
+      expect(legacyRevoke.status).toBe(204);
       const revokedRoster = await fetch(`${origin}/v1/person/employees`, {
         headers: { authorization: `Bearer ${founderAccess}` },
       });
@@ -282,10 +362,10 @@ describe("Person employee lifecycle", () => {
             invitation_state: "none",
           },
           {
-            email: "john@example.com",
-            display_name: "John Doe",
-            membership_status: "active",
-            invitation_state: "pending",
+            email: legacyEmail,
+            display_name: "Alice Legacy",
+            membership_status: "revoked",
+            invitation_state: "none",
           },
         ]),
       );
@@ -302,6 +382,7 @@ describe("Person employee lifecycle", () => {
       expect(replacement.status).toBe(201);
       const replacementInvitation = await json(replacement);
       expect(replacementInvitation.login_grant).not.toBe(second.login_grant);
+      provider.email = "jane@example.com";
       const rehired = await login(origin, replacementInvitation.login_grant as string);
       const rehiredRead = await fetch(`${origin}/v1/person/records`, {
         headers: { authorization: `Bearer ${rehired.access_token as string}` },

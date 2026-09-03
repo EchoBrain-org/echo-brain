@@ -922,6 +922,93 @@ describe("Person client", () => {
     });
   });
 
+  it("keeps legacy durable employee identities usable without emitting an expected-email artifact", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const outputPath = join(home, "legacy-employee-reissued-onboarding.json");
+      const observed: Array<{ path: string; method: string; body?: unknown }> = [];
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          observed.push({
+            path,
+            method: init?.method ?? "GET",
+            ...(init?.body === undefined
+              ? {}
+              : { body: JSON.parse(String(init.body)) }),
+          });
+          if (init?.method === "GET") {
+            return json({
+              schema_version: 1,
+              kind: "echo-clean-person-employee-roster-v1",
+              employees: [
+                {
+                  email: "alice@localhost",
+                  display_name: "Alice Legacy",
+                  membership_status: "active",
+                  invitation_state: "pending",
+                },
+              ],
+            });
+          }
+          if (init?.method === "PUT") {
+            return json({
+              login_grant: "G".repeat(43),
+              expires_at: "2026-08-18T00:15:00.000Z",
+            }, 201);
+          }
+          return new Response(null, { status: 204 });
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_type: "owner",
+      });
+
+      await expect(client.employees()).resolves.toMatchObject({
+        employees: [expect.objectContaining({ email: "alice@localhost" })],
+      });
+      await client.reissueEmployee({
+        email: "alice@localhost",
+        output_path: outputPath,
+      });
+      await expect(client.revokeEmployee("alice@localhost")).resolves.toBeUndefined();
+      await expect(
+        client.inviteEmployee({
+          name: "Alice Legacy",
+          email: "alice@localhost",
+          output_path: join(home, "strict-new-invite.json"),
+        }),
+      ).rejects.toThrow(/canonical lowercase mailbox/);
+
+      expect(observed).toEqual([
+        { path: "/v1/person/employees", method: "GET" },
+        {
+          path: "/v1/person/employees",
+          method: "PUT",
+          body: { email: "alice@localhost" },
+        },
+        {
+          path: "/v1/person/employees",
+          method: "DELETE",
+          body: { email: "alice@localhost" },
+        },
+      ]);
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+        schema_version: 1,
+        kind: "echo-person-onboarding-invitation",
+        authority_url: "https://authority.example",
+        login_grant: "G".repeat(43),
+        expires_at: "2026-08-18T00:15:00.000Z",
+      });
+    });
+  });
+
   it("renders the owner employee roster without local database access or lifecycle identifiers", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();

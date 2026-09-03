@@ -19,6 +19,31 @@ const LOOPBACK_HANDOFF_PATH_PATTERN = /^\/[A-Za-z0-9_-]{43}$/;
 const EXPECTED_PERSON_EMAIL =
   /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
 
+/**
+ * The compatible durable Person identity key. Existing Authority state can
+ * contain provider-observed addresses such as `alice@localhost`; keep those
+ * usable for roster and lifecycle operations without relaxing new-invite or
+ * browser-hint validation.
+ */
+export function isCanonicalPersonEmail(value: unknown): value is string {
+  if (
+    typeof value !== 'string' ||
+    value.length < 3 ||
+    value.length > 254 ||
+    value !== value.trim() ||
+    value !== value.toLowerCase() ||
+    !/^[!-~]+$/.test(value)
+  ) {
+    return false;
+  }
+  const separator = value.indexOf('@');
+  return (
+    separator > 0 &&
+    separator === value.lastIndexOf('@') &&
+    separator < value.length - 1
+  );
+}
+
 function hasBoundedMailboxParts(value: string): boolean {
   const [localPart, domain] = value.split('@');
   return (

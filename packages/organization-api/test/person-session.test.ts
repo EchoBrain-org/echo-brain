@@ -1,4 +1,5 @@
 import {
+  isCanonicalPersonEmail,
   isExpectedPersonEmail,
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse,
@@ -29,6 +30,13 @@ describe('Person session HTTP DTOs', () => {
   it('exports the expected-email boundary rule', () => {
     expect(isExpectedPersonEmail('founder@example.com')).toBe(true);
     expect(isExpectedPersonEmail('Founder@example.com')).toBe(false);
+  });
+
+  it('keeps durable canonical identities broader than expected-email boundaries', () => {
+    expect(isCanonicalPersonEmail('alice@localhost')).toBe(true);
+    expect(isExpectedPersonEmail('alice@localhost')).toBe(false);
+    expect(isCanonicalPersonEmail('Alice@localhost')).toBe(false);
+    expect(isCanonicalPersonEmail('alice@@localhost')).toBe(false);
   });
 
   it('accepts only the two begin variants and exact issued pair', () => {

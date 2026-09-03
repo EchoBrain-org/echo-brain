@@ -10,6 +10,7 @@ import {
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
+  isCanonicalPersonEmail,
   isExpectedPersonEmail,
   isOrganizationApiValidationError,
   validateOrganizationApiError,
@@ -582,7 +583,7 @@ function validateEmployeeRoster(value: unknown): EmployeeRosterV1 {
       "employee roster item is invalid",
     );
     if (
-      !isExpectedPersonEmail(employee.email) ||
+      !isCanonicalPersonEmail(employee.email) ||
       typeof employee.display_name !== "string" ||
       employee.display_name.length < 1 ||
       employee.display_name.length > 200 ||
@@ -616,6 +617,9 @@ function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<R
   exactKeys(request, includeName ? ["name", "email"] : ["email"], "employee request is invalid");
   if (
     typeof request.email !== "string" ||
+    (includeName
+      ? !isExpectedPersonEmail(request.email)
+      : !isCanonicalPersonEmail(request.email)) ||
     (includeName && typeof request.name !== "string")
   ) {
     throw new Error("employee request is invalid");

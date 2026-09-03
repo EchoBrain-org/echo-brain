@@ -529,6 +529,33 @@ export class PersonIdentitySessionApplication {
     );
   }
 
+  /**
+   * Reissues a grant for a durable employee identity created before the v2
+   * expected-email boundary. Callers must use this only for an existing
+   * membership; new invitations remain mailbox-shaped.
+   */
+  issueEmployeeBootstrapLoginGrantForDurableIdentityAt(
+    transaction: PersonSessionWriteTransaction,
+    issuedAt: string,
+    input: { target_membership_id: string; expected_email: string },
+  ): IssuedPersonLoginGrant {
+    if (!isCanonicalPersonEmail(input.expected_email)) {
+      throw new AuthorityOperationError(
+        "invalid_request",
+        "login grant expected email must be a durable canonical identity",
+      );
+    }
+    const loginGrant = this.secret("login_grant");
+    return this.issueBootstrapLoginGrantAt(
+      transaction,
+      issuedAt,
+      { ...input, expected_issuer: this.configuration.issuer },
+      loginGrant,
+      this.digestSecret(loginGrant),
+      this.expectedEmailSha256(input.expected_email),
+    );
+  }
+
   withAuthenticatedMembershipWrite<T>(input: {
     access_token: string;
     commit: (

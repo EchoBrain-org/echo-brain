@@ -1,5 +1,8 @@
 import { AuthorityOperationError } from "../domain/errors.js";
-import { isExpectedPersonEmail } from "../domain/person-session-rules.js";
+import {
+  isCanonicalPersonEmail,
+  isExpectedPersonEmail,
+} from "../domain/person-session-rules.js";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import type {
   EmployeeRosterEntry,
@@ -37,11 +40,20 @@ function validateEmployeeName(value: string): void {
   }
 }
 
-function validateEmployeeEmail(value: string): void {
+function validateNewEmployeeEmail(value: string): void {
   if (!isExpectedPersonEmail(value)) {
     throw new AuthorityOperationError(
       "invalid_request",
       "employee email must be canonical lowercase ASCII",
+    );
+  }
+}
+
+function validateDurableEmployeeEmail(value: string): void {
+  if (!isCanonicalPersonEmail(value)) {
+    throw new AuthorityOperationError(
+      "invalid_request",
+      "employee email must be a canonical durable identity",
     );
   }
 }
@@ -72,7 +84,7 @@ export class PersonEmployeeLifecycleApplication {
     email: string;
   }): IssuedEmployeeInvitation {
     validateEmployeeName(input.name);
-    validateEmployeeEmail(input.email);
+    validateNewEmployeeEmail(input.email);
     const emailSha256 = personLoginGrantExpectedEmailSha256(input.email);
     return this.sessions.withAuthenticatedMembershipWrite({
       access_token: input.access_token,
@@ -120,7 +132,7 @@ export class PersonEmployeeLifecycleApplication {
     access_token: string;
     email: string;
   }): IssuedEmployeeInvitation {
-    validateEmployeeEmail(input.email);
+    validateDurableEmployeeEmail(input.email);
     const emailSha256 = personLoginGrantExpectedEmailSha256(input.email);
     return this.sessions.withAuthenticatedMembershipWrite({
       access_token: input.access_token,
@@ -142,18 +154,24 @@ export class PersonEmployeeLifecycleApplication {
         }
         transaction.invalidatePendingPersonLoginGrants(membership.membership_id);
         return invitation(
-          this.sessions.issueEmployeeBootstrapLoginGrantAt(
-            transaction,
-            observedAt,
-            { target_membership_id: membership.membership_id, expected_email: input.email },
-          ),
+          isExpectedPersonEmail(input.email)
+            ? this.sessions.issueEmployeeBootstrapLoginGrantAt(
+                transaction,
+                observedAt,
+                { target_membership_id: membership.membership_id, expected_email: input.email },
+              )
+            : this.sessions.issueEmployeeBootstrapLoginGrantForDurableIdentityAt(
+                transaction,
+                observedAt,
+                { target_membership_id: membership.membership_id, expected_email: input.email },
+              ),
         );
       },
     });
   }
 
   revoke(input: { access_token: string; email: string }): void {
-    validateEmployeeEmail(input.email);
+    validateDurableEmployeeEmail(input.email);
     const emailSha256 = personLoginGrantExpectedEmailSha256(input.email);
     this.sessions.withAuthenticatedMembershipWrite({
       access_token: input.access_token,

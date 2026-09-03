@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
+  isCanonicalPersonEmail,
+  isExpectedPersonEmail,
   validateOrganizationPersonSession,
   type OrganizationPersonMeetingIngestionExclusionSelectorV2,
   type OrganizationPersonSessionV2,
@@ -343,6 +345,7 @@ export class PersonClient {
     return await this.issueEmployeeInvitation(
       outputPath,
       input.email,
+      "invite",
       () =>
         this.authority(stored.authority_origin).inviteEmployee(
           { name: input.name, email: input.email },
@@ -362,6 +365,7 @@ export class PersonClient {
       return await this.issueEmployeeInvitation(
         outputPath,
         input.email,
+        "reissue",
         () =>
           this.authority(stored.authority_origin).reissueEmployee(
             { email: input.email },
@@ -393,21 +397,39 @@ export class PersonClient {
 
   private async issueEmployeeInvitation(
     outputPath: string,
-    expectedEmail: string,
+    email: string,
+    mode: "invite" | "reissue",
     issue: () => Promise<{ login_grant: string; expires_at: string }>,
     authorityOrigin: string,
   ): Promise<{ output_path: string; expires_at: string }> {
+    if (mode === "invite" && !isExpectedPersonEmail(email)) {
+      throw new Error("Employee email must be a canonical lowercase mailbox");
+    }
+    if (mode === "reissue" && !isCanonicalPersonEmail(email)) {
+      throw new Error("Employee email must be a canonical durable identity");
+    }
     const issued = await issue();
     // A different local writer can win after preflight. O_EXCL leaves its
     // file untouched; the owner can safely reissue the one-time grant.
-    writePersonOnboardingInvitation(outputPath, {
-      schema_version: 2,
-      kind: "echo-person-onboarding-invitation",
-      authority_url: authorityOrigin,
-      login_grant: issued.login_grant,
-      expires_at: issued.expires_at,
-      expected_email: expectedEmail,
-    });
+    writePersonOnboardingInvitation(
+      outputPath,
+      mode === "invite" || isExpectedPersonEmail(email)
+        ? {
+            schema_version: 2,
+            kind: "echo-person-onboarding-invitation",
+            authority_url: authorityOrigin,
+            login_grant: issued.login_grant,
+            expires_at: issued.expires_at,
+            expected_email: email,
+          }
+        : {
+            schema_version: 1,
+            kind: "echo-person-onboarding-invitation",
+            authority_url: authorityOrigin,
+            login_grant: issued.login_grant,
+            expires_at: issued.expires_at,
+          },
+    );
     return Object.freeze({ output_path: outputPath, expires_at: issued.expires_at });
   }
 }
