@@ -265,7 +265,8 @@ deployed, that any metric is live, or that a live journey has been rehearsed.
 The overview emits content-free CloudWatch Embedded Metric Format (EMF) records
 beside the canonical raw `echo-authority-journey-stage-v1`, liveness, and
 approved-search-backlog log records. EMF is a projection of the same event,
-not a second ingestion path; it has no browser AWS credential. Within this
+not a second ingestion path and requires no application-managed browser
+credential. Within this
 dedicated stack, `WorkerCycleCompleted` is the only log metric filter. All
 journey, LLM, retrieval, liveness, and backlog metrics are EMF. Recent-run and
 Logs Insights views are bounded by the existing 14-day Authority log retention.
@@ -348,8 +349,76 @@ Phase 4 local verification covers formatter, transport, template/query, and
 deterministic fixture reconciliation: dashboard aggregates reconcile with the
 fixture's raw canonical journey events and approved-search state. No AWS stack
 deployment, live CloudWatch proof, or live journey rehearsal is claimed here.
-The operator-only Journey Explorer backend is Phase 5; its UI and the AWS
-staging Ask-and-approval rehearsal are Phase 6 work and remain deferred.
+
+#### Staging Journey Explorer backend - Phase 5, locally implemented and not deployed
+
+The separate `authority-staging-journey-explorer-v1.template.json` and its
+inline Node handler are locally implemented and tested, but have not been
+deployed. They are staging-only and accept only
+`/echo-brain/authority/authority-staging.echobrain.org` as the source log group.
+The backend is invoked directly by a CloudWatch custom widget. It is not a
+public service: there is no function URL, API Gateway route,
+application-managed or end-user AWS credential, direct widget permission to
+CloudWatch Logs, or mutation operation. The signed-in console operator's
+Identity Center session authorizes only invocation of the exact Lambda after
+the Phase 6 permission-set assignment.
+
+The handler accepts only three fixed operations:
+
+1. `describe` returns safe widget metadata.
+2. `list` runs a fixed query for recent redacted journeys. The default time
+   range is eight hours, the maximum is the 14-day retained-log boundary, and
+   a page has at most 25 journeys. Its pending summary retains the latest
+   approved or superseded milestone even when a later event is non-terminal.
+3. `detail` accepts one canonical lowercase UUID journey ID and runs a fixed
+   correlated-event query over the bounded 14-day retained history, not the
+   dashboard's selected list range. It requires the canonical sequence-one
+   `ask_validation` or `meeting_source_intake` started event; otherwise it
+   returns `journey_history_incomplete` and does not report a clipped timeline
+   or wall-clock.
+
+Both queries have a 2,500-record cap and return `result_limit_exceeded` if it
+is saturated instead of silently omitting a journey or showing a partial
+waterfall. Narrow the dashboard time range before retrying that safe error for
+`list`; a `detail` request already uses the full bounded retained history.
+
+The client cannot supply Logs Insights text, a query ID, `SOURCE`, a raw log
+message, prompt, answer, source content, or other event content. Every query
+filters `environment=staging`. The handler rejects unknown parameter keys and
+uses finite allowlists for workflow, stage, event, outcome, failure class,
+provider, model, finish reason, and usage status. Returned detail is an
+allowlisted projection only: schema version, journey UUID, sequence, attempt,
+release SHA/build number, event times and elapsed latency, provider latency,
+nullable token usage, retrieval counts, retry/failure metadata, and human
+wait. It does not return `@message` or source content.
+
+Interpret timing as follows: full wall-clock is first-to-terminal
+`observed_at`, service wall-clock subtracts the one `queue_age_ms` human-wait
+interval, and human wait stays separately labelled rather than becoming
+machine latency or an availability signal. A non-retryable `failed` stage is a
+terminal failure. An approved or superseded stage alone is still pending until
+the workflow reaches a recognized terminal boundary.
+
+The Lambda execution role may start and read queries only against that exact
+source log group, stop a query only through the AWS-required unscoped action,
+and write only to its dedicated 14-day retained function log group. The stack
+also creates an exact-function `lambda:InvokeFunction` customer managed policy.
+Query cancellation is bounded and best-effort. If `StartQuery` times out, the
+handler aborts its SDK request and waits up to one additional second for a
+valid late query ID. An ID received in that window gets one separately bounded
+`StopQuery` attempt before the handler returns. Without an ID, the remote
+outcome is unknown and no post-response cleanup is launched.
+It is intentionally unattached: the `AWSReservedSSO` roles used by operators
+are Identity Center-protected and must not be edited directly. Before a widget
+is added or invoked, Phase 6 must reference this customer managed policy from
+an approved Identity Center permission set. The inline staging Lambda relies on
+the Node runtime-provided AWS SDK v3; a portable production bundle and pinned
+SDK version are deferred to a future production review.
+
+No AWS deployment, permission-set assignment, live CloudWatch query, live
+widget use, Ask/approval rehearsal, or production change is claimed by Phase
+5. Phase 6 remains responsible for the UI, the approved permission-set
+reference, staging deployment, and the one Ask plus one approval rehearsal.
 
 ### 6. Rehearse the sanitized worker-failure signal
 

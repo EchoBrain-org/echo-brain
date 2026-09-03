@@ -100,6 +100,8 @@ describe("CI workflow", () => {
       "authority-current-host-recovery-v1.guard",
       "authority-recovery-helper-v1.template.json",
       "authority-recovery-helper-v1.guard",
+      "authority-staging-journey-explorer-v1.template.json",
+      "authority-staging-journey-explorer-v1.guard",
       "authority-current-host-recovery-v1.validation-tools.json",
       "downloadVerified",
       '"--output-format"',

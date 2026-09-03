@@ -54,6 +54,16 @@ const PAIRS = Object.freeze([
       "authority-staging-journey-observability-v1.guard",
     ),
   }),
+  Object.freeze({
+    template: join(
+      DEPLOYMENT,
+      "authority-staging-journey-explorer-v1.template.json",
+    ),
+    guard: join(
+      DEPLOYMENT,
+      "authority-staging-journey-explorer-v1.guard",
+    ),
+  }),
 ]);
 
 function text(value, label) {
