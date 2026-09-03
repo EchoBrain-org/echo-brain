@@ -65,6 +65,12 @@ function topLevelBlocksByType(
 describe("private Slack DM approval stager V1", () => {
   it("binds null policy before publishing one verified-owner DM card", async () => {
     const operations: string[] = [];
+    const journeyTelemetry = {
+      beginStageForApproval: vi.fn(() => ({ journey_id: "journey-1", stage: "meeting_approval_staging", attempt: 1, started: { observed_at: NOW, monotonic_ms: 1 } })),
+      markCardStaged: vi.fn(() => operations.push("journey-card-staged")),
+      succeedStage: vi.fn((_: unknown, result: { outcome?: string }) => operations.push(`journey-${result.outcome}`)),
+      failStage: vi.fn(),
+    };
     const reviewedInput = {
       ...input,
       decisions: {
@@ -168,18 +174,26 @@ describe("private Slack DM approval stager V1", () => {
       }) as never : undefined,
       canonical_sha256: canonicalSha256,
       now: () => NOW,
+      journey_telemetry: journeyTelemetry as never,
     });
 
     await expect(stager.stage(reviewedInput)).resolves.toEqual({
       kind: "delivery_pending",
     });
-    expect(operations).toEqual([]);
+    expect(operations).toEqual(["journey-delivery_pending"]);
 
     ownerLinked = true;
     await expect(stager.stage(reviewedInput)).resolves.toEqual({ kind: "staged", stage_id: "apr_1" });
     expect(operations).toEqual([
-      "freeze", "open-dm", "assignment", "marker", "marker-durable", "cp-pending", "publish", "authority-staged",
+      "journey-delivery_pending", "freeze", "open-dm", "assignment", "marker", "marker-durable", "cp-pending", "publish", "authority-staged", "journey-card-staged", "journey-staged",
     ]);
+    expect(journeyTelemetry.beginStageForApproval).toHaveBeenCalledTimes(2);
+    expect(journeyTelemetry.beginStageForApproval).toHaveBeenNthCalledWith(
+      1,
+      "apr_1",
+      "meeting_approval_staging",
+    );
+    expect(journeyTelemetry.markCardStaged).toHaveBeenCalledWith("apr_1");
     expect(stage).toHaveBeenCalledOnce();
     expect(JSON.stringify(preparedSnapshot)).toContain("Keep the owner-only default.");
     expect(preparedSnapshot).toMatchObject({
@@ -317,6 +331,12 @@ describe("private Slack DM approval stager V1", () => {
   it("keeps target loss after CP staging as state drift before publishing the full card", async () => {
     let current = outbox();
     let ownerIsCurrent = true;
+    const journeyTelemetry = {
+      beginStageForApproval: vi.fn(() => ({ journey_id: "journey-1", stage: "meeting_approval_staging", attempt: 1, started: { observed_at: NOW, monotonic_ms: 1 } })),
+      markCardStaged: vi.fn(),
+      succeedStage: vi.fn(),
+      failStage: vi.fn(),
+    };
     const assignment = {
       organization_id: "org_1",
       candidate: {},
@@ -371,6 +391,7 @@ describe("private Slack DM approval stager V1", () => {
       resolve_reviewer_target: resolveTarget,
       canonical_sha256: canonicalSha256,
       now: () => NOW,
+      journey_telemetry: journeyTelemetry as never,
     });
 
     await expect(stager.stage(input)).resolves.toEqual({ kind: "state_drift" });
@@ -378,6 +399,11 @@ describe("private Slack DM approval stager V1", () => {
     expect(controlPlaneStage).toHaveBeenCalledOnce();
     expect(publish).not.toHaveBeenCalled();
     expect(markControlPlaneStaged).not.toHaveBeenCalled();
+    expect(journeyTelemetry.failStage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Error),
+      { failure_class: "invalid_contract", retryable: false },
+    );
   });
 
   it("keeps a queued candidate pending when owner proof is absent", async () => {
@@ -431,6 +457,72 @@ describe("private Slack DM approval stager V1", () => {
 
     await expect(stager.stage(input)).resolves.toEqual({ kind: "delivery_pending" });
     expect(assignmentStage).not.toHaveBeenCalled();
+  });
+
+  it("closes a thrown delivery error then preserves the original error", async () => {
+    const expected = new Error("Slack transport failed");
+    const journeyTelemetry = {
+      beginStageForApproval: vi.fn(() => ({ journey_id: "journey-1", stage: "meeting_approval_staging", attempt: 1, started: { observed_at: NOW, monotonic_ms: 1 } })),
+      markCardStaged: vi.fn(),
+      succeedStage: vi.fn(),
+      failStage: vi.fn(),
+    };
+    const stager = new PrivateSlackDmApprovalStagerV1({
+      authority: {
+        readApprovalDeliveryQuarantine: () => undefined,
+        readCandidateByApprovalId: () => outbox(),
+        prepareApprovalPost: () => ({ outbox: outbox("posting"), created: true }),
+      } as unknown as SqliteAuthorityMeetingProcessingStateV1,
+      authority_database: {} as never, control_plane_database: {} as never,
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      assignments: { readCurrent: () => undefined } as never,
+      control_plane: {} as never,
+      poster: {
+        openDirectMessage: async () => { throw expected; },
+        postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone: vi.fn(),
+      },
+      resolve_reviewer_target: () => ({
+        reviewer: { principal_id: "prn_1", membership_id: "mem_1", membership_type: "owner" },
+        slack_target: {
+          connection: { body: { organization_id: "org_1", connection_id: "con_1", provider_app_id: "A01", provider_bot_id: "B01", provider_bot_user_id: "U02", provider_tenant_id: "T01", provider_enterprise_id: null }, sha256: DIGEST("6") },
+          connection_state: { body: {}, sha256: DIGEST("7") },
+          current_slack_identity_link: { provider: "slack", external_identity_link_id: "clm_1", external_identity_link_contract_sha256: DIGEST("4"), provider_subject_id: "U01" },
+        },
+      }) as never,
+      canonical_sha256: canonicalSha256,
+      journey_telemetry: journeyTelemetry as never,
+    });
+
+    await expect(stager.stage(input)).rejects.toBe(expected);
+    expect(journeyTelemetry.failStage).toHaveBeenCalledWith(expect.anything(), expected);
+  });
+
+  it("preserves delivery result when the optional observer throws", async () => {
+    const journeyTelemetry = {
+      beginStageForApproval: vi.fn(() => ({ journey_id: "journey-1", stage: "meeting_approval_staging", attempt: 1, started: { observed_at: NOW, monotonic_ms: 1 } })),
+      markCardStaged: vi.fn(),
+      succeedStage: vi.fn(() => { throw new Error("observer unavailable"); }),
+      failStage: vi.fn(),
+    };
+    const stager = new PrivateSlackDmApprovalStagerV1({
+      authority: {
+        readApprovalDeliveryQuarantine: () => undefined,
+        readCandidateByApprovalId: () => outbox(),
+      } as unknown as SqliteAuthorityMeetingProcessingStateV1,
+      authority_database: {} as never, control_plane_database: {} as never,
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      assignments: {} as never, control_plane: {} as never,
+      poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone: vi.fn() },
+      resolve_reviewer_target: () => undefined,
+      canonical_sha256: canonicalSha256,
+      journey_telemetry: journeyTelemetry as never,
+    });
+
+    await expect(stager.stage(input)).resolves.toEqual({ kind: "delivery_pending" });
+    expect(journeyTelemetry.succeedStage).toHaveBeenCalledWith(
+      expect.anything(),
+      { outcome: "delivery_pending" },
+    );
   });
 
   it("uses immutable presentation evidence to tombstone a superseded private DM", async () => {

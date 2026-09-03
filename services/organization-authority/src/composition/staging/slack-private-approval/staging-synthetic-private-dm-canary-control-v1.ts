@@ -1,12 +1,13 @@
 import { chmodSync, lstatSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { OpenedOrganizationAuthorityRuntime } from "../../organization-authority-runtime.js";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "../../staging-authority-environment-v1.js";
 
 export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_SOCKET_V1 =
   "/echo-runtime/authority-staging-private-dm-canary-v1.sock";
 
 export const STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 =
-  "https://authority-staging.echobrain.org";
+  STAGING_AUTHORITY_ORIGIN_V1;
 const RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 const STAGING_AUTHORITY_HOST = "authority-staging.echobrain.org";
 const CONTROL_PATH = "/v1/run";

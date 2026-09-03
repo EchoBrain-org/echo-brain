@@ -11,6 +11,12 @@ import type {
   MeetingProcessingWorkerPhaseRunnerV1,
   MeetingProcessingWorkerPhaseV1,
 } from "./meeting-processing-worker-lifecycle.js";
+import type {
+  MeetingApprovalJourneyRefV1,
+  MeetingApprovalJourneyStageAttemptV1,
+  MeetingApprovalJourneyTelemetryPortV1,
+} from "./meeting-approval-journey-telemetry-port-v1.js";
+import type { DecisionExtractionGenerationObservation } from "../core/contracts/decision.js";
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
 import {
   reviewInputSha256V1,
@@ -244,6 +250,8 @@ export interface AdmittedMeetingProcessingCycleV1Options {
   readonly stager: ApprovalWorkflowStagerV1;
   /** Provider-owned cursor and source-metadata validation. */
   readonly source_cursor_policy: AdmittedMeetingSourceCursorPolicyV1;
+  /** Optional, staging-owned journey detail. It must never affect processing. */
+  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
 }
 
 function assertAdmissionMatchesAdapters(
@@ -413,6 +421,10 @@ export class AdmittedMeetingProcessingCycleV1 {
         ? signal.reason
         : new Error("admitted meeting-processing cycle was cancelled");
     }
+    // The source-stage clock deliberately starts before admission and pull,
+    // but a durable journey is created only after a canonical source identity
+    // and revision are available.
+    const sourceStarted = this.captureTelemetryClock();
     const intake = await this.phase("source_intake", async () => {
       const admission = await this.options.state.readAdmission();
       assertAdmissionMatchesAdapters(
@@ -465,23 +477,52 @@ export class AdmittedMeetingProcessingCycleV1 {
       }
       assertCanonicalMeetingDocument(meeting, this.options.source.identity);
       const reviewPolicy = legacyRestrictedReviewerReviewPolicySnapshotV1;
-      const frozen =
-        await this.options.state.readFrozenCandidateForSourceRevision({
+      const sourceAttempt = this.safely(
+        () =>
+          this.options.journey_telemetry?.beginOrResumeSource(
+            {
+              source_adapter_id: meeting.provenance.source.adapter_id,
+              source_instance_id: meeting.provenance.source.instance_id,
+              external_id: meeting.provenance.external_id,
+              canonical_revision: meeting.provenance.canonical_revision,
+            },
+            sourceStarted,
+          ) ?? null,
+        null,
+      ) ?? null;
+      try {
+        const frozen =
+          await this.options.state.readFrozenCandidateForSourceRevision({
           external_id: meeting.provenance.external_id,
           canonical_revision: meeting.provenance.canonical_revision,
+          });
+        this.safely(() => {
+          this.options.journey_telemetry?.succeedStage(sourceAttempt);
         });
-      return {
-        kind: "meeting" as const,
-        admission,
-        batch,
-        meeting,
-        reviewPolicy,
-        frozen,
-      };
+        return {
+          kind: "meeting" as const,
+          admission,
+          batch,
+          meeting,
+          reviewPolicy,
+          frozen,
+          journey: sourceAttempt,
+        };
+      } catch (error) {
+        this.safely(() => {
+          this.options.journey_telemetry?.failStage(sourceAttempt, error);
+        });
+        throw error;
+      }
     }, signal);
     if (intake.kind === "complete") return intake.result;
-    const { admission, batch, meeting, reviewPolicy, frozen } = intake;
+    const { admission, batch, meeting, reviewPolicy, frozen, journey } = intake;
     if (frozen !== undefined) {
+      this.bindCandidate(journey, frozen);
+      this.skipHistoricalFrozenStages(journey);
+      if (frozen.disposition !== "actionable") {
+        this.skipApprovalStages(journey);
+      }
       return this.phase(
         "approval_staging",
         async () => {
@@ -534,40 +575,86 @@ export class AdmittedMeetingProcessingCycleV1 {
           review_lineage_id: reviewLineageId,
           review_input_sha256: reviewInputSha256,
         });
-      const extracted = reusable === undefined
-        ? await this.options.processor.extract(
-            meeting,
-            {
-              processor_version: this.options.processor.identity.version,
-              input_fingerprint: inputFingerprint(
-                meeting,
-                this.options.processor,
-              ),
+      if (reusable !== undefined) {
+        this.skipStageIfMissing(journey, "meeting_extraction");
+        const rebound = rebindDecisionsToRevision(
+          reusable.decisions,
+          reusable.meeting,
+          meeting,
+        );
+        assertCanonicalDecisionSet(
+          rebound,
+          meeting,
+          this.options.processor.identity,
+        );
+        return rebound;
+      }
+
+      const extractionAttempt = this.beginStage(journey, "meeting_extraction");
+      const extractionStartedAt = Date.now();
+      let observation: DecisionExtractionGenerationObservation | null = null;
+      try {
+        const extracted = await this.options.processor.extract(
+          meeting,
+          {
+            processor_version: this.options.processor.identity.version,
+            input_fingerprint: inputFingerprint(meeting, this.options.processor),
+            on_generation: (event) => {
+              observation = event;
             },
-            signal === undefined ? undefined : { signal },
-          )
-        : rebindDecisionsToRevision(
-            reusable.decisions,
-            reusable.meeting,
-            meeting,
-          );
-      assertCanonicalDecisionSet(
-        extracted,
-        meeting,
-        this.options.processor.identity,
-      );
-      return extracted;
+          },
+          signal === undefined ? undefined : { signal },
+        );
+        assertCanonicalDecisionSet(
+          extracted,
+          meeting,
+          this.options.processor.identity,
+        );
+        this.closeExtractionSuccess(
+          extractionAttempt,
+          observation,
+          extractionStartedAt,
+        );
+        return extracted;
+      } catch (error) {
+        this.closeExtractionFailure(
+          extractionAttempt,
+          error,
+          observation,
+          extractionStartedAt,
+        );
+        throw error;
+      }
     }, signal);
     return this.phase(
       "approval_staging",
       async () => {
-        const candidate = await this.options.state.stageCandidate({
-          admission,
-          meeting,
-          decisions,
-          review_policy: reviewPolicy,
-        });
+        const candidateAttempt = this.beginStage(
+          journey,
+          "meeting_candidate_persist",
+        );
+        let candidate: MeetingProcessingCandidateV1;
+        try {
+          candidate = await this.options.state.stageCandidate({
+            admission,
+            meeting,
+            decisions,
+            review_policy: reviewPolicy,
+          });
+          this.safely(() => {
+            this.options.journey_telemetry?.succeedStage(candidateAttempt, {
+              outcome: candidate.disposition,
+            });
+          });
+        } catch (error) {
+          this.safely(() => {
+            this.options.journey_telemetry?.failStage(candidateAttempt, error);
+          });
+          throw error;
+        }
+        this.bindCandidate(journey, candidate);
         if (candidate.disposition !== "actionable") {
+          this.skipApprovalStages(journey);
           await this.options.stager.reconcileSuperseded(
             signal === undefined ? undefined : { signal },
           );
@@ -724,5 +811,123 @@ export class AdmittedMeetingProcessingCycleV1 {
     signal?: AbortSignal,
   ): Promise<T> {
     return this.workerLifecycle?.runPhase(phase, operation, signal) ?? operation();
+  }
+
+  private safely<T>(operation: () => T, fallback?: T): T | undefined {
+    try {
+      return operation();
+    } catch {
+      return fallback;
+    }
+  }
+
+  private captureTelemetryClock() {
+    return this.safely(
+      () => this.options.journey_telemetry?.captureClock(),
+    );
+  }
+
+  private beginStage(
+    journey: MeetingApprovalJourneyRefV1 | null,
+    stage: "meeting_extraction" | "meeting_candidate_persist",
+  ): MeetingApprovalJourneyStageAttemptV1 | null {
+    if (journey === null) return null;
+    return this.safely(
+      () => this.options.journey_telemetry?.beginStage(journey, stage) ?? null,
+      null,
+    ) ?? null;
+  }
+
+  private closeExtractionSuccess(
+    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
+    observation: DecisionExtractionGenerationObservation | null,
+    startedAt: number,
+  ): void {
+    this.safely(() => {
+      const telemetry = this.options.journey_telemetry;
+      if (telemetry === undefined) return;
+      telemetry.succeedExtractionStage(
+        attempt,
+        observation,
+        Math.max(0, Date.now() - startedAt),
+      );
+    });
+  }
+
+  private closeExtractionFailure(
+    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
+    error: unknown,
+    observation: DecisionExtractionGenerationObservation | null,
+    startedAt: number,
+  ): void {
+    this.safely(() => {
+      const telemetry = this.options.journey_telemetry;
+      if (telemetry === undefined) return;
+      telemetry.failExtractionStage(
+        attempt,
+        error,
+        observation,
+        Math.max(0, Date.now() - startedAt),
+      );
+    });
+  }
+
+  private bindCandidate(
+    journey: MeetingApprovalJourneyRefV1 | null,
+    candidate: MeetingProcessingCandidateV1,
+  ): void {
+    if (journey === null) return;
+    this.safely(() => {
+      this.options.journey_telemetry?.bindCandidate(journey, {
+        candidate_id: candidate.candidate_id,
+        approval_id: candidate.approval_id,
+      });
+    });
+  }
+
+  private skipHistoricalFrozenStages(
+    journey: MeetingApprovalJourneyRefV1 | null,
+  ): void {
+    this.skipStageIfMissing(journey, "meeting_extraction");
+    this.skipStageIfMissing(journey, "meeting_candidate_persist");
+  }
+
+  private skipApprovalStages(
+    journey: MeetingApprovalJourneyRefV1 | null,
+  ): void {
+    for (const stage of [
+      "meeting_approval_staging",
+      "meeting_approval_action_verify",
+      "meeting_approval_action_queue",
+      "meeting_terminal_persist",
+      "meeting_record_append",
+      "meeting_search_publication",
+    ] as const) {
+      this.skipStageIfMissing(journey, stage);
+    }
+  }
+
+  private skipStageIfMissing(
+    journey: MeetingApprovalJourneyRefV1 | null,
+    stage:
+      | "meeting_extraction"
+      | "meeting_candidate_persist"
+      | "meeting_approval_staging"
+      | "meeting_approval_action_verify"
+      | "meeting_approval_action_queue"
+      | "meeting_terminal_persist"
+      | "meeting_record_append"
+      | "meeting_search_publication",
+  ): void {
+    if (journey === null) return;
+    this.safely(() => {
+      const telemetry = this.options.journey_telemetry;
+      if (
+        telemetry !== undefined &&
+        !telemetry.hasTerminalJourneyStage(journey, stage)
+      ) {
+        telemetry.skipStage(journey, stage);
+      }
+    });
   }
 }

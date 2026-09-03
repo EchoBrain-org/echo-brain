@@ -27,7 +27,43 @@ export interface StructuredGenerationResult {
   requestId?: string;
   inputTokens?: number;
   outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
   stopReason?: string;
+}
+
+/**
+ * The small, content-free subset of a provider response that remains useful
+ * when the provider reports a completed-but-unsuccessful generation.
+ *
+ * Do not add request identifiers, prompts, response content, or provider error
+ * detail here. This shape can cross the extraction boundary into telemetry.
+ */
+export interface StructuredGenerationFailureObservation {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
+  stopReason?: string;
+}
+
+/**
+ * A provider failure that still has safe, chargeable generation metadata.
+ * Consumers must treat the observation as optional because transport and
+ * malformed-response failures have no trustworthy usage data.
+ */
+export class StructuredGenerationAttemptError extends AdapterError {
+  constructor(
+    code: AdapterErrorCode,
+    message: string,
+    retryable: boolean,
+    public readonly observation: StructuredGenerationFailureObservation,
+  ) {
+    super(code, message, retryable);
+    this.name = 'StructuredGenerationAttemptError';
+  }
 }
 
 /**

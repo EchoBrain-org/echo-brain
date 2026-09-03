@@ -5,12 +5,16 @@ import { openOrganizationAuthorityService } from "./organization-authority-compo
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
 import {
   openStagingSyntheticPrivateDmCanaryControlV1,
-  STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1,
 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "./staging-authority-environment-v1.js";
 import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js";
 import { createStagingJourneyTelemetryTransportFromEnvironmentV1 } from "./staging/observability/staging-journey-telemetry-transport-v1.js";
 import { createAskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
+import {
+  OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
+  OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
+} from "./providers/openrouter/openrouter-decision-processor-config-v1.js";
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -157,7 +161,7 @@ export async function runOrganizationAuthorityServiceCli(
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
     stagingJourneyTelemetry =
       manifest.authority_url ===
-      STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1
+      STAGING_AUTHORITY_ORIGIN_V1
         ? createStagingJourneyTelemetryTransportFromEnvironmentV1(process.env, {
             write: io.stderr,
           })
@@ -173,6 +177,17 @@ export async function runOrganizationAuthorityServiceCli(
             planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
             answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
           });
+    const meetingApprovalJourneyTelemetry =
+      stagingJourneyTelemetry?.identity === null ||
+      stagingJourneyTelemetry?.identity === undefined
+        ? undefined
+        : {
+            observer: stagingJourneyTelemetry.observer,
+            release_sha: stagingJourneyTelemetry.identity.release_sha,
+            build_number: stagingJourneyTelemetry.identity.build_number,
+            extraction_provider: OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
+            extraction_model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
+          } as const;
     const runtime = await openOrganizationAuthorityService({
       state_directory: stateDirectory,
       host,
@@ -235,6 +250,13 @@ export async function runOrganizationAuthorityServiceCli(
       ...(askJourneyTelemetry === undefined
         ? {}
         : { ask_journey_telemetry: askJourneyTelemetry }),
+      ...(meetingApprovalJourneyTelemetry === undefined
+        ? {}
+        : {
+            staging_meeting_approval_journey_telemetry_enabled: true,
+            meeting_approval_journey_telemetry:
+              meetingApprovalJourneyTelemetry,
+          }),
       ...(parsed["--worker-interval-ms"] === undefined
         ? {}
         : {
@@ -246,7 +268,7 @@ export async function runOrganizationAuthorityServiceCli(
     });
     const stagingCanaryControl =
       manifest.authority_url ===
-        STAGING_SYNTHETIC_PRIVATE_DM_CANARY_AUTHORITY_ORIGIN_V1 &&
+        STAGING_AUTHORITY_ORIGIN_V1 &&
       runtime.run_staging_synthetic_private_dm_canary !== undefined
         ? await openStagingSyntheticPrivateDmCanaryControlV1({
             authority_url: manifest.authority_url,
@@ -273,14 +295,15 @@ export async function runOrganizationAuthorityServiceCli(
     await new Promise<void>((resolve) => {
       let closing: Promise<void> | undefined;
       const close = (): void => {
-        stagingJourneyTelemetry?.close();
         closing ??=
           stagingCanaryControl === undefined
-            ? runtime.close()
+            ? runtime.close().finally(() => stagingJourneyTelemetry?.close())
             : Promise.all([
                 stagingCanaryControl.close().catch(() => undefined),
                 runtime.close(),
-              ]).then(() => undefined);
+              ])
+                .then(() => undefined)
+                .finally(() => stagingJourneyTelemetry?.close());
         void closing.finally(resolve);
       };
       process.once("SIGINT", close);

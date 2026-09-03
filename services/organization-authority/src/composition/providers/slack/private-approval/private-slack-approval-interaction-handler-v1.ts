@@ -1,5 +1,10 @@
 import { AuthorityOperationError } from "../../../../domain/errors.js";
 import type {
+  MeetingApprovalJourneyClockV1,
+  MeetingApprovalJourneyStageAttemptV1,
+  MeetingApprovalJourneyTelemetryPortV1,
+} from "../../../../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
+import type {
   EnqueuePrivateApprovalInteractionResultV1,
   PrivateApprovalSignedTerminalActionV1,
 } from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
@@ -33,12 +38,76 @@ export interface PrivateSlackApprovalInteractionHandlerInputV1 {
   readonly now_unix_seconds?: () => number;
   readonly now?: () => string;
   /**
+   * Optional staging-only journey telemetry. This must never affect Slack's
+   * acknowledgement or durable receipt semantics.
+   */
+  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
+  /**
    * Observational only. Receives no provider data and is invoked only after a
    * successfully HMAC-verified request fails the parser boundary.
    */
   readonly on_rejection?: (event: {
     readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
   }) => void;
+}
+
+function captureJourneyClock(
+  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
+): MeetingApprovalJourneyClockV1 | undefined {
+  try {
+    return telemetry?.captureClock();
+  } catch {
+    return undefined;
+  }
+}
+
+function beginApprovalJourneyStage(
+  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
+  approvalId: string,
+  stage: "meeting_approval_action_verify" | "meeting_approval_action_queue",
+  started?: MeetingApprovalJourneyClockV1,
+): MeetingApprovalJourneyStageAttemptV1 | null {
+  try {
+    return telemetry?.beginStageForApproval(approvalId, stage, started) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function approvalQueueAgeMs(
+  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
+  approvalId: string,
+  observedAt: string,
+): number | null {
+  try {
+    return telemetry?.queueAgeMs(approvalId, observedAt) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function succeedApprovalJourneyStage(
+  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
+  attempt: MeetingApprovalJourneyStageAttemptV1 | null,
+  input?: { readonly queue_age_ms?: number | null },
+): void {
+  try {
+    telemetry?.succeedStage(attempt, input);
+  } catch {
+    // Telemetry is strictly observational.
+  }
+}
+
+function failApprovalJourneyStage(
+  telemetry: MeetingApprovalJourneyTelemetryPortV1 | undefined,
+  attempt: MeetingApprovalJourneyStageAttemptV1 | null,
+  error: unknown,
+): void {
+  try {
+    telemetry?.failStage(attempt, error);
+  } catch {
+    // Telemetry is strictly observational.
+  }
 }
 
 function reportRejection(
@@ -89,6 +158,9 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
         PrivateSlackApprovalInteractionHttpPortV1["accept"]
       >[0],
     ): Promise<"accepted"> {
+      // Capture at ingress so human-action verification latency excludes no
+      // work before HTTP acceptance. An unavailable observer is fail-open.
+      const acceptedAt = captureJourneyClock(input.journey_telemetry);
       if (!isSlackFormContentType(request.content_type)) {
         throw new AuthorityOperationError(
           "invalid_request",
@@ -132,8 +204,28 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
       }
       if (interaction.disposition === "presentation_change") return "accepted";
 
+      let queueAttempt: MeetingApprovalJourneyStageAttemptV1 | null = null;
       try {
         const observedAt = canonicalNow(now);
+        const verificationAttempt = beginApprovalJourneyStage(
+          input.journey_telemetry,
+          interaction.approval_id,
+          "meeting_approval_action_verify",
+          acceptedAt,
+        );
+        succeedApprovalJourneyStage(input.journey_telemetry, verificationAttempt, {
+          queue_age_ms: approvalQueueAgeMs(
+            input.journey_telemetry,
+            interaction.approval_id,
+            observedAt,
+          ),
+        });
+        queueAttempt = beginApprovalJourneyStage(
+          input.journey_telemetry,
+          interaction.approval_id,
+          "meeting_approval_action_queue",
+          captureJourneyClock(input.journey_telemetry),
+        );
         const result = await input.persistence.enqueue({
           disposition: "resolution",
           receipt: Object.freeze({
@@ -154,8 +246,10 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
         if (result.disposition !== "resolution") {
           throw new Error("private approval terminal receipt was not queued");
         }
+        succeedApprovalJourneyStage(input.journey_telemetry, queueAttempt);
         return "accepted";
       } catch (error) {
+        failApprovalJourneyStage(input.journey_telemetry, queueAttempt, error);
         if (error instanceof AuthorityOperationError) throw error;
         throw new AuthorityOperationError(
           "unavailable",

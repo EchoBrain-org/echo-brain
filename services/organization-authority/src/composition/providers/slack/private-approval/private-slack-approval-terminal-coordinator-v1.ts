@@ -33,6 +33,10 @@ import type {
   PrivateSlackBlockV4RecordWriterV1,
 } from "../../../../processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../../../../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import type {
+  MeetingApprovalJourneyStageAttemptV1,
+  MeetingApprovalJourneyTelemetryPortV1,
+} from "../../../../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -86,6 +90,8 @@ export interface PrivateSlackApprovalTerminalCoordinatorV1Options {
     "appendApproved"
   >;
   readonly poster: Pick<PrivateSlackApprovalCardPosterV1, "renderTerminal">;
+  /** Optional staging telemetry. It is deliberately fail-open. */
+  readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
 }
 
 /**
@@ -108,27 +114,48 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
   async observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void> {
     for (const queued of this.options.control_plane.listQueued()) {
       signal.throwIfAborted();
+      const approvalId = queued.receipt.approval_id;
+      const terminalAttempt = this.beginTerminalStage(approvalId);
       try {
-        await this.options.control_plane.finalize(
+        const terminal = await this.options.control_plane.finalize(
           queued.receipt.provider_action_key_sha256,
         );
+        this.succeedStage(terminalAttempt, { outcome: terminal.outcome });
+        if (terminal.outcome === "rejected") {
+          this.skipRejectedOrDeniedDownstreamStages(approvalId);
+        }
       } catch (error) {
         if (error instanceof PrivateApprovalFinalizationDeniedError) {
-          this.options.control_plane.recordDenied(
-            queued.receipt.provider_action_key_sha256,
-            error.reason_code,
-          );
+          try {
+            this.options.control_plane.recordDenied(
+              queued.receipt.provider_action_key_sha256,
+              error.reason_code,
+            );
+          } catch (recordError) {
+            this.failStage(terminalAttempt, recordError);
+            throw recordError;
+          }
+          this.succeedStage(terminalAttempt, { outcome: "denied" });
+          this.skipRejectedOrDeniedDownstreamStages(approvalId);
           continue;
         }
         // A competing terminal click cannot become the decision terminal.
         // Persist it as state drift so this second receipt cannot spin forever.
         if (error instanceof PrivateApprovalFinalizationConflictError) {
-          this.options.control_plane.recordDenied(
-            queued.receipt.provider_action_key_sha256,
-            "state_drift",
-          );
+          try {
+            this.options.control_plane.recordDenied(
+              queued.receipt.provider_action_key_sha256,
+              "state_drift",
+            );
+          } catch (recordError) {
+            this.failStage(terminalAttempt, recordError);
+            throw recordError;
+          }
+          this.succeedStage(terminalAttempt, { outcome: "denied" });
+          this.skipRejectedOrDeniedDownstreamStages(approvalId);
           continue;
         }
+        this.failStage(terminalAttempt, error);
         throw error;
       }
     }
@@ -142,6 +169,7 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
   private async materializeDurableTerminals(signal: AbortSignal): Promise<void> {
     for (const terminal of this.options.control_plane.listTerminals()) {
       signal.throwIfAborted();
+      this.synthesizeTerminalSuccessIfMissing(terminal);
       const authorityTerminal = await this.materializeTerminal(terminal);
       signal.throwIfAborted();
       await this.reconcileTerminalCard(authorityTerminal);
@@ -153,7 +181,17 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
   ): Promise<PrivateApprovalTerminalReceiptV1> {
     const approvalId = terminal.resolution.approval_id;
     const existing = await this.options.authority.readTerminal(approvalId);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      if (existing.outcome === "rejected") {
+        this.skipRejectedOrDeniedDownstreamStages(approvalId);
+      } else if (existing.v4_receipt !== null) {
+        // A prior worker may have committed the Authority receipt before this
+        // optional sidecar existed. Preserve that completed append as an
+        // instantaneous observation so search publication can resume.
+        this.synthesizeRecordAppendSuccessIfMissing(approvalId);
+      }
+      return existing;
+    }
 
     const candidate = await this.options.authority.readFrozenCandidateForApproval(
       approvalId,
@@ -168,16 +206,27 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     if (terminal.outcome === "rejected") {
       // Rejection is a durable terminal and private card update only. It never
       // reaches V4 and therefore never releases a readable policy fact.
-      return this.options.authority.recordTerminal({
+      const recorded = await this.options.authority.recordTerminal({
         candidate_id: candidate.candidate_id,
         resolution: terminal.resolution,
       });
+      this.skipRejectedOrDeniedDownstreamStages(approvalId);
+      return recorded;
     }
 
-    const appended = await this.options.record_writer.appendApproved(
-      terminal as PrivateSlackBlockApprovalTerminalV1,
-      candidate,
-    );
+    const appendAttempt = this.beginStageForApproval(approvalId, "meeting_record_append");
+    let appended: Awaited<ReturnType<PrivateSlackBlockV4RecordWriterV1["appendApproved"]>>;
+    try {
+      appended = await this.options.record_writer.appendApproved(
+        terminal as PrivateSlackBlockApprovalTerminalV1,
+        candidate,
+      );
+    } catch (error) {
+      this.failStage(appendAttempt, error);
+      throw error;
+    }
+    this.succeedStage(appendAttempt);
+    this.markAwaitingSearch(approvalId);
     return this.options.authority.recordTerminal({
       candidate_id: candidate.candidate_id,
       resolution: terminal.resolution,
@@ -185,6 +234,100 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
       // before it makes the V4 receipt durable.
       v4_receipt: appended.receipt as unknown as CanonicalPrivateApprovalV4ReceiptV1,
     });
+  }
+
+  private beginTerminalStage(
+    approvalId: string,
+  ): MeetingApprovalJourneyStageAttemptV1 | null {
+    if (this.hasTerminalStage(approvalId, "meeting_terminal_persist")) return null;
+    return this.beginStageForApproval(approvalId, "meeting_terminal_persist");
+  }
+
+  private synthesizeTerminalSuccessIfMissing(
+    terminal: DurablePrivateApprovalTerminalV1,
+  ): void {
+    const approvalId = terminal.resolution.approval_id;
+    if (this.hasTerminalStage(approvalId, "meeting_terminal_persist")) return;
+    const attempt = this.beginStageForApproval(approvalId, "meeting_terminal_persist");
+    this.succeedStage(attempt, { outcome: terminal.outcome });
+  }
+
+  private synthesizeRecordAppendSuccessIfMissing(approvalId: string): void {
+    if (!this.hasTerminalStage(approvalId, "meeting_record_append")) {
+      const attempt = this.beginStageForApproval(approvalId, "meeting_record_append");
+      this.succeedStage(attempt);
+    }
+    // Re-mark independently of the stage event. A crash or disposable-sidecar
+    // failure can happen after the V4 append was observed but before its search
+    // correlation row was written; the durable Authority receipt lets a later
+    // pass repair that optional marker without appending again.
+    this.markAwaitingSearch(approvalId);
+  }
+
+  private skipRejectedOrDeniedDownstreamStages(approvalId: string): void {
+    this.skipStageForApproval(approvalId, "meeting_record_append");
+    this.skipStageForApproval(approvalId, "meeting_search_publication");
+  }
+
+  private hasTerminalStage(
+    approvalId: string,
+    stage: "meeting_terminal_persist" | "meeting_record_append" | "meeting_search_publication",
+  ): boolean {
+    try {
+      return this.options.journey_telemetry?.hasTerminalStage(approvalId, stage) ?? false;
+    } catch {
+      return false;
+    }
+  }
+
+  private beginStageForApproval(
+    approvalId: string,
+    stage: "meeting_terminal_persist" | "meeting_record_append",
+  ): MeetingApprovalJourneyStageAttemptV1 | null {
+    try {
+      return this.options.journey_telemetry?.beginStageForApproval(approvalId, stage) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private succeedStage(
+    attempt: MeetingApprovalJourneyStageAttemptV1 | null,
+    input?: { readonly outcome?: "approved" | "rejected" | "denied" },
+  ): void {
+    try {
+      this.options.journey_telemetry?.succeedStage(attempt, input);
+    } catch {
+      // Observability cannot alter a durable approval decision.
+    }
+  }
+
+  private failStage(attempt: MeetingApprovalJourneyStageAttemptV1 | null, error: unknown): void {
+    try {
+      this.options.journey_telemetry?.failStage(attempt, error);
+    } catch {
+      // Observability cannot mask the original failure.
+    }
+  }
+
+  private skipStageForApproval(
+    approvalId: string,
+    stage: "meeting_record_append" | "meeting_search_publication",
+  ): void {
+    if (this.hasTerminalStage(approvalId, stage)) return;
+    try {
+      this.options.journey_telemetry?.skipStageForApproval(approvalId, stage);
+    } catch {
+      // A telemetry sidecar is never a prerequisite for an approval action.
+    }
+  }
+
+  private markAwaitingSearch(approvalId: string): void {
+    try {
+      this.options.journey_telemetry?.markAwaitingSearch(approvalId);
+    } catch {
+      // The durable V4 receipt remains authoritative when the sidecar fails.
+    }
   }
 
   private async reconcileTerminalCard(
