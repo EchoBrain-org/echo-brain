@@ -150,9 +150,7 @@ describe("staging Journey Explorer backend stack", () => {
     const fn = resource(stack, "CustomWidgetJourneyExplorer");
     expect(fn.DependsOn).toBeUndefined();
     expect(fn.Properties).toMatchObject({
-      FunctionName: {
-        "Fn::Sub": "customWidget-${AWS::StackName}-journey-explorer",
-      },
+      FunctionName: "customWidget-echo-staging-journey-explorer-v1",
       Description: "Staging-only read-only content-free journey query backend.",
       Runtime: "nodejs24.x",
       Handler: "index.handler",
@@ -171,6 +169,10 @@ describe("staging Journey Explorer backend stack", () => {
         Variables: {
           STAGING_JOURNEY_LOG_GROUP_NAME_V1: { Ref: "StagingLogGroupName" },
           STAGING_JOURNEY_QUERY_TIMEOUT_MS_V1: "12000",
+          STAGING_JOURNEY_EXPLORER_ENDPOINT_ARN_V1: {
+            "Fn::Sub":
+              "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:customWidget-echo-staging-journey-explorer-v1",
+          },
         },
       },
     });
@@ -193,9 +195,8 @@ describe("staging Journey Explorer backend stack", () => {
     const stack = template();
     const policy = resource(stack, "JourneyExplorerOperatorInvokePolicy");
     expect(policy.Properties).toEqual({
-      ManagedPolicyName: {
-        "Fn::Sub": "${AWS::StackName}-journey-explorer-invoke",
-      },
+      ManagedPolicyName: "echo-staging-journey-explorer-invoke-v1",
+      Path: "/",
       Description:
         "Lets an approved same-account staging operator invoke only the Journey Explorer backend.",
       PolicyDocument: {
@@ -217,6 +218,11 @@ describe("staging Journey Explorer backend stack", () => {
     expect(policy.Properties).not.toHaveProperty("Groups");
     expect(stack.Outputs.JourneyExplorerOperatorInvokePolicyArn).toMatchObject({
       Value: { Ref: "JourneyExplorerOperatorInvokePolicy" },
+    });
+    expect(stack.Outputs.JourneyExplorerOperatorInvokePolicyName).toEqual({
+      Description:
+        "Customer managed policy name for the approved IAM Identity Center permission set reference.",
+      Value: "echo-staging-journey-explorer-invoke-v1",
     });
   });
 });

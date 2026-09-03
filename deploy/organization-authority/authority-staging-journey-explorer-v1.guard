@@ -119,7 +119,7 @@ rule exact_read_only_execution_role {
 
 rule bounded_staging_query_function {
     Resources.CustomWidgetJourneyExplorer.DependsOn not exists
-    Resources.CustomWidgetJourneyExplorer.Properties.FunctionName == { "Fn::Sub": "customWidget-${AWS::StackName}-journey-explorer" }
+    Resources.CustomWidgetJourneyExplorer.Properties.FunctionName == 'customWidget-echo-staging-journey-explorer-v1'
     Resources.CustomWidgetJourneyExplorer.Properties.Description == 'Staging-only read-only content-free journey query backend.'
     Resources.CustomWidgetJourneyExplorer.Properties.Runtime == 'nodejs24.x'
     Resources.CustomWidgetJourneyExplorer.Properties.Handler == 'index.handler'
@@ -137,7 +137,8 @@ rule bounded_staging_query_function {
     Resources.CustomWidgetJourneyExplorer.Properties.Environment == {
         "Variables": {
             "STAGING_JOURNEY_LOG_GROUP_NAME_V1": { "Ref": "StagingLogGroupName" },
-            "STAGING_JOURNEY_QUERY_TIMEOUT_MS_V1": "12000"
+            "STAGING_JOURNEY_QUERY_TIMEOUT_MS_V1": "12000",
+            "STAGING_JOURNEY_EXPLORER_ENDPOINT_ARN_V1": { "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:customWidget-echo-staging-journey-explorer-v1" }
         }
     }
     Resources.CustomWidgetJourneyExplorer.Properties.Code.ZipFile exists
@@ -148,7 +149,8 @@ rule bounded_staging_query_function {
 }
 
 rule operator_policy_invokes_only_this_backend {
-    Resources.JourneyExplorerOperatorInvokePolicy.Properties.ManagedPolicyName == { "Fn::Sub": "${AWS::StackName}-journey-explorer-invoke" }
+    Resources.JourneyExplorerOperatorInvokePolicy.Properties.ManagedPolicyName == 'echo-staging-journey-explorer-invoke-v1'
+    Resources.JourneyExplorerOperatorInvokePolicy.Properties.Path == '/'
     Resources.JourneyExplorerOperatorInvokePolicy.Properties.Description == 'Lets an approved same-account staging operator invoke only the Journey Explorer backend.'
     Resources.JourneyExplorerOperatorInvokePolicy.Properties.PolicyDocument == {
         "Version": "2012-10-17",
@@ -162,4 +164,5 @@ rule operator_policy_invokes_only_this_backend {
     Resources.JourneyExplorerOperatorInvokePolicy.Properties.Roles not exists
     Resources.JourneyExplorerOperatorInvokePolicy.Properties.Users not exists
     Resources.JourneyExplorerOperatorInvokePolicy.Properties.Groups not exists
+    Outputs.JourneyExplorerOperatorInvokePolicyName.Value == 'echo-staging-journey-explorer-invoke-v1'
 }
