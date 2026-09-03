@@ -339,6 +339,11 @@ retained function log group.
 `StopQuery` alone uses an unscoped resource because
 it consumes an opaque query ID; the handler never accepts a caller-supplied ID
 and obtains one only from its exact-source `StartQuery`.
+Cancellation is bounded and best-effort. On a `StartQuery` timeout the handler
+aborts the SDK request, waits up to one additional second for a valid late
+query ID, and, if one arrives in that window, awaits one separately bounded
+`StopQuery` attempt before returning. Without an ID the remote outcome is
+unknown; no cleanup is launched after the Lambda response.
 It creates a separate invoke-only customer managed policy for the exact Lambda
 function. That policy is intentionally unattached: `AWSReservedSSO` roles are
 Identity Center-protected, so Phase 6 must reference the customer managed

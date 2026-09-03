@@ -75,6 +75,15 @@ class Client {
     return next;
   }
 }
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
 function handler(client: Client, more: Record<string, unknown> = {}) {
   return mod.createStagingJourneyExplorerHandlerV1({
     logsClient: client,
@@ -602,7 +611,7 @@ describe("staging Journey Explorer custom widget", () => {
     }
   });
 
-  it("bounds an abort-ignoring StartQuery to the remaining budget", async () => {
+  it("returns from a never-settling StartQuery after bounded recovery", async () => {
     vi.useFakeTimers();
     try {
       const clockSamples = [0, 950];
@@ -617,6 +626,10 @@ describe("staging Journey Explorer custom widget", () => {
         monotonicNow: () => clockSamples.shift() ?? 950,
         queryDeadlineMs: 1_000,
       })({ operation: "list" });
+      let finished = false;
+      void result.then(() => {
+        finished = true;
+      });
       await vi.advanceTimersByTimeAsync(0);
       expect(stalled.sent).toHaveLength(1);
       expect(stalled.sent[0]).toBeInstanceOf(Start);
@@ -625,9 +638,127 @@ describe("staging Journey Explorer custom widget", () => {
       await vi.advanceTimersByTimeAsync(49);
       expect(startSignal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
-      await expect(result).resolves.toEqual({ error: "query_timeout" });
       expect(startSignal?.aborted).toBe(true);
       expect(stalled.sent).toHaveLength(1);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toEqual({ error: "query_timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not launch cleanup after bounded StartQuery recovery ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const lateStart = deferred<unknown>();
+      const clockSamples = [0, 950];
+      const client = new Client([() => lateStart.promise]);
+      const result = handler(client, {
+        monotonicNow: () => clockSamples.shift() ?? 950,
+        queryDeadlineMs: 1_000,
+      })({ operation: "list" });
+
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(result).resolves.toEqual({ error: "query_timeout" });
+      expect(client.sent).toHaveLength(1);
+
+      lateStart.resolve({ queryId: "outside-recovery-window" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.sent).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers a valid late StartQuery before returning its timeout result", async () => {
+    vi.useFakeTimers();
+    try {
+      const lateStart = deferred<unknown>();
+      const clockSamples = [0, 950];
+      let startSignal: AbortSignal | undefined;
+      let stopSignal: AbortSignal | undefined;
+      const client = new Client([
+        (_command: unknown, options: unknown) => {
+          startSignal = (options as { abortSignal?: AbortSignal }).abortSignal;
+          return lateStart.promise;
+        },
+        (_command: unknown, options: unknown) => {
+          stopSignal = (options as { abortSignal?: AbortSignal }).abortSignal;
+          return new Promise(() => undefined);
+        },
+      ]);
+      const result = handler(client, {
+        monotonicNow: () => clockSamples.shift() ?? 950,
+        queryDeadlineMs: 1_000,
+      })({ operation: "list" });
+      let finished = false;
+      void result.then(() => {
+        finished = true;
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(startSignal?.aborted).toBe(true);
+      expect(client.sent).toHaveLength(1);
+      expect(finished).toBe(false);
+
+      lateStart.resolve({ queryId: "late-start-query" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.sent).toHaveLength(2);
+      expect(client.sent[1]).toBeInstanceOf(Stop);
+      expect((client.sent[1] as Stop).input).toEqual({
+        queryId: "late-start-query",
+      });
+      expect(stopSignal?.aborted).toBe(false);
+      expect((client.sendOptions[1] as { abortSignal?: AbortSignal }).abortSignal).toBe(
+        stopSignal,
+      );
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stopSignal?.aborted).toBe(true);
+      expect(client.sent).toHaveLength(2);
+      await expect(result).resolves.toEqual({ error: "query_timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores invalid and rejected late StartQuery results", async () => {
+    vi.useFakeTimers();
+    try {
+      const invalid = deferred<unknown>();
+      const invalidClock = [0, 950];
+      const invalidClient = new Client([
+        () => invalid.promise,
+      ]);
+      const invalidResult = handler(invalidClient, {
+        monotonicNow: () => invalidClock.shift() ?? 950,
+        queryDeadlineMs: 1_000,
+      })({ operation: "list" });
+      await vi.advanceTimersByTimeAsync(50);
+      invalid.resolve({ queryId: "" });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(invalidResult).resolves.toEqual({ error: "query_timeout" });
+      expect(invalidClient.sent).toHaveLength(1);
+
+      const rejected = deferred<unknown>();
+      const rejectedClock = [0, 950];
+      const rejectedClient = new Client([
+        () => rejected.promise,
+      ]);
+      const rejectedResult = handler(rejectedClient, {
+        monotonicNow: () => rejectedClock.shift() ?? 950,
+        queryDeadlineMs: 1_000,
+      })({ operation: "list" });
+      await vi.advanceTimersByTimeAsync(50);
+      rejected.reject(new Error("private late StartQuery failure"));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(rejectedResult).resolves.toEqual({ error: "query_timeout" });
+      expect(rejectedClient.sent).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

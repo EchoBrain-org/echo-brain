@@ -12,6 +12,7 @@ const LIST_LIMIT = 2500;
 const MAX_OFFSET = LIST_LIMIT;
 const DETAIL_LIMIT = 2500;
 const CLEANUP_TIMEOUT_MS = 1000;
+const START_RECOVERY_TIMEOUT_MS = 1000;
 const MAX_MACHINE_DURATION = 31 * 24 * HOUR;
 const MAX_ATTEMPT = 100;
 const WORKFLOWS = new Set(["ask", "meeting_approval"]);
@@ -756,7 +757,28 @@ function createStagingJourneyExplorerHandlerV1(options) {
       options.queryDeadlineMs <= 12000
         ? options.queryDeadlineMs
         : 12000;
-  async function sendBounded(command, timeoutMs, timeoutError) {
+  function queryId(value) {
+    return value &&
+      typeof value.queryId === "string" &&
+      value.queryId.length > 0 &&
+      value.queryId.length <= 256
+      ? value.queryId
+      : null;
+  }
+  async function settleWithin(promise, timeoutMs) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function sendBounded(command, timeoutMs, timeoutError, onTimeout) {
     const abortController = new AbortController();
     let timer;
     const request = Promise.resolve().then(() =>
@@ -776,12 +798,38 @@ function createStagingJourneyExplorerHandlerV1(options) {
           }, timeoutMs);
         }),
       ]);
-      if (outcome === null) throw timeoutError();
+      if (outcome === null) {
+        if (onTimeout) {
+          try {
+            await onTimeout(settled);
+          } catch {}
+        }
+        throw timeoutError();
+      }
       if (!outcome.ok) throw outcome.failure;
       return outcome.value;
     } finally {
       clearTimeout(timer);
     }
+  }
+  async function stopQuery(queryId) {
+    try {
+      await sendBounded(
+        new commands.StopQueryCommand({ queryId }),
+        CLEANUP_TIMEOUT_MS,
+        () => new Error("cleanup timed out"),
+      );
+    } catch {
+      // Best-effort cleanup must not replace the original query failure.
+    }
+  }
+  async function recoverLateStart(settled) {
+    // Keep recovery inside this invocation: wait at most one additional second
+    // for a valid late query ID, then make one bounded StopQuery attempt. If the
+    // ID arrives later, this invocation cannot safely clean it up after return.
+    const outcome = await settleWithin(settled, START_RECOVERY_TIMEOUT_MS);
+    const lateQueryId = outcome && outcome.ok ? queryId(outcome.value) : null;
+    if (lateQueryId !== null) await stopQuery(lateQueryId);
   }
   async function run(queryString, start, end, limit) {
     const deadline = clock() + deadlineMs;
@@ -797,21 +845,16 @@ function createStagingJourneyExplorerHandlerV1(options) {
       }),
       startRemaining,
       queryTimeoutError,
+      recoverLateStart,
     );
-    if (
-      !started ||
-      typeof started.queryId !== "string" ||
-      started.queryId.length === 0 ||
-      started.queryId.length > 256
-    )
-      throw new Error("query id");
-    const queryId = started.queryId;
+    const startedQueryId = queryId(started);
+    if (startedQueryId === null) throw new Error("query id");
     try {
       for (let polls = 0; polls < 50; polls += 1) {
         const remaining = deadline - clock();
         if (remaining <= 0) throw queryTimeoutError();
         const result = await sendBounded(
-          new commands.GetQueryResultsCommand({ queryId }),
+          new commands.GetQueryResultsCommand({ queryId: startedQueryId }),
           remaining,
           queryTimeoutError,
         );
@@ -829,15 +872,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
       }
       throw queryTimeoutError();
     } catch (caught) {
-      try {
-        await sendBounded(
-          new commands.StopQueryCommand({ queryId }),
-          CLEANUP_TIMEOUT_MS,
-          () => new Error("cleanup timed out"),
-        );
-      } catch {
-        // Best-effort cleanup must not replace the original query failure.
-      }
+      await stopQuery(startedQueryId);
       throw caught;
     }
   }

@@ -88,7 +88,12 @@ exact source log group's two AWS-documented IAM ARN forms (with and without
 the trailing `:*`) and write only to its own retained function logs.
 `StopQuery` remains scoped to `*` because it consumes an opaque query ID; the
 handler never accepts a caller-supplied ID and can only obtain one from its
-exact-source `StartQuery`. The companion
+exact-source `StartQuery`. Cancellation is bounded and best-effort. If
+`StartQuery` times out, the handler aborts the SDK request, waits up to one
+additional second for a valid late query ID, and, when one arrives in that
+window, awaits one separately bounded `StopQuery` attempt before returning.
+Without an ID the remote outcome is unknown, and the handler launches no
+post-response cleanup that Lambda could freeze. The companion
 invoke-only customer managed policy is deliberately unattached because
 `AWSReservedSSO` roles are Identity Center-protected. Phase 6 must attach the
 policy by referencing it from an approved Identity Center permission set before

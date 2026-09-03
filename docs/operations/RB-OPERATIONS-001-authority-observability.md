@@ -403,6 +403,11 @@ The Lambda execution role may start and read queries only against that exact
 source log group, stop a query only through the AWS-required unscoped action,
 and write only to its dedicated 14-day retained function log group. The stack
 also creates an exact-function `lambda:InvokeFunction` customer managed policy.
+Query cancellation is bounded and best-effort. If `StartQuery` times out, the
+handler aborts its SDK request and waits up to one additional second for a
+valid late query ID. An ID received in that window gets one separately bounded
+`StopQuery` attempt before the handler returns. Without an ID, the remote
+outcome is unknown and no post-response cleanup is launched.
 It is intentionally unattached: the `AWSReservedSSO` roles used by operators
 are Identity Center-protected and must not be edited directly. Before a widget
 is added or invoked, Phase 6 must reference this customer managed policy from
