@@ -492,6 +492,23 @@ describe("staging Journey Explorer custom widget", () => {
       })({ operation: "list" }),
     ).resolves.toEqual({ error: "query_timeout" });
     expect(slow.sent[1]).toBeInstanceOf(Stop);
+    const pollingError = Object.assign(new Error("private poll failure"), {
+      code: "RESULT_LIMIT",
+    });
+    const pollFailure = new Client([
+      { queryId: "poll-failure" },
+      pollingError,
+      new Error("private cleanup failure"),
+    ]);
+    const pollFailureResult = await handler(pollFailure)({ operation: "list" });
+    expect(pollFailureResult).toEqual({ error: "result_limit_exceeded" });
+    expect(pollFailure.sent).toHaveLength(3);
+    expect(pollFailure.sent[1]).toBeInstanceOf(Get);
+    expect(pollFailure.sent[2]).toBeInstanceOf(Stop);
+    expect((pollFailure.sent[2] as Stop).input).toEqual({
+      queryId: "poll-failure",
+    });
+    expect(JSON.stringify(pollFailureResult)).not.toContain("private");
     const broken = new Client([new Error("provider secret token")]);
     const hidden = await handler(broken)({ operation: "list" });
     expect(hidden).toEqual({ error: "journey_explorer_unavailable" });

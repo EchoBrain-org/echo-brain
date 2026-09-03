@@ -771,24 +771,30 @@ function createStagingJourneyExplorerHandlerV1(options) {
       started.queryId.length > 256
     )
       throw new Error("query id");
-    const deadline = clock() + deadlineMs;
-    for (let polls = 0; polls < 50 && clock() < deadline; polls += 1) {
-      const result = await options.logsClient.send(
-        new commands.GetQueryResultsCommand({ queryId: started.queryId }),
-      );
-      if (result && result.status === "Complete")
-        return Array.isArray(result.results) ? result.results : [];
-      if (result && result.status === "Timeout") throw queryTimeoutError();
-      if (result && ["Failed", "Cancelled", "Unknown"].includes(result.status))
-        throw new Error("query");
-      await pause();
-    }
+    const queryId = started.queryId;
     try {
-      await options.logsClient.send(
-        new commands.StopQueryCommand({ queryId: started.queryId }),
-      );
-    } catch {}
-    throw queryTimeoutError();
+      const deadline = clock() + deadlineMs;
+      for (let polls = 0; polls < 50 && clock() < deadline; polls += 1) {
+        const result = await options.logsClient.send(
+          new commands.GetQueryResultsCommand({ queryId }),
+        );
+        if (result && result.status === "Complete")
+          return Array.isArray(result.results) ? result.results : [];
+        if (result && result.status === "Timeout") throw queryTimeoutError();
+        if (
+          result &&
+          ["Failed", "Cancelled", "Unknown"].includes(result.status)
+        )
+          throw new Error("query");
+        await pause();
+      }
+      throw queryTimeoutError();
+    } catch (caught) {
+      try {
+        await options.logsClient.send(new commands.StopQueryCommand({ queryId }));
+      } catch {}
+      throw caught;
+    }
   }
   return async (event) => {
     try {
