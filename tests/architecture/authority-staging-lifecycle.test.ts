@@ -1155,6 +1155,22 @@ describe("Authority staging lifecycle", () => {
     expect(fixture.events).not.toContain("execute-change-set");
   });
 
+  it("rejects a probe-only authority retry while the current stack is rolled back", async () => {
+    const fixture = dependencies({
+      authorityDescriptor: "serving",
+      initialStack: { ...stack(true), status: "UPDATE_ROLLBACK_COMPLETE" },
+    });
+    await expect(
+      runAuthorityStaging("up", ACCEPTED_INPUT, {
+        ...fixture.dependencies,
+        execute: true,
+        requireAuthority: true,
+      }),
+    ).rejects.toThrow("stack_status_invalid");
+    expect(fixture.events).toEqual(["describe-stack"]);
+    expect(fixture.descriptorRequests).toHaveLength(0);
+  });
+
   it("emits a safe failure receipt when the post-execution host-ready output is false", async () => {
     const fixture = dependencies({ postExecuteHostReady: false });
     let failure: unknown;

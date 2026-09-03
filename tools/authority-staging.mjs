@@ -1087,6 +1087,11 @@ async function runUp(
     // the host. Re-running it must be a non-mutating verification, not a
     // needless down/up cycle or a second change-set execution.
     if (!(execute && requireAuthority)) refuse("host_already_enabled");
+    // A completed rollback is recoverable only through a newly reviewed
+    // lifecycle retry. Do not let its stale host-ready output turn this into a
+    // descriptor-only success: the stack itself is not healthy.
+    if (!HEALTHY_STACK_STATUSES.has(current.status))
+      refuse("stack_status_invalid");
     const descriptor = await probeAuthorityDescriptor(input, dependencies, {
       attempts: DESCRIPTOR_PROBE_ATTEMPTS,
     });
