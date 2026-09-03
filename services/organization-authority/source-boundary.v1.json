@@ -683,6 +683,16 @@
       "allowed_node_builtins": []
     },
     {
+      "name": "authority-journey-telemetry-is-provider-neutral-and-content-free",
+      "from": "services/organization-authority/src/shared/journey-telemetry-v1.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "crypto"
+      ]
+    },
+    {
       "name": "processing-core-is-tool-agnostic",
       "from": "services/organization-authority/src/processing/core/**",
       "allowed_imports": [

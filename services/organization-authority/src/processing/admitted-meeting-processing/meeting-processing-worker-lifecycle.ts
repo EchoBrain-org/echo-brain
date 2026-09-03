@@ -1,6 +1,6 @@
 import { AdapterError } from "../core/contracts/adapter.js";
 
-export const MEETING_PROCESSING_WORKER_PHASES_V1 = [
+export const MEETING_PROCESSING_WORKER_PHASES_V1 = Object.freeze([
   "recovery",
   "source_intake",
   "extraction",
@@ -8,7 +8,7 @@ export const MEETING_PROCESSING_WORKER_PHASES_V1 = [
   "approval_observation",
   "record_append",
   "search_reconciliation",
-] as const;
+] as const);
 
 export type MeetingProcessingWorkerPhaseV1 =
   (typeof MEETING_PROCESSING_WORKER_PHASES_V1)[number];
