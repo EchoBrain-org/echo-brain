@@ -4,7 +4,17 @@ import {
   createJourneyTelemetryEventV1,
   createJourneyTelemetryV1,
   isJourneyMetricDimensionKeyV1,
+  JOURNEY_ENVIRONMENTS_V1,
+  JOURNEY_EVENTS_V1,
+  JOURNEY_FAILURE_CLASSES_V1,
+  JOURNEY_LLM_FINISH_REASONS_V1,
+  JOURNEY_LLM_MODELS_V1,
+  JOURNEY_LLM_PROVIDERS_V1,
+  JOURNEY_LLM_USAGE_STATUSES_V1,
   JOURNEY_METRIC_DIMENSION_KEYS_V1,
+  JOURNEY_OUTCOMES_V1,
+  JOURNEY_STAGES_V1,
+  JOURNEY_WORKFLOWS_V1,
   parseJourneyIdV1,
   type JourneyTelemetryContextInputV1,
 } from "../../src/shared/journey-telemetry-v1.js";
@@ -362,6 +372,98 @@ describe("journey telemetry v1", () => {
     ]) {
       expect(isJourneyMetricDimensionKeyV1(forbidden)).toBe(false);
     }
+  });
+
+  it("freezes every validation allowlist so runtime mutation cannot admit new values", () => {
+    const injected = "runtime-injected-value";
+    const allowlists: readonly (readonly string[])[] = [
+      JOURNEY_ENVIRONMENTS_V1,
+      JOURNEY_WORKFLOWS_V1,
+      JOURNEY_STAGES_V1,
+      JOURNEY_METRIC_DIMENSION_KEYS_V1,
+      JOURNEY_EVENTS_V1,
+      JOURNEY_OUTCOMES_V1,
+      JOURNEY_FAILURE_CLASSES_V1,
+      JOURNEY_LLM_PROVIDERS_V1,
+      JOURNEY_LLM_MODELS_V1,
+      JOURNEY_LLM_FINISH_REASONS_V1,
+      JOURNEY_LLM_USAGE_STATUSES_V1,
+    ];
+
+    for (const allowlist of allowlists) {
+      expect(Object.isFrozen(allowlist)).toBe(true);
+      expect(() => (allowlist as string[]).push(injected)).toThrow(TypeError);
+      expect(allowlist).not.toContain(injected);
+    }
+
+    expect(() =>
+      createJourneyTelemetryEventV1({
+        journey_id: JOURNEY_ID,
+        sequence: 1,
+        observed_at: OBSERVED_AT,
+        context: { ...askContext, environment: injected } as never,
+        event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
+      }),
+    ).toThrow("environment");
+    expect(() =>
+      createJourneyTelemetryEventV1({
+        journey_id: JOURNEY_ID,
+        sequence: 1,
+        observed_at: OBSERVED_AT,
+        context: { ...askContext, workflow: injected } as never,
+        event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
+      }),
+    ).toThrow("workflow");
+    expect(() => strict({ stage: injected, llm_usage: null })).toThrow("stage");
+    expect(() => strict({ event: injected })).toThrow("event");
+    expect(() =>
+      strict({ stage: "ask_response", outcome: injected, llm_usage: null }),
+    ).toThrow("outcome");
+    expect(() =>
+      strict({ event: "failed", failure_class: injected, retryable: false }),
+    ).toThrow("failure_class");
+    expect(() =>
+      strict({
+        llm_usage: {
+          provider: injected,
+          model: "anthropic/claude-sonnet-4.6",
+          provider_latency_ms: 1,
+          finish_reason: "completed",
+        },
+      }),
+    ).toThrow("provider");
+    expect(() =>
+      strict({
+        llm_usage: {
+          provider: "openrouter",
+          model: injected,
+          provider_latency_ms: 1,
+          finish_reason: "completed",
+        },
+      }),
+    ).toThrow("model");
+    expect(() =>
+      strict({
+        llm_usage: {
+          provider: "openrouter",
+          model: "anthropic/claude-sonnet-4.6",
+          provider_latency_ms: 1,
+          finish_reason: injected,
+        },
+      }),
+    ).toThrow("finish_reason");
+    expect(() =>
+      strict({
+        llm_usage: {
+          provider: "openrouter",
+          model: "anthropic/claude-sonnet-4.6",
+          provider_latency_ms: 1,
+          finish_reason: "completed",
+          usage_status: injected,
+        },
+      }),
+    ).toThrow("usage_status");
+    expect(isJourneyMetricDimensionKeyV1(injected)).toBe(false);
   });
 
   it("enforces stage-compatible outcomes and keeps intermediate stages outcome-free", () => {

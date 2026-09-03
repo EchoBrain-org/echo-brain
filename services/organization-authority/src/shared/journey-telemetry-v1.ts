@@ -8,18 +8,18 @@ import { randomUUID } from "node:crypto";
 export const JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 = 1 as const;
 export const JOURNEY_TELEMETRY_KIND_V1 = "echo-authority-journey-stage-v1" as const;
 
-export const JOURNEY_ENVIRONMENTS_V1 = [
+export const JOURNEY_ENVIRONMENTS_V1 = Object.freeze([
   "development",
   "test",
   "staging",
   "production",
-] as const;
+] as const);
 export type JourneyEnvironmentV1 = (typeof JOURNEY_ENVIRONMENTS_V1)[number];
 
-export const JOURNEY_WORKFLOWS_V1 = ["ask", "meeting_approval"] as const;
+export const JOURNEY_WORKFLOWS_V1 = Object.freeze(["ask", "meeting_approval"] as const);
 export type JourneyWorkflowV1 = (typeof JOURNEY_WORKFLOWS_V1)[number];
 
-export const JOURNEY_STAGES_V1 = [
+export const JOURNEY_STAGES_V1 = Object.freeze([
   "ask_validation",
   "ask_authorization",
   "ask_planner",
@@ -38,7 +38,7 @@ export const JOURNEY_STAGES_V1 = [
   "meeting_terminal_persist",
   "meeting_record_append",
   "meeting_search_publication",
-] as const;
+] as const);
 export type JourneyStageV1 = (typeof JOURNEY_STAGES_V1)[number];
 
 /**
@@ -46,7 +46,7 @@ export type JourneyStageV1 = (typeof JOURNEY_STAGES_V1)[number];
  * Journey, request, person, user, meeting, candidate, and approval identifiers
  * are deliberately excluded: they belong only in permitted run-detail logs.
  */
-export const JOURNEY_METRIC_DIMENSION_KEYS_V1 = [
+export const JOURNEY_METRIC_DIMENSION_KEYS_V1 = Object.freeze([
   "environment",
   "workflow",
   "stage",
@@ -55,14 +55,19 @@ export const JOURNEY_METRIC_DIMENSION_KEYS_V1 = [
   "retryable",
   "provider",
   "model",
-] as const;
+] as const);
 export type JourneyMetricDimensionKeyV1 =
   (typeof JOURNEY_METRIC_DIMENSION_KEYS_V1)[number];
 
-export const JOURNEY_EVENTS_V1 = ["started", "succeeded", "failed", "skipped"] as const;
+export const JOURNEY_EVENTS_V1 = Object.freeze([
+  "started",
+  "succeeded",
+  "failed",
+  "skipped",
+] as const);
 export type JourneyEventV1 = (typeof JOURNEY_EVENTS_V1)[number];
 
-export const JOURNEY_OUTCOMES_V1 = [
+export const JOURNEY_OUTCOMES_V1 = Object.freeze([
   "completed",
   "answered",
   "insufficient_evidence",
@@ -80,10 +85,10 @@ export const JOURNEY_OUTCOMES_V1 = [
   "published",
   "superseded",
   "skipped",
-] as const;
+] as const);
 export type JourneyOutcomeV1 = (typeof JOURNEY_OUTCOMES_V1)[number];
 
-export const JOURNEY_FAILURE_CLASSES_V1 = [
+export const JOURNEY_FAILURE_CLASSES_V1 = Object.freeze([
   "authorization",
   "invalid_request",
   "invalid_contract",
@@ -93,37 +98,40 @@ export const JOURNEY_FAILURE_CLASSES_V1 = [
   "cancelled",
   "provider_rejected",
   "unknown",
-] as const;
+] as const);
 export type JourneyFailureClassV1 = (typeof JOURNEY_FAILURE_CLASSES_V1)[number];
 
-export const JOURNEY_LLM_PROVIDERS_V1 = [
+export const JOURNEY_LLM_PROVIDERS_V1 = Object.freeze([
   "anthropic",
   "openai",
   "openrouter",
   "ollama",
   "other",
-] as const;
+] as const);
 export type JourneyLlmProviderV1 = (typeof JOURNEY_LLM_PROVIDERS_V1)[number];
 
 /** Finite configuration-derived model identities admitted by telemetry V1. */
-export const JOURNEY_LLM_MODELS_V1 = [
+export const JOURNEY_LLM_MODELS_V1 = Object.freeze([
   "anthropic/claude-sonnet-4.6",
   "deepseek/deepseek-v3.2",
-] as const;
+] as const);
 export type JourneyLlmModelV1 = (typeof JOURNEY_LLM_MODELS_V1)[number];
 
-export const JOURNEY_LLM_FINISH_REASONS_V1 = [
+export const JOURNEY_LLM_FINISH_REASONS_V1 = Object.freeze([
   "completed",
   "length",
   "stop",
   "content_filter",
   "tool_call",
   "unknown",
-] as const;
+] as const);
 export type JourneyLlmFinishReasonV1 =
   (typeof JOURNEY_LLM_FINISH_REASONS_V1)[number];
 
-export const JOURNEY_LLM_USAGE_STATUSES_V1 = ["reported", "unavailable"] as const;
+export const JOURNEY_LLM_USAGE_STATUSES_V1 = Object.freeze([
+  "reported",
+  "unavailable",
+] as const);
 export type JourneyLlmUsageStatusV1 =
   (typeof JOURNEY_LLM_USAGE_STATUSES_V1)[number];
 
