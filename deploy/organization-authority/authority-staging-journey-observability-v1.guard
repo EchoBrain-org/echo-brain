@@ -1,0 +1,118 @@
+# CloudFormation Guard 3.2.1 policy for the dedicated staging journey overview.
+# This stack reads the one existing staging runtime log group. It must never
+# become an Authority host, data, IAM, Lambda, or delivery stack.
+
+let all_resources = Resources.*
+let metric_filters = Resources.*[ Type == 'AWS::Logs::MetricFilter' ]
+let alarms = Resources.*[ Type == 'AWS::CloudWatch::Alarm' ]
+let dashboards = Resources.*[ Type == 'AWS::CloudWatch::Dashboard' ]
+let iam_resources = Resources.*[ Type == /AWS::IAM::.*/ ]
+let lambda_resources = Resources.*[ Type == /AWS::Lambda::.*/ ]
+let log_groups = Resources.*[ Type == 'AWS::Logs::LogGroup' ]
+let data_stores = Resources.*[ Type IN [
+    'AWS::DynamoDB::Table',
+    'AWS::S3::Bucket',
+    'AWS::RDS::DBInstance',
+    'AWS::EFS::FileSystem',
+    'AWS::OpenSearchService::Domain'
+] ]
+
+rule exact_staging_journey_overview_inventory {
+    let resource_count = count(%all_resources)
+    let metric_filter_count = count(%metric_filters)
+    let alarm_count = count(%alarms)
+    let dashboard_count = count(%dashboards)
+
+    %resource_count == 5
+    %metric_filter_count == 1
+    %alarm_count == 3
+    %dashboard_count == 1
+    Resources.WorkerCycleCompletedMetricFilter.Type == 'AWS::Logs::MetricFilter'
+    Resources.WorkerSilenceAlarm.Type == 'AWS::CloudWatch::Alarm'
+    Resources.AskRetrievalFailureAlarm.Type == 'AWS::CloudWatch::Alarm'
+    Resources.ApprovedSearchStuckAlarm.Type == 'AWS::CloudWatch::Alarm'
+    Resources.StagingJourneyOverviewDashboard.Type == 'AWS::CloudWatch::Dashboard'
+}
+
+rule staging_only_input_boundary {
+    Parameters.StagingLogGroupName.Type == 'String'
+    Parameters.StagingLogGroupName.Default == '/echo-brain/authority/authority-staging.echobrain.org'
+    Parameters.StagingLogGroupName.AllowedValues == [ '/echo-brain/authority/authority-staging.echobrain.org' ]
+    Parameters.AlertTopicArn.Type == 'String'
+    Parameters.AlertTopicArn.AllowedPattern == '^arn:aws[a-zA-Z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$'
+}
+
+rule has_no_platform_or_data_resources {
+    %iam_resources EMPTY
+    %lambda_resources EMPTY
+    %log_groups EMPTY
+    %data_stores EMPTY
+}
+
+rule metric_filter_is_staging_worker_liveness_only {
+    Resources.WorkerCycleCompletedMetricFilter.Properties.LogGroupName == { "Ref": "StagingLogGroupName" }
+    Resources.WorkerCycleCompletedMetricFilter.Properties.FilterPattern == '{ ($.kind = "echo-clean-live-worker-cycle-v1") && ($.event = "succeeded") }'
+    Resources.WorkerCycleCompletedMetricFilter.Properties.MetricTransformations == [ {
+        "MetricNamespace": "EchoBrain/StagingJourneyV1",
+        "MetricName": "WorkerCycleCompleted",
+        "MetricValue": "1",
+        "Unit": "Count"
+    } ]
+}
+
+rule all_alarms_have_staging_namespace_and_explicit_delivery_behavior {
+    %alarms.Properties.Namespace == 'EchoBrain/StagingJourneyV1'
+    %alarms.Properties.AlarmActions == [ { "Ref": "AlertTopicArn" } ]
+    %alarms.Properties.OKActions == [ { "Ref": "AlertTopicArn" } ]
+    %alarms.Properties.TreatMissingData exists
+}
+
+rule exact_staging_alarm_thresholds {
+    Resources.WorkerSilenceAlarm.Properties == {
+        "AlarmDescription": "Staging Authority worker completed fewer than one cycle in two of the last three minutes.",
+        "AlarmActions": [ { "Ref": "AlertTopicArn" } ],
+        "OKActions": [ { "Ref": "AlertTopicArn" } ],
+        "Namespace": "EchoBrain/StagingJourneyV1",
+        "MetricName": "WorkerCycleCompleted",
+        "Statistic": "Sum",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "DatapointsToAlarm": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching"
+    }
+    Resources.AskRetrievalFailureAlarm.Properties == {
+        "AlarmDescription": "At least two staging Ask retrieval failures occurred in five minutes.",
+        "AlarmActions": [ { "Ref": "AlertTopicArn" } ],
+        "OKActions": [ { "Ref": "AlertTopicArn" } ],
+        "Namespace": "EchoBrain/StagingJourneyV1",
+        "MetricName": "AskRetrievalFailure",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Threshold": 2,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching"
+    }
+    Resources.ApprovedSearchStuckAlarm.Properties == {
+        "AlarmDescription": "At least one approved staging meeting record remains awaiting readable-search publication.",
+        "AlarmActions": [ { "Ref": "AlertTopicArn" } ],
+        "OKActions": [ { "Ref": "AlertTopicArn" } ],
+        "Namespace": "EchoBrain/StagingJourneyV1",
+        "MetricName": "ApprovedSearchStuckCount",
+        "Statistic": "Maximum",
+        "Period": 60,
+        "EvaluationPeriods": 3,
+        "DatapointsToAlarm": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching"
+    }
+}
+
+rule dashboard_is_owned_by_this_stack_and_has_a_literal_body {
+    Resources.StagingJourneyOverviewDashboard.Properties.DashboardName == { "Fn::Sub": "${AWS::StackName}-overview" }
+    Resources.StagingJourneyOverviewDashboard.Properties.DashboardBody.'Fn::Sub' exists
+}

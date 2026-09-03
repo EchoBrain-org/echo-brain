@@ -3,11 +3,20 @@ import {
   createJourneyTelemetryEventV1,
   type JourneyTelemetryObserverV1,
 } from "../../../shared/journey-telemetry-v1.js";
+import {
+  formatApprovedSearchBacklogMetricsV1,
+  formatJourneyTelemetryMetricsV1,
+  formatStagingJourneyLivenessMetricV1,
+  type StagingApprovedSearchBacklogObserverV1,
+} from "./staging-journey-metrics-v1.js";
 
 export const STAGING_JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1 = 1 as const;
 export const STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1 =
   "echo-authority-journey-telemetry-liveness-v1" as const;
 export const STAGING_JOURNEY_TELEMETRY_HEARTBEAT_INTERVAL_MS_V1 = 60_000;
+export const STAGING_APPROVED_SEARCH_BACKLOG_SCHEMA_VERSION_V1 = 1 as const;
+export const STAGING_APPROVED_SEARCH_BACKLOG_KIND_V1 =
+  "echo-authority-approved-search-backlog-v1" as const;
 
 export interface StagingJourneyTelemetryIdentityV1 {
   readonly release_sha: string;
@@ -22,6 +31,16 @@ export interface StagingJourneyTelemetryLivenessEventV1 {
   readonly release_sha: string;
   readonly build_number: number;
   readonly event: "startup" | "heartbeat";
+}
+
+export interface StagingApprovedSearchBacklogEventV1 {
+  readonly schema_version: typeof STAGING_APPROVED_SEARCH_BACKLOG_SCHEMA_VERSION_V1;
+  readonly kind: typeof STAGING_APPROVED_SEARCH_BACKLOG_KIND_V1;
+  readonly observed_at: string;
+  readonly environment: "staging";
+  readonly pending_count: number;
+  readonly stuck_count: number;
+  readonly oldest_age_ms: number | null;
 }
 
 export type StagingJourneyTelemetryWriterV1 = (line: string) => void | Promise<void>;
@@ -49,6 +68,8 @@ export interface StagingJourneyTelemetryTransportV1 {
   start(): void;
   /** Safe to pass directly to createJourneyTelemetryV1, including while liveness is inert. */
   readonly observer: JourneyTelemetryObserverV1;
+  /** Safe to pass to the staging approval sidecar recorder. */
+  readonly approved_search_backlog_observer: StagingApprovedSearchBacklogObserverV1;
   /** Stops liveness emission. Safe to call more than once. */
   close(): void;
 }
@@ -90,6 +111,7 @@ function disabledTransport(): StagingJourneyTelemetryTransportV1 {
     identity: null,
     start: () => undefined,
     observer: () => undefined,
+    approved_search_backlog_observer: () => undefined,
     close: () => undefined,
   });
 }
@@ -128,7 +150,7 @@ export function createStagingJourneyTelemetryTransportV1(
     try {
       const observedAt = now();
       if (!isCanonicalUtcTimestamp(observedAt)) return;
-      write({
+      const liveness = {
         schema_version: STAGING_JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1,
         kind: STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1,
         observed_at: observedAt,
@@ -136,7 +158,9 @@ export function createStagingJourneyTelemetryTransportV1(
         release_sha: immutableIdentity.release_sha,
         build_number: immutableIdentity.build_number,
         event,
-      } satisfies StagingJourneyTelemetryLivenessEventV1);
+      } satisfies StagingJourneyTelemetryLivenessEventV1;
+      write(liveness);
+      write(formatStagingJourneyLivenessMetricV1(observedAt));
     } catch {
       // A faulty clock is not allowed to change the service's behavior.
     }
@@ -153,7 +177,7 @@ export function createStagingJourneyTelemetryTransportV1(
         return;
       }
       // Reconstruct the contract before serialization to drop injected fields.
-      write(createJourneyTelemetryEventV1({
+      const normalized = createJourneyTelemetryEventV1({
         journey_id: event.journey_id,
         sequence: event.sequence,
         observed_at: event.observed_at,
@@ -175,12 +199,37 @@ export function createStagingJourneyTelemetryTransportV1(
           retrieval: event.retrieval,
           llm_usage: event.llm_usage,
         },
-      }));
+      });
+      write(normalized);
+      for (const metric of formatJourneyTelemetryMetricsV1(normalized)) {
+        write(metric);
+      }
     } catch {
       // An invalid observer input is omitted rather than surfacing to callers.
     }
   };
 
+  const approvedSearchBacklogObserver: StagingApprovedSearchBacklogObserverV1 =
+    (snapshot) => {
+      if (closed) return;
+      try {
+        // Format first so the strict content-free snapshot contract is checked
+        // before either the diagnostic event or its metric projection is written.
+        const metric = formatApprovedSearchBacklogMetricsV1(snapshot);
+        write({
+          schema_version: STAGING_APPROVED_SEARCH_BACKLOG_SCHEMA_VERSION_V1,
+          kind: STAGING_APPROVED_SEARCH_BACKLOG_KIND_V1,
+          observed_at: snapshot.observed_at,
+          environment: "staging",
+          pending_count: snapshot.pending_count,
+          stuck_count: snapshot.stuck_count,
+          oldest_age_ms: snapshot.oldest_age_ms,
+        } satisfies StagingApprovedSearchBacklogEventV1);
+        write(metric);
+      } catch {
+        // Invalid backlog health must remain outside approval control flow.
+      }
+    };
   return Object.freeze({
     enabled: true,
     identity: immutableIdentity,
@@ -199,6 +248,7 @@ export function createStagingJourneyTelemetryTransportV1(
       }
     },
     observer,
+    approved_search_backlog_observer: approvedSearchBacklogObserver,
     close(): void {
       if (closed) return;
       closed = true;

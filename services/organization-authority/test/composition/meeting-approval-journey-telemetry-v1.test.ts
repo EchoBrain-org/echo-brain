@@ -9,6 +9,8 @@ import {
 } from "../../src/composition/meeting-approval-journey-state-v1.js";
 import {
   openMeetingApprovalJourneyTelemetryV1,
+  STAGING_APPROVED_SEARCH_STUCK_THRESHOLD_MS_V1,
+  type MeetingApprovalSearchBacklogObserverV1,
   type MeetingApprovalJourneyTelemetryDependenciesV1,
 } from "../../src/composition/meeting-approval-journey-telemetry-v1.js";
 import type { JourneyTelemetryEventV1 } from "../../src/shared/journey-telemetry-v1.js";
@@ -16,10 +18,16 @@ import type { JourneyTelemetryEventV1 } from "../../src/shared/journey-telemetry
 const RELEASE_SHA = "c".repeat(40);
 const JOURNEY_ID = "1b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
 const SECOND_JOURNEY_ID = "2b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
-const SOURCE_STARTED = { observed_at: "2026-09-02T12:34:56.000Z", monotonic_ms: 10 } as const;
+const SOURCE_STARTED = {
+  observed_at: "2026-09-02T12:34:56.000Z",
+  monotonic_ms: 10,
+} as const;
 const SOURCE_CLOSED = "2026-09-02T12:34:56.007Z";
 const SOURCE_CARD_STAGED = "2026-09-02T12:35:00.000Z";
-const ACTION_STARTED = { observed_at: "2026-09-02T12:36:00.000Z", monotonic_ms: 100 } as const;
+const ACTION_STARTED = {
+  observed_at: "2026-09-02T12:36:00.000Z",
+  monotonic_ms: 100,
+} as const;
 const ACTION_CLOSED = "2026-09-02T12:36:00.024Z";
 const roots: string[] = [];
 
@@ -41,7 +49,11 @@ function openState(
 function telemetry(
   state: MeetingApprovalJourneyStateV1,
   events: JourneyTelemetryEventV1[],
-  dependencies: Omit<MeetingApprovalJourneyTelemetryDependenciesV1, "state"> = {},
+  dependencies: Omit<
+    MeetingApprovalJourneyTelemetryDependenciesV1,
+    "state"
+  > = {},
+  approvedSearchBacklogObserver?: MeetingApprovalSearchBacklogObserverV1,
 ) {
   return openMeetingApprovalJourneyTelemetryV1(
     {
@@ -53,6 +65,9 @@ function telemetry(
       build_number: 42,
       extraction_provider: "openrouter",
       extraction_model: "deepseek/deepseek-v3.2",
+      ...(approvedSearchBacklogObserver === undefined
+        ? {}
+        : { approved_search_backlog_observer: approvedSearchBacklogObserver }),
     },
     { state, ...dependencies },
   );
@@ -73,7 +88,8 @@ function source() {
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0))
+    rmSync(root, { recursive: true, force: true });
 });
 
 describe("meeting approval journey telemetry v1", () => {
@@ -192,7 +208,8 @@ describe("meeting approval journey telemetry v1", () => {
     await flushObserver();
 
     const successes = events.filter(
-      (event) => event.stage === "meeting_extraction" && event.event === "succeeded",
+      (event) =>
+        event.stage === "meeting_extraction" && event.event === "succeeded",
     );
     expect(successes).toHaveLength(2);
     expect(successes[0]?.llm_usage).toEqual({
@@ -233,11 +250,10 @@ describe("meeting approval journey telemetry v1", () => {
       candidate_id: "candidate-private-sentinel",
       approval_id: "approval-private-sentinel",
     });
-    const extraction = first.beginStage(
-      intake,
-      "meeting_extraction",
-      { observed_at: "2026-09-02T12:34:57.000Z", monotonic_ms: 30 },
-    );
+    const extraction = first.beginStage(intake, "meeting_extraction", {
+      observed_at: "2026-09-02T12:34:57.000Z",
+      monotonic_ms: 30,
+    });
     first.failExtractionStage(
       extraction,
       new AdapterError("rate_limited", "provider-error-private-sentinel", true),
@@ -246,27 +262,38 @@ describe("meeting approval journey telemetry v1", () => {
     );
     first.close();
     await flushObserver();
-    expect(firstEvents.find((event) => event.event === "failed")).toMatchObject({
-      stage: "meeting_extraction",
-      failure_class: "rate_limited",
-      retryable: true,
-      llm_usage: { usage_status: "unavailable", provider_latency_ms: 12 },
-    });
+    expect(firstEvents.find((event) => event.event === "failed")).toMatchObject(
+      {
+        stage: "meeting_extraction",
+        failure_class: "rate_limited",
+        retryable: true,
+        llm_usage: { usage_status: "unavailable", provider_latency_ms: 12 },
+      },
+    );
 
     const restartEvents: JourneyTelemetryEventV1[] = [];
     const now = ["2026-09-02T13:00:00.000Z", ACTION_CLOSED];
     const monotonic = [80, 124];
-    const restarted = telemetry(openState(path, SECOND_JOURNEY_ID), restartEvents, {
-      now: () => now.shift() ?? ACTION_CLOSED,
-      now_ms: () => monotonic.shift() ?? 124,
+    const restarted = telemetry(
+      openState(path, SECOND_JOURNEY_ID),
+      restartEvents,
+      {
+        now: () => now.shift() ?? ACTION_CLOSED,
+        now_ms: () => monotonic.shift() ?? 124,
+      },
+    );
+    expect(restarted.readForApproval("approval-private-sentinel")).toEqual({
+      journey_id: JOURNEY_ID,
     });
-    expect(restarted.readForApproval("approval-private-sentinel")).toEqual({ journey_id: JOURNEY_ID });
     restarted.markCardStaged(
       "approval-private-sentinel",
       SOURCE_CARD_STAGED,
     );
     expect(
-      restarted.queueAgeMs("approval-private-sentinel", ACTION_STARTED.observed_at),
+      restarted.queueAgeMs(
+        "approval-private-sentinel",
+        ACTION_STARTED.observed_at,
+      ),
     ).toBe(60_000);
     const verify = restarted.beginStageForApproval(
       "approval-private-sentinel",
@@ -288,7 +315,11 @@ describe("meeting approval journey telemetry v1", () => {
         failure_class: "unknown",
         retryable: true,
       }),
-      expect.objectContaining({ sequence: 5, stage: "meeting_approval_action_verify", event: "started" }),
+      expect.objectContaining({
+        sequence: 5,
+        stage: "meeting_approval_action_verify",
+        event: "started",
+      }),
       expect.objectContaining({
         sequence: 6,
         stage: "meeting_approval_action_verify",
@@ -374,7 +405,8 @@ describe("meeting approval journey telemetry v1", () => {
         state_directory: "/unused-with-injected-state",
         observer: async (event) => {
           events.push(event);
-          if (event.sequence % 2 === 0) throw new Error("observer-private-error-sentinel");
+          if (event.sequence % 2 === 0)
+            throw new Error("observer-private-error-sentinel");
         },
         release_sha: RELEASE_SHA,
         build_number: 42,
@@ -389,32 +421,50 @@ describe("meeting approval journey telemetry v1", () => {
       },
     );
     const first = recorder.beginOrResumeSource(source(), SOURCE_STARTED)!;
-    recorder.bindCandidate(first, { candidate_id: "candidate-current", approval_id: "approval-current" });
+    recorder.bindCandidate(first, {
+      candidate_id: "candidate-current",
+      approval_id: "approval-current",
+    });
     recorder.markAwaitingSearch("approval-current");
     const currentAttempts = recorder.beginAwaitingSearch();
     expect(currentAttempts).toHaveLength(1);
-    expect(() => recorder.completeAwaitingSearch(currentAttempts, "current")).not.toThrow();
+    expect(() =>
+      recorder.completeAwaitingSearch(currentAttempts, "current"),
+    ).not.toThrow();
 
     const second = recorder.beginOrResumeSource(
       { ...source(), external_id: "source-external-second" },
       SOURCE_STARTED,
     )!;
-    recorder.bindCandidate(second, { candidate_id: "candidate-later", approval_id: "approval-later" });
+    recorder.bindCandidate(second, {
+      candidate_id: "candidate-later",
+      approval_id: "approval-later",
+    });
     recorder.markAwaitingSearch("approval-later");
     const supersededAttempts = recorder.beginAwaitingSearch();
     expect(supersededAttempts).toHaveLength(1);
-    expect(() => recorder.completeAwaitingSearch(supersededAttempts, "superseded")).not.toThrow();
+    expect(() =>
+      recorder.completeAwaitingSearch(supersededAttempts, "superseded"),
+    ).not.toThrow();
     const publishedAttempts = recorder.beginAwaitingSearch();
     expect(publishedAttempts).toHaveLength(1);
-    expect(() => recorder.completeAwaitingSearch(publishedAttempts, "published")).not.toThrow();
+    expect(() =>
+      recorder.completeAwaitingSearch(publishedAttempts, "published"),
+    ).not.toThrow();
     await flushObserver();
 
     expect(
       events
-        .filter((event) => event.stage === "meeting_search_publication" && event.event === "succeeded")
+        .filter(
+          (event) =>
+            event.stage === "meeting_search_publication" &&
+            event.event === "succeeded",
+        )
         .map((event) => event.outcome),
     ).toEqual(["current", "superseded", "published"]);
-    expect(JSON.stringify(events)).not.toContain("observer-private-error-sentinel");
+    expect(JSON.stringify(events)).not.toContain(
+      "observer-private-error-sentinel",
+    );
   });
 
   it("closes failed search work and leaves the record pending for the next reconciliation", async () => {
@@ -434,7 +484,11 @@ describe("meeting approval journey telemetry v1", () => {
     expect(failedAttempts).toHaveLength(1);
     recorder.failAwaitingSearch(
       failedAttempts,
-      new AdapterError("temporarily_unavailable", "search-private-sentinel", true),
+      new AdapterError(
+        "temporarily_unavailable",
+        "search-private-sentinel",
+        true,
+      ),
     );
 
     const retryAttempts = recorder.beginAwaitingSearch();
@@ -507,6 +561,89 @@ describe("meeting approval journey telemetry v1", () => {
       retryable: false,
     });
     recorder.close();
+  });
+
+  it("reports explicit zero and thresholded approved-search backlog snapshots without identifiers", () => {
+    const events: JourneyTelemetryEventV1[] = [];
+    const snapshots: unknown[] = [];
+    let now = "2026-09-02T12:40:00.000Z";
+    const recorder = telemetry(
+      openState(stateFile()),
+      events,
+      {
+        now: () => now,
+        now_ms: () => 100,
+      },
+      (snapshot) => {
+        snapshots.push(snapshot);
+      },
+    );
+    const intake = recorder.beginOrResumeSource(source(), SOURCE_STARTED)!;
+    recorder.bindCandidate(intake, {
+      candidate_id: "candidate-backlog-private-sentinel",
+      approval_id: "approval-backlog-private-sentinel",
+    });
+
+    recorder.markAwaitingSearch("approval-backlog-private-sentinel");
+    now = new Date(
+      Date.parse(now) + STAGING_APPROVED_SEARCH_STUCK_THRESHOLD_MS_V1,
+    ).toISOString();
+    const attempts = recorder.beginAwaitingSearch();
+    recorder.completeAwaitingSearch(attempts, "published");
+
+    expect(snapshots).toEqual([
+      {
+        observed_at: "2026-09-02T12:40:00.000Z",
+        pending_count: 1,
+        stuck_count: 0,
+        oldest_age_ms: 0,
+      },
+      {
+        observed_at: "2026-09-02T12:45:00.000Z",
+        pending_count: 1,
+        stuck_count: 1,
+        oldest_age_ms: STAGING_APPROVED_SEARCH_STUCK_THRESHOLD_MS_V1,
+      },
+      {
+        observed_at: "2026-09-02T12:45:00.000Z",
+        pending_count: 0,
+        stuck_count: 0,
+        oldest_age_ms: null,
+      },
+    ]);
+    const serialized = JSON.stringify(snapshots);
+    expect(serialized).not.toContain(JOURNEY_ID);
+    expect(serialized).not.toContain("candidate-backlog-private-sentinel");
+    expect(serialized).not.toContain("approval-backlog-private-sentinel");
+  });
+
+  it("keeps backlog observer failures outside approval and search control flow", async () => {
+    const recorder = telemetry(
+      openState(stateFile()),
+      [],
+      {
+        now: () => "2026-09-02T12:40:00.000Z",
+        now_ms: () => 100,
+      },
+      async () => {
+        throw new Error("backlog-observer-private-sentinel");
+      },
+    );
+    const intake = recorder.beginOrResumeSource(source(), SOURCE_STARTED)!;
+    recorder.bindCandidate(intake, {
+      candidate_id: "candidate-backlog-failure",
+      approval_id: "approval-backlog-failure",
+    });
+
+    expect(() =>
+      recorder.markAwaitingSearch("approval-backlog-failure"),
+    ).not.toThrow();
+    const attempts = recorder.beginAwaitingSearch();
+    expect(attempts).toHaveLength(1);
+    expect(() =>
+      recorder.failAwaitingSearch(attempts, new Error("search failed")),
+    ).not.toThrow();
+    await flushObserver();
   });
 
   it("contains synchronous observer throws as well", async () => {

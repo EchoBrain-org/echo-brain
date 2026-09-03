@@ -183,6 +183,8 @@ export async function runOrganizationAuthorityServiceCli(
         ? undefined
         : {
             observer: stagingJourneyTelemetry.observer,
+            approved_search_backlog_observer:
+              stagingJourneyTelemetry.approved_search_backlog_observer,
             release_sha: stagingJourneyTelemetry.identity.release_sha,
             build_number: stagingJourneyTelemetry.identity.build_number,
             extraction_provider: OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
