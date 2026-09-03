@@ -333,8 +333,10 @@ a terminal failure; approved and superseded are not by themselves terminal
 journey results.
 
 The dedicated stack grants the Lambda execution role `StartQuery` and
-`GetQueryResults` only on the exact source log group and writes only to its own
-retained function log group. `StopQuery` alone uses an unscoped resource because
+`GetQueryResults` only on the exact source log group's two AWS-documented IAM
+ARN forms, with and without the trailing `:*`, and writes only to its own
+retained function log group.
+`StopQuery` alone uses an unscoped resource because
 it consumes an opaque query ID; the handler never accepts a caller-supplied ID
 and obtains one only from its exact-source `StartQuery`.
 It creates a separate invoke-only customer managed policy for the exact Lambda

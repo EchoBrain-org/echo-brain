@@ -120,10 +120,16 @@ describe("staging Journey Explorer backend stack", () => {
         Sid: "QueryExactStagingJourneyLogGroup",
         Effect: "Allow",
         Action: ["logs:StartQuery", "logs:GetQueryResults"],
-        Resource: {
-          "Fn::Sub":
-            "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${StagingLogGroupName}",
-        },
+        Resource: [
+          {
+            "Fn::Sub":
+              "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${StagingLogGroupName}",
+          },
+          {
+            "Fn::Sub":
+              "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${StagingLogGroupName}:*",
+          },
+        ],
       },
       {
         Sid: "CancelTimedOutLogsInsightsQuery",

@@ -84,7 +84,8 @@ There is no public endpoint, API Gateway, function URL, application-managed or
 end-user AWS credential, or direct widget access to CloudWatch Logs. The
 signed-in console operator's Identity Center session authorizes only the
 Lambda invocation. The Lambda role can start and read query results only on the
-exact source log group and write only its own retained function logs.
+exact source log group's two AWS-documented IAM ARN forms (with and without
+the trailing `:*`) and write only to its own retained function logs.
 `StopQuery` remains scoped to `*` because it consumes an opaque query ID; the
 handler never accepts a caller-supplied ID and can only obtain one from its
 exact-source `StartQuery`. The companion
