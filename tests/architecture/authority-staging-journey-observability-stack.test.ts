@@ -277,11 +277,20 @@ describe("staging journey observability overview stack", () => {
     expect(wallClock).toContain("p99_wall_clock_ms");
     expect(wallClock).toContain("max(queue_age_ms) as human_wait_ms");
     expect(wallClock).toContain("retryable, sequence, queue_age_ms | stats");
-    expect(wallClock).toContain("coalesce(human_wait_ms, 0)");
-    expect(wallClock).toContain("filter journey_wall_clock_ms >= human_wait_ms");
     expect(wallClock).toContain(
-      "journey_wall_clock_ms - human_wait_ms as service_wall_clock_ms",
+      "coalesce(human_wait_ms, 0) as normalized_human_wait_ms",
     );
+    expect(wallClock).toContain(
+      "filter journey_wall_clock_ms >= normalized_human_wait_ms",
+    );
+    expect(wallClock).toContain(
+      "journey_wall_clock_ms - normalized_human_wait_ms as service_wall_clock_ms",
+    );
+    expect(wallClock).not.toContain(
+      "fields workflow, journey_wall_clock_ms, journey_wall_clock_ms - normalized_human_wait_ms",
+    );
+    expect([...wallClock.matchAll(/\bas human_wait_ms\b/g)]).toHaveLength(1);
+    expect([...wallClock.matchAll(/\bas normalized_human_wait_ms\b/g)]).toHaveLength(1);
     expect(wallClock).toContain("p50_service_wall_clock_ms");
     expect(wallClock).toContain("p95_service_wall_clock_ms");
     expect(wallClock).toContain("p99_service_wall_clock_ms");
@@ -295,6 +304,9 @@ describe("staging journey observability overview stack", () => {
     expect(queries.join("\n")).not.toMatch(/sum\(elapsed_ms\)/i);
     const tokenTotals = queries.find((query) => query.includes("journey_total_tokens"));
     expect(tokenTotals).toContain("llm_usage.total_tokens as total_tokens");
+    expect(tokenTotals).toContain(
+      'filter kind = "echo-authority-journey-stage-v1" | fields parseDate',
+    );
     expect(tokenTotals).toContain('event = "started" and sequence = 1');
     expect(tokenTotals).toContain("canonical_start_observed_at_ms");
     expect(tokenTotals).toContain("canonical_start_observed_at_ms < 32503680000000");
@@ -305,6 +317,7 @@ describe("staging journey observability overview stack", () => {
     expect(tokenTotals).toContain("total_token_samples");
     expect(tokenTotals).toContain("sum(if(ispresent(total_tokens), 1, 0))");
     expect(tokenTotals).toContain("total_token_samples > 0");
+    expect([...tokenTotals.matchAll(/\bas total_tokens\b/g)]).toHaveLength(1);
     expect(tokenTotals).toContain('event = "failed" and retryable = false');
     expect(tokenTotals).toContain('outcome in ["current", "published"]');
     expect(tokenTotals).not.toContain("superseded");
@@ -316,6 +329,12 @@ describe("staging journey observability overview stack", () => {
     expect(rates).toContain("succeeded_attempts / closed_attempts");
     expect(rates).toContain("failed_attempts / closed_attempts");
     expect(rates).toContain("retry_attempts / started_attempts");
+    expect(rates).toContain(
+      "display workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
+    );
+    expect(rates).not.toContain(
+      "fields workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
+    );
     expect(rates).not.toContain("ask_response");
     expect(rates).not.toContain("meeting_terminal_persist");
   });
