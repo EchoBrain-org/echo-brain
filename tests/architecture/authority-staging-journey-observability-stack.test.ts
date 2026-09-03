@@ -48,14 +48,20 @@ function metricNames(widget: Record<string, unknown>): readonly string[] {
   const metrics = widget.properties as { readonly metrics?: unknown };
   const entries = Array.isArray(metrics.metrics) ? metrics.metrics : [];
   return entries.flatMap((entry) => {
-    if (Array.isArray(entry)) {
-      const value = entry[1];
-      return typeof value === "string" && value !== "." ? [value] : [];
+    // CloudWatch requires every metrics element to be an array. A metric-math
+    // or SEARCH expression is a single-element array wrapping the expression
+    // object; a plain metric is [namespace, name, ...dimensions].
+    if (!Array.isArray(entry)) return [];
+    const head = entry[0];
+    if (head !== null && typeof head === "object") {
+      const expression = (head as { readonly expression?: unknown }).expression;
+      if (typeof expression !== "string") return [];
+      return [...expression.matchAll(/MetricName="([^"]+)"/g)].map(
+        (match) => match[1]!,
+      );
     }
-    if (entry === null || typeof entry !== "object") return [];
-    const expression = (entry as { readonly expression?: unknown }).expression;
-    if (typeof expression !== "string") return [];
-    return [...expression.matchAll(/MetricName="([^"]+)"/g)].map((match) => match[1]!);
+    const value = entry[1];
+    return typeof value === "string" && value !== "." ? [value] : [];
   });
 }
 
@@ -201,6 +207,28 @@ describe("staging journey observability overview stack", () => {
       },
     });
 
+    // CloudWatch rejects a dashboard whose `metrics` holds anything other than
+    // arrays: "Field metrics has to be an array of array of strings, with an
+    // optional metricRenderer object as last element". A bare expression object
+    // passes local JSON checks but fails at PutDashboard, so assert the shape
+    // here rather than discovering it during a live deploy.
+    const malformed = widgets
+      .filter((widget) => widget.type === "metric")
+      .flatMap((widget) => {
+        const properties = widget.properties as {
+          readonly metrics?: unknown;
+          readonly title?: string;
+        };
+        const entries = Array.isArray(properties.metrics)
+          ? properties.metrics
+          : [];
+        return entries
+          .map((entry, index) => ({ entry, index }))
+          .filter(({ entry }) => !Array.isArray(entry))
+          .map(({ index }) => `${properties.title ?? "untitled"}[${index}]`);
+      });
+    expect(malformed).toEqual([]);
+
     const metrics = widgets
       .filter((widget) => widget.type === "metric")
       .flatMap(metricNames);
@@ -317,7 +345,17 @@ describe("staging journey observability overview stack", () => {
     expect(wallClock).toContain("p95_service_wall_clock_ms");
     expect(wallClock).toContain("p99_service_wall_clock_ms");
     expect(JSON.stringify(logWidgets)).toContain("Full and service wall-clock");
-    expect(wallClock).toContain('event = "failed" and retryable = false');
+    // `retryable` is emitted only on failed events, so on a healthy journey it
+    // is absent. A bare `retryable = false` then evaluates to null, and null
+    // poisons the whole OR chain: max(if(...)) yields null for EVERY row, the
+    // downstream `terminal_observed_at_ms > 0` filter drops every journey, and
+    // the widget renders "No data found" precisely when nothing has failed.
+    // coalesce() resolves the null before the comparison; defaulting to "true"
+    // fails safe, since an absent value must never mark a journey terminal.
+    expect(wallClock).toContain(
+      'event = "failed" and coalesce(retryable, "true") = "false"',
+    );
+    expect(wallClock).not.toMatch(/retryable\s*=\s*false/);
     expect(wallClock).toContain('outcome in ["current", "published"]');
     expect(wallClock).toContain('outcome in ["rejected", "denied"]');
     expect(wallClock).not.toContain("superseded");
@@ -343,7 +381,11 @@ describe("staging journey observability overview stack", () => {
     expect(tokenTotals).not.toContain("ispresent(total_tokens)");
     expect(tokenTotals).toContain("total_token_samples > 0");
     expect([...tokenTotals.matchAll(/\bas total_tokens\b/g)]).toHaveLength(1);
-    expect(tokenTotals).toContain('event = "failed" and retryable = false');
+    // Same null-poisoning guard as the wall-clock query above.
+    expect(tokenTotals).toContain(
+      'event = "failed" and coalesce(retryable, "true") = "false"',
+    );
+    expect(tokenTotals).not.toMatch(/retryable\s*=\s*false/);
     expect(tokenTotals).toContain('outcome in ["current", "published"]');
     expect(tokenTotals).not.toContain("superseded");
     expect(tokenTotals).toContain("p95_total_tokens");
