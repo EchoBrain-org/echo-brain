@@ -572,6 +572,22 @@ describe("Authority staging host stack", () => {
     expect(userData).toContain(
       "export -f allowed_bootstrap_stage set_bootstrap_stage retry download_setup_bundle bootstrap_main",
     );
+    const resumeAssignment = userData.indexOf(
+      "resume_retained_authority='${ResumeRetainedAuthority}'",
+    );
+    const resumeExport = userData.indexOf(
+      "export bootstrap_stage_file resume_retained_authority",
+    );
+    const bootstrapFunctionExport = userData.indexOf(
+      "export -f allowed_bootstrap_stage set_bootstrap_stage retry download_setup_bundle bootstrap_main",
+    );
+    const bootstrapChild = userData.indexOf(
+      "timeout --signal=TERM --kill-after=10 800 bash -Eeuo pipefail -c bootstrap_main",
+    );
+    expect(resumeAssignment).toBeGreaterThan(-1);
+    expect(resumeExport).toBeGreaterThan(resumeAssignment);
+    expect(bootstrapFunctionExport).toBeGreaterThan(resumeExport);
+    expect(bootstrapChild).toBeGreaterThan(bootstrapFunctionExport);
     const deadline = userData.match(
       /timeout --signal=TERM --kill-after=10 ([0-9]+) bash -Eeuo pipefail -c bootstrap_main/,
     );
