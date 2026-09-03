@@ -102,8 +102,8 @@ for unreleased rehearsal state that does not meet this floor.
 Complete the bootstrap, initial-owner identity link, credential installation, and
 finalization, then start the active runtime. `resume` stops at this point and
 prints the exact URL. Only once that runtime is healthy, enable
-**Interactivity & Shortcuts**, save this Request URL, create the first
-post-cutoff canary meeting, and rerun `resume`:
+**Interactivity & Shortcuts**, save this Request URL, then run the supported
+release-bound synthetic staging canary and rerun `resume`:
 
 ```text
 https://<staging-authority-host>/v2/integrations/slack/interactions
@@ -112,6 +112,12 @@ https://<staging-authority-host>/v2/integrations/slack/interactions
 ```sh
 ./onboard-clean-v1.sh resume
 ```
+
+On the exact `authority-staging.echobrain.org` host, run
+`./update-clean-v1.sh canary`, approve its private Slack card, and complete the
+two Person reads printed by `resume`. This synthetic path is staging-only. A
+non-staging deployment still needs durable progress from its admitted live
+source before it can become terminal green.
 
 The endpoint intentionally returns `503` before finalization. Do not attempt to
 validate it against a pre-finalize runtime. Event Subscriptions, Socket Mode,
@@ -187,10 +193,10 @@ path and command printed by `resume`. Install the exact Person client from the
 same release record first, using [the release installer](../release/README.md).
 The received invitation must be a current-user mode-`0600` file inside a
 mode-`0700` directory. Do not paste invitation contents into chat or a terminal.
-The wrapper also prints the bounded one-note post-finalization Granola, Slack,
-list, and search canary. After approving that card and completing both reads,
-rerun `resume`, then `status`: a terminal green result additionally requires a
-running healthy Authority container on the exact accepted image.
+The wrapper prints the bounded synthetic private-DM staging canary plus the
+Slack, list, and search steps. After approving that card and completing both
+reads, rerun `resume`, then `status`: a terminal green result additionally
+requires a running healthy Authority container on the exact accepted image.
 
 Use this Authority-state read-only progress check after the accepted image is
 present locally:

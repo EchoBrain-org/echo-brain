@@ -20,7 +20,7 @@ import Database from "better-sqlite3";
 import {
   assertFederationId,
   canonicalJson,
-  federationId,
+  canonicalSha256,federationId,
 } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import {
@@ -29,7 +29,8 @@ import {
 } from "@echo-brain/organization-control-plane/slack-connection-setup-v1";
 import { assertDisplayName } from "../domain/rules.js";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
-import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";
+import { isCanonicalPersonEmail ,
+  isExpectedPersonEmail,} from "../domain/person-session-rules.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
 import {
   readPrivateAuthorityCredential,
@@ -52,7 +53,12 @@ import {
   readPersonOidcConfiguration,
   runOrganizationAuthorityPersonAdministrationCli,
 } from "./organization-authority-person-administration-cli.js";
-import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
+import { reissueLegacyPersonOnboardingInvitation } from "./person-onboarding-service.js";
+import {verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
+import {
+  isStagingSyntheticMeetingCanaryEnvelopeV1,
+  stagingSyntheticMeetingCanaryInputFromEnvelopeV1,
+} from "../shared/staging-synthetic-meeting-canary-envelope-v1.js";
 
 const MANIFEST_DIRECTORY = "onboarding";
 const MANIFEST_FILENAME = "clean-founder-v1.json";
@@ -64,6 +70,10 @@ const LLM_CREDENTIAL_FILENAME = "llm-credential";
 const SOURCE_INSTANCE_ID = "founder-granola-v1";
 const PROCESSOR_INSTANCE_ID = "founder-llm-v1";
 const DEFAULT_ARTIFACT_REVISION = "clean-founder-v1";
+const STAGING_SYNTHETIC_CANARY_ORIGIN =
+  "https://authority-staging.echobrain.org";
+const STAGING_SYNTHETIC_CANARY_HOST = "authority-staging.echobrain.org";
+const CLEAN_V1_RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 
 const USAGE = `usage:
   echo-organization-authority-setup bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> --slack-approval-channel-id <id> [--artifact-revision <revision>] < slack-bot-token
@@ -246,7 +256,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       runOrganizationAuthorityPersonAdministrationCli(["credentials-init", "--state-dir", stateDirectory], {
         stdout,
         stderr: () => undefined,
-      }),
+      },),
     );
   },
   connect_slack: async (input) => {
@@ -273,14 +283,14 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       "verified_at",
     ] as const) {
       if (typeof result[field] !== "string") {
-        throw new Error("Slack connection did not return safe verification details");
+        throw new Error("Slack connection did not return safe verification details",);
       }
     }
     if (
       result.provider_enterprise_id !== null &&
       typeof result.provider_enterprise_id !== "string"
     ) {
-      throw new Error("Slack connection did not return safe verification details");
+      throw new Error("Slack connection did not return safe verification details",);
     }
     if (
       !Array.isArray(result.required_scopes) ||
@@ -293,7 +303,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       result.bot_membership_verified !== true ||
       result.bot_access_verified !== true
     ) {
-      throw new Error("Slack connection did not return complete channel verification");
+      throw new Error("Slack connection did not return complete channel verification",);
     }
     if (input.connection_id === undefined) {
       throw new Error(
@@ -409,7 +419,7 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
     return value;
   };
   const ownerEmail = required("--owner-email");
-  if (!isCanonicalPersonEmail(ownerEmail)) {
+  if (!isExpectedPersonEmail(ownerEmail)) {
     throw new Error("--owner-email must be a canonical lowercase email");
   }
   const parsed = Object.freeze({
@@ -532,9 +542,9 @@ function assertSetupSeed(seed: OrganizationAuthoritySetupSeedV1): void {
   try {
     assertFederationId(seed.authority_id, "oau", "setup authority_id");
     assertFederationId(seed.organization_id, "org", "setup organization_id");
-    assertFederationId(seed.owner_principal_id, "prn", "setup owner_principal_id");
-    assertFederationId(seed.owner_membership_id, "mem", "setup owner_membership_id");
-    assertFederationId(seed.slack_connection_id, "con", "setup slack_connection_id");
+    assertFederationId(seed.owner_principal_id, "prn", "setup owner_principal_id",);
+    assertFederationId(seed.owner_membership_id, "mem", "setup owner_membership_id",);
+    assertFederationId(seed.slack_connection_id, "con", "setup slack_connection_id",);
   } catch {
     throw new Error("organization setup seed is invalid");
   }
@@ -547,7 +557,7 @@ function assertSetupSeed(seed: OrganizationAuthoritySetupSeedV1): void {
   }
 }
 
-function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 {
+function validateManifest(value: unknown,): OrganizationAuthoritySetupManifestV1 {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("organization setup manifest is invalid");
   }
@@ -615,7 +625,7 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 
   return Object.freeze(manifest);
 }
 
-function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV1 {
+function readPrivateManifest(path: string,): OrganizationAuthoritySetupManifestV1 {
   const metadata = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -625,17 +635,17 @@ function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV1
     (metadata.mode & 0o777) !== 0o600
   ) {
     throw new Error(
-      "organization setup manifest must be current-user 0600",
+      "organization setup manifest must be current-user 0600"
     );
   }
   const bytes = readFileSync(path);
   if (bytes.byteLength === 0 || bytes.byteLength > 16 * 1024) {
     throw new Error("organization setup manifest is invalid");
   }
-  const manifest = validateManifest(JSON.parse(bytes.toString("utf8")) as unknown);
+  const manifest = validateManifest(JSON.parse(bytes.toString("utf8")) as unknown,);
   if (`${canonicalJson(manifest as never)}\n` !== bytes.toString("utf8")) {
     throw new Error(
-      "organization setup manifest is not canonically encoded",
+      "organization setup manifest is not canonically encoded"
     );
   }
   return manifest;
@@ -679,8 +689,8 @@ function setupManifest(
     artifact_revision: input.artifact_revision,
     authority_url: input.authority_url,
     oidc_config_path: input.oidc_config_path,
-    pkce_key_file: join(credentialsDirectory, "person-session-pkce-sealing-key"),
-    invitation_path: join(input.state_directory, MANIFEST_DIRECTORY, INVITATION_FILENAME),
+    pkce_key_file: join(credentialsDirectory, "person-session-pkce-sealing-key",),
+    invitation_path: join(input.state_directory, MANIFEST_DIRECTORY, INVITATION_FILENAME,),
     slack_approval_channel_id: input.slack_approval_channel_id,
     slack_connection_id: seed.slack_connection_id,
     authority_id: seed.authority_id,
@@ -688,8 +698,8 @@ function setupManifest(
     state_lineage_id: seed.state_lineage_id,
     owner_principal_id: seed.owner_principal_id,
     owner_membership_id: seed.owner_membership_id,
-    granola_credential_file: join(credentialsDirectory, GRANOLA_CREDENTIAL_FILENAME),
-    granola_owner_email_file: join(credentialsDirectory, GRANOLA_OWNER_EMAIL_FILENAME),
+    granola_credential_file: join(credentialsDirectory, GRANOLA_CREDENTIAL_FILENAME,),
+    granola_owner_email_file: join(credentialsDirectory, GRANOLA_OWNER_EMAIL_FILENAME,),
     llm_credential_file: join(credentialsDirectory, LLM_CREDENTIAL_FILENAME),
     organization_name: input.organization_name,
     owner_display_name: input.owner_display_name,
@@ -713,7 +723,7 @@ function setupInputMatches(
   );
 }
 
-function loadSetupManifest(stateDirectory: string): {
+function loadSetupManifest(stateDirectory: string): |{
   readonly manifest: OrganizationAuthoritySetupManifestV1;
   readonly location: "sibling" | "state";
 } | undefined {
@@ -741,7 +751,7 @@ function loadSetupManifest(stateDirectory: string): {
   });
 }
 
-function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1): void {
+function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1,): void {
   const verified = verifyAuthorityStateLineage(manifest.state_directory);
   if (
     verified.root.authority_id !== manifest.setup_seed.authority_id ||
@@ -749,12 +759,12 @@ function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1): voi
     verified.root.state_lineage_id !== manifest.setup_seed.state_lineage_id
   ) {
     throw new Error(
-      "organization setup plan does not match published genesis",
+      "organization setup plan does not match published genesis"
     );
   }
 }
 
-function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV1): void {
+function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV1,): void {
   const source = siblingSetupPlanPath(manifest.state_directory);
   const destination = manifestPath(manifest.state_directory);
   if (existsSync(destination)) return;
@@ -889,7 +899,7 @@ function usableInitialOwnerInvitation(
         (invitation.schema_version === 2 &&
           keys ===
             "authority_url,expected_email,expires_at,kind,login_grant,schema_version" &&
-          isCanonicalPersonEmail(invitation.expected_email) &&
+          isExpectedPersonEmail(invitation.expected_email) &&
           invitation.expected_email === manifest.owner_email)
       ) ||
       invitation.kind !== "echo-person-onboarding-invitation" ||
@@ -903,9 +913,9 @@ function usableInitialOwnerInvitation(
     const database = new Database(join(manifest.state_directory, "authority.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    });
+    },);
     try {
-      return database.prepare(
+      return (database.prepare(
         `SELECT 1 FROM authority_person_login_grants
           WHERE login_grant_sha256 = ? AND organization_id = ?
             AND principal_id = ? AND membership_id = ? AND membership_type = 'owner'
@@ -919,7 +929,7 @@ function usableInitialOwnerInvitation(
         manifest.owner_membership_id,
         personLoginGrantExpectedEmailSha256(manifest.owner_email),
         new Date().toISOString(),
-      ) !== undefined;
+      ) !== undefined);
     } finally {
       database.close();
     }
@@ -952,14 +962,14 @@ function plannedSlackIsActive(
     const database = new Database(join(manifest.state_directory, "integrations.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    });
+    },);
     try {
-      return database
+      return (database
         .prepare(
           "SELECT 1 FROM organization_tool_connection_current_state " +
             "WHERE connection_id = ? AND current_status = 'active' LIMIT 1",
         )
-        .get(manifest.slack_connection_id) !== undefined;
+        .get(manifest.slack_connection_id) !== undefined);
     } finally {
       database.close();
     }
@@ -997,7 +1007,8 @@ interface InitialOwnerSetupStatus {
  */
 interface SetupCanaryEvidence {
   readonly source_progress_observed: boolean;
-  readonly approved_record_present: boolean;
+  /** A release-bound synthetic rehearsal is accepted only on the exact staging origin. */
+  readonly synthetic_staging_canary_observed?: boolean;readonly approved_record_present: boolean;
   readonly active_generation_current: boolean;
   readonly owner_layer1_read_after_head: boolean;
   readonly owner_layer2_read_after_generation: boolean;
@@ -1006,6 +1017,7 @@ interface SetupCanaryEvidence {
 
 const EMPTY_SETUP_CANARY_EVIDENCE: SetupCanaryEvidence = Object.freeze({
   source_progress_observed: false,
+  synthetic_staging_canary_observed: false,
   approved_record_present: false,
   active_generation_current: false,
   owner_layer1_read_after_head: false,
@@ -1085,8 +1097,8 @@ function readInitialOwnerSetupStatus(
   manifest: OrganizationAuthoritySetupManifestV1,
   dependencies?: OrganizationAuthoritySetupCliDependencies,
 ): InitialOwnerSetupStatus {
-  return dependencies?.read_initial_owner_setup_status?.(manifest) ??
-    initialOwnerSetupStatus(manifest);
+  return (dependencies?.read_initial_owner_setup_status?.(manifest) ??
+    initialOwnerSetupStatus(manifest));
 }
 
 function currentRecordHead(database: Database.Database): CurrentRecordHead {
@@ -1158,7 +1170,7 @@ function activeGenerationPointer(
     typeof row.published_at !== "string"
   ) {
     throw new Error(
-      "organization setup canary generation pointer is invalid",
+      "organization setup canary generation pointer is invalid"
     );
   }
   return Object.freeze({
@@ -1179,7 +1191,7 @@ function activeGenerationPointer(
  * disabled and the ordinary provider-free contract is expected.
  */
 function expectedSetupCanaryRetrievalContract(
-  authority: Database.Database,
+  authority: Database.Database
 ) {
   const sourceIsAdmitted =
     authority
@@ -1249,7 +1261,7 @@ function ownerReadAfter(
   mode: "layer1" | "layer2",
   after: string,
 ): boolean {
-  return authority
+  return (authority
     .prepare(
       `SELECT 1
          FROM authority_person_read_decision_audit_v2
@@ -1272,7 +1284,79 @@ function ownerReadAfter(
       manifest.state_lineage_id,
       manifest.owner_principal_id,
       manifest.owner_membership_id,
-    ) !== undefined;
+    ) !== undefined);
+}
+
+/**
+ * The staging rehearsal deliberately never advances the admitted provider
+ * cursor. Its durable substitute is an approved record tied to the exact
+ * synthetic candidate for the release currently running on the fixed staging
+ * origin. Production and every other host continue to require source cursor
+ * progress.
+ */
+function stagingSyntheticCanaryObserved(
+  manifest: OrganizationAuthoritySetupManifestV1,
+  authority: Database.Database,
+  record: Database.Database,
+): boolean {
+  const releaseId = process.env.ECHO_CLEAN_RELEASE_ID;
+  if (
+    manifest.authority_url !== STAGING_SYNTHETIC_CANARY_ORIGIN ||
+    process.env.ECHO_CLEAN_AUTHORITY_HOST !== STAGING_SYNTHETIC_CANARY_HOST ||
+    releaseId === undefined ||
+    !CLEAN_V1_RELEASE_ID.test(releaseId)
+  ) {
+    return false;
+  }
+  const cursor = `synthetic-staging-canary:v1:${releaseId}`;
+  const candidates = authority
+    .prepare(
+      `SELECT candidate.meeting_json, candidate.meeting_sha256, outbox.approval_id
+         FROM authority_live_source_candidates_v2 AS candidate
+         JOIN authority_live_approval_outbox_v2 AS outbox
+           ON outbox.candidate_id = candidate.candidate_id
+        WHERE candidate.disposition = 'actionable'
+          AND candidate.source_cursor = ?
+          AND outbox.state = 'staged'`,
+    )
+    .all(cursor) as readonly {
+    readonly meeting_json: string;
+    readonly meeting_sha256: string;
+    readonly approval_id: string;
+  }[];
+  for (const candidate of candidates) {
+    try {
+      const meeting = JSON.parse(candidate.meeting_json) as unknown;
+      const input = stagingSyntheticMeetingCanaryInputFromEnvelopeV1(meeting);
+      // Verify the immutable bytes and digest before the neutral contract
+      // rebuilds the complete envelope from release, owner, and observation.
+      if (
+        input === undefined ||
+        input.canary_id !== releaseId ||
+        input.owner_email !== manifest.owner_email ||
+        canonicalJson(meeting as never) !== candidate.meeting_json ||
+        canonicalSha256(meeting as never) !== candidate.meeting_sha256 ||
+        !isStagingSyntheticMeetingCanaryEnvelopeV1(meeting, input)
+      ) {
+        continue;
+      }
+      if (
+        record
+          .prepare(
+            `SELECT 1 FROM organization_record_log
+              WHERE event_kind = 'approved' AND action = 'approve'
+                AND approval_id = ?
+              LIMIT 1`,
+          )
+          .get(candidate.approval_id) !== undefined
+      ) {
+        return true;
+      }
+    } catch {
+      // A malformed frozen snapshot cannot become staging evidence.
+    }
+  }
+  return false;
 }
 
 /**
@@ -1290,7 +1374,7 @@ function setupCanaryEvidence(
     authority = new Database(join(manifest.state_directory, "authority.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    });
+    },);
     record = new Database(join(manifest.state_directory, "record-log.sqlite"), {
       readonly: true,
       fileMustExist: true,
@@ -1310,6 +1394,11 @@ function setupCanaryEvidence(
           LIMIT 1`,
       )
       .get() !== undefined;
+    const syntheticStagingCanaryObserved = stagingSyntheticCanaryObserved(
+      manifest,
+      authority,
+      record,
+    );
     const approvedRecordPresent = record
       .prepare(
         `SELECT 1 FROM organization_record_log
@@ -1348,13 +1437,14 @@ function setupCanaryEvidence(
       sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
     if (!stable) return EMPTY_SETUP_CANARY_EVIDENCE;
     const complete =
-      sourceProgressObserved &&
+      (sourceProgressObserved || syntheticStagingCanaryObserved)&&
       approvedRecordPresent &&
       activeGenerationCurrent &&
       ownerLayer1ReadAfterHead &&
       ownerLayer2ReadAfterGeneration;
     return Object.freeze({
       source_progress_observed: sourceProgressObserved,
+      synthetic_staging_canary_observed: syntheticStagingCanaryObserved,
       approved_record_present: approvedRecordPresent,
       active_generation_current: activeGenerationCurrent,
       owner_layer1_read_after_head: ownerLayer1ReadAfterHead,
@@ -1373,8 +1463,8 @@ function readSetupCanaryEvidence(
   manifest: OrganizationAuthoritySetupManifestV1,
   dependencies?: OrganizationAuthoritySetupCliDependencies,
 ): SetupCanaryEvidence {
-  return dependencies?.read_setup_canary_evidence?.(manifest) ??
-    setupCanaryEvidence(manifest);
+  return (dependencies?.read_setup_canary_evidence?.(manifest) ??
+    setupCanaryEvidence(manifest));
 }
 
 function initialOwnerSetupStatus(
@@ -1391,7 +1481,7 @@ function initialOwnerSetupStatus(
     const authority = new Database(join(manifest.state_directory, "authority.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    });
+    },);
     let initialOwnerOidcBound = false;
     let granolaAdmissionProof: InitialOwnerSetupStatus["granola_admission_proof"];
     try {
@@ -1451,13 +1541,13 @@ function initialOwnerSetupStatus(
       const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
         `file:${manifest.granola_owner_email_file}`,
       );
-      void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`);
+      void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`,);
       granolaCredentialsValid = ownerEmail === manifest.owner_email;
     } catch {}
     const control = new Database(join(manifest.state_directory, "integrations.sqlite"), {
       readonly: true,
       fileMustExist: true,
-    });
+    },);
     try {
       const initialOwnerSlackIdentityLinkActive = control.prepare(
         `SELECT 1 FROM organization_external_human_link_current AS link
@@ -1576,10 +1666,10 @@ async function bootstrap(
       );
     }
     const manifest = setupManifest(input, dependencies.now());
-    writeCanonicalPrivateFile(siblingSetupPlanPath(input.state_directory), manifest);
+    writeCanonicalPrivateFile(siblingSetupPlanPath(input.state_directory), manifest,);
     setup = Object.freeze({ manifest, location: "sibling" as const });
   } else if (!setupInputMatches(setup.manifest, input)) {
-    throw new Error("bootstrap arguments do not exactly match the durable setup plan");
+    throw new Error("bootstrap arguments do not exactly match the durable setup plan",);
   }
   const manifest = setup.manifest;
   if (!existsSync(input.state_directory)) {
@@ -1630,7 +1720,7 @@ async function bootstrap(
       : stage().invitation_file_present;
   if (!initialOwnerAlreadyBound && !invitationIsUsable()) {
     discardUnusableInvitation(invitationPath);
-    await dependencies.issue_invitation({
+    if (isExpectedPersonEmail(manifest.owner_email)) {await dependencies.issue_invitation({
       state_directory: input.state_directory,
       oidc_config_path: input.oidc_config_path,
       pkce_key_file: manifest.pkce_key_file,
@@ -1639,7 +1729,22 @@ async function bootstrap(
       authority_url: input.authority_url,
       output_path: invitationPath,
     });
-  }
+  } else {
+      const oidc = readPersonOidcConfiguration(manifest.oidc_config_path);
+      reissueLegacyPersonOnboardingInvitation({
+        state_directory: manifest.state_directory,
+        oidc: oidc.configuration,
+        pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
+          `file:${manifest.pkce_key_file}`,
+        ),
+        organization_id: manifest.organization_id,
+        principal_id: manifest.owner_principal_id,
+        membership_id: manifest.owner_membership_id,
+        expected_email: manifest.owner_email,
+        authority_url: manifest.authority_url,
+        output_path: invitationPath,
+      });
+    }}
   const completedStage = stage();
   const completedFull = readInitialOwnerSetupStatus(manifest, dependencies);
   const nextStep = nextOrganizationAuthoritySetupStep({
@@ -1656,7 +1761,10 @@ async function bootstrap(
       ...(!initialOwnerAlreadyBound ? { invitation_path: invitationPath } : {}),
       ...((completedFull.slack_verification ?? slack.verification) === undefined
         ? {}
-        : { slack_verification: completedFull.slack_verification ?? slack.verification }),
+        : {
+            slack_verification:
+              completedFull.slack_verification ?? slack.verification,
+          }),
       ...(completedFull.granola_admission_proof === undefined
         ? {}
         : { granola_admission_proof: completedFull.granola_admission_proof }),
@@ -1729,13 +1837,13 @@ function installProviderCredentials(
   input: CredentialInstallInput,
   io: CliIo,
 ): void {
-  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory);
+  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory,);
   verifySetupGenesis(manifest);
   if (
     manifest.granola_credential_file !==
       join(input.state_directory, "credentials", GRANOLA_CREDENTIAL_FILENAME) ||
     manifest.granola_owner_email_file !==
-      join(input.state_directory, "credentials", GRANOLA_OWNER_EMAIL_FILENAME) ||
+      join(input.state_directory, "credentials", GRANOLA_OWNER_EMAIL_FILENAME,) ||
     manifest.llm_credential_file !==
       join(input.state_directory, "credentials", LLM_CREDENTIAL_FILENAME)
   ) {
@@ -1790,7 +1898,7 @@ async function finalize(
   io: CliIo,
   dependencies: OrganizationAuthoritySetupCliDependencies,
 ): Promise<void> {
-  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory);
+  const manifest = readOrganizationAuthoritySetupManifest(input.state_directory,);
   // This is a stopped-state publication gate, not merely a convenience
   // command. Prove genesis before a dependency can admit anything.
   verifySetupGenesis(manifest);
@@ -1847,6 +1955,7 @@ function status(
         granola_credentials_valid: false,
         granola_admission_present: false,
         source_progress_observed: false,
+        synthetic_staging_canary_observed: false,
         approved_record_present: false,
         active_generation_current: false,
         owner_layer1_read_after_head: false,
@@ -1915,6 +2024,8 @@ function status(
       granola_credentials_valid: full.granola_credentials_valid,
       granola_admission_present: full.granola_admission_present,
       source_progress_observed: canary.source_progress_observed,
+      synthetic_staging_canary_observed:
+        canary.synthetic_staging_canary_observed ?? false,
       approved_record_present: canary.approved_record_present,
       active_generation_current: canary.active_generation_current,
       owner_layer1_read_after_head: canary.owner_layer1_read_after_head,

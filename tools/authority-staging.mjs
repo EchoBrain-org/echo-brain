@@ -120,6 +120,24 @@ const SAFE_MODIFY_LOGICAL_IDS = new Set([
   "StagingHostLaunchTemplate",
   "StagingHostRole",
 ]);
+const HOST_SETUP_PARAMETER_KEYS = Object.freeze([
+  "HostSetupObjectKey",
+  "HostSetupObjectVersion",
+  "HostSetupSha256",
+]);
+const ONBOARDING_TRANSFER_PARAMETER_KEYS = Object.freeze([
+  "OnboardingInputObjectKey",
+  "OnboardingInputObjectVersion",
+  "OnboardingInputAccessExpiresAt",
+]);
+const TEMPLATE_PARAMETER_KEYS = Object.freeze([
+  ...BASE_PARAMETERS,
+  "HostEnabled",
+  "InitializeBlankDataVolume",
+  "ResumeRetainedAuthority",
+  ...HOST_SETUP_PARAMETER_KEYS,
+  ...ONBOARDING_TRANSFER_PARAMETER_KEYS,
+]);
 
 class AwsCliError extends Error {
   constructor(code, safeEvents = []) {
@@ -373,6 +391,16 @@ function buildParameters(
     // restart, before CloudFormation signals ready.
     ResumeRetainedAuthority:
       hostEnabled && resumeRetainedAuthority ? "true" : "false",
+    // Every lifecycle plan names the complete template vector. These transfer
+    // controls are never lifecycle inputs, so their only safe value here is
+    // the template default. That makes an outstanding transfer grant visible
+    // as a reviewed-plan mismatch instead of silently inheriting it.
+    HostSetupObjectKey: "",
+    HostSetupObjectVersion: "",
+    HostSetupSha256: "",
+    OnboardingInputObjectKey: "",
+    OnboardingInputObjectVersion: "",
+    OnboardingInputAccessExpiresAt: "",
   };
   if (hostEnabled) {
     if (setupArtifact !== undefined) {
@@ -1425,14 +1453,52 @@ function parametersMatch(payload, expected) {
     return false;
   }
   if (!Array.isArray(payload.Parameters)) return false;
-  const actual = new Map(
-    payload.Parameters.map((item) => [
-      item?.ParameterKey,
-      item?.ParameterValue,
-    ]),
-  );
-  return Object.entries(expected.parameters).every(
-    ([key, value]) => actual.get(key) === value,
+
+  // Every lifecycle plan names the complete template vector. The only dynamic
+  // values are the three HostSetup fields during execute: their exact S3
+  // object version is intentionally learned from the stored plan and then
+  // checked by assertReviewedSetupArtifact. Every other value must match.
+  // In particular, accepting a subset would let an already-existing same-name
+  // change set smuggle in an onboarding-transfer grant while still matching
+  // the host lifecycle parameters.
+  const expectedEntries = Object.entries(expected.parameters);
+  if (
+    expectedEntries.length !== TEMPLATE_PARAMETER_KEYS.length ||
+    !TEMPLATE_PARAMETER_KEYS.every((key) =>
+      Object.hasOwn(expected.parameters, key),
+    )
+  ) {
+    return false;
+  }
+  if (payload.Parameters.length !== TEMPLATE_PARAMETER_KEYS.length)
+    return false;
+
+  const actual = new Map();
+  for (const item of payload.Parameters) {
+    const key = item?.ParameterKey;
+    const value = item?.ParameterValue;
+    if (typeof key !== "string" || typeof value !== "string") return false;
+    // Map construction alone would silently collapse duplicate keys, turning a
+    // malformed response into a false match.
+    if (actual.has(key)) return false;
+    actual.set(key, value);
+  }
+  if (!TEMPLATE_PARAMETER_KEYS.every((key) => actual.has(key))) return false;
+  const dynamicHostSetup =
+    expected.parameters.HostEnabled === "true" &&
+    HOST_SETUP_PARAMETER_KEYS.every(
+      (key) => expected.parameters[key] === "",
+    );
+  for (const [key, value] of expectedEntries) {
+    if (dynamicHostSetup && HOST_SETUP_PARAMETER_KEYS.includes(key)) continue;
+    if (actual.get(key) !== value) return false;
+  }
+  return (
+    !dynamicHostSetup ||
+    HOST_SETUP_PARAMETER_KEYS.every((key) => {
+      const value = actual.get(key);
+      return value !== undefined && value.length > 0;
+    })
   );
 }
 

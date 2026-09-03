@@ -1,5 +1,5 @@
 import { AuthorityOperationError } from "../domain/errors.js";
-import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";
+import { isExpectedPersonEmail } from "../domain/person-session-rules.js";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import type {
   EmployeeRosterEntry,
@@ -38,7 +38,7 @@ function validateEmployeeName(value: string): void {
 }
 
 function validateEmployeeEmail(value: string): void {
-  if (!isCanonicalPersonEmail(value)) {
+  if (!isExpectedPersonEmail(value)) {
     throw new AuthorityOperationError(
       "invalid_request",
       "employee email must be canonical lowercase ASCII",

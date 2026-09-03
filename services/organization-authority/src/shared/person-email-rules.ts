@@ -3,9 +3,32 @@
  *
  * This is deliberately a narrow identity key, not a general RFC email parser:
  * callers persist and compare it exactly, so it must already be lowercase,
- * trimmed, bounded ASCII and use a conservative mailbox shape. This accepts
- * ordinary dotted and plus-tagged work addresses, while excluding shell and
- * display-name syntax that does not make a stable identity key.
+ * trimmed, printable ASCII, and contain one non-edge `@` separator.
+ */
+export function isCanonicalPersonEmail(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length < 3 ||
+    value.length > 254 ||
+    value !== value.trim() ||
+    value !== value.toLowerCase() ||
+    !/^[!-~]+$/.test(value)
+  ) {
+    return false;
+  }
+  const separator = value.indexOf("@");
+  return (
+    separator > 0 &&
+    separator === value.lastIndexOf("@") &&
+    separator < value.length - 1
+  );
+}
+
+/**
+ * New expected-email artifacts and OIDC chooser hints use a stricter
+ * mailbox-shaped subset. Keep this separate from the durable Person identity
+ * key above: that key also validates previously stored and provider-observed
+ * addresses, whose historical compatibility must not change.
  */
 const CANONICAL_PERSON_EMAIL =
   /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -21,7 +44,7 @@ function hasBoundedMailboxParts(value: string): boolean {
   );
 }
 
-export function isCanonicalPersonEmail(value: unknown): value is string {
+export function isExpectedPersonEmail(value: unknown): value is string {
   if (
     typeof value !== "string" ||
     value.length < 3 ||

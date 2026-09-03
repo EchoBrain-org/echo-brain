@@ -128,6 +128,20 @@ describe("Person session store", () => {
       write({
         ...base,
         schema_version: 2,
+        expected_email: "founder@localhost",
+      });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+
+      write({
+        ...base,
+        schema_version: 2,
+        expected_email: "founder@example",
+      });
+      expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");
+
+      write({
+        ...base,
+        schema_version: 2,
         expected_email: `${"a".repeat(65)}@example.com`,
       });
       expect(() => readPersonOnboardingInvitation(path)).toThrow("invalid");

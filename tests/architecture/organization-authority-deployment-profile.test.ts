@@ -225,7 +225,7 @@ if [[ "$1" == compose ]]; then
       printf '%s\\n' '{"ok":true,"credentials_ready":true}'
       exit 0
       ;;
-    *" run "*) printf '%s\\n' '{"next_step":"complete"}'; exit 0 ;;
+    *" run "*) printf '%s\\n' "$ECHO_FAKE_SETUP_STATUS"; exit 0 ;;
     *" ps -q authority "*) printf '%s\\n' fake-authority; exit 0 ;;
     *" ps -q proxy "*) printf '%s\\n' fake-proxy; exit 0 ;;
   esac
@@ -272,6 +272,7 @@ exec /bin/cp "$@"
     ECHO_FAKE_RUNTIME_PROFILE_SHA256: profile.digest,
     ECHO_FAKE_RUNNING: "true",
     ECHO_FAKE_HEALTH: "healthy",
+    ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete"}',
     ECHO_FAKE_FAIL_FIRST_UP: "false",
     ECHO_FAKE_FAIL_REHEARSAL_ARCHIVE: "false",
     ECHO_FAKE_WAIT_DURING_INSTALL: "false",
@@ -365,9 +366,30 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("terminal_green()");
     expect(source).toContain("onboarding_complete=true");
     expect(source).toContain("Rerun onboard-clean-v1.sh resume, then onboard-clean-v1.sh status");
-    expect(source).toContain("one new Granola note");
+    expect(source).toContain("./update-clean-v1.sh canary");
+    expect(source).toContain("SYNTHETIC STAGING CANARY");
     expect(source).not.toContain("Reject a second card");
     expect(source).toContain("founder-person-invitation.json");
+    expect(source).toContain("canonical accepted release record %s");
+    expect(source).toContain("verified Person onboarding kit matching that release");
+    expect(source).toContain('"$initial_owner_invitation" "$RELEASE_FILE"');
+    expect(source).toContain('"<release-matched-kit>/Start ECHO.command" <transferred-absolute-path>');
+    expect(source).toContain("Do not use a preexisting global echo-brain command");
+    expect(source).toContain(
+      '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person logout',
+    );
+    expect(source).toContain("RELEASE-MATCHED-KIT:");
+    expect(source).toContain('client_sha256="$(release_field client-sha256)"');
+    expect(source).toContain('client_version="$(release_field client-version)"');
+    expect(source).toContain('source_sha="$(release_field source-sha)"');
+    expect(source).toContain("KIT-BUILD:");
+    expect(source).toContain("deploy/release/README.md");
+    expect(source).toContain("npm run kit:person-onboarding");
+    expect(source).toContain("transferred accepted release record");
+    expect(source).not.toContain("client_artifact_url=%s");
+    expect(source).not.toContain(
+      "then run echo-brain person login --invitation <transferred-absolute-path>",
+    );
     expect(source).toContain("replace-rehearsal --confirm-no-live-users");
     expect(source).not.toContain('mv "$DATA_DIR"');
     expect(source).toContain("doctor --input-dir <absolute-private-input-directory>");
@@ -393,6 +415,52 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(guide).toContain("never auto-reclaim an existing lock");
     expect(guide).toContain("Recover an interrupted operation lock");
     expect(guide).toContain('rmdir -- "$authority_lock"');
+  });
+
+  it("keeps credential-bearing release URLs out of the founder handoff", () => {
+    const fixture = preparedStatusFixture();
+    const urlToken = "founder-handoff-url-token-must-not-be-logged";
+    try {
+      const releasePath = join(
+        fixture.releaseDir,
+        "current.clean-v1.json",
+      );
+      writeFileSync(
+        releasePath,
+        readFileSync(releasePath, "utf8").replace(
+          "https://downloads.example/echo-brain-person-client.tgz",
+          `https://downloads.example/echo-brain-person-client.tgz?token=${urlToken}`,
+        ),
+      );
+      const onboarding = join(
+        fixture.deploy,
+        "clean-data",
+        "state",
+        "onboarding",
+      );
+      mkdirSync(onboarding, { recursive: true });
+      writeFileSync(join(onboarding, "founder-person-invitation.json"), "{}\n", {
+        mode: 0o600,
+      });
+
+      const result = fixture.run("resume", {
+        ECHO_FAKE_SETUP_STATUS:
+          '{"next_step":"complete_founder_browser_login"}',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("RELEASE-MATCHED-KIT:");
+      expect(result.stdout).toContain("client_artifact_sha256=");
+      expect(result.stdout).not.toContain(urlToken);
+      expect(result.stdout).not.toContain("client_artifact_url=");
+      expect(result.stdout).toContain(
+        '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person logout',
+      );
+      expect(result.stdout).not.toContain("echo-brain person logout");
+      expect(result.stdout).not.toContain("echo-brain person login");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
   });
 
   it("reports a complete canary safely when the Authority is stopped or drifted", () => {

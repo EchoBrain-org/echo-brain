@@ -1154,7 +1154,10 @@ describe("Organization Authority API runtime", () => {
       );
       const expiredPage = await expiredDelivery.text();
       expect(expiredPage).toContain("Sign-in expired");
-      expect(expiredPage).toContain("echo-brain person login");
+      expect(expiredPage).toContain(
+        "rerun the exact command that started sign-in",
+      );
+      expect(expiredPage).not.toContain("echo-brain person login");
       expect(expiredPage).not.toContain("access_token");
       expect(expiredPage).not.toContain("refresh_token");
       expect(expiredPage).not.toContain('name="session"');

@@ -8,6 +8,7 @@ import {
   assertSessionRevocationReason,
   earlierTimestamp,
   isCanonicalPersonEmail,
+  isExpectedPersonEmail,
   isStrictlyBefore,
   OIDC_ASSERTION_ISSUED_AT_SKEW_MS,
   MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS,
@@ -432,7 +433,37 @@ export class PersonIdentitySessionApplication {
     });
   }
 
+  get oidcConfigurationSha256(): Sha256Digest {
+    return this.configuration.oidc_configuration_sha256;
+  }
+
   issueBootstrapLoginGrant(input: {
+    target_membership_id: string;
+    expected_issuer: string;
+    expected_email: string;
+  }): IssuedPersonLoginGrant {
+    if (input.expected_issuer !== this.configuration.issuer) {
+      throw new AuthorityOperationError(
+        "invalid_request",
+        "login grant issuer does not match Authority configuration",
+      );
+    }
+    if (!isExpectedPersonEmail(input.expected_email)) {
+      throw new AuthorityOperationError(
+        "invalid_request",
+        "login grant expected email must be canonical lowercase ASCII",
+      );
+    }
+    return this.issueBootstrapLoginGrantForCanonicalIdentity(input);
+  }
+
+  /**
+   * Reissues a grant for an identity already committed in durable Authority
+   * state. This is intentionally separate from the public/new-bootstrap path:
+   * old state used the broader canonical identity-key rule, while every new
+   * expected-email boundary remains mailbox-shaped.
+   */
+  issueBootstrapLoginGrantForDurableIdentity(input: {
     target_membership_id: string;
     expected_issuer: string;
     expected_email: string;
@@ -446,9 +477,17 @@ export class PersonIdentitySessionApplication {
     if (!isCanonicalPersonEmail(input.expected_email)) {
       throw new AuthorityOperationError(
         "invalid_request",
-        "login grant expected email must be canonical lowercase ASCII",
+        "login grant expected email must be a durable canonical identity",
       );
     }
+    return this.issueBootstrapLoginGrantForCanonicalIdentity(input);
+  }
+
+  private issueBootstrapLoginGrantForCanonicalIdentity(input: {
+    target_membership_id: string;
+    expected_issuer: string;
+    expected_email: string;
+  }): IssuedPersonLoginGrant {
     const loginGrant = this.secret("login_grant");
     const loginGrantSha256 = this.digestSecret(loginGrant);
     const expectedEmailSha256 = this.expectedEmailSha256(input.expected_email);
@@ -473,7 +512,7 @@ export class PersonIdentitySessionApplication {
     input: { target_membership_id: string; expected_email: string },
   ): IssuedPersonLoginGrant {
     const expectedIssuer = this.configuration.issuer;
-    if (!isCanonicalPersonEmail(input.expected_email)) {
+    if (!isExpectedPersonEmail(input.expected_email)) {
       throw new AuthorityOperationError(
         "invalid_request",
         "login grant expected email must be canonical lowercase ASCII",
@@ -621,7 +660,7 @@ export class PersonIdentitySessionApplication {
     const candidateHintSha256 =
       input.kind === "identity_bootstrap" &&
       input.login_hint !== undefined &&
-      isCanonicalPersonEmail(input.login_hint)
+      isExpectedPersonEmail(input.login_hint)
         ? this.expectedEmailSha256(input.login_hint)
         : undefined;
 

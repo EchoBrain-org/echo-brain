@@ -90,6 +90,7 @@ describe('Person session HTTP DTOs', () => {
       "founder;$(id)@example.com",
       "founder`id`@example.com",
       "founder..name@example.com",
+      "founder@localhost",
       "founder@example",
       "founder@-example.com",
       `${'a'.repeat(65)}@example.com`,

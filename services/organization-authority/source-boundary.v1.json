@@ -357,6 +357,16 @@
       "allowed_node_builtins": []
     },
     {
+      "name": "authority-staging-synthetic-canary-envelope-is-pure",
+      "from": "services/organization-authority/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
       "name": "authority-application-depends-inward",
       "from": "services/organization-authority/src/application/**",
       "allowed_imports": [
@@ -517,6 +527,7 @@
         "services/organization-authority/src/answer-composition/**",
         "services/organization-authority/src/composition/**",
         "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts",
         "services/organization-authority/src/presentation/**",
         "services/organization-authority/src/state-lineage/**",
         "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
@@ -640,7 +651,8 @@
       "from": "services/organization-authority/src/processing/admitted-meeting-processing/**",
       "allowed_imports": [
         "services/organization-authority/src/processing/admitted-meeting-processing/**",
-        "services/organization-authority/src/processing/core/**"
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",

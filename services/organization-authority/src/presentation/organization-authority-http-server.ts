@@ -257,7 +257,7 @@ function handoffErrorHtml(
 
 function expiredHandoffHtml(response: ServerResponse): void {
   const page = Buffer.from(
-    "<!doctype html><meta charset=\"utf-8\"><title>Echo sign-in expired</title><p>Sign-in expired. Return to your terminal and rerun <code>echo-brain person login</code>.</p>",
+    "<!doctype html><meta charset=\"utf-8\"><title>Echo sign-in expired</title><p>Sign-in expired. Return to your terminal and rerun the exact command that started sign-in.</p>",
     "utf8",
   );
   response.writeHead(200, {

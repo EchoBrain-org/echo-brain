@@ -171,7 +171,7 @@ workspace:
 Complete bootstrap, the initial-owner identity link, credential installation, and
 finalization first, then start the active runtime. Only after that runtime is
 healthy, enable **Interactivity & Shortcuts** and save this Request URL before
-creating the first post-cutoff canary meeting:
+running the release-bound synthetic staging canary:
 
 ```text
 https://<staging-authority-host>/v2/integrations/slack/interactions
@@ -296,20 +296,29 @@ startup, the runtime reconciles the search index once, then each cycle recovers 
 V4 appends, polls the admitted meeting source, finalizes approvals, appends
 approved records, and reconciles the search index again.
 
-Create one new post-finalization Granola note with a unique marker, approve its
-private meeting-owner Slack DM card, then check both read paths:
+On the exact `authority-staging.echobrain.org` host, run the release-bound
+synthetic path instead of creating a Granola note:
+
+```sh
+./update-clean-v1.sh canary
+```
+
+Approve its private meeting-owner Slack DM card, then check both read paths:
 
 ```sh
 echo-brain person records --limit 20
-echo-brain person records --query 'known marker'
+echo-brain person records --query 'SYNTHETIC STAGING CANARY'
 ```
 
 Rerun `echo-organization-authority-setup resume --state-dir
-/absolute/clean-state`, then `status`. The one-note canary is complete only
-when durable state proves source progress, an approved record, an exact-head
-search index generation, and positive owner record-list and indexed-search reads after that
-head and generation. The status output contains only boolean or enum evidence;
-it never prints record, reader, query, or timestamp data.
+/absolute/clean-state`, then `status`. A staging terminal result accepts only
+the durable synthetic candidate tied to the running release. Every other origin
+continues to require a newly observed Granola source record after its admitted
+cutoff, its private approval, and the equivalent two reads. Both paths require
+an approved record, an exact-head search index generation, and positive owner
+record-list and indexed-search reads after that head and generation. The status
+output contains only boolean or enum evidence; it never prints record, reader,
+query, or timestamp data.
 
 ## Person reads and permissions
 

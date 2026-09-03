@@ -7,6 +7,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,7 +32,8 @@ import {
   type OrganizationAuthoritySetupCliDependencies,
 } from "../src/composition/organization-authority-setup-cli.js";
 import { runOrganizationAuthorityPersonAdministrationCli } from "../src/composition/organization-authority-person-administration-cli.js";
-import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
+import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
+import {bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import {
   OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
@@ -39,6 +41,7 @@ import {
   OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
 } from "../src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
+import { createStagingSyntheticMeetingCanaryV1 } from "../src/processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -48,7 +51,7 @@ afterEach(() => {
   }
 });
 
-function stateDirectory(): string {
+function stateDirectory(authorityUrl = "https://authority.example"): string {
   const root = mkdtempSync(join(tmpdir(), "echo-clean-founder-"));
   temporaryDirectories.push(root);
   const oidcConfig = join(root, "oidc.json");
@@ -57,7 +60,7 @@ function stateDirectory(): string {
     JSON.stringify({
       issuer: "https://issuer.example",
       client_id: "founder-client",
-      redirect_uri: "https://authority.example/v2/session/oidc/callback",
+      redirect_uri: `${authorityUrl}/v2/session/oidc/callback`,
       tenant: { kind: "issuer" },
       id_token_algorithms: ["RS256"],
       client_authentication: "none",
@@ -68,7 +71,7 @@ function stateDirectory(): string {
   return join(root, "state");
 }
 
-function dependencies(order: string[]): OrganizationAuthoritySetupCliDependencies {
+function dependencies(order: string[],): OrganizationAuthoritySetupCliDependencies {
   return {
     now: () => "2026-08-22T12:00:00.000Z",
     initialize_state: (input) => {
@@ -162,7 +165,9 @@ interface DurableCanaryFixtureOptions {
   readonly layer2_result_count?: number | null;
   readonly layer1_owner_tuple?: "owner" | "other";
   readonly layer2_owner_tuple?: "owner" | "other";
-}
+readonly synthetic_staging_release_id?: string;
+  readonly synthetic_staging_corruption?:
+    "partial" | "wrong_owner" | "wrong_digest" | "noncanonical";}
 
 function buildInputForCanary(
   state: string,
@@ -219,11 +224,11 @@ function buildInputForCanary(
         ),
         content: plane(
           "retrieval-content",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V1),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V1,),
         ),
         lexical: plane(
           "retrieval-lexical",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V1),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V1,),
         ),
       },
     },
@@ -418,13 +423,92 @@ function installDurableCanaryFixture(
       options.layer2_owner_tuple,
       "2026-08-23T00:00:03.000Z",
     );
-  } finally {
+  if (options.synthetic_staging_release_id !== undefined) {
+      const releaseId = options.synthetic_staging_release_id;
+      const meeting = createStagingSyntheticMeetingCanaryV1({
+        canary_id: releaseId,
+        owner_email: "founder@example.com",
+        observed_at: issuedAt,
+      });
+      const storedMeeting =
+        options.synthetic_staging_corruption === "partial"
+          ? { ...meeting, content: [] }
+          : options.synthetic_staging_corruption === "wrong_owner"
+            ? createStagingSyntheticMeetingCanaryV1({
+                canary_id: releaseId,
+                owner_email: "other@example.com",
+                observed_at: issuedAt,
+              })
+            : meeting;
+      const storedMeetingJson =
+        options.synthetic_staging_corruption === "noncanonical"
+          ? JSON.stringify(storedMeeting)
+          : canonicalJson(storedMeeting);
+      const storedMeetingSha256 =
+        options.synthetic_staging_corruption === "wrong_digest"
+          ? sha256Digest("wrong-staging-meeting-digest")
+          : sha256Digest(canonicalJson(storedMeeting));
+      const candidateId = "cnd_founder_staging_canary";
+      authority
+        .prepare(
+          `INSERT INTO authority_live_source_candidates_v2 (
+             candidate_id, candidate_semantic_sha256,
+             admission_semantic_input_sha256, review_lineage_id,
+             review_input_sha256, review_semantic_sha256,
+             review_policy_id, review_policy_contract_sha256,
+             review_policy_consequence_text,
+             review_policy_consequence_sha256, disposition, source_cursor,
+             meeting_sha256, meeting_json, decisions_sha256, decisions_json,
+             created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'actionable', ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          candidateId,
+          sha256Digest("staging-candidate"),
+          admissionSemanticSha256,
+          "rli_founder_staging_canary",
+          sha256Digest("staging-input"),
+          sha256Digest("staging-review"),
+          "restricted-reviewer-v1",
+          sha256Digest("staging-policy"),
+          "staging canary",
+          sha256Digest("staging-consequence"),
+          `synthetic-staging-canary:v1:${releaseId}`,
+          storedMeetingSha256,
+          storedMeetingJson,
+          sha256Digest("staging-decisions"),
+          canonicalJson({ schema_version: 1, signals: [] }),
+          issuedAt,
+        );
+      authority
+        .prepare(
+          `INSERT INTO authority_live_approval_outbox_v2
+             (candidate_id, approval_id, stage_command_id, state,
+              provider_message_ts, frozen_card_sha256, approved_snapshot_json,
+              approved_snapshot_sha256, post_started_at,
+              control_approval_sha256, updated_at)
+           VALUES (?, ?, ?, 'staged', ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          candidateId,
+          approvalId,
+          "pas_founder_staging_canary",
+          "123.456",
+          sha256Digest("staging-card"),
+          canonicalJson({ schema_version: 1, kind: "staging-card" }),
+          sha256Digest("staging-snapshot"),
+          issuedAt,
+          sha256Digest("staging-control-approval"),
+          issuedAt,
+        );
+    }} finally {
     authority.close();
   }
 }
 
 describe("Organization Authority setup coordinator", () => {
-  const bootstrapArgs = (state: string) => [
+  const bootstrapArgs = (state: string,
+    authorityUrl = "https://authority.example",) => [
     "bootstrap",
     "--state-dir",
     state,
@@ -435,7 +519,7 @@ describe("Organization Authority setup coordinator", () => {
     "--owner-email",
     "founder@example.com",
     "--authority-url",
-    "https://authority.example",
+    authorityUrl,
     "--oidc-config",
     join(dirname(state), "oidc.json"),
     "--slack-approval-channel-id",
@@ -583,7 +667,7 @@ describe("Organization Authority setup coordinator", () => {
     );
     expect(bootstrapStatus, stderr).toBe(0);
     const manifest = readOrganizationAuthoritySetupManifest(state);
-    expect(JSON.parse(readFileSync(manifest.invitation_path, "utf8"))).toMatchObject({
+    expect(JSON.parse(readFileSync(manifest.invitation_path, "utf8")),).toMatchObject({
       schema_version: 2,
       expected_email: "founder@example.com",
     });
@@ -607,21 +691,89 @@ describe("Organization Authority setup coordinator", () => {
     writeFileSync(
       manifest.invitation_path,
       `${canonicalJson(legacy)}\n`,
-      { mode: 0o600 },
+      { mode: 0o600 ,}
     );
     chmodSync(manifest.invitation_path, 0o600);
     let statusOutput = "";
     expect(
       await runOrganizationAuthoritySetupCli(
         ["status", "--state-dir", state],
-        { ...io, stdout: (value) => (statusOutput += value) },
+        { ...io, stdout: (value) => (statusOutput += value) ,}
       ),
     ).toBe(0);
     expect(JSON.parse(statusOutput)).toMatchObject({
       founder_invitation_valid: true,
     });
 
-    const mismatchedPath = join(dirname(manifest.invitation_path), "other.json");
+    // A manifest alone cannot opt an identity into legacy issuance.
+    const historicManifest = JSON.parse(
+      readFileSync(join(state, "onboarding", "clean-founder-v1.json"), "utf8"),
+    ) as Record<string, unknown>;
+    historicManifest.owner_email = "founder@localhost";
+    writeFileSync(
+      join(state, "onboarding", "clean-founder-v1.json"),
+      `${canonicalJson(historicManifest)}\n`,
+      { mode: 0o600 },
+    );
+    chmodSync(join(state, "onboarding", "clean-founder-v1.json"), 0o600);
+    unlinkSync(manifest.invitation_path);
+
+    expect(
+      await runOrganizationAuthoritySetupCli(
+        ["resume", "--state-dir", state],
+        io,
+        defaultPathDependencies,
+      ),
+    ).toBe(1);
+    expect(existsSync(manifest.invitation_path)).toBe(false);
+
+    // A pre-a612c9e owner grant is immutable evidence that this exact broad
+    // identity key was historically bound to the same owner and OIDC config.
+    // Its expiry is intentionally irrelevant: it is proof, not a credential.
+    const authority = new Database(join(state, "authority.sqlite"));
+    try {
+      authority
+        .prepare(
+          `INSERT INTO authority_person_login_grants
+             (login_grant_sha256, grant_purpose, organization_id, principal_id,
+              membership_id, membership_type, expected_issuer,
+              expected_email_sha256, oidc_configuration_sha256, issued_at,
+              expires_at, consumed_at)
+           SELECT ?, grant_purpose, organization_id, principal_id,
+                  membership_id, membership_type, expected_issuer,
+                  ?, oidc_configuration_sha256, ?, ?, NULL
+             FROM authority_person_login_grants
+            WHERE organization_id = ? AND principal_id = ? AND membership_id = ?
+              AND membership_type = 'owner'
+            LIMIT 1`,
+        )
+        .run(
+          sha256Digest("historic-founder-localhost-grant"),
+          personLoginGrantExpectedEmailSha256("founder@localhost"),
+          "2020-01-01T00:00:00.000Z",
+          "2020-01-01T00:15:00.000Z",
+          manifest.organization_id,
+          manifest.owner_principal_id,
+          manifest.owner_membership_id,
+        );
+    } finally {
+      authority.close();
+    }
+
+    expect(
+      await runOrganizationAuthoritySetupCli(
+        ["resume", "--state-dir", state],
+        io,
+        defaultPathDependencies,
+      ),
+    ).toBe(0);
+    expect(invitationIssues).toBe(1);
+    expect(
+      JSON.parse(readFileSync(manifest.invitation_path, "utf8")),
+    ).toMatchObject({ schema_version: 1 });
+    expect(
+      JSON.parse(readFileSync(manifest.invitation_path, "utf8")),
+    ).not.toHaveProperty("expected_email");const mismatchedPath = join(dirname(manifest.invitation_path), "other.json",);
     expect(
       await runOrganizationAuthorityPersonAdministrationCli(
         [
@@ -659,7 +811,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(
       await runOrganizationAuthoritySetupCli(
         ["status", "--state-dir", state],
-        { ...io, stdout: (value) => (statusOutput += value) },
+        { ...io, stdout: (value) => (statusOutput += value) ,}
       ),
     ).toBe(0);
     expect(JSON.parse(statusOutput)).toMatchObject({
@@ -710,7 +862,7 @@ describe("Organization Authority setup coordinator", () => {
 
     const result = await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "token" },
+      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "token" ,},
       dependencies(order),
     );
 
@@ -726,7 +878,7 @@ describe("Organization Authority setup coordinator", () => {
     const order: string[] = [];
     await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" },
+      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" ,},
       dependencies(order),
     );
     const path = join(state, "onboarding", "clean-founder-v1.json");
@@ -828,7 +980,7 @@ describe("Organization Authority setup coordinator", () => {
     const base = dependencies(order);
     await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" },
+      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" ,},
       base,
     );
     order.splice(0);
@@ -836,7 +988,7 @@ describe("Organization Authority setup coordinator", () => {
     let stderr = "";
     const result = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", state],
-      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "" },
+      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "" ,},
       {
         ...base,
         read_initial_owner_setup_status: () => ({
@@ -861,16 +1013,16 @@ describe("Organization Authority setup coordinator", () => {
     const base = dependencies(order);
     await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" },
+      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" ,},
       base,
     );
     order.splice(0);
-    writeFileSync(join(state, "state-lineage-root.v1.json"), "{}", { mode: 0o600 });
+    writeFileSync(join(state, "state-lineage-root.v1.json"), "{}", { mode: 0o600 ,});
 
     let stderr = "";
     const result = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", state],
-      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "" },
+      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "" ,},
       {
         ...base,
         read_initial_owner_setup_status: () => ({
@@ -893,7 +1045,7 @@ describe("Organization Authority setup coordinator", () => {
     const base = dependencies(order);
     await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" },
+      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" ,},
       base,
     );
     order.splice(0);
@@ -916,11 +1068,11 @@ describe("Organization Authority setup coordinator", () => {
       },
       read_initial_owner_setup_status: () => ({ ...full }),
     };
-    const io = { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "" };
+    const io = { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "" ,};
 
-    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying)).toBe(1);
-    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying)).toBe(0);
-    expect(order.filter((entry) => entry.startsWith("activate:"))).toHaveLength(0);
+    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying,),).toBe(1);
+    expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying,),).toBe(0);
+    expect(order.filter((entry) => entry.startsWith("activate:"))).toHaveLength(0,);
     expect(order.filter((entry) => entry.startsWith("admit:"))).toHaveLength(2);
   });
 
@@ -935,7 +1087,7 @@ describe("Organization Authority setup coordinator", () => {
     let stdout = "";
     const result = await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: (value) => (stdout += value), stderr: () => undefined, read_stdin: async () => "token" },
+      { stdout: (value) => (stdout += value), stderr: () => undefined, read_stdin: async () => "token" ,},
       {
         ...dependencies(order),
         read_setup_stage: () => completedStage,
@@ -1019,11 +1171,11 @@ describe("Organization Authority setup coordinator", () => {
       credentials_ready: true,
     });
     for (const value of Object.values(values)) expect(stdout).not.toContain(value);
-    expect(readFileSync(join(credentialDirectory, "granola-credential"), "utf8"))
+    expect(readFileSync(join(credentialDirectory, "granola-credential"), "utf8"),)
       .toBe(values.granola);
-    expect(readFileSync(join(credentialDirectory, "granola-owner-email"), "utf8"))
+    expect(readFileSync(join(credentialDirectory, "granola-owner-email"), "utf8"),)
       .toBe(values.owner);
-    expect(readFileSync(join(credentialDirectory, "llm-credential"), "utf8"))
+    expect(readFileSync(join(credentialDirectory, "llm-credential"), "utf8"),)
       .toBe(values.llm);
     for (const filename of [
       "granola-credential",
@@ -1081,7 +1233,7 @@ describe("Organization Authority setup coordinator", () => {
       read_stdin: async () => "xoxb-test-token",
     };
 
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps)).toBe(1);
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps),).toBe(1);
     let status = "";
     expect(
       await runOrganizationAuthoritySetupCli(["status", "--state-dir", state], {
@@ -1102,22 +1254,22 @@ describe("Organization Authority setup coordinator", () => {
     resetFails = false;
     failAfter = "credentials";
     expect(
-      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps),
+      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
     ).toBe(1);
     failAfter = "slack";
     expect(
-      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps),
+      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
     ).toBe(1);
     expect(order.filter((value) => value === "credentials")).toHaveLength(1);
     failAfter = "invitation";
     expect(
-      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps),
+      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
     ).toBe(1);
     expect(order.filter((value) => value === "slack")).toHaveLength(1);
     expect(stdinReads).toBe(1);
     failAfter = undefined;
     expect(
-      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps),
+      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
     ).toBe(0);
     expect(order.filter((value) => value === "invitation")).toHaveLength(1);
     expect(stdinReads).toBe(1);
@@ -1133,7 +1285,7 @@ describe("Organization Authority setup coordinator", () => {
       stderr: () => undefined,
       read_stdin: async () => "token",
     };
-    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps)).toBe(0);
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps),).toBe(0);
 
     let incompleteOutput = "";
     expect(
@@ -1214,15 +1366,15 @@ describe("Organization Authority setup coordinator", () => {
       false,
       false,
     ],
-    ["requires a real source cursor advance", { cursor_version: 0 }, false, true, true, true, true],
-    ["rejects a stale record-head pointer", { pointer_current: false }, true, true, false, false, false],
-    ["rejects a stale retrieval contract", { pointer_current_contract: false }, true, true, false, false, false],
-    ["requires a positive Layer 1 audit", { layer1_result_count: null }, true, true, true, false, true],
-    ["rejects a zero-result Layer 1 audit", { layer1_result_count: 0 }, true, true, true, false, true],
-    ["requires a positive Layer 2 audit", { layer2_result_count: null }, true, true, true, true, false],
-    ["rejects a zero-result Layer 2 audit", { layer2_result_count: 0 }, true, true, true, true, false],
-    ["requires the owner tuple for Layer 1", { layer1_owner_tuple: "other" }, true, true, true, false, true],
-    ["requires the owner tuple for Layer 2", { layer2_owner_tuple: "other" }, true, true, true, true, false],
+    ["requires a real source cursor advance", { cursor_version: 0 }, false, true, true, true, true,],
+    ["rejects a stale record-head pointer", { pointer_current: false }, true, true, false, false, false,],
+    ["rejects a stale retrieval contract", { pointer_current_contract: false }, true, true, false, false, false,],
+    ["requires a positive Layer 1 audit", { layer1_result_count: null }, true, true, true, false, true,],
+    ["rejects a zero-result Layer 1 audit", { layer1_result_count: 0 }, true, true, true, false, true,],
+    ["requires a positive Layer 2 audit", { layer2_result_count: null }, true, true, true, true, false,],
+    ["rejects a zero-result Layer 2 audit", { layer2_result_count: 0 }, true, true, true, true, false,],
+    ["requires the owner tuple for Layer 1", { layer1_owner_tuple: "other" }, true, true, true, false, true,],
+    ["requires the owner tuple for Layer 2", { layer2_owner_tuple: "other" }, true, true, true, true, false,],
   ] as const)(
     "derives durable canary evidence from SQLite: %s",
     async (
@@ -1246,7 +1398,7 @@ describe("Organization Authority setup coordinator", () => {
         read_stdin: async () => "token",
       };
       expect(
-        await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, productionDependencies),
+        await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, productionDependencies,),
       ).toBe(0);
       installDurableCanaryFixture(state, fixtureOptions);
 
@@ -1272,4 +1424,116 @@ describe("Organization Authority setup coordinator", () => {
       });
     },
   );
+it("accepts an approved release-bound synthetic canary only on staging", async () => {
+    const releaseId = "clean-v1-staging-synthetic-canary";
+    const originalReleaseId = process.env.ECHO_CLEAN_RELEASE_ID;
+    const originalHost = process.env.ECHO_CLEAN_AUTHORITY_HOST;
+    const io = {
+      stdout: () => undefined,
+      stderr: () => undefined,
+      read_stdin: async () => "token",
+    };
+    const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
+      ...readyStatusDependencies([]),
+      read_setup_canary_evidence: undefined,
+    };
+    try {
+      process.env.ECHO_CLEAN_RELEASE_ID = releaseId;
+      process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
+
+      const staging = stateDirectory("https://authority-staging.echobrain.org");
+      expect(
+        await runOrganizationAuthoritySetupCli(
+          bootstrapArgs(staging, "https://authority-staging.echobrain.org"),
+          io,
+          productionDependencies,
+        ),
+      ).toBe(0);
+      installDurableCanaryFixture(staging, {
+        cursor_version: 0,
+        synthetic_staging_release_id: releaseId,});
+let stagingOutput = "";
+      expect(
+        await runOrganizationAuthoritySetupCli(
+          ["status", "--state-dir", staging],
+          { ...io, stdout: (value) => (stagingOutput += value) },
+          productionDependencies,
+        ),
+      ).toBe(0);
+      expect(JSON.parse(stagingOutput)).toMatchObject({
+        source_progress_observed: false,
+        synthetic_staging_canary_observed: true,
+        next_step: "complete",
+      });
+
+      for (const corruption of [
+        "partial",
+        "wrong_owner",
+        "wrong_digest",
+        "noncanonical",
+      ] as const) {
+        const corrupt = stateDirectory(
+          "https://authority-staging.echobrain.org",
+        );
+        expect(
+          await runOrganizationAuthoritySetupCli(
+            bootstrapArgs(corrupt, "https://authority-staging.echobrain.org"),
+            io,
+            productionDependencies,
+          ),
+        ).toBe(0);
+        installDurableCanaryFixture(corrupt, {
+          cursor_version: 0,
+          synthetic_staging_release_id: releaseId,
+          synthetic_staging_corruption: corruption,
+        });
+        let corruptOutput = "";
+        expect(
+          await runOrganizationAuthoritySetupCli(
+            ["status", "--state-dir", corrupt],
+            { ...io, stdout: (value) => (corruptOutput += value) },
+            productionDependencies,
+          ),
+        ).toBe(0);
+        expect(JSON.parse(corruptOutput)).toMatchObject({
+          source_progress_observed: false,
+          synthetic_staging_canary_observed: false,
+          next_step: "ready_to_start",
+        });
+      }
+
+      const production = stateDirectory();
+      expect(
+        await runOrganizationAuthoritySetupCli(
+          bootstrapArgs(production),
+          io,
+          productionDependencies,
+        ),
+      ).toBe(0);
+      installDurableCanaryFixture(production, {
+        cursor_version: 0,
+        synthetic_staging_release_id: releaseId,
+      });
+      let productionOutput = "";
+      expect(
+        await runOrganizationAuthoritySetupCli(
+          ["status", "--state-dir", production],
+          { ...io, stdout: (value) => (productionOutput += value) },
+          productionDependencies,
+        ),
+      ).toBe(0);
+      expect(JSON.parse(productionOutput)).toMatchObject({
+        source_progress_observed: false,
+        synthetic_staging_canary_observed: false,
+        next_step: "ready_to_start",
+      });
+    } finally {
+      if (originalReleaseId === undefined)
+        delete process.env.ECHO_CLEAN_RELEASE_ID;
+      else process.env.ECHO_CLEAN_RELEASE_ID = originalReleaseId;
+      if (originalHost === undefined)
+        delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
+      else process.env.ECHO_CLEAN_AUTHORITY_HOST = originalHost;
+    }
+  });
 });

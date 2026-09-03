@@ -47,6 +47,19 @@ const TOKEN = "cf-management-token-not-a-real-secret";
 const CLI = fileURLToPath(
   new URL("../../tools/authority-staging.mjs", import.meta.url),
 );
+const STAGING_TEMPLATE = fileURLToPath(
+  new URL(
+    "../../deploy/organization-authority/authority-staging-host-v1.template.json",
+    import.meta.url,
+  ),
+);
+const STAGING_TEMPLATE_CONTENTS = readFileSync(STAGING_TEMPLATE);
+const STAGING_TEMPLATE_SHA256 = createHash("sha256")
+  .update(STAGING_TEMPLATE_CONTENTS)
+  .digest("hex");
+const STAGING_TEMPLATE_PARAMETER_KEYS = Object.keys(
+  JSON.parse(STAGING_TEMPLATE_CONTENTS.toString("utf8")).Parameters,
+).sort();
 const SECRET_ARN =
   "arn:aws:secretsmanager:us-west-2:123456789012:secret:echo/staging/tunnel-abc";
 const AUTHORITY_DESCRIPTOR = (() => {
@@ -261,6 +274,28 @@ const ACCEPTED_INPUT = Object.freeze({
   ...INPUT,
   authorityPinSha256: AUTHORITY_PIN,
 });
+
+function templateParameterVector(
+  overrides: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  return {
+    ...INPUT.stack.parameters,
+    DataVolumeSizeGiB: "30",
+    HostEnabled: "false",
+    HostSetupObjectKey: "",
+    HostSetupObjectVersion: "",
+    HostSetupSha256: "",
+    InitializeBlankDataVolume: "false",
+    OnboardingInputAccessExpiresAt: "",
+    OnboardingInputObjectKey: "",
+    OnboardingInputObjectVersion: "",
+    PublicSubnetCidr: "10.238.1.0/24",
+    ResumeRetainedAuthority: "false",
+    StagingInstanceType: "t4g.small",
+    VpcCidr: "10.238.0.0/16",
+    ...overrides,
+  };
+}
 
 function stack(hostEnabled = false, terminationProtection = true) {
   return {
@@ -580,12 +615,7 @@ describe("Authority staging lifecycle", () => {
       ],
     });
     expect(fixture.events).toEqual(["describe-stack", "plan:CREATE:false"]);
-    expect(fixture.plans[0]?.parameters).toMatchObject({
-      VpcCidr: "10.238.0.0/16",
-      PublicSubnetCidr: "10.238.1.0/24",
-      StagingInstanceType: "t4g.small",
-      DataVolumeSizeGiB: "30",
-    });
+    expect(fixture.plans[0]?.parameters).toEqual(templateParameterVector());
     expect(fixture.plans[0]?.onStackFailure).toBe("DO_NOTHING");
   });
 
@@ -788,10 +818,14 @@ describe("Authority staging lifecycle", () => {
       "describe-stack",
       "plan:UPDATE:true",
     ]);
-    expect(fixture.plans[0]?.parameters.InitializeBlankDataVolume).toBe(
-      "false",
+    expect(fixture.plans[0]?.parameters).toEqual(
+      templateParameterVector({
+        HostEnabled: "true",
+        HostSetupObjectKey: INPUT.hostSetup.key,
+        HostSetupObjectVersion: "version-0001",
+        HostSetupSha256: INPUT.hostSetup.sha256,
+      }),
     );
-    expect(fixture.plans[0]?.parameters.ResumeRetainedAuthority).toBe("false");
   });
 
   it("requires an explicit audited flag before an initial blank volume can be formatted", async () => {
@@ -908,6 +942,9 @@ describe("Authority staging lifecycle", () => {
     expect(fixture.descriptorRequests).toEqual([
       "https://staging.example.com/v1/authority-descriptor",
     ]);
+    expect(fixture.reviewedPlans[0]?.parameters).toEqual(
+      templateParameterVector({ HostEnabled: "true" }),
+    );
   });
 
   it("reports an accepted Authority and classifies a non-serving status", async () => {
@@ -2037,7 +2074,12 @@ describe("Authority staging lifecycle", () => {
             },
           },
         ],
-        Parameters: [{ ParameterKey: "HostEnabled", ParameterValue: "false" }],
+        Parameters: Object.entries(templateParameterVector()).map(
+          ([ParameterKey, ParameterValue]) => ({
+            ParameterKey,
+            ParameterValue,
+          }),
+        ),
         Status: "CREATE_COMPLETE",
       };
       const typeCases = [
@@ -2092,6 +2134,19 @@ describe("Authority staging lifecycle", () => {
             Description: `echo-authority-staging-template-${templateSha256}-UPDATE`,
           },
         },
+        {
+          expectedMatch: false,
+          name: "duplicate parameter key",
+          requestType: "UPDATE" as const,
+          response: {
+            ...changeSetResponse,
+            Description: `echo-authority-staging-template-${templateSha256}-UPDATE`,
+            Parameters: [
+              ...changeSetResponse.Parameters,
+              { ParameterKey: "HostEnabled", ParameterValue: "false" },
+            ],
+          },
+        },
       ];
       for (const [index, typeCase] of typeCases.entries()) {
         process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify(
@@ -2105,7 +2160,7 @@ describe("Authority staging lifecycle", () => {
           ...(typeCase.requestType === "CREATE"
             ? { onStackFailure: "DO_NOTHING" as const }
             : {}),
-          parameters: { HostEnabled: "false" },
+          parameters: templateParameterVector(),
           region: "us-west-2",
           stackName: "echo-authority-staging-adapter-test",
           templatePath: "/private/tmp/committed-template.json",
@@ -2134,7 +2189,7 @@ describe("Authority staging lifecycle", () => {
         changeSetType: "CREATE",
         clientToken: "staging-adapter-test-003",
         onStackFailure: "DO_NOTHING",
-        parameters: { HostEnabled: "false" },
+        parameters: templateParameterVector(),
         region: "us-west-2",
         stackName: "echo-authority-staging-adapter-test",
         templatePath: "/private/tmp/committed-template.json",
@@ -2156,7 +2211,7 @@ describe("Authority staging lifecycle", () => {
         changeSetType: "CREATE",
         clientToken: "staging-adapter-test-004",
         onStackFailure: "DO_NOTHING",
-        parameters: { HostEnabled: "false" },
+        parameters: templateParameterVector(),
         region: "us-west-2",
         stackName: "echo-authority-staging-adapter-test",
         templatePath: "/private/tmp/committed-template.json",
@@ -2166,11 +2221,204 @@ describe("Authority staging lifecycle", () => {
       const createCalls = readFileSync(fake.log, "utf8");
       expect(createCalls).toContain("ARG=--on-stack-failure\nARG=DO_NOTHING");
       expect(createCalls.match(/ARG=--profile\nARG=echo-prod/g)).toHaveLength(
-        21,
+        24,
       );
-      expect(createCalls.match(/^PROFILE_ENV=echo-prod$/gm)).toHaveLength(21);
-      expect(createCalls.match(/ACCESS_KEY_ENV=unset/g)).toHaveLength(21);
-      expect(createCalls.match(/^TOKEN_ENV=unset$/gm)).toHaveLength(21);
+      expect(createCalls.match(/^PROFILE_ENV=echo-prod$/gm)).toHaveLength(24);
+      expect(createCalls.match(/ACCESS_KEY_ENV=unset/g)).toHaveLength(24);
+      expect(createCalls.match(/^TOKEN_ENV=unset$/gm)).toHaveLength(24);
+    } finally {
+      restore();
+    }
+  });
+
+  it("requires the complete template parameter vector for each lifecycle phase", async () => {
+    const fake = withFakeAws();
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_DESCRIBE_RESPONSE: undefined,
+      FAKE_AWS_LOG: fake.log,
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    try {
+      const adapters = createAwsCliAdapters();
+      const templateSha256 = "f".repeat(64);
+      const hostSetup = {
+        HostEnabled: "true",
+        HostSetupObjectKey: INPUT.hostSetup.key,
+        HostSetupObjectVersion: "version-0001",
+        HostSetupSha256: INPUT.hostSetup.sha256,
+      };
+      const slotInit = templateParameterVector();
+      const upPlan = templateParameterVector(hostSetup);
+      // Execute creates its review request before it re-learns the immutable
+      // S3 version. The described change set must carry a complete, nonempty
+      // tuple, which the lifecycle then verifies against the uploaded object.
+      const upExecuteReview = templateParameterVector({ HostEnabled: "true" });
+      const down = templateParameterVector({ HostEnabled: "false" });
+      expect(Object.keys(slotInit).sort()).toEqual(
+        STAGING_TEMPLATE_PARAMETER_KEYS,
+      );
+      expect(STAGING_TEMPLATE_PARAMETER_KEYS).toHaveLength(17);
+
+      async function review(
+        name: string,
+        changeSetType: "CREATE" | "UPDATE",
+        parameters: Record<string, string>,
+        describedParameters: Record<string, string> = parameters,
+        response: Record<string, unknown> = {},
+      ) {
+        process.env.FAKE_AWS_DESCRIBE_RESPONSE = JSON.stringify({
+          ChangeSetId: `change-set-${name}`,
+          ChangeSetType: changeSetType,
+          Changes: [],
+          Description: `echo-authority-staging-template-${templateSha256}-${changeSetType}`,
+          ...(changeSetType === "CREATE"
+            ? { OnStackFailure: "DO_NOTHING" }
+            : {}),
+          Parameters: Object.entries(describedParameters).map(
+            ([ParameterKey, ParameterValue]) => ({
+              ParameterKey,
+              ParameterValue,
+            }),
+          ),
+          Status: "CREATE_COMPLETE",
+          ...response,
+        });
+        return adapters.cloudFormation!.createChangeSet({
+          capabilities: ["CAPABILITY_IAM"],
+          changeSetName: `echo-authority-${name}`,
+          changeSetType,
+          clientToken: `staging-vector-${name}`,
+          ...(changeSetType === "CREATE"
+            ? { onStackFailure: "DO_NOTHING" as const }
+            : {}),
+          parameters,
+          region: "us-west-2",
+          stackName: "echo-authority-staging-vector-test",
+          templatePath: "/private/tmp/committed-template.json",
+          templateSha256,
+        });
+      }
+
+      expect((await review("slot-init", "CREATE", slotInit)).matchesExpected).toBe(
+        true,
+      );
+      expect((await review("up-plan", "UPDATE", upPlan)).matchesExpected).toBe(
+        true,
+      );
+      expect(
+        (
+          await review(
+            "up-execute-review",
+            "UPDATE",
+            upExecuteReview,
+            upPlan,
+          )
+        ).matchesExpected,
+      ).toBe(true);
+      expect((await review("down", "UPDATE", down)).matchesExpected).toBe(true);
+
+      const noChange = await review("no-change", "UPDATE", down, down, {
+        Status: "FAILED",
+        StatusReason: "The submitted information didn't contain changes.",
+      });
+      expect(noChange).toMatchObject({
+        kind: "no_changes",
+        matchesExpected: true,
+      });
+
+      expect(
+        (
+          await review(
+            "injected-transfer-grant",
+            "UPDATE",
+            upExecuteReview,
+            templateParameterVector({
+              ...hostSetup,
+              OnboardingInputObjectKey: "onboarding/unexpected-transfer.tar.gz",
+            }),
+          )
+        ).matchesExpected,
+      ).toBe(false);
+
+      const duplicate = await review("duplicate-key", "UPDATE", down, down, {
+        Parameters: [
+          ...Object.entries(down).map(([ParameterKey, ParameterValue]) => ({
+            ParameterKey,
+            ParameterValue,
+          })),
+          { ParameterKey: "HostEnabled", ParameterValue: "false" },
+        ],
+      });
+      expect(duplicate.matchesExpected).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it("refuses an unexpected onboarding-transfer grant before executing a reviewed up change set", async () => {
+    const fake = withFakeAws();
+    const fixture = dependencies();
+    const expectedParameters = templateParameterVector({
+      HostEnabled: "true",
+      HostSetupObjectKey: INPUT.hostSetup.key,
+      HostSetupObjectVersion: "version-0001",
+      HostSetupSha256: INPUT.hostSetup.sha256,
+    });
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_DESCRIBE_RESPONSE: JSON.stringify({
+        ChangeSetId: "change-set-extra-onboarding-parameter",
+        ChangeSetType: "UPDATE",
+        Changes: [
+          {
+            ResourceChange: {
+              Action: "Add",
+              LogicalResourceId: "StagingHost",
+              ResourceType: "AWS::EC2::Instance",
+            },
+          },
+        ],
+        Description: `echo-authority-staging-template-${STAGING_TEMPLATE_SHA256}-UPDATE`,
+        Parameters: Object.entries(expectedParameters).map(
+          ([ParameterKey, ParameterValue]) => ({
+            ParameterKey,
+            ParameterValue:
+              ParameterKey === "OnboardingInputObjectKey"
+                ? "onboarding/unexpected-transfer.tar.gz"
+                : ParameterValue,
+          }),
+        ),
+        Status: "CREATE_COMPLETE",
+      }),
+      FAKE_AWS_LOG: fake.log,
+      FAKE_AWS_STACK_RESPONSE: JSON.stringify({
+        Stacks: [
+          {
+            EnableTerminationProtection: true,
+            Outputs: [
+              {
+                OutputKey: "HostSetupArtifactBucketName",
+                OutputValue: "echo-authority-staging-artifacts",
+              },
+              { OutputKey: "StagingHostReady", OutputValue: "false" },
+            ],
+            StackStatus: "UPDATE_COMPLETE",
+          },
+        ],
+      }),
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    try {
+      const adapters = createAwsCliAdapters();
+      await expect(
+        runAuthorityStaging("up", INPUT, {
+          ...fixture.dependencies,
+          cloudFormation: adapters.cloudFormation,
+          execute: true,
+        }),
+      ).rejects.toThrow("change_set_not_reviewable");
+      expect(readFileSync(fake.log, "utf8")).not.toContain(
+        "ARG=cloudformation\nARG=execute-change-set",
+      );
     } finally {
       restore();
     }
