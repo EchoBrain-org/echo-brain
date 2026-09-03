@@ -326,6 +326,26 @@ describe("staging Journey Explorer custom widget", () => {
     expect(html).toContain("temporarily unavailable");
     expect(html).not.toContain("attacker");
     expect(html).not.toContain("Journey timeline");
+
+    const foreignId = "22222222-2222-4222-8222-222222222222";
+    const mismatched = new Client([
+      { queryId: "foreign-invalid" },
+      {
+        status: "Complete",
+        results: [
+          event({
+            stage: "ask_validation",
+            event: "started",
+            outcome: null,
+            elapsed_ms: 0,
+          }),
+          event({ journey_id: foreignId, sequence: 2 }),
+        ],
+      },
+    ]);
+    await expect(
+      handler(mismatched)({ operation: "detail", journey_id: id }),
+    ).resolves.toEqual({ error: "journey_explorer_unavailable" });
   });
 
   it("separates approval human wait from full and service wall-clock latency", async () => {
@@ -481,6 +501,28 @@ describe("staging Journey Explorer custom widget", () => {
       endTime: Math.ceil(now / 1_000),
       limit: 2500,
     });
+
+    const rendered = new Client([
+      { queryId: "rendered-incomplete" },
+      {
+        status: "Complete",
+        results: [
+          event({
+            sequence: 2,
+            observed_at: "2026-09-02T11:59:00.000Z",
+          }),
+        ],
+      },
+    ]);
+    const html = await handler(rendered)({
+      operation: "detail",
+      journey_id: id,
+      from: now - 60_000,
+      to: now,
+      render: true,
+    });
+    expect(html).toContain("canonical start");
+    expect(html).not.toContain("Journey timeline");
   });
 
   it("fails closed for a saturated detail and stops a timed out query without leaking provider errors", async () => {
@@ -1053,7 +1095,15 @@ describe("staging Journey Explorer custom widget", () => {
       {
         status: "Complete",
         results: Array.from({ length: 2_000 }, (_, index) =>
-          event({ sequence: index + 1 }),
+          index === 0
+            ? event({
+                sequence: 1,
+                stage: "ask_validation",
+                event: "started",
+                outcome: null,
+                elapsed_ms: 0,
+              })
+            : event({ sequence: index + 1 }),
         ),
       },
     ]);

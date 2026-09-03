@@ -829,7 +829,7 @@ function machineWaterfall(item, origin, span) {
   return `<div class="waterfall-track" aria-label="${escapeHtml(`${item.elapsed_ms} ms machine latency at ${item.observed_at}`)}"><span class="waterfall-bar" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"></span></div>${milliseconds(item.elapsed_ms)}`;
 }
 function renderDetail(data, parsed, endpointArn) {
-  const range = `<p class="notice">Selected range: ${escapeHtml(new Date(parsed.start).toISOString())} to ${escapeHtml(new Date(parsed.end).toISOString())}. This timeline may be partial; widen the dashboard range to include all stages.</p>`;
+  const range = `<p class="notice">List selection: ${escapeHtml(new Date(parsed.start).toISOString())} to ${escapeHtml(new Date(parsed.end).toISOString())}. Detail is verified against the retained 14-day staging history; a missing canonical start fails closed instead of showing a partial timeline.</p>`;
   const origin = Math.min(
     ...data.stages.map((item) => iso(item.observed_at) - item.elapsed_ms),
   );
@@ -868,6 +868,8 @@ function renderError(code) {
         "The selected range returned too many events. Narrow the range.",
       journey_not_found:
         "No validated journey was found in the selected range.",
+      journey_history_incomplete:
+        "The retained staging history does not contain this journey's canonical start, so no partial timeline is shown.",
       journey_explorer_unavailable:
         "The Journey Explorer is temporarily unavailable.",
     }[code] || "The Journey Explorer is temporarily unavailable.";
