@@ -251,6 +251,106 @@ and the operator Explorer remain Phase 4 through Phase 6 work; their absence is
 not a Phase 1 liveness failure. Do not enable or rehearse this transport against
 a production Authority in this sprint.
 
+#### Staging journey overview design - Phase 4, not yet deployed
+
+The Phase 4 formatter and
+`authority-staging-journey-observability-v1.template.json` are implemented and
+locally verified. The dedicated stack is **staging-only**, distinct from the
+generic `authority-observability-v1.template.json` stack, and can select only
+`/echo-brain/authority/authority-staging.echobrain.org`. It therefore cannot
+create a production journey resource, permission, dashboard, alarm, retention
+change, or deployment path. This is not evidence that the stack has been
+deployed, that any metric is live, or that a live journey has been rehearsed.
+
+The overview emits content-free CloudWatch Embedded Metric Format (EMF) records
+beside the canonical raw `echo-authority-journey-stage-v1`, liveness, and
+approved-search-backlog log records. EMF is a projection of the same event,
+not a second ingestion path; it has no browser AWS credential. Within this
+dedicated stack, `WorkerCycleCompleted` is the only log metric filter. All
+journey, LLM, retrieval, liveness, and backlog metrics are EMF. Recent-run and
+Logs Insights views are bounded by the existing 14-day Authority log retention.
+A result older than that bound is unavailable rather than inferred.
+
+The formatter defines this fixed metric dictionary. Dimensions are only the
+versioned low-cardinality fields listed below; `journey_id`, release SHA,
+build number, and every business or person identifier are never dimensions.
+
+| Metric | Value and population rule | Dimensions |
+| --- | --- | --- |
+| `StageStarted`, `StageSucceeded`, `StageFailed`, `StageSkipped` | `1` for the corresponding canonical stage event | `workflow`, `stage` |
+| `StageClosedLatencyMs` | `elapsed_ms` only for succeeded or failed closed machine stages | `workflow`, `stage` |
+| `StageRetryAttempt` | `1` when a started stage has `attempt > 1` | `workflow`, `stage` |
+| `TerminalOutcome` | `1` for a succeeded stage with a non-null bounded stage outcome | `workflow`, `stage`, `outcome` |
+| `StageFailure` | `1` for a failed stage | `workflow`, `stage`, `failure_class` |
+| `AskRetrievalFailure` | `1` for a failed `ask_retrieval` stage | none |
+| `LlmAttempt`, `LlmUsageReported`, `LlmUsageUnavailable`, `LlmProviderLatencyMs` | one terminal LLM-attempt count, usage-status count, and provider RTT | `stage`, `provider`, `model` |
+| `LlmInputTokens`, `LlmOutputTokens`, `LlmTotalTokens`, `LlmCachedInputTokens`, `LlmReasoningTokens` | the respective non-null provider-reported value only | `stage`, `provider`, `model` |
+| `LlmTotalTokensAvailable` | `1` only when that attempt has a non-null total-token value | `stage`, `provider`, `model` |
+| `RetrievalPlannedQueries`, `RetrievalQueryHits`, `RetrievalReleasedAtoms`, `RetrievalContextAtoms`, `RetrievalCitations` | the respective non-null retrieval counter | `workflow`, `stage` |
+| `ApprovalHumanWaitMs` | `queue_age_ms` from card staging to verified action | `workflow`, `stage` |
+| `JourneyTelemetryAlive`, `WorkerCycleCompleted` | `1` for liveness output and a completed worker cycle, respectively | none |
+| `ApprovedSearchPendingCount`, `ApprovedSearchStuckCount`, `ApprovedSearchBacklogCheck`, `ApprovedSearchOldestAgeMs` | explicit-zero durable backlog gauge, stuck-gauge, scan heartbeat, and oldest pending age | none |
+
+`tokens per total-token-available LLM attempt` means the sum of `LlmTotalTokens`
+divided by `LlmTotalTokensAvailable` within the displayed grouping and period.
+The separate usage-coverage ratio is `LlmUsageReported / LlmAttempt`. This
+distinction prevents a partial provider usage report with no total from being
+treated as a zero-token attempt. A bounded Logs Insights view separately sums
+non-null total tokens across every attempt in each recognized completed
+journey, then reports per-request totals and p50/p95/p99 by workflow.
+`TerminalOutcome` is the metric name for a bounded stage result; values such
+as `actionable`, `staged`, and `superseded` do not by themselves mean that the
+whole journey completed. End-to-end queries recognize only Ask response
+success, meeting search `current` or `published`, meeting rejection or denial,
+and non-retryable failure as journey-terminal boundaries.
+
+End-to-end timing is a Logs Insights derivation over one correlated journey.
+The dashboard uses the supported
+[`parseDate(fieldName, format [, timezone])`](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax-operations-functions.html)
+function to convert the canonical ISO-UTC `observed_at` value to milliseconds.
+It requires that the selected dashboard range contains the canonical journey
+start (`event = started` and `sequence = 1`) as well as a recognized terminal
+success or non-retryable failure. A range that cuts off the start is excluded
+from both wall-clock and completed-journey token totals, rather than reporting
+a shortened journey. Full journey wall-clock is terminal `observed_at` minus
+that canonical start and therefore includes approval wait. Service wall-clock
+subtracts the one measured `queue_age_ms` approval interval only after the
+query proves it cannot go negative; a contradictory partial or malformed
+journey is excluded rather than clamped. Ask subtracts zero. Neither measure
+sums stage durations, so retries and inter-stage gaps remain visible.
+
+Human wait is intentionally different: it is the `queue_age_ms` from approval
+card staging to verified human action. It appears as a separately labelled
+business interval, never in `StageClosedLatencyMs`, end-to-end
+machine percentiles, availability calculations, or a latency alarm.
+
+The dashboard layout is deliberately small:
+
+1. alarm status and telemetry heartbeat;
+2. Ask response and meeting stage outcomes plus the meeting funnel;
+3. stage p50/p95/p99 machine latency plus full and wait-excluded end-to-end
+   p50/p95/p99 wall-clock;
+4. LLM token totals by step, tokens per total-token-available attempt, usage coverage,
+   completed-request token totals, and retries;
+5. approved-search pending count/oldest age and four bounded Logs Insights
+   tables for recent safe failures, full/service wall-clock, completed-journey
+   token totals, and per-stage success/failure/retry rates.
+
+The initial quick-detection alarms are: successful worker cycles missing in two
+of three one-minute periods; two Ask retrieval failures in five minutes; and a
+durable approved-search backlog whose age is at least five minutes and whose
+stuck gauge is at least one for two of three one-minute periods. The final
+alarm consumes the explicit pending-work observation above, not a best-effort
+join in a dashboard query. Latency and token anomaly alarms are explicitly
+deferred until a measured staging baseline exists.
+
+Phase 4 local verification covers formatter, transport, template/query, and
+deterministic fixture reconciliation: dashboard aggregates reconcile with the
+fixture's raw canonical journey events and approved-search state. No AWS stack
+deployment, live CloudWatch proof, or live journey rehearsal is claimed here.
+The operator-only Journey Explorer backend is Phase 5; its UI and the AWS
+staging Ask-and-approval rehearsal are Phase 6 work and remain deferred.
+
 ### 6. Rehearse the sanitized worker-failure signal
 
 Use a dedicated rehearsal stream and only the fixed schema event. Emit three
