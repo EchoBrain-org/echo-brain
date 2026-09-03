@@ -318,7 +318,8 @@ describe("staging journey observability overview stack", () => {
     );
     expect(tokenTotals).toContain("sum(total_tokens) as journey_total_tokens");
     expect(tokenTotals).toContain("total_token_samples");
-    expect(tokenTotals).toContain("sum(if(ispresent(total_tokens), 1, 0))");
+    expect(tokenTotals).toContain("sum(if(isNumeric(total_tokens), 1, 0))");
+    expect(tokenTotals).not.toContain("ispresent(total_tokens)");
     expect(tokenTotals).toContain("total_token_samples > 0");
     expect([...tokenTotals.matchAll(/\bas total_tokens\b/g)]).toHaveLength(1);
     expect(tokenTotals).toContain('event = "failed" and retryable = false');
