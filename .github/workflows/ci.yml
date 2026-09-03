@@ -178,7 +178,9 @@ jobs:
           platforms: linux/arm64
           load: true
           tags: echo-organization-authority:ci
-          build-args: ECHO_SOURCE_SHA=${{ github.sha }}
+          build-args: |
+            ECHO_SOURCE_SHA=${{ github.sha }}
+            ECHO_BUILD_NUMBER=${{ github.run_id }}
           # This is an optimization only. Cache export failures must never
           # turn an otherwise valid proof red.
           # Pull-request scopes neither read nor write the canonical cache.
@@ -214,9 +216,17 @@ jobs:
           authority_platform="$(docker image inspect --format '{{.Os}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
           authority_architecture="$(docker image inspect --format '{{.Architecture}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
           authority_source_sha="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
+          authority_build_number="$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.build-number"}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
+          authority_telemetry_capability="$(docker image inspect --format '{{index .Config.Labels "org.echobrain.authority.telemetry.staging-journey-v1"}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
+          authority_environment="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$ECHO_CLEAN_AUTHORITY_IMAGE")"
           test "$authority_platform" = linux
           test "$authority_architecture" = arm64
           test "$authority_source_sha" = "$GITHUB_SHA"
+          test "$authority_build_number" = "$GITHUB_RUN_ID"
+          test "$authority_telemetry_capability" = true
+          test "$(printf '%s\n' "$authority_environment" | grep -Fxc "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true")" -eq 1
+          test "$(printf '%s\n' "$authority_environment" | grep -Fxc "ECHO_SOURCE_SHA=$GITHUB_SHA")" -eq 1
+          test "$(printf '%s\n' "$authority_environment" | grep -Fxc "ECHO_BUILD_NUMBER=$GITHUB_RUN_ID")" -eq 1
           authority_node_version="$(docker run --rm --entrypoint node "$ECHO_CLEAN_AUTHORITY_IMAGE" --version)"
           test "$authority_node_version" = "v$PRODUCT_NODE_VERSION"
 

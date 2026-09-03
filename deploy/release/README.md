@@ -32,19 +32,27 @@ npm run pack:person-client -- /absolute/private/release-artifacts
 ```
 
 Build the Authority image from that same committed source with the guarded
-build command. It refuses a dirty worktree, derives the source SHA itself,
-checks that the source stays unchanged during the build, and verifies the OCI
-revision label. The release record's `source_sha` must be that exact value;
-the deploy command checks the pulled image label before it starts the
-container.
+build command. Supply the successful CI run ID (`github.run_id`), never the
+workflow run number. It refuses a dirty worktree, derives the source SHA
+itself, checks that the source stays unchanged during the build, and verifies
+the OCI revision label, build-number label, telemetry capability, and image
+environment bindings. The deploy verifier requires those identity bindings
+for telemetry-capable images and verifies the effective container environment;
+older retained images remain rollback-compatible with telemetry disabled.
+The release record's `source_sha` must be that exact value; the deploy command
+checks the pulled image label before it starts the container.
 
 ```sh
-npm run build:authority-image -- echo-organization-authority:release-candidate
+npm run build:authority-image -- echo-organization-authority:release-candidate \
+  --build-number <successful-ci-run-id>
 ```
 
-CI separately builds and exercises the Authority for Linux arm64 and records
-its OCI source label. It has no registry credentials: publishing the image and
-supplying the immutable ECR digest remain an explicit release-operator input.
+CI separately builds and exercises the Authority for Linux arm64, binding the
+commit SHA and successful CI run ID into the image's labels and environment.
+That is build provenance, not release authority: CI has no registry credentials.
+Publishing the verified image and supplying its immutable ECR digest remain the
+release-operator boundary; the digest is the artifact identity accepted by the
+release record.
 
 Create the runtime profile from the four reviewed deployment files in the same
 committed source, then validate and record its digest. This profile is a

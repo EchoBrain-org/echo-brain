@@ -201,6 +201,7 @@ describe("Authority minimal observability stack", () => {
   it("attaches narrowly scoped Docker log-write permissions to the supplied host role", () => {
     const stack = template();
     const policy = resource(stack, "AuthorityDockerLogWritePolicy");
+    const logGroup = resource(stack, "DockerRuntimeLogGroup");
     const statements = (
       policy.Properties!.PolicyDocument as { Statement: unknown[] }
     ).Statement;
@@ -220,8 +221,14 @@ describe("Authority minimal observability stack", () => {
       },
     ]);
 
-    expect(resource(stack, "DockerRuntimeLogGroup").Properties).toMatchObject({
-      LogGroupName: { "Fn::Sub": "/echo-brain/authority/${AuthorityHost}" },
+    expect(logGroup).toMatchObject({
+      Type: "AWS::Logs::LogGroup",
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
+      Properties: {
+        LogGroupName: { "Fn::Sub": "/echo-brain/authority/${AuthorityHost}" },
+        RetentionInDays: 14,
+      },
     });
 
     const serialized = JSON.stringify(stack);
@@ -237,5 +244,24 @@ describe("Authority minimal observability stack", () => {
         "DockerRuntimeLogGroupName",
       ]),
     );
+  });
+
+  it("documents the content-free staging journey heartbeat in the owned log group", () => {
+    const runbook = readFileSync(RUNBOOK, "utf8");
+    const heartbeat = runbook.slice(
+      runbook.indexOf("#### Inspect the staging journey transport heartbeat"),
+      runbook.indexOf("### 6. Rehearse the sanitized worker-failure signal"),
+    );
+
+    expect(heartbeat).toContain(
+      'kind = "echo-authority-journey-telemetry-liveness-v1"',
+    );
+    expect(heartbeat).toContain(
+      "fields @timestamp, event, release_sha, build_number",
+    );
+    expect(heartbeat).toContain("approximately every 60 seconds");
+    expect(heartbeat).toContain("content-free and best effort");
+    expect(heartbeat).toContain("log-stream-only permission");
+    expect(heartbeat).toContain("Do not enable or rehearse this transport against");
   });
 });

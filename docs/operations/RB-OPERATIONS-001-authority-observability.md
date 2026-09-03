@@ -220,6 +220,37 @@ prompts, raw errors, or stack traces from these fields. The legacy
 metric and alarm. It is not part of new lifecycle diagnosis, and this slice
 does not add alarms, a status API, correlation, or close #87.
 
+#### Inspect the staging journey transport heartbeat
+
+For `https://authority-staging.echobrain.org` only, use the same retained
+`authority` log stream and run this Logs Insights query:
+
+```
+fields @timestamp, event, release_sha, build_number
+| filter kind = "echo-authority-journey-telemetry-liveness-v1"
+| sort @timestamp desc
+```
+
+Expected evidence is one `startup` event for each Authority process followed
+by a `heartbeat` approximately every 60 seconds while that process remains
+running. `release_sha` must be the image's lowercase 40-character Git revision
+and `build_number` must be the image's positive numeric CI run ID. The image
+build verifies both values against its OCI metadata before publishing it. The
+staging update verifier also rejects a telemetry-capable image or running
+container whose label and effective environment bindings disagree.
+
+This transport is content-free and best effort. At the service boundary,
+missing or malformed immutable image identity disables only the staging journey
+telemetry transport; it must not prevent Authority startup or request handling.
+A guarded staging update rejects inconsistent telemetry-capable image metadata
+before accepting the candidate, preserving the currently accepted runtime. The
+Docker `awslogs` driver
+delivers the JSON lines using the host role's log-stream-only permission, so no
+AWS credential is exposed to a browser. Journey metrics, alarms, dashboards,
+and the operator Explorer remain Phase 4 through Phase 6 work; their absence is
+not a Phase 1 liveness failure. Do not enable or rehearse this transport against
+a production Authority in this sprint.
+
 ### 6. Rehearse the sanitized worker-failure signal
 
 Use a dedicated rehearsal stream and only the fixed schema event. Emit three

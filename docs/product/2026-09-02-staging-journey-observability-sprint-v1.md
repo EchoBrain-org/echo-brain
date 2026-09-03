@@ -93,6 +93,13 @@ Every machine-stage event carries, at minimum:
 - only workflow-safe counts where applicable, such as planned queries, query
   hits, released atoms, context atoms, or citations.
 
+For this sprint, `build_number` is the positive numeric GitHub Actions
+`github.run_id` for the successful validation run selected by the trusted
+release operator. The guarded image build copies that value and the source SHA
+into OCI metadata and the image environment; the immutable image digest binds
+those fields to the selected artifact. This identity is diagnostic provenance,
+not release authorization or a business identifier.
+
 `outcome` is null on intermediate successful stages. It is populated only at
 the bounded stage that establishes that outcome, so an Ask planner cannot claim
 `answered` and an extraction stage cannot claim `approved`.
