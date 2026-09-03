@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  discardPersonOnboardingInvitation,
   reservePersonOnboardingInvitationTarget,
   writePersonOnboardingInvitation,
 } from "../../src/adapters/files/private-person-onboarding-invitation.js";
@@ -51,6 +52,47 @@ function options(outputPath: string) {
   };
 }
 
+/**
+ * Replica of the strict parser shipped before schema version 2. Keep this
+ * local: the compatibility property is that an old client recognizes only the
+ * exact V1 shape, including its schema version.
+ */
+function parsePriorReleasedV1Invitation(serialized: string): {
+  authority_url: string;
+  expires_at: string;
+  kind: "echo-person-onboarding-invitation";
+  login_grant: string;
+  schema_version: 1;
+} {
+  const parsed: unknown = JSON.parse(serialized);
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed)
+  ) {
+    throw new Error("Person onboarding invitation is invalid");
+  }
+  const record = parsed as Record<string, unknown>;
+  if (
+    Object.keys(record).sort().join(",") !==
+      "authority_url,expires_at,kind,login_grant,schema_version" ||
+    record.schema_version !== 1 ||
+    record.kind !== "echo-person-onboarding-invitation" ||
+    typeof record.authority_url !== "string" ||
+    typeof record.login_grant !== "string" ||
+    typeof record.expires_at !== "string"
+  ) {
+    throw new Error("Person onboarding invitation is invalid");
+  }
+  return {
+    authority_url: record.authority_url,
+    expires_at: record.expires_at,
+    kind: record.kind,
+    login_grant: record.login_grant,
+    schema_version: 1,
+  };
+}
+
 describe("private Person onboarding invitation", () => {
   it("writes only the canonical bootstrap material as a 0600 file", () => {
     const path = join(directory(), "person.json");
@@ -62,6 +104,66 @@ describe("private Person onboarding invitation", () => {
     expect(readFileSync(path, "utf8")).toBe(
       '{"authority_url":"https://authority.example.com","expires_at":"2026-08-21T00:15:00.000Z","kind":"echo-person-onboarding-invitation","login_grant":"GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG","schema_version":1}\n',
     );
+  });
+
+  it("emits a versioned v2 artifact when the expected account is present", () => {
+    const path = join(directory(), "person.json");
+    const input = options(path);
+    const invitation = writePersonOnboardingInvitation(
+      reservePersonOnboardingInvitationTarget(input),
+      input.issued_login_grant,
+      { expected_email: "founder@example.com" },
+    );
+
+    expect(invitation).toMatchObject({
+      schema_version: 2,
+      expected_email: "founder@example.com",
+    });
+    expect(readFileSync(path, "utf8")).toBe(
+      '{"authority_url":"https://authority.example.com","expected_email":"founder@example.com","expires_at":"2026-08-21T00:15:00.000Z","kind":"echo-person-onboarding-invitation","login_grant":"GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG","schema_version":2}\n',
+    );
+  });
+
+  it("refuses shell-shaped expected-email input before serializing an artifact", () => {
+    const path = join(directory(), "person.json");
+    const input = options(path);
+    const reservation = reservePersonOnboardingInvitationTarget(input);
+
+    expect(() =>
+      writePersonOnboardingInvitation(reservation, input.issued_login_grant, {
+        expected_email: "founder;$(id)@example.com",
+      }),
+    ).toThrow("expected email is invalid");
+    discardPersonOnboardingInvitation(reservation);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("is rejected by a prior strict V1 reader as a different schema, while V1 remains compatible", () => {
+    const root = directory();
+    const v1Path = join(root, "person-v1.json");
+    const v2Path = join(root, "person-v2.json");
+    const v1Input = options(v1Path);
+    const v2Input = options(v2Path);
+
+    writePersonOnboardingInvitation(
+      reservePersonOnboardingInvitationTarget(v1Input),
+      v1Input.issued_login_grant,
+    );
+    writePersonOnboardingInvitation(
+      reservePersonOnboardingInvitationTarget(v2Input),
+      v2Input.issued_login_grant,
+      { expected_email: "founder@example.com" },
+    );
+
+    expect(
+      parsePriorReleasedV1Invitation(readFileSync(v1Path, "utf8")),
+    ).toMatchObject({ schema_version: 1 });
+    expect(JSON.parse(readFileSync(v2Path, "utf8"))).toMatchObject({
+      schema_version: 2,
+    });
+    expect(() =>
+      parsePriorReleasedV1Invitation(readFileSync(v2Path, "utf8")),
+    ).toThrow("Person onboarding invitation is invalid");
   });
 
   it("never replaces an existing recipient artifact", () => {

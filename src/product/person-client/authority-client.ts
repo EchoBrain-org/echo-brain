@@ -10,6 +10,8 @@ import {
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
+  isCanonicalPersonEmail,
+  isExpectedPersonEmail,
   isOrganizationApiValidationError,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
@@ -45,7 +47,6 @@ const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
 const PERSON_ANSWER_PATH_V1 = "/v1/person/ask";
-
 export interface EmployeeInvitationV1 {
   readonly login_grant: string;
   readonly expires_at: string;
@@ -582,15 +583,7 @@ function validateEmployeeRoster(value: unknown): EmployeeRosterV1 {
       "employee roster item is invalid",
     );
     if (
-      typeof employee.email !== "string" ||
-      employee.email.length < 3 ||
-      employee.email.length > 254 ||
-      employee.email !== employee.email.trim() ||
-      employee.email !== employee.email.toLowerCase() ||
-      !/^[!-~]+$/.test(employee.email) ||
-      employee.email.indexOf("@") <= 0 ||
-      employee.email.indexOf("@") !== employee.email.lastIndexOf("@") ||
-      employee.email.endsWith("@") ||
+      !isCanonicalPersonEmail(employee.email) ||
       typeof employee.display_name !== "string" ||
       employee.display_name.length < 1 ||
       employee.display_name.length > 200 ||
@@ -624,6 +617,9 @@ function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<R
   exactKeys(request, includeName ? ["name", "email"] : ["email"], "employee request is invalid");
   if (
     typeof request.email !== "string" ||
+    (includeName
+      ? !isExpectedPersonEmail(request.email)
+      : !isCanonicalPersonEmail(request.email)) ||
     (includeName && typeof request.name !== "string")
   ) {
     throw new Error("employee request is invalid");

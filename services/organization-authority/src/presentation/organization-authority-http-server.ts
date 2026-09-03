@@ -257,7 +257,7 @@ function handoffErrorHtml(
 
 function expiredHandoffHtml(response: ServerResponse): void {
   const page = Buffer.from(
-    "<!doctype html><meta charset=\"utf-8\"><title>Echo sign-in expired</title><p>Sign-in expired. Return to your terminal and rerun <code>echo-brain person login</code>.</p>",
+    "<!doctype html><meta charset=\"utf-8\"><title>Echo sign-in expired</title><p>Sign-in expired. Return to your terminal and rerun the exact command that started sign-in.</p>",
     "utf8",
   );
   response.writeHead(200, {
@@ -492,7 +492,13 @@ export function createOrganizationAuthorityHttpServer(
         }
         const begun = options.sessions.beginOidcLogin(
           input.kind === "identity_bootstrap"
-            ? { kind: input.kind, login_grant: input.login_grant }
+            ? {
+                kind: input.kind,
+                login_grant: input.login_grant,
+                ...(input.login_hint === undefined
+                  ? {}
+                  : { login_hint: input.login_hint }),
+              }
             : { kind: input.kind },
         );
         if (input.loopback_handoff !== undefined) {

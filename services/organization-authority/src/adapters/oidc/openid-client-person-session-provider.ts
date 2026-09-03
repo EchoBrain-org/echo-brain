@@ -240,7 +240,13 @@ export class OpenIdClientPersonSessionProvider
         nonce: attempt.nonce,
         code_challenge: attempt.code_challenge,
         code_challenge_method: 'S256',
+        // The chooser stays forced. A verified hint only pre-selects the
+        // invited account; the Authority still verifies the returned account
+        // and can safely return the caller to the chooser if it differs.
         prompt: 'select_account',
+        ...(attempt.login_hint === undefined
+          ? {}
+          : { login_hint: attempt.login_hint }),
       })
       .href;
   }

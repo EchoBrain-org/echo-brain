@@ -12,7 +12,10 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
+import {
+  isExpectedPersonEmail,
+  validateOrganizationAuthorityOrigin,
+} from "@echo-brain/organization-api";
 
 const MAXIMUM_INVITATION_BYTES = 8 * 1024;
 const LOGIN_GRANT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -23,7 +26,34 @@ export interface PersonOnboardingInvitationV1 {
   readonly authority_url: string;
   readonly login_grant: string;
   readonly expires_at: string;
+  /**
+   * v1 has no expected-email field. `never` retains convenient optional
+   * property access on the versioned union without allowing callers to build
+   * a v1 artifact that carries a value.
+   */
+  readonly expected_email?: never;
 }
+
+/**
+ * v2 introduces the expected account as a required field. It must not be
+ * emitted as an additive v1 extension: released v1 readers reject that shape.
+ */
+export interface PersonOnboardingInvitationV2 {
+  readonly schema_version: 2;
+  readonly kind: "echo-person-onboarding-invitation";
+  readonly authority_url: string;
+  readonly login_grant: string;
+  readonly expires_at: string;
+  /**
+   * The exact work address this invitation was issued for. The client supplies
+   * it only to the direct browser flow as an OIDC `login_hint`.
+   */
+  readonly expected_email: string;
+}
+
+export type PersonOnboardingInvitation =
+  | PersonOnboardingInvitationV1
+  | PersonOnboardingInvitationV2;
 
 function invitationPath(value: string): string {
   if (
@@ -91,19 +121,29 @@ export function preflightPersonOnboardingInvitationOutput(inputPath: string): st
   throw new Error("Person onboarding invitation output already exists");
 }
 
-function validate(value: unknown): PersonOnboardingInvitationV1 {
+function validate(value: unknown): PersonOnboardingInvitation {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Person onboarding invitation is invalid");
   }
   const record = value as Record<string, unknown>;
+  // Each version owns an exact key set. In particular, never accept
+  // `expected_email` on schema v1: that would make a newly written invitation
+  // unreadable by released strict v1 clients.
+  const keys = Object.keys(record).sort().join(",");
   if (
-    Object.keys(record).sort().join(",") !==
-      "authority_url,expires_at,kind,login_grant,schema_version" ||
-    record.schema_version !== 1 ||
+    !(
+      (record.schema_version === 1 &&
+        keys === "authority_url,expires_at,kind,login_grant,schema_version") ||
+      (record.schema_version === 2 &&
+        keys ===
+          "authority_url,expected_email,expires_at,kind,login_grant,schema_version")
+    ) ||
     record.kind !== "echo-person-onboarding-invitation" ||
     typeof record.authority_url !== "string" ||
     typeof record.login_grant !== "string" ||
-    typeof record.expires_at !== "string"
+    typeof record.expires_at !== "string" ||
+    (record.schema_version === 2 &&
+      !isExpectedPersonEmail(record.expected_email))
   ) {
     throw new Error("Person onboarding invitation is invalid");
   }
@@ -120,19 +160,30 @@ function validate(value: unknown): PersonOnboardingInvitationV1 {
   ) {
     throw new Error("Person onboarding invitation is invalid");
   }
-  return Object.freeze({
-    schema_version: 1,
-    kind: "echo-person-onboarding-invitation",
-    authority_url: record.authority_url,
-    login_grant: record.login_grant,
-    expires_at: record.expires_at,
-  });
+  return Object.freeze(
+    record.schema_version === 1
+      ? {
+          schema_version: 1,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: record.authority_url,
+          login_grant: record.login_grant,
+          expires_at: record.expires_at,
+        }
+      : {
+          schema_version: 2,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: record.authority_url,
+          login_grant: record.login_grant,
+          expires_at: record.expires_at,
+          expected_email: record.expected_email as string,
+        },
+  );
 }
 
 /** Reads the Authority-neutral, one-time bootstrap artifact without printing it. */
 export function readPersonOnboardingInvitation(
   inputPath: string,
-): PersonOnboardingInvitationV1 {
+): PersonOnboardingInvitation {
   const path = canonicalInvitationPath(inputPath);
   const before = lstatSync(path);
   const currentUid = process.getuid?.();
@@ -188,7 +239,7 @@ export function readPersonOnboardingInvitation(
 /** Writes a new invitation once into an explicitly private, non-replaced file. */
 export function writePersonOnboardingInvitation(
   inputPath: string,
-  value: PersonOnboardingInvitationV1,
+  value: PersonOnboardingInvitation,
 ): void {
   const path = assertPrivateOutputParent(inputPath);
   const invitation = validate(value);

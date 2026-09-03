@@ -5,6 +5,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,8 +15,11 @@ import {
   createOnboardingInputArchive,
   cleanupOnboardingTransfer,
   executeOnboardingTransfer,
+  awsCliArguments,
   onboardingTransferSsmCommands,
   planOnboardingTransfer,
+  preflightOnboardingInput,
+  sanitizedAwsEnvironment,
 } from "../../tools/authority-staging-onboarding-transfer.mjs";
 import { spawnSync } from "node:child_process";
 
@@ -215,6 +219,163 @@ function privateConfig(source: string, archive: string) {
   chmodSync(path, 0o600);
   return path;
 }
+
+describe("Authority staging onboarding input preflight", () => {
+  it("reports a complete private input directory as ready without touching AWS", () => {
+    const source = inputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const report = preflightOnboardingInput(privateConfig(source, archive));
+
+    expect(report).toMatchObject({
+      kind: "echo-authority-staging-onboarding-preflight-v1",
+      state: "ready",
+      ready: true,
+      directory_private: true,
+      unexpected_file_count: 0,
+      next_action: "run plan",
+    });
+    expect(report.required_files).toHaveLength(INPUT_FILES.length);
+    expect(
+      report.required_files.every((file) => file.state === "ready"),
+    ).toBe(true);
+  });
+
+  it("names every unusable required file instead of one opaque shape failure", () => {
+    const source = inputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    // The three ways an operator actually arrives at the AWS step unready:
+    // a credential never obtained, a file created empty, and one left readable.
+    rmSync(join(source, "slack-signing-secret"));
+    writeFileSync(join(source, "llm-credential"), "", { mode: 0o600 });
+    chmodSync(join(source, "granola-credential"), 0o644);
+
+    const report = preflightOnboardingInput(privateConfig(source, archive));
+
+    expect(report.ready).toBe(false);
+    expect(report.state).toBe("incomplete");
+    const byName = new Map(
+      report.required_files.map((file) => [file.name, file.state]),
+    );
+    expect(byName.get("slack-signing-secret")).toBe("missing");
+    expect(byName.get("llm-credential")).toBe("empty");
+    expect(byName.get("granola-credential")).toBe("not_private_regular");
+    expect(byName.get("release.json")).toBe("ready");
+    expect(report.next_action).toContain("slack-signing-secret");
+    expect(report.next_action).toContain("llm-credential");
+    // Metadata only. No file content may appear in a readiness report.
+    expect(JSON.stringify(report)).not.toContain("slack-bot-token\n");
+  });
+
+  it("redacts stray filenames and flags a non-private directory before any transfer", () => {
+    const source = inputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    writeFileSync(join(source, "notes.txt"), "scratch\n", { mode: 0o600 });
+    const strayReport = preflightOnboardingInput(privateConfig(source, archive));
+    expect(strayReport.ready).toBe(false);
+    expect(strayReport.unexpected_file_count).toBe(1);
+    expect(JSON.stringify(strayReport)).not.toContain("notes.txt");
+    expect(strayReport.next_action).toBe(
+      "remove 1 unexpected file from the private input directory, then rerun preflight",
+    );
+
+    rmSync(join(source, "notes.txt"));
+    chmodSync(source, 0o755);
+    const openReport = preflightOnboardingInput(privateConfig(source, archive));
+    expect(openReport).toMatchObject({
+      ready: false,
+      directory_private: false,
+      next_action: "make the input directory a current-user 0700 directory",
+    });
+    chmodSync(source, 0o700);
+  });
+
+  it("gives an actionable aggregate-size diagnosis when every file is individually valid", () => {
+    const source = inputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    for (const name of INPUT_FILES) truncateSync(join(source, name), 5 * 1024 * 1024);
+
+    const report = preflightOnboardingInput(privateConfig(source, archive));
+
+    expect(report).toMatchObject({
+      ready: false,
+      total_bytes: 45 * 1024 * 1024,
+      total_bytes_limit: 40 * 1024 * 1024,
+      bytes_over_limit: 5 * 1024 * 1024,
+      next_action: "reduce total required input bytes by at least 5242880, to at most 41943040, then rerun preflight",
+    });
+    expect(report.required_files.every((file) => file.state === "ready")).toBe(true);
+  });
+
+  it("pins local AWS CLI calls to echo-prod without inherited endpoint, proxy, or CA overrides", () => {
+    const environment = sanitizedAwsEnvironment({
+      AWS_ACCESS_KEY_ID: "ambient-key",
+      AWS_SECRET_ACCESS_KEY: "ambient-secret",
+      AWS_PROFILE: "wrong-profile",
+      AWS_ENDPOINT_URL: "https://endpoint.example",
+      AWS_ENDPOINT_URL_S3: "https://s3-endpoint.example",
+      AWS_CA_BUNDLE: "/tmp/ca.pem",
+      HTTPS_PROXY: "https://proxy.example",
+      no_proxy: "localhost",
+      KEEP_ME: "safe",
+    });
+
+    expect(environment).toMatchObject({
+      AWS_PROFILE: "echo-prod",
+      AWS_DEFAULT_PROFILE: "echo-prod",
+      AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: "true",
+      KEEP_ME: "safe",
+    });
+    for (const key of [
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_ENDPOINT_URL",
+      "AWS_ENDPOINT_URL_S3",
+      "AWS_CA_BUNDLE",
+      "HTTPS_PROXY",
+      "no_proxy",
+    ]) expect(environment).not.toHaveProperty(key);
+  });
+
+  it("passes the approved AWS profile explicitly instead of relying on environment selection", () => {
+    const fakeAwsArguments = awsCliArguments([
+      "s3api",
+      "put-object",
+      "--bucket",
+      "echo-authority-staging-onboarding",
+    ]);
+
+    expect(fakeAwsArguments).toEqual([
+      "--no-cli-pager",
+      "--profile",
+      "echo-prod",
+      "s3api",
+      "put-object",
+      "--bucket",
+      "echo-authority-staging-onboarding",
+    ]);
+  });
+
+  it("exits non-zero from the CLI when the input is not ready", () => {
+    const source = inputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    rmSync(join(source, "oidc-client-secret"));
+    const result = spawnSync(
+      process.execPath,
+      [
+        new URL(
+          "../../tools/authority-staging-onboarding-transfer.mjs",
+          import.meta.url,
+        ).pathname,
+        "preflight",
+        "--input",
+        privateConfig(source, archive),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ready: false });
+  });
+});
 
 function called(
   fake: ReturnType<typeof fakeAws>,

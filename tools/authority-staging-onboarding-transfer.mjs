@@ -78,6 +78,21 @@ const AMBIENT_AWS_CREDENTIAL_KEYS = Object.freeze([
   "AWS_CONFIG_FILE",
   "AWS_SHARED_CREDENTIALS_FILE",
 ]);
+const AMBIENT_AWS_TRANSPORT_KEYS = Object.freeze([
+  "AWS_CA_BUNDLE",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+]);
 
 class TransferError extends Error {
   constructor(code) {
@@ -247,18 +262,38 @@ function parseConfig(path) {
   });
 }
 
-function awsEnvironment() {
-  const environment = { ...process.env, AWS_PROFILE: "echo-prod" };
+/**
+ * Pin every local AWS CLI call to the approved SSO profile and discard process
+ * state that could redirect an encrypted archive upload to another endpoint or
+ * proxy. The Cloudflare dynamic reference is resolved separately by asm-exec;
+ * it never enters this environment.
+ */
+export function sanitizedAwsEnvironment(sourceEnvironment = process.env) {
+  const environment = { ...sourceEnvironment };
   for (const key of AMBIENT_AWS_CREDENTIAL_KEYS) delete environment[key];
+  for (const key of AMBIENT_AWS_TRANSPORT_KEYS) delete environment[key];
+  for (const key of Object.keys(environment)) {
+    if (key === "AWS_ENDPOINT_URL" || key.startsWith("AWS_ENDPOINT_URL_"))
+      delete environment[key];
+  }
+  environment.AWS_PROFILE = "echo-prod";
+  environment.AWS_DEFAULT_PROFILE = "echo-prod";
+  // Ignore an endpoint_url inherited through the normal AWS config file too.
+  environment.AWS_IGNORE_CONFIGURED_ENDPOINT_URLS = "true";
   return environment;
+}
+
+/** Add non-ambient safety controls to every local AWS CLI process. */
+export function awsCliArguments(args) {
+  return ["--no-cli-pager", "--profile", "echo-prod", ...args];
 }
 
 function defaultAwsJson(args) {
   try {
     return JSON.parse(
-      execFileSync("aws", args, {
+      execFileSync("aws", awsCliArguments(args), {
         encoding: "utf8",
-        env: awsEnvironment(),
+        env: sanitizedAwsEnvironment(),
         stdio: ["ignore", "pipe", "pipe"],
       }),
     );
@@ -276,9 +311,9 @@ function defaultAwsJson(args) {
 
 function defaultAwsNoOutput(args) {
   try {
-    execFileSync("aws", args, {
+    execFileSync("aws", awsCliArguments(args), {
       encoding: "utf8",
-      env: awsEnvironment(),
+      env: sanitizedAwsEnvironment(),
       stdio: ["ignore", "ignore", "ignore"],
     });
   } catch {
@@ -1131,12 +1166,105 @@ export function cleanupOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS }
   return cleanupReceipt(receiptPathname, receipt, aws);
 }
 
+/**
+ * A read-only, AWS-free readiness report for the private onboarding input.
+ *
+ * The transfer itself refuses a wrong-shaped directory with one opaque code,
+ * which is correct as an invariant but useless as a diagnosis: an operator
+ * learns a file is missing only after authenticating, planning, and reaching
+ * the archive step. This names every required file and what is wrong with it
+ * before any of that begins. It reports metadata only, never file content, and
+ * makes no network or AWS call.
+ */
+export function preflightOnboardingInput(configPath) {
+  const config = parseConfig(configPath);
+  let sourceDir;
+  let directoryPrivate = true;
+  try {
+    sourceDir = privateDirectory(
+      config.privateInputDir,
+      "input_directory_not_private",
+    );
+  } catch {
+    directoryPrivate = false;
+    sourceDir = resolve(config.privateInputDir);
+  }
+  const present = directoryPrivate
+    ? new Set(readdirSync(sourceDir))
+    : new Set();
+  const files = INPUT_FILES.map((name) => {
+    if (!present.has(name))
+      return Object.freeze({ name, state: "missing", detail: null });
+    const path = resolve(sourceDir, name);
+    let state;
+    try {
+      state = privateRegularFile(path, "input_file_not_private_regular");
+    } catch {
+      return Object.freeze({
+        name,
+        state: "not_private_regular",
+        detail: "must be a current-user 0600 regular file",
+      });
+    }
+    if (state.size === 0)
+      return Object.freeze({ name, state: "empty", detail: "file is empty" });
+    if (state.size > MAXIMUM_INPUT_FILE_BYTES)
+      return Object.freeze({
+        name,
+        state: "too_large",
+        detail: `exceeds ${MAXIMUM_INPUT_FILE_BYTES} bytes`,
+      });
+    return Object.freeze({ name, state: "ready", detail: null, bytes: state.size });
+  });
+  const unexpected = [...present]
+    .filter((name) => !INPUT_FILES.includes(name))
+    .sort();
+  const totalBytes = files.reduce((total, file) => total + (file.bytes ?? 0), 0);
+  const blocking = files.filter((file) => file.state !== "ready");
+  const bytesOverLimit = Math.max(0, totalBytes - MAXIMUM_INPUT_TOTAL_BYTES);
+  const totalTooLarge = bytesOverLimit > 0;
+  const ready =
+    directoryPrivate &&
+    blocking.length === 0 &&
+    unexpected.length === 0 &&
+    !totalTooLarge;
+  return Object.freeze({
+    schema_version: 1,
+    kind: "echo-authority-staging-onboarding-preflight-v1",
+    action: "preflight",
+    state: ready ? "ready" : "incomplete",
+    ready,
+    operation_id: config.operationId,
+    directory_private: directoryPrivate,
+    required_files: Object.freeze(files),
+    // Names can themselves be sensitive or misleading operational metadata.
+    // A preflight report only needs to say that the strict allowlist was not
+    // met; archive construction remains the authoritative exact-name check.
+    unexpected_file_count: unexpected.length,
+    total_bytes: totalBytes,
+    total_bytes_limit: MAXIMUM_INPUT_TOTAL_BYTES,
+    bytes_over_limit: bytesOverLimit,
+    // The one line an operator needs before spending an AWS session on this.
+    next_action: ready
+      ? "run plan"
+      : !directoryPrivate
+        ? "make the input directory a current-user 0700 directory"
+        : unexpected.length > 0
+          ? `remove ${unexpected.length} unexpected ${unexpected.length === 1 ? "file" : "files"} from the private input directory, then rerun preflight`
+          : totalTooLarge
+            ? `reduce total required input bytes by at least ${bytesOverLimit}, to at most ${MAXIMUM_INPUT_TOTAL_BYTES}, then rerun preflight`
+            : `supply or repair: ${blocking.map((file) => file.name).join(", ")}`,
+  });
+}
+
 function usage() {
   refuse("usage");
 }
 
 function runCli(argv) {
   const [action, flag, value] = argv;
+  if (action === "preflight" && flag === "--input" && typeof value === "string" && argv.length === 3)
+    return preflightOnboardingInput(value);
   if (action === "plan" && flag === "--input" && typeof value === "string" && argv.length === 3)
     return planOnboardingTransfer(value);
   if (action === "execute" && flag === "--receipt" && typeof value === "string" && argv.length === 3)
@@ -1148,7 +1276,12 @@ function runCli(argv) {
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    process.stdout.write(`${JSON.stringify(runCli(process.argv.slice(2)))}\n`);
+    const result = runCli(process.argv.slice(2));
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    // A readiness report is not a failure, but an unready one must not look
+    // like a green step in a script that continues into AWS work.
+    if (result?.kind === "echo-authority-staging-onboarding-preflight-v1" && result.ready !== true)
+      process.exitCode = 2;
   } catch (error) {
     const code = error instanceof TransferError ? error.code : "unexpected";
     process.stderr.write(`authority staging onboarding transfer failed: ${code}\n`);

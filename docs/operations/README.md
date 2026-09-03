@@ -31,6 +31,7 @@ link to the maintained procedure.
 
 ## Current procedures
 
+- [PB-OPERATIONS-001: Select the Authority operator lane](PB-OPERATIONS-001-authority-operator-lane.md)
 - [RB-OPERATIONS-001: Deploy and rehearse minimal Authority observability](RB-OPERATIONS-001-authority-observability.md)
 - [RB-OPERATIONS-002: Establish and rehearse the Authority root-volume recovery floor](RB-OPERATIONS-002-authority-recovery-floor.md)
 - [RB-OPERATIONS-003: Protect canonical source and immutable releases](RB-OPERATIONS-003-protect-canonical-source-and-releases.md)

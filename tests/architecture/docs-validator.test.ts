@@ -90,11 +90,23 @@ function fixture() {
     join(root, "docs/components/test.md"),
     [
       common("CMP-TEST", "component"),
+      "playbook_ids:",
+      "  - PB-TEST-001",
       "qualification_ids:",
       "  - QMAT-TEST-001",
       "  - QUAL-20260813-120000-001",
       "---",
       "# Test component",
+      "",
+    ].join("\n"),
+  );
+  write(
+    join(root, "docs/operations/PB-TEST-001.md"),
+    [
+      common("PB-TEST-001", "playbook"),
+      "tested_at: null",
+      "---",
+      "# Test playbook",
       "",
     ].join("\n"),
   );
@@ -149,6 +161,7 @@ function fixture() {
   for (const path of [
     "docs/components/README.md",
     "docs/components/test.md",
+    "docs/operations/PB-TEST-001.md",
     "docs/qualification/evidence-index.md",
     "docs/qualification/matrix.md",
     "docs/qualification/QUAL-20260813-120000-001.md",
@@ -200,6 +213,44 @@ afterEach(() => {
 describe("documentation validator", () => {
   it("accepts the lean proof-grade baseline", () =>
     expect(validate(fixture().root)).toContain("checks passed"));
+  it("rejects a reviewed ref retained only by an unpushed local branch", () => {
+    const { root, sha } = fixture();
+    run("git", ["add", "."], root);
+    run("git", ["commit", "--quiet", "-m", "materialize fixture"], root);
+    run("git", ["switch", "--quiet", "--detach"], root);
+    run(
+      "git",
+      ["commit", "--quiet", "--allow-empty", "-m", "unreachable review"],
+      root,
+    );
+    const unreachable = run("git", ["rev-parse", "HEAD"], root);
+    run("git", ["branch", "local-review-only"], root);
+    run("git", ["switch", "--quiet", "-"], root);
+    edit(root, "docs/operations/PB-TEST-001.md", (source) =>
+      source.replace(`reviewed_ref: ${sha}`, `reviewed_ref: ${unreachable}`),
+    );
+    expect(validate(root)).toContain(
+      "reviewed_ref does not name a reachable commit",
+    );
+  });
+  it("accepts a reviewed ref retained by an immutable tag", () => {
+    const { root, sha } = fixture();
+    run("git", ["add", "."], root);
+    run("git", ["commit", "--quiet", "-m", "materialize fixture"], root);
+    run("git", ["switch", "--quiet", "--detach"], root);
+    run(
+      "git",
+      ["commit", "--quiet", "--allow-empty", "-m", "tagged review"],
+      root,
+    );
+    const tagged = run("git", ["rev-parse", "HEAD"], root);
+    run("git", ["tag", "review-baseline"], root);
+    run("git", ["switch", "--quiet", "-"], root);
+    edit(root, "docs/operations/PB-TEST-001.md", (source) =>
+      source.replace(`reviewed_ref: ${sha}`, `reviewed_ref: ${tagged}`),
+    );
+    expect(validate(root)).toContain("checks passed");
+  });
   it("rejects retired workspace paths in the component catalog", () => {
     const { root } = fixture();
     write(
@@ -377,6 +428,24 @@ describe("documentation validator", () => {
     );
     expect(validate(root)).toContain(
       "qualification_ids has stale backlink QUAL-20260813-120000-001; QUAL-20260813-120000-001 does not reference CMP-TEST",
+    );
+  });
+  it("requires component reverse backlinks for playbooks", () => {
+    const { root } = fixture();
+    edit(root, "docs/components/test.md", (source) =>
+      source.replace("playbook_ids:\n  - PB-TEST-001\n", ""),
+    );
+    expect(validate(root)).toContain(
+      "CMP-TEST is missing playbook_ids backlink PB-TEST-001",
+    );
+  });
+  it("rejects stale component playbook backlinks", () => {
+    const { root } = fixture();
+    edit(root, "docs/operations/PB-TEST-001.md", (source) =>
+      source.replace("component_ids:\n  - CMP-TEST", "component_ids: []"),
+    );
+    expect(validate(root)).toContain(
+      "playbook_ids has stale backlink PB-TEST-001; PB-TEST-001 does not reference CMP-TEST",
     );
   });
   it("requires superseded decision status when superseded_by is nonempty", () => {

@@ -179,6 +179,15 @@ unique `(issuer, sub)` binding, and issues the first session family. An existing
 pair bound to another principal, or an email match without the exact grant,
 denies.
 
+There is one narrow pre-binding exception: a verified canonical email that
+does not match the bootstrap grant may restart the same pending attempt once,
+so the person can select the invited account. The Authority records that retry
+reservation in the existing opaque redemption-claim state; it does not extend
+the attempt's ten-minute expiry or issue a credential. A second verified email
+mismatch terminalizes the attempt and consumes the grant. Unverified or
+malformed email, provider terminal failure, replay, and every other denial are
+terminal on their first occurrence.
+
 Later sign-ins for an existing binding use a grantless attempt. Only after the
 ID token passes every check does the Authority resolve the exact existing
 `(issuer, sub)` binding, re-read its current membership, consume the attempt,
@@ -325,7 +334,7 @@ migrations `0001` through `0008`:
 | --- | --- |
 | `authority_person_login_grants` | Current administrator authorization to bind one exact active organization, principal, membership, membership type, expected issuer, and invited work-email digest. Stores only the one-time grant digest, domain-separated email digest, exact target, issue/expiry, and consumption state. It intentionally has no expected subject or plaintext email. |
 | `authority_oidc_identity_bindings` | The unique exact `(issuer, sub)` to Authority-principal and membership binding, with `tenant_constraint_sha256`, `oidc_configuration_sha256`, unique `initial_login_grant_sha256`, creation, and explicit revocation state. It has no email-derived key and is never retargeted in place. Bootstrap creation is atomic with grant and attempt consumption. |
-| `authority_oidc_login_attempts` | Bounded single-use authorization attempts: exact issuer, client, redirect and tenant/configuration digests; state and nonce digests; nullable sealed PKCE verifier plus sealing-key ID; optional bootstrap-grant digest; and creation, expiry, terminal outcome, assertion-issuance, and completion state. A null grant denotes an existing-binding login. Terminal completion atomically scrubs both sealed fields while retaining digest/timestamp replay evidence; expired rows require explicit maintenance. It stores no authorization code or upstream token. |
+| `authority_oidc_login_attempts` | Bounded single-use authorization attempts: exact issuer, client, redirect and tenant/configuration digests; state and nonce digests; nullable sealed PKCE verifier plus sealing-key ID; optional bootstrap-grant digest; and creation, expiry, terminal outcome, assertion-issuance, and completion state. A null grant denotes an existing-binding login. The opaque redemption-claim state also carries the one permitted verified-email-mismatch retry reservation for a pending bootstrap attempt; it does not create a schema field or extend expiry. Terminal completion atomically scrubs both sealed fields while retaining digest/timestamp replay evidence; expired rows require explicit maintenance. It stores no authorization code or upstream token. |
 | `authority_person_session_families` | One authenticated family bound by exact foreign keys to an identity binding and current Person tuple, with `upstream_assertion_issued_at`, `oidc_configuration_sha256`, creation, the seven-day hard-reauthentication deadline derived from that time, and family-wide revocation reason/time. Its hard deadline is immutable. |
 | `authority_person_session_credentials` | Unique SHA-256 digests for typed session or refresh credentials, their family, rotation generation, issue/expiry, refresh consumption, and revocation state. It stores no raw credential; refresh replay closes the family transactionally. |
 

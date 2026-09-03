@@ -16,6 +16,8 @@ import { lstatSync, readFileSync, statSync } from "node:fs";
 import process from "node:process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateOrganizationAuthorityDescriptorResponse } from "@echo-brain/organization-api";
+import { verifyOrganizationAuthorityPin } from "@echo-brain/organization-protocol";
 import {
   installStagingEdgeToken,
   stagingEdgeStatus,
@@ -25,6 +27,7 @@ const STACK_NAME = /^[A-Za-z][A-Za-z0-9-]{0,127}$/;
 const OPERATION_ID = /^staging-[a-z0-9][a-z0-9-]{7,63}$/;
 const REGION = /^[a-z]{2}(?:-[a-z0-9]+)+-[1-9][0-9]*$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const S3_KEY = /^[A-Za-z0-9][A-Za-z0-9._/-]{1,900}\.tar\.gz$/;
 const S3_VERSION = /^[A-Za-z0-9._/+=-]{8,1024}$/;
 const PARAMETER_VALUE = /^[\x20-\x7e]{1,2048}$/;
@@ -52,6 +55,21 @@ const AMBIENT_AWS_CREDENTIAL_KEYS = Object.freeze([
   "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
   "AWS_CONFIG_FILE",
   "AWS_SHARED_CREDENTIALS_FILE",
+]);
+const AMBIENT_AWS_TRANSPORT_KEYS = Object.freeze([
+  "AWS_CA_BUNDLE",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
 ]);
 const TEMPLATE_MAX_BYTES = 51200;
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -101,6 +119,24 @@ const EPHEMERAL_HOST_LOGICAL_IDS = new Set([
 const SAFE_MODIFY_LOGICAL_IDS = new Set([
   "StagingHostLaunchTemplate",
   "StagingHostRole",
+]);
+const HOST_SETUP_PARAMETER_KEYS = Object.freeze([
+  "HostSetupObjectKey",
+  "HostSetupObjectVersion",
+  "HostSetupSha256",
+]);
+const ONBOARDING_TRANSFER_PARAMETER_KEYS = Object.freeze([
+  "OnboardingInputObjectKey",
+  "OnboardingInputObjectVersion",
+  "OnboardingInputAccessExpiresAt",
+]);
+const TEMPLATE_PARAMETER_KEYS = Object.freeze([
+  ...BASE_PARAMETERS,
+  "HostEnabled",
+  "InitializeBlankDataVolume",
+  "ResumeRetainedAuthority",
+  ...HOST_SETUP_PARAMETER_KEYS,
+  ...ONBOARDING_TRANSFER_PARAMETER_KEYS,
 ]);
 
 class AwsCliError extends Error {
@@ -224,7 +260,15 @@ export function validateStagingLifecycleInput(value) {
   const raw = requiredObject(value, "input_invalid");
   onlyKeys(
     raw,
-    new Set(["region", "operationId", "slotId", "stack", "edge", "hostSetup"]),
+    new Set([
+      "region",
+      "operationId",
+      "slotId",
+      "stack",
+      "edge",
+      "hostSetup",
+      "authorityPinSha256",
+    ]),
     "input_property_not_allowed",
   );
   const stack = requiredObject(raw.stack, "stack_invalid");
@@ -250,6 +294,12 @@ export function validateStagingLifecycleInput(value) {
   };
   if (raw.hostSetup !== undefined)
     input.hostSetup = validateHostSetup(raw.hostSetup);
+  if (raw.authorityPinSha256 !== undefined)
+    input.authorityPinSha256 = exactString(
+      raw.authorityPinSha256,
+      SHA256_DIGEST,
+      "authority_pin_invalid",
+    );
   return Object.freeze(input);
 }
 
@@ -329,12 +379,28 @@ function buildParameters(
   hostEnabled,
   setupArtifact = undefined,
   initializeBlankDataVolume = false,
+  resumeRetainedAuthority = false,
 ) {
   const parameters = {
     ...input.stack.parameters,
     HostEnabled: hostEnabled ? "true" : "false",
     InitializeBlankDataVolume:
       hostEnabled && initializeBlankDataVolume ? "true" : "false",
+    // An ordinary up deliberately only materializes retained state. The
+    // accepted Authority resumes only for the independently pinned retained
+    // restart, before CloudFormation signals ready.
+    ResumeRetainedAuthority:
+      hostEnabled && resumeRetainedAuthority ? "true" : "false",
+    // Every lifecycle plan names the complete template vector. These transfer
+    // controls are never lifecycle inputs, so their only safe value here is
+    // the template default. That makes an outstanding transfer grant visible
+    // as a reviewed-plan mismatch instead of silently inheriting it.
+    HostSetupObjectKey: "",
+    HostSetupObjectVersion: "",
+    HostSetupSha256: "",
+    OnboardingInputObjectKey: "",
+    OnboardingInputObjectVersion: "",
+    OnboardingInputAccessExpiresAt: "",
   };
   if (hostEnabled) {
     if (setupArtifact !== undefined) {
@@ -357,6 +423,7 @@ function changeSetRequest(
   hostEnabled,
   setupArtifact,
   initializeBlankDataVolume = false,
+  resumeRetainedAuthority = false,
 ) {
   return Object.freeze({
     capabilities: Object.freeze(["CAPABILITY_IAM"]),
@@ -369,6 +436,7 @@ function changeSetRequest(
       hostEnabled,
       setupArtifact,
       initializeBlankDataVolume,
+      resumeRetainedAuthority,
     ),
     region: input.region,
     stackName: input.stack.name,
@@ -503,6 +571,7 @@ async function planStack(
   dependencies,
   setupArtifact,
   initializeBlankDataVolume = false,
+  resumeRetainedAuthority = false,
 ) {
   const existing = await describeExactStack(input, dependencies);
   const createChangeSet = adapterFunction(dependencies, "createChangeSet");
@@ -514,6 +583,7 @@ async function planStack(
       hostEnabled,
       setupArtifact,
       initializeBlankDataVolume,
+      resumeRetainedAuthority,
     ),
   );
   const plan = checkedChangeSet(planned);
@@ -529,6 +599,7 @@ async function reviewedPlanStack(
   hostEnabled,
   dependencies,
   initializeBlankDataVolume = false,
+  resumeRetainedAuthority = false,
 ) {
   const existing = await describeExactStack(input, dependencies);
   const describeChangeSet = adapterFunction(dependencies, "describeChangeSet");
@@ -539,6 +610,7 @@ async function reviewedPlanStack(
     hostEnabled,
     undefined,
     initializeBlankDataVolume,
+    resumeRetainedAuthority,
   );
   const plan = assertChangeBoundary(
     checkedChangeSet(await describeChangeSet(expected)),
@@ -613,6 +685,154 @@ function edgeDependencies(dependencies) {
     fetchImpl: dependencies?.fetchImpl,
     putSecretValue: dependencies?.putSecretValue,
   });
+}
+
+/**
+ * `up` previously finished at the CloudFormation wait condition, which proves
+ * only that the machine booted and the tunnel connector reported ready. It
+ * never proved the Authority was serving, so every caller re-established that
+ * fact by hand from logs, container labels, and database counts.
+ *
+ * This probe closes that gap with a content-free observation of the public
+ * descriptor. It is deliberately reported rather than enforced by default: a
+ * genuinely fresh slot has no onboarded Authority yet, and calling that a
+ * failure would be false. `--require-authority` is for the down/up cycle, where
+ * a prepared data volume is expected to come back serving.
+ */
+const AUTHORITY_DESCRIPTOR_PATH = "/v1/authority-descriptor";
+const DESCRIPTOR_PROBE_ATTEMPTS = 20;
+const DESCRIPTOR_PROBE_INTERVAL_MS = 6_000;
+const DESCRIPTOR_PROBE_REQUEST_TIMEOUT_MS = 5_000;
+
+function descriptorObservation(fields) {
+  return Object.freeze({
+    path: AUTHORITY_DESCRIPTOR_PATH,
+    ...fields,
+  });
+}
+
+async function probeAuthorityDescriptor(
+  input,
+  dependencies = {},
+  options = {},
+) {
+  const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
+  if (typeof fetchImpl !== "function") refuse("descriptor_probe_unavailable");
+  const sleepImpl =
+    dependencies.sleepImpl ??
+    ((milliseconds) =>
+      new Promise((resolve_) => {
+        setTimeout(resolve_, milliseconds);
+      }));
+  // One observation is enough to state the fact in the receipt. Waiting through
+  // the full window only earns its cost when the caller is gating on the answer.
+  const attemptLimit =
+    dependencies.descriptorProbeAttempts ?? options.attempts ?? 1;
+  const url = `https://${input.edge.hostname}${AUTHORITY_DESCRIPTOR_PATH}`;
+  let lastStatus = null;
+  let lastFailure = "unreachable";
+  for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        method: "GET",
+        redirect: "error",
+        signal: AbortSignal.timeout(DESCRIPTOR_PROBE_REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      lastStatus = null;
+      lastFailure = "unreachable";
+      if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
+      continue;
+    }
+    lastStatus = typeof response?.status === "number" ? response.status : null;
+    if (lastStatus !== 200) {
+      lastFailure = "http_status";
+      if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
+      continue;
+    }
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      lastFailure = "body_invalid";
+      if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
+      continue;
+    }
+    // Validate the established public response envelope, while deliberately
+    // retaining none of the response body in a receipt or log. A 200 from a
+    // proxy, an unrelated application, or `{}` is not proof of Authority.
+    let descriptor;
+    try {
+      descriptor = validateOrganizationAuthorityDescriptorResponse(body);
+    } catch {
+      lastFailure = "descriptor_invalid";
+      if (attempt < attemptLimit) await sleepImpl(DESCRIPTOR_PROBE_INTERVAL_MS);
+      continue;
+    }
+    if (input.authorityPinSha256 === undefined) {
+      return descriptorObservation({
+        accepted: false,
+        serving: true,
+        attempts: attempt,
+        status: 200,
+        failure_class: "descriptor_pin_required",
+      });
+    }
+    try {
+      verifyOrganizationAuthorityPin(
+        descriptor.authority_descriptor,
+        input.authorityPinSha256,
+      );
+    } catch {
+      // A structurally valid descriptor for another Authority is a permanent
+      // identity mismatch, not a delayed-start condition. Do not burn the
+      // recovery probe window retrying it.
+      return descriptorObservation({
+        accepted: false,
+        serving: true,
+        attempts: attempt,
+        status: 200,
+        failure_class: "descriptor_pin_mismatch",
+      });
+    }
+    return descriptorObservation({
+      accepted: true,
+      serving: true,
+      attempts: attempt,
+      status: 200,
+      failure_class: null,
+    });
+  }
+  return descriptorObservation({
+    accepted: false,
+    serving: false,
+    attempts: attemptLimit,
+    status: lastStatus,
+    failure_class: lastFailure,
+  });
+}
+
+function requiredAuthorityFailureCode(descriptor) {
+  return descriptor.failure_class === "descriptor_pin_mismatch"
+    ? "authority_descriptor_pin_mismatch"
+    : "authority_descriptor_unready";
+}
+
+function executedUpFailureReceipt(input, failureClass, fields) {
+  return lifecycleReceipt(input, "up", "failed", {
+    ...fields,
+    failure_class: failureClass,
+  });
+}
+
+function refuseWithReceipt(code, receipt) {
+  const error = new LifecycleError(code);
+  // This is intentionally a sanitized, public receipt only. runCli emits it
+  // before the controlled nonzero exit so automation can distinguish a probe
+  // failure from a CloudFormation failure without ever receiving response data.
+  error.receipt = receipt;
+  throw error;
 }
 
 function safeEdgeState(value) {
@@ -845,12 +1065,62 @@ async function runSlotInit(input, { execute = false, ...dependencies } = {}) {
 
 async function runUp(
   input,
-  { execute = false, initializeBlankDataVolume = false, ...dependencies } = {},
+  {
+    execute = false,
+    initializeBlankDataVolume = false,
+    requireAuthority = false,
+    ...dependencies
+  } = {},
 ) {
-  if (input.hostSetup === undefined) refuse("host_setup_required");
+  // The descriptor schema proves liveness only. A retained-volume recovery
+  // must also prove it is the independently accepted Authority before any AWS
+  // action begins.
+  if (requireAuthority && initializeBlankDataVolume)
+    refuse("require_authority_conflicts_with_blank_data_volume");
+  if (requireAuthority && input.authorityPinSha256 === undefined)
+    refuse("authority_descriptor_pin_required");
   const current = await initializedProtectedStack(input, dependencies);
-  if (requiredOutput(current.outputs, "StagingHostReady") === "true")
-    refuse("host_already_enabled");
+  const hostAlreadyEnabled =
+    requiredOutput(current.outputs, "StagingHostReady") === "true";
+  if (hostAlreadyEnabled) {
+    // A descriptor gate may time out after CloudFormation has already enabled
+    // the host. Re-running it must be a non-mutating verification, not a
+    // needless down/up cycle or a second change-set execution.
+    if (!(execute && requireAuthority)) refuse("host_already_enabled");
+    // A completed rollback is recoverable only through a newly reviewed
+    // lifecycle retry. Do not let its stale host-ready output turn this into a
+    // descriptor-only success: the stack itself is not healthy.
+    if (!HEALTHY_STACK_STATUSES.has(current.status))
+      refuse("stack_status_invalid");
+    const descriptor = await probeAuthorityDescriptor(input, dependencies, {
+      attempts: DESCRIPTOR_PROBE_ATTEMPTS,
+    });
+    if (!descriptor.accepted) {
+      const failureCode = requiredAuthorityFailureCode(descriptor);
+      refuseWithReceipt(
+        failureCode,
+        executedUpFailureReceipt(input, failureCode, {
+          authority_descriptor: descriptor,
+          authority_accepted: false,
+          authority_serving: descriptor.serving,
+          host_enabled: true,
+          host_ready: true,
+          stack_status: current.status,
+          verification_only: true,
+        }),
+      );
+    }
+    return lifecycleReceipt(input, "up", "executed", {
+      authority_descriptor: descriptor,
+      authority_accepted: true,
+      authority_serving: true,
+      host_enabled: true,
+      host_ready: true,
+      stack_status: current.status,
+      verification_only: true,
+    });
+  }
+  if (input.hostSetup === undefined) refuse("host_setup_required");
   const setupArtifact = execute
     ? undefined
     : await prepareSetupArtifact(input, current.outputs, dependencies);
@@ -861,6 +1131,7 @@ async function runUp(
         true,
         dependencies,
         initializeBlankDataVolume,
+        requireAuthority,
       )
     : await planStack(
         input,
@@ -869,6 +1140,7 @@ async function runUp(
         dependencies,
         setupArtifact,
         initializeBlankDataVolume,
+        requireAuthority,
       );
   if (!execute)
     return lifecycleReceipt(input, "up", "planned", {
@@ -882,10 +1154,49 @@ async function runUp(
     dependencies,
   );
   const stack = await executePlannedStack(input, planned.plan, dependencies);
+  const hostReady =
+    requiredOutput(stack.outputs, "StagingHostReady") === "true";
+  if (!hostReady)
+    refuseWithReceipt(
+      "host_ready_unproven",
+      executedUpFailureReceipt(input, "host_ready_unproven", {
+        ...publicPlan(planned.plan, true),
+        authority_accepted: false,
+        authority_serving: false,
+        host_enabled: false,
+        host_ready: false,
+        initialize_blank_data_volume: initializeBlankDataVolume,
+        stack_status: stack.status,
+      }),
+    );
+  const descriptor = await probeAuthorityDescriptor(input, dependencies, {
+    attempts: requireAuthority ? DESCRIPTOR_PROBE_ATTEMPTS : 1,
+  });
+  if (requireAuthority && !descriptor.accepted) {
+    const failureCode = requiredAuthorityFailureCode(descriptor);
+    refuseWithReceipt(
+      failureCode,
+      executedUpFailureReceipt(input, failureCode, {
+        ...publicPlan(planned.plan, true),
+        authority_descriptor: descriptor,
+        authority_accepted: false,
+        authority_serving: descriptor.serving,
+        host_ready: hostReady,
+        initialize_blank_data_volume: initializeBlankDataVolume,
+        stack_status: stack.status,
+      }),
+    );
+  }
   return lifecycleReceipt(input, "up", "executed", {
     ...publicPlan(planned.plan, true),
     initialize_blank_data_volume: initializeBlankDataVolume,
     stack_status: stack.status,
+    // Machine readiness and Authority readiness are separate facts. Naming both
+    // is what makes this receipt enough to decide on without a follow-up hunt.
+    host_ready: hostReady,
+    authority_serving: descriptor.serving,
+    authority_accepted: descriptor.accepted,
+    authority_descriptor: descriptor,
   });
 }
 
@@ -965,6 +1276,21 @@ async function runStatus(input, dependencies = {}) {
       stack_status: stack.status,
       termination_protection: false,
     });
+  const hostReady =
+    requiredOutput(stack.outputs, "StagingHostReady") === "true";
+  // A stopped disposable host makes the edge's current state irrelevant to
+  // this lifecycle decision. Return the known AWS fact before resolving any
+  // Cloudflare token or making an external request.
+  if (!hostReady)
+    return lifecycleReceipt(input, "status", "host_down", {
+      authority_serving: false,
+      authority_accepted: false,
+      edge_checked: false,
+      host_enabled: false,
+      host_ready: false,
+      stack_status: stack.status,
+      termination_protection: true,
+    });
   const secretArn = requiredOutput(
     stack.outputs,
     "AuthorityTunnelTokenSecretArn",
@@ -974,8 +1300,47 @@ async function runStatus(input, dependencies = {}) {
     edgeInput(input, secretArn, dependencies),
     edgeDependencies(dependencies),
   );
-  return lifecycleReceipt(input, "status", safeEdgeState(status), {
+  const edgeState = safeEdgeState(status);
+  const descriptor = await probeAuthorityDescriptor(input, dependencies);
+  if (!descriptor.serving)
+    return lifecycleReceipt(input, "status", "authority_unready", {
+      authority_descriptor: descriptor,
+      authority_accepted: false,
+      authority_serving: false,
+      edge_checked: true,
+      edge_ready: edgeState === "ready",
+      host_enabled: true,
+      host_ready: true,
+      stack_status: stack.status,
+      termination_protection: true,
+    });
+  if (!descriptor.accepted)
+    return lifecycleReceipt(
+      input,
+      "status",
+      descriptor.failure_class === "descriptor_pin_mismatch"
+        ? "authority_pin_mismatch"
+        : "authority_unpinned",
+      {
+        authority_descriptor: descriptor,
+        authority_accepted: false,
+        authority_serving: true,
+        edge_checked: true,
+        edge_ready: edgeState === "ready",
+        host_enabled: true,
+        host_ready: true,
+        stack_status: stack.status,
+        termination_protection: true,
+      },
+    );
+  return lifecycleReceipt(input, "status", edgeState, {
+    authority_descriptor: descriptor,
+    authority_accepted: true,
+    authority_serving: true,
     edge_checked: true,
+    edge_ready: edgeState === "ready",
+    host_enabled: true,
+    host_ready: true,
     stack_status: stack.status,
     termination_protection: true,
   });
@@ -997,8 +1362,15 @@ export async function runAuthorityStaging(action, rawInput, dependencies = {}) {
 function echoHostedAwsEnvironment({ preserveCloudflareToken = false } = {}) {
   const environment = { ...process.env };
   for (const key of AMBIENT_AWS_CREDENTIAL_KEYS) delete environment[key];
+  for (const key of AMBIENT_AWS_TRANSPORT_KEYS) delete environment[key];
+  for (const key of Object.keys(environment)) {
+    if (key === "AWS_ENDPOINT_URL" || key.startsWith("AWS_ENDPOINT_URL_"))
+      delete environment[key];
+  }
   environment.AWS_PROFILE = ECHO_HOSTED_STAGING_AWS_PROFILE;
   environment.AWS_DEFAULT_PROFILE = ECHO_HOSTED_STAGING_AWS_PROFILE;
+  // Never honor endpoint_url from an inherited AWS config file either.
+  environment.AWS_IGNORE_CONFIGURED_ENDPOINT_URLS = "true";
   if (!preserveCloudflareToken) delete environment.ECHO_CLOUDFLARE_API_TOKEN;
   return environment;
 }
@@ -1086,14 +1458,52 @@ function parametersMatch(payload, expected) {
     return false;
   }
   if (!Array.isArray(payload.Parameters)) return false;
-  const actual = new Map(
-    payload.Parameters.map((item) => [
-      item?.ParameterKey,
-      item?.ParameterValue,
-    ]),
-  );
-  return Object.entries(expected.parameters).every(
-    ([key, value]) => actual.get(key) === value,
+
+  // Every lifecycle plan names the complete template vector. The only dynamic
+  // values are the three HostSetup fields during execute: their exact S3
+  // object version is intentionally learned from the stored plan and then
+  // checked by assertReviewedSetupArtifact. Every other value must match.
+  // In particular, accepting a subset would let an already-existing same-name
+  // change set smuggle in an onboarding-transfer grant while still matching
+  // the host lifecycle parameters.
+  const expectedEntries = Object.entries(expected.parameters);
+  if (
+    expectedEntries.length !== TEMPLATE_PARAMETER_KEYS.length ||
+    !TEMPLATE_PARAMETER_KEYS.every((key) =>
+      Object.hasOwn(expected.parameters, key),
+    )
+  ) {
+    return false;
+  }
+  if (payload.Parameters.length !== TEMPLATE_PARAMETER_KEYS.length)
+    return false;
+
+  const actual = new Map();
+  for (const item of payload.Parameters) {
+    const key = item?.ParameterKey;
+    const value = item?.ParameterValue;
+    if (typeof key !== "string" || typeof value !== "string") return false;
+    // Map construction alone would silently collapse duplicate keys, turning a
+    // malformed response into a false match.
+    if (actual.has(key)) return false;
+    actual.set(key, value);
+  }
+  if (!TEMPLATE_PARAMETER_KEYS.every((key) => actual.has(key))) return false;
+  const dynamicHostSetup =
+    expected.parameters.HostEnabled === "true" &&
+    HOST_SETUP_PARAMETER_KEYS.every(
+      (key) => expected.parameters[key] === "",
+    );
+  for (const [key, value] of expectedEntries) {
+    if (dynamicHostSetup && HOST_SETUP_PARAMETER_KEYS.includes(key)) continue;
+    if (actual.get(key) !== value) return false;
+  }
+  return (
+    !dynamicHostSetup ||
+    HOST_SETUP_PARAMETER_KEYS.every((key) => {
+      const value = actual.get(key);
+      return value !== undefined && value.length > 0;
+    })
   );
 }
 
@@ -1574,10 +1984,15 @@ function parseCli(argv) {
   let inputPath;
   let execute = false;
   let initializeBlankDataVolume = false;
+  let requireAuthority = false;
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
     if (flag === "--execute" && !execute) {
       execute = true;
+      continue;
+    }
+    if (flag === "--require-authority" && !requireAuthority) {
+      requireAuthority = true;
       continue;
     }
     if (
@@ -1597,17 +2012,36 @@ function parseCli(argv) {
   if (typeof inputPath !== "string" || inputPath.length === 0) refuse("usage");
   if (initializeBlankDataVolume && action !== "up")
     refuse("initialize_blank_data_volume_requires_up");
+  if (requireAuthority && action !== "up")
+    refuse("require_authority_requires_up");
+  // This is a reviewed host-bootstrap intent. A plan does not probe the
+  // descriptor, but must bind the same resume parameter that its execute will
+  // require from CloudFormation.
+  if (requireAuthority && initializeBlankDataVolume)
+    refuse("require_authority_conflicts_with_blank_data_volume");
   let input;
   try {
     input = JSON.parse(readFileSync(inputPath, "utf8"));
   } catch {
     refuse("input_file_invalid");
   }
-  return Object.freeze({ action, execute, initializeBlankDataVolume, input });
+  return Object.freeze({
+    action,
+    execute,
+    initializeBlankDataVolume,
+    requireAuthority,
+    input,
+  });
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
-  const { action, execute, initializeBlankDataVolume, input } = parseCli(argv);
+  const {
+    action,
+    execute,
+    initializeBlankDataVolume,
+    requireAuthority,
+    input,
+  } = parseCli(argv);
   const defaults = createAwsCliAdapters();
   return runAuthorityStaging(action, input, {
     ...defaults,
@@ -1618,6 +2052,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     ssm: dependencies.ssm ?? defaults.ssm,
     execute,
     initializeBlankDataVolume,
+    requireAuthority,
   });
 }
 
@@ -1719,6 +2154,11 @@ async function runCli() {
       error.code === "cloudflare_api_token_resolution_required"
     ) {
       if (await reexecWithAsmExec()) process.exitCode ??= 1;
+      return;
+    }
+    if (error instanceof LifecycleError && error.receipt !== undefined) {
+      process.stdout.write(`${JSON.stringify(error.receipt)}\n`);
+      process.exitCode = 1;
       return;
     }
     throw error;

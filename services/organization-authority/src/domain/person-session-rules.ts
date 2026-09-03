@@ -1,7 +1,10 @@
 import { AuthorityOperationError } from "./errors.js";
 import { timestampMillis } from "./rules.js";
 
-export { isCanonicalPersonEmail } from "../shared/person-email-rules.js";
+export {
+  isCanonicalPersonEmail,
+  isExpectedPersonEmail,
+} from "../shared/person-email-rules.js";
 
 export const PERSON_LOGIN_GRANT_LIFETIME_MS = 15 * 60 * 1000;
 export const OIDC_LOGIN_ATTEMPT_LIFETIME_MS = 10 * 60 * 1000;

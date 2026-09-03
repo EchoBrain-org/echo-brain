@@ -66,6 +66,7 @@ const RELATIONS = new Map([
   ["invariant_ids", new Set(["invariant"])],
   ["decision_ids", new Set(["decision"])],
   ["failure_pattern_ids", new Set(["failure-pattern"])],
+  ["playbook_ids", new Set(["playbook"])],
   ["runbook_ids", new Set(["runbook"])],
   ["qualification_ids", new Set(["qualification", "qualification-matrix"])],
 ]);
@@ -74,6 +75,7 @@ const COMPONENT_BACKLINK_FIELDS = new Map([
   ["invariant", "invariant_ids"],
   ["decision", "decision_ids"],
   ["failure-pattern", "failure_pattern_ids"],
+  ["playbook", "playbook_ids"],
   ["runbook", "runbook_ids"],
   ["qualification", "qualification_ids"],
   ["qualification-matrix", "qualification_ids"],
@@ -241,6 +243,24 @@ function gitObjectExists(spec) {
   );
 }
 
+function gitCommitIsReachable(sha) {
+  if (!gitObjectExists(`${sha}^{commit}`)) return false;
+  if (
+    spawnSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+      cwd: REPO,
+      stdio: "ignore",
+    }).status === 0
+  ) {
+    return true;
+  }
+  const refs = spawnSync(
+    "git",
+    ["for-each-ref", "refs/tags", "--contains", sha, "--format=%(refname)"],
+    { cwd: REPO, encoding: "utf8" },
+  );
+  return refs.status === 0 && refs.stdout.trim().length > 0;
+}
+
 function fullSha(value) {
   return /^[0-9a-f]{40}$/.test(String(value));
 }
@@ -291,8 +311,8 @@ function validateShape(record, errors) {
     errors.push(
       `${record.path}: reviewed_ref must be a full lowercase commit SHA`,
     );
-  else if (!gitObjectExists(`${metadata.reviewed_ref}^{commit}`))
-    errors.push(`${record.path}: reviewed_ref does not name a local commit`);
+  else if (!gitCommitIsReachable(metadata.reviewed_ref))
+    errors.push(`${record.path}: reviewed_ref does not name a reachable commit`);
   for (const field of RELATIONS.keys()) array(record, field, errors);
 }
 

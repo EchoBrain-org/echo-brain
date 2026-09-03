@@ -253,10 +253,27 @@ function openAuthorizationUrl(url: string): boolean {
   return opened.status === 0;
 }
 
+/**
+ * The Authority may use an OIDC login_hint to improve the directly opened
+ * browser flow. It is private invitation metadata, so never repeat it in the
+ * machine-readable receipt used for a manual-browser fallback.
+ */
+function manualAuthorizationUrl(authorizationUrl: string): string {
+  const manual = new URL(authorizationUrl);
+  manual.searchParams.delete("login_hint");
+  return manual.toString();
+}
+
 async function completePersonLogin(input: {
   readonly client: PersonClient;
   readonly authority_url: string;
   readonly login_grant?: string;
+  /**
+   * The address the invitation names, when it carries one. It is sent as an
+   * OIDC `login_hint` to the directly opened browser, but is never written to
+   * the terminal's machine-readable output.
+   */
+  readonly expected_email?: string;
   readonly stdout: Output;
   readonly random_bytes?: (size: number) => Uint8Array;
   readonly open_browser?: (url: string) => boolean | Promise<boolean>;
@@ -274,6 +291,7 @@ async function completePersonLogin(input: {
         input.authority_url,
         input.login_grant,
         { url: handoff.url, token: handoff.token },
+        input.expected_email,
       );
     } catch (error) {
       // A prior bootstrap may have completed even when its browser never
@@ -312,23 +330,26 @@ async function completePersonLogin(input: {
       input.open_browser === undefined
         ? undefined
         : await input.open_browser(begun.authorization_url);
+    const expectedAccountNotice =
+      input.expected_email === undefined || recoveredExistingInvitation
+        ? ""
+        : "Sign in with the account named in the private invitation. ";
+    const browserWasOpened = browserOpened === true;
     print(input.stdout, {
       ok: true,
       phase: "open-browser",
-      authorization_url: begun.authorization_url,
+      ...(browserWasOpened
+        ? {}
+        : { authorization_url: manualAuthorizationUrl(begun.authorization_url) }),
       expires_at: begun.expires_at,
       ...(browserOpened === undefined ? {} : { browser_opened: browserOpened }),
       instruction: recoveredExistingInvitation
-        ? browserOpened === undefined
-          ? "An existing ECHO identity was found. Open authorization_url to continue sign-in."
-          : browserOpened
-            ? "An existing ECHO identity was found. Continue sign-in in the opened browser."
-            : "An existing ECHO identity was found. Open authorization_url to continue sign-in."
-        : browserOpened === false
-          ? "Open authorization_url to complete sign-in in your browser."
-          : browserOpened === true
-            ? "Complete sign-in in the opened browser."
-            : "Open authorization_url to complete sign-in in your browser.",
+        ? browserWasOpened
+          ? "An existing ECHO identity was found. Continue sign-in in the opened browser."
+          : "An existing ECHO identity was found. Open authorization_url to continue sign-in."
+        : browserWasOpened
+          ? `${expectedAccountNotice}Complete sign-in in the opened browser.`
+          : `${expectedAccountNotice}Open authorization_url to complete sign-in in your browser.`,
     });
     const handoffResult = await handoff.wait();
     if (handoffResult.kind === "error") {
@@ -336,12 +357,14 @@ async function completePersonLogin(input: {
         throw new Error(
           input.login_grant === undefined
             ? "No existing ECHO identity was found. Ask the ECHO owner for an invitation."
-            : "The selected Google account has no active ECHO identity. Select the invited Google account, or ask the ECHO owner to reissue the invitation.",
+            : input.expected_email === undefined
+              ? "The selected Google account has no active ECHO identity. Select the invited Google account, or ask the ECHO owner to reissue the invitation."
+              : "Sign-in could not be completed with the account named in the private invitation. Ask the ECHO owner to reissue the invitation, then run this command again and choose that account in the Google account chooser.",
         );
       }
       if (handoffResult.code === "retryable") {
         throw new Error(
-          "Person browser sign-in can be retried. Rerun the same command before the invitation expires.",
+          "Person browser sign-in can be retried. The invitation remains usable: rerun the same command before it expires and choose the account named in the private invitation.",
         );
       }
       throw new Error("Person browser sign-in could not be completed");
@@ -450,9 +473,8 @@ export async function runPersonClientCli(
         await completePersonLogin({
           client,
           authority_url: authorityUrl,
-          ...(invitation === undefined
-            ? {}
-            : { login_grant: invitation.login_grant }),
+          login_grant: invitation?.login_grant,
+          expected_email: invitation?.expected_email,
           stdout,
           ...(dependencies.random_bytes === undefined
             ? {}
@@ -478,6 +500,7 @@ export async function runPersonClientCli(
           client,
           authority_url: invitation.authority_url,
           login_grant: invitation.login_grant,
+          expected_email: invitation.expected_email,
           stdout,
           ...(dependencies.random_bytes === undefined
             ? {}

@@ -7,8 +7,10 @@ permission-aware Person reads and answer composition. It has no compatibility ru
 Authority state: start with a new state directory and do not reuse legacy
 state, credentials, or volumes.
 
-For the production Compose profile and host preparation, use the
-[deployment README](../../deploy/organization-authority/README.md). The
+For any deployed staging initial-owner setup, do not run the lower-level setup
+commands in this service reference. Start with the
+[deployment README](../../deploy/organization-authority/README.md) and its
+`onboard-clean-v1.sh doctor`, `prepare`, then `resume` flow. The
 [organization onboarding and employee rollout](../../docs/product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md)
 defines the supported operator and employee flow.
 
@@ -83,7 +85,12 @@ state with a durable setup plan, generated internal IDs, Person credentials,
 Slack connection, and initial-owner invitation. Do not run reset into a directory
 that already contains state.
 
-## Initial-owner setup and onboarding
+## Initial-owner setup internals
+
+For deployed staging, use the resumable wrapper in the
+[deployment runbook](../../deploy/organization-authority/README.md). The
+numbered commands below are lower-level composition reference for local
+development and custom deployments; they are not the staging runbook.
 
 Bootstrap and finalization are stopped-state operations. The path is:
 
@@ -171,7 +178,7 @@ workspace:
 Complete bootstrap, the initial-owner identity link, credential installation, and
 finalization first, then start the active runtime. Only after that runtime is
 healthy, enable **Interactivity & Shortcuts** and save this Request URL before
-creating the first post-cutoff canary meeting:
+running the release-bound synthetic staging canary:
 
 ```text
 https://<staging-authority-host>/v2/integrations/slack/interactions
@@ -296,20 +303,14 @@ startup, the runtime reconciles the search index once, then each cycle recovers 
 V4 appends, polls the admitted meeting source, finalizes approvals, appends
 approved records, and reconciles the search index again.
 
-Create one new post-finalization Granola note with a unique marker, approve its
-private meeting-owner Slack DM card, then check both read paths:
-
-```sh
-echo-brain person records --limit 20
-echo-brain person records --query 'known marker'
-```
-
-Rerun `echo-organization-authority-setup resume --state-dir
-/absolute/clean-state`, then `status`. The one-note canary is complete only
-when durable state proves source progress, an approved record, an exact-head
-search index generation, and positive owner record-list and indexed-search reads after that
-head and generation. The status output contains only boolean or enum evidence;
-it never prints record, reader, query, or timestamp data.
+The deployment wrapper's `resume` output is the single source for staging's
+actor-scoped host, Slack, and release-matched Person-client actions. A staging
+terminal result accepts only the durable synthetic candidate tied to the
+running release; every other origin still requires newly admitted live-source
+progress. Both paths require an approved record, an exact-head search
+generation, and positive owner list and search reads after that head and
+generation. Status emits only boolean or enum evidence, never record, reader,
+query, or timestamp data.
 
 ## Person reads and permissions
 

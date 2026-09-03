@@ -322,6 +322,31 @@ describe('OpenIdClientPersonSessionProvider', () => {
     });
   });
 
+  it('forwards a verified login hint without changing the authorization request contract', async () => {
+    const issuer = new OfflineOidcIssuer();
+    const provider = await discover(issuer);
+
+    const authorizationUrl = new URL(
+      provider.buildAuthorizationUrl({
+        ...BEGUN_ATTEMPT,
+        login_hint: VERIFIED_EMAIL,
+      }),
+    );
+
+    expect(Object.fromEntries(authorizationUrl.searchParams)).toEqual({
+      client_id: CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+      response_type: 'code',
+      scope: 'openid email',
+      state: STATE,
+      nonce: NONCE,
+      code_challenge: CODE_CHALLENGE,
+      code_challenge_method: 'S256',
+      prompt: 'select_account',
+      login_hint: VERIFIED_EMAIL,
+    });
+  });
+
   it('uses public-client authentication without a client credential', async () => {
     const issuer = new OfflineOidcIssuer();
     const provider = await discover(issuer, { method: 'none' });

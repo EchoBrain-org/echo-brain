@@ -16,9 +16,64 @@ import {
 
 const OPAQUE_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const LOOPBACK_HANDOFF_PATH_PATTERN = /^\/[A-Za-z0-9_-]{43}$/;
+const EXPECTED_PERSON_EMAIL =
+  /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+/**
+ * The compatible durable Person identity key. Existing Authority state can
+ * contain provider-observed addresses such as `alice@localhost`; keep those
+ * usable for roster and lifecycle operations without relaxing new-invite or
+ * browser-hint validation.
+ */
+export function isCanonicalPersonEmail(value: unknown): value is string {
+  if (
+    typeof value !== 'string' ||
+    value.length < 3 ||
+    value.length > 254 ||
+    value !== value.trim() ||
+    value !== value.toLowerCase() ||
+    !/^[!-~]+$/.test(value)
+  ) {
+    return false;
+  }
+  const separator = value.indexOf('@');
+  return (
+    separator > 0 &&
+    separator === value.lastIndexOf('@') &&
+    separator < value.length - 1
+  );
+}
+
+function hasBoundedMailboxParts(value: string): boolean {
+  const [localPart, domain] = value.split('@');
+  return (
+    localPart !== undefined &&
+    domain !== undefined &&
+    localPart.length <= 64 &&
+    domain.length <= 253 &&
+    domain.split('.').every((label) => label.length <= 63)
+  );
+}
 
 function assertOpaqueSecret(value: unknown, label: string): void {
   assertPatternString(value, label, 43, OPAQUE_SECRET_PATTERN);
+}
+
+/** The mailbox shape shared by expected-email fields at public boundaries. */
+export function isExpectedPersonEmail(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length >= 3 &&
+    value.length <= 254 &&
+    value === value.trim() &&
+    value === value.toLowerCase() &&
+    EXPECTED_PERSON_EMAIL.test(value) &&
+    hasBoundedMailboxParts(value)
+  );
+}
+
+function assertExpectedPersonEmail(value: unknown, label: string): void {
+  if (!isExpectedPersonEmail(value)) fail(`${label} is invalid`);
 }
 
 function assertLoopbackHandoff(value: unknown, label: string): void {
@@ -74,14 +129,17 @@ export function validateOrganizationPersonOidcBeginRequest(
     }
     return record as unknown as OrganizationPersonOidcBeginRequestV2;
   }
-  const keys = record.loopback_handoff === undefined
-    ? ['kind', 'login_grant']
-    : ['kind', 'login_grant', 'loopback_handoff'];
-  assertExactKeys(record, keys, label);
+  const keys = ['kind', 'login_grant'];
+  if (record.login_hint !== undefined) keys.push('login_hint');
+  if (record.loopback_handoff !== undefined) keys.push('loopback_handoff');
+  assertExactKeys(record, keys.sort(), label);
   if (record.kind !== 'identity_bootstrap') {
     fail(`${label} kind is unsupported`);
   }
   assertOpaqueSecret(record.login_grant, `${label} login_grant`);
+  if (record.login_hint !== undefined) {
+    assertExpectedPersonEmail(record.login_hint, `${label} login_hint`);
+  }
   if (record.loopback_handoff !== undefined) {
     assertLoopbackHandoff(record.loopback_handoff, `${label} loopback_handoff`);
   }

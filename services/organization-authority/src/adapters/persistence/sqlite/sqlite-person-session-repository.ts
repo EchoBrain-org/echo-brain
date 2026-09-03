@@ -23,7 +23,12 @@ import type {
   StoredPersonSessionCredential,
   StoredPersonSessionFamily,
 } from "../../../application/ports/authority-repository.js";
+import {
+  isOidcRedemptionClaimInNamespace,
+  namespaceOidcRedemptionClaimId,
+} from "../../../application/ports/person-session-repository.js";
 import type {
+  ClaimedOidcLoginAttempt,
   PersonSessionReadTransaction,
   PersonSessionRepository,
   PersonSessionWriteTransaction,
@@ -561,27 +566,116 @@ class Transaction implements PersonSessionWriteTransaction {
   claimOidcLoginAttempt(
     stateSha256: Sha256Digest,
     redemptionClaimId: string,
-  ): StoredOidcLoginAttempt | undefined {
+  ): ClaimedOidcLoginAttempt | undefined {
     const now = this.writeTime();
+    const current = this.oidcLoginAttempt(stateSha256);
+    const retryReservationUsed =
+      current?.redemption_claim_id !== null &&
+      current?.redemption_claim_id !== undefined &&
+      isOidcRedemptionClaimInNamespace(
+        current.redemption_claim_id,
+        "reservation",
+      );
+    if (!isOidcRedemptionClaimInNamespace(redemptionClaimId, "ordinary")) {
+      throw new Error("OIDC redemption claims must use the ordinary namespace");
+    }
+    let claimedRedemptionClaimId = redemptionClaimId;
+    if (retryReservationUsed) {
+      const reservationClaimId = current?.redemption_claim_id;
+      if (reservationClaimId === null || reservationClaimId === undefined) {
+        throw new Error("OIDC retry reservation is unavailable");
+      }
+      const released = this.database
+        .prepare(
+          `UPDATE authority_oidc_login_attempts SET redemption_claim_id = NULL, redemption_claimed_at = NULL WHERE state_sha256 = ? AND redemption_claim_id = ? AND terminal_outcome IS NULL AND expires_at > ?`,
+        )
+        .run(stateSha256, reservationClaimId, now).changes;
+      if (released !== 1) return undefined;
+      claimedRedemptionClaimId = namespaceOidcRedemptionClaimId(
+        reservationClaimId,
+        "retry",
+      );
+    }
     const changed = this.database
       .prepare(
         `UPDATE authority_oidc_login_attempts SET redemption_claim_id = ?, redemption_claimed_at = ? WHERE state_sha256 = ? AND terminal_outcome IS NULL AND redemption_claim_id IS NULL AND expires_at > ?`,
       )
-      .run(redemptionClaimId, now, stateSha256, now).changes;
-    return changed === 1 ? this.oidcLoginAttempt(stateSha256) : undefined;
+      .run(claimedRedemptionClaimId, now, stateSha256, now).changes;
+    if (changed !== 1) {
+      // The reservation was first released above. Do not commit that release
+      // if its replacement claim could not be acquired in this transaction.
+      if (retryReservationUsed)
+        throw new Error("OIDC retry reservation could not be claimed");
+      return undefined;
+    }
+    const attempt =
+      this.oidcLoginAttempt(stateSha256);
+    return attempt === undefined
+      ? undefined
+      : {
+          attempt,
+          bootstrap_email_mismatch_retry_reserved: retryReservationUsed,
+        };
   }
 
   releaseOidcLoginAttemptClaim(
     stateSha256: Sha256Digest,
     redemptionClaimId: string,
+    preserveBootstrapEmailMismatchRetryReservation: boolean,
   ): boolean {
-    return (
-      this.database
-        .prepare(
-          `UPDATE authority_oidc_login_attempts SET redemption_claim_id = NULL, redemption_claimed_at = NULL WHERE state_sha256 = ? AND redemption_claim_id = ? AND terminal_outcome IS NULL`,
-        )
-        .run(stateSha256, redemptionClaimId).changes === 1
+    const released = this.database
+      .prepare(
+        `UPDATE authority_oidc_login_attempts SET redemption_claim_id = NULL, redemption_claimed_at = NULL WHERE state_sha256 = ? AND redemption_claim_id = ? AND terminal_outcome IS NULL`,
+      )
+      .run(stateSha256, redemptionClaimId).changes;
+    if (released !== 1) return false;
+    if (!preserveBootstrapEmailMismatchRetryReservation) return true;
+    if (!isOidcRedemptionClaimInNamespace(redemptionClaimId, "retry")) {
+      throw new Error("OIDC retry claim namespace is invalid");
+    }
+    const now = this.writeTime();
+    const reservationClaimId = namespaceOidcRedemptionClaimId(
+      redemptionClaimId,
+      "reservation",
     );
+    const reserved = this.database
+      .prepare(
+        `UPDATE authority_oidc_login_attempts SET redemption_claim_id = ?, redemption_claimed_at = ? WHERE state_sha256 = ? AND redemption_claim_id IS NULL AND terminal_outcome IS NULL AND expires_at > ?`,
+      )
+      .run(reservationClaimId, now, stateSha256, now).changes;
+    if (reserved !== 1)
+      throw new Error("OIDC retry reservation could not be restored");
+    return true;
+  }
+
+  reserveOidcLoginAttemptBootstrapEmailMismatchRetry(
+    stateSha256: Sha256Digest,
+    redemptionClaimId: string,
+  ): boolean {
+    if (!isOidcRedemptionClaimInNamespace(redemptionClaimId, "ordinary")) {
+      throw new Error("OIDC ordinary claim namespace is invalid");
+    }
+    const released = this.database
+      .prepare(
+        `UPDATE authority_oidc_login_attempts SET redemption_claim_id = NULL, redemption_claimed_at = NULL WHERE state_sha256 = ? AND redemption_claim_id = ? AND terminal_outcome IS NULL`,
+      )
+      .run(stateSha256, redemptionClaimId).changes;
+    if (released !== 1) return false;
+    const now = this.writeTime();
+    const reservationClaimId = namespaceOidcRedemptionClaimId(
+      redemptionClaimId,
+      "reservation",
+    );
+    const reserved = this.database
+      .prepare(
+        `UPDATE authority_oidc_login_attempts SET redemption_claim_id = ?, redemption_claimed_at = ? WHERE state_sha256 = ? AND redemption_claim_id IS NULL AND terminal_outcome IS NULL AND expires_at > ?`,
+      )
+      .run(reservationClaimId, now, stateSha256, now).changes;
+    // `writeAtLinearization` rolls both legal state transitions back on this
+    // impossible second-step miss, rather than committing a lost retry cap.
+    if (reserved !== 1)
+      throw new Error("OIDC retry reservation could not be recorded");
+    return true;
   }
 
   completeOidcLoginAttempt(

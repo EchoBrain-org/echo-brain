@@ -98,6 +98,8 @@ export {
   validateOrganizationPersonMeetingIngestionExclusionListRequest,
 } from './person-meeting-ingestion-exclusion-read.js';
 export {
+  isCanonicalPersonEmail,
+  isExpectedPersonEmail,
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse,
   validateOrganizationPersonSession,

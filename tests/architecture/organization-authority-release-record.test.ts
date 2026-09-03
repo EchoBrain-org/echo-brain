@@ -587,6 +587,9 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(source).toContain("--canary-passed");
     expect(source).toContain("update-clean-v1.sh canary");
     expect(source).toContain("run_staging_private_dm_canary");
+    expect(source).toContain(
+      "stop for founder Slack approval and the exact candidate-client record and answer checks",
+    );
     expect(source).toContain("authority-staging.echobrain.org");
     expect(source).toContain("compose_clean exec -T authority node");
     expect(source).toContain("staging-private-dm-canary --release-id");

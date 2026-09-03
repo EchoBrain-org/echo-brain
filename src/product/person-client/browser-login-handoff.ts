@@ -14,11 +14,15 @@ export interface PersonLoopbackHandoff {
   close(): Promise<void>;
 }
 
+export type PersonLoopbackHandoffErrorCode =
+  | "identity_not_bound"
+  | "retryable";
+
 export type PersonLoopbackHandoffResult =
   | { readonly kind: "session"; readonly session: unknown }
   | {
       readonly kind: "error";
-      readonly code: "identity_not_bound" | "retryable";
+      readonly code: PersonLoopbackHandoffErrorCode;
     };
 
 function randomSecret(randomBytes: (size: number) => Uint8Array): string {
@@ -77,7 +81,7 @@ async function readForm(request: IncomingMessage): Promise<{
       token,
       result: {
         kind: "error",
-        code: form.get("error") as "identity_not_bound" | "retryable",
+        code: form.get("error") as PersonLoopbackHandoffErrorCode,
       },
     };
   }
@@ -109,9 +113,48 @@ async function readForm(request: IncomingMessage): Promise<{
   }
 }
 
-function noStoreHtml(response: import("node:http").ServerResponse, status: number): void {
+/**
+ * The browser tab is the only surface most people look at, so it has to say
+ * what went wrong and what to do. Terminal stderr already carried this; the
+ * page did not, which is how a wrong-account denial read as an unexplained
+ * dead end.
+ */
+function failureHtml(
+  code: PersonLoopbackHandoffErrorCode | undefined,
+): string {
+  if (code === "identity_not_bound") {
+    return (
+      "<!doctype html><title>Echo sign-in</title>" +
+      "<p>Sign-in did not use the account named in the private invitation.</p>" +
+      "<p>Ask the ECHO owner to reissue the invitation, then start sign-in again and pick that account in the Google chooser.</p>" +
+      "<p>Return to your terminal for next steps.</p>"
+    );
+  }
+  if (code === "retryable") {
+    return (
+      "<!doctype html><title>Echo sign-in</title>" +
+      "<p>Sign-in can be retried.</p>" +
+      "<p>The invitation remains usable. Run the same command again in your terminal before it expires and choose the account named in the private invitation.</p>"
+    );
+  }
+  return (
+    "<!doctype html><title>Echo sign-in</title>" +
+    "<p>Sign-in could not be completed.</p>" +
+    "<p>Return to your terminal for details.</p>"
+  );
+}
+
+function noStoreHtml(
+  response: import("node:http").ServerResponse,
+  status: number,
+  failure?: {
+    readonly code?: PersonLoopbackHandoffErrorCode;
+  },
+): void {
   const bytes = Buffer.from(
-    status === 200 ? "<!doctype html><title>Echo sign-in complete</title><p>Sign-in complete. You can close this tab.</p>" : "<!doctype html><title>Echo sign-in</title><p>Sign-in could not be completed.</p>",
+    status === 200
+      ? "<!doctype html><title>Echo sign-in complete</title><p>Sign-in complete. You can close this tab.</p>"
+      : failureHtml(failure?.code),
     "utf8",
   );
   response.writeHead(status, {
@@ -164,7 +207,15 @@ export async function startPersonLoopbackHandoff(input: {
         return;
       }
       settled = true;
-      noStoreHtml(response, form.result.kind === "session" ? 200 : 400);
+      noStoreHtml(
+        response,
+        form.result.kind === "session" ? 200 : 400,
+        form.result.kind === "session"
+          ? undefined
+          : {
+              code: form.result.code,
+            },
+      );
       resolveWait!(form.result);
     } catch {
       noStoreHtml(response, 400);

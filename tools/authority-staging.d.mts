@@ -18,6 +18,8 @@ export type StagingLifecycleInput = Readonly<{
     zoneId: string;
     hostname: string;
   }>;
+  /** Independently trusted `sha256:` pin for accepted Authority recovery. */
+  authorityPinSha256?: string;
   hostSetup?: Readonly<{ path: string; key: string; sha256: string }>;
 }>;
 
@@ -98,7 +100,17 @@ export type StagingLifecycleReceipt = Readonly<{
     | "incomplete"
     | "failed_create"
     | "update_rolled_back"
-    | "unprotected";
+    | "unprotected"
+    /** The persistent edge is configured, but the disposable host is absent. */
+    | "host_down"
+    /** The host exists but its public Authority descriptor does not validate. */
+    | "authority_unready"
+    /** A valid Authority is serving, but no independently trusted pin is set. */
+    | "authority_unpinned"
+    /** A valid Authority is serving, but it does not match the trusted pin. */
+    | "authority_pin_mismatch"
+    /** An executed authority-required probe failed; see failure_class. */
+    | "failed";
   operation_id: string;
   stack_name: string;
   hostname: string;
@@ -108,6 +120,16 @@ export type StagingLifecycleReceipt = Readonly<{
 export type LifecycleDependencies = Readonly<{
   execute?: boolean;
   initializeBlankDataVolume?: boolean;
+  /**
+   * Fail an executed `up` when the public Authority descriptor never answers.
+   * For a down/up cycle over a prepared data volume, where "still not serving"
+   * is a real failure rather than a fresh slot awaiting onboarding.
+   */
+  requireAuthority?: boolean;
+  /** Test seam: bounds the descriptor probe instead of its default window. */
+  descriptorProbeAttempts?: number;
+  /** Test seam: replaces the wait between descriptor probe attempts. */
+  sleepImpl?: (milliseconds: number) => Promise<void>;
   cloudflareApiToken?: string;
   fetchImpl?: FetchLike;
   putSecretValue?: PutSecretValue;

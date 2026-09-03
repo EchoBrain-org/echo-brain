@@ -60,6 +60,10 @@ describe("Authority staging host stack", () => {
       Default: "false",
       AllowedValues: ["true", "false"],
     });
+    expect(stack.Parameters.ResumeRetainedAuthority).toMatchObject({
+      Default: "false",
+      AllowedValues: ["true", "false"],
+    });
     expect(stack.Conditions.HostEnabledCondition).toEqual({
       "Fn::Equals": [{ Ref: "HostEnabled" }, "true"],
     });
@@ -75,6 +79,29 @@ describe("Authority staging host stack", () => {
           },
           AssertDescription:
             "InitializeBlankDataVolume may be true only on an explicitly reviewed host-creation change set",
+        },
+      ],
+    });
+    expect(
+      stack.Rules.RetainedAuthorityResumeRequiresEnabledNonblankHost,
+    ).toEqual({
+      RuleCondition: {
+        "Fn::Equals": [{ Ref: "ResumeRetainedAuthority" }, "true"],
+      },
+      Assertions: [
+        {
+          Assert: {
+            "Fn::Equals": [{ Ref: "HostEnabled" }, "true"],
+          },
+          AssertDescription:
+            "ResumeRetainedAuthority may be true only when HostEnabled is true",
+        },
+        {
+          Assert: {
+            "Fn::Equals": [{ Ref: "InitializeBlankDataVolume" }, "false"],
+          },
+          AssertDescription:
+            "ResumeRetainedAuthority may be true only for a nonblank retained-volume restart",
         },
       ],
     });
@@ -409,50 +436,45 @@ describe("Authority staging host stack", () => {
       expect(stack.Parameters[parameter]).toBeDefined();
     }
     for (const required of [
-      "apt-get install -y --no-install-recommends ca-certificates curl snapd",
-      "snap install aws-cli --classic",
-      "timeout 20 /snap/bin/aws --cli-connect-timeout 5 --cli-read-timeout 15 s3api get-object",
       "--region '${AWS::Region}'",
       "--version-id '${HostSetupObjectVersion}'",
-      "sha256sum -c -",
-      "bootstrap-ubuntu-arm64.sh",
-      "--region '${AWS::Region}'",
       "--tunnel-secret-arn '${AuthorityTunnelTokenSecret}'",
       "--ecr-registry '${AWS::AccountId}.dkr.ecr.${AWS::Region}.${AWS::URLSuffix}'",
       "--data-volume-id '${StagingDataVolume}'",
       "expected_volume_serial=$(printf '%s' '${StagingDataVolume}' | tr -d '-')",
       "lsblk -dn -o SERIAL",
       "InitializeBlankDataVolumeArgument",
-      "/usr/local/sbin/install-echo-authority-tunnel-token",
-      "systemctl enable --now cloudflared-echo-authority.service",
       "http://127.0.0.1:20241/ready",
       "tunnel_ready=true",
-      "/srv/echo-authority-clean-v1/restore-clean-v1-host.sh materialize",
-      "machine-tunnel-materialization-ready",
+      "resume_retained_authority='${ResumeRetainedAuthority}'",
+      "machine-tunnel-retained-state-ready",
       "bootstrap-not-started",
       "bootstrap-stage-unavailable",
       "bootstrap_stage_file=/run/echo-authority-staging-bootstrap-stage",
       "timeout --signal=TERM --kill-after=10 800 bash -Eeuo pipefail -c bootstrap_main",
       "--connect-timeout 5 --max-time 15",
       "staging bootstrap stage: %s",
-      "machine configuration, tunnel connection, and retained-state materialization are ready",
+      "machine configuration, tunnel connection, retained-state materialization, and applicable retained Authority resume are ready",
       "--header 'Content-Type:'",
-      "apt-get update",
-      "apt-get install -y --no-install-recommends ca-certificates curl snapd",
-      "systemctl enable --now snapd.socket",
-      "timeout 60 snap wait system seed.loaded",
-      "timeout 120 snap install aws-cli --classic",
-      "set_bootstrap_stage aws-cli-ready",
-      "/snap/bin/aws --version >/dev/null",
-      "retry 6 10 download_setup_bundle",
     ]) {
       expect(userData).toContain(required);
     }
     expect(userData).toContain("--initialize-blank-data-volume");
     expect(userData).toContain('"InitializeBlankDataVolumeCondition"');
+    const substitutions = (
+      (launchTemplate.Properties!.LaunchTemplateData as Record<string, unknown>)
+        .UserData as {
+        readonly "Fn::Base64": {
+          readonly "Fn::Sub": readonly [string, Record<string, unknown>];
+        };
+      }
+    )["Fn::Base64"]["Fn::Sub"][1];
+    expect(substitutions.ResumeRetainedAuthority).toEqual({
+      Ref: "ResumeRetainedAuthority",
+    });
     expect(userData).toContain("signal_failure");
     expect(userData).toContain(
-      "bootstrap-not-started|initial-apt-update|initial-apt-install|snapd-socket|snapd-ready|aws-cli-install|aws-cli-ready|setup-bundle-download|setup-bundle-verify|setup-bundle-extract|data-volume-discovery|machine-bootstrap|tunnel-token-install|tunnel-service|tunnel-ready|retained-state-materialization|ready-signal",
+      "bootstrap-not-started|initial-apt-update|initial-apt-install|snapd-socket|snapd-ready|aws-cli-install|aws-cli-ready|setup-bundle-download|setup-bundle-verify|setup-bundle-extract|data-volume-discovery|machine-bootstrap|tunnel-token-install|tunnel-service|tunnel-ready|retained-state-materialization|retained-state-resume|ready-signal",
     );
     expect(userData.match(/--header 'Content-Type:'/g)).toHaveLength(2);
     expect(userData).not.toMatch(
@@ -533,6 +555,22 @@ describe("Authority staging host stack", () => {
     expect(userData).toContain(
       "export -f allowed_bootstrap_stage set_bootstrap_stage retry download_setup_bundle bootstrap_main",
     );
+    const resumeAssignment = userData.indexOf(
+      "resume_retained_authority='${ResumeRetainedAuthority}'",
+    );
+    const resumeExport = userData.indexOf(
+      "export bootstrap_stage_file resume_retained_authority",
+    );
+    const bootstrapFunctionExport = userData.indexOf(
+      "export -f allowed_bootstrap_stage set_bootstrap_stage retry download_setup_bundle bootstrap_main",
+    );
+    const bootstrapChild = userData.indexOf(
+      "timeout --signal=TERM --kill-after=10 800 bash -Eeuo pipefail -c bootstrap_main",
+    );
+    expect(resumeAssignment).toBeGreaterThan(-1);
+    expect(resumeExport).toBeGreaterThan(resumeAssignment);
+    expect(bootstrapFunctionExport).toBeGreaterThan(resumeExport);
+    expect(bootstrapChild).toBeGreaterThan(bootstrapFunctionExport);
     const deadline = userData.match(
       /timeout --signal=TERM --kill-after=10 ([0-9]+) bash -Eeuo pipefail -c bootstrap_main/,
     );
@@ -581,6 +619,10 @@ describe("Authority staging host stack", () => {
         "retained-state-materialization",
         "/srv/echo-authority-clean-v1/restore-clean-v1-host.sh materialize",
       ],
+      [
+        "retained-state-resume",
+        "/srv/echo-authority-clean-v1/restore-clean-v1-host.sh resume",
+      ],
     ] as const;
     for (const [stage, operation] of stagedOperations) {
       const assignment = bootstrapMain![1]!.indexOf(
@@ -597,6 +639,21 @@ describe("Authority staging host stack", () => {
         expect(operationIndex, stage).toBeLessThan(nextAssignment);
       }
     }
+    const materializeIndex = bootstrapMain![1]!.indexOf(
+      "/srv/echo-authority-clean-v1/restore-clean-v1-host.sh materialize",
+    );
+    const resumeGuardIndex = bootstrapMain![1]!.indexOf(
+      "if [[ $resume_retained_authority == true ]]; then",
+    );
+    const resumeIndex = bootstrapMain![1]!.indexOf(
+      "/srv/echo-authority-clean-v1/restore-clean-v1-host.sh resume",
+    );
+    const readySignalIndex = bootstrapMain![1]!.indexOf(
+      "set_bootstrap_stage ready-signal",
+    );
+    expect(materializeIndex).toBeLessThan(resumeGuardIndex);
+    expect(resumeGuardIndex).toBeLessThan(resumeIndex);
+    expect(resumeIndex).toBeLessThan(readySignalIndex);
     expect(bootstrapMain![1]).toContain("set_bootstrap_stage ready-signal");
     const downloadFunction = userData.match(
       /download_setup_bundle\(\) \{([\s\S]*?)\n\}/,
@@ -632,6 +689,12 @@ describe("Authority staging host stack", () => {
     const serialized = JSON.stringify(stack.Outputs);
     expect(serialized).not.toMatch(
       /secretstring|secretbinary|cloudflare.*value/i,
+    );
+    expect(stack.Outputs.StagingHostReady?.Description).toContain(
+      "When ResumeRetainedAuthority is true, it additionally required the accepted retained Authority to reach terminal green before ready.",
+    );
+    expect(stack.Outputs.StagingHostReady?.Description).toContain(
+      "It never attests public HTTPS or independent descriptor-pin acceptance.",
     );
   });
 

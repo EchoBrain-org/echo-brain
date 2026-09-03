@@ -869,8 +869,143 @@ describe("Person client", () => {
         output_path: outputPath,
         expires_at: "2026-08-18T00:15:00.000Z",
       });
-      expect(readFileSync(outputPath, "utf8")).toContain(loginGrant);
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+        schema_version: 2,
+        login_grant: loginGrant,
+        expected_email: "jane@example.com",
+      });
       expect(lstatSync(outputPath).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("writes a versioned expected-account artifact when reissuing an employee invitation", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const outputPath = join(home, "employee-reissued-onboarding.json");
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          expect(path).toBe("/v1/person/employees");
+          expect(init?.method).toBe("PUT");
+          expect(JSON.parse(String(init?.body))).toEqual({
+            email: "jane@example.com",
+          });
+          return json(
+            {
+              login_grant: "G".repeat(43),
+              expires_at: "2026-08-18T00:15:00.000Z",
+            },
+            201,
+          );
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_type: "owner",
+      });
+
+      await client.reissueEmployee({
+        email: "jane@example.com",
+        output_path: outputPath,
+      });
+
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toMatchObject({
+        schema_version: 2,
+        expected_email: "jane@example.com",
+      });
+      expect(lstatSync(outputPath).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("keeps legacy durable employee identities usable without emitting an expected-email artifact", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const outputPath = join(home, "legacy-employee-reissued-onboarding.json");
+      const observed: Array<{ path: string; method: string; body?: unknown }> = [];
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          observed.push({
+            path,
+            method: init?.method ?? "GET",
+            ...(init?.body === undefined
+              ? {}
+              : { body: JSON.parse(String(init.body)) }),
+          });
+          if (init?.method === "GET") {
+            return json({
+              schema_version: 1,
+              kind: "echo-clean-person-employee-roster-v1",
+              employees: [
+                {
+                  email: "alice@localhost",
+                  display_name: "Alice Legacy",
+                  membership_status: "active",
+                  invitation_state: "pending",
+                },
+              ],
+            });
+          }
+          if (init?.method === "PUT") {
+            return json({
+              login_grant: "G".repeat(43),
+              expires_at: "2026-08-18T00:15:00.000Z",
+            }, 201);
+          }
+          return new Response(null, { status: 204 });
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_type: "owner",
+      });
+
+      await expect(client.employees()).resolves.toMatchObject({
+        employees: [expect.objectContaining({ email: "alice@localhost" })],
+      });
+      await client.reissueEmployee({
+        email: "alice@localhost",
+        output_path: outputPath,
+      });
+      await expect(client.revokeEmployee("alice@localhost")).resolves.toBeUndefined();
+      await expect(
+        client.inviteEmployee({
+          name: "Alice Legacy",
+          email: "alice@localhost",
+          output_path: join(home, "strict-new-invite.json"),
+        }),
+      ).rejects.toThrow(/canonical lowercase mailbox/);
+
+      expect(observed).toEqual([
+        { path: "/v1/person/employees", method: "GET" },
+        {
+          path: "/v1/person/employees",
+          method: "PUT",
+          body: { email: "alice@localhost" },
+        },
+        {
+          path: "/v1/person/employees",
+          method: "DELETE",
+          body: { email: "alice@localhost" },
+        },
+      ]);
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+        schema_version: 1,
+        kind: "echo-person-onboarding-invitation",
+        authority_url: "https://authority.example",
+        login_grant: "G".repeat(43),
+        expires_at: "2026-08-18T00:15:00.000Z",
+      });
     });
   });
 
@@ -1155,6 +1290,192 @@ describe("Person client", () => {
       expect(stdout).not.toContain(loginGrant);
       expect(stdout).not.toContain(SESSION.access_token);
       expect(stdout).not.toContain(SESSION.refresh_token);
+    });
+  });
+
+  it("keeps an invitation account private while preserving a manual-browser fallback", async () => {
+    await withHome(async (home) => {
+      const invitationPath = join(home, "person-onboarding.json");
+      const expectedEmail = "founder+private@example.com";
+      const loginGrant = "G".repeat(43);
+      const hintedAuthorizationUrl = `https://identity.example/authorize?state=state&login_hint=${encodeURIComponent(expectedEmail)}&prompt=select_account`;
+      writeFileSync(
+        invitationPath,
+        `${canonicalJson({
+          schema_version: 2,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: "https://authority.example",
+          login_grant: loginGrant,
+          expires_at: "2026-08-18T00:15:00.000Z",
+          expected_email: expectedEmail,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      chmodSync(invitationPath, 0o600);
+      const authority = authorityDescriptor();
+      const opened: string[] = [];
+      let stdout = "";
+      const status = await runPersonClientCli(
+        ["start", "--invitation", invitationPath],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: () => true },
+          home_directory: home,
+          now: () => NOW,
+          open_authorization_url: (url) => {
+            opened.push(url);
+            return false;
+          },
+          fetch: async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === "/v2/session/oidc/begin") {
+              const request = JSON.parse(String(init?.body)) as Record<
+                string,
+                unknown
+              >;
+              expect(request.login_hint).toBe(expectedEmail);
+              const handoff = request.loopback_handoff as Record<
+                string,
+                string
+              >;
+              queueMicrotask(() => {
+                void globalThis.fetch(handoff.url, {
+                  method: "POST",
+                  headers: {
+                    "content-type": "application/x-www-form-urlencoded",
+                  },
+                  body: new URLSearchParams({
+                    token: handoff.token,
+                    session: Buffer.from(
+                      canonicalJson(ROTATED_SESSION as never),
+                      "utf8",
+                    ).toString("base64url"),
+                  }),
+                });
+              });
+              return json(
+                {
+                  authorization_url: hintedAuthorizationUrl,
+                  expires_at: "2026-08-18T00:10:00.000Z",
+                },
+                201,
+              );
+            }
+            if (path === "/v1/authority-descriptor") {
+              return json({ authority_descriptor: authority });
+            }
+            expect(path).toBe("/v1/person/records");
+            return json({
+              schema_version: 1,
+              kind: "echo-clean-person-record-list-v1",
+              records: [],
+            });
+          },
+        },
+      );
+
+      expect(status).toBe(0);
+      // The directly opened URL remains hinted, but the manual fallback never
+      // writes private invitation metadata to stdout.
+      expect(opened).toEqual([hintedAuthorizationUrl]);
+      const lines = stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(lines[0]).toMatchObject({
+        phase: "open-browser",
+        authorization_url:
+          "https://identity.example/authorize?state=state&prompt=select_account",
+        browser_opened: false,
+        instruction:
+          "Sign in with the account named in the private invitation. Open authorization_url to complete sign-in in your browser.",
+      });
+      expect(lines[0]).not.toHaveProperty("expected_account");
+      expect(stdout).not.toContain(expectedEmail);
+      expect(stdout).not.toContain(encodeURIComponent(expectedEmail));
+      expect(stdout).not.toContain("login_hint");
+    });
+  });
+
+  it("does not leak a private invitation account after a wrong-account sign-in", async () => {
+    await withHome(async (home) => {
+      const invitationPath = join(home, "person-onboarding.json");
+      const expectedEmail = "founder+private@example.com";
+      const hintedAuthorizationUrl = `https://identity.example/authorize?state=state&login_hint=${encodeURIComponent(expectedEmail)}`;
+      writeFileSync(
+        invitationPath,
+        `${canonicalJson({
+          schema_version: 2,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: "https://authority.example",
+          login_grant: "G".repeat(43),
+          expires_at: "2026-08-18T00:15:00.000Z",
+          expected_email: expectedEmail,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      chmodSync(invitationPath, 0o600);
+      const opened: string[] = [];
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(
+        ["start", "--invitation", invitationPath],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          open_authorization_url: (url) => {
+            opened.push(url);
+            return true;
+          },
+          fetch: async (input, init) => {
+            expect(new URL(String(input)).pathname).toBe("/v2/session/oidc/begin");
+            const request = JSON.parse(String(init?.body)) as Record<
+              string,
+              unknown
+            >;
+            expect(request.login_hint).toBe(expectedEmail);
+            const handoff = request.loopback_handoff as Record<string, string>;
+            queueMicrotask(() => {
+              void globalThis.fetch(handoff.url, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/x-www-form-urlencoded",
+                },
+                body: new URLSearchParams({
+                  token: handoff.token,
+                  error: "retryable",
+                }),
+              });
+            });
+            return json(
+              {
+                authorization_url: hintedAuthorizationUrl,
+                expires_at: "2026-08-18T00:10:00.000Z",
+              },
+              201,
+            );
+          },
+        },
+      );
+
+      expect(status).toBe(1);
+      expect(opened).toEqual([hintedAuthorizationUrl]);
+      const openBrowserReceipt = JSON.parse(stdout.trim()) as Record<string, unknown>;
+      expect(openBrowserReceipt).not.toHaveProperty("authorization_url");
+      expect(stdout).not.toContain("https://identity.example/authorize");
+      expect(stdout).not.toContain("state=state");
+      for (const output of [stdout, stderr]) {
+        expect(output).not.toContain(expectedEmail);
+        expect(output).not.toContain(encodeURIComponent(expectedEmail));
+        expect(output).not.toContain("login_hint");
+        expect(output).not.toContain(
+          "echo-organization-authority-person-admin",
+        );
+      }
+      expect(stderr).toContain("invitation remains usable");
+      expect(stderr).toContain("account named in the private invitation");
     });
   });
 

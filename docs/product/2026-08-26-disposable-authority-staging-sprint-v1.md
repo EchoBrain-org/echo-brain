@@ -176,6 +176,41 @@ That local connector check proves connector connectivity only. It does not
 prove public DNS, public HTTPS, Caddy, the Authority process, onboarding, or
 `/v1/authority-descriptor`.
 
+An executed `up` therefore also observes the public descriptor once and records
+both facts separately in its receipt: `host_ready` for machine-and-connector
+readiness, and `authority_serving` with a classified `authority_descriptor`
+observation for the application. The observation is reported, not enforced,
+because a genuinely fresh slot has no onboarded Authority yet and calling that a
+failure would be untrue. `up --require-authority` binds the reviewed
+retained-host bootstrap to resume the accepted Authority after materialization
+and before CloudFormation signals ready; its matching
+`up --execute --require-authority` then inverts that for the `down`/`up`
+cycle over a prepared retained volume, where the accepted release is
+expected back and "still not serving" is a real failure. The flag is present
+on both the reviewed plan and its unchanged-operation-ID execute so their
+CloudFormation parameters match. It additionally
+requires the private input's independently trusted `authorityPinSha256`, the
+accepted Authority `authority_pin_sha256` digest (emitted in bootstrap evidence
+as `authority_descriptor_sha256`). The controller validates the response
+envelope, then compares its descriptor to that pin without retaining or
+emitting the body. A missing pin refuses `--require-authority` before AWS work;
+a valid descriptor with a different pin is `authority_descriptor_pin_mismatch`,
+not a delayed-start retry. A normal status receipt reports liveness and
+acceptance separately: `authority_unpinned` and `authority_pin_mismatch` are
+never green even though a valid Authority may be serving.
+
+If required verification fails after the host has already reached
+`StagingHostReady=true`, preserve the operation ID and retry the exact
+`up --execute --require-authority` command. This is a probe-only verification,
+recorded with `verification_only: true`: it does not upload a host bundle,
+create or execute a CloudFormation change set, invoke SSM, or mutate the edge.
+A failed attempt writes its classified machine-readable receipt before the
+nonzero exit. `status` remains read-only and reports edge, host, and Authority
+observations separately; an edge response cannot make a stopped host ready.
+When the stack reports `StagingHostReady=false`, `status` returns `host_down`
+with `edge_checked: false` before resolving a Cloudflare token or making an
+edge request, so edge readiness is intentionally unknown in that receipt.
+
 First-live application qualification is a separate phase: deploy the existing
 observability stack as a sibling stack and confirm its required log groups and
 role permissions; then restore and start the accepted release, complete
@@ -239,13 +274,13 @@ mistaken for optional observability.
 
 Create the persistent slot and host through reviewed AWS change sets, deploy
 the unmodified observability sibling stack, and instantiate once with throwaway
-provider accounts. Transfer the private eight-file onboarding input through the
+provider accounts. Transfer the private nine-file onboarding input through the
 dedicated versioned KMS-encrypted staging transfer bucket, never a terminal or
 SSH session. The host role receives `s3:GetObjectVersion` for one exact object
 version and its matching KMS decrypt context only while a reviewed,
 IAM-policy-only change set is active, with a 15-minute IAM expiry backstop. A
 bounded SSM command verifies the
-archive SHA-256, rejects every archive member except the eight exact regular
+archive SHA-256, rejects every archive member except the nine exact regular
 files, suppresses onboarding output, and invokes the existing `doctor` then
 `prepare`. It must revoke the temporary policy and permanently delete and prove
 absent every version, delete marker, and multipart upload for the exact S3 key
@@ -263,11 +298,13 @@ operation attempts a proved host remount and existing-container restart if the
 CloudFormation update fails after quiescence; an unproved recovery blocks the
 rehearsal and requires operator inspection before another lifecycle command.
 This phase is allowed only for the prepared retained volume from Phase 3, with its
-accepted digest-pinned release already recorded. After each `up` materializes
-the host, first prove that the setup bundle manifest's `source_commit` equals
-the accepted release record's `source-sha`, then deliberately resume that
-accepted release. Record sanitized elapsed time and compare the public and local
-descriptors only then. Do not treat a
+accepted digest-pinned release already recorded. Each reviewed
+`up --require-authority` change set makes the host first prove that the setup
+bundle manifest's `source_commit` equals the accepted release record's
+`source-sha`, then resumes that accepted release before the host signals
+CloudFormation readiness. A plain `up` remains materialize-only for operator
+inspection or rehearsal replacement. Record sanitized elapsed time and compare
+the public and local descriptors only then. Do not treat a
 fresh blank volume or fresh onboarding as a repeated-up timing rehearsal.
 
 Record sanitized timing and outcome receipts. The receipt identifies command

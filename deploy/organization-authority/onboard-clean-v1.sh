@@ -1306,16 +1306,24 @@ resume() {
         ;;
       complete_founder_browser_login)
         start_runtime
-        local initial_owner_invitation="$DATA_DIR/state/onboarding/founder-person-invitation.json"
+        local initial_owner_invitation="$DATA_DIR/state/onboarding/founder-person-invitation.json" client_sha256 client_version release_id source_sha
         [[ -f "$initial_owner_invitation" && ! -L "$initial_owner_invitation" ]] || \
           fail 'initial-owner invitation is missing from the expected clean state path'
-        printf 'ACTION: Privately transfer %s to the initial-owner machine, preserve mode 0600, then run echo-brain person login --invitation <transferred-absolute-path>.\n' "$initial_owner_invitation"
+        client_sha256="$(release_field client-sha256)"
+        client_version="$(release_field client-version)"
+        release_id="$(release_field release-id)"
+        source_sha="$(release_field source-sha)"
+        printf 'ACTION: Privately transfer invitation %s, canonical accepted release record %s, and the verified Person onboarding kit matching that release to the initial-owner machine; preserve the invitation mode 0600. Do not use a preexisting global echo-brain command. Run "<release-matched-kit>/Start ECHO.command" <transferred-absolute-path>. If that kit reports an existing ECHO session and this invitation is for a different person, run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person logout, then retry that same kit command.\n' \
+          "$initial_owner_invitation" "$RELEASE_FILE"
+        printf 'RELEASE-MATCHED-KIT: release_id=%s source_sha=%s client_version=%s client_artifact_sha256=%s\n' \
+          "$release_id" "$source_sha" "$client_version" "$client_sha256"
+        printf 'KIT-BUILD: If no verified kit was supplied, use a reviewed checkout at source_sha above and deploy/release/README.md. Obtain the artifact only from the privately transferred accepted release record, verify its SHA-256, build the macOS-arm64 kit with `npm run kit:person-onboarding -- --release <accepted-release.json> --artifact <exact-client.tgz> --app <matching-ECHO.app.zip> --output <private-kit.tar.gz>`, then use its Start ECHO.command command.\n'
         print_status "$(setup_status)"
         return
         ;;
       complete_founder_slack_link)
         start_runtime
-        printf 'ACTION: On the initial-owner machine, run echo-brain person slack-link and complete its one-time Slack code exchange.\n'
+        printf 'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person slack-link and complete its one-time Slack code exchange.\n'
         print_status "$(setup_status)"
         return
         ;;
@@ -1333,7 +1341,9 @@ resume() {
         ;;
       ready_to_start)
         start_runtime
-        printf 'CANARY: create one new Granola note with a unique marker; approve its Slack card; then run echo-brain person records --limit 20 and echo-brain person records --query <marker>. Rerun onboard-clean-v1.sh resume, then onboard-clean-v1.sh status; terminal green requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
+        printf 'HOST ACTION: On the exact staging host, run ./update-clean-v1.sh canary.\n'
+        printf 'FOUNDER ACTION: Approve its private Slack card, then on the initial-owner machine run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20 and "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY".\n'
+        printf 'HOST ACTION: On the exact staging host, rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status. The staging-only synthetic receipt is release-bound; terminal green still requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
         print_status "$(setup_status)"
         return
         ;;

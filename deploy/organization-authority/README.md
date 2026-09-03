@@ -1,5 +1,10 @@
 # Organization Authority deployment
 
+Coding agents follow
+[PB-OPERATIONS-001](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
+before local exercise, staging, onboarding, or deploy. Do not add a
+tool-specific procedure.
+
 This is the deployable Organization Authority. Its current `clean-v1`
 compatibility profile uses a new `clean-data/` directory, never imports
 previous Authority state, and uses both EC2 Compose profiles automatically.
@@ -144,6 +149,20 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 | `granola-credential`       | Organization Granola credential.                                                                                                    |
 | `llm-credential`           | Retained LLM provider credential.                                                                                                   |
 
+Check that directory before spending an AWS session on it:
+
+```
+npm run authority:staging-onboarding-transfer -- preflight --input <config.json>
+```
+
+`preflight` reads no file contents, makes no AWS call, and names every required
+file that is missing, empty, oversized, or not a private regular file. It also
+reports the aggregate byte limit with the exact bytes over it and an
+unexpected-file count without exposing unexpected filenames. It exits `2` when
+the input is not ready, so it can gate the rest of a run. Without it, a missing
+credential surfaces only after authentication, planning, and the archive step, as one opaque
+`input_directory_shape_invalid`.
+
 The secrets are never placed in command arguments or normal wrapper output.
 `prepare` installs byte-exact fixed server copies with mode `0600` under its
 mode-`0700` private data directory.
@@ -177,8 +196,8 @@ for unreleased rehearsal state that does not meet this floor.
 Complete the bootstrap, initial-owner identity link, credential installation, and
 finalization, then start the active runtime. `resume` stops at this point and
 prints the exact URL. Only once that runtime is healthy, enable
-**Interactivity & Shortcuts**, save this Request URL, create the first
-post-cutoff canary meeting, and rerun `resume`:
+**Interactivity & Shortcuts**, save this Request URL, then run the supported
+release-bound synthetic staging canary and rerun `resume`:
 
 ```text
 https://<staging-authority-host>/v2/integrations/slack/interactions
@@ -187,6 +206,12 @@ https://<staging-authority-host>/v2/integrations/slack/interactions
 ```sh
 ./onboard-clean-v1.sh resume
 ```
+
+On the exact `authority-staging.echobrain.org` host, run
+`./update-clean-v1.sh canary`, approve its private Slack card, and complete the
+two Person reads printed by `resume`. This synthetic path is staging-only. A
+non-staging deployment still needs durable progress from its admitted live
+source before it can become terminal green.
 
 The endpoint intentionally returns `503` before finalization. Do not attempt to
 validate it against a pre-finalize runtime. Event Subscriptions, Socket Mode,
@@ -256,16 +281,14 @@ starts the runtime for browser login and Slack linking, stops it for credential
 installation and finalization, then starts it again. It never reads SQLite,
 prints secret values, or asks for generated IDs.
 
-When prompted for browser login, transfer the initial-owner invitation to the
-initial owner's current-user machine through a private channel, then run the exact
-path and command printed by `resume`. Install the exact Person client from the
-same release record first, using [the release installer](../release/README.md).
-The received invitation must be a current-user mode-`0600` file inside a
-mode-`0700` directory. Do not paste invitation contents into chat or a terminal.
-The wrapper also prints the bounded one-note post-finalization Granola, Slack,
-list, and search canary. After approving that card and completing both reads,
-rerun `resume`, then `status`: a terminal green result additionally requires a
-running healthy Authority container on the exact accepted image.
+At each pause, follow the exact actor-scoped action printed by `resume`. For
+browser login, privately transfer its named invitation and accepted release to
+the initial owner's machine and use the matching
+[release kit](../release/README.md). The invitation must be a current-user
+mode-`0600` file inside a mode-`0700` directory; never paste its contents into
+chat or a terminal. Continue until `resume` reports completion, then run
+`status`. Terminal green also requires a healthy Authority container on the
+exact accepted image.
 
 Use this Authority-state read-only progress check after the accepted image is
 present locally:

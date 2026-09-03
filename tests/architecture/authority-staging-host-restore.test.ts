@@ -1,6 +1,14 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -14,7 +22,7 @@ function restoreScript(): string {
 }
 
 describe("Authority retained-host restore", () => {
-  it("is syntactically valid and treats a genuinely blank retained volume as a safe no-op", () => {
+  it("keeps blank materialization a safe no-op but refuses a resume without an accepted tuple", () => {
     const script = restoreScript();
 
     expect(() => execFileSync("bash", ["-n", RESTORER])).not.toThrow();
@@ -24,7 +32,81 @@ describe("Authority retained-host restore", () => {
       '{"ok":true,"state":"unprepared","action":"no_op"}',
     );
     expect(script).toContain("return 10");
-    expect(script).toContain("[[ $COMMAND == materialize || $restored == false ]]");
+    expect(script).toContain("if [[ $COMMAND == materialize ]]; then");
+    expect(script).toContain(
+      "fail 'retained host resume requires an accepted release tuple'",
+    );
+    expect(script).toContain(
+      "but resume is refused. A partial, candidate, symlinked, permission-unsafe, or",
+    );
+  });
+
+  it("executes blank materialization successfully but exits through the classified resume refusal", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-retained-host-restore-"));
+    const deploy = join(root, "deploy");
+    const data = join(deploy, "clean-data");
+    const bin = join(root, "bin");
+    const testableRestorer = join(root, "restore-clean-v1-host.sh");
+    try {
+      mkdirSync(join(data, "lost+found"), { recursive: true });
+      mkdirSync(join(deploy, "release"), { recursive: true });
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(deploy, "release", "clean-v1-release.py"), "#!/bin/sh\n");
+      writeFileSync(
+        join(deploy, "release", "clean-v1-runtime-profile.py"),
+        "#!/bin/sh\n",
+      );
+      writeFileSync(
+        join(bin, "id"),
+        "#!/bin/sh\ncase \"$1\" in -u) printf '999\\n' ;; -g) printf '988\\n' ;; esac\n",
+      );
+      writeFileSync(join(bin, "stat"), "#!/bin/sh\nprintf '999:988:700\\n'\n");
+      chmodSync(join(bin, "id"), 0o755);
+      chmodSync(join(bin, "stat"), 0o755);
+
+      const rootCheck =
+        "[[ " + "$" + "{EUID} -eq 0 ]] || fail 'run this restore command as root'";
+      const source = restoreScript();
+      expect(source).toContain(rootCheck);
+      writeFileSync(
+        testableRestorer,
+        source.replace(
+          rootCheck,
+          ": # isolated behavior test supplies Linux ownership facts",
+        ),
+        { mode: 0o700 },
+      );
+
+      const environment = {
+        ...process.env,
+        PATH: bin + ":" + (process.env.PATH ?? ""),
+      };
+      const materialize = spawnSync(
+        "bash",
+        [testableRestorer, "materialize", "--deploy-dir", deploy],
+        { encoding: "utf8", env: environment },
+      );
+      expect(materialize.status).toBe(0);
+      expect(materialize.stdout).toContain(
+        '{"ok":true,"state":"unprepared","action":"no_op"}',
+      );
+      expect(materialize.stderr).toBe("");
+
+      const resume = spawnSync(
+        "bash",
+        [testableRestorer, "resume", "--deploy-dir", deploy],
+        { encoding: "utf8", env: environment },
+      );
+      expect(resume.status).toBe(1);
+      expect(resume.stdout).toContain(
+        '{"ok":true,"state":"unprepared","action":"no_op"}',
+      );
+      expect(resume.stderr).toContain(
+        "restore-clean-v1-host: retained host resume requires an accepted release tuple",
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("rebuilds only the root-volume runtime material from a complete accepted retained tuple", () => {

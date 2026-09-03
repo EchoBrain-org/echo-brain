@@ -1,4 +1,6 @@
 import {
+  isCanonicalPersonEmail,
+  isExpectedPersonEmail,
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse,
   validateOrganizationPersonSession,
@@ -25,6 +27,18 @@ const SESSION = {
 } as const;
 
 describe('Person session HTTP DTOs', () => {
+  it('exports the expected-email boundary rule', () => {
+    expect(isExpectedPersonEmail('founder@example.com')).toBe(true);
+    expect(isExpectedPersonEmail('Founder@example.com')).toBe(false);
+  });
+
+  it('keeps durable canonical identities broader than expected-email boundaries', () => {
+    expect(isCanonicalPersonEmail('alice@localhost')).toBe(true);
+    expect(isExpectedPersonEmail('alice@localhost')).toBe(false);
+    expect(isCanonicalPersonEmail('Alice@localhost')).toBe(false);
+    expect(isCanonicalPersonEmail('alice@@localhost')).toBe(false);
+  });
+
   it('accepts only the two begin variants and exact issued pair', () => {
     expect(
       validateOrganizationPersonOidcBeginRequest({
@@ -49,6 +63,75 @@ describe('Person session HTTP DTOs', () => {
         refresh_token: SESSION.refresh_token,
       }),
     ).toEqual({ refresh_token: SESSION.refresh_token });
+  });
+
+  it('accepts an optional canonical login_hint on the bootstrap variant only', () => {
+    expect(
+      validateOrganizationPersonOidcBeginRequest({
+        kind: 'identity_bootstrap',
+        login_grant: 'G'.repeat(43),
+        login_hint: 'founder@example.com',
+      }),
+    ).toMatchObject({ login_hint: 'founder@example.com' });
+    expect(
+      validateOrganizationPersonOidcBeginRequest({
+        kind: 'identity_bootstrap',
+        login_grant: 'G'.repeat(43),
+        login_hint: `${'a'.repeat(64)}@example.com`,
+      }),
+    ).toMatchObject({ login_hint: `${'a'.repeat(64)}@example.com` });
+    expect(
+      validateOrganizationPersonOidcBeginRequest({
+        kind: 'identity_bootstrap',
+        login_grant: 'G'.repeat(43),
+        login_hint: 'founder@example.com',
+        loopback_handoff: {
+          url: `http://127.0.0.1:49152/${'P'.repeat(43)}`,
+          token: 'T'.repeat(43),
+        },
+      }),
+    ).toMatchObject({ login_hint: 'founder@example.com' });
+    // Not canonical, so it could never match a stored digest anyway. Reject it
+    // at the edge rather than carrying it into the session application.
+    expect(() =>
+      validateOrganizationPersonOidcBeginRequest({
+        kind: 'identity_bootstrap',
+        login_grant: 'G'.repeat(43),
+        login_hint: 'Founder@Example.com',
+      }),
+    ).toThrow(/login_hint is invalid/);
+    for (const login_hint of [
+      "founder;$(id)@example.com",
+      "founder`id`@example.com",
+      "founder..name@example.com",
+      "founder@localhost",
+      "founder@example",
+      "founder@-example.com",
+      `${'a'.repeat(65)}@example.com`,
+      `a@${'a'.repeat(64)}.com`,
+    ]) {
+      expect(() =>
+        validateOrganizationPersonOidcBeginRequest({
+          kind: 'identity_bootstrap',
+          login_grant: 'G'.repeat(43),
+          login_hint,
+        }),
+      ).toThrow(/login_hint is invalid/);
+    }
+    expect(() =>
+      validateOrganizationPersonOidcBeginRequest({
+        kind: 'identity_bootstrap',
+        login_grant: 'G'.repeat(43),
+        login_hint: 'no-at-sign',
+      }),
+    ).toThrow(/login_hint is invalid/);
+    // A hint has no meaning without a grant to check it against.
+    expect(() =>
+      validateOrganizationPersonOidcBeginRequest({
+        kind: 'existing_identity_login',
+        login_hint: 'founder@example.com',
+      }),
+    ).toThrow(/unexpected shape/);
   });
 
   it('rejects extra keys, malformed secrets, and inconsistent pairs', () => {

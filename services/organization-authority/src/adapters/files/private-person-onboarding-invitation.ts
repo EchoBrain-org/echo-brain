@@ -11,7 +11,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
+import {
+  isExpectedPersonEmail,
+  validateOrganizationAuthorityOrigin,
+} from "@echo-brain/organization-api";
 
 interface IssuedPersonOnboardingLoginGrant {
   readonly login_grant: string;
@@ -27,6 +30,25 @@ export interface PersonOnboardingInvitationV1 {
   login_grant: string;
   expires_at: string;
 }
+
+/**
+ * Version 2 deliberately changes the artifact version rather than extending
+ * v1. Released v1 readers reject unknown keys, so a v1 artifact with an
+ * additive `expected_email` field would strand recipients on older clients.
+ */
+export interface PersonOnboardingInvitationV2 {
+  schema_version: 2;
+  kind: "echo-person-onboarding-invitation";
+  authority_url: string;
+  login_grant: string;
+  expires_at: string;
+  /** The exact canonical work address selected for this one-time grant. */
+  expected_email: string;
+}
+
+export type PersonOnboardingInvitation =
+  | PersonOnboardingInvitationV1
+  | PersonOnboardingInvitationV2;
 
 export interface PersonOnboardingInvitationTarget {
   output_path: string;
@@ -147,7 +169,7 @@ export function discardPersonOnboardingInvitation(
   }
 }
 
-function serialize(value: PersonOnboardingInvitationV1): string {
+function serialize(value: PersonOnboardingInvitation): string {
   const serialized = `${canonicalJson(value)}\n`;
   if (
     Buffer.byteLength(serialized, "utf8") > MAX_PERSON_ONBOARDING_ARTIFACT_BYTES
@@ -161,17 +183,32 @@ function serialize(value: PersonOnboardingInvitationV1): string {
 export function writePersonOnboardingInvitation(
   reservation: ReservedPersonOnboardingInvitation,
   issuedLoginGrant: IssuedPersonOnboardingLoginGrant,
-): PersonOnboardingInvitationV1 {
+  options?: { readonly expected_email?: string },
+): PersonOnboardingInvitation {
   if (reservation.released || reservation.descriptor === null) {
     throw new Error("Person onboarding output reservation is unavailable");
   }
-  const invitation: PersonOnboardingInvitationV1 = {
-    schema_version: 1,
-    kind: "echo-person-onboarding-invitation",
-    authority_url: reservation.authority_url,
-    login_grant: issuedLoginGrant.login_grant,
-    expires_at: issuedLoginGrant.expires_at,
-  };
+  const expectedEmail = options?.expected_email;
+  if (expectedEmail !== undefined && !isExpectedPersonEmail(expectedEmail)) {
+    throw new Error("Person onboarding expected email is invalid");
+  }
+  const invitation: PersonOnboardingInvitation =
+    expectedEmail === undefined
+      ? {
+          schema_version: 1,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: reservation.authority_url,
+          login_grant: issuedLoginGrant.login_grant,
+          expires_at: issuedLoginGrant.expires_at,
+        }
+      : {
+          schema_version: 2,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: reservation.authority_url,
+          login_grant: issuedLoginGrant.login_grant,
+          expires_at: issuedLoginGrant.expires_at,
+          expected_email: expectedEmail,
+        };
   try {
     writeFileSync(reservation.descriptor, serialize(invitation), "utf8");
     fsyncSync(reservation.descriptor);

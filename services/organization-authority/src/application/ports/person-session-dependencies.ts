@@ -100,6 +100,8 @@ export type PersonSessionOidcFailureReason =
   | "claim_issued_at_invalid"
   | "claim_tenant_mismatch"
   | "claim_email_invalid"
+  /** A verified bootstrap identity named a different invited account. */
+  | "bootstrap_email_mismatch"
   | "bootstrap_binding_denied"
   | "identity_binding_denied"
   | "internal_failure";
