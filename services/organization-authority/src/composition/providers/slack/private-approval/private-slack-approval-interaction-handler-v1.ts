@@ -45,6 +45,13 @@ export interface PrivateSlackApprovalInteractionHandlerInputV1 {
    */
   readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
   /**
+   * Observational only. Invoked after a verified terminal action has been
+   * durably queued, so the runtime may publish it without waiting for the
+   * periodic cycle. Receives no data; its failure never changes the
+   * acknowledgement.
+   */
+  readonly on_action_queued?: () => void;
+  /**
    * Observational only. Receives no provider data and is invoked only after a
    * successfully HMAC-verified request fails the parser boundary.
    */
@@ -268,6 +275,11 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
           throw new Error("private approval terminal receipt was not queued");
         }
         succeedApprovalJourneyStage(input.journey_telemetry, queueAttempt);
+        try {
+          input.on_action_queued?.();
+        } catch {
+          // The wake signal is observational; the receipt is already durable.
+        }
         return "accepted";
       } catch (error) {
         failApprovalJourneyStage(input.journey_telemetry, queueAttempt, error);

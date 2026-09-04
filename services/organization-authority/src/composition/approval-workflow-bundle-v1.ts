@@ -28,6 +28,14 @@ export interface ApprovalWorkflowContextV1 {
   readonly next_envelope_id: () => string;
   /** Present only in the explicitly configured staging runtime. */
   readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
+  /**
+   * Optional wake signal. An approval surface calls it after a verified
+   * terminal action is durably queued so the runtime can publish it now
+   * rather than at the next periodic cycle. Observational: it carries no
+   * data, may be a no-op, and its failure never changes the surface's
+   * acknowledgement or durable receipt.
+   */
+  readonly on_terminal_action_queued?: () => void;
 }
 
 export interface ApprovalWorkflowComponentsV1 {

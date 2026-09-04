@@ -383,7 +383,12 @@ export async function openOrganizationAuthorityRuntime(
       authority_id: lineage.root.authority_id,
       organization_id: lineage.root.organization_id,
     });
+    // The approval surface is loaded before the worker exists, so its wake
+    // signal is bound late. Until the lifecycle starts it is a no-op; the
+    // periodic cycle still publishes anything queued in that window.
+    let requestApprovalPublication: (() => void) | undefined;
     const approvalContext = {
+      on_terminal_action_queued: () => requestApprovalPublication?.(),
       state: sourceState,
       authority_database: authority,
       control_plane_database: control,
@@ -466,10 +471,12 @@ export async function openOrganizationAuthorityRuntime(
         on_worker_telemetry: config.on_worker_telemetry,
       },
     );
+    requestApprovalPublication = () => runtime.requestApprovalPublication();
     return {
       address: runtime.address,
       processing: "active",
       runExclusive: (operation) => runtime.runExclusive(operation),
+      requestApprovalPublication,
       ...(config.run_staging_synthetic_private_dm_canary === undefined
         ? {}
         : {

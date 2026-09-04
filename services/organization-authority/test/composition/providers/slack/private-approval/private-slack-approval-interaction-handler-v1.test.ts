@@ -304,6 +304,67 @@ describe("private Slack interactions application V1", () => {
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
+  it("signals the wake hook only after the terminal receipt is durably queued", async () => {
+    const order: string[] = [];
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: {
+        enqueue: () => {
+          order.push("enqueue");
+          return {
+            disposition: "resolution" as const,
+            receipt: {} as never,
+            receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+            idempotent: false,
+          };
+        },
+      },
+      now_unix_seconds: () => NOW,
+      now: () => "2026-08-28T22:00:00.000Z",
+      on_action_queued: () => order.push("wake"),
+    });
+
+    await expect(application.accept(request(raw()))).resolves.toBe("accepted");
+    expect(order).toEqual(["enqueue", "wake"]);
+  });
+
+  it("does not signal the wake hook when durable enqueue fails", async () => {
+    const wake = vi.fn();
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: { enqueue: () => { throw new Error("database busy"); } },
+      now_unix_seconds: () => NOW,
+      now: () => "2026-08-28T22:00:00.000Z",
+      on_action_queued: wake,
+    });
+
+    await expect(application.accept(request(raw()))).rejects.toMatchObject({
+      code: "unavailable",
+    });
+    expect(wake).not.toHaveBeenCalled();
+  });
+
+  it("keeps the acknowledgement when the wake hook throws", async () => {
+    const enqueue = vi.fn(() => ({
+      disposition: "resolution" as const,
+      receipt: {} as never,
+      receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+      idempotent: false,
+    }));
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: { enqueue },
+      now_unix_seconds: () => NOW,
+      now: () => "2026-08-28T22:00:00.000Z",
+      on_action_queued: () => {
+        throw new Error("worker unavailable");
+      },
+    });
+
+    await expect(application.accept(request(raw()))).resolves.toBe("accepted");
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
   it("closes queue telemetry as failed when durable enqueue fails", async () => {
     const telemetry = journeyTelemetry({});
     const application = createPrivateSlackApprovalInteractionHandlerV1({

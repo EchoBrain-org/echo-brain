@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  runOrganizationAuthorityApprovalPublicationV1,
   runOrganizationAuthorityProcessingCycleV1,
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
@@ -390,5 +391,193 @@ describe("Organization Authority service lifecycle", () => {
       ),
     ).rejects.toThrow();
     expect(events).toEqual(["recover", "stage", "finalize", "append"]);
+  });
+
+  it("publishes only the approval phases, never source intake", async () => {
+    const events: string[] = [];
+
+    await runOrganizationAuthorityApprovalPublicationV1(
+      processing(events),
+      new AbortController().signal,
+    );
+
+    expect(events).toEqual(["finalize", "append", "reconcile"]);
+  });
+
+  it("publishes a requested approval without waiting for the periodic cycle", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 60_000 },
+      {
+        processing: processing(events),
+        start_api_runtime: async () => apiRuntime(events),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    events.length = 0;
+
+    runtime.requestApprovalPublication();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // No 60 s tick has elapsed, yet the approval phases ran, and no source
+    // poll ran with them.
+    expect(events).toEqual(["finalize", "append", "reconcile"]);
+    await runtime.close();
+    vi.useRealTimers();
+  });
+
+  it("coalesces requests that arrive while one is waiting for the gate", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    let releaseStage: (() => void) | undefined;
+    const slow = processing(events);
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 60_000 },
+      {
+        processing: {
+          ...slow,
+          pollAndStageAdmittedMeetings: async () => {
+            events.push("stage");
+            await new Promise<void>((resolve) => {
+              releaseStage = resolve;
+            });
+          },
+        },
+        start_api_runtime: async () => apiRuntime(events),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // The first periodic cycle is now parked inside source intake.
+    expect(events.at(-1)).toBe("stage");
+    events.length = 0;
+
+    runtime.requestApprovalPublication();
+    runtime.requestApprovalPublication();
+    runtime.requestApprovalPublication();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toEqual([]);
+
+    releaseStage?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The cycle finishes its own phases first, then exactly one publication.
+    expect(events).toEqual([
+      "finalize",
+      "append",
+      "reconcile",
+      "finalize",
+      "append",
+      "reconcile",
+    ]);
+    await runtime.close();
+    vi.useRealTimers();
+  });
+
+  it("schedules exactly one follow-up for a request made mid-publication", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const gate: { release?: () => void; open: boolean } = { open: false };
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 60_000 },
+      {
+        processing: processing(events, async () => {
+          if (gate.open) return;
+          await new Promise<void>((resolve) => {
+            gate.release = resolve;
+          });
+        }),
+        start_api_runtime: async () => apiRuntime(events),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // The first periodic cycle is parked in append; let it finish.
+    gate.release?.();
+    await vi.advanceTimersByTimeAsync(0);
+    events.length = 0;
+
+    runtime.requestApprovalPublication();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toEqual(["finalize", "append"]);
+
+    runtime.requestApprovalPublication();
+    runtime.requestApprovalPublication();
+    gate.open = true;
+    gate.release?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toEqual([
+      "finalize",
+      "append",
+      "reconcile",
+      "finalize",
+      "append",
+      "reconcile",
+    ]);
+    await runtime.close();
+    vi.useRealTimers();
+  });
+
+  it("reports a failed publication and leaves the periodic cycle running", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const errors: Error[] = [];
+    let failNext = false;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 1_000 },
+      {
+        processing: processing(events, async () => {
+          if (failNext) {
+            failNext = false;
+            throw new Error("append unavailable");
+          }
+        }),
+        start_api_runtime: async () => apiRuntime(events),
+        on_worker_error: (error) => errors.push(error),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    events.length = 0;
+
+    failNext = true;
+    runtime.requestApprovalPublication();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toEqual(["finalize", "append"]);
+    expect(errors.map((error) => error.message)).toEqual(["append unavailable"]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.slice(2)).toEqual([
+      "recover",
+      "stage",
+      "finalize",
+      "append",
+      "reconcile",
+    ]);
+    await runtime.close();
+    vi.useRealTimers();
+  });
+
+  it("ignores publication requests after close", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const errors: Error[] = [];
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 60_000 },
+      {
+        processing: processing(events),
+        start_api_runtime: async () => apiRuntime(events),
+        on_worker_error: (error) => errors.push(error),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await runtime.close();
+    events.length = 0;
+
+    runtime.requestApprovalPublication();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toEqual([]);
+    expect(errors).toEqual([]);
+    vi.useRealTimers();
   });
 });
