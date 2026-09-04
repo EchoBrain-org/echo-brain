@@ -473,6 +473,69 @@ describe("staging Journey Explorer custom widget", () => {
     });
   });
 
+  it("accepts the Logs Insights boolean rendering of retryable (0/1) alongside false/true", async () => {
+    const start = event({
+      sequence: 1,
+      stage: "ask_validation",
+      event: "started",
+      outcome: null,
+      elapsed_ms: 0,
+      observed_at: "2026-09-02T11:58:59.000Z",
+    });
+    // CloudWatch Logs Insights returns JSON booleans as "0" / "1", never "false" / "true".
+    const nonretryable = new Client([
+      { queryId: "q" },
+      {
+        status: "Complete",
+        results: [
+          start,
+          event({
+            sequence: 2,
+            event: "failed",
+            retryable: "0",
+            failure_class: "invalid_contract",
+            outcome: null,
+          }),
+        ],
+      },
+    ]);
+    await expect(
+      handler(nonretryable)({ operation: "detail", journey_id: id }),
+    ).resolves.toMatchObject({
+      status: "complete",
+      terminal_outcome: "failed",
+      terminal_failure_class: "invalid_contract",
+      stages: expect.arrayContaining([
+        expect.objectContaining({ sequence: 2, retryable: false }),
+      ]),
+    });
+    const retryable = new Client([
+      { queryId: "q" },
+      {
+        status: "Complete",
+        results: [
+          start,
+          event({
+            sequence: 2,
+            event: "failed",
+            retryable: "1",
+            failure_class: "unavailable",
+            outcome: null,
+          }),
+        ],
+      },
+    ]);
+    await expect(
+      handler(retryable)({ operation: "detail", journey_id: id }),
+    ).resolves.toMatchObject({
+      status: "pending",
+      terminal_outcome: null,
+      stages: expect.arrayContaining([
+        expect.objectContaining({ sequence: 2, retryable: true }),
+      ]),
+    });
+  });
+
   it("queries retained history for detail and rejects a time-clipped journey without its canonical start", async () => {
     const client = new Client([
       { queryId: "q" },

@@ -278,12 +278,13 @@ function stage(raw) {
     attempt = uint(raw.attempt, 1, MAX_ATTEMPT),
     queue_age_ms =
       raw.queue_age_ms === undefined ? null : uint(raw.queue_age_ms),
+    // Logs Insights renders JSON booleans as "1" / "0"; accept the words as well.
     retryable =
       raw.retryable === undefined
         ? null
-        : raw.retryable === "true"
+        : raw.retryable === "true" || raw.retryable === "1"
           ? true
-          : raw.retryable === "false"
+          : raw.retryable === "false" || raw.retryable === "0"
             ? false
             : null;
   if (
