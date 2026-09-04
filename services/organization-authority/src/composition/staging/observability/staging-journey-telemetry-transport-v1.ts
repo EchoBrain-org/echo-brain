@@ -4,6 +4,10 @@ import {
   type JourneyTelemetryObserverV1,
 } from "../../../shared/journey-telemetry-v1.js";
 import {
+  formatStagingJourneyContentRecordV1,
+  type StagingJourneyContentRecordInputV1,
+} from "./staging-journey-content-telemetry-v1.js";
+import {
   formatApprovedSearchBacklogMetricsV1,
   formatJourneyTelemetryMetricsV1,
   formatStagingJourneyLivenessMetricV1,
@@ -56,6 +60,15 @@ export interface StagingJourneyTelemetryTransportDependenciesV1 {
   readonly scheduler?: StagingJourneyTelemetrySchedulerV1;
 }
 
+export interface StagingJourneyTelemetryTransportOptionsV1 {
+  /** Staging debugging switch: also write prompts, released text, and raw model output. */
+  readonly content_enabled?: boolean;
+}
+
+export type StagingJourneyContentObserverV1 = (
+  record: StagingJourneyContentRecordInputV1,
+) => void;
+
 export interface StagingJourneyTelemetryTransportV1 {
   /** False only when the deploy identity is unsafe to emit. */
   readonly enabled: boolean;
@@ -70,6 +83,10 @@ export interface StagingJourneyTelemetryTransportV1 {
   readonly observer: JourneyTelemetryObserverV1;
   /** Safe to pass to the staging approval sidecar recorder. */
   readonly approved_search_backlog_observer: StagingApprovedSearchBacklogObserverV1;
+  /** True only when the staging content switch is on for a valid identity. */
+  readonly content_enabled: boolean;
+  /** Writes bounded content records; inert unless content_enabled. */
+  readonly content_observer: StagingJourneyContentObserverV1;
   /** Stops liveness emission. Safe to call more than once. */
   close(): void;
 }
@@ -112,6 +129,8 @@ function disabledTransport(): StagingJourneyTelemetryTransportV1 {
     start: () => undefined,
     observer: () => undefined,
     approved_search_backlog_observer: () => undefined,
+    content_enabled: false,
+    content_observer: () => undefined,
     close: () => undefined,
   });
 }
@@ -124,9 +143,11 @@ function disabledTransport(): StagingJourneyTelemetryTransportV1 {
 export function createStagingJourneyTelemetryTransportV1(
   identity: StagingJourneyTelemetryIdentityV1,
   dependencies: StagingJourneyTelemetryTransportDependenciesV1,
+  options: StagingJourneyTelemetryTransportOptionsV1 = {},
 ): StagingJourneyTelemetryTransportV1 {
   if (!isValidIdentity(identity)) return disabledTransport();
   const immutableIdentity = Object.freeze({ ...identity });
+  const contentEnabled = options.content_enabled === true;
 
   const now = dependencies.now ?? (() => new Date().toISOString());
   const scheduler = dependencies.scheduler ?? defaultScheduler();
@@ -209,6 +230,23 @@ export function createStagingJourneyTelemetryTransportV1(
     }
   };
 
+  const contentObserver: StagingJourneyContentObserverV1 = (record) => {
+    if (!contentEnabled || closed) return;
+    try {
+      if (
+        record.release_sha !== immutableIdentity.release_sha ||
+        record.build_number !== immutableIdentity.build_number
+      ) {
+        return;
+      }
+      const formatted = formatStagingJourneyContentRecordV1(record);
+      if (formatted === null) return;
+      write(formatted);
+    } catch {
+      // Content telemetry is strictly outside answer control flow.
+    }
+  };
+
   const approvedSearchBacklogObserver: StagingApprovedSearchBacklogObserverV1 =
     (snapshot) => {
       if (closed) return;
@@ -249,6 +287,8 @@ export function createStagingJourneyTelemetryTransportV1(
     },
     observer,
     approved_search_backlog_observer: approvedSearchBacklogObserver,
+    content_enabled: contentEnabled,
+    content_observer: contentObserver,
     close(): void {
       if (closed) return;
       closed = true;
@@ -282,5 +322,9 @@ export function createStagingJourneyTelemetryTransportFromEnvironmentV1(
       build_number: parsedBuildNumber,
     },
     dependencies,
+    {
+      content_enabled:
+        environment.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1 === "true",
+    },
   );
 }

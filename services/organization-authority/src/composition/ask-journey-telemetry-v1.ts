@@ -1,5 +1,7 @@
 import { RetrievalGroundedAnswerCompositionError } from "../answer-composition/retrieval-grounded-answer-composition.js";
 import type {
+  AnswerCompositionContentKindV1,
+  AnswerCompositionContentObservationV1,
   AnswerCompositionGenerationObservationV1,
   AnswerCompositionStageObservationV1,
 } from "../answer-composition/retrieval-grounded-answer-composition.js";
@@ -50,6 +52,25 @@ export interface AskJourneyTelemetryFactoryV1 {
   start(): AskJourneyTelemetryRecorderV1;
 }
 
+/** Journey-stamped content observation; only the staging content switch wires a receiver. */
+export interface AskJourneyContentRecordInputV1 {
+  readonly journey_id: string;
+  readonly sequence: number;
+  readonly observed_at: string;
+  readonly release_sha: string;
+  readonly build_number: number;
+  readonly stage: Extract<
+    AskJourneyStageV1,
+    "ask_validation" | "ask_planner" | "ask_context" | "ask_answer"
+  >;
+  readonly content_kind: AnswerCompositionContentKindV1;
+  readonly content: unknown;
+}
+
+export type AskJourneyContentObserverV1 = (
+  record: AskJourneyContentRecordInputV1,
+) => void;
+
 export interface AskJourneyTelemetryRecorderV1 {
   readonly journey_id: string | null;
   startTimer(): number;
@@ -65,6 +86,8 @@ export interface AskJourneyTelemetryRecorderV1 {
   ): void;
   skip(stage: Exclude<AskJourneyStageV1, "ask_response">): void;
   observeComposition(event: AnswerCompositionStageObservationV1): void;
+  /** No-op unless the factory was opened with a content observer. */
+  observeContent(event: AnswerCompositionContentObservationV1): void;
   complete(
     outcome: AskJourneyOutcomeV1,
     started_at_ms: number,
@@ -241,6 +264,8 @@ export function createAskJourneyTelemetryFactoryV1(input: {
   readonly answer_model: JourneyLlmModelV1;
   readonly clock?: JourneyTelemetryDependenciesV1;
   readonly now_ms?: () => number;
+  /** Staging debugging only; absent in every other deployment. */
+  readonly content_observer?: AskJourneyContentObserverV1;
 }): AskJourneyTelemetryFactoryV1 {
   const telemetry = createJourneyTelemetryV1(input.observer, input.clock);
   const nowMs = input.now_ms ?? (() => performance.now());
@@ -257,6 +282,7 @@ export function createAskJourneyTelemetryFactoryV1(input: {
       });
       const closed = new Set<AskJourneyStageV1>();
       let lastFailure: AskJourneyFailureV1 | null = null;
+      let contentSequence = 0;
       const counters: Partial<
         Record<keyof JourneyRetrievalCountersInputV1, number>
       > = {};
@@ -352,6 +378,24 @@ export function createAskJourneyTelemetryFactoryV1(input: {
             outcome: "skipped",
             elapsed_ms: 0,
           });
+        },
+        observeContent(event) {
+          if (input.content_observer === undefined || journey === null) return;
+          try {
+            contentSequence += 1;
+            input.content_observer({
+              journey_id: journey.journey_id,
+              sequence: contentSequence,
+              observed_at: input.clock?.now?.() ?? new Date().toISOString(),
+              release_sha: input.release_sha,
+              build_number: input.build_number,
+              stage: `ask_${event.stage}`,
+              content_kind: event.content_kind,
+              content: event.content,
+            });
+          } catch {
+            // Content observation is fail-open like every other observer.
+          }
         },
         observeComposition(event) {
           const stage = `ask_${event.stage}` as Exclude<
