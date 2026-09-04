@@ -229,6 +229,31 @@ export interface AnswerCompositionStageObservationV1 {
   readonly retrieval: AnswerCompositionRetrievalObservationV1 | null;
 }
 
+export const ANSWER_COMPOSITION_CONTENT_KINDS_V1 = Object.freeze([
+  "question",
+  "planner_prompt",
+  "planner_output",
+  "planner_validation_error",
+  "context_atoms",
+  "answer_prompt",
+  "answer_output",
+  "answer_validation_error",
+] as const);
+export type AnswerCompositionContentKindV1 =
+  (typeof ANSWER_COMPOSITION_CONTENT_KINDS_V1)[number];
+
+/**
+ * Opt-in content seam for staging debugging. Unlike the stage seam it carries
+ * the question, prompts, released source text, raw model output, and the exact
+ * validation message. Composition emits nothing here unless an observer is
+ * configured, and observer failures never alter the answer.
+ */
+export interface AnswerCompositionContentObservationV1 {
+  readonly stage: "validation" | "planner" | "context" | "answer";
+  readonly content_kind: AnswerCompositionContentKindV1;
+  readonly content: unknown;
+}
+
 /**
  * Metadata-only failure signal. It deliberately has no field capable of
  * carrying a question, prompt, released record, answer, reasoning, or token.
@@ -264,6 +289,8 @@ export interface RetrievalGroundedAnswerCompositionOptions {
   readonly now_ms?: () => number;
   /** Content-free stage observer. Observer failures never alter the answer. */
   readonly on_stage?: (event: AnswerCompositionStageObservationV1) => void;
+  /** Opt-in staging content observer. Observer failures never alter the answer. */
+  readonly on_content?: (event: AnswerCompositionContentObservationV1) => void;
 }
 
 export interface RetrievalGroundedAnswerCompositionResult {
@@ -718,6 +745,18 @@ function elapsedMilliseconds(now: () => number, startedAt: number): number {
   return Math.max(0, Math.round(now() - startedAt));
 }
 
+function reportContent(
+  options: RetrievalGroundedAnswerCompositionOptions,
+  event: AnswerCompositionContentObservationV1,
+): void {
+  if (options.on_content === undefined) return;
+  try {
+    options.on_content(Object.freeze({ ...event }));
+  } catch {
+    // Content observation is strictly outside answer control flow.
+  }
+}
+
 function reportStage(
   options: RetrievalGroundedAnswerCompositionOptions,
   event: AnswerCompositionStageObservationV1,
@@ -874,6 +913,11 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
   return Object.freeze({
     async answer(input): Promise<RetrievalGroundedAnswerCompositionResult> {
       const question = validateReleasedRetrievalQuery(input.question);
+      reportContent(options, {
+        stage: "validation",
+        content_kind: "question",
+        content: { question },
+      });
       const exactRelease = extractSingleCanonicalReleaseId(question);
       const authorshipUnsupported =
         isFirstPersonDecisionAuthorshipQuestion(question);
@@ -900,6 +944,11 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           max_output_tokens: ANSWER_COMPOSITION_PLANNER_MAX_OUTPUT_TOKENS,
           timeout_ms: requestTimeout,
         });
+        reportContent(options, {
+          stage: "planner",
+          content_kind: "planner_prompt",
+          content: plannerRequest,
+        });
         const plannerStartedAt = now();
         let plannerGeneration:
           | StructuredGenerationObservedResultV1
@@ -918,6 +967,15 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
             options.on_stage === undefined
               ? 0
               : elapsedMilliseconds(now, plannerStartedAt);
+          reportContent(options, {
+            stage: "planner",
+            content_kind: "planner_output",
+            content: {
+              value: plannerGeneration.value,
+              usage: plannerGeneration.usage,
+              finish_reason: plannerGeneration.finish_reason,
+            },
+          });
           plan = parsePlan(
             plannerGeneration.value,
             question,
@@ -943,6 +1001,13 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
             }),
           });
         } catch (error) {
+          if (error instanceof RetrievalGroundedAnswerCompositionError) {
+            reportContent(options, {
+              stage: "planner",
+              content_kind: "planner_validation_error",
+              content: { message: error.message },
+            });
+          }
           if (options.on_stage !== undefined) {
             const metadata = modelFailureMetadata(error);
             const elapsed = elapsedMilliseconds(now, plannerStartedAt);
@@ -1008,6 +1073,19 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           options.on_stage === undefined ? 0 : now();
         try {
           context = boundedContext(release);
+          reportContent(options, {
+            stage: "context",
+            content_kind: "context_atoms",
+            content: {
+              atoms: context.map((atom) => ({
+                citation_id: atom.citation_id,
+                atom_id: atom.atom_id,
+                record_sha256: atom.record_sha256,
+                policy_id: atom.policy_id,
+                text: atom.text,
+              })),
+            },
+          });
           reportStage(options, {
             stage: "context",
             event: "succeeded",
@@ -1056,6 +1134,13 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
               max_output_tokens: ANSWER_COMPOSITION_ANSWER_MAX_OUTPUT_TOKENS,
               timeout_ms: requestTimeout,
             });
+      if (answerRequest !== null) {
+        reportContent(options, {
+          stage: "answer",
+          content_kind: "answer_prompt",
+          content: answerRequest,
+        });
+      }
       // An empty permitted release is not a generation task. Returning this fixed
       // response is both cheaper and clearer than inviting an unsupported answer.
       let parsed: ReturnType<typeof parseAnswer>;
@@ -1108,6 +1193,15 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
             options.on_stage === undefined
               ? 0
               : elapsedMilliseconds(now, answerStartedAt);
+          reportContent(options, {
+            stage: "answer",
+            content_kind: "answer_output",
+            content: {
+              value: answerGeneration.value,
+              usage: answerGeneration.usage,
+              finish_reason: answerGeneration.finish_reason,
+            },
+          });
           parsed = parseAnswer(
             answerGeneration.value,
             context,
@@ -1140,6 +1234,13 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
             }),
           });
         } catch (error) {
+          if (error instanceof RetrievalGroundedAnswerCompositionError) {
+            reportContent(options, {
+              stage: "answer",
+              content_kind: "answer_validation_error",
+              content: { message: error.message },
+            });
+          }
           if (options.on_stage !== undefined) {
             const metadata = modelFailureMetadata(error);
             const elapsed = elapsedMilliseconds(now, answerStartedAt);

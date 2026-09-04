@@ -1088,3 +1088,88 @@ describe("Person answer HTTP mount", () => {
     }
   });
 });
+
+it("routes the question and raw output to the staging content observer while stage telemetry stays content-free", async () => {
+  const telemetry: JourneyTelemetryEventV1[] = [];
+  const content: Array<{
+    journey_id: string;
+    content_kind: string;
+    content: unknown;
+  }> = [];
+  let observedCalls = 0;
+  const model: StructuredGenerationPort = {
+    generate: vi.fn(async () => {
+      throw new Error("the value-only path must remain unused in staging");
+    }),
+    generate_with_observation: vi.fn(async () => {
+      observedCalls += 1;
+      return {
+        value:
+          observedCalls === 1
+            ? { queries: ["launch date"] }
+            : {
+                status: "answered",
+                answer: "Tuesday, owned by the product team.",
+                citations: ["a1", "a2"],
+              },
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          total_tokens: 2,
+          cached_input_tokens: 0,
+          reasoning_tokens: 0,
+        },
+        finish_reason: "stop" as const,
+        provider_latency_ms: 1,
+      };
+    }),
+  };
+  const journeyFactory = createAskJourneyTelemetryFactoryV1({
+    observer: (event) => {
+      telemetry.push(event);
+    },
+    release_sha: "a".repeat(40),
+    build_number: 42,
+    planner_model: "deepseek/deepseek-v3.2",
+    answer_model: "deepseek/deepseek-v3.2",
+    clock: {
+      now: () => "2026-09-02T17:00:00.000Z",
+      create_uuid: () => "123e4567-e89b-42d3-a456-426614174000",
+    },
+    content_observer: (record) => {
+      content.push(record);
+    },
+  });
+  const value = setup({
+    model,
+    generation: STAGING_GENERATION,
+    ask_journey_telemetry: journeyFactory,
+  });
+  const question = "QUESTION-CONTENT-ONLY-journey";
+  try {
+    await expect(
+      value.route.ask({ access_token: "BEARER-DO-NOT-LOG-content", question }),
+    ).resolves.toMatchObject({ answer: "Tuesday, owned by the product team." });
+    await vi.waitFor(() => expect(telemetry).toHaveLength(10));
+    expect(content.map((record) => record.content_kind)).toEqual([
+      "question",
+      "planner_prompt",
+      "planner_output",
+      "context_atoms",
+      "answer_prompt",
+      "answer_output",
+    ]);
+    expect(
+      content.every(
+        (record) => record.journey_id === "123e4567-e89b-42d3-a456-426614174000",
+      ),
+    ).toBe(true);
+    expect(content[0]?.content).toEqual({ question });
+    const serializedContent = JSON.stringify(content);
+    expect(serializedContent).toContain(question);
+    expect(serializedContent).not.toContain("BEARER-DO-NOT-LOG-content");
+    expect(JSON.stringify(telemetry)).not.toContain(question);
+  } finally {
+    value.database.close();
+  }
+});

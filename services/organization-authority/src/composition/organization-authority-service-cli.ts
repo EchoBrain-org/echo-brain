@@ -176,6 +176,9 @@ export async function runOrganizationAuthorityServiceCli(
             build_number: stagingJourneyTelemetry.identity.build_number,
             planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
             answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+            ...(stagingJourneyTelemetry.content_enabled
+              ? { content_observer: stagingJourneyTelemetry.content_observer }
+              : {}),
           });
     const meetingApprovalJourneyTelemetry =
       stagingJourneyTelemetry?.identity === null ||

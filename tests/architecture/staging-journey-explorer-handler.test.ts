@@ -207,18 +207,45 @@ describe("staging Journey Explorer custom widget", () => {
         from: "2026-08-01T00:00:00.000Z",
         to: "2026-09-02T00:00:00.000Z",
       },
-      {
-        operation: "list",
-        widgetContext: {
-          ...widgetContext(now - 60_000, now),
-          unexpected: "not a CloudWatch context field",
-        },
-      },
     ])
       await expect(invoke(input)).resolves.toEqual({
         error: "invalid_request",
       });
     expect(client.sent).toEqual([]);
+  });
+
+  it("tolerates console-only context extras and names the rejected field when rendering", async () => {
+    const extras = [
+      { describe: false, operation: "list", widgetContext: widgetContext(now - 60_000, now) },
+      {
+        operation: "list",
+        widgetContext: {
+          ...widgetContext(now - 60_000, now),
+          timeRange: { ...widgetContext(now - 60_000, now).timeRange, zoom: null },
+        },
+      },
+      {
+        operation: "list",
+        widgetContext: {
+          ...widgetContext(now - 60_000, now),
+          domain: "https://us-west-2.console.aws.amazon.com",
+          isUsingThemeDark: false,
+          unexpected: "not a documented CloudWatch context field",
+        },
+      },
+    ];
+    for (const input of extras) {
+      const client = new Client([{ queryId: "q" }, { status: "Complete", results: [] }]);
+      await expect(handler(client)(input)).resolves.toMatchObject({ journeys: [] });
+      expect(client.sent).toHaveLength(2);
+    }
+    const rejected = new Client([]);
+    const html = await handler(rejected)({ operation: "list", query: "fields @message", render: true });
+    expect(html).toContain("The requested explorer action was not valid (event).");
+    expect(rejected.sent).toEqual([]);
+    await expect(
+      handler(new Client([]))({ operation: "list", query: "fields @message" }),
+    ).resolves.toEqual({ error: "invalid_request" });
   });
 
   it("uses finite allowlists and returns content-free metadata and null token fields only", async () => {
@@ -470,6 +497,69 @@ describe("staging Journey Explorer custom widget", () => {
           terminal_outcome: null,
         }),
       ],
+    });
+  });
+
+  it("accepts the Logs Insights boolean rendering of retryable (0/1) alongside false/true", async () => {
+    const start = event({
+      sequence: 1,
+      stage: "ask_validation",
+      event: "started",
+      outcome: null,
+      elapsed_ms: 0,
+      observed_at: "2026-09-02T11:58:59.000Z",
+    });
+    // CloudWatch Logs Insights returns JSON booleans as "0" / "1", never "false" / "true".
+    const nonretryable = new Client([
+      { queryId: "q" },
+      {
+        status: "Complete",
+        results: [
+          start,
+          event({
+            sequence: 2,
+            event: "failed",
+            retryable: "0",
+            failure_class: "invalid_contract",
+            outcome: null,
+          }),
+        ],
+      },
+    ]);
+    await expect(
+      handler(nonretryable)({ operation: "detail", journey_id: id }),
+    ).resolves.toMatchObject({
+      status: "complete",
+      terminal_outcome: "failed",
+      terminal_failure_class: "invalid_contract",
+      stages: expect.arrayContaining([
+        expect.objectContaining({ sequence: 2, retryable: false }),
+      ]),
+    });
+    const retryable = new Client([
+      { queryId: "q" },
+      {
+        status: "Complete",
+        results: [
+          start,
+          event({
+            sequence: 2,
+            event: "failed",
+            retryable: "1",
+            failure_class: "unavailable",
+            outcome: null,
+          }),
+        ],
+      },
+    ]);
+    await expect(
+      handler(retryable)({ operation: "detail", journey_id: id }),
+    ).resolves.toMatchObject({
+      status: "pending",
+      terminal_outcome: null,
+      stages: expect.arrayContaining([
+        expect.objectContaining({ sequence: 2, retryable: true }),
+      ]),
     });
   });
 

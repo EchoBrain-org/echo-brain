@@ -32,6 +32,10 @@ services:
       # derives its stable canary id from it, never from an operator request.
       ECHO_CLEAN_RELEASE_ID: "${ECHO_CLEAN_RELEASE_ID:?set ECHO_CLEAN_RELEASE_ID to the accepted release ID}"
       ECHO_CLEAN_AUTHORITY_HOST: "${ECHO_CLEAN_AUTHORITY_HOST:?set ECHO_CLEAN_AUTHORITY_HOST to the public DNS name}"
+      # Staging debugging switch. When "true" the Authority also writes the
+      # question, prompts, released source text, raw model output, and exact
+      # validation messages to its log stream as echo-authority-journey-content-v1.
+      ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "${ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1:-false}"
     restart: unless-stopped
     stop_grace_period: 45s
     volumes:

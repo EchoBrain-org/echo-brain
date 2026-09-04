@@ -498,3 +498,93 @@ describe("staging journey telemetry transport v1", () => {
     expect(lines).toHaveLength(2);
   });
 });
+
+const contentTransport = await import(
+  "../../../../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js"
+);
+
+describe("staging journey content telemetry switch", () => {
+  const identity = { release_sha: "a".repeat(40), build_number: 42 };
+  const record = {
+    journey_id: "123e4567-e89b-42d3-a456-426614174000",
+    sequence: 1,
+    observed_at: "2026-09-02T17:00:00.000Z",
+    release_sha: identity.release_sha,
+    build_number: 42,
+    stage: "ask_answer" as const,
+    content_kind: "answer_output" as const,
+    content: { value: { status: "answered" } },
+  };
+
+  it("is off by default and writes nothing", () => {
+    const lines: string[] = [];
+    const transport = contentTransport.createStagingJourneyTelemetryTransportV1(
+      identity,
+      { write: (line) => void lines.push(line) },
+    );
+    expect(transport.content_enabled).toBe(false);
+    transport.content_observer(record);
+    expect(lines).toEqual([]);
+  });
+
+  it("writes canonical bounded content records only for the exact identity when enabled", () => {
+    const lines: string[] = [];
+    const transport = contentTransport.createStagingJourneyTelemetryTransportV1(
+      identity,
+      { write: (line) => void lines.push(line) },
+      { content_enabled: true },
+    );
+    expect(transport.content_enabled).toBe(true);
+    transport.content_observer(record);
+    transport.content_observer({ ...record, build_number: 43 });
+    transport.content_observer({ ...record, journey_id: "nope" });
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+      schema_version: 1,
+      kind: "echo-authority-journey-content-v1",
+      environment: "staging",
+      workflow: "ask",
+      journey_id: record.journey_id,
+      sequence: 1,
+      release_sha: identity.release_sha,
+      build_number: 42,
+      stage: "ask_answer",
+      content_kind: "answer_output",
+      truncated: false,
+      content: { value: { status: "answered" } },
+    });
+    transport.close();
+    transport.content_observer(record);
+    expect(lines).toHaveLength(1);
+  });
+
+  it("reads the staging content switch from the immutable image environment", () => {
+    const write = () => undefined;
+    const base = {
+      ECHO_STAGING_JOURNEY_TELEMETRY_V1: "true",
+      ECHO_SOURCE_SHA: identity.release_sha,
+      ECHO_BUILD_NUMBER: "42",
+    };
+    const create = contentTransport.createStagingJourneyTelemetryTransportFromEnvironmentV1;
+    expect(create(base, { write }).content_enabled).toBe(false);
+    expect(
+      create({ ...base, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "true" }, { write })
+        .content_enabled,
+    ).toBe(true);
+    expect(
+      create({ ...base, ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "TRUE" }, { write })
+        .content_enabled,
+    ).toBe(false);
+    // Content telemetry never exists without the content-free transport.
+    expect(
+      create(
+        {
+          ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "true",
+          ECHO_SOURCE_SHA: identity.release_sha,
+          ECHO_BUILD_NUMBER: "42",
+        },
+        { write },
+      ).content_enabled,
+    ).toBe(false);
+  });
+});

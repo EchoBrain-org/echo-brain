@@ -300,6 +300,7 @@ export function createPersonAnswerRouteV1(
             : {
                 now_ms: () => journey.startTimer(),
                 on_stage: (event) => journey.observeComposition(event),
+                on_content: (event) => journey.observeContent(event),
               }),
           ...(options.on_failure === undefined
             ? {}
