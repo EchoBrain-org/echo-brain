@@ -70,6 +70,16 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
   /** Runs bounded operator work through the same gate as the processing worker. */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  /**
+   * Asks the worker to publish queued approval actions now instead of at the
+   * next periodic cycle. It runs only the approval phases (finalize, append,
+   * reconcile) through the same exclusive gate as the periodic cycle, so no
+   * second writer is introduced. Requests made while one is still waiting for
+   * the gate coalesce into that one run; a request made while a publication is
+   * already executing schedules exactly one follow-up run. It never throws and
+   * never blocks the caller; failures go to `on_worker_error`.
+   */
+  requestApprovalPublication(): void;
   /** Stops the worker before closing the Authority API database handles. */
   close(): Promise<void>;
 }
@@ -100,6 +110,34 @@ export async function runOrganizationAuthorityProcessingCycleV1(
     );
   }
   signal.throwIfAborted();
+  await phase("approval_observation", () =>
+    processing.observeAndFinalizePendingApprovals(signal),
+  );
+  signal.throwIfAborted();
+  await phase("record_append", () => processing.appendFinalizedApprovalsToV4(signal));
+  signal.throwIfAborted();
+  await phase("search_reconciliation", () =>
+    processing.reconcileReadableSearchGeneration(signal),
+  );
+}
+
+/**
+ * Runs only the approval-publication phases of the cycle: finalize queued
+ * actions, append approved ones to V4, and reconcile the search generation.
+ * Source intake is deliberately excluded so an approval never waits behind a
+ * source poll or an extraction call. The periodic cycle still runs these same
+ * phases, so a lost or failed publication request is recovered by the next
+ * tick rather than by any retry logic here.
+ */
+export async function runOrganizationAuthorityApprovalPublicationV1(
+  processing: OrganizationAuthorityProcessingCycleV1,
+  signal: AbortSignal,
+  lifecycle?: MeetingProcessingWorkerPhaseRunnerV1,
+): Promise<void> {
+  const phase = <T>(
+    name: Parameters<MeetingProcessingWorkerPhaseRunnerV1["runPhase"]>[0],
+    operation: () => Promise<T>,
+  ): Promise<T> => lifecycle?.runPhase(name, operation, signal) ?? operation();
   await phase("approval_observation", () =>
     processing.observeAndFinalizePendingApprovals(signal),
   );
@@ -173,10 +211,41 @@ export async function startOrganizationAuthorityServiceLifecycle(
       },
       onError: dependencies.on_worker_error,
     });
+    let closing = false;
+    let publicationPending = false;
+    const requestApprovalPublication = (): void => {
+      if (closing || publicationPending) return;
+      publicationPending = true;
+      void worker
+        .runExclusive(async (signal) => {
+          // Clear before running so a request that arrives mid-publication
+          // schedules one follow-up run rather than being dropped.
+          publicationPending = false;
+          await runOrganizationAuthorityApprovalPublicationV1(
+            dependencies.processing,
+            signal,
+            lifecycle,
+          );
+        })
+        .catch((failure: unknown) => {
+          // `publicationPending` was already cleared when the run started; the
+          // only pre-start failure is the closed worker's aborted signal.
+          if (closing) return;
+          try {
+            dependencies.on_worker_error?.(
+              failure instanceof Error ? failure : new Error(String(failure)),
+            );
+          } catch {
+            // Error reporting is observational and cannot become control flow.
+          }
+        });
+    };
     return {
       address: startedApi.address,
       runExclusive: (operation) => worker.runExclusive(operation),
+      requestApprovalPublication,
       close: async () => {
+        closing = true;
         try {
           try {
             await worker.close();

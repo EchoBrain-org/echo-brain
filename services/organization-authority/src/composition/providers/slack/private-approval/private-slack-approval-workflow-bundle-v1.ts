@@ -191,6 +191,9 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
         ),
         persistence: controlPlane,
         on_rejection: config.on_rejection,
+        ...(context.on_terminal_action_queued === undefined
+          ? {}
+          : { on_action_queued: context.on_terminal_action_queued }),
         ...(context.journey_telemetry === undefined
           ? {}
           : {
