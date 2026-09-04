@@ -140,6 +140,7 @@ const { runOrganizationAuthorityServiceCli } =
 
 afterEach(() => {
   delete process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1;
+  delete process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1;
   delete process.env.ECHO_BUILD_NUMBER;
   delete process.env.ECHO_SOURCE_SHA;
   runtimeState.worker_error = undefined;
@@ -285,6 +286,57 @@ describe("admitted runtime CLI events", () => {
     expect(nonStagingStderr.join("")).not.toContain(
       "echo-authority-journey-telemetry-liveness-v1",
     );
+  });
+
+  it("writes content records to stderr only when the staging content switch is on", async () => {
+    const releaseSha = "a".repeat(40);
+    process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
+    process.env.ECHO_SOURCE_SHA = releaseSha;
+    process.env.ECHO_BUILD_NUMBER = "33689731778";
+    runtimeState.authority_url = "https://authority-staging.echobrain.org";
+    for (const enabled of [false, true]) {
+      if (enabled) process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1 = "true";
+      else delete process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1;
+      runtimeState.worker_error = undefined;
+      const stderr: string[] = [];
+      const run = start({
+        stderr: (value) => {
+          stderr.push(value);
+        },
+      });
+      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+      const factory = runtimeState.ask_journey_telemetry as
+        | { start(): { observeContent(event: unknown): void } }
+        | undefined;
+      expect(factory).toBeDefined();
+      factory?.start().observeContent({
+        stage: "validation",
+        content_kind: "question",
+        content: { question: "CONTENT-SWITCH-QUESTION" },
+      });
+      process.emit("SIGTERM");
+      await expect(run).resolves.toBe(0);
+      const records = stderr
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.kind === "echo-authority-journey-content-v1");
+      if (enabled) {
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({
+          schema_version: 1,
+          environment: "staging",
+          workflow: "ask",
+          release_sha: releaseSha,
+          build_number: 33_689_731_778,
+          stage: "ask_validation",
+          content_kind: "question",
+          truncated: false,
+          content: { question: "CONTENT-SWITCH-QUESTION" },
+        });
+      } else {
+        expect(records).toHaveLength(0);
+        expect(stderr.join("")).not.toContain("CONTENT-SWITCH-QUESTION");
+      }
+    }
   });
 
   it("keeps staging available when immutable telemetry identity is invalid", async () => {

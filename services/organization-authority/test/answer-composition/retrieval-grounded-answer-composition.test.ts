@@ -4,6 +4,7 @@ import {
   createRetrievalGroundedAnswerComposition,
   RetrievalGroundedAnswerCompositionError,
   validateReleasedRetrievalQuery,
+  type AnswerCompositionContentObservationV1,
   type AnswerCompositionFailureDiagnosticV1,
   type AnswerCompositionStageObservationV1,
   type ReleasedRetrievalBatch,
@@ -918,5 +919,141 @@ describe("retrieval-grounded answer composition", () => {
     expect(releasedRetrieval.retrieve).toHaveBeenCalledWith({
       queries: [question, "clean-v1-planner-20260830-999"],
     });
+  });
+});
+
+describe("retrieval-grounded answer composition content seam", () => {
+  const usage = {
+    input_tokens: 10,
+    output_tokens: 5,
+    total_tokens: 15,
+    cached_input_tokens: 0,
+    reasoning_tokens: 0,
+  };
+  function ports(answerValue: unknown) {
+    const plannerValue = { queries: ["launch date"] };
+    const planner: StructuredGenerationPort = {
+      generate: vi.fn(async () => plannerValue),
+      generate_with_observation: vi.fn(async () => ({
+        value: plannerValue,
+        usage,
+        finish_reason: "stop" as const,
+        provider_latency_ms: 3,
+      })),
+    };
+    const answerer: StructuredGenerationPort = {
+      generate: vi.fn(async () => answerValue),
+      generate_with_observation: vi.fn(async () => ({
+        value: answerValue,
+        usage,
+        finish_reason: "stop" as const,
+        provider_latency_ms: 4,
+      })),
+    };
+    return { planner, answerer };
+  }
+  function compose(
+    generation: ReturnType<typeof ports>,
+    on_content?: (event: AnswerCompositionContentObservationV1) => void,
+    on_stage?: (event: AnswerCompositionStageObservationV1) => void,
+  ) {
+    return createRetrievalGroundedAnswerComposition({
+      ...generation,
+      released_retrieval: {
+        retrieve: vi.fn(async (input) => release(true, input.queries.length)),
+        revalidate: vi.fn(async () => ({
+          checked_at: "2026-08-23T00:00:01.000Z",
+        })),
+      },
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "deepseek/deepseek-v3.2",
+      answer_model: "deepseek/deepseek-v3.2",
+      ...(on_content === undefined ? {} : { on_content }),
+      ...(on_stage === undefined ? {} : { on_stage }),
+    });
+  }
+  const answered = { status: "answered", answer: "Tuesday.", citations: ["a1"] };
+
+  it("emits the question, prompts, context atoms, and raw outputs only to on_content", async () => {
+    const content: AnswerCompositionContentObservationV1[] = [];
+    const stages: AnswerCompositionStageObservationV1[] = [];
+    const composition = compose(
+      ports(answered),
+      (event) => content.push(event),
+      (event) => stages.push(event),
+    );
+    await expect(
+      composition.answer({ question: "CONTENT-ONLY when is the launch" }),
+    ).resolves.toMatchObject({ answer: "Tuesday." });
+    expect(content.map((event) => `${event.stage}:${event.content_kind}`)).toEqual([
+      "validation:question",
+      "planner:planner_prompt",
+      "planner:planner_output",
+      "context:context_atoms",
+      "answer:answer_prompt",
+      "answer:answer_output",
+    ]);
+    expect(content[0]?.content).toEqual({ question: "CONTENT-ONLY when is the launch" });
+    expect(content[1]?.content).toMatchObject({
+      model: "deepseek/deepseek-v3.2",
+      user_prompt: expect.stringContaining("CONTENT-ONLY"),
+    });
+    expect(content[2]?.content).toMatchObject({
+      value: { queries: ["launch date"] },
+      finish_reason: "stop",
+    });
+    expect(content[3]?.content).toMatchObject({
+      atoms: [
+        expect.objectContaining({
+          citation_id: "a1",
+          text: "The approved launch date is Tuesday.",
+        }),
+        expect.objectContaining({ citation_id: "a2" }),
+      ],
+    });
+    expect(content[4]?.content).toMatchObject({
+      user_prompt: expect.stringContaining("CONTENT-ONLY"),
+    });
+    expect(content[5]?.content).toMatchObject({
+      value: answered,
+      finish_reason: "stop",
+    });
+    expect(stages.length).toBeGreaterThan(0);
+    const serializedStages = JSON.stringify(stages);
+    expect(serializedStages).not.toContain("CONTENT-ONLY");
+    expect(serializedStages).not.toContain("Tuesday");
+  });
+
+  it("emits the exact validation message when schema-valid model output violates the answer contract", async () => {
+    const content: AnswerCompositionContentObservationV1[] = [];
+    const composition = compose(
+      ports({ status: "answered", answer: "Tuesday.", citations: [] }),
+      (event) => content.push(event),
+    );
+    await expect(
+      composition.answer({ question: "when is the launch" }),
+    ).rejects.toThrow(RetrievalGroundedAnswerCompositionError);
+    expect(content.some((event) => event.content_kind === "answer_output")).toBe(true);
+    expect(content.at(-1)).toEqual({
+      stage: "answer",
+      content_kind: "answer_validation_error",
+      content: { message: "answer response has invalid citation status" },
+    });
+  });
+
+  it("stays silent without on_content and never lets a content observer failure alter the answer", async () => {
+    const stages: AnswerCompositionStageObservationV1[] = [];
+    await expect(
+      compose(ports(answered), undefined, (event) => stages.push(event)).answer({
+        question: "when is the launch",
+      }),
+    ).resolves.toMatchObject({ answer: "Tuesday." });
+    expect(stages.length).toBeGreaterThan(0);
+    await expect(
+      compose(ports(answered), () => {
+        throw new Error("content observer down");
+      }).answer({ question: "when is the launch" }),
+    ).resolves.toMatchObject({ answer: "Tuesday." });
   });
 });

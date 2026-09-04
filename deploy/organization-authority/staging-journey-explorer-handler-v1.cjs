@@ -141,30 +141,6 @@ const RETRIEVAL_STAGES = new Set([
   "ask_audit",
   "ask_response",
 ]);
-const WIDGET_CONTEXT_KEYS = new Set([
-  "dashboardName",
-  "widgetId",
-  "accountId",
-  "locale",
-  "timezone",
-  "period",
-  "isAutoPeriod",
-  "timeRange",
-  "theme",
-  "linkCharts",
-  "title",
-  "forms",
-  "params",
-  "width",
-  "height",
-]);
-const TIME_RANGE_KEYS = new Set([
-  "mode",
-  "start",
-  "end",
-  "relativeStart",
-  "zoom",
-]);
 const ENDPOINT_ARN =
   /^arn:(aws|aws-us-gov|aws-cn):lambda:([a-z0-9-]+):([0-9]{12}):function:customWidget-echo-staging-journey-explorer-v1$/;
 const BASE =
@@ -278,12 +254,13 @@ function stage(raw) {
     attempt = uint(raw.attempt, 1, MAX_ATTEMPT),
     queue_age_ms =
       raw.queue_age_ms === undefined ? null : uint(raw.queue_age_ms),
+    // Logs Insights renders JSON booleans as "1" / "0"; accept the words as well.
     retryable =
       raw.retryable === undefined
         ? null
-        : raw.retryable === "true"
+        : raw.retryable === "true" || raw.retryable === "1"
           ? true
-          : raw.retryable === "false"
+          : raw.retryable === "false" || raw.retryable === "0"
             ? false
             : null;
   if (
@@ -634,21 +611,22 @@ function time(value) {
   if (parsed !== null) return parsed;
   throw error("time");
 }
+// The console adds undocumented context fields over time (for example
+// "domain"); only timeRange is consumed, so other keys are ignored rather than
+// failing the whole widget closed.
 function context(value) {
   if (value === undefined) return null;
   if (
     !value ||
     typeof value !== "object" ||
     Array.isArray(value) ||
-    Object.keys(value).some((key) => !WIDGET_CONTEXT_KEYS.has(key)) ||
     !value.timeRange ||
     typeof value.timeRange !== "object" ||
-    Array.isArray(value.timeRange) ||
-    Object.keys(value.timeRange).some((key) => !TIME_RANGE_KEYS.has(key))
+    Array.isArray(value.timeRange)
   )
     throw error("widgetContext");
   let selected = value.timeRange;
-  if (value.timeRange.zoom !== undefined) {
+  if (value.timeRange.zoom !== undefined && value.timeRange.zoom !== null) {
     if (
       !value.timeRange.zoom ||
       typeof value.timeRange.zoom !== "object" ||
@@ -684,7 +662,8 @@ function request(event, now) {
     context(event.widgetContext);
     return { operation: "describe", render: event.render === true };
   }
-  if (event.describe !== undefined) throw error("describe");
+  if (event.describe !== undefined && event.describe !== false)
+    throw error("describe");
   const operation = event.operation === undefined ? "list" : event.operation;
   if (operation !== "list" && operation !== "detail") throw error("operation");
   const range = context(event.widgetContext),
@@ -859,10 +838,13 @@ function renderDetail(data, parsed, endpointArn) {
     `${range}${summary}${tokens}${humanWait}<p>${back}</p><p class="notice">The machine waterfall positions each event from its validated observed time and sizes its bar from elapsed_ms. Human wait and inter-stage gaps remain empty space; human wait is never drawn as machine work.</p><table><thead><tr><th>Sequence</th><th>Stage</th><th>Attempt</th><th>Event</th><th>Observed</th><th>Machine waterfall</th><th>Prior retries</th><th>Outcome</th><th>Failure boundary</th><th>LLM</th><th>Retrieval</th></tr></thead><tbody>${stages}</tbody></table>`,
   );
 }
-function renderError(code, operation) {
+function renderError(code, operation, reason) {
   const message =
     {
-      invalid_request: "The requested explorer action was not valid.",
+      invalid_request:
+        typeof reason === "string" && /^[a-z_]{1,32}$/.test(reason)
+          ? `The requested explorer action was not valid (${escapeHtml(reason)}).`
+          : "The requested explorer action was not valid.",
       query_timeout:
         operation === "detail"
           ? "The retained 14-day history query for this journey timed out, so no partial timeline is shown. Choose another journey or investigate its telemetry in CloudWatch Logs."
@@ -1086,7 +1068,13 @@ function createStagingJourneyExplorerHandlerV1(options) {
         : detail;
     } catch (caught) {
       const output = safe(caught);
-      return wantsRender ? renderError(output.error, parsed?.operation) : output;
+      return wantsRender
+        ? renderError(
+            output.error,
+            parsed?.operation,
+            caught && caught.code === "INVALID_REQUEST" ? caught.message : undefined,
+          )
+        : output;
     }
   };
 }
