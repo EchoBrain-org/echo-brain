@@ -1,0 +1,490 @@
+{
+  "schema_version": 1,
+  "kind": "authority-capacity-metrics-v1",
+  "status": "pinned-rules-harness-not-implemented-no-capacity-claim",
+  "definition": "../../docs/product/2026-09-05-authority-capacity-metrics-v1.md",
+  "evaluation_scope": {
+    "objective": "runtime-capacity-with-deterministic-external-inference",
+    "live_llm_calls_allowed": false,
+    "llm_quality_scoring_enabled": false,
+    "excluded": [
+      "extraction-semantic-quality-and-recall",
+      "relationship-semantic-quality",
+      "planner-and-answer-semantic-quality",
+      "model-or-prompt-selection-and-tuning",
+      "live-model-sampling-latency-and-output-variation"
+    ],
+    "fixture_stages": [
+      "extraction",
+      "relationship_projection",
+      "answer_planner",
+      "answer_generation"
+    ],
+    "fixture_response_selection": "sealed-per-run-semantic-request-identity-with-server-issued-attempt-ordinal",
+    "fixture_responses_and_delays_frozen_across_candidates": false,
+    "fixture_boundary": "external-inference-transport-only",
+    "real_runtime_checks_and_durable_paths_required": true,
+    "answer_success_oracle": "expected-fixture-output-citations-and-authorized-audited-release",
+    "unexpected_fixture_request_or_output": "correctness-failure",
+    "scripted_faults": "sealed-reproducible-cases-in-both-timed-run-and-boundary-suite",
+    "latency_scoring": "end-to-end-under-pinned-scripted-delay-distribution-with-no-latency-subtraction",
+    "comparison_rules": "fixed-generator-distributions-and-oracle; fresh-held-out-realization-after-candidate-freeze; disclosed-seeds-diagnostic-only"
+  },
+  "milestones": [
+    {
+      "id": "M1",
+      "active_employees": 10,
+      "history_label": "1 month",
+      "history_calendar_days": 30,
+      "history_workdays": 20,
+      "historical_atoms_min": 350,
+      "historical_postings_min": 8750,
+      "admitted_source_owners_min": 1,
+      "history_probe_count": 200,
+      "coverage": "team consuming the current single-owner feed",
+      "peak_day_meetings": 6,
+      "peak_day_answers": 55,
+      "peak_day_user_searches": 55,
+      "role": "baseline-checkpoint-not-an-optimization-achievement"
+    },
+    {
+      "id": "M2",
+      "active_employees": 50,
+      "history_label": "1 year",
+      "history_calendar_days": 365,
+      "history_workdays": 250,
+      "historical_atoms_min": 21875,
+      "historical_postings_min": 546875,
+      "admitted_source_owners_min": 50,
+      "history_probe_count": 200,
+      "coverage": "independent owner-scoped intake for the active employees",
+      "peak_day_meetings": 28,
+      "peak_day_answers": 274,
+      "peak_day_user_searches": 274,
+      "role": "usable-capacity-target-not-a-required-architecture"
+    },
+    {
+      "id": "M3",
+      "active_employees": 250,
+      "history_label": "2 years",
+      "history_calendar_days": 730,
+      "history_workdays": 500,
+      "historical_atoms_min": 218750,
+      "historical_postings_min": 5468750,
+      "admitted_source_owners_min": 250,
+      "history_probe_count": 250,
+      "coverage": "independent owner-scoped intake for the active employees",
+      "peak_day_meetings": 137,
+      "peak_day_answers": 1368,
+      "peak_day_user_searches": 1368,
+      "role": "usable-capacity-target-not-a-required-architecture"
+    }
+  ],
+  "workload": {
+    "distinct_meetings_per_employee_per_workday": 0.5,
+    "approved_fraction": 0.7,
+    "atoms_per_approved_meeting": 5,
+    "mean_postings_per_atom": 25,
+    "answers_per_employee_per_workday": 5,
+    "direct_searches_per_employee_per_workday": 5,
+    "shared_atom_fraction": 0.7,
+    "private_atom_fraction": 0.3,
+    "supported_policies": [
+      "organization-member-readable-person-v2",
+      "restricted-reviewer-person-v2"
+    ],
+    "run_duration_ms": 28800000,
+    "peak_duration_ms": 900000,
+    "peak_multiplier": 4,
+    "approval_delay_after_card_ms": 30000,
+    "availability_probe_interval_ms": 10000,
+    "history_probe_count_rule": "max(200, active_employees)",
+    "history_age_buckets": 10,
+    "history_age_bucket_atom_count_rule": "equal-tenths-with-deterministic-whole-atom-rounding",
+    "history_probes_min_per_age_bucket": 10,
+    "approval_visibility_probe_interval_ms": 250,
+    "final_drain_start": "fixed-end-of-eight-hour-arrival-trace",
+    "load_clock": "real-monotonic",
+    "arrivals": "fixed-before-run-independent-of-candidate-completion",
+    "peak_start_window_ms": [
+      7200000,
+      21600000
+    ],
+    "peak_start_selection": "sealed-uniform-after-candidate-digest",
+    "history_negative_probes_extra": 20,
+    "warmup_duration_ms_max": 1800000,
+    "warmup": "fresh-state-index-build-inside-budget-no-future-queries; startup-time-and-effects-reported"
+  },
+  "thresholds": {
+    "search": {
+      "p95_ms_max": 500,
+      "completion_deadline_ms": 2000,
+      "verified_success_fraction_min": 0.995
+    },
+    "answer": {
+      "p95_ms_max": 15000,
+      "completion_deadline_ms": 30000,
+      "verified_success_fraction_min": 0.995
+    },
+    "source_to_card": {
+      "p95_ms_max": 180000,
+      "observation_deadline_ms": 600000
+    },
+    "approval_to_search": {
+      "p95_ms_max": 60000,
+      "observation_deadline_ms": 300000
+    },
+    "history_probe_success_fraction_min": 1,
+    "final_drain_ms_max": 600000,
+    "eligible_work_remaining_after_drain_max": 0,
+    "permission_violations_max": 0,
+    "acknowledged_durable_work_lost_max": 0,
+    "duplicate_canonical_appends_max": 0,
+    "partial_or_invalid_generation_publications_max": 0,
+    "unexpected_provider_effects_max": 0,
+    "required_assertions_pass_fraction_min": 1,
+    "provider_call_multiplier_max": 1.02,
+    "provider_wire_byte_multiplier_max": 1.02,
+    "provider_call_rounding": "floor",
+    "ordinary_calls_per_answer_stage_max": 1,
+    "concurrent_duplicate_effects_max": 0,
+    "audit_after_response_violations_max": 0,
+    "unapproved_generation_atoms_max": 0,
+    "missing_or_wrong_logical_postings_max": 0,
+    "timed_permission_assertions_pass_fraction_min": 1,
+    "post_kill_readiness_ms_max": 60000
+  },
+  "grading": {
+    "percentile": "nearest-rank-ceil-0.95-times-offered-count",
+    "failed_incorrect_or_unfinished_latency": "positive-infinity",
+    "empty_population": "not-run",
+    "search_gates_evaluated_separately": [
+      "direct_user_search",
+      "availability_probe",
+      "history_probe"
+    ],
+    "success_rates_evaluated_separately": [
+      "direct_user_search",
+      "availability_probe",
+      "answer"
+    ],
+    "history_probe_success_fraction_override": 1,
+    "combined_search_metrics": "diagnostic-only",
+    "denominator": "all-offered-eligible-operations-in-the-predeclared-trace",
+    "source_to_card_population": "all-predeclared-actionable-source-revisions-including-missing-cards",
+    "approval_to_search_population": "all-valid-approve-actions-actually-offered-after-a-card-including-failed-acknowledgements",
+    "missing_card_dependent_action": "no-approval-latency-sample-but-source-failure-and-unfinished-backlog",
+    "admitted_owner_evidence": "each-owner-has-source-history-or-timed-revision-and-independent-admitted-cursor-state",
+    "user_retries_allowed_for_success_credit": 0,
+    "expected_fault_case_denials_in_normal_success_denominator": false,
+    "approval_visibility_poll_requests_in_normal_success_denominator": false,
+    "independent_availability_probes_in_search_denominator": true,
+    "shortened_or_virtual_time_run_can_pass_milestone": false,
+    "missing_required_evidence_can_pass": false,
+    "qualification_claim": "capacity for the pinned workload, provider and hardware profiles; not production qualification",
+    "verdicts": [
+      "pass",
+      "fail",
+      "inconclusive",
+      "not-run"
+    ],
+    "provider_scope": "synthetic-sealed-v1",
+    "ordinary_work_affected_by_injected_crash_in_normal_denominator": true,
+    "inconclusive_requires_independent_infrastructure_evidence": true,
+    "measured_failure_remains_fail_despite_later_infrastructure_fault": true
+  },
+  "reference_hardware": {
+    "id": "authority-capacity-reference-v1",
+    "provider": "AWS EC2",
+    "instance_type": "c7i.xlarge",
+    "region": "us-west-2",
+    "os": "Ubuntu Server 24.04 LTS x86_64; exact AMI and kernel pinned in first verifier environment lock",
+    "total_candidate_vcpu_limit": 4,
+    "total_candidate_memory_limit_bytes": 8589934592,
+    "swap_allowed": false,
+    "storage": {
+      "type": "EBS gp3",
+      "size_gib": 100,
+      "iops": 3000,
+      "throughput_mib_per_second": 125,
+      "filesystem": "ext4",
+      "mount": "dedicated-block-backed-state-volume-with-default-write-barriers",
+      "encryption": true
+    },
+    "driver_and_simulators": "separate-hosts-in-same-availability-zone-no-shared-candidate-cpuset",
+    "candidate_root_filesystem_readonly": true,
+    "candidate_durable_writes_only_under_state": true,
+    "persistent_state_on_tmpfs_overlay_or_memory_forbidden": true,
+    "all_candidate_children_in_resource_budget": true,
+    "hardware_fingerprint_required": true,
+    "environment_lock_required": true,
+    "environment_changes_require_new_profile_version": true,
+    "different_hardware_results_comparable": false
+  },
+  "provider_profile": {
+    "id": "synthetic-sealed-v1",
+    "status": "scripted-assumptions-not-live-llm-measurements",
+    "delay_distribution": "continuous-uniform-between-min-and-max; deterministic-from-sealed-seed-semantic-root-and-server-issued-ordinal",
+    "delay_resolution_ms": 1,
+    "delay_selection_controlled_by_candidate": false,
+    "delays_ms": {
+      "source_request": {
+        "min": 50,
+        "max": 500
+      },
+      "extraction": {
+        "min": 10000,
+        "max": 45000
+      },
+      "relationship_projection": {
+        "min": 1000,
+        "max": 8000
+      },
+      "answer_planner": {
+        "min": 500,
+        "max": 3000
+      },
+      "answer_generation": {
+        "min": 3000,
+        "max": 10000
+      },
+      "approval_provider_request": {
+        "min": 50,
+        "max": 500
+      },
+      "identity_provider_request": {
+        "min": 25,
+        "max": 200
+      }
+    },
+    "planner_output": "query-terms-only-no-atom-ids-or-citations",
+    "generation_input_validation": "production-citation-aliases-and-text-bound-out-of-band-to-required-atom-ids-content-digests-and-this-request-authorized-layer3-release; no-unreleased-extra-evidence",
+    "generation_output": "production-wire-format-with-citations-only-to-valid-supplied-evidence",
+    "causal_binding": "opaque-token-returned-by-planner-http-response-must-be-presented-on-answer-http-request; approved-snapshot-token-required-before-projection; external-ledger-validates; no-raw-transcript-token-fields-in-projection-payload",
+    "causal_transport_support_status": "not-present-in-current-port-qualification-prerequisite",
+    "attempt_policy": "server-assigns-and-counts-every-request; no-hedges-or-successful-stage-retries",
+    "budget_scope": "per-inference-stage-and-semantic-root; cannot-pool-or-borrow-between-stages",
+    "expected_call_basis": {
+      "extraction": "one-per-actionable-source-revision",
+      "answer_planner": "one-per-planned-answer",
+      "answer_generation": "one-per-sealed-planned-answer-whose-oracle-outcome-requires-generation; never-derived-from-candidate-success-count",
+      "relationship_projection": "at-most-one-per-eligible-nonempty-segment-per-approved-head; overall upper bound (planned-approved-meetings+1)*admitted-segments"
+    },
+    "recovery_allowance": "one-additional-call-per-stage-only-for-a-root-proven-interrupted-by-the-single-injected-kill; count-as-expected-before-applying-1.02",
+    "wire_byte_budget": "canonical-production-request-plus-response-bytes-under-the-pinned-payload-contract; per-stage; includes-all-attempts; no-tokenization-or-parsing-offload",
+    "answer_canonical_packet": "independent-oracle-expected-evidence-packet-under-current-ranking-batch-merge-related-expansion-and-context-bounds; not-all-authorized-matches-or-candidate-selected-payload",
+    "timed_run_faults": "40-permission-cases-and-one-cgroup-kill",
+    "provider_error_cases": "separate-deterministic-boundary-suite-with-explicit-case-effect-budgets",
+    "unmodeled_provider_outages": false
+  },
+  "required_evidence": [
+    "candidate_commit_and_artifact_digest",
+    "metric_contract_digest",
+    "hardware_fingerprint_and_resource_enforcement",
+    "runtime_and_dependency_versions",
+    "dataset_digest_and_verified_starting_state",
+    "trace_manifest_digest_seed_and_all_planned_operations",
+    "provider_profile_digest_and_effect_ledger",
+    "inference_fixture_version_digest_and_per_stage_conformance_results",
+    "offered_complete_failed_and_unfinished_counts_by_operation",
+    "latencies_from_external_observers_including_poll_interval",
+    "scripted_wait_p95_and_sample_count_by_operation_population_including_planned_waits_for_failed_or_unfinished_operations",
+    "actual_provider_waits_and_completed_missing_counts_by_population",
+    "historical_record_and_generation_membership_comparison",
+    "all_history_probe_outcomes",
+    "start_and_end_corpus_counts_and_oldest_source_date",
+    "complete_normal_run_and_final_drain_observation",
+    "all_planned_permission_replay_and_crash_case_outcomes",
+    "repository_check_results",
+    "per_gate_verdicts_and_overall_verdict",
+    "profile_pin_and_environment_lock",
+    "qualification_registry_all_attempts_and_manifest_reveal",
+    "externally_anchored_registration_and_manifest_commitment_receipts_before_startup",
+    "isolation_and_production_wire_format_attestation",
+    "query_shape_and_exact_logical_postings_comparison",
+    "provider_stage_call_and_wire_byte_budgets_and_causal_ledger",
+    "complete_card_content_and_mutation_ledger",
+    "per_visibility_success_out_of_band_generation_proof",
+    "random_generation_snapshots_and_build_history",
+    "timed_denial_and_cgroup_kill_outcomes",
+    "all_writer_durability_policy_and_commit_ack_order_evidence",
+    "validated_storage_fault_model_and_recovery_outcomes"
+  ],
+  "search_workload": {
+    "vocabulary_size": 4096,
+    "vocabulary_tokens": "seeded-ordinary-lowercase-alphabetic-words-4-to-12-characters",
+    "zipf_exponent": 1.1,
+    "document_unique_content_terms_range": [
+      20,
+      30
+    ],
+    "mean_total_postings_per_atom": 25,
+    "posting_count_includes_controlled_category": true,
+    "term_frequency_probabilities": {
+      "1": 0.7,
+      "2": 0.2,
+      "3": 0.1
+    },
+    "selective_query_fraction": 0.4,
+    "medium_query_fraction": 0.3,
+    "broad_query_fraction": 0.2,
+    "negative_query_fraction": 0.1,
+    "selective_query_terms": 2,
+    "selective_term_document_frequency_min": 2,
+    "selective_pair_identity": "unique-cooccurrence-with-no-special-marker-token",
+    "medium_query_terms_range": [
+      2,
+      4
+    ],
+    "medium_authorized_candidate_count_min": 100,
+    "broad_query_terms_range": [
+      1,
+      3
+    ],
+    "broad_authorized_candidate_count_min_by_milestone": {
+      "M1": 200,
+      "M2": 1000,
+      "M3": 1000
+    },
+    "candidate_count_definition": "authorized-union-of-atoms-matching-any-analyzed-query-term-before-top-k",
+    "top_k": 10,
+    "oracle": "direct-layer3-limit10-response-equals-entire-expected-ordered-list-of-ids-record-hashes-policies-and-text; answer-batch-and-related-packet-contracts-preserved",
+    "oracle_head_rule": "independently-observed-active-head-at-offer-or-newer-independently-validated-head-used-at-release-never-older; exact-current-record-head-and-current-person-release-fences-remain; hash-and-verified-lineage-bound",
+    "query_shape_checks_after_analysis": true,
+    "history_owner_policy_coverage": "each-owner-at-least-once-both-policies-globally-not-all-owner-policy-pairs",
+    "oracle_implementation": "independent-verifier-no-candidate-module-imports",
+    "history_queries": "positive-held-out-queries-for-target-atoms; 20-extra-negative-probes",
+    "negative_expected_hits": 0,
+    "logical_postings_oracle": "complete-(term,atom_id,term_frequency)-multiset-derived-from-approved-content",
+    "physical_index_layout_constrained": false,
+    "generator_shape_failure": "inconclusive-before-load-no-silent-relaxation"
+  },
+  "run_protocol": {
+    "profile_rules_public": true,
+    "qualification_manifest_sealed": true,
+    "external_commitment_anchor": "signed-tag-on-protected-remote-with-independent-receipt-retention-or-verifiable-third-party-timestamp; runner-cannot-silently-rewrite; required-before-startup",
+    "missing_external_anchor": "not-run",
+    "registration_order": [
+      "freeze-verifier-generator-oracle-and-host-image-digests",
+      "register-immutable-candidate-image-source-and-config-digests",
+      "generate-fresh-corpus-trace-queries-fault-schedule-and-provider-realization",
+      "publish-timestamped-salted-manifest-commitment-in-verifier-owned-registry",
+      "start-fresh-state-warmup-then-timed-run",
+      "publish-outcomes-and-reveal-manifest-for-commitment-verification"
+    ],
+    "candidate_access": "only-normal-http-source-provider-and-user-traffic-plus-own-state; no-verifier-files-seed-registry-or-admin-endpoint",
+    "fixture_interface": "separate-host-http-production-wire-format-via-production-client-no-test-mode-branch",
+    "oracle_changes_require_independent_review": true,
+    "offer_nonce": "verifier-minted-at-offer-bound-to-request-provider-exchange-response-digest-and-durable-release-audit-digest-in-external-ledger",
+    "durable_nonce_binding_status": "unmet-in-current-audits; reviewed-durable-request-correlation-required; repeated-response-digests-or-headers-alone-insufficient",
+    "nonce_is_proof_of_computation": false,
+    "caching_rule": "general-index-and-current-scope-current-generation-caching-allowed; sealed-query-answer-tables-or-benchmark-recognition-forbidden",
+    "qualification_attempts_per_candidate_profile_milestone_max": 1,
+    "replacement_attempts": "independently-attested-infrastructure-inconclusive-only; never-replace-measured-fail",
+    "all_qualification_attempts_disclosed": true,
+    "local_diagnostic_attempts_not_qualification": true,
+    "revealed_manifest_reuse_can_qualify": false,
+    "meaningless_artifact_digest_changes_create_new_attempt": false
+  },
+  "publication_evidence": {
+    "card_completion": "external-provider-ledger-has-complete-frozen-card-content-digest-atom-set-provenance-and-correct-recipient",
+    "post_availability_content_mutations_max": 0,
+    "allowed_card_mutations": "declared-status-or-control-changes-only-no-edit-to-approved-substance",
+    "preapproval_rule": "no-unapproved-atom-content-ids-postings-or-projection-input-in-any-layer2-staging-or-published-generation; generic-scaffolding-and-reuse-of-approved-data-allowed",
+    "visibility_success": "independent-observer-correlates-response-release-with-active-pointer-exact-head-immutable-manifest-and-atom-content-policy-membership",
+    "visibility_evidence_missing": "no-success-credit",
+    "new_approved_atoms": "rotate-into-availability-probes-from-own-approval-plus-60s; at-least-one-owner-and-one-different-reader-with-policy-correct-outcome",
+    "random_generation_snapshot_count_min": 24,
+    "random_generation_snapshot_oracle": "exact-trusted-facts-content-policy-and-recomputed-logical-roots-for-that-head-in-every-segment",
+    "build_accounting": "every-build-incremental-update-compaction-recovery-and-byte-count-recorded; ordinary-work-remains-inside-budget-and-deadlines",
+    "full_rebuilds_forbidden": false,
+    "retrospective_publication_credit": false,
+    "load_adaptive_maintenance_allowed": true,
+    "sealed_schedule_access_forbidden": true
+  },
+  "correctness": {
+    "timed_permission_cases": 40,
+    "permission_case_classes": [
+      "wrong-reviewer",
+      "revoked-member",
+      "revocation-during-answer",
+      "cross-org-session",
+      "expired-session",
+      "invalid-approval-signature",
+      "cross-segment-relationship",
+      "unapproved-content",
+      "unreleased-citation",
+      "stale-generation-release"
+    ],
+    "seeds_per_permission_class": 4,
+    "timed_cases_selection": "sealed-distributed-during-load-with-at-least-10-during-peak",
+    "timed_kill": {
+      "count": 1,
+      "target": "entire-candidate-cgroup",
+      "when": "sealed-uniform-point-in-peak-with-auto-restart-and-arrivals-continuing"
+    },
+    "process_death_boundaries": [
+      "candidate-persistence",
+      "cursor-advancement",
+      "approval-receipt-persistence",
+      "provider-delivery-effect",
+      "v4-append",
+      "authority-terminal-receipt",
+      "generation-rename",
+      "active-pointer-publication",
+      "answer-audit-commit"
+    ],
+    "process_death_positions": [
+      "before",
+      "after"
+    ],
+    "process_death_case_count": 18,
+    "forbidden_order_case": "withhold-or-fail-answer-audit-persist; any-answer-body-byte-before-durable-audit-is-FAIL",
+    "replay_classes": [
+      "duplicate-source",
+      "duplicate-signed-approval",
+      "provider-effect-lost-acknowledgement"
+    ],
+    "repository_checks_required": true,
+    "same_artifact_config_under_load_and_faults": true
+  },
+  "durability": {
+    "baseline_sqlite": {
+      "journal_mode": "DELETE",
+      "synchronous": "FULL"
+    },
+    "weaker_synchronous_modes_forbidden": true,
+    "wal_full_or_other_equivalent_change": "eligible-only-with-existing-contract-preservation-and-independent-equivalence-fault-evidence; not-by-setting-name-alone",
+    "attestation": "all-writer-connections-and-setting-changes-observed-throughout; boot-final-PRAGMA-snapshots-alone-insufficient",
+    "storage_fault_case_count_min": 4,
+    "storage_fault_boundaries": [
+      "acknowledged-approval-receipt",
+      "acknowledged-v4-append",
+      "committed-active-generation-pointer",
+      "answer-audit-before-first-response-byte"
+    ],
+    "storage_fault_model": "independent-flush-aware-volatile-layer-discard; preserve-completed-flushes-and-drop-only-unflushed-data-and-metadata; restart-with-caches-gone",
+    "positive_and_negative_fault_model_controls_required": true,
+    "lost_acknowledged_durable_effects_max": 0,
+    "group_commit_allowed": true,
+    "per_write_fsync_count_gate": false,
+    "external_sync_commit_ack_order_evidence_required": true,
+    "process_kill_proves_power_loss": false,
+    "dm_flakey_drop_writes_alone_sufficient": false
+  },
+  "profile_pin": {
+    "id": "authority-capacity-v1",
+    "algorithm": "sha256-sorted-json-rules-and-raw-definition-v1",
+    "definition_sha256": "7c6b11abf9fcc01d678c2b444465ffaf8612debc84d10041213efc51b99e4629",
+    "sha256": "a8d4e85f3d15cf9b35a6968a1849829ea6b167dc25030102005f5e1d0620cbfc",
+    "rule": "hash sorted-key compact JSON of {rules: full contract without profile_pin, definition_sha256: SHA256 of raw definition bytes}; verifier registry pins this accepted digest",
+    "change_policy": "any pinned rule or definition change requires metrics-v2 and comparable baseline"
+  },
+  "qualification_prerequisites": [
+    "sealed-runner-and-independent-oracle-implemented",
+    "fixture-wire-format-and-causal-audit-binding-implemented-without-test-bypass",
+    "reference-host-image-and-verifier-artifacts-locked",
+    "fault-observer-and-flush-aware-storage-model-validated",
+    "baseline-run-recorded-before-optimization-claim"
+  ]
+}
