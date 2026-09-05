@@ -49,6 +49,12 @@ def directory(path, private=False):
         require(stat.S_IMODE(info.st_mode) == 0o700)
 
 
+def authority_data_directory(path):
+    # Bootstrap and retained-host restore require this service-owned mount.
+    info = path.lstat()
+    require(stat.S_ISDIR(info.st_mode) and (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (999, 988, 0o700))
+
+
 def regular(path, private=False, limit=262144):
     info = path.lstat()
     require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid() and not info.st_mode & 0o022 and info.st_size <= limit)
@@ -202,7 +208,9 @@ def execute_request(request, request_hash, root=DEPLOY, identity=machine_identit
     # Validate every existing parent component before reading or creating paths.
     for ancestor in reversed(root.parents):
         directory(ancestor)
-    for path in (root, root / 'clean-data', root / 'clean-data/release', root / 'release'):
+    directory(root)
+    authority_data_directory(root / 'clean-data')
+    for path in (root / 'clean-data/release', root / 'release'):
         directory(path)
     lock = root / 'clean-data/.authority-operation-lock'
     try:

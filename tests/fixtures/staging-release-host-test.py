@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import stat
 import sys
 import tempfile
 import unittest
@@ -25,6 +26,21 @@ class HostProtocol(unittest.TestCase):
         self.root = pathlib.Path(self.temporary.name)
         for path in ('clean-data', 'clean-data/release', 'release'):
             (self.root / path).mkdir(mode=0o700)
+        # Bootstrap's retained mount is service-owned, not root-owned. Model
+        # that one inode's identity without requiring chown/root on test Macs.
+        self.data_owner = (999, 988)
+        self.owner_overrides = {}
+        original_lstat = pathlib.Path.lstat
+        def fixture_lstat(path, *args, **kwargs):
+            info = original_lstat(path, *args, **kwargs)
+            owner = self.data_owner if path == self.root / 'clean-data' else self.owner_overrides.get(path)
+            if owner is not None:
+                fields = list(info)
+                fields[4], fields[5] = owner
+                return os.stat_result(fields)
+            return info
+        self.stat_patcher = patch.object(pathlib.Path, 'lstat', fixture_lstat)
+        self.stat_patcher.start()
         self.write('clean-data/release/current.clean-v1.json', accepted_bytes)
         self.write('.env.clean-v1', b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\nPRIVATE_FIXTURE=never-print-this-value\n')
         paths = {'update-clean-v1.sh': 'deploy/organization-authority/update-clean-v1.sh', 'release/clean-v1-release.py': 'deploy/release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py': 'deploy/release/clean-v1-runtime-profile.py'}
@@ -39,6 +55,7 @@ class HostProtocol(unittest.TestCase):
 
     def tearDown(self):
         self.patcher.stop()
+        self.stat_patcher.stop()
         self.temporary.cleanup()
 
     def write(self, name, data, mode=0o600):
@@ -83,6 +100,42 @@ class HostProtocol(unittest.TestCase):
         self.assertEqual((self.root / '.env.clean-v1').read_bytes(), before_env)
         self.assertEqual((self.root / 'clean-data/release/current.clean-v1.json').read_bytes(), accepted_bytes)
         self.assertFalse((self.root / 'clean-data/release/candidate.clean-v1.json').exists())
+
+    def test_data_root_requires_exact_bootstrap_owner_group_and_mode(self):
+        before = (self.root / 'update-clean-v1.sh').read_bytes()
+        for owner in ((0, 0), (999, 0), (0, 988), (1000, 1000)):
+            with self.subTest(owner=owner):
+                self.data_owner = owner
+                with self.assertRaises(host.Refused):
+                    self.execute(self.request('install'))
+                self.assertFalse((self.root / 'clean-data/.authority-operation-lock').exists())
+        self.data_owner = (999, 988)
+        for mode in (0o755, 0o750, 0o770):
+            with self.subTest(mode=mode):
+                (self.root / 'clean-data').chmod(mode)
+                with self.assertRaises(host.Refused):
+                    self.execute(self.request('install'))
+        (self.root / 'clean-data').chmod(0o700)
+        self.assertEqual((self.root / 'update-clean-v1.sh').read_bytes(), before)
+        self.assertEqual(self.calls, [])
+
+    def test_data_root_symlink_is_not_a_service_owned_directory(self):
+        data = self.root / 'clean-data'
+        retained = self.root / 'retained-fixture'
+        data.rename(retained)
+        data.symlink_to(retained, target_is_directory=True)
+        self.assertTrue(stat.S_ISLNK(data.lstat().st_mode))
+        with self.assertRaises(host.Refused):
+            self.execute(self.request('install'))
+        self.assertFalse((retained / '.authority-operation-lock').exists())
+
+    def test_service_ownership_is_not_allowed_for_release_control_paths(self):
+        for name in ('release', 'clean-data/release'):
+            with self.subTest(path=name):
+                self.owner_overrides = {self.root / name: (999, 988)}
+                with self.assertRaises(host.Refused):
+                    self.execute(self.request('install'))
+                self.assertFalse((self.root / 'clean-data/.authority-operation-lock').exists())
 
     def test_unknown_old_tool_refuses_before_any_replacement(self):
         self.write('release/clean-v1-runtime-profile.py', b'unreviewed bytes', 0o755)

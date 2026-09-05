@@ -358,7 +358,8 @@ payload and checksums fit under the CLI's conservative 60-KiB command cap; it
 refuses larger artifacts rather than selecting another courier implicitly.
 
 The host independently checks IMDSv2 identity, the mounted retained volume,
-root-owned deployment paths, the literal staging hostname, accepted-record
+its bootstrap-required service ownership (`999:988`, mode `0700`), root-owned
+deployment and release-control paths, the literal staging hostname, accepted-record
 digest and candidate state. It holds the existing Authority operation lock
 across these checks, tooling installation and the exact updater call. Updater
 actions use a private nested lock through the existing lock-path override;
