@@ -17,6 +17,7 @@ import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./providers/sl
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.js";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import type { LlmDecisionProcessorOptions } from "../processing/adapters/decision-processors/llm/llm-decision-processor.js";
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<
@@ -30,6 +31,8 @@ export interface OrganizationAuthorityServiceConfig
   readonly granola_credential_file: string;
   readonly granola_owner_email_file: string;
   readonly openrouter_credential_file: string;
+  /** Optional content-free extraction transport from an immutable source identity. */
+  readonly extraction_transport_context?: LlmDecisionProcessorOptions["extraction_transport_context"];
   readonly slack_signing_secret_file: string;
   readonly slack_connection_id: string;
   readonly slack_identity_link_channel_id: string;
@@ -69,6 +72,7 @@ export function openOrganizationAuthorityService(
     granola_credential_file,
     granola_owner_email_file,
     openrouter_credential_file,
+    extraction_transport_context,
     slack_signing_secret_file,
     slack_connection_id,
     slack_identity_link_channel_id,
@@ -103,6 +107,9 @@ export function openOrganizationAuthorityService(
       }),
       decision_processor_bundle: createOpenRouterDecisionProcessorBundleV1({
         credential_file: openrouter_credential_file,
+        ...(extraction_transport_context === undefined
+          ? {}
+          : { extraction_transport_context }),
       }),
       approval_workflow_bundle: createPrivateSlackApprovalWorkflowBundleV1({
         state_directory: sharedConfig.state_directory,

@@ -220,6 +220,35 @@ describe('llm decision processor extraction', () => {
     );
   });
 
+  it('derives optional provider transport only from the immutable meeting identity', async () => {
+    const client = new FakeLlmClient(validModelOutput);
+    const seen: unknown[] = [];
+    const instance = new LlmDecisionProcessor(processorConfig, {
+      client,
+      now: () => '2026-07-17T18:00:00.000Z',
+      extraction_transport_context(identity) {
+        seen.push(identity);
+        return { operation_correlation: 'meeting_offer_correlation_001' };
+      },
+    });
+
+    await instance.extract(meeting, extractionContext(instance));
+
+    expect(seen).toEqual([
+      {
+        meeting_id: 'meeting-llm-1',
+        source_adapter_id: 'fixture-source',
+        source_instance_id: 'local',
+        source_version: '1.0.0',
+        source_external_id: 'fixture-llm-1',
+        canonical_revision: 'sha256:llm-fixture-revision',
+      },
+    ]);
+    expect(client.requests[0]!.transport).toEqual({
+      operation_correlation: 'meeting_offer_correlation_001',
+    });
+  });
+
   it('falls back safely to the UTC calendar date when the source timezone is invalid', async () => {
     const client = new FakeLlmClient(validModelOutput);
     const instance = processor(client);

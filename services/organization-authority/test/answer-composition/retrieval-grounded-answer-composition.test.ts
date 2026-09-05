@@ -57,6 +57,111 @@ function release(atoms = true, queryCount = 1): ReleasedRetrievalBatch {
 }
 
 describe("retrieval-grounded answer composition", () => {
+  it("forwards the offer correlation to the planner and its causal token to generation", async () => {
+    const operationCorrelation = "a".repeat(32);
+    const causalToken = "b".repeat(32);
+    const planner = {
+      generate: vi.fn(),
+      generate_with_observation: vi.fn(async () => ({
+        value: { queries: [] },
+        usage: {
+          input_tokens: null,
+          output_tokens: null,
+          total_tokens: null,
+          cached_input_tokens: null,
+          reasoning_tokens: null,
+        },
+        finish_reason: "stop" as const,
+        provider_latency_ms: 1,
+        causal_token: causalToken,
+      })),
+    };
+    const answerer = {
+      generate: vi.fn(),
+      generate_with_observation: vi.fn(async () => ({
+        value: {
+          status: "answered",
+          answer: "Tuesday.",
+          citations: ["a1"],
+        },
+        usage: {
+          input_tokens: null,
+          output_tokens: null,
+          total_tokens: null,
+          cached_input_tokens: null,
+          reasoning_tokens: null,
+        },
+        finish_reason: "stop" as const,
+        provider_latency_ms: 1,
+      })),
+    };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner,
+      answerer,
+      released_retrieval: {
+        retrieve: async () => release(),
+        revalidate: async () => ({ checked_at: "2026-08-23T00:00:01.000Z" }),
+      },
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await answer.answer({
+      question: "When is the launch?",
+      transport: { operation_correlation: operationCorrelation },
+    });
+
+    expect(planner.generate_with_observation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: { operation_correlation: operationCorrelation },
+      }),
+    );
+    expect(answerer.generate_with_observation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: {
+          operation_correlation: operationCorrelation,
+          predecessor_token: causalToken,
+        },
+      }),
+    );
+  });
+
+  it("uses value-only generation for ordinary uncorrelated answers", async () => {
+    const planner = {
+      generate: vi.fn(async () => ({ queries: [] })),
+      generate_with_observation: vi.fn(),
+    };
+    const answerer = {
+      generate: vi.fn(async () => ({
+        status: "answered",
+        answer: "Tuesday.",
+        citations: ["a1"],
+      })),
+      generate_with_observation: vi.fn(),
+    };
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner,
+      answerer,
+      released_retrieval: {
+        retrieve: async () => release(),
+        revalidate: async () => ({ checked_at: "2026-08-23T00:00:01.000Z" }),
+      },
+      audit: { append: vi.fn() },
+      generation_adapter_id: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await answer.answer({ question: "When is the launch?" });
+
+    expect(planner.generate).toHaveBeenCalledTimes(1);
+    expect(answerer.generate).toHaveBeenCalledTimes(1);
+    expect(planner.generate_with_observation).not.toHaveBeenCalled();
+    expect(answerer.generate_with_observation).not.toHaveBeenCalled();
+  });
+
   it("plans once, reads one released retrieval batch, verifies citations, revalidates, and audits hashes", async () => {
     const events: string[] = [];
     let plannerRequest: StructuredGenerationInput | undefined;

@@ -58,6 +58,7 @@ import {
   projectRelatedAtomsV1,
   type RelatedAtomStructuredGenerationPortV1,
 } from "./related-atom-projector-v1.js";
+import { opaqueTransportValue } from "../answer-composition/retrieval-grounded-answer-composition.js";
 
 export const READABLE_SEARCH_SOURCE_REVISION_V1 =
   "organization-authority-clean-readable-search-v2" as const;
@@ -95,6 +96,28 @@ export interface ReadableSearchRelatedAtomProjectorProfileV1 {
 export interface ReadableSearchRelatedAtomProjectorBindingV1 {
   readonly structured_output: RelatedAtomStructuredGenerationPortV1;
   readonly profile: ReadableSearchRelatedAtomProjectorProfileV1;
+  /** Optional independent witness for the approved projector input. */
+  readonly approved_snapshot_attestor?: ReadableSearchApprovedSnapshotAttestorV1;
+}
+
+export interface ReadableSearchApprovedSnapshotAttestorV1 {
+  attest(input: {
+    readonly exact_head: {
+      readonly authority_id: string;
+      readonly organization_id: string;
+      readonly state_lineage_id: string;
+      readonly position: number;
+      readonly record_sha256: Sha256Digest | null;
+    };
+    readonly visibility_segment_sha256: Sha256Digest;
+    readonly content_sha256: Sha256Digest;
+    readonly signal?: AbortSignal;
+  }): Promise<{
+    /** Optional offered-operation binding for the provider request. */
+    readonly operation_correlation?: string;
+    /** Required successor from the independently approved snapshot witness. */
+    readonly causal_token: string;
+  }>;
 }
 
 const READABLE_SEARCH_ANALYZER_RELEASE_V3 = Object.freeze({
@@ -236,6 +259,13 @@ export function readableSearchGenerationContractV1(input: Readonly<{
 
 interface ReconciliationSnapshotV1 {
   readonly record_head: ReadableSearchRecordHeadV1;
+  readonly exact_head?: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly position: number;
+    readonly record_sha256: Sha256Digest | null;
+  };
   readonly source_snapshot: RecordRetrievalSourceSnapshotV1;
   /** Validated, policy-segment-local, disposable Layer 2 pairs. */
   readonly related_atom_pairs?: readonly ReadableSearchRelatedAtomPairV1[];
@@ -248,6 +278,32 @@ function visibilitySegmentKey(atom: RecordRetrievalSourceSnapshotV1["atoms"][num
     reviewer_principal_id: atom.reviewer_principal_id,
     reviewer_membership_id: atom.reviewer_membership_id,
   });
+}
+
+function visibilitySegmentSha256(
+  atom: RecordRetrievalSourceSnapshotV1["atoms"][number],
+): Sha256Digest {
+  return canonicalSha256({
+    policy_id: atom.policy_id,
+    policy_contract_sha256: atom.policy_contract_sha256,
+    reviewer_principal_id: atom.reviewer_principal_id,
+    reviewer_membership_id: atom.reviewer_membership_id,
+  });
+}
+
+function selectedContentSha256(
+  atoms: readonly RecordRetrievalSourceSnapshotV1["atoms"][number][],
+): Sha256Digest {
+  return canonicalSha256(
+    atoms.map((atom) => ({
+      atom_id: atom.atom_id,
+      record_sha256: atom.record_sha256,
+      record_position: atom.record_position,
+      atom_order: atom.atom_order,
+      item_kind: atom.item_kind,
+      text_sha256: sha256Digest(atom.text),
+    })),
+  );
 }
 
 /**
@@ -298,6 +354,31 @@ export async function projectSnapshotRelatedAtomsV1(input: {
       selectedTextBytes += textBytes;
     }
     if (new Set(selected.map((atom) => atom.record_sha256)).size < 2) continue;
+    const attestation = input.projector.approved_snapshot_attestor;
+    const attested =
+      attestation === undefined
+        ? undefined
+        : await attestation.attest({
+            exact_head: (() => {
+              if (input.snapshot.exact_head === undefined) {
+                throw new Error(
+                  "related atom projection snapshot lacks an exact head",
+                );
+              }
+              return input.snapshot.exact_head;
+            })(),
+            visibility_segment_sha256: visibilitySegmentSha256(selected[0]!),
+            content_sha256: selectedContentSha256(selected),
+            signal: input.signal,
+          });
+    if (
+      attested !== undefined &&
+      (opaqueTransportValue(attested.causal_token) === undefined ||
+        (attested.operation_correlation !== undefined &&
+          opaqueTransportValue(attested.operation_correlation) === undefined))
+    ) {
+      throw new Error("related atom projection snapshot attestation is invalid");
+    }
     const projected = await projectRelatedAtomsV1({
       atoms: selected.map((atom) =>
         Object.freeze({
@@ -310,6 +391,16 @@ export async function projectSnapshotRelatedAtomsV1(input: {
       model: input.projector.profile.model,
       structured_output: input.projector.structured_output,
       timeout_ms: input.projector.profile.timeout_ms,
+      ...(attested === undefined
+        ? {}
+        : {
+            transport: {
+              ...(attested.operation_correlation === undefined
+                ? {}
+                : { operation_correlation: attested.operation_correlation }),
+              predecessor_token: attested.causal_token,
+            },
+          }),
       signal: input.signal,
     });
     const admittedAtomIds = new Map<string, Sha256Digest>(
@@ -460,6 +551,12 @@ export function createReadableSearchGenerationReconcilerV1(input: {
           : sourceSnapshot.head;
       return Object.freeze({
         record_head: capturedHead,
+        exact_head: Object.freeze({
+          authority_id: input.root.authority_id,
+          organization_id: input.root.organization_id,
+          state_lineage_id: input.root.state_lineage_id,
+          ...capturedHead,
+        }),
         source_snapshot: sourceSnapshot,
       });
     },

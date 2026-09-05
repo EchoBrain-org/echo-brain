@@ -29,6 +29,7 @@ import type {
   PersonAnswerHttpApplicationV1,
   PersonAnswerResponseV1,
 } from "../src/presentation/person-answer-http-application.js";
+import type { PersonRecordSearchHttpApplicationV1 } from "../src/presentation/person-record-search-http-application.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const NOW = "2026-08-23T00:00:00.000Z";
@@ -265,6 +266,110 @@ describe("Person answer route", () => {
       expect(value.append.mock.calls[0]?.[0].response_sha256).toBe(
         canonicalSha256(response as never),
       );
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("binds identical answers to distinct durable correlation commitments without changing content", async () => {
+    let generationCalls = 0;
+    const journeyEvents: JourneyTelemetryEventV1[] = [];
+    const value = setup({
+      model: {
+        generate: vi.fn(async () => {
+          throw new Error("staging observation path must be used");
+        }),
+        generate_with_observation: vi.fn(async () => {
+          generationCalls += 1;
+          return {
+            value:
+              generationCalls % 2 === 1
+                ? { queries: ["launch date", "launch owner"] }
+                : {
+                    status: "answered",
+                    answer: "Tuesday, owned by the product team.",
+                    citations: ["a1", "a2"],
+                  },
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              total_tokens: 0,
+              cached_input_tokens: 0,
+              reasoning_tokens: 0,
+            },
+            finish_reason: "stop" as const,
+            provider_latency_ms: 0,
+            causal_token: `causal_token_binding_${String(generationCalls)}`,
+          };
+        }),
+      },
+      ask_journey_telemetry: stagingTelemetry(
+        journeyEvents,
+        "123e4567-e89b-42d3-a456-426614174000",
+        1,
+      ),
+    });
+    const firstCorrelation = "operation_binding_first_1234";
+    const secondCorrelation = "operation_binding_second_5678";
+    try {
+      value.append.mockRestore();
+      const first = await value.route.ask({
+        access_token: "bearer-only-token",
+        question: "When is the launch and who owns it?",
+        operation_correlation: firstCorrelation,
+      });
+      const second = await value.route.ask({
+        access_token: "bearer-only-token",
+        question: "When is the launch and who owns it?",
+        operation_correlation: secondCorrelation,
+      });
+      expect(second).toEqual(first);
+      expect(value.search.searchBatch).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ operation_correlation: firstCorrelation }),
+      );
+      expect(value.search.searchBatch).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ operation_correlation: secondCorrelation }),
+      );
+      const rows = value.database
+        .prepare(
+          `SELECT body_json FROM authority_person_read_decision_audit_v2
+           WHERE context_kind = 'answer_composition' ORDER BY rowid`,
+        )
+        .all() as Array<{ readonly body_json: string }>;
+      expect(rows).toHaveLength(2);
+      const bodies = rows.map((row) => JSON.parse(row.body_json) as Record<string, unknown>);
+      expect(bodies).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            schema_version: 2,
+            kind: "echo-person-answer-composition-audit-v2",
+          }),
+        ]),
+      );
+      expect(bodies[0]?.operation_correlation_sha256).not.toBe(
+        bodies[1]?.operation_correlation_sha256,
+      );
+      expect(JSON.stringify(bodies)).not.toContain(firstCorrelation);
+      expect(JSON.stringify(bodies)).not.toContain(secondCorrelation);
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("rejects malformed direct operation correlations before retrieval", async () => {
+    const value = setup({});
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "bearer-only-token",
+          question: "When is the launch?",
+          operation_correlation: "too-short",
+        }),
+      ).rejects.toMatchObject({ code: "invalid_request" });
+      expect(value.search.searchBatch).not.toHaveBeenCalled();
+      expect(value.append).not.toHaveBeenCalled();
     } finally {
       value.database.close();
     }
@@ -925,13 +1030,17 @@ describe("Person answer route", () => {
   });
 });
 
-async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
+async function startServer(
+  person_answer?: PersonAnswerHttpApplicationV1,
+  person_record_search?: PersonRecordSearchHttpApplicationV1,
+) {
   const server = createOrganizationAuthorityHttpServer({
     descriptor: {} as never,
     sessions: {} as never,
     oidc_provider: {} as never,
     expected_issuer: "https://issuer.example",
     ...(person_answer === undefined ? {} : { person_answer }),
+    ...(person_record_search === undefined ? {} : { person_record_search }),
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -1031,6 +1140,101 @@ describe("Person answer HTTP mount", () => {
         access_token: "bearer-only-token",
         question: maximumQuestion,
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("forwards a valid operation correlation only from the request header", async () => {
+    const answer: PersonAnswerHttpApplicationV1 = {
+      ask: vi.fn(async (): Promise<PersonAnswerResponseV1> => ({
+        schema_version: 1,
+        kind: "echo-clean-person-answer-v1",
+        generation_id: digest("generation"),
+        record_head: { position: 7, record_sha256: digest("head") },
+        answer: "Tuesday.",
+        citations: [],
+      })),
+    };
+    const search: PersonRecordSearchHttpApplicationV1 = {
+      search: vi.fn(() => ({
+        schema_version: 1 as const,
+        kind: "echo-clean-person-record-search-v1" as const,
+        generation_id: digest("generation"),
+        record_head: { position: 7, record_sha256: digest("head") },
+        items: [],
+      })),
+    };
+    const correlation = "operation_binding_0123456789";
+    const server = await startServer(answer, search);
+    try {
+      const answerResponse = await fetch(`${server.url}/v1/person/ask`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer bearer-only-token",
+          "content-type": "application/json",
+          "x-echo-operation-correlation": correlation,
+        },
+        body: JSON.stringify({ question: "When is the launch?" }),
+      });
+      expect(answerResponse.status).toBe(200);
+      expect(answer.ask).toHaveBeenCalledWith({
+        access_token: "bearer-only-token",
+        question: "When is the launch?",
+        operation_correlation: correlation,
+      });
+      const searchResponse = await fetch(`${server.url}/v1/person/records`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer bearer-only-token",
+          "content-type": "application/json",
+          "x-echo-operation-correlation": correlation,
+        },
+        body: JSON.stringify({ query: "launch status" }),
+      });
+      expect(searchResponse.status).toBe(200);
+      expect(search.search).toHaveBeenCalledWith({
+        access_token: "bearer-only-token",
+        query: "launch status",
+        operation_correlation: correlation,
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects malformed operation correlations before invoking either app", async () => {
+    const answer: PersonAnswerHttpApplicationV1 = {
+      ask: vi.fn(async () => {
+        throw new Error("must not be called");
+      }),
+    };
+    const search: PersonRecordSearchHttpApplicationV1 = {
+      search: vi.fn(() => {
+        throw new Error("must not be called");
+      }),
+    };
+    const server = await startServer(answer, search);
+    try {
+      const headers = {
+        authorization: "Bearer bearer-only-token",
+        "content-type": "application/json",
+        "x-echo-operation-correlation": "too-short",
+      };
+      const answerResponse = await fetch(`${server.url}/v1/person/ask`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ question: "When is the launch?" }),
+      });
+      expect(answerResponse.status).toBe(400);
+      const searchResponse = await fetch(`${server.url}/v1/person/records`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query: "launch status" }),
+      });
+      expect(searchResponse.status).toBe(400);
+      expect(answer.ask).not.toHaveBeenCalled();
+      expect(search.search).not.toHaveBeenCalled();
     } finally {
       await server.close();
     }

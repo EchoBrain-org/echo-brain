@@ -350,14 +350,82 @@ describe("Person Layer 2 route", () => {
         .get() as { readonly body_json: string };
       const body = JSON.parse(audit.body_json) as Record<string, unknown>;
       expect(body).toMatchObject({
+        schema_version: 1,
         kind: "echo-clean-person-record-read-audit-v1",
         read_mode: "layer2",
         principal_id: "principal_reader",
         membership_id: "membership_reader",
         result_count: 1,
       });
+      expect(body).not.toHaveProperty("operation_correlation_sha256");
       expect(audit.body_json).not.toContain("unlogged-query-phrase");
       expect(audit.body_json).not.toContain("Choose the lean path.");
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
+  it("binds repeated identical searches to distinct durable correlation commitments", () => {
+    const value = setup();
+    const search = vi.fn(() => ({
+      generation_id: digest("generation"),
+      exact_head: {
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        position: 0,
+        record_sha256: null,
+      },
+      items: [],
+    }));
+    const firstCorrelation = "operation_binding_first_1234";
+    const secondCorrelation = "operation_binding_second_5678";
+    try {
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => authorization() },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
+        search_generation: search,
+      });
+      const first = route.search({
+        access_token: "bearer-only",
+        query: "release status",
+        operation_correlation: firstCorrelation,
+      });
+      const second = route.search({
+        access_token: "bearer-only",
+        query: "release status",
+        operation_correlation: secondCorrelation,
+      });
+      expect(second).toEqual(first);
+      const rows = value.authority
+        .prepare(
+          `SELECT body_json FROM authority_person_read_decision_audit_v2
+           WHERE context_kind = 'record_read' ORDER BY rowid`,
+        )
+        .all() as Array<{ readonly body_json: string }>;
+      expect(rows).toHaveLength(2);
+      const bodies = rows.map((row) => JSON.parse(row.body_json) as Record<string, unknown>);
+      expect(bodies).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            schema_version: 2,
+            kind: "echo-clean-person-record-read-audit-v2",
+          }),
+        ]),
+      );
+      expect(bodies[0]?.operation_correlation_sha256).not.toBe(
+        bodies[1]?.operation_correlation_sha256,
+      );
+      expect(JSON.stringify(bodies)).not.toContain(firstCorrelation);
+      expect(JSON.stringify(bodies)).not.toContain(secondCorrelation);
     } finally {
       value.record.close();
       value.authority.close();

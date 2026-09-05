@@ -1,3 +1,5 @@
+import type { StructuredGenerationTransportV1 } from "../answer-composition/retrieval-grounded-answer-composition.js";
+
 /**
  * Disposable Layer 2 projection core for material cross-record relationships.
  * It receives only approved retrieval-atom summaries from one exact visibility
@@ -37,6 +39,8 @@ export interface RelatedAtomStructuredGenerationInputV1 {
   readonly schema: { readonly [key: string]: unknown };
   readonly max_output_tokens: number;
   readonly timeout_ms: number;
+  /** Optional opaque provenance for the provider transport only. */
+  readonly transport?: StructuredGenerationTransportV1;
   readonly signal?: AbortSignal;
 }
 
@@ -57,6 +61,8 @@ export interface ProjectRelatedAtomsInputV1 {
   readonly model: string;
   readonly structured_output: RelatedAtomStructuredGenerationPortV1;
   readonly timeout_ms?: number;
+  /** Supplied by a verified approved-snapshot witness when one is configured. */
+  readonly transport?: StructuredGenerationTransportV1;
   readonly signal?: AbortSignal;
 }
 
@@ -279,6 +285,7 @@ export async function projectRelatedAtomsV1(
     schema: RELATIONSHIP_SCHEMA_V1,
     max_output_tokens: RELATED_ATOM_PROJECTOR_MAX_OUTPUT_TOKENS_V1,
     timeout_ms: validateTimeout(input.timeout_ms),
+    ...(input.transport === undefined ? {} : { transport: input.transport }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
   const unique = new Map<string, RelatedAtomPairV1>();

@@ -2,6 +2,7 @@ import { readPrivateAuthorityCredential } from "../../../adapters/security/priva
 import {
   createLlmDecisionProcessor,
   llmProcessingVersion,
+  type LlmDecisionProcessorOptions,
 } from "../../../processing/adapters/decision-processors/llm/llm-decision-processor.js";
 import type { AdapterConfig } from "../../../processing/core/contracts/adapter.js";
 import type { AdmittedMeetingProcessingAdmissionV1 } from "../../../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
@@ -36,6 +37,8 @@ function assertProcessorConfig(
  */
 export function createOpenRouterDecisionProcessorBundleV1(input: {
   readonly credential_file: string;
+  /** Optional content-free transport context from an admitted meeting identity. */
+  readonly extraction_transport_context?: LlmDecisionProcessorOptions["extraction_transport_context"];
 }): DecisionProcessorBundleV1 {
   const credentialReference = `file:${input.credential_file}`;
   let commitmentsChecked = false;
@@ -73,6 +76,9 @@ export function createOpenRouterDecisionProcessorBundleV1(input: {
       const processor = createLlmDecisionProcessor(config, {
         credentialResolver: (reference) =>
           reference === credentialReference ? credential : undefined,
+        ...(input.extraction_transport_context === undefined
+          ? {}
+          : { extraction_transport_context: input.extraction_transport_context }),
       });
       assertProcessorConfig(processor, config);
       if (

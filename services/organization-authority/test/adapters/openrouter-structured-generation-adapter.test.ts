@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createOpenRouterStructuredGenerationAdapter,
   OpenRouterStructuredGenerationError,
+  STRUCTURED_GENERATION_CAUSAL_TOKEN_HEADER_V1,
+  STRUCTURED_GENERATION_OPERATION_CORRELATION_HEADER_V1,
+  STRUCTURED_GENERATION_PREDECESSOR_TOKEN_HEADER_V1,
 } from "../../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 
 const structuredRequest = {
@@ -35,6 +38,52 @@ async function observed(
 }
 
 describe("OpenRouter structured generation", () => {
+  it("forwards bounded transport correlation and returns an opaque causal token", async () => {
+    const calls: Array<{
+      readonly input: RequestInfo | URL;
+      readonly init: RequestInit | undefined;
+    }> = [];
+    const operationCorrelation = "a".repeat(32);
+    const predecessorToken = "b".repeat(32);
+    const causalToken = "c".repeat(32);
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-observation",
+      endpoint: "https://fixture.example/api/v1/chat/completions",
+      fetch_impl: (async (input, init) => {
+        calls.push({ input, init });
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{\"queries\":[]}' } }],
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              [STRUCTURED_GENERATION_CAUSAL_TOKEN_HEADER_V1]: causalToken,
+            },
+          },
+        );
+      }) as typeof fetch,
+    });
+
+    const result = await adapter.generate_with_observation!({
+      ...structuredRequest,
+      transport: {
+        operation_correlation: operationCorrelation,
+        predecessor_token: predecessorToken,
+      },
+    });
+    // Verify the custom endpoint separately so request provenance cannot be
+    // confused with request-body provider parameters.
+    expect(calls[0]?.input).toBe("https://fixture.example/api/v1/chat/completions");
+    expect(result.causal_token).toBe(causalToken);
+    expect(calls[0]?.init?.headers).toMatchObject({
+      [STRUCTURED_GENERATION_OPERATION_CORRELATION_HEADER_V1]: operationCorrelation,
+      [STRUCTURED_GENERATION_PREDECESSOR_TOKEN_HEADER_V1]: predecessorToken,
+    });
+  });
+
   it("uses JSON-schema output with the configured bounds", async () => {
     const calls: Array<{
       readonly input: RequestInfo | URL;

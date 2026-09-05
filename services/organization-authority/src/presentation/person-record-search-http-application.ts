@@ -28,5 +28,7 @@ export interface PersonRecordSearchHttpApplicationV1 {
     readonly access_token: string;
     readonly query: string;
     readonly limit?: number;
+    /** Opaque request binding, supplied only through the HTTP header. */
+    readonly operation_correlation?: string;
   }): PersonRecordSearchResponseV1;
 }

@@ -47,7 +47,22 @@ export interface StructuredGenerationInput {
   readonly schema: StructuredGenerationJsonSchema;
   readonly max_output_tokens: number;
   readonly timeout_ms: number;
+  /**
+   * Opaque request provenance carried by a provider-neutral transport adapter.
+   * It is never part of a prompt or model schema and must not alter semantics.
+   */
+  readonly transport?: StructuredGenerationTransportV1;
   readonly signal?: AbortSignal;
+}
+
+/**
+ * Bounded, content-free transport metadata. The operation correlation binds a
+ * user offer to provider effects; a predecessor token establishes a causal
+ * dependency between successive provider effects.
+ */
+export interface StructuredGenerationTransportV1 {
+  readonly operation_correlation?: string;
+  readonly predecessor_token?: string;
 }
 
 type AuditedStructuredGenerationInput = Omit<
@@ -81,6 +96,8 @@ export interface StructuredGenerationObservedResultV1 {
   readonly finish_reason: StructuredGenerationFinishReasonV1 | null;
   /** Network request and response-body time, excluding structured parsing. */
   readonly provider_latency_ms: number | null;
+  /** Opaque successor token returned by a provider transport response. */
+  readonly causal_token?: string;
 }
 
 export interface ReleasedRetrievalAtom {
@@ -704,6 +721,7 @@ function safeObservedGeneration(
   let usage = UNAVAILABLE_GENERATION_USAGE_V1;
   let finishReason: StructuredGenerationFinishReasonV1 | null = null;
   let providerLatency: number | null = null;
+  let causalToken: string | undefined;
   try {
     usage = safeObservedUsage(result.usage);
     finishReason = FINISH_REASONS.has(
@@ -712,6 +730,7 @@ function safeObservedGeneration(
       ? result.finish_reason
       : null;
     providerLatency = safeObservedCount(result.provider_latency_ms);
+    causalToken = opaqueTransportValue(result.causal_token);
   } catch {
     // Observation metadata is optional and cannot invalidate model output.
   }
@@ -720,6 +739,41 @@ function safeObservedGeneration(
     usage,
     finish_reason: finishReason,
     provider_latency_ms: providerLatency,
+    ...(causalToken === undefined ? {} : { causal_token: causalToken }),
+  });
+}
+
+const OPAQUE_TRANSPORT_VALUE = /^[A-Za-z0-9_-]{16,128}$/;
+
+export function opaqueTransportValue(value: unknown): string | undefined {
+  return typeof value === "string" && OPAQUE_TRANSPORT_VALUE.test(value)
+    ? value
+    : undefined;
+}
+
+export function validateStructuredGenerationTransportV1(
+  value: StructuredGenerationTransportV1 | undefined,
+): StructuredGenerationTransportV1 | undefined {
+  if (value === undefined) return undefined;
+  const operationCorrelation = opaqueTransportValue(
+    value.operation_correlation,
+  );
+  const predecessorToken = opaqueTransportValue(value.predecessor_token);
+  if (
+    (value.operation_correlation !== undefined && operationCorrelation === undefined) ||
+    (value.predecessor_token !== undefined && predecessorToken === undefined)
+  ) {
+    throw new RetrievalGroundedAnswerCompositionError(
+      "structured generation transport is invalid",
+    );
+  }
+  return Object.freeze({
+    ...(operationCorrelation === undefined
+      ? {}
+      : { operation_correlation: operationCorrelation }),
+    ...(predecessorToken === undefined
+      ? {}
+      : { predecessor_token: predecessorToken }),
   });
 }
 
@@ -728,7 +782,13 @@ async function generateWithOptionalObservation(
   input: StructuredGenerationInput,
   observe: boolean,
 ): Promise<StructuredGenerationObservedResultV1> {
-  if (observe && port.generate_with_observation !== undefined) {
+  // Metadata is needed only for telemetry or for an offered operation that
+  // must receive a causal successor. Preserve the value-only provider path
+  // for ordinary uncorrelated requests.
+  if (
+    port.generate_with_observation !== undefined &&
+    (observe || input.transport?.operation_correlation !== undefined)
+  ) {
     return safeObservedGeneration(
       await port.generate_with_observation(input),
     );
@@ -897,7 +957,11 @@ function reportModelFailure(
 }
 
 export function createRetrievalGroundedAnswerComposition(options: RetrievalGroundedAnswerCompositionOptions): {
-  answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<RetrievalGroundedAnswerCompositionResult>;
+  answer(input: {
+    readonly question: string;
+    readonly transport?: StructuredGenerationTransportV1;
+    readonly signal?: AbortSignal;
+  }): Promise<RetrievalGroundedAnswerCompositionResult>;
 } {
   const generationAdapterId = opaqueIdentifier(
     options.generation_adapter_id,
@@ -913,6 +977,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
   return Object.freeze({
     async answer(input): Promise<RetrievalGroundedAnswerCompositionResult> {
       const question = validateReleasedRetrievalQuery(input.question);
+      const transport = validateStructuredGenerationTransportV1(input.transport);
       reportContent(options, {
         stage: "validation",
         content_kind: "question",
@@ -922,6 +987,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
       const authorshipUnsupported =
         isFirstPersonDecisionAuthorshipQuestion(question);
       let plannerRequest: AuditedStructuredGenerationInput | null = null;
+      let plannerCausalToken: string | undefined;
       input.signal?.throwIfAborted();
       let plan: readonly string[];
       if (authorshipUnsupported) {
@@ -943,6 +1009,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           schema: plannerSchema,
           max_output_tokens: ANSWER_COMPOSITION_PLANNER_MAX_OUTPUT_TOKENS,
           timeout_ms: requestTimeout,
+          ...(transport === undefined ? {} : { transport }),
         });
         reportContent(options, {
           stage: "planner",
@@ -963,6 +1030,15 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
             },
             options.on_stage !== undefined,
           );
+          plannerCausalToken = plannerGeneration.causal_token;
+          if (
+            transport?.operation_correlation !== undefined &&
+            plannerCausalToken === undefined
+          ) {
+            throw new RetrievalGroundedAnswerCompositionError(
+              "planner transport did not return a causal token",
+            );
+          }
           plannerProviderElapsed =
             options.on_stage === undefined
               ? 0
@@ -1133,6 +1209,24 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
               schema: answerSchema,
               max_output_tokens: ANSWER_COMPOSITION_ANSWER_MAX_OUTPUT_TOKENS,
               timeout_ms: requestTimeout,
+              ...(transport === undefined && plannerCausalToken === undefined
+                ? {}
+                : {
+                    transport: Object.freeze({
+                      ...(transport?.operation_correlation === undefined
+                        ? {}
+                        : {
+                            operation_correlation:
+                              transport.operation_correlation,
+                          }),
+                      ...(plannerCausalToken === undefined
+                        ? {}
+                        : {
+                            predecessor_token:
+                              plannerCausalToken,
+                          }),
+                    }),
+                  }),
             });
       if (answerRequest !== null) {
         reportContent(options, {
