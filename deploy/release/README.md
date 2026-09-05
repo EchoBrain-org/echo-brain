@@ -163,6 +163,15 @@ status, but does not accept it yet.
   --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
+For an accepted staging Authority only, an explicit `--content-telemetry true` or
+`--content-telemetry false` may follow those arguments. The option sets
+`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` in the new candidate's saved
+environment before activation and verifies the effective container setting.
+The source environment must use the literal format described below.
+It never modifies the accepted snapshot. Without the option, the candidate
+inherits the accepted setting. Do not enable telemetry by editing `.env.clean-v1`
+after promotion: that creates environment drift and blocks the next release.
+
 Run the bounded private-DM canary through the selected running release. It
 prefers a staged candidate, otherwise uses the accepted release. It refuses any
 host except Authority staging, verifies the exact running release, and calls
@@ -227,6 +236,70 @@ migration is not eligible for this loop; make an explicit migration decision
 instead. If persisted state is older or otherwise not that exact V4/V2/V2
 lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
+
+### Environment drift before staging
+
+If `status` refuses an environment mismatch, a human on the exact reviewed
+staging host runs the installed wrapper:
+
+```sh
+./update-clean-v1.sh diagnose-environment
+```
+
+This checks the selected release's stored tuple and materialized profile,
+but does not query Docker or assert runtime health. Its JSON reports the
+selected release ID, candidate presence, whether environment bytes match,
+the fixed allowlisted setting name when changed, whether other bytes differ,
+and pending-repair state. Arbitrary setting names, values, and raw diffs are
+never printed. `repair_eligible` describes environment eligibility only;
+execution separately verifies the exact accepted runtime.
+
+For an accepted release with no staged candidate, the only automatic repair
+allowed is restoring the saved environment when every difference is confined
+to one canonical `ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true|false` line
+(or that line's presence). Every other byte must be unchanged. Both files must
+be private, current-operator-owned regular files. A non-staging Authority,
+unrelated change, malformed or duplicate switch, unsafe file, or mismatched
+repair evidence is refused. Do not paste environment files into chat.
+
+Automatic repair and the explicit candidate override accept only the
+onboarding writer's literal `NAME=value` lines (plus blank/comment lines).
+Quoted or multiline values, interpolation, escape syntax, alternate
+assignment syntax, and noncanonical line endings are deliberately refused;
+the diagnostic reports `environment_format_supported=false`. This prevents a
+setting-looking line inside private content from being classified as a safe
+configuration change. Other valid Compose environment formats require review,
+not automatic rewriting.
+
+After reviewing the diagnostic and the effect of restoring the saved setting,
+the human binds the operation to that exact accepted release ID:
+
+```sh
+./update-clean-v1.sh repair-environment \
+  --expected-release-id <accepted-release-id-from-diagnostic> --restore-accepted
+./update-clean-v1.sh status
+```
+
+The restore may disable content telemetry if it was enabled after acceptance.
+It atomically restores the accepted environment and restarts/checks the exact
+accepted image, profile, proxy, public descriptor, and effective telemetry
+setting. It does not replace the accepted record, change its snapshot, create
+a candidate, or infer canary approval. The private original file is retained
+as `clean-data/release/environment-repairs/<release-id>.before.env`; a private
+verification receipt is stored alongside it. These files are immutable and
+not overwritten with different evidence for another repair of the same release.
+
+A durable `environment-repair.pending.json` blocks status success, staging,
+canary, promotion, and rollback until recovery is verified. After an
+interruption or failed restart, rerun the same repair command for the same
+release; diagnostics remain available. An unrelated intervening change stops
+the retry. Do not remove or edit the pending marker, backup, or accepted
+snapshot. An already matching, verified accepted runtime is a no-op.
+
+Once repair and status succeed, stage the next reviewed candidate with the
+intended `--content-telemetry` option, then follow the normal canary and human
+approval gates. General configuration or credential drift requires separate
+review; this command is not a blanket environment reset.
 
 ## First-cohort employee onboarding kit
 

@@ -402,6 +402,12 @@ Authority.
 
 ### Current-host recovery floor
 
+For environment drift that prevents staging, follow the release loop's
+[secret-safe diagnosis and guarded repair](../release/README.md#environment-drift-before-staging).
+The current-host wrapper can recover accepted-only staging content-telemetry
+drift without inventing a candidate. Unknown changes remain blocked; never
+overwrite an accepted snapshot to make the equality check pass.
+
 The release recovery unit above restores accepted deployment configuration. It
 does not reconstruct `clean-data/` if the Authority root volume is lost or
 corrupted. Until the later retained-data-volume and replaceable-host programme
