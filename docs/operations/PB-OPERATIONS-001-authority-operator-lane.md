@@ -55,6 +55,8 @@ mode-`0700` directory and temporary transfer archive.
 | Create the first host on a never-prepared volume | Run `up --initialize-blank-data-volume`: plan, human review, then execute. |
 | Replace a host while retaining its prepared volume and edge | Run a reviewed `down`, then use a new operation ID for reviewed `up --require-authority`; keep the flag on both plan and execute. |
 | Change the accepted image on the current host | A human runs installed `update-clean-v1.sh stage`, synthetic `canary`, stops for approval and the release checks, then runs `promote`. |
+| Diagnose an environment mismatch before staging | A human runs installed `update-clean-v1.sh diagnose-environment`; it reports only allowlisted setting names and safe classifications, not environment values or runtime health. |
+| Recover accepted-only staging content-telemetry drift | After reviewing the diagnostic and exact accepted release ID, a human runs installed `update-clean-v1.sh repair-environment` with its explicit restore confirmation. Unknown drift or a staged candidate stops this lane. |
 | Move first-onboarding input to a ready host | Run onboarding-transfer `preflight`, `plan`, human review, then `execute`. |
 | Advance initial-owner onboarding | A human runs installed `onboard-clean-v1.sh resume` and follows its exact actor-scoped action. |
 
@@ -101,6 +103,20 @@ Only after both checks pass may the host operator run
 is the operator's explicit confirmation of those human checks, not evidence
 created by the staged canary receipt. Run `status` and roll back instead if any
 check fails.
+
+**Environment drift before an update.** Do not edit the active environment or
+accepted snapshot by hand. The installed wrapper's `diagnose-environment`
+selects the staged candidate when present, otherwise the accepted record.
+Only accepted-only drift limited to the canonical staging content-telemetry
+switch is eligible for `repair-environment`; the exact syntax and evidence
+contract are in the [release loop](../../deploy/release/README.md#environment-drift-before-staging).
+The human reviews that restoring the saved setting may disable telemetry until
+the next candidate. Recovery preserves a private before-copy, leaves the
+accepted snapshot unchanged, and must verify the accepted runtime before
+clearing its pending marker. If interrupted, retry only the same repair for
+the same accepted release. Do not remove the marker or start a candidate to
+work around it. Intended telemetry changes belong in the next candidate's
+`stage --content-telemetry` option, before its canary and promotion.
 
 **Initial input transfer.** Run the AWS-free `preflight` before spending an AWS
 session or creating an archive. Plan creates the reviewable grant and private

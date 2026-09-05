@@ -2,6 +2,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -297,6 +298,63 @@ function writeCurrentStateLineage(stateDirectory: string) {
     { encoding: "utf8" },
   );
   expect(created.status).toBe(0);
+}
+
+function environmentDriftFixture() {
+  const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-environment-drift-"));
+  roots.push(root);
+  const envFile = join(root, ".env.clean-v1");
+  const state = join(root, "release-state");
+  const profile = writeRuntimeProfile();
+  const accepted = releaseWithRuntimeProfile(profile);
+  const runtimeConfig = prepareRuntimeConfig(root, profile);
+  installActiveTuple(state, envFile, accepted, profile);
+  const acceptedPath = join(state, "current.clean-v1.json");
+  copyFileSync(writeRecord(accepted), acceptedPath);
+  const snapshot = acceptedRuntimeEnvironment(state, accepted.release_id);
+  const original = tupleEnvironment(accepted).replace(
+    "authority.example.test",
+    "authority-staging.echobrain.org",
+  ) + "SYNTHETIC_PRIVATE_VALUE=never-print-this-test-value\n";
+  writeFileSync(snapshot, original);
+  writeFileSync(envFile, original + "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n");
+  const bin = join(root, "bin");
+  const log = join(root, "docker.log");
+  const failStart = join(root, "fail-start");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "docker"), [
+    "#!/usr/bin/env bash",
+    "printf '%s\\n' \"$*\" >> \"$ECHO_TEST_DOCKER_LOG\"",
+    "if [[ \"$1\" == compose && \"$*\" == *' ps -q authority'* ]]; then echo authority-container; exit 0; fi",
+    "if [[ \"$1\" == compose && \"$*\" == *' ps -q proxy'* ]]; then echo proxy-container; exit 0; fi",
+    "if [[ \"$1\" == inspect && \"$*\" == *'.State.Running'* ]]; then echo true; exit 0; fi",
+    "if [[ \"$1\" == inspect && \"$*\" == *'io.echo-brain.release-id'* && -n \"$ECHO_TEST_WRONG_RELEASE\" ]]; then echo clean-v1-wrong-runtime; exit 0; fi",
+    "if [[ \"$1\" == inspect && \"$*\" == *'io.echo-brain.release-id'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' \"$ECHO_CLEAN_ENV_FILE\"; exit 0; fi",
+    "if [[ \"$1\" == inspect && \"$*\" == *'io.echo-brain.runtime-profile-sha256'* ]]; then sed -n 's/^ECHO_CLEAN_RUNTIME_PROFILE_SHA256=//p' \"$ECHO_CLEAN_ENV_FILE\"; exit 0; fi",
+    "if [[ \"$1\" == inspect && \"$*\" == *'.Image'* ]]; then echo \"$ECHO_TEST_IMAGE_ID\"; exit 0; fi",
+    "if [[ \"$1\" == image && \"$*\" == *'org.opencontainers.image.revision'* ]]; then sed -n 's/^ECHO_CLEAN_RELEASE_SOURCE_SHA=//p' \"$ECHO_CLEAN_ENV_FILE\"; exit 0; fi",
+    "if [[ \"$1\" == image && \"$*\" == *'.RepoDigests'* ]]; then sed -n 's/^ECHO_CLEAN_AUTHORITY_IMAGE=//p' \"$ECHO_CLEAN_ENV_FILE\"; exit 0; fi",
+    "if [[ \"$1\" == inspect && \"$*\" == *'{{json .Config.Env}}'* && -n \"$ECHO_TEST_RUNTIME_CONTENT\" ]]; then printf '%s\\n' \"$ECHO_TEST_RUNTIME_CONTENT\"; exit 0; fi",
+    "if [[ \"$1\" == inspect && \"$*\" == *'{{json .Config.Env}}'* ]]; then python3 -c 'import json, os, pathlib; print(json.dumps([line for line in pathlib.Path(os.environ[\"ECHO_CLEAN_ENV_FILE\"]).read_text().splitlines() if line.startswith(\"ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=\")]))'; exit 0; fi",
+    "if [[ \"$*\" == *'.Config.'* ]]; then exit 0; fi",
+    "if [[ \"$1\" == compose && \"$*\" == *' up '* && -e \"$ECHO_TEST_FAIL_START\" ]]; then exit 1; fi",
+    "if [[ \"$1\" == compose ]]; then exit 0; fi",
+    "exit 91",
+    "",
+  ].join("\n"), { mode: 0o755 });
+  const environment = {
+    PATH: `${bin}:${process.env.PATH}`,
+    ECHO_CLEAN_ENV_FILE: envFile,
+    ECHO_CLEAN_RELEASE_STATE_DIR: state,
+    ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
+    ECHO_TEST_DOCKER_LOG: log,
+    ECHO_TEST_FAIL_START: failStart,
+    ECHO_TEST_IMAGE_ID: `sha256:${"e".repeat(64)}`,
+  };
+  return { root, envFile, state, profile, accepted, acceptedPath, snapshot, original,
+    runtimeConfig, log, failStart, environment,
+    execute: (...args: string[]) => run("bash", [UPDATE, ...args], environment),
+  };
 }
 
 function writeValidAuthorityV3Lineage(stateDirectory: string): void {
@@ -2526,6 +2584,294 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("regular file");
+  });
+
+  it("diagnoses environment drift without disclosing names or values outside the allowlist", () => {
+    const fixture = environmentDriftFixture();
+    const before = readFileSync(fixture.envFile);
+    const status = fixture.execute("status");
+    expect(status.status).toBe(1);
+    expect(status.stderr).toContain("release environment drifted");
+    const result = fixture.execute("diagnose-environment");
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      release_id: fixture.accepted.release_id,
+      candidate_staged: false,
+      environment_matches: false,
+      changed_settings: ["ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1"],
+      other_bytes_changed: false,
+      repair_eligible: true,
+      runtime_checked: false,
+    });
+    expect(result.stdout + result.stderr).not.toContain("SYNTHETIC_PRIVATE_VALUE");
+    expect(result.stdout + result.stderr).not.toContain("never-print-this-test-value");
+    expect(readFileSync(fixture.envFile)).toEqual(before);
+    expect(existsSync(fixture.log)).toBe(false);
+  });
+
+  it("repairs only allowlisted environment drift without a candidate and preserves accepted evidence", () => {
+    const fixture = environmentDriftFixture();
+    const before = readFileSync(fixture.envFile);
+    const acceptedBytes = readFileSync(fixture.acceptedPath);
+    const result = fixture.execute("repair-environment", "--expected-release-id",
+      fixture.accepted.release_id, "--restore-accepted");
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ stage: "environment_repaired", runtime_verified: true });
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(fixture.original);
+    expect(readFileSync(fixture.snapshot, "utf8")).toBe(fixture.original);
+    expect(readFileSync(fixture.acceptedPath)).toEqual(acceptedBytes);
+    const backup = join(fixture.state, "environment-repairs", fixture.accepted.release_id + ".before.env");
+    expect(readFileSync(backup)).toEqual(before);
+    expect(statSync(backup).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(fixture.state, "environment-repair.pending.json"))).toBe(false);
+    expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(false);
+    expect(fixture.execute("status").status).toBe(0);
+    const log = readFileSync(fixture.log, "utf8");
+    const retry = fixture.execute("repair-environment", "--expected-release-id",
+      fixture.accepted.release_id, "--restore-accepted");
+    expect(retry.status).toBe(0);
+    expect(JSON.parse(retry.stdout).stage).toBe("environment_already_matches");
+    expect(readFileSync(fixture.log, "utf8").slice(log.length)).not.toContain(" up ");
+  });
+
+  it.each([
+    ["unrelated credential change", "SYNTHETIC_PRIVATE_VALUE=changed-private-value\n", true],
+    ["unrelated new setting", "UNTRUSTED_PRIVATE_NAME=private-payload\n", false],
+    ["formatting drift", "\n", false],
+    ["duplicate switch", "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false\n", false],
+    ["malformed switch", "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=not-a-boolean\n", false],
+  ])("refuses environment repair for %s without leaking private input", (_name, extra, replace) => {
+    const fixture = environmentDriftFixture();
+    const original = readFileSync(fixture.envFile, "utf8");
+    const drifted = _name === "malformed switch"
+      ? original.replace("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n", String(extra))
+      : replace
+      ? original.replace("SYNTHETIC_PRIVATE_VALUE=never-print-this-test-value\n", String(extra))
+      : original + extra;
+    writeFileSync(fixture.envFile, drifted);
+    const diagnostic = fixture.execute("diagnose-environment");
+    expect(diagnostic.status).toBe(0);
+    expect(JSON.parse(diagnostic.stdout).repair_eligible).toBe(false);
+    const repair = fixture.execute("repair-environment", "--expected-release-id",
+      fixture.accepted.release_id, "--restore-accepted");
+    expect(repair.status).toBe(1);
+    expect(repair.stderr).toContain("environment operation refused");
+    const output = diagnostic.stdout + diagnostic.stderr + repair.stdout + repair.stderr;
+    for (const privateText of ["SYNTHETIC_PRIVATE_VALUE", "never-print-this-test-value",
+      "changed-private-value", "UNTRUSTED_PRIVATE_NAME", "private-payload", "not-a-boolean"]) {
+      expect(output).not.toContain(privateText);
+    }
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(drifted);
+    expect(existsSync(fixture.log)).toBe(false);
+    expect(existsSync(join(fixture.state, "environment-repair.pending.json"))).toBe(false);
+  });
+
+  it.each(["expected release", "candidate", "candidate symlink", "non-staging host",
+    "unsafe permissions", "active symlink", "snapshot symlink", "backup directory symlink"])(
+    "refuses environment repair with %s before invoking Docker", (failure) => {
+      const fixture = environmentDriftFixture();
+      let expectedRelease = fixture.accepted.release_id;
+      if (failure === "expected release") expectedRelease = "clean-v1-other-release";
+      if (failure === "candidate") copyFileSync(fixture.acceptedPath, join(fixture.state, "candidate.clean-v1.json"));
+      if (failure === "candidate symlink") symlinkSync(join(fixture.root, "missing"), join(fixture.state, "candidate.clean-v1.json"));
+      if (failure === "non-staging host") {
+        for (const path of [fixture.envFile, fixture.snapshot]) {
+          writeFileSync(path, readFileSync(path, "utf8").replace("authority-staging.echobrain.org", "authority.example.test"));
+        }
+      }
+      if (failure === "unsafe permissions") chmodSync(fixture.envFile, 0o644);
+      if (failure === "active symlink" || failure === "snapshot symlink") {
+        const path = failure === "active symlink" ? fixture.envFile : fixture.snapshot;
+        const target = join(fixture.root, "linked-environment");
+        copyFileSync(path, target);
+        rmSync(path);
+        symlinkSync(target, path);
+      }
+      if (failure === "backup directory symlink") symlinkSync(fixture.root, join(fixture.state, "environment-repairs"));
+      const before = readFileSync(fixture.envFile);
+      const result = fixture.execute("repair-environment", "--expected-release-id", expectedRelease, "--restore-accepted");
+      expect(result.status).toBe(1);
+      expect(readFileSync(fixture.envFile)).toEqual(before);
+      expect(existsSync(fixture.log)).toBe(false);
+      expect(existsSync(join(fixture.state, "environment-repair.pending.json"))).toBe(false);
+    },
+  );
+
+  it("diagnoses a staged candidate but never offers accepted-only environment repair", () => {
+    const fixture = environmentDriftFixture();
+    copyFileSync(fixture.acceptedPath, join(fixture.state, "candidate.clean-v1.json"));
+    const result = fixture.execute("diagnose-environment");
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ candidate_staged: true, repair_eligible: false });
+    expect(existsSync(fixture.log)).toBe(false);
+  });
+
+  it("keeps environment repair pending after failed runtime recovery and resumes safely", () => {
+    const fixture = environmentDriftFixture();
+    const before = readFileSync(fixture.envFile);
+    writeFileSync(fixture.failStart, "fail\n");
+    const args = ["repair-environment", "--expected-release-id", fixture.accepted.release_id, "--restore-accepted"];
+    const failed = fixture.execute(...args);
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain("runtime recovery is unconfirmed");
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(fixture.original);
+    const pending = join(fixture.state, "environment-repair.pending.json");
+    expect(statSync(pending).mode & 0o777).toBe(0o600);
+    // A crash can leave a temporary second hard link during no-replace
+    // publication. Valid immutable evidence must still permit a safe retry.
+    const backup = join(fixture.state, "environment-repairs", fixture.accepted.release_id + ".before.env");
+    linkSync(backup, join(fixture.state, "environment-repairs", ".interrupted-backup"));
+    linkSync(pending, join(fixture.state, ".interrupted-pending"));
+    expect(JSON.parse(fixture.execute("diagnose-environment").stdout)).toMatchObject({ repair_pending: true, repair_eligible: true });
+    const log = readFileSync(fixture.log);
+    for (const command of ["stage", "canary", "promote", "rollback", "status"]) {
+      expect(fixture.execute(command).stderr).toContain("environment repair is pending");
+    }
+    expect(readFileSync(fixture.log)).toEqual(log);
+    // Also simulate an interruption after the durable marker but before the
+    // atomic environment replacement. The exact preserved input is accepted.
+    writeFileSync(fixture.envFile, before);
+    rmSync(fixture.failStart);
+    const retried = fixture.execute(...args);
+    expect(retried.status).toBe(0);
+    expect(existsSync(pending)).toBe(false);
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(fixture.original);
+    const receipt = join(fixture.state, "environment-repairs", fixture.accepted.release_id + ".json");
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({ release_id: fixture.accepted.release_id, runtime_verified: true });
+  });
+
+  it("refuses changed environment or repair evidence on a pending repair retry", () => {
+    const fixture = environmentDriftFixture();
+    writeFileSync(fixture.failStart, "fail\n");
+    const args = ["repair-environment", "--expected-release-id", fixture.accepted.release_id, "--restore-accepted"];
+    expect(fixture.execute(...args).status).toBe(1);
+    rmSync(fixture.failStart);
+    const log = readFileSync(fixture.log);
+    writeFileSync(fixture.envFile, fixture.original + "SYNTHETIC_ADDITIONAL_SECRET=do-not-print\n");
+    const result = fixture.execute(...args);
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("do-not-print");
+    expect(readFileSync(fixture.log)).toEqual(log);
+    expect(existsSync(join(fixture.state, "environment-repair.pending.json"))).toBe(true);
+    writeFileSync(fixture.envFile, fixture.original);
+    const pending = join(fixture.state, "environment-repair.pending.json");
+    writeFileSync(pending, "{\"kind\":\"mismatched\"}\n");
+    expect(fixture.execute(...args).status).toBe(1);
+    expect(readFileSync(fixture.log)).toEqual(log);
+  });
+
+  it("binds a content telemetry override to the candidate environment and preserves rollback", () => {
+    const fixture = environmentDriftFixture();
+    writeFileSync(fixture.envFile, fixture.original);
+    const candidateRecord = releaseWithRuntimeProfile(fixture.profile, {
+      release_id: "clean-v1-20260822-002",
+      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)) },
+    });
+    const candidate = writeRecord(candidateRecord);
+    const stage = fixture.execute("stage", "--release", candidate,
+      "--runtime-profile", fixture.profile, "--content-telemetry", "true");
+    expect(stage.status).toBe(0);
+    const candidateEnvironment = readFileSync(acceptedRuntimeEnvironment(fixture.state, candidateRecord.release_id), "utf8");
+    expect(candidateEnvironment).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n");
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(candidateEnvironment);
+    expect(readFileSync(fixture.snapshot, "utf8")).toBe(fixture.original);
+    expect(readFileSync(fixture.acceptedPath, "utf8")).toBe(canonical(fixture.accepted) + "\n");
+    expect(fixture.execute("rollback").status).toBe(0);
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(fixture.original);
+  });
+
+  it("refuses ambiguous environment syntax that hides a setting-looking line inside a private value", () => {
+    const fixture = environmentDriftFixture();
+    const accepted = fixture.original + "SYNTHETIC_MULTILINE='private-first-line\nECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false\nprivate-last-line'\n";
+    writeFileSync(fixture.snapshot, accepted);
+    const drifted = accepted.replace("TELEMETRY_V1=false", "TELEMETRY_V1=true");
+    writeFileSync(fixture.envFile, drifted);
+    const diagnostic = fixture.execute("diagnose-environment");
+    expect(diagnostic.status).toBe(0);
+    expect(JSON.parse(diagnostic.stdout)).toMatchObject({ environment_format_supported: false, repair_eligible: false, changed_settings: [], other_bytes_changed: true });
+    const result = fixture.execute("repair-environment", "--expected-release-id", fixture.accepted.release_id, "--restore-accepted");
+    expect(result.status).toBe(1);
+    expect(diagnostic.stdout + diagnostic.stderr + result.stdout + result.stderr).not.toContain("private-first-line");
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(drifted);
+    expect(existsSync(fixture.log)).toBe(false);
+  });
+
+  it("refuses environment repair when the running release differs before any mutation", () => {
+    const fixture = environmentDriftFixture();
+    const before = readFileSync(fixture.envFile);
+    const result = run("bash", [UPDATE, "repair-environment", "--expected-release-id",
+      fixture.accepted.release_id, "--restore-accepted"], { ...fixture.environment, ECHO_TEST_WRONG_RELEASE: "true" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires the exact accepted runtime");
+    expect(readFileSync(fixture.envFile)).toEqual(before);
+    expect(existsSync(join(fixture.state, "environment-repair.pending.json"))).toBe(false);
+    expect(readFileSync(fixture.log, "utf8")).not.toContain(" up ");
+  });
+
+  it.each([
+    "SYNTHETIC_LITERAL='quoted-value'\n",
+    "SYNTHETIC_INTERPOLATION=$ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1\n",
+    "SYNTHETIC_ALTERNATE: literal\n",
+    "SYNTHETIC_LINE_ENDING=literal\r\n",
+    "SYNTHETIC_NO_FINAL_NEWLINE=literal",
+  ])("refuses nonliteral environments for candidate telemetry overrides (%#)", (extra) => {
+    const fixture = environmentDriftFixture();
+    const environment = fixture.original + extra;
+    writeFileSync(fixture.envFile, environment);
+    writeFileSync(fixture.snapshot, environment);
+    const candidate = writeRecord(releaseWithRuntimeProfile(fixture.profile, {
+      release_id: "clean-v1-20260822-002",
+      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)) },
+    }));
+    const result = fixture.execute("stage", "--release", candidate,
+      "--runtime-profile", fixture.profile, "--content-telemetry", "true");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("environment operation refused");
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(environment);
+    expect(existsSync(fixture.log)).toBe(false);
+    expect(existsSync(join(fixture.state, "candidate.clean-v1.json"))).toBe(false);
+  });
+
+  it("does not complete environment repair while the effective runtime switch still differs", () => {
+    const fixture = environmentDriftFixture();
+    const result = run("bash", [UPDATE, "repair-environment", "--expected-release-id",
+      fixture.accepted.release_id, "--restore-accepted"], {
+      ...fixture.environment,
+      ECHO_TEST_RUNTIME_CONTENT: JSON.stringify(["ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true", "SYNTHETIC_RUNTIME_SECRET=not-for-output"]),
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("runtime recovery is unconfirmed");
+    expect(result.stdout + result.stderr).not.toContain("not-for-output");
+    expect(existsSync(join(fixture.state, "environment-repair.pending.json"))).toBe(true);
+    expect(existsSync(join(fixture.state, "environment-repairs", fixture.accepted.release_id + ".json"))).toBe(false);
+  });
+
+  it.each(["true", "false"])("stages an explicit %s content telemetry setting only on staging", (value) => {
+    const fixture = environmentDriftFixture();
+    const nonStaging = fixture.original.replace("authority-staging.echobrain.org", "authority.example.test");
+    writeFileSync(fixture.envFile, nonStaging);
+    writeFileSync(fixture.snapshot, nonStaging);
+    const result = fixture.execute("stage", "--release", fixture.acceptedPath,
+      "--runtime-profile", fixture.profile, "--content-telemetry", value);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("staging-only");
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(nonStaging);
+    expect(existsSync(fixture.log)).toBe(false);
+  });
+
+  it("does not overwrite different private backup evidence from an earlier environment repair", () => {
+    const fixture = environmentDriftFixture();
+    const args = ["repair-environment", "--expected-release-id", fixture.accepted.release_id, "--restore-accepted"];
+    expect(fixture.execute(...args).status).toBe(0);
+    const backup = join(fixture.state, "environment-repairs", fixture.accepted.release_id + ".before.env");
+    const saved = readFileSync(backup);
+    const newDrift = fixture.original + "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false\n";
+    writeFileSync(fixture.envFile, newDrift);
+    const result = fixture.execute(...args);
+    expect(result.status).toBe(1);
+    expect(readFileSync(backup)).toEqual(saved);
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(newDrift);
+    expect(existsSync(join(fixture.state, "environment-repair.pending.json"))).toBe(false);
   });
 
   it("reports runtime-profile drift before claiming the accepted release is healthy", () => {
