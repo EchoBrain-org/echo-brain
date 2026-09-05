@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
@@ -9,6 +10,9 @@ import {
   privateSlackApprovalBlockKitActionIdV1,
 } from "../../../../../src/composition/providers/slack/private-approval/private-slack-approval-block-kit-card-v1.js";
 import { createPrivateSlackApprovalInteractionHandlerV1 } from "../../../../../src/composition/providers/slack/private-approval/private-slack-approval-interaction-handler-v1.js";
+import { createPrivateSlackApprovalHttpAdapterV1 } from "../../../../../src/composition/providers/slack/private-approval/private-slack-approval-http-adapter-v1.js";
+import { startOrganizationAuthorityServiceLifecycle } from "../../../../../src/composition/organization-authority-service-lifecycle.js";
+import { createOrganizationAuthorityHttpServer } from "../../../../../src/presentation/organization-authority-http-server.js";
 
 function journeyTelemetry(input: {
   readonly queue_age_ms?: number | null;
@@ -343,6 +347,95 @@ describe("private Slack interactions application V1", () => {
     });
     expect(wake).not.toHaveBeenCalled();
   });
+
+  it("writes the HTTP acknowledgement before an idle worker starts publication", async () => {
+    const order: string[] = [];
+    let queued = false;
+    let publicationStarted!: () => void;
+    const published = new Promise<void>((resolve) => {
+      publicationStarted = resolve;
+    });
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: {} as never, worker_interval_ms: 60_000 },
+      {
+        processing: {
+          recoverV4Appends: async () => undefined,
+          pollAndStageAdmittedMeetings: async () => undefined,
+          observeAndFinalizePendingApprovals: async () => {
+            if (!queued) return;
+            // This synchronous prefix stands in for SQLite finalization. It
+            // must not run until the HTTP acknowledgement has been written.
+            order.push("publication");
+            publicationStarted();
+          },
+          appendFinalizedApprovalsToV4: async () => undefined,
+          reconcileReadableSearchGeneration: async () => undefined,
+        },
+        start_api_runtime: async () => ({
+          address: { address: "127.0.0.1", family: "IPv4", port: 0 },
+          close: async () => undefined,
+        }),
+      },
+    );
+    // Wait for the initial periodic cycle; the click must exercise an idle
+    // gate, where runExclusive starts its operation synchronously.
+    await runtime.runExclusive(async () => undefined);
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: {
+        enqueue: () => {
+          queued = true;
+          order.push("enqueue");
+          return {
+            disposition: "resolution" as const,
+            receipt: {} as never,
+            receipt_sha256: `sha256:${"d".repeat(64)}` as const,
+            idempotent: false,
+          };
+        },
+      },
+      now_unix_seconds: () => NOW,
+      now: () => "2026-08-28T22:00:00.000Z",
+      on_action_queued: () => runtime.requestApprovalPublication(),
+    });
+    const ingress = createPrivateSlackApprovalHttpAdapterV1(application);
+    const server = createOrganizationAuthorityHttpServer({
+      descriptor: {} as never,
+      sessions: {} as never,
+      oidc_provider: {} as never,
+      expected_issuer: "https://issuer.example",
+      private_approval_interaction_ingress: ingress,
+    });
+    server.prependListener("request", (_request, response) => {
+      response.once("finish", () => order.push("acknowledgement"));
+    });
+    try {
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("test HTTP server did not bind TCP");
+      }
+      const signed = request(raw());
+      const response = await fetch(`http://127.0.0.1:${address.port}${ingress.path}`, {
+        method: "POST",
+        headers: {
+          "content-type": signed.content_type,
+          "x-slack-request-timestamp": signed.slack_request_timestamp,
+          "x-slack-signature": signed.slack_signature,
+        },
+        body: Buffer.from(signed.raw_body),
+      });
+      await response.text();
+      expect(response.status).toBe(200);
+      await published;
+      expect(order).toEqual(["enqueue", "acknowledgement", "publication"]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await runtime.close();
+    }
+  }, 10_000);
 
   it("keeps the acknowledgement when the wake hook throws", async () => {
     const enqueue = vi.fn(() => ({
