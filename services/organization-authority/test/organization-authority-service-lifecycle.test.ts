@@ -557,6 +557,32 @@ describe("Organization Authority service lifecycle", () => {
     vi.useRealTimers();
   });
 
+  it("cancels a deferred publication when close begins before it starts", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 60_000 },
+      {
+        processing: processing(events),
+        start_api_runtime: async () => apiRuntime(events),
+      },
+    );
+    let closed = false;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      events.length = 0;
+      runtime.requestApprovalPublication();
+      await runtime.close();
+      closed = true;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events).toEqual(["api-close"]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (!closed) await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores publication requests after close", async () => {
     vi.useFakeTimers();
     const events: string[] = [];

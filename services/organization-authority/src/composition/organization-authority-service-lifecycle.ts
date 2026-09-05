@@ -213,32 +213,39 @@ export async function startOrganizationAuthorityServiceLifecycle(
     });
     let closing = false;
     let publicationPending = false;
+    let publicationImmediate: ReturnType<typeof setImmediate> | undefined;
     const requestApprovalPublication = (): void => {
       if (closing || publicationPending) return;
       publicationPending = true;
-      void worker
-        .runExclusive(async (signal) => {
-          // Clear before running so a request that arrives mid-publication
-          // schedules one follow-up run rather than being dropped.
-          publicationPending = false;
-          await runOrganizationAuthorityApprovalPublicationV1(
-            dependencies.processing,
-            signal,
-            lifecycle,
-          );
-        })
-        .catch((failure: unknown) => {
-          // `publicationPending` was already cleared when the run started; the
-          // only pre-start failure is the closed worker's aborted signal.
-          if (closing) return;
-          try {
-            dependencies.on_worker_error?.(
-              failure instanceof Error ? failure : new Error(String(failure)),
+      // An idle runExclusive gate starts synchronously. Yield to the next
+      // event-loop turn so the ingress can write its HTTP acknowledgement
+      // before SQLite finalization begins, including any busy-lock wait.
+      publicationImmediate = setImmediate(() => {
+        publicationImmediate = undefined;
+        void worker
+          .runExclusive(async (signal) => {
+            // Clear before running so a request that arrives mid-publication
+            // schedules one follow-up run rather than being dropped.
+            publicationPending = false;
+            await runOrganizationAuthorityApprovalPublicationV1(
+              dependencies.processing,
+              signal,
+              lifecycle,
             );
-          } catch {
-            // Error reporting is observational and cannot become control flow.
-          }
-        });
+          })
+          .catch((failure: unknown) => {
+            // `publicationPending` was already cleared when the run started;
+            // the only pre-start failure is the closed worker's aborted signal.
+            if (closing) return;
+            try {
+              dependencies.on_worker_error?.(
+                failure instanceof Error ? failure : new Error(String(failure)),
+              );
+            } catch {
+              // Error reporting is observational and cannot become control flow.
+            }
+          });
+      });
     };
     return {
       address: startedApi.address,
@@ -246,6 +253,11 @@ export async function startOrganizationAuthorityServiceLifecycle(
       requestApprovalPublication,
       close: async () => {
         closing = true;
+        if (publicationImmediate !== undefined) {
+          clearImmediate(publicationImmediate);
+          publicationImmediate = undefined;
+          publicationPending = false;
+        }
         try {
           try {
             await worker.close();
