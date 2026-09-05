@@ -27,8 +27,12 @@ On founder-live machines, those instructions also bind every ECHO-using turn to 
   the AWS CLI, or CloudFormation APIs to mutate the Authority staging slot or
   onboarding-transfer boundary. Those mutations go through
   `npm run authority:staging` and `npm run authority:staging-onboarding-transfer`
-  only. Host-local onboarding and release actions use the exact installed
-  wrappers through the human Session Manager lane. If the MCP is unavailable,
+  only. Current-host staging release actions additionally use the reviewed
+  `npm run authority:staging-release` CLI, which transfers only checksum-bound
+  non-secret artifacts and invokes named installed update-wrapper actions via
+  bounded SSM. It does not mutate infrastructure or the onboarding-transfer
+  boundary. Host-local onboarding remains in the human Session Manager lane.
+  If the MCP is unavailable,
   use the AWS CLI only for inspection that the repository CLIs do not expose.
 - Before starting a task, check whether a relevant AWS skill is available.
   Load the skill with `retrieve_skill` and prefer its guidance over
@@ -82,7 +86,7 @@ instance role. Never copy a production secret into a Cloud environment.
 Codex, Claude Code, and Cursor are the same operator. There is one playbook.
 Do not add a tool-specific skill, playbook, or chat checklist that restates it.
 
-Before `authority:local`, `authority:staging`, onboarding transfer,
+Before `authority:local`, `authority:staging`, `authority:staging-release`, onboarding transfer,
 `onboard-clean-v1.sh`, `update-clean-v1.sh`, `restore-clean-v1-host.sh`,
 Authority image or host-bundle builds, SSM, restage, onboard, or deploy, read
 and follow
@@ -94,3 +98,11 @@ playbook is not permission to call AWS.
 Never use `--initialize-blank-data-volume` on a prepared volume, restage to
 compile, guess `authorityPinSha256` from the public endpoint, or put a login
 grant in output, argv, or chat.
+
+For a current-host staging update, a local coding agent may drive the reviewed
+release CLI, eligible telemetry-drift recovery, exact offline Person-client
+installation, and both candidate-client checks. Login/MFA, private Slack-card
+approval, and the exact candidate's final release decision remain human inputs.
+Never fabricate that authorization or infer it from a canary receipt, PR merge,
+or blanket approval to automate. Unknown drift, unconfirmed remote execution,
+and destructive/infrastructure changes stop the automatic release lane.

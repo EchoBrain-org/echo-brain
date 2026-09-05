@@ -113,6 +113,11 @@ invitation, Slack, Granola, or model secret.
 
 ## EC2 Authority replacement
 
+For the existing staging host, prefer the
+[automated current-host lane](#automated-current-host-staging-lane). The direct
+host commands below remain the installed-wrapper contract and human fallback;
+they are not permission for an agent to open a shell session.
+
 Keep the three operator lanes separate:
 
 - A new organization uses `onboard-clean-v1.sh prepare` and `resume` for the
@@ -300,6 +305,130 @@ Once repair and status succeed, stage the next reviewed candidate with the
 intended `--content-telemetry` option, then follow the normal canary and human
 approval gates. General configuration or credential drift requires separate
 review; this command is not a blanket environment reset.
+
+## Automated current-host staging lane
+
+`npm run authority:staging-release` is the local operator's bounded alternative
+to copying files into Session Manager. It is restricted to the repository-pinned
+staging AWS account, region `us-west-2`, and `echo-authority-staging-v1`. It does not
+replace the host, change IAM/CloudFormation/Cloudflare, use the onboarding
+transfer bucket, handle invitations, or permit production/client-live release.
+Cloud coding tasks still stop before every live operation.
+
+The CLI requires a clean checkout whose exact HEAD is reachable from fetched
+`origin/main`. The reviewed CLI and host-runner source, updater and validators
+are taken from that commit. The candidate image/client/profile keep their own
+release source identity; a tooling-only update does not rebuild those artifacts.
+Fetch and verify reviewed source before planning. The previous tooling source
+must also be a full reviewed-main ancestor, not an arbitrary file or command.
+
+Keep the accepted canonical record, candidate canonical record, matching runtime
+profile and operation receipts in an operator-owned mode-`0700` directory outside
+the checkout; input records/profile and receipts must be mode `0600`. Never add
+environment files, tokens, invitations, or credential material. URL metadata
+with userinfo, query or fragment is refused. The profile's four files must match
+the candidate's committed source exactly.
+
+Plan one named action. For `install`, supply the full source SHA corresponding
+to the independently reviewed *currently installed* tooling. Unknown installed
+bytes stop instead of being overwritten. Replacing tooling saves private old
+copies and hashes; it never edits the accepted release or environment.
+
+```sh
+npm run authority:staging-release -- plan \
+  --action install \
+  --accepted-release /absolute/private/releases/accepted.json \
+  --release /absolute/private/releases/candidate.json \
+  --runtime-profile /absolute/private/releases/runtime-profile.json \
+  --previous-tooling-source <full-reviewed-installed-tooling-sha> \
+  --output /absolute/private/releases/install-operation.json
+npm run authority:staging-release -- execute \
+  --receipt /absolute/private/releases/install-operation.json
+npm run authority:staging-release -- status \
+  --receipt /absolute/private/releases/install-operation.json
+```
+
+Plans contain non-secret artifacts and expire after 30 minutes. `plan` performs
+read-only account, stack, exact-instance, retained-volume and SSM-online checks;
+it does not send a command. `execute` repeats target checks before submission.
+Plan/execute are mechanical operator steps within the founder's staging
+delegation, not a new approval prompt for each command. The only commands sent
+are generated from the fixed reviewed host runner. Its compressed non-secret
+payload and checksums fit under the CLI's conservative 60-KiB command cap; it
+refuses larger artifacts rather than selecting another courier implicitly.
+
+The host independently checks IMDSv2 identity, the mounted retained volume,
+root-owned deployment paths, the literal staging hostname, accepted-record
+digest and candidate state. It holds the existing Authority operation lock
+across these checks, tooling installation and the exact updater call. Updater
+actions use a private nested lock through the existing lock-path override;
+ordinary human wrappers cannot run concurrently. No raw environment, arbitrary
+setting name, wrapper stdout/stderr, or exception string is returned to SSM.
+
+Make a **new plan and receipt** for each subsequent action, reusing the same
+accepted/candidate/profile inputs. Omit `--previous-tooling-source` once tooling
+is installed; the new installed tools must match the executing reviewed source.
+
+| Action | Preconditions and result |
+| --- | --- |
+| `diagnose` | Returns the fixed secret-safe diagnostic; no runtime-health claim. |
+| `repair` | Requires accepted-only eligible telemetry drift or its exact pending repair; restores the saved environment and verifies the accepted runtime. May temporarily disable telemetry. |
+| `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
+| `stage` | No staged candidate; uses exact candidate/profile. Add `--content-telemetry true` or `false` to this plan only. |
+| `canary` | Requires the exact staged candidate; stops for the human to approve its private Slack card. `delivery_pending` is safe to retry with a new canary operation after the first invocation has definitively completed. |
+| `rollback` | Requires the exact staged candidate and unchanged accepted record; existing wrapper recovery semantics apply. |
+| `promote` | Requires the exact staged candidate, its stored canary receipt, successful exact-client checks, and the separate final founder authorization below. |
+
+`status --receipt` polls that existing operation; it is not `plan --action status`,
+which creates a fresh host-runtime check. A `submitted` or `submitting` result
+is not success. Poll the same receipt; `execute` on it never sends twice.
+The local receipt is synced before `SendCommand`, which has no request-id token.
+If its response is lost, polling reconciles the unique operation comment and
+exact target. If no command can be established, retain the receipt and stop;
+do not create a replacement operation to bypass uncertainty. AWS invocation
+visibility can lag submission. Timeout/cancellation/terminal transport failure
+is `unconfirmed`, not proof that the runtime stopped or recovery succeeded.
+These semantics follow the [Run Command API](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html)
+and [invocation status contract](https://docs.aws.amazon.com/cli/latest/reference/ssm/get-command-invocation.html).
+
+Host-side request/result journals live under
+`clean-data/release/remote-operations/<operation-id>/`. A duplicate exact request
+returns its completed receipt; incomplete prior execution does not run again.
+Never delete a lock, pending repair, or journal to force progress. Unknown
+tooling, state mismatch, unsupported environment syntax, unconfirmed execution,
+and destructive/infrastructure changes require investigation outside this lane.
+
+After the canary, the human approves the Slack card. The local operator can
+install the already-built, checksum-verified offline Person bundle on the
+designated canary Mac and run both exact absolute-path Person commands above.
+The client's authenticated permission checks remain intact; login/MFA stays
+human. Empty records or an uncited/negative answer are not passing checks.
+Retain the safe check evidence and ask for the final decision on the exact
+candidate. Only after that decision create a private authorization JSON:
+
+```json
+{
+  "kind": "echo-staging-release-founder-authorization-v1",
+  "release_sha256": "<candidate-record-sha256>",
+  "person_client_sha256": "<candidate-person-client-artifact-sha256>",
+  "slack_approved": true,
+  "person_records_passed": true,
+  "person_ask_passed": true,
+  "release_authorized": true
+}
+```
+
+This records operator-attested evidence and the human decision; it is not a
+cryptographic signature or a replacement for doing the checks. The CLI never
+creates it automatically. `plan --action promote` additionally requires
+`--approval /absolute/private/releases/founder-authorization.json`. A mismatched
+digest or false/missing confirmation refuses before any host command. Blanket
+automation permission, code-review approval, a merge, and a canary receipt do
+not authorize promotion. After promotion, use the newly accepted record as the
+accepted input for subsequent operations and keep the old record as history.
+For a fresh post-promotion `status` or `diagnose`, pass that new accepted record
+to both `--accepted-release` and `--release`, with its matching profile. This
+does not stage a candidate or require inventing a future release.
 
 ## First-cohort employee onboarding kit
 
