@@ -38,16 +38,19 @@ describe("Authority operator playbook", () => {
     expect(PLAYBOOK).not.toContain("Google / `echo-brain person login`");
   });
 
-  it("stops routine updates for human approval and reads before promotion", () => {
+  it("automates routine staging execution but retains human approval and proven reads before promotion", () => {
     expect(PLAYBOOK).toContain(
       "../../deploy/release/README.md#ec2-authority-replacement",
     );
     expect(PLAYBOOK).toContain(
-      "Only after both checks pass may the host operator run\n`update-clean-v1.sh promote --canary-passed`",
+      "After `stage` and synthetic `canary`, stop for the founder's private Slack-card\napproval.",
     );
     expect(PLAYBOOK).toContain(
-      "The flag\nis the operator's explicit confirmation of those human checks",
+      "Only after both checks pass, show their evidence and ask\nthe founder for the final decision on that exact candidate.",
     );
+    expect(PLAYBOOK).toContain("Plan and execute are machine steps, not repeated human approval prompts.");
+    expect(PLAYBOOK).toContain("release- and client-digest-bound authorization");
+    expect(PLAYBOOK).toContain("Never create it merely because\nthe PR was approved or the founder authorized automation.");
     const releaseGuide = readRepoFile("deploy/release/README.md");
     expect(releaseGuide).toContain(
       '"$HOME/.local/bin/echo-brain" person records --query',
@@ -56,6 +59,19 @@ describe("Authority operator playbook", () => {
       '"$HOME/.local/bin/echo-brain" person ask --question',
     );
     expect(releaseGuide).not.toMatch(/^echo-brain person (?:records|ask)/m);
+    expect(releaseGuide).toContain("The CLI never\ncreates it automatically.");
+    expect(releaseGuide).toContain('"release_authorized": true');
+  });
+
+  it("limits delegated execution to the reviewed current-host staging CLI", () => {
+    expect(PLAYBOOK).toContain("uses the reviewed `authority:staging-release`");
+    expect(PLAYBOOK).toContain("Coding agents do not start interactive SSM sessions.");
+    expect(PLAYBOOK).toContain("Other host actions remain human-only");
+    expect(PLAYBOOK).toContain("Unknown drift, unconfirmed remote\nexecution, or destructive changes");
+    expect(PLAYBOOK).toContain("The Cloud\nboundary in `AGENTS.md` wins.");
+    const agents = readRepoFile("AGENTS.md");
+    expect(agents).toContain("`npm run authority:staging-release` CLI");
+    expect(agents).toContain("Host-local onboarding remains in the human Session Manager lane.");
   });
 
   it("is reachable from every shared operator entrypoint", () => {
