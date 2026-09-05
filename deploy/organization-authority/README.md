@@ -5,6 +5,13 @@ Coding agents follow
 before local exercise, staging, onboarding, or deploy. Do not add a
 tool-specific procedure.
 
+Current-host staging updates use the shared
+[`authority:staging-release` automation](../release/README.md#automated-current-host-staging-lane).
+It transfers only reviewed non-secret tooling and release artifacts, and invokes
+named installed updater actions with exact-target and accepted-record checks.
+It does not automate initial onboarding, change infrastructure, or infer the
+human Slack approval and final release decision.
+
 This is the deployable Organization Authority. Its current `clean-v1`
 compatibility profile uses a new `clean-data/` directory, never imports
 previous Authority state, and uses both EC2 Compose profiles automatically.
