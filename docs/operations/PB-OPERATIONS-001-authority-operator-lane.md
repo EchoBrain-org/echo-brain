@@ -63,6 +63,7 @@ mode-`0700` directory and temporary transfer archive.
 | Diagnose an environment mismatch before staging | The release CLI's `diagnose` action invokes installed `update-clean-v1.sh diagnose-environment`; only allowlisted setting names and safe classifications leave the host. |
 | Recover accepted-only staging content-telemetry drift | The release CLI's `repair` action binds the exact accepted record and requires an eligible diagnostic before the installed wrapper restores its snapshot. Unknown drift or a staged candidate stops this lane. |
 | Move first-onboarding input to a ready host | Run onboarding-transfer `preflight`, `plan`, human review, then `execute`. |
+| Bring the initial-owner invitation to its Mac | Use onboarding-transfer `export-plan`, review the target and accepted release, then approve the private handoff before `export-execute`; see the deployment README. |
 | Advance initial-owner onboarding | A human runs installed `onboard-clean-v1.sh resume` and follows its exact actor-scoped action. |
 
 A host-bundle or image build does not activate an image. Use `update-clean` on
@@ -162,6 +163,15 @@ opens Session Manager, changes to `/srv/echo-authority-clean-v1`, and runs only
 the named installed wrapper action. Privilege elevation stays non-interactive
 and scoped to that command. Agents never open or type into that session. Stop
 on unexpected instance, installed path, accepted record, candidate, or lock state.
+
+**Private invitation handoff.** The onboarding-transfer CLI's
+[bounded export](../../deploy/organization-authority/README.md#private-invitation-export-to-the-initial-owner-mac)
+reads the two fixed initial-owner handoff files after validating the accepted
+release and staging host. Use reviewed tooling from a clean checkout, prepare
+the exact export plan, and stop for approval of the private handoff before
+execute. Only recipient-encrypted bytes traverse SSM; no secret is printed or
+passed in argv. The export holds the existing host guard and does not invoke
+an onboarding wrapper, alter runtime configuration, or advance a human gate.
 
 **Resume onboarding.** Run `onboard-clean-v1.sh resume`, then stop at every
 printed `ACTION:`, `HOST ACTION:`, or `FOUNDER ACTION:`. Do not loop `resume`

@@ -297,6 +297,62 @@ chat or a terminal. Continue until `resume` reports completion, then run
 `status`. Terminal green also requires a healthy Authority container on the
 exact accepted image.
 
+### Private invitation export to the initial-owner Mac
+
+After `resume` prints `complete_founder_browser_login`, the invitation exists
+on the host. The browser Session Manager terminal is not the private file
+handoff. Do not display or copy the invitation JSON through terminal output.
+The staging onboarding-transfer CLI has a bounded outbound mode for the two
+fixed files named by `resume`: `founder-person-invitation.json` and
+`current.clean-v1.json`.
+
+Use reviewed tooling from a clean checkout. Create a current-user mode-`0700`
+output directory outside the checkout and a mode-`0600` controller JSON:
+
+```json
+{
+  "outputDir": "/absolute/private/initial-owner-handoff",
+  "release": "/absolute/private/current.clean-v1.json"
+}
+```
+
+The local `release` must be the independently held canonical accepted record,
+not a record inferred from the public endpoint. On the initial-owner Mac:
+
+```sh
+npm run authority:staging-onboarding-transfer -- export-plan \
+  --input /absolute/private/invitation-export-input.json
+
+# Review the exact target and release and approve this private handoff.
+npm run authority:staging-onboarding-transfer -- export-execute \
+  --receipt /absolute/private/initial-owner-handoff/invitation-export.json
+```
+
+Plan only inspects the staging target and creates a local recipient key and
+receipt. Execute rechecks the account, stack, instance and volume, holds the
+existing host operation guard, verifies the mounted volume and healthy accepted
+image, and reads only those two fixed files. It encrypts their contents for
+the requesting Mac before returning through SSM. The private key and plaintext
+invitation never enter SSM arguments or output. There are no S3, IAM, runtime
+configuration or observability changes. The temporary host guard is removed
+after the bounded command finishes normally.
+
+Successful export writes both files mode `0600`, deletes the local recipient
+key, and prints paths only. For `export_pending_retry_same_receipt`, repeat
+`export-execute` with that same receipt to poll the existing command. An
+unconfirmed submission, failed command, changed target, candidate or busy host
+guard stops this lane; never create a second request to bypass the refusal.
+
+With the already verified release-matched kit, run:
+
+```sh
+"<release-matched-kit>/Start ECHO.command" \
+  /absolute/private/initial-owner-handoff/founder-person-invitation.json
+```
+
+Browser login and all subsequent printed onboarding actions remain human
+steps. Export does not advance onboarding or authorize a release.
+
 Use this Authority-state read-only progress check after the accepted image is
 present locally:
 
