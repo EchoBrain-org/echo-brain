@@ -10,7 +10,7 @@ CLOUDFLARED_VERSION=2026.7.3
 CLOUDFLARED_SHA256=d3ea7d22dd337b465da33d6bc1c4b3cfd381407447a2a7d29542c19783430db3
 AGENT_TOOLKIT_COMMIT=171d4fba3bc404da3473f323c3e293b4a989f089
 ASM_EXEC_UPSTREAM_SHA256=d55eb38ad33a5b76f584ca180f633ecc120cf39b8fd29427ffbe11a8fbf19556
-ASM_EXEC_PATCHED_SHA256=1fbb03673905a55fa4ace3bb80ecd383e75d81de72c40fab23c11b0a7c0f4e89
+ASM_EXEC_PATCHED_SHA256=65a91272d2fb0bd12752fec2f770ac3ea89217358cbbbf3451d2454edc8b2e76
 
 AUTHORITY_UID=999
 AUTHORITY_GID=988
@@ -379,15 +379,43 @@ install_asm_exec() {
 @@ -196 +196 @@
 -    resp = urllib.request.urlopen(req, timeout=10)
 +    resp = urllib.request.urlopen(req, timeout=30)
-@@ -203,7 +203,7 @@
-         if "SecretString" in payload:
-             return payload["SecretString"]
-         # call_aws may nest the CLI output under a results/output key
+@@ -208,2 +208,2 @@
+-        # call_aws may nest the CLI output under a results/output key
 -        for key in ("result", "results", "output", "stdout"):
-+        for key in ("result", "results", "output", "stdout", "structuredContent"):
-             if key in payload:
-                 nested = payload[key]
-                 if isinstance(nested, str):
++        # MCP responses may nest the result in text or structured output
++        for key in ("result", "results", "output", "stdout", "structuredContent", "return_value"):
+@@ -226,2 +226,2 @@
+-    The server exposes 'aws___call_aws', which runs a full AWS CLI command
+-    (passed as the 'cli_command' string) server-side and returns its output.
++    The server exposes 'aws___run_script'; its call_boto3 primitive runs the
++    fixed Secrets Manager operation remotely and returns its result.
+@@ -241,10 +241,8 @@
+-        # Build the CLI command string the MCP server will execute. Include
+-        # --region so cross-region secrets resolve regardless of the endpoint's
+-        # home region. The secret id is quoted to tolerate ARNs and shell metachars.
+-        cmd_parts = ["aws", "secretsmanager", "get-secret-value",
+-                     "--secret-id", _shell_quote(secret_name),
+-                     "--version-stage", _shell_quote(label),
+-                     "--output", "json"]
+-        if region:
+-            cmd_parts += ["--region", region]
+-        cli_command = " ".join(cmd_parts)
++        # Preserve cross-region lookup and quote inputs as Python literals.
++        script = (
++            "result = await call_boto3("
++            "service_name='secretsmanager', operation_name='GetSecretValue', "
++            f"region_name={region!r}, "
++            f"params={dict(SecretId=secret_name, VersionStage=label)!r})\n"
++            "result\n"
++        )
+@@ -254,2 +252,2 @@
+-             "params": {"name": "aws___call_aws",
+-                        "arguments": {"cli_command": cli_command}}},
++             "params": {"name": "aws___run_script",
++                        "arguments": {"code": script}}},
+@@ -257,0 +256,2 @@
++        if resp.get("error") or (isinstance(result, dict) and result.get("isError")):
++            return None
 PATCH
   printf '%s  %s\n' "$ASM_EXEC_PATCHED_SHA256" "$asm_exec" | sha256sum --check --status \
     || fail 'patched asm-exec checksum mismatch'
