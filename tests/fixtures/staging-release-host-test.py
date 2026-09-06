@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from unittest.mock import patch
@@ -489,6 +490,137 @@ class HostProtocol(unittest.TestCase):
         operation = self.root / 'clean-data/release'
         result = host.wrapper(self.root, operation, ['status'])
         self.assertEqual(result, (False, 'wrapper_failed', None))
+
+    def test_wrapper_bounds_flooding_descendant_output_and_reaps_the_group(self):
+        started = self.root / 'descendant-started'
+        survived = self.root / 'descendant-survived'
+        probe = f'''#!{sys.executable}
+import os, signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child = os.fork()
+if child == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    open({str(started)!r}, 'w').close()
+    deadline = time.monotonic() + 0.35
+    while True:
+        os.write(1, b'x' * 4096)
+        if time.monotonic() >= deadline:
+            open({str(survived)!r}, 'w').close()
+while not os.path.exists({str(started)!r}):
+    time.sleep(0.001)
+while True:
+    os.write(2, b'y' * 4096)
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        started_at = time.monotonic()
+        with patch.multiple(host, WRAPPER_TIMEOUT_SECONDS=1, WRAPPER_TERM_GRACE_SECONDS=0.05, WRAPPER_KILL_REAP_SECONDS=0.5, WRAPPER_STREAM_BYTES=1024, WRAPPER_TOTAL_OUTPUT_BYTES=1024):
+            with self.assertRaises(host.InterruptedWrapper):
+                host.wrapper(self.root, self.root / 'clean-data/release', ['status'])
+        self.assertLess(time.monotonic() - started_at, 2)
+        time.sleep(0.4)
+        self.assertFalse(survived.exists(), 'the retained stdout descriptor descendant must receive SIGKILL')
+
+    def test_wrapper_timeout_has_a_finite_term_then_kill_reap_budget(self):
+        probe = f'''#!{sys.executable}
+import signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(0.01)
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        started_at = time.monotonic()
+        with patch.multiple(host, WRAPPER_TIMEOUT_SECONDS=0.05, WRAPPER_TERM_GRACE_SECONDS=0.05, WRAPPER_KILL_REAP_SECONDS=0.5):
+            with self.assertRaises(host.InterruptedWrapper):
+                host.wrapper(self.root, self.root / 'clean-data/release', ['status'])
+        self.assertLess(time.monotonic() - started_at, 2)
+
+    def test_wrapper_reap_error_still_reports_interruption(self):
+        ready = self.root / 'reap-error-probe-ready'
+        probe = f'''#!{sys.executable}
+import time
+open({str(ready)!r}, 'w').close()
+while True:
+    time.sleep(0.01)
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        original_stop_group = host.stop_group
+        def reap_then_fail(*args):
+            self.assertTrue(ready.exists())
+            original_stop_group(*args)
+            raise OSError('fixture reap failure')
+        with patch.multiple(host, WRAPPER_TIMEOUT_SECONDS=0.1, WRAPPER_TERM_GRACE_SECONDS=0.05, WRAPPER_KILL_REAP_SECONDS=0.05), patch.object(host, 'stop_group', side_effect=reap_then_fail):
+            with self.assertRaises(host.InterruptedWrapper):
+                host.wrapper(self.root, self.root / 'clean-data/release', ['status'])
+
+    def test_non_diagnostic_wrapper_allows_progress_output_without_retaining_it(self):
+        probe = f'''#!{sys.executable}
+import os
+for _ in range(9):
+    os.write(1, b'x' * 16384)
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        self.assertEqual(host.wrapper(self.root, self.root / 'clean-data/release', ['status']), (True, 'verified', None))
+
+    def test_diagnose_drains_valid_multi_chunk_short_lived_output(self):
+        diagnostic = {
+            'schema_version': 1,
+            'kind': 'echo-clean-v1-environment-drift',
+            'release_id': base['accepted']['release_id'],
+            'changed_settings': [],
+            'candidate_staged': False,
+            'environment_matches': True,
+            'other_bytes_changed': False,
+            'allowlisted_settings_valid': True,
+            'environment_format_supported': True,
+            'repair_pending': False,
+            'repair_eligible': False,
+            'runtime_checked': False,
+        }
+        payload = json.dumps(diagnostic, sort_keys=True, separators=(',', ':')).encode()
+        probe = f'''#!{sys.executable}
+import os
+os.write(1, {payload!r})
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        with patch.object(host, 'WRAPPER_READ_BYTES', 7):
+            self.assertEqual(host.wrapper(self.root, self.root / 'clean-data/release', ['diagnose-environment']), (True, 'verified', diagnostic))
+
+    def test_diagnose_trailing_output_over_64k_forces_interrupted_result(self):
+        diagnostic = {
+            'schema_version': 1,
+            'kind': 'echo-clean-v1-environment-drift',
+            'release_id': base['accepted']['release_id'],
+            'changed_settings': [],
+            'candidate_staged': False,
+            'environment_matches': True,
+            'other_bytes_changed': False,
+            'allowlisted_settings_valid': True,
+            'environment_format_supported': True,
+            'repair_pending': False,
+            'repair_eligible': False,
+            'runtime_checked': False,
+        }
+        payload = json.dumps(diagnostic, sort_keys=True, separators=(',', ':')).encode() + b'x' * 65536
+        probe = f'''#!{sys.executable}
+import os
+os.write(1, {payload!r})
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        with patch.object(host, 'WRAPPER_READ_BYTES', 17):
+            with self.assertRaises(host.InterruptedWrapper):
+                host.wrapper(self.root, self.root / 'clean-data/release', ['diagnose-environment'])
+
+    def test_interrupted_wrapper_termination_retains_the_root_guard(self):
+        self.install()
+        def interrupted(*_):
+            raise host.InterruptedWrapper()
+        result = self.execute(self.request('status'), invoke=interrupted)
+        self.assertEqual(result['code'], 'operation_incomplete')
+        self.assertFalse(result['ok'])
+        self.assertTrue((self.root / '.staging-release-guard/owner-pid').is_file())
+        operation = self.root / 'clean-data/release/remote-operations' / result['operation_id']
+        self.assertTrue((operation / 'request.json').is_file())
+        self.assertFalse((operation / 'result.json').exists())
 
     def test_replaced_release_path_cannot_substitute_wrapper_inputs(self):
         self.install()
