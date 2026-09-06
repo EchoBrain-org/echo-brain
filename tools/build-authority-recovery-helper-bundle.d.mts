@@ -5,7 +5,7 @@ export type AuthorityRecoveryHelperBundleManifest = Readonly<{
   node_version: "v22.22.1";
   platform: "linux";
   architecture: "arm64";
-  package_lock_sha256: string;
+  npm_shrinkwrap_sha256: string;
   archive_sha256: string;
   required_paths: readonly string[];
 }>;
