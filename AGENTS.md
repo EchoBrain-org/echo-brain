@@ -17,23 +17,19 @@ On founder-live machines, those instructions also bind every ECHO-using turn to 
   account root user. Authenticate through IAM Identity Center with
   `aws sso login --profile echo-prod` and pass `--profile echo-prod` to AWS CLI
   commands.
-- Coding agents access EC2 hosts only through bounded SSM Run Command
-  operations already wrapped by this repository's CLIs. Coding agents must not
-  run `aws ssm start-session`, SSH, `su`, `sudo -i`, or an interactive root
-  shell. A human at the keyboard may use Session Manager for an exact installed
-  host wrapper named by the Authority operator playbook; any privilege
-  elevation stays non-interactive and scoped to that command.
+- Coding agents do not access EC2 hosts. They must not run
+  `aws ssm start-session`, SSH, `su`, `sudo -i`, or an interactive root shell,
+  and this repository no longer wraps any SSM Run Command. A human at the
+  keyboard may use Session Manager for an exact installed host wrapper named by
+  the Authority operator playbook; any privilege elevation stays
+  non-interactive and scoped to that command.
 - Prefer the AWS MCP Server for read-only AWS inspection. Do not use AWS MCP,
-  the AWS CLI, or CloudFormation APIs to mutate the Authority staging slot or
-  onboarding-transfer boundary. Those mutations go through
-  `npm run authority:staging` and `npm run authority:staging-onboarding-transfer`
-  only. Current-host staging release actions additionally use the reviewed
-  `npm run authority:staging-release` CLI, which transfers only checksum-bound
-  non-secret artifacts and invokes named installed update-wrapper actions via
-  bounded SSM. It does not mutate infrastructure or the onboarding-transfer
-  boundary. Host-local onboarding remains in the human Session Manager lane.
-  If the MCP is unavailable,
-  use the AWS CLI only for inspection that the repository CLIs do not expose.
+  the AWS CLI, or CloudFormation APIs to mutate the production Authority host,
+  its recovery stack, or its observability stack. The AWS staging slot and its
+  repository CLIs were retired on 2026-09-06. Host changes are human actions
+  through the installed wrappers, and host-local onboarding remains in the
+  human Session Manager lane. If the MCP is unavailable, use the AWS CLI only
+  for inspection.
 - Before starting a task, check whether a relevant AWS skill is available.
   Load the skill with `retrieve_skill` and prefer its guidance over
   general knowledge.
@@ -86,23 +82,18 @@ instance role. Never copy a production secret into a Cloud environment.
 Codex, Claude Code, and Cursor are the same operator. There is one playbook.
 Do not add a tool-specific skill, playbook, or chat checklist that restates it.
 
-Before `authority:local`, `authority:staging`, `authority:staging-release`, onboarding transfer,
-`onboard-clean-v1.sh`, `update-clean-v1.sh`, `restore-clean-v1-host.sh`,
-Authority image or host-bundle builds, SSM, restage, onboard, or deploy, read
-and follow
+Before `authority:local`, `onboard-clean-v1.sh`, `update-clean-v1.sh`,
+`backup-authority-maintenance.sh`, Authority image builds, SSM, onboard, or
+deploy, read and follow
 [`docs/operations/PB-OPERATIONS-001-authority-operator-lane.md`](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
 
 That file is the router. The Codex Cloud boundary above still wins; the
 playbook is not permission to call AWS.
 
-Never use `--initialize-blank-data-volume` on a prepared volume, restage to
-compile, guess `authorityPinSha256` from the public endpoint, or put a login
-grant in output, argv, or chat.
+Never put a login grant in output, argv, or chat.
 
-For a current-host staging update, a local coding agent may drive the reviewed
-release CLI, eligible telemetry-drift recovery, exact offline Person-client
-installation, and both candidate-client checks. Login/MFA, private Slack-card
-approval, and the exact candidate's final release decision remain human inputs.
-Never fabricate that authorization or infer it from a canary receipt, PR merge,
-or blanket approval to automate. Unknown drift, unconfirmed remote execution,
-and destructive/infrastructure changes stop the automatic release lane.
+There is no automated release lane. Host updates, login/MFA, private Slack-card
+approval, and the release decision are human actions. Never fabricate that
+authorization or infer it from a canary receipt, PR merge, or blanket approval
+to automate. Unknown drift, unconfirmed remote execution, and
+destructive/infrastructure changes stop any agent-driven step.

@@ -94,8 +94,8 @@ An optional `--model author/model-slug` compares another model without changing
 the prompt, schema, fixtures, or oracle. The evaluator never sends Slack, writes
 Authority state, publishes V4 records, or calls retrieval.
 
-For a live rehearsal, follow [staging/STAGING.md](staging/STAGING.md), then the
-customer sequence in [RUNBOOK.md](RUNBOOK.md). Evaluate the captured result with:
+For a live rehearsal in an isolated operator environment, follow the customer
+sequence in [RUNBOOK.md](RUNBOOK.md). Evaluate the captured result with:
 
 ```sh
 node demo/evaluate-rehearsal.mjs \

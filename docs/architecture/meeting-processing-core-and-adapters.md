@@ -173,7 +173,7 @@ and
   `presentation_external_id` until an explicit schema migration.
 - Bundles are trusted static composition, and name/dependency checks cannot
   detect every hidden semantic coupling. Each selected profile still needs
-  capability tests and a bounded staging rehearsal.
+  capability tests and a bounded local rehearsal.
 - Compatibility-bound `clean-founder-*` commands, manifest kinds, and durable
   instance IDs describe the V1 initial-owner bootstrap contract. Runtime
   components must not reuse that cohort name; replacing the persisted/operator

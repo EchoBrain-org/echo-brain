@@ -37,33 +37,6 @@ const PAIRS = Object.freeze([
     ),
     guard: join(DEPLOYMENT, "authority-recovery-helper-v1.guard"),
   }),
-  Object.freeze({
-    template: join(
-      DEPLOYMENT,
-      "authority-staging-host-v1.template.json",
-    ),
-    guard: join(DEPLOYMENT, "authority-staging-host-v1.guard"),
-  }),
-  Object.freeze({
-    template: join(
-      DEPLOYMENT,
-      "authority-staging-journey-observability-v1.template.json",
-    ),
-    guard: join(
-      DEPLOYMENT,
-      "authority-staging-journey-observability-v1.guard",
-    ),
-  }),
-  Object.freeze({
-    template: join(
-      DEPLOYMENT,
-      "authority-staging-journey-explorer-v1.template.json",
-    ),
-    guard: join(
-      DEPLOYMENT,
-      "authority-staging-journey-explorer-v1.guard",
-    ),
-  }),
 ]);
 
 function text(value, label) {

@@ -13,65 +13,42 @@ const PLAYBOOK = readFileSync(
 const readRepoFile = (path: string) => readFileSync(resolve(REPO, path), "utf8");
 
 describe("Authority operator playbook", () => {
-  it("keeps retained recovery inside the reviewed authority-required up", () => {
-    expect(PLAYBOOK).toContain("up --require-authority");
-    expect(PLAYBOOK).toContain(
-      "Do not invoke\n`restore-clean-v1-host.sh resume` manually for this normal path.",
-    );
-    expect(PLAYBOOK).not.toContain(
-      "restore-clean-v1-host.sh resume` via bounded SSM",
-    );
+  it("keeps every production host change a human action", () => {
+    expect(PLAYBOOK).toContain("Coding agents do not start interactive SSM sessions");
+    expect(PLAYBOOK).toContain("this repository wraps no SSM Run Command");
+    expect(PLAYBOOK).toContain("Agents never open or type into that session.");
+    expect(PLAYBOOK).toContain("Do not loop `resume`\nthrough a human gate.");
+    const agents = readRepoFile("AGENTS.md");
+    expect(agents).toContain("this repository no longer wraps any SSM Run Command");
+    expect(agents).toContain("There is no automated release lane.");
   });
 
-  it("keeps transfer cleanup conditional", () => {
-    expect(PLAYBOOK).toContain(
-      "Run `cleanup`\nonly when execute retains the receipt and reports `cleanup_required`",
-    );
-  });
-
-  it("keeps onboarding release-bound and staging synthetic", () => {
+  it("keeps onboarding release-bound and Granola-free", () => {
     expect(PLAYBOOK).toContain("<release-matched-kit>/Start ECHO.command");
     expect(PLAYBOOK).toContain("person slack-link");
-    expect(PLAYBOOK).toContain("./update-clean-v1.sh canary");
-    expect(PLAYBOOK).toContain("Do not create a live Granola\nnote for this flow.");
+    expect(PLAYBOOK).toContain("Do not create a live Granola note to rehearse a release.");
     expect(PLAYBOOK).not.toContain("Granola note and Approve DM");
     expect(PLAYBOOK).not.toContain("Google / `echo-brain person login`");
   });
 
-  it("automates routine staging execution but retains human approval and proven reads before promotion", () => {
-    expect(PLAYBOOK).toContain(
-      "../../deploy/release/README.md#ec2-authority-replacement",
-    );
-    expect(PLAYBOOK).toContain(
-      "After `stage` and synthetic `canary`, stop for the founder's private Slack-card\napproval.",
-    );
-    expect(PLAYBOOK).toContain(
-      "Only after both checks pass, show their evidence and ask\nthe founder for the final decision on that exact candidate.",
-    );
-    expect(PLAYBOOK).toContain("Plan and execute are machine steps, not repeated human approval prompts.");
-    expect(PLAYBOOK).toContain("release- and client-digest-bound authorization");
-    expect(PLAYBOOK).toContain("Never create it merely because\nthe PR was approved or the founder authorized automation.");
+  it("no longer routes to the retired staging slot", () => {
+    for (const retired of [
+      "authority:staging",
+      "slot-init",
+      "onboarding-transfer",
+      "--require-authority",
+      "--initialize-blank-data-volume",
+      "restore-clean-v1-host.sh",
+      "#automated-current-host-staging-lane",
+      "#live-operator-boundary",
+    ]) {
+      expect(PLAYBOOK).not.toContain(retired);
+    }
     const releaseGuide = readRepoFile("deploy/release/README.md");
-    expect(releaseGuide).toContain(
-      '"$HOME/.local/bin/echo-brain" person records --query',
-    );
-    expect(releaseGuide).toContain(
-      '"$HOME/.local/bin/echo-brain" person ask --question',
-    );
-    expect(releaseGuide).not.toMatch(/^echo-brain person (?:records|ask)/m);
-    expect(releaseGuide).toContain("The CLI never\ncreates it automatically.");
-    expect(releaseGuide).toContain('"release_authorized": true');
-  });
-
-  it("limits delegated execution to the reviewed current-host staging CLI", () => {
-    expect(PLAYBOOK).toContain("uses the reviewed `authority:staging-release`");
-    expect(PLAYBOOK).toContain("Coding agents do not start interactive SSM sessions.");
-    expect(PLAYBOOK).toContain("Other host actions remain human-only");
-    expect(PLAYBOOK).toContain("Unknown drift, unconfirmed remote\nexecution, or destructive changes");
-    expect(PLAYBOOK).toContain("The Cloud\nboundary in `AGENTS.md` wins.");
-    const agents = readRepoFile("AGENTS.md");
-    expect(agents).toContain("`npm run authority:staging-release` CLI");
-    expect(agents).toContain("Host-local onboarding remains in the human Session Manager lane.");
+    expect(releaseGuide).toContain("## EC2 Authority replacement");
+    expect(releaseGuide).not.toContain("authority:staging-release");
+    expect(releaseGuide).not.toContain("## Automated current-host staging lane");
+    expect(readRepoFile("package.json")).not.toContain("authority:staging");
   });
 
   it("is reachable from every shared operator entrypoint", () => {

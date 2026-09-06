@@ -41,10 +41,9 @@ The wording intentionally omits the meeting titles and internal phrases such as
 
 ## Runtime commands
 
-On the disposable EC2 staging host, use `staging/STAGING.md`; its bounded
-switchover selects this entrypoint, keeps demo state separate, and restores the
-accepted clean-live runtime. The direct commands below are for an already
-isolated operator environment.
+The direct commands below are for an already isolated operator environment.
+The EC2 staging-host switchover lane was retired with the AWS staging slot on
+2026-09-06.
 
 Use the same absolute isolated state and personalized meeting-copy paths for
 admission and service startup:
