@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import re
+import selectors
 import signal
 import stat
 import subprocess
@@ -26,6 +27,13 @@ ACTIONS = ('install', 'inspect-install', 'diagnose', 'repair', 'stage', 'canary'
 SAFE_CODES = ('installed', 'installation_failed', 'inspection_verified', 'inspection_refused', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed')
 INSPECTION_CATEGORIES = ('ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'repair_pending', 'inspection_failed', 'control_path_changed')
 TOOL_CATEGORIES = ('tool_missing', 'tool_file_invalid', 'tool_hash_unknown')
+WRAPPER_TIMEOUT_SECONDS = 1000
+WRAPPER_TERM_GRACE_SECONDS = 5
+WRAPPER_KILL_REAP_SECONDS = 5
+WRAPPER_STREAM_BYTES = 65536
+WRAPPER_READ_BYTES = 16384
+WRAPPER_TOTAL_OUTPUT_BYTES = 4 * 1024 * 1024
+WRAPPER_DIAGNOSE_STDOUT_BYTES = 65536
 
 
 class Refused(Exception):
@@ -34,6 +42,10 @@ class Refused(Exception):
         self.code = code
         self.tool = tool
         self.inventory = inventory
+
+
+class InterruptedWrapper(Exception):
+    """A forced stop leaves the operation incomplete until an operator inspects it."""
 
 
 def require(condition, code='precondition_failed'):
@@ -110,9 +122,12 @@ def make_directory(path):
 
 
 def validate_request(request):
-    expected = {'schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval'}
+    migration = request.get('schema_version') == 3
+    expected = {'schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval'} | ({'tooling_migration'} if migration else set())
     require(set(request) == expected)
-    require(request['schema_version'] == 2 and request['kind'] == 'echo-staging-release-request-v2')
+    require(request['schema_version'] in (2, 3) and request['kind'] == f"echo-staging-release-request-v{request['schema_version']}")
+    if migration:
+        require(request['tooling_migration'] == 'legacy-staging-host-v1' and request['action'] in ('install', 'inspect-install'))
     require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', request['operation_id']) is not None)
     require(request['action'] in ACTIONS)
     require(type(request['created_at']) is int and request['expires_at'] == request['created_at'] + 1800)
@@ -176,26 +191,191 @@ def machine_identity(request, root):
         require(serial.replace('-', '') == target['volume_id'].replace('-', ''))
 
 
+class CapturedOutput:
+    def __init__(self, limit, enforce_limit=False):
+        self.limit = limit
+        self.enforce_limit = enforce_limit
+        self.value = bytearray()
+        self.total = 0
+        self.exceeded = False
+
+    def append(self, chunk):
+        self.total += len(chunk)
+        remaining = self.limit - len(self.value)
+        if remaining > 0:
+            self.value.extend(chunk[:remaining])
+        if self.enforce_limit and len(chunk) > remaining:
+            self.exceeded = True
+
+
+class OutputBudget:
+    def __init__(self, limit):
+        self.limit = limit
+        self.total = 0
+
+    @property
+    def exceeded(self):
+        return self.total > self.limit
+
+    def append(self, chunk):
+        self.total += len(chunk)
+
+
+def process_group_alive(process_group):
+    try:
+        os.killpg(process_group, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # A failure to inspect the group is not proof that it stopped.
+        return True
+
+
+def close_output(selector, streams):
+    for stream in streams:
+        if stream is None:
+            continue
+        try:
+            selector.unregister(stream)
+        except Exception:
+            pass
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
+def read_output(selector, captures, budget, timeout):
+    """Drain both pipes while the wrapper runs, without retaining unbounded bytes."""
+    for key, _ in selector.select(timeout):
+        stream = key.fileobj
+        try:
+            # One chunk per ready descriptor keeps a continuous writer from
+            # monopolising the deadline or starving the other stream.
+            chunk = os.read(stream.fileno(), WRAPPER_READ_BYTES)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            try:
+                selector.unregister(stream)
+            except Exception:
+                pass
+            stream.close()
+            continue
+        captures[stream].append(chunk)
+        budget.append(chunk)
+
+
+def output_exceeded(captures, budget):
+    return budget.exceeded or any(capture.exceeded for capture in captures.values())
+
+
+def drain_output(selector, captures, budget, deadline):
+    """Consume an exited group's remaining pipe bytes without an unbounded read."""
+    while selector.get_map():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        read_output(selector, captures, budget, min(remaining, 0.1))
+        if output_exceeded(captures, budget):
+            return False
+    return True
+
+
+def wait_for_group(child, selector, captures, budget, deadline):
+    """Keep draining while waiting for both the leader and all descendants."""
+    while True:
+        if child.poll() is not None and not process_group_alive(child.pid):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        read_output(selector, captures, budget, min(remaining, 0.1))
+
+
+def stop_group(child, selector, captures, budget):
+    """Use two bounded phases; never turn a failed wrapper into an unbounded wait."""
+    for signal_to_send, seconds in ((signal.SIGTERM, WRAPPER_TERM_GRACE_SECONDS), (signal.SIGKILL, WRAPPER_KILL_REAP_SECONDS)):
+        try:
+            os.killpg(child.pid, signal_to_send)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            # Keep trying the finite policy. A later successful observation is
+            # required before the caller can release the root guard.
+            pass
+        if wait_for_group(child, selector, captures, budget, time.monotonic() + seconds):
+            return True
+    return child.poll() is not None and not process_group_alive(child.pid)
+
+
+def interrupt_wrapper(child, selector, captures, budget):
+    """Always preserve the root guard after an attempted forced termination."""
+    try:
+        stop_group(child, selector, captures, budget)
+    except Exception:
+        pass
+    raise InterruptedWrapper()
+
+
 def wrapper(root, operation, args):
     # Inherit the descriptor-pinned release cwd; never resolve it back to its
     # service-replaceable pathname. Candidate inputs live under the root guard.
     environment = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin', 'HOME': '/root', 'LANG': 'C.UTF-8', 'ECHO_CLEAN_RELEASE_STATE_DIR': '.', 'ECHO_CLEAN_STATE_DIR': str(root / 'clean-data/state'), 'ECHO_CLEAN_OPERATION_LOCK_DIR': str(root / '.staging-release-guard/wrapper-lock')}
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        child = subprocess.Popen([str(root / 'update-clean-v1.sh'), *args], env=environment, stdout=stdout, stderr=stderr, start_new_session=True)
-        try:
-            code = child.wait(timeout=1000)
-        except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGTERM)
+    child = None
+    selector = selectors.DefaultSelector()
+    streams = []
+    captures = {}
+    budget = OutputBudget(WRAPPER_TOTAL_OUTPUT_BYTES)
+    try:
+        child = subprocess.Popen([str(root / 'update-clean-v1.sh'), *args], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        streams = [child.stdout, child.stderr]
+        captures = {
+            stream: CapturedOutput(
+                WRAPPER_DIAGNOSE_STDOUT_BYTES if stream is child.stdout and args[0] == 'diagnose-environment' else WRAPPER_STREAM_BYTES,
+                stream is child.stdout and args[0] == 'diagnose-environment',
+            )
+            for stream in streams
+        }
+        for stream in streams:
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ)
+        deadline = time.monotonic() + WRAPPER_TIMEOUT_SECONDS
+        while True:
+            if output_exceeded(captures, budget):
+                interrupt_wrapper(child, selector, captures, budget)
+            if child.poll() is not None:
+                # A direct child exiting is insufficient: a descendant may
+                # retain stdout/stderr and continue the wrapper operation.
+                if process_group_alive(child.pid):
+                    interrupt_wrapper(child, selector, captures, budget)
+                if not drain_output(selector, captures, budget, deadline):
+                    interrupt_wrapper(child, selector, captures, budget)
+                raw = bytes(captures[child.stdout].value)
+                error = bytes(captures[child.stderr].value)
+                code = child.returncode
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                interrupt_wrapper(child, selector, captures, budget)
+            read_output(selector, captures, budget, min(remaining, 0.1))
+    except InterruptedWrapper:
+        raise
+    except Exception:
+        if child is not None:
             try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait()
-            return False, 'wrapper_failed', None
-        stdout.seek(0)
-        raw = stdout.read(65537)
-        stderr.seek(0)
-        error = stderr.read(65537)
+                stop_group(child, selector, captures, budget)
+            except Exception:
+                pass
+            raise InterruptedWrapper() from None
+        return False, 'wrapper_failed', None
+    finally:
+        close_output(selector, streams)
+        try:
+            selector.close()
+        except Exception:
+            pass
     if code != 0:
         if b'release environment drifted from the accepted release record' in error:
             return False, 'environment_drift', None
@@ -226,9 +406,15 @@ def tooling_state(request, name, digest):
     return 'old' if digest == request['old_tool_hashes'][name] else 'unknown'
 
 
-def inventory_problem(inventory):
+def migration_absence_allowed(request, name):
+    return request.get('tooling_migration') == 'legacy-staging-host-v1' and name == 'backup-authority-maintenance.sh'
+
+
+def inventory_problem(inventory, request):
     categories = {'missing': 'tool_missing', 'invalid': 'tool_file_invalid', 'unknown': 'tool_hash_unknown'}
     for name in TOOLS:
+        if inventory[name]['state'] == 'missing' and migration_absence_allowed(request, name):
+            continue
         if inventory[name]['state'] in categories:
             return categories[inventory[name]['state']], name
     return None, None
@@ -249,7 +435,7 @@ def valid_inventory(request, inventory, category, tool):
                     return False
             elif type(digest) is not str or re.fullmatch(r'[a-f0-9]{64}', digest) is None or entry['state'] != tooling_state(request, name, digest):
                 return False
-        problem = inventory_problem(inventory)
+        problem = inventory_problem(inventory, request)
         if category in ('ready', 'repair_pending'):
             return problem == (None, None)
         return category in TOOL_CATEGORIES and problem == (category, tool)
@@ -314,7 +500,7 @@ def installer_preconditions(request, root):
     old_hashes, inventory = {}, None
     if request['action'] == 'inspect-install':
         inventory = read_tooling_inventory(request, root)
-        problem, tool = inventory_problem(inventory)
+        problem, tool = inventory_problem(inventory, request)
         if problem is not None:
             raise Refused(problem, tool, inventory)
         old_hashes = {name: entry['sha256'] for name, entry in inventory.items()}
@@ -323,6 +509,9 @@ def installer_preconditions(request, root):
             try:
                 old_hashes[name] = sha(regular(root / name))
             except FileNotFoundError:
+                if migration_absence_allowed(request, name):
+                    old_hashes[name] = None
+                    continue
                 raise Refused('tool_missing', name)
             except Exception:
                 raise Refused('tool_file_invalid', name)
@@ -401,6 +590,12 @@ def execute_request(request, request_hash, root=DEPLOY, identity=machine_identit
                 return inspection_result(request, request_hash, 'control_path_changed')
             return result_for(request, request_hash, False, 'control_path_changed')
         return result
+    except InterruptedWrapper:
+        # A timeout, excess output, or lingering descendant does not prove
+        # that Docker-side work stopped. Keep the root guard and leave the
+        # operation without a result so it cannot be replayed automatically.
+        keep_guard = True
+        return result_for(request, request_hash, False, 'operation_incomplete')
     except Exception as error:
         if request['action'] == 'inspect-install':
             if release_fd is not None and not binding_ok():
@@ -460,8 +655,12 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
             # Preflight all existing tools before replacing any one of them.
             immutable(operation / 'tooling-before.json', canonical(old_hashes))
             for index, name in enumerate(TOOLS):
-                original = regular(root / name)
-                immutable(operation / f'tool-{index}.before', original)
+                try:
+                    original = regular(root / name)
+                    immutable(operation / f'tool-{index}.before', original)
+                except FileNotFoundError:
+                    require(migration_absence_allowed(request, name) and old_hashes[name] is None)
+                    immutable(operation / f'tool-{index}.absent', b'absent\n')
                 # clean-data may be a separate filesystem from deployment.
                 # Create the final temp beside its destination, then rename.
                 destination = root / name
@@ -499,6 +698,8 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
             result = inspection_result(request, request_hash, 'control_path_changed') if request['action'] == 'inspect-install' else result_for(request, request_hash, False, 'control_path_changed')
         immutable(operation / 'result.json', canonical(result))
         return result
+    except InterruptedWrapper:
+        raise
     except Exception as error:
         if request['action'] == 'inspect-install':
             result = inspection_failure(request, request_hash, error)

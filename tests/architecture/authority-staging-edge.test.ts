@@ -25,7 +25,23 @@ const CONNECTOR_TOKEN = "connector-token-not-a-real-secret";
 const TUNNEL_NAME = `echo-authority-${INPUT.slotId}`;
 
 function response(result: unknown, ok = true) {
-  return { ok, json: async () => ({ success: ok, result }) };
+  const payload = { success: ok, result };
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  let sent = false;
+  return {
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (sent) return { done: true };
+          sent = true;
+          return { done: false, value: bytes };
+        },
+        releaseLock: () => {},
+      }),
+    },
+    ok,
+    json: async () => payload,
+  };
 }
 
 function expectedConfiguration() {
@@ -174,6 +190,79 @@ function persistentRetryFetch(
 }
 
 describe("Authority staging Cloudflare edge", () => {
+  it("bounds a stalled request and an oversized response before accepting edge state", async () => {
+    let nonOkSignal: AbortSignal | undefined;
+    await expect(
+      stagingEdgeStatus(INPUT, {
+        fetchImpl: async (_url, init = {}) => {
+          nonOkSignal = init.signal as AbortSignal;
+          return { json: async () => ({ result: [], success: false }), ok: false };
+        },
+      }),
+    ).rejects.toThrow("cloudflare_tunnel_list_failed");
+    expect(nonOkSignal?.aborted).toBe(true);
+
+    await expect(
+      stagingEdgeStatus(INPUT, {
+        fetchImpl: async () =>
+          new Promise((resolve) => {
+            setTimeout(
+              () => resolve({ json: async () => ({ result: [], success: true }), ok: true }),
+              25,
+            );
+          }),
+        requestTimeoutMs: 5,
+      }),
+    ).rejects.toThrow("cloudflare_tunnel_list_unavailable");
+
+    const validPayload = new TextEncoder().encode(
+      JSON.stringify({ result: [], success: true }),
+    );
+    await expect(
+      stagingEdgeStatus(INPUT, {
+        fetchImpl: async () => ({
+          body: {
+            getReader: () => ({
+              read: async () =>
+                new Promise((resolve) => {
+                  setTimeout(
+                    () => resolve({ done: false, value: validPayload }),
+                    25,
+                  );
+                }),
+            }),
+          },
+          json: async () => ({ result: [], success: true }),
+          ok: true,
+        }),
+        requestTimeoutMs: 5,
+      }),
+    ).rejects.toThrow("cloudflare_tunnel_list_response_invalid");
+
+    const oversized = new TextEncoder().encode(
+      JSON.stringify({ result: [], success: true }),
+    );
+    let oversizedSignal: AbortSignal | undefined;
+    await expect(
+      stagingEdgeStatus(INPUT, {
+        fetchImpl: async (_url, init = {}) => {
+          oversizedSignal = init.signal as AbortSignal;
+          return {
+            body: {
+              getReader: () => ({
+                read: async () => ({ done: false, value: oversized }),
+              }),
+            },
+            json: async () => ({ result: [], success: true }),
+            ok: true,
+          };
+        },
+        maxResponseBytes: 8,
+      }),
+    ).rejects.toThrow("cloudflare_tunnel_list_response_invalid");
+    expect(oversizedSignal?.aborted).toBe(true);
+  });
+
   it("derives one tunnel name from a bounded slot ID and rejects direct names", () => {
     const maximumSlotId = `staging-${"a".repeat(40)}`;
     expect(maximumSlotId).toHaveLength(48);

@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from unittest.mock import patch
@@ -121,6 +122,97 @@ class HostProtocol(unittest.TestCase):
         self.assertEqual((self.root / '.env.clean-v1').read_bytes(), before_env)
         self.assertEqual((self.root / 'clean-data/release/current.clean-v1.json').read_bytes(), accepted_bytes)
         self.assertFalse((self.root / 'clean-data/release/candidate.clean-v1.json').exists())
+
+    def test_named_legacy_migration_is_opt_in_and_records_absence(self):
+        backup = 'backup-authority-maintenance.sh'
+        (self.root / backup).unlink()
+        refused = self.execute(self.request('install'))
+        self.assertFalse(refused['ok'])
+        self.assertEqual(refused['code'], 'precondition_failed')
+
+        request = self.request('install')
+        request['schema_version'] = 3
+        request['kind'] = 'echo-staging-release-request-v3'
+        request['tooling_migration'] = 'legacy-staging-host-v1'
+        for name in host.TOOLS:
+            if name != backup:
+                request['old_tool_hashes'][name] = host.sha((self.root / name).read_bytes())
+        result = self.execute(request)
+        self.assertTrue(result['ok'], result)
+        operation = self.root / 'clean-data/release/remote-operations' / request['operation_id']
+        self.assertEqual((operation / 'tooling-before.json').read_text(), host.canonical({
+            name: None if name == backup else request['old_tool_hashes'][name] for name in host.TOOLS
+        }).decode())
+        self.assertEqual((operation / 'tool-3.absent').read_bytes(), b'absent\n')
+        self.assertEqual(self.execute(request), result)
+        self.assertEqual(self.calls, [])
+
+    def test_named_legacy_migration_rejects_unexpected_backup_bytes(self):
+        request = self.request('install')
+        request['schema_version'] = 3
+        request['kind'] = 'echo-staging-release-request-v3'
+        request['tooling_migration'] = 'legacy-staging-host-v1'
+        for name in host.TOOLS:
+            if name != 'backup-authority-maintenance.sh':
+                request['old_tool_hashes'][name] = host.sha((self.root / name).read_bytes())
+        self.write('backup-authority-maintenance.sh', b'unexpected-backup', 0o755)
+        self.assertFalse(self.execute(request)['ok'])
+        self.assertEqual((self.root / 'update-clean-v1.sh').read_bytes(), b'old-reviewed-tool:deploy/organization-authority/update-clean-v1.sh\n')
+
+    def test_migration_absence_does_not_mask_later_invalid_tool(self):
+        request = self.request('inspect-install')
+        request.update(schema_version=3, kind='echo-staging-release-request-v3', tooling_migration='legacy-staging-host-v1')
+        (self.root / 'backup-authority-maintenance.sh').unlink()
+        result = self.execute(request)
+        self.assertTrue(result['ok'], result)
+        self.write('release/clean-v1-release.py', b'unknown bytes', 0o755)
+        request['operation_id'] = str(uuid.uuid4())
+        result = self.execute(request)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['diagnostic']['tool'], 'release/clean-v1-release.py')
+        self.assertEqual(result['diagnostic']['category'], 'tool_hash_unknown')
+
+    def test_migration_keeps_unsafe_missing_candidate_and_repair_guards(self):
+        def request(action):
+            value = self.request(action)
+            value.update(schema_version=3, kind='echo-staging-release-request-v3', tooling_migration='legacy-staging-host-v1')
+            return value
+        backup = self.root / 'backup-authority-maintenance.sh'
+        backup.unlink()
+        before = (self.root / 'update-clean-v1.sh').read_bytes()
+        for name in ('candidate.clean-v1.json', 'environment-repair.pending.json'):
+            path = self.root / 'clean-data/release' / name
+            path.write_bytes(b'{}\n'); path.chmod(0o600)
+            self.assertFalse(self.execute(request('install'))['ok'])
+            path.unlink()
+        backup.symlink_to('/does-not-exist')
+        self.assertFalse(self.execute(request('install'))['ok'])
+        backup.unlink()
+        validator = self.root / 'release/clean-v1-runtime-profile.py'
+        validator.unlink()
+        self.assertFalse(self.execute(request('install'))['ok'])
+        self.assertEqual((self.root / 'update-clean-v1.sh').read_bytes(), before)
+        self.assertEqual(self.calls, [])
+
+    def test_migration_partial_publication_is_not_reexecuted_but_new_plan_can_finish(self):
+        backup = self.root / 'backup-authority-maintenance.sh'
+        backup.unlink()
+        request = self.request('install')
+        request.update(schema_version=3, kind='echo-staging-release-request-v3', tooling_migration='legacy-staging-host-v1')
+        replace = host.os.replace
+        def interrupted(source, destination):
+            if str(destination).endswith('restore-clean-v1-host.sh'):
+                raise OSError('synthetic interruption')
+            return replace(source, destination)
+        with patch.object(host.os, 'replace', interrupted):
+            result = self.execute(request)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['code'], 'installation_failed')
+        self.assertEqual(self.execute(request), result)
+        self.assertFalse(backup.exists())
+        request['operation_id'] = str(uuid.uuid4())
+        self.assertTrue(self.execute(request)['ok'])
+        self.assertEqual(self.calls, [])
 
     def test_inspect_install_reports_ready_without_tooling_or_runtime_mutation(self):
         request = self.request('inspect-install')
@@ -489,6 +581,137 @@ class HostProtocol(unittest.TestCase):
         operation = self.root / 'clean-data/release'
         result = host.wrapper(self.root, operation, ['status'])
         self.assertEqual(result, (False, 'wrapper_failed', None))
+
+    def test_wrapper_bounds_flooding_descendant_output_and_reaps_the_group(self):
+        started = self.root / 'descendant-started'
+        survived = self.root / 'descendant-survived'
+        probe = f'''#!{sys.executable}
+import os, signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child = os.fork()
+if child == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    open({str(started)!r}, 'w').close()
+    deadline = time.monotonic() + 0.35
+    while True:
+        os.write(1, b'x' * 4096)
+        if time.monotonic() >= deadline:
+            open({str(survived)!r}, 'w').close()
+while not os.path.exists({str(started)!r}):
+    time.sleep(0.001)
+while True:
+    os.write(2, b'y' * 4096)
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        started_at = time.monotonic()
+        with patch.multiple(host, WRAPPER_TIMEOUT_SECONDS=1, WRAPPER_TERM_GRACE_SECONDS=0.05, WRAPPER_KILL_REAP_SECONDS=0.5, WRAPPER_STREAM_BYTES=1024, WRAPPER_TOTAL_OUTPUT_BYTES=1024):
+            with self.assertRaises(host.InterruptedWrapper):
+                host.wrapper(self.root, self.root / 'clean-data/release', ['status'])
+        self.assertLess(time.monotonic() - started_at, 2)
+        time.sleep(0.4)
+        self.assertFalse(survived.exists(), 'the retained stdout descriptor descendant must receive SIGKILL')
+
+    def test_wrapper_timeout_has_a_finite_term_then_kill_reap_budget(self):
+        probe = f'''#!{sys.executable}
+import signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(0.01)
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        started_at = time.monotonic()
+        with patch.multiple(host, WRAPPER_TIMEOUT_SECONDS=0.05, WRAPPER_TERM_GRACE_SECONDS=0.05, WRAPPER_KILL_REAP_SECONDS=0.5):
+            with self.assertRaises(host.InterruptedWrapper):
+                host.wrapper(self.root, self.root / 'clean-data/release', ['status'])
+        self.assertLess(time.monotonic() - started_at, 2)
+
+    def test_wrapper_reap_error_still_reports_interruption(self):
+        ready = self.root / 'reap-error-probe-ready'
+        probe = f'''#!{sys.executable}
+import time
+open({str(ready)!r}, 'w').close()
+while True:
+    time.sleep(0.01)
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        original_stop_group = host.stop_group
+        def reap_then_fail(*args):
+            self.assertTrue(ready.exists())
+            original_stop_group(*args)
+            raise OSError('fixture reap failure')
+        with patch.multiple(host, WRAPPER_TIMEOUT_SECONDS=0.1, WRAPPER_TERM_GRACE_SECONDS=0.05, WRAPPER_KILL_REAP_SECONDS=0.05), patch.object(host, 'stop_group', side_effect=reap_then_fail):
+            with self.assertRaises(host.InterruptedWrapper):
+                host.wrapper(self.root, self.root / 'clean-data/release', ['status'])
+
+    def test_non_diagnostic_wrapper_allows_progress_output_without_retaining_it(self):
+        probe = f'''#!{sys.executable}
+import os
+for _ in range(9):
+    os.write(1, b'x' * 16384)
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        self.assertEqual(host.wrapper(self.root, self.root / 'clean-data/release', ['status']), (True, 'verified', None))
+
+    def test_diagnose_drains_valid_multi_chunk_short_lived_output(self):
+        diagnostic = {
+            'schema_version': 1,
+            'kind': 'echo-clean-v1-environment-drift',
+            'release_id': base['accepted']['release_id'],
+            'changed_settings': [],
+            'candidate_staged': False,
+            'environment_matches': True,
+            'other_bytes_changed': False,
+            'allowlisted_settings_valid': True,
+            'environment_format_supported': True,
+            'repair_pending': False,
+            'repair_eligible': False,
+            'runtime_checked': False,
+        }
+        payload = json.dumps(diagnostic, sort_keys=True, separators=(',', ':')).encode()
+        probe = f'''#!{sys.executable}
+import os
+os.write(1, {payload!r})
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        with patch.object(host, 'WRAPPER_READ_BYTES', 7):
+            self.assertEqual(host.wrapper(self.root, self.root / 'clean-data/release', ['diagnose-environment']), (True, 'verified', diagnostic))
+
+    def test_diagnose_trailing_output_over_64k_forces_interrupted_result(self):
+        diagnostic = {
+            'schema_version': 1,
+            'kind': 'echo-clean-v1-environment-drift',
+            'release_id': base['accepted']['release_id'],
+            'changed_settings': [],
+            'candidate_staged': False,
+            'environment_matches': True,
+            'other_bytes_changed': False,
+            'allowlisted_settings_valid': True,
+            'environment_format_supported': True,
+            'repair_pending': False,
+            'repair_eligible': False,
+            'runtime_checked': False,
+        }
+        payload = json.dumps(diagnostic, sort_keys=True, separators=(',', ':')).encode() + b'x' * 65536
+        probe = f'''#!{sys.executable}
+import os
+os.write(1, {payload!r})
+'''
+        self.write('update-clean-v1.sh', probe.encode(), 0o755)
+        with patch.object(host, 'WRAPPER_READ_BYTES', 17):
+            with self.assertRaises(host.InterruptedWrapper):
+                host.wrapper(self.root, self.root / 'clean-data/release', ['diagnose-environment'])
+
+    def test_interrupted_wrapper_termination_retains_the_root_guard(self):
+        self.install()
+        def interrupted(*_):
+            raise host.InterruptedWrapper()
+        result = self.execute(self.request('status'), invoke=interrupted)
+        self.assertEqual(result['code'], 'operation_incomplete')
+        self.assertFalse(result['ok'])
+        self.assertTrue((self.root / '.staging-release-guard/owner-pid').is_file())
+        operation = self.root / 'clean-data/release/remote-operations' / result['operation_id']
+        self.assertTrue((operation / 'request.json').is_file())
+        self.assertFalse((operation / 'result.json').exists())
 
     def test_replaced_release_path_cannot_substitute_wrapper_inputs(self):
         self.install()

@@ -9,6 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 
 const API_BASE = "https://api.cloudflare.com/client/v4";
 const ACCOUNT_ID = /^[a-f0-9]{32}$/i;
@@ -22,6 +23,10 @@ const SECRET_ARN =
 const TUNNEL_ID =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const ORIGIN = "http://127.0.0.1:80";
+const CLOUDFLARE_REQUEST_TIMEOUT_MS = 10_000;
+const CLOUDFLARE_RESPONSE_MAX_BYTES = 256 * 1024;
+const CLOUDFLARE_REQUEST_TIMEOUT_MAX_MS = 60_000;
+const CLOUDFLARE_RESPONSE_MAX_MAX_BYTES = 4 * 1024 * 1024;
 
 class EdgeError extends Error {
   constructor(code) {
@@ -174,30 +179,151 @@ function endpoint(path, query = undefined) {
   return url.toString();
 }
 
-async function cloudflareRequest(fetchImpl, input, stage, url, options = {}) {
+function boundedLimit(value, fallback, maximum) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum)
+    refuse("request_limit_invalid");
+  return value;
+}
+
+function requestBounds({ maxResponseBytes, requestTimeoutMs } = {}) {
+  return Object.freeze({
+    maxResponseBytes: boundedLimit(
+      maxResponseBytes,
+      CLOUDFLARE_RESPONSE_MAX_BYTES,
+      CLOUDFLARE_RESPONSE_MAX_MAX_BYTES,
+    ),
+    requestTimeoutMs: boundedLimit(
+      requestTimeoutMs,
+      CLOUDFLARE_REQUEST_TIMEOUT_MS,
+      CLOUDFLARE_REQUEST_TIMEOUT_MAX_MS,
+    ),
+  });
+}
+
+function requestWithinDeadline(promise, timeoutMs, controller) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(
+      () => {
+        controller.abort();
+        rejectPromise(new EdgeError("request_deadline_exceeded"));
+      },
+      timeoutMs,
+    );
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolvePromise(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        rejectPromise(error);
+      },
+    );
+  });
+}
+
+async function boundedJsonResponse(response, maxResponseBytes, signal) {
+  const contentLength = response.headers?.get?.("content-length");
+  if (
+    typeof contentLength === "string" &&
+    /^[0-9]+$/.test(contentLength) &&
+    Number(contentLength) > maxResponseBytes
+  ) {
+    throw new EdgeError("response_too_large");
+  }
+  const reader = response.body?.getReader?.();
+  if (reader === undefined) throw new EdgeError("response_nonstreaming");
+  const chunks = [];
+  let total = 0;
+  let complete = false;
+  let cancellation;
+  const cancelReader = () => {
+    cancellation ??= Promise.resolve(reader.cancel?.()).catch(() => {});
+    return cancellation;
+  };
+  signal.addEventListener("abort", cancelReader, { once: true });
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next?.done === true) break;
+      if (!(next?.value instanceof Uint8Array))
+        throw new EdgeError("response_invalid");
+      total += next.value.byteLength;
+      if (total > maxResponseBytes) throw new EdgeError("response_too_large");
+      chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    complete = true;
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } finally {
+    signal.removeEventListener("abort", cancelReader);
+    if (!complete) await cancelReader();
+    try {
+      reader.releaseLock?.();
+    } catch {
+      // The reader is no longer used after this request.
+    }
+  }
+}
+
+async function cloudflareRequest(
+  fetchImpl,
+  input,
+  stage,
+  url,
+  options = {},
+  bounds = requestBounds(),
+) {
+  const startedAt = performance.now();
+  const controller = new AbortController();
+  const remaining = () =>
+    Math.max(1, bounds.requestTimeoutMs - (performance.now() - startedAt));
   let response;
   try {
-    response = await fetchImpl(url, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${input.apiToken}`,
-        "Content-Type": "application/json",
-        ...(options.headers ?? {}),
-      },
-    });
+    response = await requestWithinDeadline(
+      Promise.resolve().then(() =>
+        fetchImpl(url, {
+          ...options,
+          headers: {
+            Authorization: `Bearer ${input.apiToken}`,
+            "Content-Type": "application/json",
+            ...(options.headers ?? {}),
+          },
+          signal: controller.signal,
+        }),
+      ),
+      remaining(),
+      controller,
+    );
   } catch {
+    controller.abort();
     refuse(`cloudflare_${stage}_unavailable`);
   }
-  if (!response || typeof response.ok !== "boolean" || !response.ok)
+  if (!response || typeof response.ok !== "boolean" || !response.ok) {
+    controller.abort();
     refuse(`cloudflare_${stage}_failed`);
+  }
   let payload;
   try {
-    payload = await response.json();
+    payload = await requestWithinDeadline(
+      boundedJsonResponse(response, bounds.maxResponseBytes, controller.signal),
+      remaining(),
+      controller,
+    );
   } catch {
+    controller.abort();
     refuse(`cloudflare_${stage}_response_invalid`);
   }
-  if (!payload || payload.success !== true || !("result" in payload))
+  if (!payload || payload.success !== true || !("result" in payload)) {
+    controller.abort();
     refuse(`cloudflare_${stage}_response_invalid`);
+  }
   return payload.result;
 }
 
@@ -233,7 +359,7 @@ function isOwnedTunnel(value, input) {
   );
 }
 
-async function findTunnel(fetchImpl, input) {
+async function findTunnel(fetchImpl, input, bounds) {
   const result = await cloudflareRequest(
     fetchImpl,
     input,
@@ -243,11 +369,13 @@ async function findTunnel(fetchImpl, input) {
       name: input.tunnelName,
       per_page: "1000",
     }),
+    {},
+    bounds,
   );
   return tunnelFromList(result, input);
 }
 
-async function createTunnel(fetchImpl, input) {
+async function createTunnel(fetchImpl, input, bounds) {
   const result = await cloudflareRequest(
     fetchImpl,
     input,
@@ -260,22 +388,23 @@ async function createTunnel(fetchImpl, input) {
         config_src: "cloudflare",
       }),
     },
+    bounds,
   );
   if (!isOwnedTunnel(result, input))
     refuse("cloudflare_tunnel_create_response_invalid");
   return Object.freeze({ id: result.id });
 }
 
-async function ensureTunnel(fetchImpl, input, create) {
-  const existing = await findTunnel(fetchImpl, input);
+async function ensureTunnel(fetchImpl, input, create, bounds) {
+  const existing = await findTunnel(fetchImpl, input, bounds);
   if (existing !== undefined)
     return Object.freeze({ ...existing, created: false });
   if (!create) return undefined;
-  const created = await createTunnel(fetchImpl, input);
+  const created = await createTunnel(fetchImpl, input, bounds);
   return Object.freeze({ ...created, created: true });
 }
 
-async function configureTunnel(fetchImpl, input, tunnel) {
+async function configureTunnel(fetchImpl, input, tunnel, bounds) {
   await cloudflareRequest(
     fetchImpl,
     input,
@@ -289,6 +418,7 @@ async function configureTunnel(fetchImpl, input, tunnel) {
         config: { ingress: expectedIngress(input.hostname) },
       }),
     },
+    bounds,
   );
 }
 
@@ -317,17 +447,19 @@ function isOwnedDnsRecord(value, input, tunnel) {
   );
 }
 
-async function findDnsRecord(fetchImpl, input, tunnel) {
+async function findDnsRecord(fetchImpl, input, tunnel, bounds) {
   const result = await cloudflareRequest(
     fetchImpl,
     input,
     "dns_list",
     endpoint(`/zones/${input.zoneId}/dns_records`, { name: input.hostname }),
+    {},
+    bounds,
   );
   return dnsFromList(result, input, tunnel);
 }
 
-async function createDnsRecord(fetchImpl, input, tunnel) {
+async function createDnsRecord(fetchImpl, input, tunnel, bounds) {
   const result = await cloudflareRequest(
     fetchImpl,
     input,
@@ -343,6 +475,7 @@ async function createDnsRecord(fetchImpl, input, tunnel) {
         comment: ownershipComment(input.slotId),
       }),
     },
+    bounds,
   );
   if (!isOwnedDnsRecord(result, input, tunnel))
     refuse("cloudflare_dns_create_response_invalid");
@@ -359,7 +492,7 @@ function isEmptyTunnelConfiguration(result) {
   );
 }
 
-async function readTunnelConfiguration(fetchImpl, input, tunnel) {
+async function readTunnelConfiguration(fetchImpl, input, tunnel, bounds) {
   const result = await cloudflareRequest(
     fetchImpl,
     input,
@@ -367,6 +500,8 @@ async function readTunnelConfiguration(fetchImpl, input, tunnel) {
     endpoint(
       `/accounts/${input.accountId}/cfd_tunnel/${tunnel.id}/configurations`,
     ),
+    {},
+    bounds,
   );
   if (!result || typeof result !== "object")
     refuse("cloudflare_tunnel_configuration_conflict");
@@ -381,17 +516,19 @@ async function readTunnelConfiguration(fetchImpl, input, tunnel) {
   refuse("cloudflare_tunnel_configuration_conflict");
 }
 
-async function tunnelConfigurationState(fetchImpl, input, tunnel) {
+async function tunnelConfigurationState(fetchImpl, input, tunnel, bounds) {
   if (tunnel.created) return "empty";
-  return readTunnelConfiguration(fetchImpl, input, tunnel);
+  return readTunnelConfiguration(fetchImpl, input, tunnel, bounds);
 }
 
-async function fetchConnectorToken(fetchImpl, input, tunnel) {
+async function fetchConnectorToken(fetchImpl, input, tunnel, bounds) {
   const result = await cloudflareRequest(
     fetchImpl,
     input,
     "connector_token",
     endpoint(`/accounts/${input.accountId}/cfd_tunnel/${tunnel.id}/token`),
+    {},
+    bounds,
   );
   if (typeof result !== "string" || result.length < 16 || /[\r\n]/.test(result))
     refuse("cloudflare_connector_token_response_invalid");
@@ -401,16 +538,19 @@ async function fetchConnectorToken(fetchImpl, input, tunnel) {
 /** Check the edge without creating a tunnel, DNS record, or connector token. */
 export async function stagingEdgeStatus(
   rawInput,
-  { fetchImpl = globalThis.fetch } = {},
+  { fetchImpl = globalThis.fetch, maxResponseBytes, requestTimeoutMs } = {},
 ) {
   const input = validateStagingEdgeInput(rawInput);
   if (typeof fetchImpl !== "function") refuse("fetch_unavailable");
-  const tunnel = await ensureTunnel(fetchImpl, input, false);
+  const bounds = requestBounds({ maxResponseBytes, requestTimeoutMs });
+  const tunnel = await ensureTunnel(fetchImpl, input, false, bounds);
   if (tunnel === undefined)
     return receipt(input, "status", "absent", { ready: false });
-  if ((await readTunnelConfiguration(fetchImpl, input, tunnel)) === "empty")
+  if (
+    (await readTunnelConfiguration(fetchImpl, input, tunnel, bounds)) === "empty"
+  )
     return receipt(input, "status", "incomplete", { ready: false });
-  const dns = await findDnsRecord(fetchImpl, input, tunnel);
+  const dns = await findDnsRecord(fetchImpl, input, tunnel, bounds);
   if (dns === undefined)
     return receipt(input, "status", "incomplete", { ready: false });
   return receipt(input, "status", "ready", { ready: true });
@@ -424,21 +564,28 @@ export async function stagingEdgeStatus(
  */
 export async function installStagingEdgeToken(
   rawInput,
-  { fetchImpl = globalThis.fetch, putSecretValue } = {},
+  {
+    fetchImpl = globalThis.fetch,
+    maxResponseBytes,
+    putSecretValue,
+    requestTimeoutMs,
+  } = {},
 ) {
   const input = validateStagingEdgeInput(rawInput);
   if (typeof fetchImpl !== "function") refuse("fetch_unavailable");
   if (typeof putSecretValue !== "function") refuse("secret_writer_required");
-  const tunnel = await ensureTunnel(fetchImpl, input, true);
+  const bounds = requestBounds({ maxResponseBytes, requestTimeoutMs });
+  const tunnel = await ensureTunnel(fetchImpl, input, true, bounds);
   const configuration = await tunnelConfigurationState(
     fetchImpl,
     input,
     tunnel,
+    bounds,
   );
-  const existingDns = await findDnsRecord(fetchImpl, input, tunnel);
+  const existingDns = await findDnsRecord(fetchImpl, input, tunnel, bounds);
   if (configuration === "empty")
-    await configureTunnel(fetchImpl, input, tunnel);
-  const token = await fetchConnectorToken(fetchImpl, input, tunnel);
+    await configureTunnel(fetchImpl, input, tunnel, bounds);
+  const token = await fetchConnectorToken(fetchImpl, input, tunnel, bounds);
   try {
     await putSecretValue({
       clientRequestToken: secretWriteRequestToken(tunnel.id, input.operationId),
@@ -449,7 +596,7 @@ export async function installStagingEdgeToken(
     refuse("secret_write_failed");
   }
   const dnsCreated = existingDns === undefined;
-  if (dnsCreated) await createDnsRecord(fetchImpl, input, tunnel);
+  if (dnsCreated) await createDnsRecord(fetchImpl, input, tunnel, bounds);
   return receipt(input, "install-token", "ready", {
     tunnel_created: tunnel.created,
     tunnel_configured: true,

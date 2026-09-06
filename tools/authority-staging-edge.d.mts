@@ -45,12 +45,22 @@ export function validateStagingEdgeInput(
 ): ValidatedStagingEdgeInput;
 export function stagingEdgeStatus(
   input: StagingEdgeInput,
-  dependencies?: Readonly<{ fetchImpl?: FetchLike }>,
+  dependencies?: Readonly<{
+    fetchImpl?: FetchLike;
+    /** Test seam: bounds one Cloudflare HTTP request. */
+    requestTimeoutMs?: number;
+    /** Test seam: bounds one Cloudflare JSON response. */
+    maxResponseBytes?: number;
+  }>,
 ): Promise<StagingEdgeReceipt>;
 export function installStagingEdgeToken(
   input: StagingEdgeInput,
   dependencies?: Readonly<{
     fetchImpl?: FetchLike;
     putSecretValue?: PutSecretValue;
+    /** Test seam: bounds one Cloudflare HTTP request. */
+    requestTimeoutMs?: number;
+    /** Test seam: bounds one Cloudflare JSON response. */
+    maxResponseBytes?: number;
   }>,
 ): Promise<StagingEdgeReceipt>;

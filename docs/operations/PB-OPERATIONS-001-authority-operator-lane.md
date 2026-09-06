@@ -52,12 +52,14 @@ mode-`0700` directory and temporary transfer archive.
 | Goal | Lane and boundary |
 | --- | --- |
 | Compile, test, or exercise without the live edge | Run `npm run authority:local`; do not restage. |
+| Validate current-host staging code through the human approval boundary before review | Run `npm run test:staging-journey` on the working branch; fix connected failures locally, then run `npm run check` and review the complete change. Provider/cloud responses are simulated; this is not live delivery proof. |
 | Inspect without changing state | Run `authority:staging status` or the applicable host wrapper's `status`. |
 | Create or repair the retained AWS and Cloudflare boundary | Run `authority:staging slot-init`: plan, human review, then execute the unchanged operation. |
 | Create the first host on a never-prepared volume | Run `up --initialize-blank-data-volume`: plan, human review, then execute. |
 | Replace a host while retaining its prepared volume and edge | Run a reviewed `down`, then use a new operation ID for reviewed `up --require-authority`; keep the flag on both plan and execute. |
 | Change the accepted image on the current staging host | The local operator uses `authority:staging-release` to install reviewed tooling, stage and run the synthetic canary; stops for human Slack approval; runs the exact candidate-client checks; then requests the exact final release decision before `promote`. |
 | Inspect why reviewed tooling cannot be installed | Use the release CLI's `inspect-install` action. It evaluates the install guards without replacing tooling or invoking a runtime wrapper, and returns a bounded category plus a hash-only inventory of the six fixed tools when preceding guards pass. Unknown bytes remain refused; the inventory does not authorize replacement. |
+| Migrate the recognized mixed legacy tooling layout | Use the release README's explicit `legacy-staging-host-v1` migration for inspect/install only. It pins the known per-file old sources and permits only the backup helper's expected absence; unknown or unsafe files remain refused. |
 | Diagnose an environment mismatch before staging | The release CLI's `diagnose` action invokes installed `update-clean-v1.sh diagnose-environment`; only allowlisted setting names and safe classifications leave the host. |
 | Recover accepted-only staging content-telemetry drift | The release CLI's `repair` action binds the exact accepted record and requires an eligible diagnostic before the installed wrapper restores its snapshot. Unknown drift or a staged candidate stops this lane. |
 | Move first-onboarding input to a ready host | Run onboarding-transfer `preflight`, `plan`, human review, then `execute`. |

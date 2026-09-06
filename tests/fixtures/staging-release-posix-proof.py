@@ -109,6 +109,18 @@ PY
         write(root / name, base64.b64decode(files[name]['base64']), 0o755)
     print('PASS: complete hash-only inventory with real UID/GID; unsafe files have no digest; unknown bytes remain refused')
 
+    # The named migration retains real no-follow/owner/mode checks and records
+    # the one expected absence; it must not grant a generic missing-file bypass.
+    backup = root / 'backup-authority-maintenance.sh'
+    backup.unlink()
+    assert not inspect_inventory()['ok']
+    migration = {**request, 'schema_version': 3, 'kind': 'echo-staging-release-request-v3', 'tooling_migration': 'legacy-staging-host-v1', 'action': 'install', 'operation_id': str(uuid.uuid4())}
+    result = host.execute_request(migration, host.sha(host.canonical(migration)), root=root, identity=lambda *_: None)
+    assert result['ok'] and result['code'] == 'installed'
+    assert backup.stat().st_uid == 0 and backup.stat().st_mode & 0o777 == 0o755
+    assert (root / 'clean-data/release/remote-operations' / migration['operation_id'] / 'tool-3.absent').read_bytes() == b'absent\n'
+    print('PASS: named missing-helper migration publishes root-owned tools and preserves absence evidence')
+
     def invoke(deploy, operation, args):
         attack = '''import os,pathlib,sys
 root=pathlib.Path(sys.argv[1])

@@ -22,6 +22,7 @@ const FIXTURE_FILES = [
   ["deploy/organization-authority/install-cloudflare-tunnel-token.sh", 0o755],
   ["deploy/organization-authority/onboard-clean-v1.sh", 0o755],
   ["deploy/organization-authority/restore-clean-v1-host.sh", 0o755],
+  ["deploy/organization-authority/backup-authority-maintenance.sh", 0o755],
   ["deploy/organization-authority/update-clean-v1.sh", 0o755],
   ["deploy/release/clean-v1-release.py", 0o755],
   ["deploy/release/clean-v1-runtime-profile.py", 0o755],
@@ -130,6 +131,10 @@ describe("Authority staging host bundle", () => {
         mode: "0755",
       }),
       expect.objectContaining({
+        path: "deploy/organization-authority/backup-authority-maintenance.sh",
+        mode: "0755",
+      }),
+      expect.objectContaining({
         path: "deploy/organization-authority/update-clean-v1.sh",
         mode: "0755",
       }),
@@ -149,6 +154,7 @@ describe("Authority staging host bundle", () => {
       .split("\n")
       .sort();
     expect(listed).toEqual([
+      "backup-authority-maintenance.sh",
       "bootstrap-ubuntu-arm64.sh",
       "clean-v1-release.py",
       "clean-v1-runtime-profile.py",
@@ -273,11 +279,33 @@ describe("Authority staging host bundle", () => {
     expect(sha256(output)).toBe(archiveDigest);
   });
 
-  it("refuses to reuse a half-written archive and manifest pair", () => {
+  it("recovers an interrupted archive-first publication only after exact safe-byte checks", () => {
     const subject = fixture();
     const output = join(subject.output, "bundle.tar.gz");
     expect(build(subject.root, output).status).toBe(0);
+    const manifest = readFileSync(`${output}.manifest.json`, "utf8");
     rmSync(`${output}.manifest.json`);
+    chmodSync(output, 0o644);
+    const unsafe = build(subject.root, output, ["--reuse-identical"]);
+    expect(unsafe.status).toBe(1);
+    expect(unsafe.stderr).toContain(
+      "existing output must be a current-user-owned mode 0600 regular file",
+    );
+    expect(lstatSync(`${output}.manifest.json`, { throwIfNoEntry: false })).toBeUndefined();
+
+    chmodSync(output, 0o600);
+    const recovered = build(subject.root, output, ["--reuse-identical"]);
+    expect(recovered.status).toBe(0);
+    expect(JSON.parse(recovered.stdout)).toMatchObject({ reused: true });
+    expect(readFileSync(`${output}.manifest.json`, "utf8")).toBe(manifest);
+  });
+
+  it("refuses a manifest without its archive", () => {
+    const subject = fixture();
+    const output = join(subject.output, "bundle.tar.gz");
+    expect(build(subject.root, output).status).toBe(0);
+    rmSync(output);
+
     const half = build(subject.root, output, ["--reuse-identical"]);
     expect(half.status).toBe(1);
     expect(half.stderr).toContain(

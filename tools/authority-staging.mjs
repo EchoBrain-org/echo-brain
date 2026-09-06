@@ -41,6 +41,12 @@ const HEALTHY_STACK_STATUSES = new Set(["CREATE_COMPLETE", "UPDATE_COMPLETE"]);
 const RECOVERABLE_UPDATE_STACK_STATUS = "UPDATE_ROLLBACK_COMPLETE";
 const EDGE_RECEIPT_STATES = new Set(["ready", "incomplete", "absent"]);
 const ECHO_HOSTED_STAGING_AWS_PROFILE = "echo-prod";
+const AWS_CLI_STANDARD_TIMEOUT_MS = 45_000;
+const AWS_CLOUDFORMATION_WAIT_TIMEOUT_MS = 30 * 60_000;
+const AWS_SSM_LIFECYCLE_WAIT_TIMEOUT_MS = 6 * 60_000;
+const AWS_CLI_OUTPUT_MAX_BYTES = 256 * 1024;
+const AWS_CLI_TERMINATE_GRACE_MS = 1_000;
+const SSM_LIFECYCLE_RUN_TIMEOUT_SECONDS = 300;
 const AMBIENT_AWS_CREDENTIAL_KEYS = Object.freeze([
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
@@ -425,11 +431,14 @@ function changeSetRequest(
   initializeBlankDataVolume = false,
   resumeRetainedAuthority = false,
 ) {
+  const edgePlanBinding =
+    action === "slot-init" ? canonicalEdgePlanBinding(input) : undefined;
   return Object.freeze({
     capabilities: Object.freeze(["CAPABILITY_IAM"]),
     changeSetName: changeSetName(input, action),
     changeSetType: type,
     clientToken: input.operationId,
+    edgePlanBinding,
     onStackFailure: type === "CREATE" ? "DO_NOTHING" : undefined,
     parameters: buildParameters(
       input,
@@ -575,19 +584,19 @@ async function planStack(
 ) {
   const existing = await describeExactStack(input, dependencies);
   const createChangeSet = adapterFunction(dependencies, "createChangeSet");
-  const planned = await createChangeSet(
-    changeSetRequest(
-      input,
-      action,
-      changeSetTypeFor(existing),
-      hostEnabled,
-      setupArtifact,
-      initializeBlankDataVolume,
-      resumeRetainedAuthority,
-    ),
+  const request = changeSetRequest(
+    input,
+    action,
+    changeSetTypeFor(existing),
+    hostEnabled,
+    setupArtifact,
+    initializeBlankDataVolume,
+    resumeRetainedAuthority,
   );
+  const planned = await createChangeSet(request);
   const plan = checkedChangeSet(planned);
   return Object.freeze({
+    edgePlanBinding: request.edgePlanBinding,
     existing,
     plan: assertChangeBoundary(plan, action),
   });
@@ -616,7 +625,11 @@ async function reviewedPlanStack(
     checkedChangeSet(await describeChangeSet(expected)),
     action,
   );
-  return Object.freeze({ existing, plan });
+  return Object.freeze({
+    edgePlanBinding: expected.edgePlanBinding,
+    existing,
+    plan,
+  });
 }
 
 async function executePlannedStack(input, plan, dependencies) {
@@ -642,7 +655,7 @@ async function executePlannedStack(input, plan, dependencies) {
   return current;
 }
 
-function publicPlan(plan, hostEnabled) {
+function publicPlan(plan, hostEnabled, edgePlanBinding = undefined) {
   return Object.freeze({
     change_set_actions: plan.actions,
     change_set_created: plan.kind === "change_set",
@@ -652,7 +665,17 @@ function publicPlan(plan, hostEnabled) {
         ? undefined
         : Object.freeze({ ...plan.artifact }),
     host_enabled: hostEnabled,
+    edge_coordinates: edgePlanBinding,
     no_changes: plan.kind === "no_changes",
+  });
+}
+
+function canonicalEdgePlanBinding(input) {
+  return Object.freeze({
+    account_id: input.edge.accountId,
+    hostname: input.edge.hostname,
+    slot_id: input.slotId,
+    zone_id: input.edge.zoneId,
   });
 }
 
@@ -1024,7 +1047,7 @@ async function runSlotInit(input, { execute = false, ...dependencies } = {}) {
       input,
       "slot-init",
       "planned",
-      publicPlan(planned.plan, false),
+      publicPlan(planned.plan, false, planned.edgePlanBinding),
     );
 
   const stack = await executePlannedStack(input, planned.plan, dependencies);
@@ -1056,7 +1079,7 @@ async function runSlotInit(input, { execute = false, ...dependencies } = {}) {
   );
   if (safeEdgeState(installed) !== "ready") refuse("edge_install_unready");
   return lifecycleReceipt(input, "slot-init", "ready", {
-    ...publicPlan(planned.plan, false),
+    ...publicPlan(planned.plan, false, planned.edgePlanBinding),
     edge_ready: true,
     stack_status: protectedStack.status,
     termination_protection: true,
@@ -1375,42 +1398,145 @@ function echoHostedAwsEnvironment({ preserveCloudflareToken = false } = {}) {
   return environment;
 }
 
-function awsJson(args, { stdin } = {}) {
+function awsCliTimeoutMs(args) {
+  if (args[0] === "cloudformation" && args[1] === "wait")
+    return AWS_CLOUDFORMATION_WAIT_TIMEOUT_MS;
+  if (
+    args[0] === "ssm" &&
+    args[1] === "wait" &&
+    args[2] === "command-executed"
+  ) {
+    return AWS_SSM_LIFECYCLE_WAIT_TIMEOUT_MS;
+  }
+  return AWS_CLI_STANDARD_TIMEOUT_MS;
+}
+
+function safeBoundedInteger(value, fallback, maximum) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum)
+    throw new AwsCliError("limit_invalid");
+  return value;
+}
+
+function isBoundedCliFailure(error) {
+  return (
+    error instanceof AwsCliError &&
+    new Set([
+      "deadline_exceeded",
+      "output_limit_exceeded",
+      "stdin_failed",
+    ]).has(error.code)
+  );
+}
+
+export function awsJson(
+  args,
+  { stdin, timeoutMs, maxOutputBytes } = {},
+) {
+  let boundedTimeoutMs;
+  let boundedMaxOutputBytes;
+  try {
+    boundedTimeoutMs = safeBoundedInteger(
+      timeoutMs,
+      awsCliTimeoutMs(args),
+      AWS_CLOUDFORMATION_WAIT_TIMEOUT_MS,
+    );
+    boundedMaxOutputBytes = safeBoundedInteger(
+      maxOutputBytes,
+      AWS_CLI_OUTPUT_MAX_BYTES,
+      AWS_CLI_OUTPUT_MAX_BYTES,
+    );
+  } catch (error) {
+    return Promise.reject(error);
+  }
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(
       "aws",
       ["--no-cli-pager", "--profile", ECHO_HOSTED_STAGING_AWS_PROFILE, ...args],
       {
+        detached: true,
         env: echoHostedAwsEnvironment(),
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", () => rejectPromise(new AwsCliError("unavailable")));
+    const stdout = [];
+    const stderr = [];
+    let outputBytes = 0;
+    let terminalFailure;
+    let settled = false;
+    let forceKillTimer;
+    const deadlineTimer = setTimeout(
+      () => terminate(new AwsCliError("deadline_exceeded")),
+      boundedTimeoutMs,
+    );
+    function settle(error, result = undefined) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadlineTimer);
+      if (forceKillTimer !== undefined) clearTimeout(forceKillTimer);
+      if (error !== undefined) rejectPromise(error);
+      else resolvePromise(result);
+    }
+    function terminate(error) {
+      if (terminalFailure !== undefined) return;
+      terminalFailure = error;
+      terminateProcessGroup("SIGTERM");
+      forceKillTimer = setTimeout(
+        () => {
+          terminateProcessGroup("SIGKILL");
+          child.stdin.destroy();
+          child.stdout.destroy();
+          child.stderr.destroy();
+          settle(terminalFailure);
+        },
+        AWS_CLI_TERMINATE_GRACE_MS,
+      );
+    }
+    function terminateProcessGroup(signal) {
+      if (typeof child.pid !== "number") return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        child.kill(signal);
+      }
+    }
+    function collect(chunks, chunk) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      outputBytes += bytes.byteLength;
+      if (outputBytes > boundedMaxOutputBytes) {
+        terminate(new AwsCliError("output_limit_exceeded"));
+        return;
+      }
+      chunks.push(bytes);
+    }
+    child.stdout.on("data", (chunk) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk) => collect(stderr, chunk));
+    child.once("error", () => settle(new AwsCliError("unavailable")));
     child.once("close", (code) => {
+      if (terminalFailure !== undefined) {
+        settle(terminalFailure);
+        return;
+      }
       if (code !== 0) {
         const failure = new AwsCliError("failed");
-        failure.privateDiagnostic = stderr;
-        rejectPromise(failure);
+        failure.privateDiagnostic = Buffer.concat(stderr).toString("utf8");
+        settle(failure);
         return;
       }
       try {
-        resolvePromise(stdout === "" ? {} : JSON.parse(stdout));
+        const output = Buffer.concat(stdout).toString("utf8");
+        settle(undefined, output === "" ? {} : JSON.parse(output));
       } catch {
-        rejectPromise(new AwsCliError("response_invalid"));
+        settle(new AwsCliError("response_invalid"));
       }
     });
     if (stdin === undefined) child.stdin.end();
-    else child.stdin.end(stdin);
+    else {
+      child.stdin.once("error", () =>
+        terminate(new AwsCliError("stdin_failed")),
+      );
+      child.stdin.end(stdin);
+    }
   });
 }
 
@@ -1421,8 +1547,18 @@ function cloudFormationParameters(parameters) {
   }));
 }
 
-function changeSetDescription(templateSha256, changeSetType) {
-  return `echo-authority-staging-template-${templateSha256}-${changeSetType}`;
+function changeSetDescription(
+  templateSha256,
+  changeSetType,
+  edgePlanBinding = undefined,
+) {
+  const edgeBindingSuffix =
+    edgePlanBinding === undefined
+      ? ""
+      : `-edge-${createHash("sha256")
+          .update(JSON.stringify(edgePlanBinding), "utf8")
+          .digest("hex")}`;
+  return `echo-authority-staging-template-${templateSha256}-${changeSetType}${edgeBindingSuffix}`;
 }
 
 function changeActions(payload) {
@@ -1438,7 +1574,11 @@ function changeActions(payload) {
 function parametersMatch(payload, expected) {
   if (
     payload.Description !==
-    changeSetDescription(expected.templateSha256, expected.changeSetType)
+    changeSetDescription(
+      expected.templateSha256,
+      expected.changeSetType,
+      expected.edgePlanBinding,
+    )
   ) {
     return false;
   }
@@ -1638,25 +1778,33 @@ export function createAwsCliAdapters() {
       "AWS-RunShellScript",
       "--instance-ids",
       instanceId,
+      "--timeout-seconds",
+      String(SSM_LIFECYCLE_RUN_TIMEOUT_SECONDS),
       "--parameters",
-      JSON.stringify({ commands }),
+      JSON.stringify({
+        commands,
+        executionTimeout: [String(SSM_LIFECYCLE_RUN_TIMEOUT_SECONDS)],
+      }),
       "--output",
       "json",
     ]);
     const commandId = sent.Command?.CommandId;
     if (typeof commandId !== "string" || commandId.length === 0)
       throw new AwsCliError("ssm_command_response_invalid");
-    await awsJson([
-      "ssm",
-      "wait",
-      "command-executed",
-      "--region",
-      region,
-      "--command-id",
-      commandId,
-      "--instance-id",
-      instanceId,
-    ]);
+    await awsJson(
+      [
+        "ssm",
+        "wait",
+        "command-executed",
+        "--region",
+        region,
+        "--command-id",
+        commandId,
+        "--instance-id",
+        instanceId,
+      ],
+      { timeoutMs: AWS_SSM_LIFECYCLE_WAIT_TIMEOUT_MS },
+    );
     const result = await awsJson([
       "ssm",
       "get-command-invocation",
@@ -1739,6 +1887,7 @@ export function createAwsCliAdapters() {
             changeSetDescription(
               expected.templateSha256,
               expected.changeSetType,
+              expected.edgePlanBinding,
             ),
             "--capabilities",
             ...expected.capabilities,
@@ -1799,7 +1948,11 @@ export function createAwsCliAdapters() {
         ];
         try {
           await awsJson(request);
-        } catch {
+        } catch (error) {
+          // A bounded local CLI failure does not establish whether AWS received
+          // the request. Preserve that ambiguity for operator recovery instead
+          // of sending another execution request from this process.
+          if (isBoundedCliFailure(error)) throw error;
           // The service accepts a client token precisely so an uncertain
           // request can be retried without starting a second update.
           await awsJson(request);

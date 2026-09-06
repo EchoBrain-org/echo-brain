@@ -257,7 +257,10 @@ npm run authority:staging -- slot-init \
 
 export ECHO_CLOUDFLARE_API_TOKEN='{{resolve:secretsmanager:EXACT_SECRET_ARN:SecretString:cloudflare_api_token}}'
 
-# Review this plan, then execute it with the unchanged operationId.
+# Review this plan, then execute it with the unchanged operationId and
+# `edge_coordinates`. The slot-init change-set description binds the account,
+# zone, hostname, and stable slot ID; a changed coordinate is refused before
+# CloudFormation execution.
 npm run authority:staging -- slot-init \
   --input /absolute/private/authority-staging/input.json --execute
 ```

@@ -33,6 +33,7 @@ const TOKEN_INSTALLER =
 const ONBOARD = "deploy/organization-authority/onboard-clean-v1.sh";
 const UPDATER = "deploy/organization-authority/update-clean-v1.sh";
 const RESTORER = "deploy/organization-authority/restore-clean-v1-host.sh";
+const BACKUP = "deploy/organization-authority/backup-authority-maintenance.sh";
 const RELEASE_VALIDATOR = "deploy/release/clean-v1-release.py";
 const RUNTIME_PROFILE_VALIDATOR =
   "deploy/release/clean-v1-runtime-profile.py";
@@ -47,6 +48,7 @@ const REQUIRED_FILES = Object.freeze([
   TOKEN_INSTALLER,
   ONBOARD,
   RESTORER,
+  BACKUP,
   UPDATER,
   RELEASE_VALIDATOR,
   RUNTIME_PROFILE_VALIDATOR,
@@ -238,26 +240,50 @@ function inspectExtractedBundle(archive, files) {
   }
 }
 
+function privateRegularFile(path, label) {
+  const state = regularFile(path, label);
+  if (
+    state.uid !== process.getuid() ||
+    (state.mode & 0o777) !== 0o600
+  ) fail(`${label} must be a current-user-owned mode 0600 regular file`);
+}
+
+function manifestText(manifest) {
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
 /**
  * Returns the already-written manifest when the pair on disk is exactly what
- * this run would produce, and fails when either half is present but different.
- * A half-written pair is a difference, not a match.
+ * this run would produce. It can complete the archive-first publication gap
+ * only when the existing archive is exact and safe; every other partial pair
+ * remains a refusal.
  */
-function reusableManifest(output, archive, manifest) {
+function reusableManifest(output, archive, manifest, files) {
   const manifestPath = `${output}.manifest.json`;
   const archiveExists = existsSync(output);
   const manifestExists = existsSync(manifestPath);
   if (!archiveExists && !manifestExists) return undefined;
-  if (!archiveExists || !manifestExists)
+  if (!archiveExists)
     fail("output and its manifest must be a complete matching pair");
-  regularFile(output, "existing output");
-  regularFile(manifestPath, "existing manifest");
+  privateRegularFile(output, "existing output");
   const existingArchive = readFileSync(output);
-  const expectedManifest = `${JSON.stringify(manifest, null, 2)}\n`;
-  if (
-    sha256(existingArchive) !== sha256(archive) ||
-    readFileSync(manifestPath, "utf8") !== expectedManifest
-  )
+  if (sha256(existingArchive) !== sha256(archive))
+    fail("existing output differs from this source root");
+  if (!manifestExists) {
+    // Publication writes the archive first. A process death can therefore
+    // leave this exact archive without a receipt. Complete only that precise
+    // pair after independently checking the archive again; never replace it.
+    inspectExtractedBundle(output, files);
+    writeFileSync(manifestPath, manifestText(manifest), {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    chmodSync(manifestPath, 0o600);
+    return manifest;
+  }
+  privateRegularFile(manifestPath, "existing manifest");
+  if (readFileSync(manifestPath, "utf8") !== manifestText(manifest))
     fail("existing output differs from this source root");
   return manifest;
 }
@@ -285,6 +311,7 @@ function makeBundle({ sourceRoot, output, reuseIdentical = false }) {
       output,
       archive,
       bundleManifest(sourceCommit, files, archive),
+      files,
     );
     if (reused !== undefined) return Object.freeze({ ...reused, reused: true });
   }
