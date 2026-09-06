@@ -51,16 +51,10 @@
       }
     ],
     "retired_source_paths": [
-      "packages/organization-retrieval/src/readable-search-runtime-v1.ts"
+      "packages/organization-retrieval/src/readable-search-runtime-v1.ts",
+      "packages/organization-retrieval/src/new-lineage-v1.ts"
     ],
-    "compatibility_entrypoints": [
-      {
-        "path": "packages/organization-retrieval/src/new-lineage-v1.ts",
-        "targets": [
-          "packages/organization-retrieval/src/readable-search-engine-v1.ts"
-        ]
-      }
-    ]
+    "compatibility_entrypoints": []
   },
   "layer_rules": [
     {
@@ -80,16 +74,6 @@
         "fs",
         "path"
       ]
-    },
-    {
-      "name": "retrieval-compatibility-entrypoint-is-thin",
-      "from": "packages/organization-retrieval/src/new-lineage-v1.ts",
-      "allowed_imports": [
-        "packages/organization-retrieval/src/readable-search-engine-v1.ts"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
     },
     {
       "name": "retrieval-application-is-pure",

@@ -9,23 +9,22 @@ Authority, protocol workspaces, and retained V1 compatibility validators:
 - federation identifier and UTC timestamp validation;
 - the ECDSA P-256 DER low-S signature profile, strict DER compatibility
   encode/decode helpers, and fingerprints over canonical uncompressed
-  named-curve SPKI public keys;
-- public installation-key descriptor verification; and
-- generic signed-document creation and verification.
+  named-curve SPKI public keys; and
+- public installation-key descriptor verification.
 
 The Node 22 API is deliberately OS-, deployment-, and key-provider-neutral; it
-does not claim browser portability. A caller supplies signing bytes to its own
-private-key provider, and this package never loads or stores a private key. The
-frozen fixture exported at
+does not claim browser portability. This package never loads or stores a
+private key. The frozen fixture exported at
 `@echo-brain/federation-protocol/fixtures/signed-document-p256-rfc8785.v1.json`
-fixes the canonical bytes, digests, key ID, signature encoding, and verification
-behavior shared by every consumer.
+fixes the canonical bytes, digests, key ID, and signature encoding shared by
+every consumer.
 
-Callers validate a capability-specific document schema before using the generic
-integrity verifier. The verifier intentionally ignores unknown payload and
-integrity fields so schema ownership remains with the protocol defining that
-document. Descriptor protection and assurance fields are checked for internal
-consistency but are metadata claims, not hardware attestation.
+The generic signed-document creation and verification layer was retired on
+2026-09-06; no workspace consumed it. `organization-protocol` owns the signed
+receipt and record-envelope documents built on the primitives above, and each
+protocol validates its own document schema. Descriptor protection and assurance
+fields are checked for internal consistency but are metadata claims, not
+hardware attestation.
 
 It owns no filesystem store, private-key provider, macOS implementation,
 database, HTTP transport, UI, schema, or organization-specific document or

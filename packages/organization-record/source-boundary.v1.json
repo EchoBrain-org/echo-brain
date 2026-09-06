@@ -68,16 +68,10 @@
       "packages/organization-record/src/organization-record-runtime-v1.ts",
       "packages/organization-record/src/persistence/open-unmigrated-database.ts",
       "packages/organization-record/src/retrieve/clean-person-record-reader-v1.ts",
-      "packages/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts"
+      "packages/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts",
+      "packages/organization-record/src/new-lineage-v1.ts"
     ],
-    "compatibility_entrypoints": [
-      {
-        "path": "packages/organization-record/src/new-lineage-v1.ts",
-        "targets": [
-          "packages/organization-record/src/organization-record-api-v1.ts"
-        ]
-      }
-    ]
+    "compatibility_entrypoints": []
   },
   "layer_rules": [
     {

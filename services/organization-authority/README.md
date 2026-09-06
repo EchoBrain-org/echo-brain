@@ -57,8 +57,9 @@ Use these responsibility-named commands for new automation:
 
 The older `echo-organization-authority-init-clean-state`, `-clean-founder`,
 `-clean-person`, `-clean-live`, `-synthetic-quality`, and
-`-admit-clean-granola-source` binaries remain compatibility commands. Existing
-automation may retain them; new docs and scripts should use the names above.
+`-admit-clean-granola-source` alias binaries were retired on 2026-09-06. The
+checked-in deploy scripts, container entrypoint, and harnesses already call the
+names above; automation outside this repository must use them too.
 
 Use absolute canonical paths. Private credential and invitation directories
 must be current-user `0700`; private input and invitation files must be

@@ -27,22 +27,6 @@
     "./slack-connection-setup-v1": {
       "types": "./dist/slack-connection-setup-v1.d.ts",
       "import": "./dist/slack-connection-setup-v1.js"
-    },
-    "./clean-runtime-v1": {
-      "types": "./dist/clean-runtime-v1.d.ts",
-      "import": "./dist/clean-runtime-v1.js"
-    },
-    "./new-lineage-genesis-v1": {
-      "types": "./dist/new-lineage-genesis-v1.d.ts",
-      "import": "./dist/new-lineage-genesis-v1.js"
-    },
-    "./clean-slack-identity-v1": {
-      "types": "./dist/clean-slack-identity-v1.d.ts",
-      "import": "./dist/clean-slack-identity-v1.js"
-    },
-    "./clean-founder-v1": {
-      "types": "./dist/clean-founder-v1.d.ts",
-      "import": "./dist/clean-founder-v1.js"
     }
   },
   "files": [
