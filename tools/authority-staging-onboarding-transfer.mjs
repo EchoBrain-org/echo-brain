@@ -28,6 +28,7 @@ import { gzipSync } from "node:zlib";
 import { basename, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
+import { InvitationExportError, planInvitationExport, executeInvitationExport } from './authority-staging-invitation-export.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATE = resolve(
@@ -1263,6 +1264,10 @@ function usage() {
 
 function runCli(argv) {
   const [action, flag, value] = argv;
+  if (action === "export-plan" && flag === "--input" && typeof value === "string" && argv.length === 3)
+    return planInvitationExport(value);
+  if (action === "export-execute" && flag === "--receipt" && typeof value === "string" && argv.length === 3)
+    return executeInvitationExport(value);
   if (action === "preflight" && flag === "--input" && typeof value === "string" && argv.length === 3)
     return preflightOnboardingInput(value);
   if (action === "plan" && flag === "--input" && typeof value === "string" && argv.length === 3)
@@ -1283,7 +1288,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
     if (result?.kind === "echo-authority-staging-onboarding-preflight-v1" && result.ready !== true)
       process.exitCode = 2;
   } catch (error) {
-    const code = error instanceof TransferError ? error.code : "unexpected";
+    const code = error instanceof TransferError || error instanceof InvitationExportError ? error.code : "unexpected";
     process.stderr.write(`authority staging onboarding transfer failed: ${code}\n`);
     process.exitCode = 1;
   }
