@@ -2,7 +2,7 @@
 
 Only synthetic files in TemporaryDirectory are touched. No AWS, metadata,
 Docker socket, real deployment, credentials, or application state is used.
-Run with: python3 -B <this-file> <host-runner-source> <updater-source>
+Run with: python3 -B <this-file> <host-runner-source> <updater-source> <onboard-source>
 """
 import base64
 import importlib.util
@@ -20,6 +20,7 @@ spec = importlib.util.spec_from_file_location('host', sys.argv[1])
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
 updater_source = pathlib.Path(sys.argv[2]).read_text()
+onboard_source = pathlib.Path(sys.argv[3]).read_text()
 copy_helper = re.search(r"^copy_record\(\).*?<<'PY'\n(.*?)^PY$", updater_source, re.M | re.S).group(1)
 
 with tempfile.TemporaryDirectory(prefix='echo-posix-proof-') as temporary:
@@ -102,4 +103,26 @@ print('service-swap-completed-root-guard-protected')
     assert (root / '.staging-release-guard/candidate.json').read_bytes() == candidate
     assert not (root / 'clean-data/release/remote-operations').exists()
     assert (root / 'clean-data/release-original/remote-operations' / request['operation_id'] / 'result.json').is_file()
-    print('PASS: real UID 999 rename cannot substitute inputs or clear the root guard; actual updater copy preserves pinned I/O; second operator refused')
+    functions = '\n'.join(re.search(r'^' + function + r'\(\) \{\n.*?^\}', onboard_source, re.M | re.S).group() for function in ('release_operation_lock', 'acquire_operation_lock', 'acquire_staging_release_guard'))
+    shell = '''set -euo pipefail
+DEPLOY_DIR=$1
+OPERATION_LOCK_DIR="$DEPLOY_DIR/clean-data/.authority-operation-lock"
+OPERATION_LOCK_HELD=false
+STAGING_RELEASE_GUARD_HELD=false
+fail() { exit 42; }
+''' + functions + '''
+acquire_operation_lock "$2"
+test "$STAGING_RELEASE_GUARD_HELD" = false
+release_operation_lock
+test -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+'''
+    for uid, action, owner, expected in ((0, 'resume', str(os.getpid()), 0), (999, 'resume', str(os.getpid()), 42), (0, 'prepare', str(os.getpid()), 42), (0, 'resume', str(os.getpid() + 1), 42)):
+        environment = {**os.environ, 'ECHO_CLEAN_PARENT_GUARD_PID': owner}
+        child = subprocess.run(['bash', '-c', shell, 'handoff-proof', str(root), action], cwd='/tmp', env=environment, user=uid, group=0 if uid == 0 else 988, extra_groups=[], capture_output=True, timeout=10)
+        assert child.returncode == expected, (uid, action, owner, child.stderr)
+        assert (root / '.staging-release-guard/owner-pid').read_text() == str(os.getpid()) + '\n'
+    (root / '.staging-release-guard').chmod(0o755)
+    invalid = subprocess.run(['bash', '-c', shell, 'handoff-proof', str(root), 'resume'], cwd='/tmp', env={**os.environ, 'ECHO_CLEAN_PARENT_GUARD_PID': str(os.getpid()), 'PYTHONOPTIMIZE': '1'}, capture_output=True, timeout=10)
+    assert invalid.returncode == 42, invalid.stderr
+    (root / '.staging-release-guard').chmod(0o700)
+    print('PASS: real UID 999 isolation; actual updater copy stays pinned; second operator refused; only the bound root resume child inherits the retained parent guard')

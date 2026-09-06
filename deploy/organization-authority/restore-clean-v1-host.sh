@@ -352,9 +352,9 @@ fi
 [[ $restored == true ]] || fail 'retained host resume requires an accepted release tuple'
 
 [[ -x $ONBOARD_TOOL && ! -L $ONBOARD_TOOL ]] || fail 'installed onboarding wrapper is missing or unsafe'
-# The onboarding wrapper acquires this same interlock before any mutation.
-release_staging_guard
-"$ONBOARD_TOOL" resume
+# Keep the guard across the direct child and final status check. Onboarding
+# verifies this root parent's private owner record and never releases its guard.
+ECHO_CLEAN_PARENT_GUARD_PID=$$ "$ONBOARD_TOOL" resume
 status_output="$("$ONBOARD_TOOL" status)" || fail 'onboarding status failed after retained-host restore'
 printf '%s\n' "$status_output"
 grep -Fqx 'terminal_green=true' <<<"$status_output" || \

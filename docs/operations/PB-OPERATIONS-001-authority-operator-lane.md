@@ -144,8 +144,10 @@ its named current-host staging actions only. It pins the verified release
 directory for the runner and updater, holds a root-owned interlock outside the
 service-writable data tree, and refuses any legacy Authority operation lock.
 Installed update/onboarding/backup-maintenance wrappers hold that same guard throughout their
-operations; retained restore holds it during materialization and hands off to
-guarded onboarding resume. A failed backup restart preserves the root guard as
+operations; retained restore holds it through materialization, its direct
+root onboarding-resume child, and terminal-status verification. The child
+validates the private root guard and parent PID and does not release it.
+A failed backup restart preserves the root guard as
 well as its legacy recovery lock. Updater temporary publication stays relative
 to the pinned directory. The updater child uses the exact private nested
 lock inside the guard. A `control_path_changed` result retains the guard for

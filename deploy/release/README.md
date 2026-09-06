@@ -378,8 +378,11 @@ outside the container's writable mount. The runner refuses an existing guard
 or legacy `clean-data/.authority-operation-lock`; it never deletes that legacy
 lock. Updated update/onboarding/backup-maintenance wrappers acquire this same root-owned guard
 before their legacy lock and hold it for the entire operation, even if the
-service renames the legacy lock. Retained restore holds it while materializing
-state, then hands off to onboarding's guarded resume. Backup maintenance retains
+service renames the legacy lock. Retained restore holds it through materialization,
+onboarding resume, and terminal-status verification without an unlocked handoff.
+Only its direct root resume child can inherit the guard, after checking the
+private root-owned guard and parent PID; that child never releases the parent
+guard. Backup maintenance retains
 both locks when restart proof fails, preserving the deliberate-recovery boundary.
 Only the runner's updater
 child uses the exact nested lock inside its already-held guard.
