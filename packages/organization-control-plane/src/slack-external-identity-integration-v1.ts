@@ -27,4 +27,4 @@ export {
   validateOrganizationToolConnectionStateV2,
   type OrganizationToolConnectionContractV2,
   type OrganizationToolConnectionStateV2,
-} from "./application/person-slack-reaction-approval-contracts-v2.js";
+} from "./application/organization-tool-connection-contracts-v2.js";

@@ -13,7 +13,7 @@ import {
   validateOrganizationToolConnectionStateV2,
   type OrganizationToolConnectionContractV2,
   type OrganizationToolConnectionStateV2,
-} from "../application/person-slack-reaction-approval-contracts-v2.js";
+} from "../application/organization-tool-connection-contracts-v2.js";
 import type Database from "better-sqlite3";
 
 /** A provider seam deliberately limited to Slack connection setup. */

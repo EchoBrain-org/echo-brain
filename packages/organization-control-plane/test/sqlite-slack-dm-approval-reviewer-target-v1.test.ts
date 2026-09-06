@@ -1,13 +1,13 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
   buildExternalHumanIdentityLinkContractV2,
   buildOrganizationToolConnectionContractV2,
   buildOrganizationToolConnectionStateV2,
   type ExternalHumanIdentityLinkContractV2,
   type PersonMembershipType,
-} from "../src/application/person-slack-reaction-approval-contracts-v2.js";
+} from "../src/application/organization-tool-connection-contracts-v2.js";
+import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../src/application/slack-integration-contracts.js";
 import { canonicalJson, canonicalSha256 } from "../src/canonical/canonical-json.js";
 import {
   SLACK_DM_APPROVAL_REQUIRED_SCOPES,
@@ -15,7 +15,6 @@ import {
   type CurrentSlackDmApprovalReviewerV1,
   type SlackDmApprovalReviewerTargetCoordinatesV1,
 } from "../src/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
-import { selectCurrentOwnerSlackReactionApprovalTargetV1 } from "../src/persistence/sqlite-slack-reaction-approval-target-v1.js";
 import { applyOrganizationControlBaselineV1 } from "../src/persistence/baseline.js";
 
 const CONNECTION_ID = "con_00000000-0000-4000-8000-000000000001";
@@ -39,14 +38,6 @@ function currentReviewerState(): SlackDmApprovalReviewerTargetCoordinatesV1 {
   });
 }
 
-function legacyState() {
-  return Object.freeze({
-    state_directory: "/test/control-state",
-    integrations_database_path: "/test/control-state/integrations.sqlite",
-    ...COORDINATES,
-  });
-}
-
 function slackConnectionConfigurationSha256() {
   return canonicalSha256({
     approval_adapter_id: "slack-reactions",
@@ -60,7 +51,7 @@ function slackConnectionConfigurationSha256() {
 function scopes(without?: string): readonly string[] {
   return Object.freeze(
     [...new Set([
-      ...SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+      ...SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
       ...SLACK_DM_APPROVAL_REQUIRED_SCOPES,
     ])]
       .filter((scope) => scope !== without)
@@ -162,7 +153,7 @@ function seed(
     provider_app_id: "A01",
     provider_bot_id: "B01",
     provider_bot_user_id: "U_BOT",
-    required_provider_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+    required_provider_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
     public_connection_configuration_sha256:
       slackConnectionConfigurationSha256(),
   });
@@ -316,7 +307,7 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
       provider_app_id: "A01",
       provider_bot_id: "B01",
       provider_bot_user_id: "U_BOT",
-      required_provider_scopes: SLACK_REACTION_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+      required_provider_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
       public_connection_configuration_sha256:
         slackConnectionConfigurationSha256(),
     });
@@ -412,23 +403,5 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
     expect(() => resolve(linkMismatch)).toThrow(
       "identity link is inconsistent",
     );
-  });
-
-  it("does not alter the existing public-channel owner selector", () => {
-    const database = seed({ observed_scope_without: "im:write" });
-
-    expect(resolve(database)).toBeUndefined();
-    expect(
-      selectCurrentOwnerSlackReactionApprovalTargetV1(
-        database,
-        legacyState(),
-        { connection_id: CONNECTION_ID, approval_channel_id: APPROVAL_CHANNEL_ID },
-        OWNER,
-      ),
-    ).toMatchObject({
-      connection_id: CONNECTION_ID,
-      external_identity_link_id:
-        "clm_00000000-0000-4000-8000-000000000001",
-    });
   });
 });

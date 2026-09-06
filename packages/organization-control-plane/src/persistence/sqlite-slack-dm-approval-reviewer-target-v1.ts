@@ -6,11 +6,17 @@ import {
   type OrganizationToolConnectionContractV2,
   type OrganizationToolConnectionStateV2,
   type PersonMembershipType,
-} from "../application/person-slack-reaction-approval-contracts-v2.js";
-import type { FrozenApprovalContractV2 } from "../application/person-slack-reaction-approval-activation-v2.js";
+} from "../application/organization-tool-connection-contracts-v2.js";
+import type { ApprovalContractSha256 } from "../application/record-visibility-policy-contracts-v1.js";
 import type { PrivateApprovalSlackIdentityLinkV1 } from "../application/private-approval-policy-resolution-v1.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import type Database from "better-sqlite3";
+
+/** One validated contract body together with its canonical digest. */
+export interface FrozenApprovalContractV2<T> {
+  readonly body: T;
+  readonly sha256: ApprovalContractSha256;
+}
 
 /** Additional observed scopes required to open and reconcile a private DM. */
 export const SLACK_DM_APPROVAL_REQUIRED_SCOPES = Object.freeze([

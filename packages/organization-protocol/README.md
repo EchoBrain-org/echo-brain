@@ -12,8 +12,7 @@ readers. Its public entry point exposes five responsibility groups:
 - the approval and rejection payload shapes that carry exactly the meeting
   facts a person reviewed;
 - restricted-reviewer and organization-member-readable content policies;
-- deterministic release drafts and explicitly Slack-reaction approval
-  presentations for the two version-1 approval policies; and
+- the private Slack Block Kit approval witness; and
 - authority-signed organization record envelopes and append receipts.
 
 The package does not own enrollment, access leases, user sessions, HTTP
@@ -42,15 +41,6 @@ by current Person retrieval:
 The consequence text and its digest are contract bytes, not editable UI copy.
 The selected policy is committed by the approved or rejected human action and
 carried into the signed record.
-
-The version-1 Slack-reaction approval contracts remain provider-specific by
-design. Their source names say `slack-reaction`; their frozen wire kinds and
-policy identifiers remain unchanged. Each flow has:
-
-- a release-draft projection containing the exact title and ordered decision,
-  action, and rationale lines exposed for review; and
-- a deterministic Slack Block Kit presentation, fallback text, reaction pair,
-  transport options, and canonical digest.
 
 The private Slack Block Kit flow has its own signed action witness in
 `private-slack-block-approval-record-input-v1.ts`. Raw Slack request bodies and

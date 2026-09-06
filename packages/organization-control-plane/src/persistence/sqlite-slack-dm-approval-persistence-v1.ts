@@ -21,8 +21,8 @@ import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import {
   validateOrganizationToolConnectionContractV2,
   validateOrganizationToolConnectionStateV2,
-  type ApprovalContractSha256,
-} from "../application/person-slack-reaction-approval-contracts-v2.js";
+} from "../application/organization-tool-connection-contracts-v2.js";
+import type { ApprovalContractSha256 } from "../application/record-visibility-policy-contracts-v1.js";
 import type Database from "better-sqlite3";
 
 const RECEIPT_KIND = "echo-private-approval-signed-block-action-receipt-v1" as const;

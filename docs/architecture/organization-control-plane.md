@@ -1,8 +1,7 @@
 # Organization control plane
 
-**Status:** current organization-owned Slack onboarding and Person identity
-linking, plus a retained installation-bound V1 permission slice with no shipped
-caller.
+**Status:** current organization-owned Slack onboarding, Person identity
+linking, and private Slack DM approval persistence.
 
 This component implements two current customer-visible behaviors:
 
@@ -13,10 +12,11 @@ This component implements two current customer-visible behaviors:
    `U...` user ID and link it to that employee's current ECHO membership. This
    creates no adapter binding or permission grant.
 
-The control plane also retains the installation-signed V1 action-time
-permission evaluator because existing approval and record schemas still refer
-to it. The old machine runtime and signer are deleted, so that evaluator is a
-server compatibility surface, not a current Person workflow.
+The installation-signed V1 reaction-approval evaluator and its owner-attributed
+activation command were removed on 2026-09-06. No shipped client called them,
+and the Authority's private Slack DM approval path is the only approval
+surface. Their tables remain in the frozen V1 baseline until a versioned schema
+migration retires them.
 
 ## Ownership boundaries
 
@@ -105,11 +105,9 @@ Private approval V1 needs the same app's Interactivity Request URL at
 `/v2/integrations/slack/interactions` and signing secret. It does not currently
 need Event Subscriptions, Socket Mode, or a Slack OAuth redirect flow.
 
-The retained V1 installation-signed challenge still expects an installation's
-configured reviewer and can create an installation adapter binding. No shipped
-client can initiate that compatibility flow. A profileless active connection
-is compatibility-only. Automatic multi-provider tool discovery and Person-bound
-approval configuration remain later work.
+No installation-signed challenge or adapter-binding activation remains. A
+profileless active connection is compatibility-only. Automatic multi-provider
+tool discovery and Person-bound approval configuration remain later work.
 
 The database migration preserves one active organization-owned Slack
 connection. Migration `0002_organization_tool_public_configuration.sql` is an
@@ -324,15 +322,11 @@ No Teams, Granola, project-management, or other non-Slack organization-tool
 onboarding is implemented. A multi-provider Person connect catalog is also
 explicitly deferred.
 
-`organization_permission_grants` receives NEW Slack approval grants only
-through the retained installation-bound activation path. The administrator
-command names an existing V1 identity link and exact installation adapter
-binding; its Authority route creates or reuses only direct `approve` and
-`reject` grants. It does not call Slack, accept a bot token, create a provider
-identity, or create an adapter binding. Person-v2 Slack completion creates or
-reuses only an external identity link and cannot feed this old activation
-contract. Therefore no current Person product path creates a new approval
-grant; the replacement must be additive and server-owned.
+No current product path creates `organization_permission_grants` rows. The
+installation-bound activation command that once created direct `approve` and
+`reject` grants was removed with the reaction-approval path. Person-v2 Slack
+completion creates or reuses only an external identity link. A replacement
+must be additive and server-owned.
 
 ## Schema growth rule
 

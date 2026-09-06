@@ -16,7 +16,7 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type ApprovalContractSha256,
   type PersonApprovalPolicyId,
-} from "./person-slack-reaction-approval-contracts-v2.js";
+} from "./record-visibility-policy-contracts-v1.js";
 
 export const PRIVATE_APPROVAL_PENDING_KIND =
   "echo-private-approval-pending-v1" as const;

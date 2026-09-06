@@ -15,7 +15,6 @@ import {
   restrictedReviewerPersonPolicyContractSha256,
   validatePersonContentPolicyContract,
 } from "../src/person-content-policy-v2.js";
-import { organizationMemberReadableSlackReactionApprovalPolicyContractSha256 } from "../src/organization-member-readable-slack-reaction-approval-policy.js";
 
 describe("Person content policy v2", () => {
   it("freezes the two exact human-visible consequence byte commitments", () => {
@@ -82,9 +81,6 @@ describe("Person content policy v2", () => {
     const reviewer = restrictedReviewerPersonPolicyContract();
     const member = organizationMemberReadablePersonPolicyContract();
     expect(reviewer.policy_id).not.toBe("restricted-reviewer-v1");
-    expect(organizationMemberReadablePersonPolicyContractSha256()).not.toBe(
-      organizationMemberReadableSlackReactionApprovalPolicyContractSha256(),
-    );
     expect(
       canonicalSha256({
         ...reviewer,

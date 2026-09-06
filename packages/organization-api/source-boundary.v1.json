@@ -26,7 +26,7 @@
       {
         "name": "Organization API contract types",
         "path": "packages/organization-api/src/contracts.ts",
-        "export": "OrganizationSlackReactionApprovalPermissionCheckRequestV1"
+        "export": "OrganizationApiSignedIntegrityV1"
       },
       {
         "name": "Person meeting-ingestion exclusion change contract",
