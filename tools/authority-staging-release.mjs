@@ -29,6 +29,14 @@ const TOOL_FILES = Object.freeze({
   'release/clean-v1-runtime-profile.py': 'deploy/release/clean-v1-runtime-profile.py',
 });
 const RUNNER = 'tools/authority-staging-release-host.py';
+const LEGACY_MIGRATION = 'legacy-staging-host-v1';
+const LEGACY_MIGRATION_FILES = Object.freeze({
+  'update-clean-v1.sh': ['be71eef5d3678957ef5f086a2ed42baeeb548687', 'deploy/organization-authority/update-clean-v1.sh', 'db04aaacad63d71e6e74c3d90d1c521fc2f85f177013de8869eff0cbedd398d4'],
+  'onboard-clean-v1.sh': ['be71eef5d3678957ef5f086a2ed42baeeb548687', 'deploy/organization-authority/onboard-clean-v1.sh', '23b19666f5a85446dc50bc989f42dbd72ceafbedd6f294f13d7077220e9a036c'],
+  'restore-clean-v1-host.sh': ['2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a', 'deploy/organization-authority/restore-clean-v1-host.sh', '4de16f689929ae4310cd7ff0f29b01e59cd577b652ea33b100397789dd13b583'],
+  'release/clean-v1-release.py': ['be71eef5d3678957ef5f086a2ed42baeeb548687', 'deploy/release/clean-v1-release.py', 'fa72418c3daef1da8436f1a3963085d61f40ef4635f618c52be87d368eaacff6'],
+  'release/clean-v1-runtime-profile.py': ['be71eef5d3678957ef5f086a2ed42baeeb548687', 'deploy/release/clean-v1-runtime-profile.py', '83f5f96b6a330fc30eda56ffe25bfe4a074952e170147dacbe431644873b7072'],
+});
 const LEGACY_TOOL_FILES = Object.fromEntries(Object.entries(TOOL_FILES).filter(([name]) => !['onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh'].includes(name)));
 const MAX_COMMAND_BYTES = 60 * 1024;
 const TERMINAL = ['Failed', 'Cancelled', 'TimedOut', 'Undeliverable', 'Terminated'];
@@ -149,8 +157,10 @@ function approvalFor(request, approval) {
 
 /** Pure request validation is repeated before planning, rendering and execution. */
 export function validateReleaseRequest(request, readSource = sourceFile) {
-  exactKeys(request, ['schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval']);
-  if (![1, 2].includes(request.schema_version) || request.kind !== `echo-staging-release-request-v${request.schema_version}` || !ID.test(request.operation_id)) fail('request_invalid');
+  const migration = request.schema_version === 3;
+  exactKeys(request, ['schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval', ...(migration ? ['tooling_migration'] : [])]);
+  if (![1, 2, 3].includes(request.schema_version) || request.kind !== `echo-staging-release-request-v${request.schema_version}` || !ID.test(request.operation_id)) fail('request_invalid');
+  if (migration && (request.tooling_migration !== LEGACY_MIGRATION || !['install', 'inspect-install'].includes(request.action))) fail('tooling_migration_invalid');
   const toolFiles = request.schema_version === 1 ? LEGACY_TOOL_FILES : TOOL_FILES;
   releaseAction(request.action);
   if (!Number.isSafeInteger(request.created_at) || request.expires_at !== request.created_at + 1800) fail('request_lifetime_invalid');
@@ -167,7 +177,16 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
     if (bytes[name].toString('base64') !== entry.base64 || digest(bytes[name]) !== entry.sha256) fail('artifact_checksum_mismatch');
   }
   for (const [name, path] of Object.entries(toolFiles)) {
-    if (!bytes[name].equals(readSource(request.tooling_source, path)) || request.old_tool_hashes[name] !== digest(readSource(request.previous_tooling_source, path))) fail('tooling_source_mismatch');
+    let old;
+    if (migration) {
+      if (name === 'backup-authority-maintenance.sh') old = request.files[name].sha256;
+      else {
+        const [commit, legacyPath, expected] = LEGACY_MIGRATION_FILES[name];
+        if (digest(readSource(commit, legacyPath)) !== expected) fail('tooling_source_mismatch');
+        old = expected;
+      }
+    } else old = digest(readSource(request.previous_tooling_source, path));
+    if (!bytes[name].equals(readSource(request.tooling_source, path)) || request.old_tool_hashes[name] !== old) fail('tooling_source_mismatch');
   }
   const candidate = canonicalRecord(bytes['candidate.json']);
   exactKeys(request.candidate, ['release_id', 'sha256', 'person_client_sha256']);
@@ -191,7 +210,7 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
   const payload = gzipSync(body, { level: 9 }).toString('base64');
   const runner = readSource(request.tooling_source, RUNNER).toString('utf8');
   let script = `${runner}\nmain('${payload}', '${digest(body)}')`;
-  if (request.schema_version === 2) {
+  if (request.schema_version >= 2) {
     // Compress text once, not separately base64-expanded files plus a plain
     // runner. The fixed loader verifies the whole reviewed, non-secret bundle.
     const wire = { runner, request: structuredClone(request) };
@@ -221,6 +240,8 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
 export function planStagingRelease(options, dependencies = {}) {
   const { aws = awsJson, readSource = sourceFile, runtime = reviewedRuntime, now = Date.now } = dependencies;
   releaseAction(options.action);
+  const migration = options.toolingMigration !== undefined;
+  if (migration && (options.toolingMigration !== LEGACY_MIGRATION || !['install', 'inspect-install'].includes(options.action))) fail('tooling_migration_invalid');
   const toolingSource = runtime();
   const previousSource = options.previousToolingSource ?? toolingSource;
   if (!COMMIT.test(previousSource)) fail('previous_tooling_source_invalid');
@@ -236,18 +257,29 @@ export function planStagingRelease(options, dependencies = {}) {
   const files = {};
   const old = {};
   const add = (name, bytes) => { files[name] = { sha256: digest(bytes), base64: bytes.toString('base64') }; };
-  for (const [name, path] of Object.entries(TOOL_FILES)) { add(name, readSource(toolingSource, path)); old[name] = digest(readSource(previousSource, path)); }
+  for (const [name, path] of Object.entries(TOOL_FILES)) {
+    add(name, readSource(toolingSource, path));
+    if (!migration) old[name] = digest(readSource(previousSource, path));
+    else if (name === 'backup-authority-maintenance.sh') old[name] = files[name].sha256;
+    else {
+      const [commit, legacyPath, expected] = LEGACY_MIGRATION_FILES[name];
+      if (!dependencies.readSource) git(['merge-base', '--is-ancestor', commit, 'origin/main']);
+      if (digest(readSource(commit, legacyPath)) !== expected) fail('tooling_source_mismatch');
+      old[name] = expected;
+    }
+  }
   add('candidate.json', candidateBytes);
   add('runtime-profile.json', readFileSync(options.runtimeProfile));
   const timestamp = Math.floor(now() / 1000);
   const request = {
-    schema_version: 2, kind: 'echo-staging-release-request-v2', operation_id: randomUUID(), action: options.action,
+    schema_version: migration ? 3 : 2, kind: `echo-staging-release-request-v${migration ? 3 : 2}`, operation_id: randomUUID(), action: options.action,
     created_at: timestamp, expires_at: timestamp + 1800, target: stagingReleaseTarget(aws),
     tooling_source: toolingSource, previous_tooling_source: previousSource,
     accepted: { release_id: accepted.release_id, sha256: digest(acceptedBytes) },
     candidate: { release_id: candidate.release_id, sha256: digest(candidateBytes), person_client_sha256: candidate.person_client.artifact_sha256 },
     files, old_tool_hashes: old, content_telemetry: options.contentTelemetry ?? null,
     approval: options.approval ? JSON.parse(privateFile(options.approval, 4096).toString()) : null,
+    ...(migration ? { tooling_migration: LEGACY_MIGRATION } : {}),
   };
   const parameters = releaseSsmParameters(request, readSource);
   const receipt = { schema_version: 1, kind: 'echo-staging-release-operation-v1', request, request_sha256: digest(jsonBytes(request)), parameters_sha256: digest(jsonBytes(parameters)), state: 'planned', command_id: null, outcome: null };
@@ -292,7 +324,8 @@ function validateToolingInventory(diagnostic, request) {
       const expected = entry.sha256 === request.files[name].sha256 ? 'new' : entry.sha256 === request.old_tool_hashes[name] ? 'old' : 'unknown';
       if (entry.state !== expected) fail('remote_outcome_unproven');
     }
-    if (firstProblem === null && Object.hasOwn(problemCategories, entry.state)) firstProblem = { category: problemCategories[entry.state], tool: name };
+    const expectedAbsence = request.schema_version === 3 && request.tooling_migration === LEGACY_MIGRATION && name === 'backup-authority-maintenance.sh' && entry.state === 'missing';
+    if (!expectedAbsence && firstProblem === null && Object.hasOwn(problemCategories, entry.state)) firstProblem = { category: problemCategories[entry.state], tool: name };
   }
   if (['ready', 'repair_pending'].includes(diagnostic.category)) {
     if (firstProblem !== null) fail('remote_outcome_unproven');
@@ -368,7 +401,7 @@ export function executeStagingRelease(pathname, dependencies = {}, pollOnly = fa
       return pollReceipt(path, receipt, aws);
     }
     if (runtime() !== receipt.request.tooling_source) fail('exact_reviewed_runtime_required');
-    if (receipt.request.schema_version !== 2) fail('legacy_plan_execution_refused');
+    if (![2, 3].includes(receipt.request.schema_version)) fail('legacy_plan_execution_refused');
     if (Math.floor(now() / 1000) > receipt.request.expires_at) fail('plan_expired');
     if (!same(stagingReleaseTarget(aws), receipt.request.target)) fail('staging_target_changed');
     const parameters = releaseSsmParameters(receipt.request, readSource);
@@ -398,9 +431,9 @@ function main(argv) {
   }
   if (command === 'plan') {
     const required = ['--action', '--accepted-release', '--release', '--runtime-profile', '--output'];
-    const allowed = [...required, '--previous-tooling-source', '--content-telemetry', '--approval'];
+    const allowed = [...required, '--previous-tooling-source', '--content-telemetry', '--approval', '--tooling-migration'];
     if (required.some(key => !options[key]) || Object.keys(options).some(key => !allowed.includes(key))) fail('arguments_invalid');
-    return planStagingRelease({ action: options['--action'], acceptedRelease: options['--accepted-release'], release: options['--release'], runtimeProfile: options['--runtime-profile'], output: options['--output'], previousToolingSource: options['--previous-tooling-source'], contentTelemetry: options['--content-telemetry'], approval: options['--approval'] });
+    return planStagingRelease({ action: options['--action'], acceptedRelease: options['--accepted-release'], release: options['--release'], runtimeProfile: options['--runtime-profile'], output: options['--output'], previousToolingSource: options['--previous-tooling-source'], contentTelemetry: options['--content-telemetry'], approval: options['--approval'], toolingMigration: options['--tooling-migration'] });
   }
   if (!['execute', 'status'].includes(command) || !same(Object.keys(options), ['--receipt'])) fail('arguments_invalid');
   return executeStagingRelease(options['--receipt'], {}, command === 'status');

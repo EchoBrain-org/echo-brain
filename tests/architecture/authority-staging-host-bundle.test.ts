@@ -22,6 +22,7 @@ const FIXTURE_FILES = [
   ["deploy/organization-authority/install-cloudflare-tunnel-token.sh", 0o755],
   ["deploy/organization-authority/onboard-clean-v1.sh", 0o755],
   ["deploy/organization-authority/restore-clean-v1-host.sh", 0o755],
+  ["deploy/organization-authority/backup-authority-maintenance.sh", 0o755],
   ["deploy/organization-authority/update-clean-v1.sh", 0o755],
   ["deploy/release/clean-v1-release.py", 0o755],
   ["deploy/release/clean-v1-runtime-profile.py", 0o755],
@@ -130,6 +131,10 @@ describe("Authority staging host bundle", () => {
         mode: "0755",
       }),
       expect.objectContaining({
+        path: "deploy/organization-authority/backup-authority-maintenance.sh",
+        mode: "0755",
+      }),
+      expect.objectContaining({
         path: "deploy/organization-authority/update-clean-v1.sh",
         mode: "0755",
       }),
@@ -149,6 +154,7 @@ describe("Authority staging host bundle", () => {
       .split("\n")
       .sort();
     expect(listed).toEqual([
+      "backup-authority-maintenance.sh",
       "bootstrap-ubuntu-arm64.sh",
       "clean-v1-release.py",
       "clean-v1-runtime-profile.py",

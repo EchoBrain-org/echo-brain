@@ -545,6 +545,7 @@ probe "$1"
       "ONBOARD_SOURCE",
       "UPDATER_SOURCE",
       "RESTORER_SOURCE",
+      "BACKUP_SOURCE",
       "RELEASE_VALIDATOR_SOURCE",
       "RUNTIME_PROFILE_VALIDATOR_SOURCE",
     ]) {
@@ -554,6 +555,7 @@ probe "$1"
       "$DEPLOY_DIR/onboard-clean-v1.sh",
       "$DEPLOY_DIR/update-clean-v1.sh",
       "$DEPLOY_DIR/restore-clean-v1-host.sh",
+      "$DEPLOY_DIR/backup-authority-maintenance.sh",
       "$DEPLOY_DIR/release/clean-v1-release.py",
       "$DEPLOY_DIR/release/clean-v1-runtime-profile.py",
     ]) {

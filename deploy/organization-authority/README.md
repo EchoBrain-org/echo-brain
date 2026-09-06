@@ -431,10 +431,13 @@ exists, the whole current root volume is the off-host protection boundary for
 Use [RB-OPERATIONS-002](../../docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md)
 to complete the active root-volume encryption evidence gate, create the
 scheduled AWS Backup protection, and rehearse one quiesced recovery point. The
-release installation procedure must first install the exact reviewed
+host bundle/bootstrap now includes the exact reviewed
 `backup-authority-maintenance.sh` at
 `/srv/echo-authority-clean-v1/backup-authority-maintenance.sh`, owned by root
-with mode `0755`, and verify its SHA-256 against the private review receipt.
+with mode `0755`. Existing recognized legacy staging hosts use the
+[named tooling migration](../release/README.md#live-operator-boundary); otherwise
+the release installation procedure must install it and verify its SHA-256
+against the private review receipt.
 Application release rollback does not replace this host tool. The
 template cannot itself inspect source-volume encryption. EBS recovery points
 inherit the source-volume encryption and are not independently re-encrypted by

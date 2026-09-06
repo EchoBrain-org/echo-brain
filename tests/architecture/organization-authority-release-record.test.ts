@@ -104,6 +104,10 @@ function canonical(value: unknown): string {
     .join(",")}}`;
 }
 
+// Unit container fixtures must explicitly return setup readiness. The connected
+// journey uses the real setup command and separately proves not_ready refusal.
+const READY_SETUP_DOCKER = `if [[ "$1" == compose && "$*" == *"clean-founder-main.js status --state-dir"* ]]; then printf '%s\\n' '{"schema_version":1,"kind":"echo-clean-founder-setup-status-v1","runtime_status":"ready_to_start"}'; exit 0; fi`;
+
 function record(overrides: Record<string, unknown> = {}) {
   return {
     schema_version: 1,
@@ -338,6 +342,7 @@ function environmentDriftFixture() {
     "if [[ \"$1\" == inspect && \"$*\" == *'{{json .Config.Env}}'* ]]; then python3 -c 'import json, os, pathlib; print(json.dumps([line for line in pathlib.Path(os.environ[\"ECHO_CLEAN_ENV_FILE\"]).read_text().splitlines() if line.startswith(\"ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=\")]))'; exit 0; fi",
     "if [[ \"$*\" == *'.Config.'* ]]; then exit 0; fi",
     "if [[ \"$1\" == compose && \"$*\" == *' up '* && -e \"$ECHO_TEST_FAIL_START\" ]]; then exit 1; fi",
+    READY_SETUP_DOCKER,
     "if [[ \"$1\" == compose ]]; then exit 0; fi",
     "exit 91",
     "",
@@ -498,6 +503,19 @@ afterEach(() => {
 });
 
 describe("Organization Authority clean-v1 release record", () => {
+  it.each([
+    ['', 0, false],
+    ['not JSON', 0, false],
+    [JSON.stringify({ schema_version: 1, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'not_ready' }), 0, false],
+    [JSON.stringify({ schema_version: 1, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'ready_to_start' }), 1, false],
+    [JSON.stringify({ schema_version: 1, kind: 'echo-clean-founder-setup-status-v1', runtime_status: 'ready_to_start' }), 0, true],
+  ])('requires affirmative setup readiness as well as a successful command: %s / %s', (body, code, ready) => {
+    const helper = readFileSync(UPDATE, 'utf8').match(/^safe_setup_status\(\) \{[\s\S]*?^\}/m)?.[0];
+    expect(helper).toBeDefined();
+    const result = run('bash', ['-c', `set -euo pipefail\ncompose_clean() { printf '%s' "$ECHO_TEST_SETUP_BODY"; return "$ECHO_TEST_SETUP_CODE"; }\n${helper}\nsafe_setup_status`], { ECHO_TEST_SETUP_BODY: String(body), ECHO_TEST_SETUP_CODE: String(code) });
+    expect(result.status === 0).toBe(ready);
+  });
+
   it("accepts the same canonical non-secret record in build and operator tools", () => {
     const path = writeRecord(record());
     const node = run(process.execPath, [TOOL, "validate", path]);
@@ -2091,6 +2109,7 @@ fi
     writeFileSync(
       docker,
       `#!/usr/bin/env bash
+${READY_SETUP_DOCKER}
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then
   [[ -f "${started}" ]] && printf 'authority-container\\n'
   exit 0
@@ -2169,6 +2188,7 @@ fi
     mkdirSync(bin);
     writeFileSync(docker, `#!/usr/bin/env bash
 if [[ "$1" == compose ]] && grep -q 'interrupted activation' "${runtimeConfig}/compose.clean-v1.yaml"; then exit 44; fi
+${READY_SETUP_DOCKER}
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then [[ -f "${started}" ]] && printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then [[ -f "${started}" ]] && printf 'proxy-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${started}"; exit 0; fi
@@ -2276,6 +2296,7 @@ if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then pr
     writeFileSync(
       docker,
       `#!/usr/bin/env bash
+${READY_SETUP_DOCKER}
 printf '%s\\n' "$*" >> "${log}"
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then
   [[ -f "${started}" ]] && printf 'authority-container\\n'
@@ -2381,6 +2402,7 @@ if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then touch "$
     writeFileSync(
       docker,
       `#!/usr/bin/env bash
+${READY_SETUP_DOCKER}
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi
@@ -2961,6 +2983,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${currentRecord.runtime_profile.profile_versi
     writeFileSync(
       docker,
       `#!/usr/bin/env bash
+${READY_SETUP_DOCKER}
 printf '%s\\n' "$*" >> "${log}"
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
@@ -3042,6 +3065,7 @@ if [[ "$1" == compose && "$*" == *" exec "* ]]; then exit 0; fi
     writeFileSync(
       docker,
       `#!/usr/bin/env bash
+${READY_SETUP_DOCKER}
 if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then printf 'authority-container\\n'; exit 0; fi
 if [[ "$1" == compose && "$*" == *" ps -q proxy"* ]]; then printf 'proxy-container\\n'; exit 0; fi
 if [[ "$1" == inspect && "$*" == *'.State.Running'* ]]; then printf 'true\\n'; exit 0; fi

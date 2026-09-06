@@ -853,7 +853,17 @@ except (ValueError, TypeError):
 safe_setup_status() {
   compose_clean exec -T authority node \
     services/organization-authority/dist/clean-founder-main.js \
-    status --state-dir /echo-clean/state
+    status --state-dir /echo-clean/state | python3 -c '
+import json, sys
+try:
+    raw = sys.stdin.buffer.read(16385)
+    status = json.loads(raw)
+    if len(raw) > 16384 or not isinstance(status, dict) or status.get("schema_version") != 1 or status.get("kind") != "echo-clean-founder-setup-status-v1" or status.get("runtime_status") != "ready_to_start":
+        raise ValueError()
+except (ValueError, TypeError):
+    raise SystemExit("Authority setup is not ready or returned invalid status")
+sys.stdout.buffer.write(raw)
+'
 }
 
 authority_host() {

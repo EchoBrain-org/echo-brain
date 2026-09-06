@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
 
 const temporary: string[] = [];
@@ -53,7 +53,12 @@ function fixture() {
       default: throw new Error(`Unexpected AWS operation: ${args.slice(0, 2).join(' ')}`);
     }
   };
-  const readSource = (commit: string, path: string) => commit === OLD && path !== 'tools/authority-staging-release-host.py' ? Buffer.from(`old-reviewed-tool:${path}\n`) : readFileSync(join(REPO, path));
+  const reviewedLegacy = new Set(['be71eef5d3678957ef5f086a2ed42baeeb548687', '2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a']);
+  const readSource = (commit: string, path: string) => reviewedLegacy.has(commit)
+    ? execFileSync('git', ['-C', REPO, 'show', `${commit}:${path}`])
+    : commit === OLD && path !== 'tools/authority-staging-release-host.py'
+      ? Buffer.from(`old-reviewed-tool:${path}\n`)
+      : readFileSync(join(REPO, path));
   const dependencies = { aws, readSource, runtime: () => COMMIT, now: () => 1788640000000 };
   return { directory, options, calls, state, request, outcome, dependencies };
 }
@@ -88,10 +93,52 @@ describe('bounded staging release operator', () => {
     expect(f.calls.every(args => !['s3api', 'iam', 'secretsmanager'].includes(args[0]))).toBe(true);
   });
 
+  it('uses a new request version only for the exact named install migration', () => {
+    const f = fixture();
+    expect(() => planStagingRelease({ ...f.options, action: 'status', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies)).toThrow('tooling_migration_invalid');
+    expect(() => planStagingRelease({ ...f.options, action: 'install', toolingMigration: 'anything-else' }, f.dependencies)).toThrow('tooling_migration_invalid');
+    planStagingRelease({ ...f.options, action: 'install', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies);
+    const request = f.request();
+    expect(request).toMatchObject({
+      schema_version: 3,
+      kind: 'echo-staging-release-request-v3',
+      action: 'install',
+      tooling_migration: 'legacy-staging-host-v1',
+    });
+    expect(request.old_tool_hashes).toMatchObject({
+      'update-clean-v1.sh': 'db04aaacad63d71e6e74c3d90d1c521fc2f85f177013de8869eff0cbedd398d4',
+      'onboard-clean-v1.sh': '23b19666f5a85446dc50bc989f42dbd72ceafbedd6f294f13d7077220e9a036c',
+      'restore-clean-v1-host.sh': '4de16f689929ae4310cd7ff0f29b01e59cd577b652ea33b100397789dd13b583',
+      'release/clean-v1-release.py': 'fa72418c3daef1da8436f1a3963085d61f40ef4635f618c52be87d368eaacff6',
+      'release/clean-v1-runtime-profile.py': '83f5f96b6a330fc30eda56ffe25bfe4a074952e170147dacbe431644873b7072',
+    });
+    expect(request.old_tool_hashes['backup-authority-maintenance.sh']).toBe(request.files['backup-authority-maintenance.sh'].sha256);
+    expect(Buffer.byteLength(JSON.stringify(releaseSsmParameters(request, f.dependencies.readSource)))).toBeLessThan(60 * 1024);
+  });
+
   it.each(['shell', 'onboard', 'restore', 'down'])('rejects unsupported action %s before AWS', action => {
     const f = fixture();
     expect(() => planStagingRelease({ ...f.options, action }, f.dependencies)).toThrow('action_invalid');
     expect(f.calls).toHaveLength(0);
+  });
+
+  it('executes and replays a migration inspection with explicit backup absence', () => {
+    const f = fixture();
+    planStagingRelease({ ...f.options, action: 'inspect-install', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies);
+    const result = inventoryOutcome(f);
+    for (const [name, entry] of Object.entries(result.diagnostic.inventory) as [string, any][]) {
+      if (entry.sha256 === f.request().files[name].sha256) entry.state = 'new';
+    }
+    result.diagnostic.inventory['backup-authority-maintenance.sh'] = { state: 'missing', sha256: null };
+    f.state.outputOverride = JSON.stringify(result);
+    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
+    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
+    expect(f.state.submissions).toBe(1);
+    result.diagnostic.inventory['release/clean-v1-release.py'] = { state: 'unknown', sha256: '0'.repeat(64) };
+    expect(() => safeReleaseOutcome(JSON.stringify(result), f.request(), result.request_sha256)).toThrow('remote_outcome_unproven');
+    result.ok = false; result.code = 'inspection_refused';
+    result.diagnostic.category = 'tool_hash_unknown'; result.diagnostic.tool = 'release/clean-v1-release.py';
+    expect(safeReleaseOutcome(JSON.stringify(result), f.request(), result.request_sha256)).toEqual(result);
   });
 
   it('requires an Identity Center role in the exact account', () => {

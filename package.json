@@ -48,6 +48,7 @@
     "eval:synthetic-meetings": "npm run build:workspaces && node services/organization-authority/dist/synthetic-meeting-quality-main.js",
     "eval:synthetic": "npm run eval:synthetic-meetings --",
     "test:architecture": "npm run build:workspaces && vitest run --config vitest.config.ts tests/architecture",
+    "test:staging-journey": "npm run build && vitest run --config vitest.config.ts tests/architecture/authority-staging-journey.test.ts",
     "test:protocols": "npm run build:workspaces && npm test --workspace @echo-brain/federation-protocol && npm test --workspace @echo-brain/organization-protocol && npm test --workspace @echo-brain/organization-api",
     "test:authority": "npm run build:workspaces && npm test --workspace @echo-brain/organization-authority",
     "test:control-plane": "npm run build:workspaces && npm test --workspace @echo-brain/organization-control-plane",

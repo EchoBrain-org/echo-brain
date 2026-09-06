@@ -308,6 +308,32 @@ review; this command is not a blanket environment reset.
 
 ## Automated current-host staging lane
 
+### Local acceptance before review
+
+Run `npm run test:staging-journey` from the working branch before opening a
+release-tooling PR. Iterate on that branch until this connected rehearsal and
+the focused regressions pass, then run `npm run check` and review the complete
+change once. Local tests do not require a merge or permission to deploy.
+
+The rehearsal starts with the exact reviewed legacy wrapper bytes and absent
+backup helper, executes the real release planner, host runner and updater, and
+connects their canary to a real local Authority, SQLite state, private socket,
+card builder and Slack delivery adapter. It proves unknown-tool/drift refusal,
+eligible repair, affirmative setup readiness, candidate staging, failed-card
+publication followed by restart-safe retry, and a durable pending approval
+bound to one published card. It never clicks approval, appends an approved
+record, or promotes the candidate. The test is included in `npm run check`.
+
+AWS/SSM, container lifecycle/image identity, public TLS routing and provider
+responses are simulated. This is an offline integration gate, not proof of an
+ECR artifact, real Slack scopes/delivery, live credentials, host state or the
+Cloudflare edge. CI retains the separate real-POSIX isolation proof and image
+checks. After review/merge, perform one live validation and stop at the actual
+human Slack approval boundary. Keep environment-only failures distinct from
+code defects; do not claim all external failures can be ruled out locally.
+
+### Live operator boundary
+
 `npm run authority:staging-release` is the local operator's bounded alternative
 to copying files into Session Manager. It is restricted to the repository-pinned
 staging AWS account, region `us-west-2`, and `echo-authority-staging-v1`. It does not
@@ -337,6 +363,24 @@ Plan one named action. For `install`, supply the full source SHA corresponding
 to the independently reviewed *currently installed* tooling. Unknown installed
 bytes stop instead of being overwritten. Replacing tooling saves private old
 copies and hashes; it never edits the accepted release or environment.
+
+The one supported mixed-version migration is explicitly selected with
+`--tooling-migration legacy-staging-host-v1` on an `install` or `inspect-install`
+plan. It pins updater/onboarding bytes from `be71eef5d3678957ef5f086a2ed42baeeb548687`,
+restore bytes from `2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a`, and the two known
+validators by source and SHA-256. Only `backup-authority-maintenance.sh` may be
+absent; if present it must already match the new reviewed bytes. Every other
+file must match its profile-old or reviewed-new bytes. This is not a generic
+allow-missing flag or user-supplied hash list. All ordinary install guards stay
+in force, and a missing helper cannot hide a subsequent invalid tool.
+
+Use distinct inspect/install receipts with this same named option. The private
+before-inventory records the missing helper as `null` and saves a `tool-3.absent`
+marker; existing files retain their before-copies. A partial install is not
+success, and the same operation never reruns. After reconciling its terminal
+failure and inspecting the old/new inventory, a fresh named plan may finish the
+reviewed installation. New host bundles and bootstrap include this helper so
+new hosts do not need the legacy absence migration.
 
 When an install returns only `precondition_failed`, create a separate
 `inspect-install` plan with the same inputs and `--previous-tooling-source`.
@@ -473,14 +517,15 @@ is `unconfirmed`, not proof that the runtime stopped or recovery succeeded.
 These semantics follow the [Run Command API](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html)
 and [invocation status contract](https://docs.aws.amazon.com/cli/latest/reference/ssm/get-command-invocation.html).
 
-New plans use request version 2 and a checksum-bound XZ-compressed text bundle
+Ordinary new plans use request version 2; only the explicit named tooling
+migration uses version 3. Both use a checksum-bound XZ-compressed text bundle
 containing the exact reviewed runner and non-secret files. The fixed loader
 checks its digest and size, reconstructs the canonical request and checks its
 digest before invoking the runner. Compression uses the existing operator
 Python 3 standard-library `lzma` module with a fixed preset; decoding is bounded
 by both output size and memory. No third-party package or manual courier is
 needed. The 60-KiB command cap is unchanged. Old
-version-1 receipts can still be polled with their original transport binding;
+version-1 and version-2 receipts can still be polled with their original transport binding;
 unsubmitted version-1 plans cannot execute in the new CLI. Preserve old receipts
 and reconcile any unfinished command before planning a new operation.
 
