@@ -120,7 +120,16 @@ function verifyStoppedState(stateDirectory, input, response, answers, policy) {
     assert.equal(facts.length, 5);
     assert.deepEqual(facts.map((fact) => fact.atom_id).sort(), response.items.map((item) => item.atom_id).sort());
     const audits = authority.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").all().map((row) => JSON.parse(row.body_json));
-    for (const answer of answers) assert.ok(audits.some((audit) => audit.response_sha256 === canonicalSha256(answer)), "returned answer has no matching persisted release audit");
+    for (const { actor, response: answer } of answers) {
+      const member = authority.prepare("SELECT principal_id, membership_id FROM authority_memberships WHERE membership_type = ? AND status = 'active'").get(actor);
+      const matches = audits.filter((audit) =>
+        audit.principal_id === member.principal_id && audit.membership_id === member.membership_id &&
+        audit.response_sha256 === canonicalSha256(answer));
+      assert.equal(matches.length, 1, `${actor} answer has no unique persisted release audit`);
+      assert.equal(matches[0].generation_id, response.generation_id);
+      assert.deepEqual(matches[0].record_head, log);
+      assert.equal(matches[0].citation_count, answer.citations.length);
+    }
     return { candidates: 1, approved_records: 1, signed_record_receipts: 1, atoms: facts.length, denied_wrong_reviewer: 1, matched_answer_audits: answers.length };
   } finally { for (const database of databases) database.close(); }
 }
@@ -181,7 +190,9 @@ async function scenario(policy, index) {
     const [exitCode] = await exit;
     stopped = true;
     assert.equal(exitCode, 0);
-    const durable = verifyStoppedState(state_directory, input, response, [ownerAnswer, employeeAnswer], policy);
+    const durable = verifyStoppedState(state_directory, input, response, [
+      { actor: "owner", response: ownerAnswer }, { actor: "employee", response: employeeAnswer },
+    ], policy);
     return {
       policy, result: "pass", ...durable, worker_interval_ms: identities.worker_interval_ms,
       observed_ms: { input_to_complete_candidate: Math.round(candidateMs), approval_to_durable_receipt: Math.round(ackMs), approval_to_search: Math.round(visibilityMs), deterministic_answer: Math.round(answerMs) },

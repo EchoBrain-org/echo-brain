@@ -30,7 +30,7 @@ let reads;
 let authority;
 let control;
 let record;
-const workerErrors = [];
+let workerError;
 let closing;
 
 function close() {
@@ -101,7 +101,7 @@ async function open(state_directory) {
     // IPC replaces the transport only. The actual application routes above
     // still authenticate every request, fence releases, and persist audits.
     start_api_runtime: async () => ({ address: { address: "core-ipc", family: "IPC", port: 0 }, close: async () => {} }),
-    on_worker_error: (error) => workerErrors.push({ name: error.name, message: error.message }),
+    on_worker_error: (error) => { workerError ??= error; },
   });
   return { source: input.source.identity, processor: input.processor.identity, worker_interval_ms: DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS };
 }
@@ -116,7 +116,7 @@ function status(approval_id) {
 
 async function command(message) {
   if (message.command === "open") return open(message.state_directory);
-  if (workerErrors.length) throw new Error(`core worker failed: ${workerErrors[0].message}`);
+  if (workerError) throw new Error(`core worker failed: ${workerError.message}`);
   switch (message.command) {
     case "offer": return input.offer(message.input);
     case "candidate": return await state.readFrozenCandidateForSourceRevision(message.source_revision) ?? null;
@@ -132,7 +132,7 @@ async function command(message) {
     case "drain":
       await new Promise((resolve) => setImmediate(resolve));
       await runtime.runExclusive(async () => {});
-      if (workerErrors.length) throw new Error(`core worker failed: ${workerErrors[0].message}`);
+      if (workerError) throw new Error(`core worker failed: ${workerError.message}`);
       return { drained: true };
     case "close": await close(); return { closed: true };
     default: throw new Error("unknown core checkpoint command");

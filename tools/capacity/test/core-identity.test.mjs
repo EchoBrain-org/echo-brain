@@ -30,8 +30,6 @@ test("creates owner and employee sessions through the real Authority application
     assert.equal(owner.membership_id, initialized.owner_membership_id);
     assert.equal(employee.membership_type, "employee");
     assert.notEqual(employee.membership_id, owner.membership_id);
-    assert.match(identity.owner.authorization, /^Bearer /);
-    assert.match(identity.employee.authorization, /^Bearer /);
   } finally {
     identity?.close();
     rmSync(directory, { recursive: true, force: true });

@@ -15,7 +15,7 @@ import { verifyAuthorityStateLineage } from "../../services/organization-authori
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { expandReadableSearchRelatedAtomsV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 
-export const CORE_DETERMINISTIC_ANSWER_PROFILE = Object.freeze({
+const ANSWER_PROFILE = Object.freeze({
   generation_adapter_id: "authority-core-deterministic-v1",
   planner_model: "authority-core-query-extractor-v1",
   answer_model: "authority-core-evidence-composer-v1",
@@ -29,20 +29,6 @@ function text(value, label) {
 
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
-
-function profile(value) {
-  const selected = value ?? CORE_DETERMINISTIC_ANSWER_PROFILE;
-  const source = record(selected);
-  if (source === null || !Number.isSafeInteger(source.timeout_ms) || source.timeout_ms < 1 || source.timeout_ms > 120_000) {
-    throw new TypeError("answer_profile is invalid");
-  }
-  return Object.freeze({
-    generation_adapter_id: text(source.generation_adapter_id, "answer_profile.generation_adapter_id"),
-    planner_model: text(source.planner_model, "answer_profile.planner_model"),
-    answer_model: text(source.answer_model, "answer_profile.answer_model"),
-    timeout_ms: source.timeout_ms,
-  });
 }
 
 function parseJson(value) {
@@ -79,7 +65,7 @@ function answerResponse(userPrompt) {
 
 /**
  * A provider-free structured-output port shared by answer composition and the
- * optional related-atom projector. It derives output solely from each current
+ * related-atom projector. It derives output solely from each current
  * request: planner question, answer evidence aliases, or projector input.
  */
 export function createCoreDeterministicStructuredGenerationPort() {
@@ -107,12 +93,12 @@ export function createCoreDeterministicStructuredGenerationPort() {
  * Authority state. The returned projector binding must also be passed to the
  * real reconciler that publishes the generation this route reads.
  */
-export function createCoreReadRoutes({ state_directory, sessions, answer_profile } = {}) {
+export function createCoreReadRoutes({ state_directory, sessions } = {}) {
   text(state_directory, "state_directory");
   if (sessions === null || typeof sessions !== "object" || typeof sessions.authenticateAccess !== "function") {
     throw new TypeError("sessions must be the real core identity application");
   }
-  const generation = profile(answer_profile);
+  const generation = ANSWER_PROFILE;
   const structured_output = createCoreDeterministicStructuredGenerationPort();
   const related_atom_projector = Object.freeze({
     structured_output,
@@ -155,7 +141,6 @@ export function createCoreReadRoutes({ state_directory, sessions, answer_profile
     return Object.freeze({
       search,
       answer,
-      generation,
       related_atom_projector,
       close() {
         recordDatabase?.close();

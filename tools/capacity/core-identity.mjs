@@ -13,7 +13,7 @@ import { SqlitePersonSessionRepository } from "../../services/organization-autho
 import { NodePersonSessionCrypto } from "../../services/organization-authority/dist/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../../services/organization-authority/dist/adapters/system/system-authority-clock.js";
 
-const DEFAULT_OIDC = Object.freeze({
+const OIDC = Object.freeze({
   issuer: "https://core-identity.example.test/",
   client_id: "core-identity-person-client",
   redirect_uri: "https://authority.example.test/v2/session/oidc/callback",
@@ -26,19 +26,12 @@ function text(value, label) {
   return value;
 }
 
-function identity(value, label, defaults) {
-  if (value !== undefined && (value === null || typeof value !== "object")) throw new TypeError(`${label} is invalid`);
-  return Object.freeze({
-    email: text(value?.email ?? defaults.email, `${label}.email`),
-    subject: text(value?.subject ?? defaults.subject, `${label}.subject`),
-    name: text(value?.name ?? defaults.name, `${label}.name`),
-  });
-}
+const OWNER = Object.freeze({ email: "core-owner@example.test", subject: "core-owner-subject", name: "Core Owner" });
+const EMPLOYEE = Object.freeze({ email: "core-employee@example.test", subject: "core-employee-subject", name: "Core Employee" });
 
 function bearer(session) {
   return Object.freeze({
     access_token: session.access_token,
-    authorization: `Bearer ${session.access_token}`,
     principal_id: session.principal_id,
     membership_id: session.membership_id,
   });
@@ -48,9 +41,6 @@ function bearer(session) {
 class CoreVerifiedIdentityPort {
   #attempt;
   #identity;
-  constructor(oidc) {
-    this.oidc = oidc;
-  }
   bind(attempt, selected) {
     this.#attempt = attempt;
     this.#identity = selected;
@@ -66,15 +56,15 @@ class CoreVerifiedIdentityPort {
     return Object.freeze({
       kind: "verified",
       token: Object.freeze({
-        issuer: this.oidc.issuer,
+        issuer: OIDC.issuer,
         subject: selected.subject,
-        audience: this.oidc.client_id,
+        audience: OIDC.client_id,
         nonce: attempt.nonce,
         issued_at: Math.floor(Date.now() / 1_000),
         claims: Object.freeze({
           email: selected.email,
           email_verified: true,
-          [this.oidc.tenant.claim_name]: this.oidc.tenant.claim_value,
+          [OIDC.tenant.claim_name]: OIDC.tenant.claim_value,
         }),
       }),
     });
@@ -82,47 +72,24 @@ class CoreVerifiedIdentityPort {
 }
 
 /**
- * Bootstrap durable owner and optional employee Person sessions for the core
+ * Bootstrap durable owner and employee Person sessions for the core
  * checkpoint. This never starts an OIDC client, network listener, or TLS
  * endpoint; that provider work is deliberately outside the timed stage.
  */
-export async function createCoreIdentity({ state_directory, owner_membership_id, pkce_sealing_key, owner, employee, oidc = DEFAULT_OIDC } = {}) {
+export async function createCoreIdentity({ state_directory, owner_membership_id, pkce_sealing_key } = {}) {
   text(state_directory, "state_directory");
   text(owner_membership_id, "owner_membership_id");
   if (!(pkce_sealing_key instanceof Uint8Array) || pkce_sealing_key.byteLength !== 32) {
     throw new TypeError("pkce_sealing_key must be 32 bytes");
   }
-  const ownerIdentity = identity(owner, "owner", {
-    email: "core-owner@example.test", subject: "core-owner-subject", name: "Core Owner",
-  });
-  const employeeIdentity = employee === false ? undefined : identity(employee, "employee", {
-    email: "core-employee@example.test", subject: "core-employee-subject", name: "Core Employee",
-  });
-  if (employeeIdentity !== undefined && employeeIdentity.email === ownerIdentity.email) {
-    throw new TypeError("employee.email must differ from owner.email");
-  }
-  if (oidc === null || typeof oidc !== "object" || oidc.tenant?.kind !== "claim") {
-    throw new TypeError("core identity requires a claim-bound OIDC configuration");
-  }
-  const configuration = Object.freeze({
-    issuer: text(oidc.issuer, "oidc.issuer"),
-    client_id: text(oidc.client_id, "oidc.client_id"),
-    redirect_uri: text(oidc.redirect_uri, "oidc.redirect_uri"),
-    tenant: Object.freeze({
-      kind: "claim",
-      claim_name: text(oidc.tenant.claim_name, "oidc.tenant.claim_name"),
-      claim_value: text(oidc.tenant.claim_value, "oidc.tenant.claim_value"),
-    }),
-    id_token_algorithms: Object.freeze([...oidc.id_token_algorithms]),
-  });
   let database;
   try {
     database = openAuthorityDatabase(join(state_directory, "authority.sqlite"), { fileMustExist: true });
     const crypto = new NodePersonSessionCrypto(pkce_sealing_key);
-    const provider = new CoreVerifiedIdentityPort(configuration);
+    const provider = new CoreVerifiedIdentityPort();
     const sessions = new PersonIdentitySessionApplication(
       new SqlitePersonSessionRepository(database),
-      configuration,
+      OIDC,
       { clock: new SystemAuthorityClock(), random: crypto, hash: crypto, pkce_sealer: crypto, oidc_provider: provider },
     );
     const completeBootstrap = async (login_grant, selected) => {
@@ -132,27 +99,23 @@ export async function createCoreIdentity({ state_directory, owner_membership_id,
     };
     const ownerGrant = sessions.issueBootstrapLoginGrant({
       target_membership_id: owner_membership_id,
-      expected_issuer: configuration.issuer,
-      expected_email: ownerIdentity.email,
+      expected_issuer: OIDC.issuer,
+      expected_email: OWNER.email,
     });
-    const ownerSession = await completeBootstrap(ownerGrant.login_grant, ownerIdentity);
-    let employeeSession;
-    if (employeeIdentity !== undefined) {
-      const employees = new PersonEmployeeLifecycleApplication(sessions, {
-        next(prefix) { return `${prefix}_${randomUUID()}`; },
-      });
-      const invitation = employees.invite({
-        access_token: ownerSession.access_token,
-        name: employeeIdentity.name,
-        email: employeeIdentity.email,
-      });
-      employeeSession = await completeBootstrap(invitation.login_grant, employeeIdentity);
-    }
+    const ownerSession = await completeBootstrap(ownerGrant.login_grant, OWNER);
+    const employees = new PersonEmployeeLifecycleApplication(sessions, {
+      next(prefix) { return `${prefix}_${randomUUID()}`; },
+    });
+    const invitation = employees.invite({
+      access_token: ownerSession.access_token,
+      name: EMPLOYEE.name,
+      email: EMPLOYEE.email,
+    });
+    const employeeSession = await completeBootstrap(invitation.login_grant, EMPLOYEE);
     return Object.freeze({
-      oidc: configuration,
       sessions,
       owner: bearer(ownerSession),
-      ...(employeeSession === undefined ? {} : { employee: bearer(employeeSession) }),
+      employee: bearer(employeeSession),
       close() {
         database?.close();
         database = undefined;

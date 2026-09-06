@@ -47,9 +47,12 @@ policy. Each receives one meeting with five canonical facts. It checks a complet
 durable candidate and delivered presentation, absence of unapproved search
 results, durable denial of an unassigned employee's approval, the owner's real
 approval, one signed canonical record, actual generation publication, grounded
-answers, shared/private reader isolation and exact approval-receipt replay.
+answers, shared/private reader isolation and same-process duplicate approval
+idempotence.
 After the child stops, the driver opens the real databases read-only and checks
-the frozen input, record, policy facts, active head and answer release audits.
+the frozen input, record, policy facts, active head and each reader's matching
+answer release audit. Identical answer text from two readers requires two
+separately bound audit entries.
 
 `core-candidate.mjs` composes the existing worker lifecycle, processing cycle,
 approval finalizer, record appender and search reconciler. `core-input.mjs`,
@@ -61,6 +64,9 @@ inputs at the boundary after transport verification, and deterministic delivery
 results; no Slack client, HTTP payload simulator or signature handler runs.
 Current membership, assignment, connection/link, candidate and policy checks
 remain in the production finalizer. No authorization witness is injected.
+This directly composes the shared production components; it does not start the
+deployed API/provider composition. A change to that composition must also be
+checked against this harness before making performance claims.
 
 The worker's default 30-second poll interval and database synchronization modes
 are unchanged. Input timing includes the wait for the next poll; there is no

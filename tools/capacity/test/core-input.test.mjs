@@ -23,7 +23,7 @@ test("statically admits the authenticated owner and replays an offered tuple at 
   try {
     identity = await createCoreIdentity({
       state_directory: initialized.state_directory, owner_membership_id: initialized.owner_membership_id,
-      pkce_sealing_key: randomBytes(32), employee: false,
+      pkce_sealing_key: randomBytes(32),
     });
     authority = openAuthorityDatabase(join(initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
     const input = createCoreInput({

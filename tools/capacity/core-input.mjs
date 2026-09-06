@@ -6,11 +6,6 @@ const SOURCE = Object.freeze({ kind: "meeting-source", adapter_id: "core-input",
 const PROCESSOR = Object.freeze({ kind: "decision-processor", adapter_id: "core-input", instance_id: "core-processor-v1", version: "1.0.0" });
 const CURSOR_PREFIX = "core-input:v1:";
 
-function text(value, label) {
-  if (typeof value !== "string" || value.length === 0) throw new TypeError(`${label} is required`);
-  return value;
-}
-
 function cursor(offset) {
   return `${CURSOR_PREFIX}${String(offset)}`;
 }
@@ -22,10 +17,6 @@ function offset(value) {
     throw new Error("core input cursor is invalid");
   }
   return parsed;
-}
-
-function sameIdentity(left, right) {
-  return left?.kind === right.kind && left?.adapter_id === right.adapter_id && left?.instance_id === right.instance_id && left?.version === right.version;
 }
 
 const source_cursor_policy = Object.freeze({
@@ -42,16 +33,8 @@ function health() {
  * During a run the ports are read-only except for `offer`, which appends an
  * immutable tuple and never changes a previously-addressable cursor.
  */
-export function createCoreInput({ authority, coordinates, owner, sessions } = {}) {
-  if (authority === null || typeof authority !== "object" || typeof authority.prepare !== "function" || typeof authority.exec !== "function") {
-    throw new TypeError("authority must be an open Authority database");
-  }
-  const organization_id = text(coordinates?.organization_id, "coordinates.organization_id");
-  const ownerToken = text(owner?.access_token, "owner.access_token");
-  if (sessions === null || typeof sessions !== "object" || typeof sessions.authenticateAccess !== "function") {
-    throw new TypeError("sessions.authenticateAccess is required");
-  }
-  const authorization = sessions.authenticateAccess({ access_token: ownerToken });
+export function createCoreInput({ authority, coordinates: { organization_id }, owner, sessions }) {
+  const authorization = sessions.authenticateAccess({ access_token: owner.access_token });
   if (
     authorization.organization_id !== organization_id || authorization.principal_id !== owner.principal_id ||
     authorization.membership_id !== owner.membership_id || authorization.membership_type !== "owner"
@@ -71,12 +54,10 @@ export function createCoreInput({ authority, coordinates, owner, sessions } = {}
   const source_credential_reference_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-no-provider-credential-v1" });
   const processor_configuration_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-deterministic-processor-v1" });
   const processor_credential_reference_sha256 = canonicalSha256({ kind: "echo-capacity-core-input-no-provider-credential-v1" });
-  const database = authority;
-  try {
-    database.exec("BEGIN IMMEDIATE");
-    const existing = database.prepare("SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE singleton = 1").get();
+  authority.transaction(() => {
+    const existing = authority.prepare("SELECT semantic_input_sha256 FROM authority_live_source_admission_v2 WHERE singleton = 1").get();
     if (existing !== undefined) throw new Error("core input setup requires an unadmitted Authority state");
-    database.prepare(
+    authority.prepare(
       `INSERT INTO authority_live_source_admission_v2 (
         singleton, organization_id, principal_id, membership_id, membership_type,
         source_adapter_id, source_adapter_version, source_adapter_instance_id,
@@ -94,11 +75,7 @@ export function createCoreInput({ authority, coordinates, owner, sessions } = {}
       PROCESSOR.version, processor_configuration_sha256,
       processor_credential_reference_sha256, admission_semantic_input_sha256, admitted_at,
     );
-    database.exec("COMMIT");
-  } catch (error) {
-    try { database.exec("ROLLBACK"); } catch {}
-    throw error;
-  }
+  }).immediate();
 
   const offered = [];
   const source = Object.freeze({
@@ -132,9 +109,6 @@ export function createCoreInput({ authority, coordinates, owner, sessions } = {}
     offer({ meeting, decisions } = {}) {
       assertCanonicalMeetingDocument(meeting, SOURCE);
       assertCanonicalDecisionSet(decisions, meeting, PROCESSOR);
-      if (!sameIdentity(meeting.provenance.source, SOURCE) || !sameIdentity(decisions.processor, PROCESSOR)) {
-        throw new Error("core input tuple identities do not match the admitted ports");
-      }
       if (offered.some((candidate) => candidate.meeting.id === meeting.id && candidate.meeting.provenance.canonical_revision === meeting.provenance.canonical_revision)) {
         throw new Error("core input meeting revision was already offered");
       }
