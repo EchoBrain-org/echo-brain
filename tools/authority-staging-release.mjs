@@ -19,7 +19,7 @@ const STACK = 'echo-authority-staging-v1';
 const SHA = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-const ACTIONS = ['install', 'diagnose', 'repair', 'stage', 'canary', 'status', 'rollback', 'promote'];
+const ACTIONS = ['install', 'inspect-install', 'diagnose', 'repair', 'stage', 'canary', 'status', 'rollback', 'promote'];
 const TOOL_FILES = Object.freeze({
   'update-clean-v1.sh': 'deploy/organization-authority/update-clean-v1.sh',
   'onboard-clean-v1.sh': 'deploy/organization-authority/onboard-clean-v1.sh',
@@ -174,7 +174,7 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
   if (request.candidate.release_id !== candidate.release_id || request.candidate.sha256 !== digest(bytes['candidate.json']) || request.candidate.person_client_sha256 !== candidate.person_client.artifact_sha256) fail('candidate_binding_mismatch');
   exactKeys(request.accepted, ['release_id', 'sha256']);
   if (!/^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/.test(request.accepted.release_id) || !SHA.test(request.accepted.sha256)) fail('accepted_binding_invalid');
-  if (request.accepted.release_id === candidate.release_id && (!['install', 'diagnose', 'repair', 'status'].includes(request.action) || request.accepted.sha256 !== request.candidate.sha256)) fail('accepted_binding_invalid');
+  if (request.accepted.release_id === candidate.release_id && (!['install', 'inspect-install', 'diagnose', 'repair', 'status'].includes(request.action) || request.accepted.sha256 !== request.candidate.sha256)) fail('accepted_binding_invalid');
   const profile = validateRuntimeProfile(JSON.parse(bytes['runtime-profile.json'].toString('utf8')));
   if (!jsonBytes(profile).equals(bytes['runtime-profile.json']) || digest(bytes['runtime-profile.json']) !== candidate.runtime_profile.artifact_sha256 || profile.source_sha !== candidate.source_sha) fail('profile_binding_mismatch');
   for (const [name, content] of Object.entries(profile.files)) {
@@ -277,15 +277,25 @@ export function safeReleaseOutcome(raw, request, requestHash) {
   let result;
   try { result = JSON.parse(raw); } catch { fail('remote_outcome_unproven'); }
   exactKeys(result, ['schema_version', 'kind', 'operation_id', 'request_sha256', 'action', 'ok', 'code', 'diagnostic']);
-  const codes = ['installed', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed'];
+  const codes = ['installed', 'installation_failed', 'inspection_verified', 'inspection_refused', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed'];
   if (result.schema_version !== 1 || result.kind !== 'echo-staging-release-host-result-v1' || result.operation_id !== request.operation_id || result.request_sha256 !== requestHash || result.action !== request.action || typeof result.ok !== 'boolean' || !codes.includes(result.code)) fail('remote_outcome_unproven');
-  if (result.ok !== ['installed', 'verified'].includes(result.code)) fail('remote_outcome_unproven');
+  if (result.ok !== ['installed', 'inspection_verified', 'verified'].includes(result.code)) fail('remote_outcome_unproven');
+  if ((request.action === 'inspect-install') !== ['inspection_verified', 'inspection_refused'].includes(result.code) || (['installed', 'installation_failed'].includes(result.code) && request.action !== 'install')) fail('remote_outcome_unproven');
   if (result.diagnostic !== null) {
+    if (request.action === 'inspect-install') {
+      const categories = ['ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'repair_pending', 'inspection_failed', 'control_path_changed'];
+      exactKeys(result.diagnostic, ['schema_version', 'kind', 'category', 'tool']);
+      const diagnostic = result.diagnostic;
+      const toolCategories = ['tool_missing', 'tool_file_invalid', 'tool_hash_unknown'];
+      if (diagnostic.schema_version !== 1 || diagnostic.kind !== 'echo-staging-release-install-inspection-v1' || !categories.includes(diagnostic.category) || (toolCategories.includes(diagnostic.category) ? typeof diagnostic.tool !== 'string' || !Object.hasOwn(TOOL_FILES, diagnostic.tool) : diagnostic.tool !== null) || result.ok !== (diagnostic.category === 'ready') || result.code !== (diagnostic.category === 'ready' ? 'inspection_verified' : 'inspection_refused')) fail('remote_outcome_unproven');
+      return result;
+    }
     const bools = ['candidate_staged', 'environment_matches', 'other_bytes_changed', 'allowlisted_settings_valid', 'environment_format_supported', 'repair_pending', 'repair_eligible', 'runtime_checked'];
     exactKeys(result.diagnostic, ['schema_version', 'kind', 'release_id', 'changed_settings', ...bools]);
     const diag = result.diagnostic;
     if (request.action !== 'diagnose' || diag.kind !== 'echo-clean-v1-environment-drift' || diag.schema_version !== 1 || ![request.accepted.release_id, request.candidate.release_id].includes(diag.release_id) || bools.some(key => typeof diag[key] !== 'boolean') || diag.runtime_checked !== false || ![canonicalJson([]), canonicalJson(['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'])].includes(canonicalJson(diag.changed_settings))) fail('remote_outcome_unproven');
   }
+  if (request.action === 'inspect-install') fail('remote_outcome_unproven');
   if (result.ok && request.action === 'diagnose' && result.diagnostic === null) fail('remote_outcome_unproven');
   return result;
 }

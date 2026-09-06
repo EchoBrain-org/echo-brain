@@ -5,6 +5,7 @@ source and all transported non-secret bytes to one expiring request. Private
 runtime files never leave the host. Existing updater semantics own activation.
 """
 import base64
+import contextlib
 import gzip
 import hashlib
 import io
@@ -21,17 +22,31 @@ import urllib.request
 
 DEPLOY = pathlib.Path('/srv/echo-authority-clean-v1')
 TOOLS = ('update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh', 'release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py')
-ACTIONS = ('install', 'diagnose', 'repair', 'stage', 'canary', 'status', 'rollback', 'promote')
-SAFE_CODES = ('installed', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed')
+ACTIONS = ('install', 'inspect-install', 'diagnose', 'repair', 'stage', 'canary', 'status', 'rollback', 'promote')
+SAFE_CODES = ('installed', 'installation_failed', 'inspection_verified', 'inspection_refused', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed')
+INSPECTION_CATEGORIES = ('ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'repair_pending', 'inspection_failed', 'control_path_changed')
+TOOL_CATEGORIES = ('tool_missing', 'tool_file_invalid', 'tool_hash_unknown')
 
 
 class Refused(Exception):
-    pass
+    def __init__(self, code='precondition_failed', tool=None):
+        super().__init__(code)
+        self.code = code
+        self.tool = tool
 
 
 def require(condition, code='precondition_failed'):
     if not condition:
         raise Refused(code)
+
+
+@contextlib.contextmanager
+def checked(category):
+    """Classify a fixed guard without retaining filesystem/exception detail."""
+    try:
+        yield
+    except Exception:
+        raise Refused(category) from None
 
 
 def sha(data):
@@ -128,7 +143,7 @@ def validate_request(request):
     require(candidate['person_client']['artifact_sha256'] == request['candidate']['person_client_sha256'])
     require(candidate['runtime_profile']['artifact_sha256'] == sha(files['runtime-profile.json']))
     if request['accepted']['release_id'] == request['candidate']['release_id']:
-        require(request['action'] in ('install', 'diagnose', 'repair', 'status') and request['accepted']['sha256'] == request['candidate']['sha256'])
+        require(request['action'] in ('install', 'inspect-install', 'diagnose', 'repair', 'status') and request['accepted']['sha256'] == request['candidate']['sha256'])
     approval = request['approval']
     if request['action'] == 'promote':
         require(isinstance(approval, dict) and set(approval) == {'kind', 'release_sha256', 'person_client_sha256', 'slack_approved', 'person_records_passed', 'person_ask_passed', 'release_authorized'})
@@ -141,21 +156,23 @@ def validate_request(request):
 
 
 def machine_identity(request, root):
-    require(os.geteuid() == 0 and root == DEPLOY)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    token_request = urllib.request.Request('http://169.254.169.254/latest/api/token', method='PUT', headers={'X-aws-ec2-metadata-token-ttl-seconds': '60'})
-    with opener.open(token_request, timeout=3) as response:
-        token = response.read(4096).decode()
-    metadata_request = urllib.request.Request('http://169.254.169.254/latest/dynamic/instance-identity/document', headers={'X-aws-ec2-metadata-token': token})
-    with opener.open(metadata_request, timeout=3) as response:
-        identity = json.loads(response.read(8192))
-    target = request['target']
-    require(identity.get('accountId') == target['account'] and identity.get('region') == target['region'] and identity.get('instanceId') == target['instance_id'])
+    with checked('identity_invalid'):
+        require(os.geteuid() == 0 and root == DEPLOY)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        token_request = urllib.request.Request('http://169.254.169.254/latest/api/token', method='PUT', headers={'X-aws-ec2-metadata-token-ttl-seconds': '60'})
+        with opener.open(token_request, timeout=3) as response:
+            token = response.read(4096).decode()
+        metadata_request = urllib.request.Request('http://169.254.169.254/latest/dynamic/instance-identity/document', headers={'X-aws-ec2-metadata-token': token})
+        with opener.open(metadata_request, timeout=3) as response:
+            identity = json.loads(response.read(8192))
+        target = request['target']
+        require(identity.get('accountId') == target['account'] and identity.get('region') == target['region'] and identity.get('instanceId') == target['instance_id'])
     # Verify the retained volume, not a lookalike directory on the root disk.
-    require(os.path.ismount(root / 'clean-data'))
-    device = subprocess.check_output(['/usr/bin/findmnt', '-n', '-o', 'SOURCE', '--target', str(root / 'clean-data')], stderr=subprocess.DEVNULL, timeout=5).decode().strip()
-    serial = subprocess.check_output(['/usr/bin/lsblk', '-dn', '-o', 'SERIAL', device], stderr=subprocess.DEVNULL, timeout=5).decode().strip()
-    require(serial.replace('-', '') == target['volume_id'].replace('-', ''))
+    with checked('retained_mount_invalid'):
+        require(os.path.ismount(root / 'clean-data'))
+        device = subprocess.check_output(['/usr/bin/findmnt', '-n', '-o', 'SOURCE', '--target', str(root / 'clean-data')], stderr=subprocess.DEVNULL, timeout=5).decode().strip()
+        serial = subprocess.check_output(['/usr/bin/lsblk', '-dn', '-o', 'SERIAL', device], stderr=subprocess.DEVNULL, timeout=5).decode().strip()
+        require(serial.replace('-', '') == target['volume_id'].replace('-', ''))
 
 
 def wrapper(root, operation, args):
@@ -202,20 +219,92 @@ def result_for(request, request_hash, ok, code, diagnostic=None):
     return {'schema_version': 1, 'kind': 'echo-staging-release-host-result-v1', 'operation_id': request['operation_id'], 'request_sha256': request_hash, 'action': request['action'], 'ok': ok, 'code': code, 'diagnostic': diagnostic}
 
 
+def inspection_result(request, request_hash, category, tool=None):
+    # Redact at the host boundary, before SSM sees the result. Client-side
+    # validation is defense in depth, not a substitute for safe host output.
+    valid_tool = type(tool) is str and tool in TOOLS if category in TOOL_CATEGORIES else tool is None
+    if type(category) is not str or category not in INSPECTION_CATEGORIES or not valid_tool:
+        category, tool = 'inspection_failed', None
+    diagnostic = {'schema_version': 1, 'kind': 'echo-staging-release-install-inspection-v1', 'category': category, 'tool': tool}
+    return result_for(request, request_hash, category == 'ready', 'inspection_verified' if category == 'ready' else 'inspection_refused', diagnostic)
+
+
+def inspection_failure(request, request_hash, error):
+    category = error.code if isinstance(error, Refused) and error.code != 'ready' else 'inspection_failed'
+    return inspection_result(request, request_hash, category, error.tool if isinstance(error, Refused) else None)
+
+
+def installer_preconditions(request, root):
+    """Shared, non-mutating install/inspection guard set."""
+    with checked('accepted_record_invalid'):
+        accepted = regular(pathlib.Path('current.clean-v1.json'), True, 16384)
+        accepted_id = json.loads(accepted)['release_id']
+    require(sha(accepted) == request['accepted']['sha256'] and accepted_id == request['accepted']['release_id'], 'accepted_record_mismatch')
+    with checked('environment_invalid'):
+        environment = regular(root / '.env.clean-v1', True, 1024 * 1024)
+        require(environment.endswith(b'\n') and b'\r' not in environment and b'\0' not in environment, 'environment_invalid')
+        for line in environment.splitlines():
+            if line and not line.startswith(b'#'):
+                require(re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_]*=[^\'"\\$`]*', line) is not None, 'environment_invalid')
+    require([line for line in environment.splitlines() if line.startswith(b'ECHO_CLEAN_AUTHORITY_HOST=')] == [b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org'], 'hostname_mismatch')
+    candidate_path = pathlib.Path('candidate.clean-v1.json')
+    candidate_present = candidate_path.exists() or candidate_path.is_symlink()
+    if candidate_present:
+        try:
+            require(sha(regular(candidate_path, True, 16384)) == request['candidate']['sha256'], 'candidate_present')
+        except Exception:
+            raise Refused('candidate_present')
+    if request['action'] in ('install', 'inspect-install', 'repair', 'stage'):
+        require(not candidate_present, 'candidate_present')
+    if request['action'] in ('canary', 'promote', 'rollback'):
+        require(candidate_present)
+    old_hashes = {}
+    for name in TOOLS:
+        try:
+            old_hashes[name] = sha(regular(root / name))
+        except FileNotFoundError:
+            raise Refused('tool_missing', name)
+        except Exception:
+            raise Refused('tool_file_invalid', name)
+        allowed = {request['files'][name]['sha256']}
+        if request['action'] in ('install', 'inspect-install'):
+            allowed.add(request['old_tool_hashes'][name])
+        if old_hashes[name] not in allowed:
+            raise Refused('tool_hash_unknown', name)
+    if request['action'] in ('install', 'inspect-install'):
+        pending = pathlib.Path('environment-repair.pending.json')
+        require(not pending.exists() and not pending.is_symlink(), 'repair_pending')
+    return candidate_present, old_hashes
+
+
 def execute_request(request, request_hash, root=DEPLOY, identity=machine_identity, invoke=wrapper, now=time.time):
     """Dependency seams are for hermetic tests; main supplies no overrides."""
     files = validate_request(request)
-    identity(request, root)
+    try:
+        identity(request, root)
+    except Exception as error:
+        if request['action'] == 'inspect-install':
+            return inspection_failure(request, request_hash, error) if isinstance(error, Refused) else inspection_result(request, request_hash, 'identity_invalid')
+        raise
     # Validate every existing parent component before reading or creating paths.
-    for ancestor in reversed(root.parents):
-        directory(ancestor)
-    directory(root)
-    authority_data_directory(root / 'clean-data')
-    directory(root / 'release')
+    try:
+        with checked('deployment_path_invalid'):
+            for ancestor in reversed(root.parents):
+                directory(ancestor)
+            directory(root)
+            directory(root / 'release')
+        with checked('data_ownership_invalid'):
+            authority_data_directory(root / 'clean-data')
+    except Exception as error:
+        if request['action'] == 'inspect-install':
+            return inspection_failure(request, request_hash, error)
+        raise
     lock = root / '.staging-release-guard'
     try:
         lock.mkdir(mode=0o700)
     except FileExistsError:
+        if request['action'] == 'inspect-install':
+            return inspection_result(request, request_hash, 'operation_locked')
         return result_for(request, request_hash, False, 'operation_locked')
     cwd_fd = data_fd = release_fd = None
     keep_guard = False
@@ -231,20 +320,33 @@ def execute_request(request, request_hash, root=DEPLOY, identity=machine_identit
         sync_directory(root)
         legacy = root / 'clean-data/.authority-operation-lock'
         if legacy.exists() or legacy.is_symlink():
+            if request['action'] == 'inspect-install':
+                return inspection_result(request, request_hash, 'legacy_lock_present')
             return result_for(request, request_hash, False, 'operation_locked')
-        data_fd = os.open(root / 'clean-data', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        data_info = os.fstat(data_fd)
-        require((data_info.st_uid, data_info.st_gid, stat.S_IMODE(data_info.st_mode)) == (999, 988, 0o700))
-        release_fd = os.open('release', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=data_fd)
-        info = os.fstat(release_fd)
-        require(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700)
+        with checked('data_ownership_invalid'):
+            data_fd = os.open(root / 'clean-data', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            data_info = os.fstat(data_fd)
+            require((data_info.st_uid, data_info.st_gid, stat.S_IMODE(data_info.st_mode)) == (999, 988, 0o700))
+        with checked('release_control_invalid'):
+            release_fd = os.open('release', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=data_fd)
+            info = os.fstat(release_fd)
+            require(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700)
         cwd_fd = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
         os.fchdir(release_fd)
         result = execute_pinned(request, request_hash, root, files, invoke, now, binding_ok)
         if not binding_ok():
             keep_guard = True
+            if request['action'] == 'inspect-install':
+                return inspection_result(request, request_hash, 'control_path_changed')
             return result_for(request, request_hash, False, 'control_path_changed')
         return result
+    except Exception as error:
+        if request['action'] == 'inspect-install':
+            if release_fd is not None and not binding_ok():
+                keep_guard = True
+                return inspection_result(request, request_hash, 'control_path_changed')
+            return inspection_failure(request, request_hash, error)
+        raise
     finally:
         if release_fd is not None and not binding_ok():
             keep_guard = True
@@ -277,41 +379,23 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
             result = json.loads(regular(operation / 'result.json', True))
             require(result['request_sha256'] == request_hash)
             return result
+        if request['action'] == 'inspect-install':
+            return inspection_result(request, request_hash, 'operation_incomplete')
         return result_for(request, request_hash, False, 'operation_incomplete')
     if now() > request['expires_at'] or now() < request['created_at'] - 60:
+        if request['action'] == 'inspect-install':
+            return inspection_result(request, request_hash, 'request_expired')
         return result_for(request, request_hash, False, 'expired')
     make_directory(operation)
     immutable(operation / 'request.sha256', (request_hash + '\n').encode())
     immutable(operation / 'request.json', canonical(request))
+    installing = False
     try:
-        accepted = regular(pathlib.Path('current.clean-v1.json'), True, 16384)
-        require(sha(accepted) == request['accepted']['sha256'] and json.loads(accepted)['release_id'] == request['accepted']['release_id'])
-        # Literal hostname binding refuses quoted/multiline ambiguity without
-        # ever serializing other setting names or environment values.
-        environment = regular(root / '.env.clean-v1', True, 1024 * 1024)
-        require(environment.endswith(b'\n') and b'\r' not in environment and b'\0' not in environment)
-        for line in environment.splitlines():
-            if line and not line.startswith(b'#'):
-                require(re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_]*=[^\'"\\$`]*', line) is not None)
-        require([line for line in environment.splitlines() if line.startswith(b'ECHO_CLEAN_AUTHORITY_HOST=')] == [b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org'])
-        candidate_path = pathlib.Path('candidate.clean-v1.json')
-        candidate_present = candidate_path.exists() or candidate_path.is_symlink()
-        if candidate_present:
-            require(sha(regular(candidate_path, True, 16384)) == request['candidate']['sha256'])
-        if request['action'] in ('install', 'repair', 'stage'):
-            require(not candidate_present)
-        if request['action'] in ('canary', 'promote', 'rollback'):
-            require(candidate_present)
-        old_hashes = {}
-        for name in TOOLS:
-            old_hashes[name] = sha(regular(root / name))
-            allowed = {request['files'][name]['sha256']}
-            if request['action'] == 'install':
-                allowed.add(request['old_tool_hashes'][name])
-            require(old_hashes[name] in allowed)
-        if request['action'] == 'install':
-            pending = pathlib.Path('environment-repair.pending.json')
-            require(not pending.exists() and not pending.is_symlink())
+        candidate_present, old_hashes = installer_preconditions(request, root)
+        if request['action'] == 'inspect-install':
+            result = inspection_result(request, request_hash, 'ready')
+        elif request['action'] == 'install':
+            installing = True
             # Preflight all existing tools before replacing any one of them.
             immutable(operation / 'tooling-before.json', canonical(old_hashes))
             for index, name in enumerate(TOOLS):
@@ -351,11 +435,14 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
                 require(diagnostic['release_id'] == request['candidate' if candidate_present else 'accepted']['release_id'])
             result = result_for(request, request_hash, ok, code, diagnostic)
         if not binding_ok():
-            result = result_for(request, request_hash, False, 'control_path_changed')
+            result = inspection_result(request, request_hash, 'control_path_changed') if request['action'] == 'inspect-install' else result_for(request, request_hash, False, 'control_path_changed')
         immutable(operation / 'result.json', canonical(result))
         return result
-    except Exception:
-        result = result_for(request, request_hash, False, 'precondition_failed')
+    except Exception as error:
+        if request['action'] == 'inspect-install':
+            result = inspection_failure(request, request_hash, error)
+        else:
+            result = result_for(request, request_hash, False, 'installation_failed' if installing else 'precondition_failed')
         if not (operation / 'result.json').exists():
             immutable(operation / 'result.json', canonical(result))
         return result
@@ -375,9 +462,9 @@ def main(payload, expected_hash):
         validate_request(request)
         validated = True
         result = execute_request(request, expected_hash)
-    except Exception:
+    except Exception as error:
         # Neither exception strings nor subprocess output may enter SSM logs.
         if not validated:
             raise SystemExit(1)
-        result = result_for(request, expected_hash, False, 'precondition_failed')
+        result = inspection_failure(request, expected_hash, error) if request['action'] == 'inspect-install' else result_for(request, expected_hash, False, 'precondition_failed')
     print(json.dumps(result, sort_keys=True, separators=(',', ':')))
