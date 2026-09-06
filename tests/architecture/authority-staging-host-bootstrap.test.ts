@@ -249,7 +249,13 @@ describe("Authority staging host bootstrap", () => {
     expect(script).toMatch(/dynamic\s+Secrets Manager reference only at runtime through asm-exec/);
     expect(script).toContain("systemctl disable --now cloudflared-echo-authority.service");
     expect(script).toContain("Authority Cloudflare Tunnel must remain stopped until token installation");
-    expect(script).not.toMatch(/get-secret-value|batch-get-secret-value/i);
+    // The embedded asm-exec patch removes its retired remote CLI call. The
+    // host shell itself must still resolve secrets only through asm-exec.
+    const hostShell = script.replace(
+      /  patch --batch --forward "\$asm_exec" <<'PATCH'\n[\s\S]*?\nPATCH/,
+      "",
+    );
+    expect(hostShell).not.toMatch(/get-secret-value|batch-get-secret-value/i);
   });
 
   it("uses a verified detached EBS disk and refuses an unsafe data cutover", () => {
@@ -602,7 +608,7 @@ probe "$1"
       "ASM_EXEC_UPSTREAM_SHA256=d55eb38ad33a5b76f584ca180f633ecc120cf39b8fd29427ffbe11a8fbf19556",
     );
     expect(script).toContain(
-      "ASM_EXEC_PATCHED_SHA256=1fbb03673905a55fa4ace3bb80ecd383e75d81de72c40fab23c11b0a7c0f4e89",
+      "ASM_EXEC_PATCHED_SHA256=65a91272d2fb0bd12752fec2f770ac3ea89217358cbbbf3451d2454edc8b2e76",
     );
     expect(script).toContain("structuredContent");
     expect(script).toMatch(/sha256sum --check --status[\s\S]+upstream asm-exec checksum mismatch/);
