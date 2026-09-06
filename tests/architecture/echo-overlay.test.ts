@@ -1,6 +1,18 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const SOURCE = resolve(REPO, "product/echo-overlay/main.swift");
@@ -11,8 +23,168 @@ const INSTALLER = resolve(
   REPO,
   "deploy/release/start-person-onboarding-kit.sh",
 );
+const temporaryRoots: string[] = [];
+
+function overlayFixture() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-overlay-builder-")));
+  temporaryRoots.push(root);
+  const sourceRoot = join(root, "source");
+  const output = join(root, "output");
+  mkdirSync(join(sourceRoot, "tools"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(sourceRoot, "product", "echo-overlay"), {
+    recursive: true,
+    mode: 0o700,
+  });
+  mkdirSync(output, { mode: 0o700 });
+  chmodSync(output, 0o700);
+  copyFileSync(BUILDER, join(sourceRoot, "tools", "build-echo-overlay.mjs"));
+  copyFileSync(SOURCE, join(sourceRoot, "product", "echo-overlay", "main.swift"));
+  copyFileSync(PLIST, join(sourceRoot, "product", "echo-overlay", "Info.plist"));
+  execFileSync("git", ["init", "-q", sourceRoot]);
+  execFileSync("git", ["-C", sourceRoot, "add", "."]);
+  execFileSync("git", [
+    "-C",
+    sourceRoot,
+    "-c",
+    "user.name=Overlay Test",
+    "-c",
+    "user.email=overlay@example.test",
+    "commit",
+    "-qm",
+    "fixture",
+  ]);
+  const sourceSha = execFileSync("git", ["-C", sourceRoot, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  const toolLog = join(root, "tool-log.txt");
+  const preload = join(root, "fake-macos-tools.cjs");
+  writeFileSync(
+    preload,
+    `const child = require("node:child_process");
+const fs = require("node:fs");
+const original = child.spawnSync;
+let changedAfterInitialStatus = false;
+Object.defineProperty(process, "platform", { value: "darwin" });
+Object.defineProperty(process, "arch", { value: "arm64" });
+child.spawnSync = (command, args, options) => {
+  if (command === "git") {
+    const result = original(command, args, options);
+    if (!changedAfterInitialStatus && args[0] === "status" && process.env.ECHO_OVERLAY_MUTATE_AFTER_STATUS_PATH) {
+      changedAfterInitialStatus = true;
+      fs.appendFileSync(process.env.ECHO_OVERLAY_MUTATE_AFTER_STATUS_PATH, "// changed after status\\n");
+    }
+    return result;
+  }
+  fs.appendFileSync(process.env.ECHO_OVERLAY_TOOL_LOG, command + "\\n");
+  if (command === "/usr/bin/xcrun") {
+    fs.writeFileSync(args[args.indexOf("-o") + 1], "fake executable");
+    if (process.env.ECHO_OVERLAY_MUTATE_PATH) fs.appendFileSync(process.env.ECHO_OVERLAY_MUTATE_PATH, "// changed\\n");
+    return { status: 0, stdout: "", stderr: "" };
+  }
+  if (command === "/usr/bin/ditto") {
+    fs.writeFileSync(args.at(-1), "fake archive");
+    return { status: 0, stdout: "", stderr: "" };
+  }
+  if (command === "/usr/bin/plutil") return { status: 0, stdout: process.env.ECHO_OVERLAY_EXPECTED_SHA + "\\n", stderr: "" };
+  if (command === "/usr/bin/codesign") return { status: 0, stdout: "", stderr: "" };
+  throw new Error("unexpected fake tool: " + command);
+};
+`,
+    { mode: 0o600 },
+  );
+  return { root, sourceRoot, output, sourceSha, preload, toolLog };
+}
+
+function runOverlayBuilder(
+  subject: ReturnType<typeof overlayFixture>,
+  sourceSha = subject.sourceSha,
+  environment: Record<string, string> = {},
+) {
+  return spawnSync(
+    process.execPath,
+    [
+      "--require",
+      subject.preload,
+      join(subject.sourceRoot, "tools", "build-echo-overlay.mjs"),
+      "--source-sha",
+      sourceSha,
+      "--version",
+      "0.1.0",
+      "--output",
+      join(subject.output, "ECHO.app.zip"),
+    ],
+    {
+      cwd: subject.sourceRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ECHO_OVERLAY_TOOL_LOG: subject.toolLog,
+        ECHO_OVERLAY_EXPECTED_SHA: subject.sourceSha,
+        ...environment,
+      },
+    },
+  );
+}
+
+afterEach(() => {
+  for (const root of temporaryRoots.splice(0))
+    rmSync(root, { recursive: true, force: true });
+});
 
 describe("native ECHO hotkey overlay", () => {
+  it("binds the requested source SHA to a clean committed build before and after fake native tooling", () => {
+    const subject = overlayFixture();
+    const mismatched = runOverlayBuilder(subject, "a".repeat(40));
+    expect(mismatched.status).toBe(1);
+    expect(mismatched.stderr).toContain("source SHA must match clean committed source");
+    expect(existsSync(subject.toolLog)).toBe(false);
+
+    writeFileSync(
+      join(subject.sourceRoot, "product", "echo-overlay", "main.swift"),
+      "// dirty\n",
+    );
+    const dirty = runOverlayBuilder(subject);
+    expect(dirty.status).toBe(1);
+    expect(dirty.stderr).toContain("build requires clean, committed source");
+    expect(existsSync(subject.toolLog)).toBe(false);
+
+    execFileSync("git", ["-C", subject.sourceRoot, "checkout", "--", "."]);
+    const changedAfterStatus = runOverlayBuilder(subject, subject.sourceSha, {
+      ECHO_OVERLAY_MUTATE_AFTER_STATUS_PATH: join(
+        subject.sourceRoot,
+        "product",
+        "echo-overlay",
+        "main.swift",
+      ),
+    });
+    expect(changedAfterStatus.status).toBe(1);
+    expect(changedAfterStatus.stderr).toContain(
+      "Swift source does not match its committed source",
+    );
+    expect(existsSync(subject.toolLog)).toBe(false);
+
+    execFileSync("git", ["-C", subject.sourceRoot, "checkout", "--", "."]);
+    const changedDuringBuild = runOverlayBuilder(subject, subject.sourceSha, {
+      ECHO_OVERLAY_MUTATE_PATH: join(
+        subject.sourceRoot,
+        "product",
+        "echo-overlay",
+        "main.swift",
+      ),
+    });
+    expect(changedDuringBuild.status).toBe(1);
+    expect(changedDuringBuild.stderr).toContain("source changed while the overlay was building");
+    expect(existsSync(join(subject.output, "ECHO.app.zip"))).toBe(false);
+
+    execFileSync("git", ["-C", subject.sourceRoot, "checkout", "--", "."]);
+    rmSync(subject.toolLog, { force: true });
+    const built = runOverlayBuilder(subject);
+    expect(built.status, built.stderr).toBe(0);
+    expect(JSON.parse(built.stdout)).toMatchObject({ source_sha: subject.sourceSha });
+    expect(readFileSync(subject.toolLog, "utf8")).toContain("/usr/bin/xcrun");
+    expect(readFileSync(subject.toolLog, "utf8")).toContain("/usr/bin/ditto");
+  });
+
   it("uses the installed Person CLI for questions and the authenticated first name", () => {
     const source = readFileSync(SOURCE, "utf8");
 
