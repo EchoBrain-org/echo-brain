@@ -2203,13 +2203,18 @@ if [[ "$1" == inspect && "$*" == *'.Image'* ]]; then printf 'sha256:${"f".repeat
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then exit 0; fi
-if [[ "$1" == image ]]; then printf '%s\\n' '${first.authority_image.reference}' '${next.authority_image.reference}'; exit 0; fi
+if [[ "$1" == image ]]; then printf '%s\\n' '${first.authority_image.reference}'; sleep 0.05; printf '%s\\n' '${next.authority_image.reference}'; exit 0; fi
 if [[ "$1" == compose && "$*" == *"staging-private-dm-canary"* ]]; then release_id="$(sed -n 's/^ECHO_CLEAN_RELEASE_ID=//p' "${envFile}")"; printf '{"schema_version":1,"kind":"echo-staging-synthetic-private-dm-canary-receipt-v1","release_id":"%s",${outcomeFields}}\\n' "$release_id"; exit 0; fi
 `);
     chmodSync(docker, 0o755);
     writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n", { mode: 0o600 });
     const environment = { PATH: `${bin}:${process.env.PATH}`, ECHO_CLEAN_ENV_FILE: envFile, ECHO_CLEAN_RELEASE_STATE_DIR: state, ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig };
-    expect(run("bash", [UPDATE, "stage", "--release", firstCandidate, "--runtime-profile", firstProfile], environment).status).toBe(0);
+    const staged = run(
+      "bash",
+      [UPDATE, "stage", "--release", firstCandidate, "--runtime-profile", firstProfile],
+      environment,
+    );
+    expect(staged.status, `${staged.stdout}\n${staged.stderr}`).toBe(0);
     const canary = run("bash", [UPDATE, "canary"], environment);
     expect(canary.status).toBe(1);
     expect(canary.stderr).toContain(expectedFailure);
