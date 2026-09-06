@@ -32,4 +32,17 @@ export default [
       '@typescript-eslint/no-empty-function': 'off',
     },
   },
+  {
+    files: ['tools/**/*.mjs', 'deploy/release/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+    },
+    rules: {
+      'no-dupe-keys': 'error',
+      'no-unreachable': 'error',
+      'no-unsafe-finally': 'error',
+      'valid-typeof': 'error',
+    },
+  },
 ];

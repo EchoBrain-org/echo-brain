@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -213,6 +214,59 @@ afterEach(() => {
 describe("documentation validator", () => {
   it("accepts the lean proof-grade baseline", () =>
     expect(validate(fixture().root)).toContain("checks passed"));
+  it("runs when invoked through a symlink", () => {
+    const { root } = fixture();
+    const link = join(root, "check-docs.mjs");
+    symlinkSync(TOOL, link);
+    const result = spawnSync(process.execPath, [link], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("checks passed");
+  });
+  it("caches exact Git checks only for one documentation pass", () => {
+    const module = new URL("../../tools/check-docs.mjs", import.meta.url).href;
+    const program = `
+      import assert from "node:assert/strict";
+      import { createGitCheckCache } from ${JSON.stringify(module)};
+      const calls = [];
+      const head = "${"c".repeat(40)}";
+      const run = (_command, args) => {
+        calls.push(args);
+        if (args[0] === "rev-parse") return { status: 0, stdout: head + "\\n" };
+        if (args[0] === "cat-file") return { status: 0, stdout: "" };
+        if (args[0] === "merge-base") return { status: 1, stdout: "" };
+        if (args[0] === "for-each-ref") return { status: 0, stdout: "refs/tags/review\\n" };
+        throw new Error("unexpected git invocation: " + args.join(" "));
+      };
+      const first = createGitCheckCache({ run });
+      assert.equal(first.object("${"a".repeat(40)}:tests/proof.test.ts"), true);
+      assert.equal(first.object("${"a".repeat(40)}:tests/proof.test.ts"), true);
+      assert.equal(first.reachable("${"b".repeat(40)}"), true);
+      assert.equal(first.reachable("${"b".repeat(40)}"), true);
+      const second = createGitCheckCache({ run });
+      assert.equal(second.reachable("${"b".repeat(40)}"), true);
+      const unresolved = createGitCheckCache({
+        run: (_command, args) => {
+          if (args[0] === "rev-parse") return { status: 1, stdout: "" };
+          throw new Error("unresolved HEAD must not use " + args.join(" "));
+        },
+      });
+      assert.equal(unresolved.reachable("${"b".repeat(40)}"), false);
+      const count = (name, spec) => calls.filter((args) => args[0] === name && args[args.length - 1] === spec).length;
+      assert.equal(count("cat-file", "${"a".repeat(40)}:tests/proof.test.ts"), 1);
+      assert.equal(count("cat-file", "${"b".repeat(40)}^{commit}"), 2);
+      const mergeHeads = calls.filter((args) => args[0] === "merge-base").map((args) => args.at(-1));
+      assert.deepEqual(mergeHeads, [head, head]);
+    `;
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", program], {
+      cwd: REPO,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
   it("rejects a reviewed ref retained only by an unpushed local branch", () => {
     const { root, sha } = fixture();
     run("git", ["add", "."], root);
