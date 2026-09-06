@@ -10,6 +10,7 @@ DEFAULT_DEPLOY_DIR=/srv/echo-authority-clean-v1
 
 DEPLOY_DIR=$DEFAULT_DEPLOY_DIR
 COMMAND=resume
+STAGING_RELEASE_GUARD_HELD=false
 
 fail() {
   printf 'restore-clean-v1-host: %s\n' "$*" >&2
@@ -95,6 +96,8 @@ require_prepared_state_shape() {
 }
 
 require_no_candidate_or_operation() {
+  [[ "$STAGING_RELEASE_GUARD_HELD" == true ]] || \
+    fail 'a bounded staging release operation is in progress; preserve its root-owned guard'
   [[ ! -e $CANDIDATE_FILE && ! -L $CANDIDATE_FILE ]] || \
     fail 'a candidate release is present; resolve it with update-clean-v1.sh before rebuilding this host'
   [[ ! -e $OPERATION_LOCK_DIR && ! -L $OPERATION_LOCK_DIR ]] || \
@@ -319,6 +322,22 @@ ACCEPTED_ENVIRONMENT=''
 [[ -f $RELEASE_TOOL && ! -L $RELEASE_TOOL ]] || fail 'installed release validator is missing or unsafe'
 [[ -f $RUNTIME_PROFILE_TOOL && ! -L $RUNTIME_PROFILE_TOOL ]] || fail 'installed runtime-profile validator is missing or unsafe'
 
+release_staging_guard() {
+  if [[ $STAGING_RELEASE_GUARD_HELD == true ]]; then
+    rm -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+    rmdir "$DEPLOY_DIR/.staging-release-guard"
+    STAGING_RELEASE_GUARD_HELD=false
+  fi
+}
+mkdir -m 0700 "$DEPLOY_DIR/.staging-release-guard" 2>/dev/null || \
+  fail 'a bounded staging release operation is in progress; preserve its root-owned guard'
+STAGING_RELEASE_GUARD_HELD=true
+trap 'release_staging_guard' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+(umask 077; printf '%s\n' "$$" > "$DEPLOY_DIR/.staging-release-guard/owner-pid")
+
 if restore_or_no_op; then
   restored=true
 else
@@ -333,6 +352,8 @@ fi
 [[ $restored == true ]] || fail 'retained host resume requires an accepted release tuple'
 
 [[ -x $ONBOARD_TOOL && ! -L $ONBOARD_TOOL ]] || fail 'installed onboarding wrapper is missing or unsafe'
+# The onboarding wrapper acquires this same interlock before any mutation.
+release_staging_guard
 "$ONBOARD_TOOL" resume
 status_output="$("$ONBOARD_TOOL" status)" || fail 'onboarding status failed after retained-host restore'
 printf '%s\n' "$status_output"

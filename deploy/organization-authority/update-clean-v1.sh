@@ -27,6 +27,7 @@ OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.au
 ROLLBACK_READER_CAPABILITY_LABEL='org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'
 STAGING_JOURNEY_TELEMETRY_CAPABILITY_LABEL='org.echobrain.authority.telemetry.staging-journey-v1'
 OPERATION_LOCK_HELD=false
+STAGING_RELEASE_GUARD_HELD=false
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -36,16 +37,36 @@ release_operation_lock() {
     rmdir "$OPERATION_LOCK_DIR" >/dev/null 2>&1 || true
     OPERATION_LOCK_HELD=false
   fi
+  if [[ "$STAGING_RELEASE_GUARD_HELD" == true ]]; then
+    rm -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+    rmdir "$DEPLOY_DIR/.staging-release-guard"
+    STAGING_RELEASE_GUARD_HELD=false
+  fi
 }
 
 acquire_operation_lock() {
+  acquire_staging_release_guard
   if ! mkdir -m 0700 "$OPERATION_LOCK_DIR" 2>/dev/null; then
+    release_operation_lock
     fail 'another Authority activation or release operation is already in progress; follow the README operation-lock recovery steps if its owner was interrupted'
   fi
   OPERATION_LOCK_HELD=true
   if ! (umask 077; printf '%s\n' "$$" > "$OPERATION_LOCK_DIR/owner-pid"); then
     release_operation_lock
     fail 'could not record the Authority operation lock owner'
+  fi
+}
+
+acquire_staging_release_guard() {
+  local guard="$DEPLOY_DIR/.staging-release-guard"
+  # The reviewed runner owns this exact nested lock; ordinary human calls
+  # acquire the same root-owned interlock for their entire operation.
+  [[ "$OPERATION_LOCK_DIR" != "$guard/wrapper-lock" ]] || return 0
+  mkdir -m 0700 "$guard" 2>/dev/null || fail 'a bounded staging release operation is in progress; preserve its root-owned guard'
+  STAGING_RELEASE_GUARD_HELD=true
+  if ! (umask 077; printf '%s\n' "$$" > "$guard/owner-pid"); then
+    release_operation_lock
+    fail 'could not record the root-owned staging release guard owner'
   fi
 }
 

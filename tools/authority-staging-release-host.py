@@ -20,9 +20,9 @@ import time
 import urllib.request
 
 DEPLOY = pathlib.Path('/srv/echo-authority-clean-v1')
-TOOLS = ('update-clean-v1.sh', 'release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py')
+TOOLS = ('update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py')
 ACTIONS = ('install', 'diagnose', 'repair', 'stage', 'canary', 'status', 'rollback', 'promote')
-SAFE_CODES = ('installed', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending')
+SAFE_CODES = ('installed', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed')
 
 
 class Refused(Exception):
@@ -56,11 +56,12 @@ def authority_data_directory(path):
 
 
 def regular(path, private=False, limit=262144):
-    info = path.lstat()
-    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid() and not info.st_mode & 0o022 and info.st_size <= limit)
-    if private:
-        require(not info.st_mode & 0o077)
-    with path.open('rb') as stream:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.geteuid() and not info.st_mode & 0o022 and info.st_size <= limit)
+        if private:
+            require(not info.st_mode & 0o077)
         data = stream.read(limit + 1)
     require(len(data) <= limit)
     return data
@@ -95,7 +96,7 @@ def make_directory(path):
 def validate_request(request):
     expected = {'schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval'}
     require(set(request) == expected)
-    require(request['schema_version'] == 1 and request['kind'] == 'echo-staging-release-request-v1')
+    require(request['schema_version'] == 2 and request['kind'] == 'echo-staging-release-request-v2')
     require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', request['operation_id']) is not None)
     require(request['action'] in ACTIONS)
     require(type(request['created_at']) is int and request['expires_at'] == request['created_at'] + 1800)
@@ -158,11 +159,11 @@ def machine_identity(request, root):
 
 
 def wrapper(root, operation, args):
-    # Hold the established global mkdir lock in this parent. The updater uses
-    # its existing override only for a private nested lock under that owner.
-    environment = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin', 'HOME': '/root', 'LANG': 'C.UTF-8', 'ECHO_CLEAN_OPERATION_LOCK_DIR': str(operation / 'wrapper-lock')}
+    # Inherit the descriptor-pinned release cwd; never resolve it back to its
+    # service-replaceable pathname. Candidate inputs live under the root guard.
+    environment = {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin', 'HOME': '/root', 'LANG': 'C.UTF-8', 'ECHO_CLEAN_RELEASE_STATE_DIR': '.', 'ECHO_CLEAN_STATE_DIR': str(root / 'clean-data/state'), 'ECHO_CLEAN_OPERATION_LOCK_DIR': str(root / '.staging-release-guard/wrapper-lock')}
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        child = subprocess.Popen([str(root / 'update-clean-v1.sh'), *args], cwd=root, env=environment, stdout=stdout, stderr=stderr, start_new_session=True)
+        child = subprocess.Popen([str(root / 'update-clean-v1.sh'), *args], env=environment, stdout=stdout, stderr=stderr, start_new_session=True)
         try:
             code = child.wait(timeout=1000)
         except subprocess.TimeoutExpired:
@@ -210,110 +211,154 @@ def execute_request(request, request_hash, root=DEPLOY, identity=machine_identit
         directory(ancestor)
     directory(root)
     authority_data_directory(root / 'clean-data')
-    for path in (root / 'clean-data/release', root / 'release'):
-        directory(path)
-    lock = root / 'clean-data/.authority-operation-lock'
+    directory(root / 'release')
+    lock = root / '.staging-release-guard'
     try:
         lock.mkdir(mode=0o700)
     except FileExistsError:
         return result_for(request, request_hash, False, 'operation_locked')
+    cwd_fd = data_fd = release_fd = None
+    keep_guard = False
+    def binding_ok():
+        try:
+            current = os.stat('release', dir_fd=data_fd, follow_symlinks=False)
+            opened = os.fstat(release_fd)
+            return (current.st_dev, current.st_ino) == (opened.st_dev, opened.st_ino)
+        except OSError:
+            return False
     try:
         immutable(lock / 'owner-pid', f'{os.getpid()}\n'.encode())
-        operations = root / 'clean-data/release/remote-operations'
-        make_directory(operations)
-        operation = operations / request['operation_id']
-        if operation.exists() or operation.is_symlink():
-            directory(operation, True)
-            require(regular(operation / 'request.sha256', True).decode() == request_hash + '\n')
-            if (operation / 'result.json').exists():
-                result = json.loads(regular(operation / 'result.json', True))
-                require(result['request_sha256'] == request_hash)
-                return result
-            return result_for(request, request_hash, False, 'operation_incomplete')
-        if now() > request['expires_at'] or now() < request['created_at'] - 60:
-            return result_for(request, request_hash, False, 'expired')
-        make_directory(operation)
-        immutable(operation / 'request.sha256', (request_hash + '\n').encode())
-        immutable(operation / 'request.json', canonical(request))
-        try:
-            accepted = regular(root / 'clean-data/release/current.clean-v1.json', True, 16384)
-            require(sha(accepted) == request['accepted']['sha256'] and json.loads(accepted)['release_id'] == request['accepted']['release_id'])
-            # Literal hostname binding refuses quoted/multiline ambiguity without
-            # ever serializing other setting names or environment values.
-            environment = regular(root / '.env.clean-v1', True, 1024 * 1024)
-            require(environment.endswith(b'\n') and b'\r' not in environment and b'\0' not in environment)
-            for line in environment.splitlines():
-                if line and not line.startswith(b'#'):
-                    require(re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_]*=[^\'"\\$`]*', line) is not None)
-            require([line for line in environment.splitlines() if line.startswith(b'ECHO_CLEAN_AUTHORITY_HOST=')] == [b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org'])
-            candidate_path = root / 'clean-data/release/candidate.clean-v1.json'
-            candidate_present = candidate_path.exists() or candidate_path.is_symlink()
-            if candidate_present:
-                require(sha(regular(candidate_path, True, 16384)) == request['candidate']['sha256'])
-            if request['action'] in ('install', 'repair', 'stage'):
-                require(not candidate_present)
-            if request['action'] in ('canary', 'promote', 'rollback'):
-                require(candidate_present)
-            old_hashes = {}
-            for name in TOOLS:
-                old_hashes[name] = sha(regular(root / name))
-                allowed = {request['files'][name]['sha256']}
-                if request['action'] == 'install':
-                    allowed.add(request['old_tool_hashes'][name])
-                require(old_hashes[name] in allowed)
-            if request['action'] == 'install':
-                pending = root / 'clean-data/release/environment-repair.pending.json'
-                require(not pending.exists() and not pending.is_symlink())
-                # Preflight all existing tools before replacing any one of them.
-                immutable(operation / 'tooling-before.json', canonical(old_hashes))
-                for index, name in enumerate(TOOLS):
-                    original = regular(root / name)
-                    immutable(operation / f'tool-{index}.before', original)
-                    # clean-data may be a separate filesystem from deployment.
-                    # Create the final temp beside its destination, then rename.
-                    destination = root / name
-                    fd, temp_path = tempfile.mkstemp(prefix='.echo-tool-', dir=destination.parent)
-                    try:
-                        with os.fdopen(fd, 'wb') as stream:
-                            stream.write(files[name])
-                            os.fchmod(stream.fileno(), 0o755)
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                        os.replace(temp_path, destination)
-                        sync_directory(destination.parent)
-                    finally:
-                        if os.path.exists(temp_path):
-                            os.unlink(temp_path)
-                    require(sha(regular(destination)) == request['files'][name]['sha256'])
-                result = result_for(request, request_hash, True, 'installed')
-            else:
-                for name in ('candidate.json', 'runtime-profile.json'):
-                    immutable(operation / name, files[name])
-                action = request['action']
-                args = {'diagnose': ['diagnose-environment'], 'status': ['status'], 'repair': ['repair-environment', '--expected-release-id', request['accepted']['release_id'], '--restore-accepted'], 'stage': ['stage', '--release', str(operation / 'candidate.json'), '--runtime-profile', str(operation / 'runtime-profile.json')], 'canary': ['canary'], 'rollback': ['rollback'], 'promote': ['promote', '--release', str(operation / 'candidate.json'), '--canary-passed']}[action]
-                if action == 'repair':
-                    ok, code, diagnostic = invoke(root, operation, ['diagnose-environment'])
-                    require(ok and diagnostic['release_id'] == request['accepted']['release_id'] and not diagnostic['candidate_staged'] and (diagnostic['repair_eligible'] or diagnostic['repair_pending']))
-                if action == 'stage' and request['content_telemetry'] is not None:
-                    args += ['--content-telemetry', request['content_telemetry']]
-                ok, code, diagnostic = invoke(root, operation, args)
-                if diagnostic is not None:
-                    require(diagnostic['release_id'] == request['candidate' if candidate_present else 'accepted']['release_id'])
-                result = result_for(request, request_hash, ok, code, diagnostic)
-            immutable(operation / 'result.json', canonical(result))
-            return result
-        except Exception:
-            result = result_for(request, request_hash, False, 'precondition_failed')
-            if not (operation / 'result.json').exists():
-                immutable(operation / 'result.json', canonical(result))
-            return result
+        sync_directory(root)
+        legacy = root / 'clean-data/.authority-operation-lock'
+        if legacy.exists() or legacy.is_symlink():
+            return result_for(request, request_hash, False, 'operation_locked')
+        data_fd = os.open(root / 'clean-data', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        data_info = os.fstat(data_fd)
+        require((data_info.st_uid, data_info.st_gid, stat.S_IMODE(data_info.st_mode)) == (999, 988, 0o700))
+        release_fd = os.open('release', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=data_fd)
+        info = os.fstat(release_fd)
+        require(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700)
+        cwd_fd = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        os.fchdir(release_fd)
+        result = execute_pinned(request, request_hash, root, files, invoke, now, binding_ok)
+        if not binding_ok():
+            keep_guard = True
+            return result_for(request, request_hash, False, 'control_path_changed')
+        return result
     finally:
-        # Only remove the lock this process created; never recover somebody
-        # else's stale lock or recursively delete an operations directory.
-        if (lock / 'owner-pid').exists():
-            require(regular(lock / 'owner-pid', True) == f'{os.getpid()}\n'.encode())
-            (lock / 'owner-pid').unlink()
-        lock.rmdir()
+        if release_fd is not None and not binding_ok():
+            keep_guard = True
+        if cwd_fd is not None:
+            os.fchdir(cwd_fd)
+        for fd in (cwd_fd, release_fd, data_fd):
+            if fd is not None:
+                os.close(fd)
+        if not keep_guard:
+            # This parent is root-owned and not mounted into the service.
+            for name in ('candidate.json', 'runtime-profile.json', 'owner-pid'):
+                path = lock / name
+                if path.exists():
+                    expected = f'{os.getpid()}\n'.encode() if name == 'owner-pid' else files[name]
+                    require(regular(path, True) == expected)
+                    path.unlink()
+            lock.rmdir()
+            sync_directory(root)
+
+
+def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
+    # All control-state paths stay relative to the verified cwd inode.
+    operations = pathlib.Path('remote-operations')
+    make_directory(operations)
+    operation = operations / request['operation_id']
+    if operation.exists() or operation.is_symlink():
+        directory(operation, True)
+        require(regular(operation / 'request.sha256', True).decode() == request_hash + '\n')
+        if (operation / 'result.json').exists():
+            result = json.loads(regular(operation / 'result.json', True))
+            require(result['request_sha256'] == request_hash)
+            return result
+        return result_for(request, request_hash, False, 'operation_incomplete')
+    if now() > request['expires_at'] or now() < request['created_at'] - 60:
+        return result_for(request, request_hash, False, 'expired')
+    make_directory(operation)
+    immutable(operation / 'request.sha256', (request_hash + '\n').encode())
+    immutable(operation / 'request.json', canonical(request))
+    try:
+        accepted = regular(pathlib.Path('current.clean-v1.json'), True, 16384)
+        require(sha(accepted) == request['accepted']['sha256'] and json.loads(accepted)['release_id'] == request['accepted']['release_id'])
+        # Literal hostname binding refuses quoted/multiline ambiguity without
+        # ever serializing other setting names or environment values.
+        environment = regular(root / '.env.clean-v1', True, 1024 * 1024)
+        require(environment.endswith(b'\n') and b'\r' not in environment and b'\0' not in environment)
+        for line in environment.splitlines():
+            if line and not line.startswith(b'#'):
+                require(re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_]*=[^\'"\\$`]*', line) is not None)
+        require([line for line in environment.splitlines() if line.startswith(b'ECHO_CLEAN_AUTHORITY_HOST=')] == [b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org'])
+        candidate_path = pathlib.Path('candidate.clean-v1.json')
+        candidate_present = candidate_path.exists() or candidate_path.is_symlink()
+        if candidate_present:
+            require(sha(regular(candidate_path, True, 16384)) == request['candidate']['sha256'])
+        if request['action'] in ('install', 'repair', 'stage'):
+            require(not candidate_present)
+        if request['action'] in ('canary', 'promote', 'rollback'):
+            require(candidate_present)
+        old_hashes = {}
+        for name in TOOLS:
+            old_hashes[name] = sha(regular(root / name))
+            allowed = {request['files'][name]['sha256']}
+            if request['action'] == 'install':
+                allowed.add(request['old_tool_hashes'][name])
+            require(old_hashes[name] in allowed)
+        if request['action'] == 'install':
+            pending = pathlib.Path('environment-repair.pending.json')
+            require(not pending.exists() and not pending.is_symlink())
+            # Preflight all existing tools before replacing any one of them.
+            immutable(operation / 'tooling-before.json', canonical(old_hashes))
+            for index, name in enumerate(TOOLS):
+                original = regular(root / name)
+                immutable(operation / f'tool-{index}.before', original)
+                # clean-data may be a separate filesystem from deployment.
+                # Create the final temp beside its destination, then rename.
+                destination = root / name
+                fd, temp_path = tempfile.mkstemp(prefix='.echo-tool-', dir=destination.parent)
+                try:
+                    with os.fdopen(fd, 'wb') as stream:
+                        stream.write(files[name])
+                        os.fchmod(stream.fileno(), 0o755)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(temp_path, destination)
+                    sync_directory(destination.parent)
+                finally:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                require(sha(regular(destination)) == request['files'][name]['sha256'])
+            result = result_for(request, request_hash, True, 'installed')
+        else:
+            for name in ('candidate.json', 'runtime-profile.json'):
+                immutable(operation / name, files[name])
+                immutable(root / '.staging-release-guard' / name, files[name])
+            inputs = root / '.staging-release-guard'
+            action = request['action']
+            args = {'diagnose': ['diagnose-environment'], 'status': ['status'], 'repair': ['repair-environment', '--expected-release-id', request['accepted']['release_id'], '--restore-accepted'], 'stage': ['stage', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'canary': ['canary'], 'rollback': ['rollback'], 'promote': ['promote', '--release', str(inputs / 'candidate.json'), '--canary-passed']}[action]
+            if action == 'repair':
+                ok, code, diagnostic = invoke(root, operation, ['diagnose-environment'])
+                require(ok and diagnostic['release_id'] == request['accepted']['release_id'] and not diagnostic['candidate_staged'] and (diagnostic['repair_eligible'] or diagnostic['repair_pending']))
+            if action == 'stage' and request['content_telemetry'] is not None:
+                args += ['--content-telemetry', request['content_telemetry']]
+            ok, code, diagnostic = invoke(root, operation, args)
+            if diagnostic is not None:
+                require(diagnostic['release_id'] == request['candidate' if candidate_present else 'accepted']['release_id'])
+            result = result_for(request, request_hash, ok, code, diagnostic)
+        if not binding_ok():
+            result = result_for(request, request_hash, False, 'control_path_changed')
+        immutable(operation / 'result.json', canonical(result))
+        return result
+    except Exception:
+        result = result_for(request, request_hash, False, 'precondition_failed')
+        if not (operation / 'result.json').exists():
+            immutable(operation / 'result.json', canonical(result))
+        return result
 
 
 def main(payload, expected_hash):
@@ -322,7 +367,7 @@ def main(payload, expected_hash):
     try:
         require(os.geteuid() == 0)
         require(re.fullmatch(r'[a-f0-9]{64}', expected_hash) is not None)
-        require(len(payload) <= 80000)
+        require(len(payload) <= 1024 * 1024)
         with gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode(payload, validate=True))) as compressed:
             raw = compressed.read(768 * 1024 + 1)
         require(len(raw) <= 768 * 1024 and sha(raw) == expected_hash)

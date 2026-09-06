@@ -35,6 +35,7 @@ ACTIVATION_LLM_ACTIVE_BACKUP=''
 ACTIVATION_ROLLBACK_FAILURE_STAGE=''
 ACTIVATION_CHILD_PID=''
 OPERATION_LOCK_HELD=false
+STAGING_RELEASE_GUARD_HELD=false
 REHEARSAL_ARCHIVE=''
 REHEARSAL_ARCHIVED_DATA=''
 REHEARSAL_ROLLBACK_ARMED=false
@@ -49,16 +50,33 @@ release_operation_lock() {
     rmdir "$OPERATION_LOCK_DIR" >/dev/null 2>&1 || true
     OPERATION_LOCK_HELD=false
   fi
+  if [[ "$STAGING_RELEASE_GUARD_HELD" == true ]]; then
+    rm -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+    rmdir "$DEPLOY_DIR/.staging-release-guard"
+    STAGING_RELEASE_GUARD_HELD=false
+  fi
 }
 
 acquire_operation_lock() {
+  acquire_staging_release_guard
   if ! mkdir -m 0700 "$OPERATION_LOCK_DIR" 2>/dev/null; then
+    release_operation_lock
     fail 'another Authority activation or release operation is already in progress; follow the README operation-lock recovery steps if its owner was interrupted'
   fi
   OPERATION_LOCK_HELD=true
   if ! (umask 077; printf '%s\n' "$$" > "$OPERATION_LOCK_DIR/owner-pid"); then
     release_operation_lock
     fail 'could not record the Authority operation lock owner'
+  fi
+}
+
+acquire_staging_release_guard() {
+  local guard="$DEPLOY_DIR/.staging-release-guard"
+  mkdir -m 0700 "$guard" 2>/dev/null || fail 'a bounded staging release operation is in progress; preserve its root-owned guard'
+  STAGING_RELEASE_GUARD_HELD=true
+  if ! (umask 077; printf '%s\n' "$$" > "$guard/owner-pid"); then
+    release_operation_lock
+    fail 'could not record the root-owned staging release guard owner'
   fi
 }
 

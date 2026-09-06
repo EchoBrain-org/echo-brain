@@ -22,10 +22,13 @@ const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const ACTIONS = ['install', 'diagnose', 'repair', 'stage', 'canary', 'status', 'rollback', 'promote'];
 const TOOL_FILES = Object.freeze({
   'update-clean-v1.sh': 'deploy/organization-authority/update-clean-v1.sh',
+  'onboard-clean-v1.sh': 'deploy/organization-authority/onboard-clean-v1.sh',
+  'restore-clean-v1-host.sh': 'deploy/organization-authority/restore-clean-v1-host.sh',
   'release/clean-v1-release.py': 'deploy/release/clean-v1-release.py',
   'release/clean-v1-runtime-profile.py': 'deploy/release/clean-v1-runtime-profile.py',
 });
 const RUNNER = 'tools/authority-staging-release-host.py';
+const LEGACY_TOOL_FILES = Object.fromEntries(Object.entries(TOOL_FILES).filter(([name]) => !['onboard-clean-v1.sh', 'restore-clean-v1-host.sh'].includes(name)));
 const MAX_COMMAND_BYTES = 60 * 1024;
 const TERMINAL = ['Failed', 'Cancelled', 'TimedOut', 'Undeliverable', 'Terminated'];
 const fail = code => { throw new Error(code); };
@@ -146,14 +149,15 @@ function approvalFor(request, approval) {
 /** Pure request validation is repeated before planning, rendering and execution. */
 export function validateReleaseRequest(request, readSource = sourceFile) {
   exactKeys(request, ['schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval']);
-  if (request.schema_version !== 1 || request.kind !== 'echo-staging-release-request-v1' || !ID.test(request.operation_id)) fail('request_invalid');
+  if (![1, 2].includes(request.schema_version) || request.kind !== `echo-staging-release-request-v${request.schema_version}` || !ID.test(request.operation_id)) fail('request_invalid');
+  const toolFiles = request.schema_version === 1 ? LEGACY_TOOL_FILES : TOOL_FILES;
   releaseAction(request.action);
   if (!Number.isSafeInteger(request.created_at) || request.expires_at !== request.created_at + 1800) fail('request_lifetime_invalid');
   exactKeys(request.target, ['account', 'region', 'stack_id', 'instance_id', 'volume_id']);
   if (request.target.account !== ACCOUNT || request.target.region !== REGION || !new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/[a-f0-9-]+$`).test(request.target.stack_id) || !/^i-[a-f0-9]{17}$/.test(request.target.instance_id) || !/^vol-[a-f0-9]{17}$/.test(request.target.volume_id)) fail('target_invalid');
   if (!COMMIT.test(request.tooling_source) || !COMMIT.test(request.previous_tooling_source)) fail('source_invalid');
-  exactKeys(request.files, [...Object.keys(TOOL_FILES), 'candidate.json', 'runtime-profile.json']);
-  exactKeys(request.old_tool_hashes, Object.keys(TOOL_FILES));
+  exactKeys(request.files, [...Object.keys(toolFiles), 'candidate.json', 'runtime-profile.json']);
+  exactKeys(request.old_tool_hashes, Object.keys(toolFiles));
   const bytes = {};
   for (const [name, entry] of Object.entries(request.files)) {
     exactKeys(entry, ['sha256', 'base64']);
@@ -161,7 +165,7 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
     bytes[name] = Buffer.from(entry.base64, 'base64');
     if (bytes[name].toString('base64') !== entry.base64 || digest(bytes[name]) !== entry.sha256) fail('artifact_checksum_mismatch');
   }
-  for (const [name, path] of Object.entries(TOOL_FILES)) {
+  for (const [name, path] of Object.entries(toolFiles)) {
     if (!bytes[name].equals(readSource(request.tooling_source, path)) || request.old_tool_hashes[name] !== digest(readSource(request.previous_tooling_source, path))) fail('tooling_source_mismatch');
   }
   const candidate = canonicalRecord(bytes['candidate.json']);
@@ -185,7 +189,23 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
   const body = jsonBytes(request);
   const payload = gzipSync(body, { level: 9 }).toString('base64');
   const runner = readSource(request.tooling_source, RUNNER).toString('utf8');
-  const commands = [`/usr/bin/python3 - <<'ECHO_RELEASE_PY'\n${runner}\nmain('${payload}', '${digest(body)}')\nECHO_RELEASE_PY`];
+  let script = `${runner}\nmain('${payload}', '${digest(body)}')`;
+  if (request.schema_version === 2) {
+    // Compress text once, not separately base64-expanded files plus a plain
+    // runner. The fixed loader verifies the whole reviewed, non-secret bundle.
+    const wire = { runner, request: structuredClone(request) };
+    for (const entry of Object.values(wire.request.files)) {
+      const bytes = Buffer.from(entry.base64, 'base64');
+      entry.utf8 = bytes.toString('utf8');
+      if (!Buffer.from(entry.utf8).equals(bytes)) fail('artifact_not_utf8');
+      delete entry.base64;
+    }
+    const raw = jsonBytes(wire);
+    if (raw.length > 768 * 1024) fail('bounded_command_too_large');
+    const compressed = gzipSync(raw, { level: 9 }).toString('base64');
+    script = `import base64,gzip,hashlib,io,json\nwith gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode('${compressed}',validate=True))) as stream:\n raw=stream.read(786433)\nif len(raw)>786432 or hashlib.sha256(raw).hexdigest()!='${digest(raw)}': raise SystemExit(1)\nwire=json.loads(raw)\nfor entry in wire['request']['files'].values():\n entry['base64']=base64.b64encode(entry.pop('utf8').encode()).decode()\nbody=(json.dumps(wire['request'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\\n').encode()\nif hashlib.sha256(body).hexdigest()!='${digest(body)}': raise SystemExit(1)\nnamespace={}\nexec(compile(wire['runner'],'<reviewed-staging-runner>','exec'),namespace)\nnamespace['main'](base64.b64encode(gzip.compress(body)).decode(),'${digest(body)}')`;
+  }
+  const commands = [`/usr/bin/python3 - <<'ECHO_RELEASE_PY'\n${script}\nECHO_RELEASE_PY`];
   const parameters = { commands, executionTimeout: ['1200'] };
   // Leave space for AWS-RunShellScript's document envelope under its 64 KiB limit.
   if (Buffer.byteLength(JSON.stringify(parameters)) > MAX_COMMAND_BYTES) fail('bounded_command_too_large');
@@ -215,7 +235,7 @@ export function planStagingRelease(options, dependencies = {}) {
   add('runtime-profile.json', readFileSync(options.runtimeProfile));
   const timestamp = Math.floor(now() / 1000);
   const request = {
-    schema_version: 1, kind: 'echo-staging-release-request-v1', operation_id: randomUUID(), action: options.action,
+    schema_version: 2, kind: 'echo-staging-release-request-v2', operation_id: randomUUID(), action: options.action,
     created_at: timestamp, expires_at: timestamp + 1800, target: stagingReleaseTarget(aws),
     tooling_source: toolingSource, previous_tooling_source: previousSource,
     accepted: { release_id: accepted.release_id, sha256: digest(acceptedBytes) },
@@ -251,7 +271,7 @@ export function safeReleaseOutcome(raw, request, requestHash) {
   let result;
   try { result = JSON.parse(raw); } catch { fail('remote_outcome_unproven'); }
   exactKeys(result, ['schema_version', 'kind', 'operation_id', 'request_sha256', 'action', 'ok', 'code', 'diagnostic']);
-  const codes = ['installed', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending'];
+  const codes = ['installed', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed'];
   if (result.schema_version !== 1 || result.kind !== 'echo-staging-release-host-result-v1' || result.operation_id !== request.operation_id || result.request_sha256 !== requestHash || result.action !== request.action || typeof result.ok !== 'boolean' || !codes.includes(result.code)) fail('remote_outcome_unproven');
   if (result.ok !== ['installed', 'verified'].includes(result.code)) fail('remote_outcome_unproven');
   if (result.diagnostic !== null) {
@@ -303,6 +323,7 @@ export function executeStagingRelease(pathname, dependencies = {}, pollOnly = fa
       return pollReceipt(path, receipt, aws);
     }
     if (runtime() !== receipt.request.tooling_source) fail('exact_reviewed_runtime_required');
+    if (receipt.request.schema_version !== 2) fail('legacy_plan_execution_refused');
     if (Math.floor(now() / 1000) > receipt.request.expires_at) fail('plan_expired');
     if (!same(stagingReleaseTarget(aws), receipt.request.target)) fail('staging_target_changed');
     const parameters = releaseSsmParameters(receipt.request, readSource);

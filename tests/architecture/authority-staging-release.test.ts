@@ -210,4 +210,39 @@ describe('bounded staging release operator', () => {
     expect(() => executeStagingRelease(f.options.output, f.dependencies)).toThrow();
     expect(f.state.submissions).toBe(1);
   });
+
+  it('round-trips the compressed reviewed runner and request without calling AWS', () => {
+    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const request = f.request();
+    const source = `def main(payload, expected):\n import base64,gzip,hashlib,json\n body=gzip.decompress(base64.b64decode(payload))\n assert hashlib.sha256(body).hexdigest()==expected\n value=json.loads(body)\n assert value['schema_version']==2\n assert len(value['files'])==7\n print('verified-offline-wire')\n`;
+    const readSource = (commit: string, path: string) => path === 'tools/authority-staging-release-host.py' ? Buffer.from(source) : f.dependencies.readSource(commit, path);
+    const parameters = releaseSsmParameters(request, readSource);
+    const result = spawnSync('sh', ['-c', parameters.commands[0]], { encoding: 'utf8', timeout: 10000 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe('verified-offline-wire\n');
+    const tampered = parameters.commands[0].replace(/hexdigest\(\)!='[a-f0-9]{64}'/, `hexdigest()!='${'0'.repeat(64)}'`);
+    const rejected = spawnSync('sh', ['-c', tampered], { encoding: 'utf8', timeout: 10000 });
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stdout).toBe('');
+    expect(f.state.submissions).toBe(0);
+  });
+
+  it('can poll legacy receipts but never submit a legacy unpinned plan', () => {
+    const f = fixture(); planStagingRelease(f.options, f.dependencies);
+    const dependencies = { ...f.dependencies, readSource: (commit: string, path: string) => path === 'tools/authority-staging-release-host.py' ? Buffer.from('# legacy reviewed runner fixture\n') : f.dependencies.readSource(commit, path) };
+    const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
+    receipt.request.schema_version = 1;
+    receipt.request.kind = 'echo-staging-release-request-v1';
+    for (const name of ['onboard-clean-v1.sh', 'restore-clean-v1-host.sh']) {
+      delete receipt.request.files[name]; delete receipt.request.old_tool_hashes[name];
+    }
+    receipt.request_sha256 = digest(canonical(receipt.request) + '\n');
+    receipt.parameters_sha256 = digest(canonical(releaseSsmParameters(receipt.request, dependencies.readSource)) + '\n');
+    write(f.options.output, receipt);
+    expect(() => executeStagingRelease(f.options.output, dependencies)).toThrow('legacy_plan_execution_refused');
+    expect(f.state.submissions).toBe(0);
+    receipt.state = 'submitted'; receipt.command_id = COMMAND; write(f.options.output, receipt);
+    expect(executeStagingRelease(f.options.output, dependencies, true).state).toBe('succeeded');
+    expect(f.state.submissions).toBe(0);
+  });
 });
