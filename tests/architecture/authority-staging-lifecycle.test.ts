@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  awsJson,
   createAwsCliAdapters,
   runAuthorityStaging,
   validateStagingLifecycleInput,
@@ -137,6 +138,21 @@ printf 'HTTPS_PROXY_ENV=%s\\n' "\${HTTPS_PROXY-unset}" >>"$FAKE_AWS_LOG"
 printf 'NO_PROXY_ENV=%s\\n' "\${no_proxy-unset}" >>"$FAKE_AWS_LOG"
 printf 'IGNORE_ENDPOINT_ENV=%s\\n' "\${AWS_IGNORE_CONFIGURED_ENDPOINT_URLS-unset}" >>"$FAKE_AWS_LOG"
 printf 'TOKEN_ENV=%s\\nEND\\n' "\${ECHO_CLOUDFLARE_API_TOKEN-unset}" >>"$FAKE_AWS_LOG"
+case "\${FAKE_AWS_MODE-}" in
+  stall) sleep 1 ;;
+  flood)
+    i=0
+    while [ "$i" -lt 4097 ]; do
+      printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      i=$((i + 1))
+    done
+    exit 0
+    ;;
+  descendant_pipe)
+    python3 -c 'import os,time; os.setsid(); time.sleep(2)' &
+    sleep 1
+    ;;
+esac
 case " $* " in
   *" cloudformation create-change-set "*)
     if [ "\${FAKE_AWS_MODE-}" = persist_change_set ]; then
@@ -2049,6 +2065,7 @@ describe("Authority staging lifecycle", () => {
         expect(calls).toContain(
           `ARG=--parameters\nARG={"commands":["set -eu",`,
         );
+        expect(calls).toContain('"executionTimeout":["300"]');
         expect(calls).toContain(`${testCase.marker}\\\\n`);
         expect(calls).toContain(
           `ARG=--region\nARG=us-west-2\nARG=--document-name\nARG=AWS-RunShellScript\nARG=--instance-ids\nARG=${instanceId}`,
@@ -2128,6 +2145,67 @@ describe("Authority staging lifecycle", () => {
           }),
         ).resolves.toMatchObject({ matchesExpected: false });
       }
+    } finally {
+      restore();
+    }
+  });
+
+  it("bounds a stalled, flooding, or pipe-holding AWS CLI child", async () => {
+    const fake = withFakeAws();
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_LOG: fake.log,
+      FAKE_AWS_MODE: "stall",
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    try {
+      await expect(
+        awsJson(["sts", "get-caller-identity", "--output", "json"], {
+          timeoutMs: 5,
+        }),
+      ).rejects.toThrow("deadline_exceeded");
+
+      process.env.FAKE_AWS_MODE = "flood";
+      await expect(
+        awsJson(["sts", "get-caller-identity", "--output", "json"], {
+          maxOutputBytes: 128,
+        }),
+      ).rejects.toThrow("output_limit_exceeded");
+
+      process.env.FAKE_AWS_MODE = "descendant_pipe";
+      const startedAt = Date.now();
+      await expect(
+        awsJson(["sts", "get-caller-identity", "--output", "json"], {
+          timeoutMs: 5,
+        }),
+      ).rejects.toThrow("deadline_exceeded");
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not resubmit an execute change set after a bounded CLI failure", async () => {
+    const fake = withFakeAws();
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_LOG: fake.log,
+      FAKE_AWS_MODE: "flood",
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    try {
+      await expect(
+        createAwsCliAdapters().cloudFormation!.executeChangeSet({
+          changeSetId: "change-set-bounded-execute",
+          changeSetType: "CREATE",
+          clientRequestToken: "staging-bounded-execute-20260826",
+          region: "us-west-2",
+          stackName: "echo-authority-staging-bounded-execute",
+        }),
+      ).rejects.toThrow("output_limit_exceeded");
+      expect(
+        readFileSync(fake.log, "utf8").match(
+          /ARG=cloudformation\nARG=execute-change-set/g,
+        ),
+      ).toHaveLength(1);
     } finally {
       restore();
     }

@@ -212,6 +212,15 @@ export type LifecycleDependencies = Readonly<{
 export function validateStagingLifecycleInput(
   input: unknown,
 ): StagingLifecycleInput;
+/** Internal CLI adapter with bounded-process test seams. */
+export function awsJson(
+  args: readonly string[],
+  options?: Readonly<{
+    stdin?: string;
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+  }>,
+): Promise<unknown>;
 export function runAuthorityStaging(
   action: "slot-init" | "up" | "down" | "status",
   input: unknown,
