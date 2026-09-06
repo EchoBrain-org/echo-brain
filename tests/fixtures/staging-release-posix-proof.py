@@ -73,6 +73,42 @@ PY
     original_directory = host.directory
     host.directory = lambda path, private=False: original_directory(path, private) if not path.is_absolute() or path == root or root in path.parents else None
 
+    def inspect_inventory(action='inspect-install', operation=None):
+        value = {**request, 'operation_id': operation or str(uuid.uuid4()), 'action': action}
+        def refuse_invocation(*_):
+            raise AssertionError('inventory invoked installed tooling')
+        return host.execute_request(value, host.sha(host.canonical(value)), root=root, identity=lambda *_: None, invoke=refuse_invocation)
+
+    ready = inspect_inventory()
+    assert ready['ok']
+    assert ready['diagnostic']['inventory'] == {name: {'state': 'new', 'sha256': files[name]['sha256']} for name in host.TOOLS}
+    unknown_tool = b'# unrecognized synthetic fixture\n'
+    write(root / host.TOOLS[0], unknown_tool, 0o755)
+    os.chown(root / host.TOOLS[1], 999, 988)
+    (root / host.TOOLS[2]).unlink()
+    (root / host.TOOLS[2]).symlink_to(root / '.env.clean-v1')
+    (root / host.TOOLS[3]).unlink()
+    write(root / 'fixture-hardlink', b'private fixture\n')
+    os.link(root / 'fixture-hardlink', root / host.TOOLS[3])
+    write(root / host.TOOLS[4], b'x' * 262145, 0o755)
+    (root / host.TOOLS[5]).unlink()
+    inventory_operation = str(uuid.uuid4())
+    refused = inspect_inventory(operation=inventory_operation)
+    assert not refused['ok'] and refused['diagnostic']['category'] == 'tool_hash_unknown'
+    inventory = refused['diagnostic']['inventory']
+    assert set(inventory) == set(host.TOOLS)
+    assert inventory[host.TOOLS[0]] == {'state': 'unknown', 'sha256': host.sha(unknown_tool)}
+    assert [inventory[name]['state'] for name in host.TOOLS[1:]] == ['invalid'] * 4 + ['missing']
+    assert all(inventory[name]['sha256'] is None for name in host.TOOLS[1:])
+    assert inspect_inventory(operation=inventory_operation) == refused
+    assert not inspect_inventory(action='install')['ok']
+    assert (root / host.TOOLS[0]).read_bytes() == unknown_tool
+    assert not (root / '.staging-release-guard').exists()
+    for name in host.TOOLS:
+        (root / name).unlink(missing_ok=True)
+        write(root / name, base64.b64decode(files[name]['base64']), 0o755)
+    print('PASS: complete hash-only inventory with real UID/GID; unsafe files have no digest; unknown bytes remain refused')
+
     def invoke(deploy, operation, args):
         attack = '''import os,pathlib,sys
 root=pathlib.Path(sys.argv[1])

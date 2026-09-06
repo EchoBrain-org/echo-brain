@@ -29,10 +29,11 @@ TOOL_CATEGORIES = ('tool_missing', 'tool_file_invalid', 'tool_hash_unknown')
 
 
 class Refused(Exception):
-    def __init__(self, code='precondition_failed', tool=None):
+    def __init__(self, code='precondition_failed', tool=None, inventory=None):
         super().__init__(code)
         self.code = code
         self.tool = tool
+        self.inventory = inventory
 
 
 def require(condition, code='precondition_failed'):
@@ -219,19 +220,71 @@ def result_for(request, request_hash, ok, code, diagnostic=None):
     return {'schema_version': 1, 'kind': 'echo-staging-release-host-result-v1', 'operation_id': request['operation_id'], 'request_sha256': request_hash, 'action': request['action'], 'ok': ok, 'code': code, 'diagnostic': diagnostic}
 
 
-def inspection_result(request, request_hash, category, tool=None):
+def tooling_state(request, name, digest):
+    if digest == request['files'][name]['sha256']:
+        return 'new'
+    return 'old' if digest == request['old_tool_hashes'][name] else 'unknown'
+
+
+def inventory_problem(inventory):
+    categories = {'missing': 'tool_missing', 'invalid': 'tool_file_invalid', 'unknown': 'tool_hash_unknown'}
+    for name in TOOLS:
+        if inventory[name]['state'] in categories:
+            return categories[inventory[name]['state']], name
+    return None, None
+
+
+def valid_inventory(request, inventory, category, tool):
+    if inventory is None:
+        return category != 'ready' and category not in TOOL_CATEGORIES
+    try:
+        if type(inventory) is not dict or set(inventory) != set(TOOLS):
+            return False
+        for name, entry in inventory.items():
+            if type(entry) is not dict or set(entry) != {'state', 'sha256'} or type(entry['state']) is not str:
+                return False
+            digest = entry['sha256']
+            if entry['state'] in ('missing', 'invalid'):
+                if digest is not None:
+                    return False
+            elif type(digest) is not str or re.fullmatch(r'[a-f0-9]{64}', digest) is None or entry['state'] != tooling_state(request, name, digest):
+                return False
+        problem = inventory_problem(inventory)
+        if category in ('ready', 'repair_pending'):
+            return problem == (None, None)
+        return category in TOOL_CATEGORIES and problem == (category, tool)
+    except Exception:
+        return False
+
+
+def read_tooling_inventory(request, root):
+    # All names and parents are fixed/protected. Never hash an unsafe file or
+    # any runtime/environment state; do not invoke installed tooling.
+    inventory = {}
+    for name in TOOLS:
+        try:
+            digest = sha(regular(root / name))
+            inventory[name] = {'state': tooling_state(request, name, digest), 'sha256': digest}
+        except FileNotFoundError:
+            inventory[name] = {'state': 'missing', 'sha256': None}
+        except Exception:
+            inventory[name] = {'state': 'invalid', 'sha256': None}
+    return inventory
+
+
+def inspection_result(request, request_hash, category, tool=None, inventory=None):
     # Redact at the host boundary, before SSM sees the result. Client-side
     # validation is defense in depth, not a substitute for safe host output.
     valid_tool = type(tool) is str and tool in TOOLS if category in TOOL_CATEGORIES else tool is None
-    if type(category) is not str or category not in INSPECTION_CATEGORIES or not valid_tool:
-        category, tool = 'inspection_failed', None
-    diagnostic = {'schema_version': 1, 'kind': 'echo-staging-release-install-inspection-v1', 'category': category, 'tool': tool}
+    if type(category) is not str or category not in INSPECTION_CATEGORIES or not valid_tool or not valid_inventory(request, inventory, category, tool):
+        category, tool, inventory = 'inspection_failed', None, None
+    diagnostic = {'schema_version': 2, 'kind': 'echo-staging-release-install-inspection-v2', 'category': category, 'tool': tool, 'inventory': inventory}
     return result_for(request, request_hash, category == 'ready', 'inspection_verified' if category == 'ready' else 'inspection_refused', diagnostic)
 
 
 def inspection_failure(request, request_hash, error):
     category = error.code if isinstance(error, Refused) and error.code != 'ready' else 'inspection_failed'
-    return inspection_result(request, request_hash, category, error.tool if isinstance(error, Refused) else None)
+    return inspection_result(request, request_hash, category, error.tool if isinstance(error, Refused) else None, error.inventory if isinstance(error, Refused) else None)
 
 
 def installer_preconditions(request, root):
@@ -258,23 +311,31 @@ def installer_preconditions(request, root):
         require(not candidate_present, 'candidate_present')
     if request['action'] in ('canary', 'promote', 'rollback'):
         require(candidate_present)
-    old_hashes = {}
-    for name in TOOLS:
-        try:
-            old_hashes[name] = sha(regular(root / name))
-        except FileNotFoundError:
-            raise Refused('tool_missing', name)
-        except Exception:
-            raise Refused('tool_file_invalid', name)
-        allowed = {request['files'][name]['sha256']}
-        if request['action'] in ('install', 'inspect-install'):
-            allowed.add(request['old_tool_hashes'][name])
-        if old_hashes[name] not in allowed:
-            raise Refused('tool_hash_unknown', name)
+    old_hashes, inventory = {}, None
+    if request['action'] == 'inspect-install':
+        inventory = read_tooling_inventory(request, root)
+        problem, tool = inventory_problem(inventory)
+        if problem is not None:
+            raise Refused(problem, tool, inventory)
+        old_hashes = {name: entry['sha256'] for name, entry in inventory.items()}
+    else:
+        for name in TOOLS:
+            try:
+                old_hashes[name] = sha(regular(root / name))
+            except FileNotFoundError:
+                raise Refused('tool_missing', name)
+            except Exception:
+                raise Refused('tool_file_invalid', name)
+            allowed = {request['files'][name]['sha256']}
+            if request['action'] == 'install':
+                allowed.add(request['old_tool_hashes'][name])
+            if old_hashes[name] not in allowed:
+                raise Refused('tool_hash_unknown', name)
     if request['action'] in ('install', 'inspect-install'):
         pending = pathlib.Path('environment-repair.pending.json')
-        require(not pending.exists() and not pending.is_symlink(), 'repair_pending')
-    return candidate_present, old_hashes
+        if pending.exists() or pending.is_symlink():
+            raise Refused('repair_pending', inventory=inventory)
+    return candidate_present, old_hashes, inventory
 
 
 def execute_request(request, request_hash, root=DEPLOY, identity=machine_identity, invoke=wrapper, now=time.time):
@@ -391,9 +452,9 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
     immutable(operation / 'request.json', canonical(request))
     installing = False
     try:
-        candidate_present, old_hashes = installer_preconditions(request, root)
+        candidate_present, old_hashes, inventory = installer_preconditions(request, root)
         if request['action'] == 'inspect-install':
-            result = inspection_result(request, request_hash, 'ready')
+            result = inspection_result(request, request_hash, 'ready', inventory=inventory)
         elif request['action'] == 'install':
             installing = True
             # Preflight all existing tools before replacing any one of them.

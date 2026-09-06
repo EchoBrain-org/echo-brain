@@ -342,9 +342,28 @@ When an install returns only `precondition_failed`, create a separate
 `inspect-install` plan with the same inputs and `--previous-tooling-source`.
 Inspection shares the installer's identity, mount, ownership/control-path,
 accepted-record, literal environment and hostname, candidate, old-or-new tool
-hash, and pending-repair guards. It returns only `ready` or a fixed refusal
+hash, and pending-repair guards. It returns `ready` or a fixed refusal
 category; `tool_missing`, `tool_file_invalid`, and `tool_hash_unknown` identify one of the six
-fixed reviewed tool names. A refused or interrupted inspection is not an
+fixed reviewed tool names. Once the preceding identity, path, accepted-state
+and environment-format guards pass, the version-2 diagnostic also includes a
+complete `inventory` keyed by those same six names. Each entry has exactly
+`state` and `sha256`: `new`, `old`, or `unknown` with a lowercase 64-character
+SHA-256 fingerprint, or `missing`/`invalid` with `sha256: null`. New takes
+precedence when the old and new reviewed bytes are identical. These labels
+describe equality with the request's reviewed hashes, not installation history.
+
+The inventory uses the existing no-follow, regular-file, owner, mode, link-count
+and size checks before hashing. It never hashes the environment or follows a
+tool symlink to another file. All six entries are collected even when one is
+unknown or unsafe; the result retains the first tool refusal in the fixed tool
+order and does not claim readiness. A pending-repair refusal can include a
+complete safe inventory. Failures before tooling inspection, or unexpected
+diagnostic/control-path failures, return no inventory (`null`). Invalid inventory
+is redacted to `inspection_failed` on the host before SSM sees it, and the local
+validator independently rejects malformed or contradictory state/hash bindings.
+Older saved version-1 diagnostics remain pollable with their original shapes
+and request/parameters hashes; existing receipts are never rewritten to add an
+inventory. A refused or interrupted inspection is not an
 installation failure and is never reported as success. No exception text,
 wrapper output, environment value, unknown setting name, host-supplied path, or
 file content is returned. Identity and retained-mount failures are distinct;
@@ -358,7 +377,12 @@ it does not prove that no tooling bytes changed. Generic `precondition_failed`
 results, including historical receipts, remain valid and may also represent
 partial installation. Inspection
 does not retroactively diagnose an old attempt or authorize overwriting unknown
-tools. A ready inspection proves only current prerequisites, not runtime health
+tools. Compare a returned inventory with reviewed repository/artifact history
+to establish compatible provenance for the full tool set. Do not infer a
+previous source from the candidate image, try arbitrary revisions until a guard
+passes, automatically allowlist an unknown digest, or overwrite unknown bytes.
+The inventory is evidence, not installation or release authorization.
+A ready inspection proves only current prerequisites, not runtime health
 or installation completion. Continue to stop on unknown state.
 
 ```sh
