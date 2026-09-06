@@ -803,7 +803,8 @@ running_exact_release() {
   [[ "$(docker inspect --format '{{index .Config.Labels "io.echo-brain.runtime-profile-sha256"}}' "$proxy_id")" == "$expected_profile_sha" ]] || return 1
   image_id="$(docker inspect --format '{{.Image}}' "$authority_id")"
   [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
-  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id" | grep -Fqx "$expected" || return 1
+  # Drain all digests so an early match cannot SIGPIPE docker under pipefail.
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image_id" | grep -Fx "$expected" >/dev/null || return 1
   image_source_matches "$image_id" "$expected_source" || return 1
   running_staging_journey_telemetry_identity_matches \
     "$authority_id" "$image_id" "$expected_source"

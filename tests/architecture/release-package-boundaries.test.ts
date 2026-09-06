@@ -2,12 +2,15 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createCoherentWorktreeSnapshot } from "../fixtures/coherent-worktree.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const RETIRED_ARTIFACTS = [
@@ -47,27 +50,29 @@ function npmPackDryRun(packageRoot: string): { files: Array<{ path: string }> } 
 
 describe("workspace release package boundaries", () => {
   it("removes stale retired dist modules before each package pack", () => {
-    for (const artifact of RETIRED_ARTIFACTS) {
-      const packageRoot = resolve(REPO, artifact.packagePath);
-      const manifest = JSON.parse(
-        readFileSync(resolve(packageRoot, "package.json"), "utf8"),
-      ) as { scripts?: Record<string, string> };
-      expect(manifest.scripts?.prepack).toBe("npm run clean && npm run build");
+    const fixtureRoot = mkdtempSync(resolve(tmpdir(), "echo-release-pack-"));
+    try {
+      const repository = createCoherentWorktreeSnapshot(REPO, fixtureRoot);
+      for (const artifact of RETIRED_ARTIFACTS) {
+        const packageRoot = resolve(repository, artifact.packagePath);
+        const manifest = JSON.parse(
+          readFileSync(resolve(packageRoot, "package.json"), "utf8"),
+        ) as { scripts?: Record<string, string> };
+        expect(manifest.scripts?.prepack).toBe("npm run clean && npm run build");
 
-      const staleArtifact = resolve(packageRoot, artifact.retiredPath);
-      mkdirSync(dirname(staleArtifact), { recursive: true });
-      writeFileSync(staleArtifact, "export const retired = true;\n");
-      expect(existsSync(staleArtifact)).toBe(true);
-      try {
+        const staleArtifact = resolve(packageRoot, artifact.retiredPath);
+        mkdirSync(dirname(staleArtifact), { recursive: true });
+        writeFileSync(staleArtifact, "export const retired = true;\n");
+        expect(existsSync(staleArtifact)).toBe(true);
         const packed = npmPackDryRun(packageRoot);
         const retiredPackPath = relative(packageRoot, staleArtifact);
         expect(packed.files.map((file) => file.path)).not.toContain(
           retiredPackPath,
         );
         expect(existsSync(staleArtifact)).toBe(false);
-      } finally {
-        rmSync(staleArtifact, { force: true });
       }
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
     }
   });
 });

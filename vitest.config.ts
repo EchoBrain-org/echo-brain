@@ -10,6 +10,7 @@ export default defineConfig({
     ],
     testTimeout: 180_000,
     hookTimeout: 180_000,
-    fileParallelism: false,
+    // Keep process-heavy architecture fixtures bounded while other files run.
+    maxWorkers: 2,
   },
 });

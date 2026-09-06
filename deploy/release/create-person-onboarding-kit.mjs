@@ -2,7 +2,6 @@
 
 /** Build one macOS-arm64 employee kit with an exact client and Node runtime. */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -18,6 +17,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
+import { readValidatedPersonClientReleaseArtifact, sha256File } from './release-artifact-validation.mjs';
 
 const releaseDirectory = resolve(import.meta.dirname);
 const repository = resolve(releaseDirectory, '..', '..');
@@ -103,47 +103,6 @@ function run(command, args, description) {
     fail(`${description}: ${(result.stderr || result.stdout || 'command failed').trim()}`);
   }
   return result.stdout;
-}
-
-function sha256(path) {
-  return createHash('sha256').update(readFileSync(path)).digest('hex');
-}
-
-function parseCanonicalRelease(path) {
-  const canonical = run(process.execPath, [releaseValidator, 'validate', path], 'release record is invalid');
-  try {
-    return JSON.parse(canonical);
-  } catch {
-    fail('release validator returned invalid JSON');
-  }
-}
-
-function verifyArtifactIdentity(artifact, release) {
-  const listed = run('tar', ['-tzf', artifact], 'client artifact cannot be read');
-  const entries = listed.split('\n').filter(Boolean);
-  if (!entries.includes('package/dist/build-identity.v1.json')) {
-    fail('client artifact lacks its packaged build identity');
-  }
-  let identity;
-  try {
-    identity = JSON.parse(
-      run('tar', ['-xOzf', artifact, 'package/dist/build-identity.v1.json'], 'client artifact identity cannot be read'),
-    );
-  } catch {
-    fail('client artifact build identity is invalid JSON');
-  }
-  if (
-    identity === null ||
-    typeof identity !== 'object' ||
-    Array.isArray(identity) ||
-    JSON.stringify(Object.keys(identity).sort()) !==
-      JSON.stringify(['kind', 'product_version', 'schema_version', 'source_kind', 'source_sha']) ||
-    identity.schema_version !== 1 ||
-    identity.kind !== 'echo-packaged-build-identity' ||
-    identity.product_version !== release.person_client.version ||
-    identity.source_kind !== 'materialized-commit' ||
-    identity.source_sha !== release.source_sha
-  ) fail('client artifact build identity does not match the release record');
 }
 
 function verifyOverlayIdentity(appArchive, release) {
@@ -245,11 +204,14 @@ function main(argv) {
   absentPath(outputPath, 'output kit');
   absentPath(digestPath, 'output kit digest');
 
-  const release = parseCanonicalRelease(releasePath);
-  if (sha256(artifactPath) !== release.person_client.artifact_sha256) {
-    fail('client artifact SHA-256 does not match the release record');
-  }
-  verifyArtifactIdentity(artifactPath, release);
+  const release = readValidatedPersonClientReleaseArtifact({
+    artifactPath,
+    releasePath,
+    releaseValidator,
+    nodeExecutable: process.execPath,
+    run,
+    fail,
+  });
   verifyOverlayIdentity(appPath, release);
   const runtime = runtimeIdentity(runtimeNode);
   const manifest = {
@@ -257,14 +219,14 @@ function main(argv) {
     kind: 'echo-person-onboarding-kit-v1',
     release_id: release.release_id,
     source_sha: release.source_sha,
-    release_record_sha256: sha256(releasePath),
-    person_client_artifact_sha256: sha256(artifactPath),
-    desktop_app_archive_sha256: sha256(appPath),
+    release_record_sha256: sha256File(releasePath),
+    person_client_artifact_sha256: sha256File(artifactPath),
+    desktop_app_archive_sha256: sha256File(appPath),
     runtime: {
       version: runtime.version,
       platform: runtime.platform,
       architecture: runtime.architecture,
-      node_sha256: sha256(runtimeNode),
+      node_sha256: sha256File(runtimeNode),
     },
   };
 
@@ -299,7 +261,7 @@ function main(argv) {
     }
     run('tar', ['-czf', pendingKit, '-C', stagingParent, kitName], 'could not create onboarding kit');
     chmodSync(pendingKit, 0o600);
-    const kitSha256 = sha256(pendingKit);
+    const kitSha256 = sha256File(pendingKit);
     writeFileSync(pendingDigest, `${kitSha256}  ${basename(outputPath)}\n`, {
       encoding: 'utf8',
       mode: 0o600,

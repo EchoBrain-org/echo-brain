@@ -5,7 +5,6 @@
  * inputs. The output contains no deployment material or credentials.
  */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -21,6 +20,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
+import { readValidatedPersonClientReleaseArtifact, sha256File } from './release-artifact-validation.mjs';
 
 const releaseDirectory = resolve(import.meta.dirname);
 const repository = resolve(releaseDirectory, '..', '..');
@@ -94,54 +94,6 @@ function run(command, args, description, options = {}) {
   return result.stdout;
 }
 
-function sha256(path) {
-  return createHash('sha256').update(readFileSync(path)).digest('hex');
-}
-
-function parseCanonicalRelease(path) {
-  const canonical = run(process.execPath, [releaseValidator, 'validate', path], 'release record is invalid');
-  let record;
-  try {
-    record = JSON.parse(canonical);
-  } catch {
-    fail('release validator returned invalid JSON');
-  }
-  return record;
-}
-
-function verifyArtifactIdentity(artifact, release) {
-  const listed = run('tar', ['-tzf', artifact], 'client artifact cannot be read');
-  const entries = listed.split('\n').filter(Boolean);
-  if (!entries.includes('package/dist/build-identity.v1.json')) {
-    fail('client artifact lacks its packaged build identity');
-  }
-  const identityBytes = run(
-    'tar',
-    ['-xOzf', artifact, 'package/dist/build-identity.v1.json'],
-    'client artifact build identity cannot be read',
-  );
-  let identity;
-  try {
-    identity = JSON.parse(identityBytes);
-  } catch {
-    fail('client artifact build identity is invalid JSON');
-  }
-  const expectedKeys = ['kind', 'product_version', 'schema_version', 'source_kind', 'source_sha'];
-  if (
-    identity === null ||
-    typeof identity !== 'object' ||
-    Array.isArray(identity) ||
-    JSON.stringify(Object.keys(identity).sort()) !== JSON.stringify(expectedKeys) ||
-    identity.schema_version !== 1 ||
-    identity.kind !== 'echo-packaged-build-identity' ||
-    identity.product_version !== release.person_client.version ||
-    identity.source_kind !== 'materialized-commit' ||
-    identity.source_sha !== release.source_sha
-  ) {
-    fail('client artifact build identity does not match the release record');
-  }
-}
-
 function usage() {
   return 'usage: create-offline-person-client-bundle.mjs --release <canonical-release.json> --artifact <exact-client.tgz> --output <new-bundle.tar.gz>';
 }
@@ -170,11 +122,15 @@ function main(argv) {
   absentPath(outputPath, 'output bundle');
   absentPath(digestPath, 'output bundle digest');
 
-  const release = parseCanonicalRelease(releasePath);
-  if (sha256(artifactPath) !== release.person_client.artifact_sha256) {
-    fail('client artifact SHA-256 does not match the release record');
-  }
-  verifyArtifactIdentity(artifactPath, release);
+  const release = readValidatedPersonClientReleaseArtifact({
+    artifactPath,
+    releasePath,
+    releaseValidator,
+    nodeExecutable: process.execPath,
+    run,
+    fail,
+    artifactIdentityReadDescription: 'client artifact build identity cannot be read',
+  });
 
   const stagingParent = mkdtempSync(join(outputParent, '.echo-offline-person-client-bundle-'));
   chmodSync(stagingParent, 0o700);
@@ -196,7 +152,7 @@ function main(argv) {
     chmodSync(join(bundleRoot, 'install.sh'), 0o755);
     run('tar', ['-czf', pendingBundle, '-C', stagingParent, bundleName], 'could not create bundle');
     chmodSync(pendingBundle, 0o600);
-    const bundleSha256 = sha256(pendingBundle);
+    const bundleSha256 = sha256File(pendingBundle);
     writeFileSync(pendingDigest, `${bundleSha256}  ${basename(outputPath)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     publishNoReplace(pendingDigest, digestPath, 'output bundle digest');
     publishNoReplace(pendingBundle, outputPath, 'output bundle');
