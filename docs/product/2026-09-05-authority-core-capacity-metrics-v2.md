@@ -6,8 +6,8 @@ publication, retrieval, deterministic evidence composition, audit ordering and
 replay. It excludes providers, HTTP transport, OIDC, Slack, model behavior,
 prompt quality, provider costs and provider latency.
 
-The executable coordinates are [metrics.v2.json](../../tools/capacity/metrics.v2.json).
-`node tools/capacity/verify-contract.mjs` checks its definition digest and
+The executable coordinates are [metrics.v2.json](../../tools/evals/authority-core/metrics.v2.json).
+`node tools/evals/authority-core/verify-contract.mjs` checks its definition digest and
 numeric invariants. That check is not a run and never passes a milestone.
 
 | Point | Active employees N | Searchable history | Atoms minimum | Postings minimum |

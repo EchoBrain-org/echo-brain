@@ -5,13 +5,13 @@
  * this module never accepts a reader tuple or manufactures authorization.
  */
 import { join } from "node:path";
-import { openAuthorityDatabase } from "../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
-import { SqlitePersonAnswerCompositionAuditV1 } from "../../services/organization-authority/dist/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import { SqlitePersonRecordReadAuditV1 } from "../../services/organization-authority/dist/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { createPersonAnswerRouteV1 } from "../../services/organization-authority/dist/composition/person-answer-route.js";
-import { createPersonRecordSearchRouteV1 } from "../../services/organization-authority/dist/composition/person-record-search-route.js";
-import { readableSearchGenerationContractV1 } from "../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
-import { verifyAuthorityStateLineage } from "../../services/organization-authority/dist/composition/verify-authority-state-lineage.js";
+import { openAuthorityDatabase } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
+import { SqlitePersonAnswerCompositionAuditV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
+import { SqlitePersonRecordReadAuditV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import { createPersonAnswerRouteV1 } from "../../../services/organization-authority/dist/composition/person-answer-route.js";
+import { createPersonRecordSearchRouteV1 } from "../../../services/organization-authority/dist/composition/person-record-search-route.js";
+import { readableSearchGenerationContractV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
+import { verifyAuthorityStateLineage } from "../../../services/organization-authority/dist/composition/verify-authority-state-lineage.js";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { expandReadableSearchRelatedAtomsV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 

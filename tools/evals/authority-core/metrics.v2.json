@@ -2,7 +2,7 @@
   "schema_version": 2,
   "kind": "authority-core-capacity-metrics-v2",
   "status": "frozen-rules-baseline-not-run-full-runner-not-implemented-no-capacity-claim",
-  "definition": "../../docs/product/2026-09-05-authority-core-capacity-metrics-v2.md",
+  "definition": "../../../docs/product/2026-09-05-authority-core-capacity-metrics-v2.md",
   "evaluation_scope": {
     "objective": "authority-core-runtime-capacity",
     "included": [
@@ -243,8 +243,8 @@
   },
   "profile_pin": {
     "algorithm": "sha256-sorted-json-rules-and-raw-definition-v1",
-    "definition_sha256": "4424f6934a50c70e47de0e17ea735a1c23793d20108b2bfbf7e8e6e1c6148014",
-    "sha256": "6ddeabbb963cfd015e7424a588566c58d547a5ffc733293cf08414220f246160",
+    "definition_sha256": "07dab5141e4e4d3f609ec18a4c3f4bea0284ee9b591e5cb590a8350fd8c81db5",
+    "sha256": "c4f8e08d201c284f7fd3f6a2ae69a433f404b10a8ac6f08abf6e3f2789fdb7ca",
     "change_policy": "any-rule-or-definition-change-requires-v3-and-a-new-baseline"
   },
   "implementation_status": {

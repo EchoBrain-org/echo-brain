@@ -1,6 +1,6 @@
 /** Core-stage deterministic meeting input. Provider admission is fixture setup only. */
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { assertCanonicalDecisionSet, assertCanonicalMeetingDocument } from "../../services/organization-authority/dist/processing/core/index.js";
+import { assertCanonicalDecisionSet, assertCanonicalMeetingDocument } from "../../../services/organization-authority/dist/processing/core/index.js";
 
 const SOURCE = Object.freeze({ kind: "meeting-source", adapter_id: "core-input", instance_id: "core-input-v1", version: "1.0.0" });
 const PROCESSOR = Object.freeze({ kind: "decision-processor", adapter_id: "core-input", instance_id: "core-processor-v1", version: "1.0.0" });

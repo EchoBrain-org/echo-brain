@@ -5,8 +5,8 @@ import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { openAuthorityDatabase } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
-import { bootstrapOrganizationAuthorityState } from "../../../services/organization-authority/dist/composition/organization-authority-state-bootstrap.js";
+import { openAuthorityDatabase } from "../../../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
+import { bootstrapOrganizationAuthorityState } from "../../../../services/organization-authority/dist/composition/organization-authority-state-bootstrap.js";
 import { createCoreIdentity } from "../core-identity.mjs";
 import { coreInputIdentities, createCoreInput } from "../core-input.mjs";
 

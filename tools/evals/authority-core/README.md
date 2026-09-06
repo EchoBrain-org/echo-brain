@@ -2,8 +2,17 @@
 
 Optimize the shared runtime's latency and efficiency as active employees **N**
 and retained history grow. The
-[core metric contract](../../docs/product/2026-09-05-authority-core-capacity-metrics-v2.md)
+[core metric contract](../../../docs/product/2026-09-05-authority-core-capacity-metrics-v2.md)
 defines the boundary and gates.
+
+Before any baseline, the user-authorized relocation into `tools/evals/authority-core/`
+re-pinned V2 solely to update repository paths. This is a one-time exception to
+the frozen definition's change policy: all workload, oracle, gate and hardware
+rules are unchanged. The previous profile digest was
+`6ddeabbb963cfd015e7424a588566c58d547a5ffc733293cf08414220f246160`;
+the relocated digest is
+`c4f8e08d201c284f7fd3f6a2ae69a433f404b10a8ac6f08abf6e3f2789fdb7ca`.
+Future metric changes still require a new profile and baseline.
 
 No provider clients, HTTP fixtures, simulated network waits, extraction-quality
 scores or nondeterministic model behavior run inside this benchmark. Canonical
@@ -26,6 +35,8 @@ npm run check
 ```
 
 These commands verify the components. **They do not run a capacity benchmark.**
+CI runs the component tests and the single-meeting checkpoint after the repository
+checks.
 
 `grading.mjs` is diagnostic arithmetic only. Its measurement result is never a
 qualification or milestone result: the actual run-integrity verifier and

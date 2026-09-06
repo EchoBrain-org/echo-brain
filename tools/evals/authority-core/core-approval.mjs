@@ -16,31 +16,31 @@ import {
 import {
   buildExternalHumanIdentityLinkContractV2,
   buildOrganizationToolConnectionContractV2,
-} from "../../packages/organization-control-plane/dist/application/person-slack-reaction-approval-contracts-v2.js";
+} from "../../../packages/organization-control-plane/dist/application/person-slack-reaction-approval-contracts-v2.js";
 import {
   PrivateSlackDmApprovalStagerV1,
-} from "../../services/organization-authority/dist/composition/providers/slack/private-approval/private-slack-dm-approval-stager-v1.js";
+} from "../../../services/organization-authority/dist/composition/providers/slack/private-approval/private-slack-dm-approval-stager-v1.js";
 import {
   PrivateSlackApprovalTerminalCoordinatorV1,
-} from "../../services/organization-authority/dist/composition/providers/slack/private-approval/private-slack-approval-terminal-coordinator-v1.js";
+} from "../../../services/organization-authority/dist/composition/providers/slack/private-approval/private-slack-approval-terminal-coordinator-v1.js";
 import {
   resolveCurrentPrivateSlackConnectionV1,
-} from "../../services/organization-authority/dist/composition/providers/slack/private-approval/resolve-current-private-slack-connection-v1.js";
+} from "../../../services/organization-authority/dist/composition/providers/slack/private-approval/resolve-current-private-slack-connection-v1.js";
 import {
   resolveMeetingOwnerPrivateSlackApprovalReviewerV1,
-} from "../../services/organization-authority/dist/composition/providers/slack/private-approval/resolve-meeting-owner-private-slack-approval-reviewer-v1.js";
+} from "../../../services/organization-authority/dist/composition/providers/slack/private-approval/resolve-meeting-owner-private-slack-approval-reviewer-v1.js";
 import {
   SqlitePrivateSlackApprovalAssignmentStateV1,
-} from "../../services/organization-authority/dist/composition/providers/slack/private-approval/sqlite-private-slack-approval-assignment-state-v1.js";
+} from "../../../services/organization-authority/dist/composition/providers/slack/private-approval/sqlite-private-slack-approval-assignment-state-v1.js";
 import {
   SqlitePrivateSlackApprovalTerminalAuthorityV1,
-} from "../../services/organization-authority/dist/composition/providers/slack/private-approval/sqlite-private-slack-approval-terminal-authority-v1.js";
+} from "../../../services/organization-authority/dist/composition/providers/slack/private-approval/sqlite-private-slack-approval-terminal-authority-v1.js";
 import {
   SqliteStablePrivateApprovalAuthorityFenceV1,
-} from "../../services/organization-authority/dist/composition/providers/slack/private-approval/sqlite-stable-private-approval-authority-fence-v1.js";
+} from "../../../services/organization-authority/dist/composition/providers/slack/private-approval/sqlite-stable-private-approval-authority-fence-v1.js";
 import {
   createPrivateSlackBlockV4RecordWriterV1,
-} from "../../services/organization-authority/dist/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
+} from "../../../services/organization-authority/dist/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
 
 const SCOPES = Object.freeze([
   "channels:history", "channels:read", "chat:write", "im:history",

@@ -5,14 +5,14 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ANALYZER_SOURCE_SHA256 } from "./corpus-v1.mjs";
 
-const ACCEPTED_V2_SHA256 = "6ddeabbb963cfd015e7424a588566c58d547a5ffc733293cf08414220f246160";
+const ACCEPTED_V2_SHA256 = "c4f8e08d201c284f7fd3f6a2ae69a433f404b10a8ac6f08abf6e3f2789fdb7ca";
 const here = dirname(fileURLToPath(import.meta.url));
 const contractPath = resolve(process.argv[2] ?? resolve(here, "metrics.v2.json"));
 const contract = JSON.parse(readFileSync(contractPath, "utf8"));
 const definitionPath = resolve(process.argv[3] ?? resolve(dirname(contractPath), contract.definition));
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 assert.equal(
-  hash(readFileSync(resolve(here, "../../packages/organization-retrieval/src/application/analyzer.ts"))),
+  hash(readFileSync(resolve(here, "../../../packages/organization-retrieval/src/application/analyzer.ts"))),
   ANALYZER_SOURCE_SHA256,
   "Candidate analyzer changed; verify oracle compatibility before using this profile",
 );
