@@ -2,17 +2,14 @@
 
 Optimize the shared runtime's latency and efficiency as active employees **N**
 and retained history grow. The
-[core metric contract](../../../docs/product/2026-09-05-authority-core-capacity-metrics-v2.md)
+[core metric contract](../../../docs/product/2026-09-06-authority-core-capacity-metrics-v3.md)
 defines the boundary and gates.
 
-Before any baseline, the user-authorized relocation into `tools/evals/authority-core/`
-re-pinned V2 solely to update repository paths. This is a one-time exception to
-the frozen definition's change policy: all workload, oracle, gate and hardware
-rules are unchanged. The previous profile digest was
-`6ddeabbb963cfd015e7424a588566c58d547a5ffc733293cf08414220f246160`;
-the relocated digest is
-`c4f8e08d201c284f7fd3f6a2ae69a433f404b10a8ac6f08abf6e3f2789fdb7ca`.
-Future metric changes still require a new profile and baseline.
+V3 replaces the frozen, baseline-not-run V2 profile because V2 assigned its
+70/30 policy split per atom, while the canonical approval boundary assigns one
+policy to all facts in an approved meeting. V3 rounds the shared-policy count
+at the whole-meeting level and retains V2's definition/profile digests as
+historical evidence. No baseline or capacity result carries from V2 to V3.
 
 No provider clients, HTTP fixtures, simulated network waits, extraction-quality
 scores or nondeterministic model behavior run inside this benchmark. Canonical
@@ -24,7 +21,7 @@ The metric components are:
 
 | File | Purpose |
 | --- | --- |
-| `metrics.v2.json`, `verify-contract.mjs` | Pin the core-only contract and verify its formulas. |
+| `metrics.v3.json`, `verify-contract.mjs` | Pin the core-only contract and verify its formulas. |
 | `corpus-v1.mjs` | Generate provider-free history templates and logical postings. |
 | `oracle-v1.mjs` | Independently check ranking, observed heads, content, policy ownership and the complete index. |
 | `grading.mjs` | Score every offered operation for diagnostics; failed work is infinite latency. It cannot award a milestone. |

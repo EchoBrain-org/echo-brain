@@ -149,6 +149,20 @@ function itemKindFor(index) {
   return index % 10 === 0 ? "decision" : index % 2 === 0 ? "action" : "rationale";
 }
 
+export function policyForSource(sourceIndex) {
+  return Math.floor(((sourceIndex + 1) * 7) / 10) > Math.floor((sourceIndex * 7) / 10)
+    ? POLICY_ORGANIZATION_MEMBER
+    : POLICY_RESTRICTED_REVIEWER;
+}
+
+export function ownerIndexForSource(sourceIndex, ownerCount) {
+  return (sourceIndex + Math.floor(sourceIndex / 10)) % ownerCount;
+}
+
+export function ageBucketForSource(sourceIndex, sourceCount) {
+  return Math.min(9, Math.floor((sourceIndex * 10) / sourceCount));
+}
+
 function buildAtom({ index, logPosition, ownerCount, vocabulary, cdf, random, ageBucket, historyDays }) {
   const itemKind = itemKindFor(index);
   // "decision" is a controlled category posting under the real analyzer. It
@@ -160,17 +174,20 @@ function buildAtom({ index, logPosition, ownerCount, vocabulary, cdf, random, ag
     const frequency = sampleFrequency(random);
     for (let repeat = 0; repeat < frequency; repeat += 1) renderedTerms.push(term);
   }
-  // Distribute the 70/30 policy split through time while retaining the exact
-  // floor(0.7 * atom_count) organization-member total at every milestone.
-  const policyId = Math.floor(((index + 1) * 7) / 10) > Math.floor((index * 7) / 10)
-    ? POLICY_ORGANIZATION_MEMBER
-    : POLICY_RESTRICTED_REVIEWER;
+  const sourceIndex = Math.floor(index / 5);
+  // The production approval boundary assigns one policy to the whole frozen
+  // candidate, so all five facts from this source use its one policy. The
+  // floor rule is applied to approved meetings, not individual facts.
+  const policyId = policyForSource(sourceIndex);
   // Keep all five facts from a meeting with one owner. Rotating per atom would
   // couple reviewer identities to the repeating 70/30 policy pattern.
-  const ownerIndex = Math.floor(index / 5) % ownerCount;
+  // The exact fractional policy schedule repeats every ten meetings. Rotate
+  // meeting ownership at that boundary so restricted meetings still cover all
+  // admitted reviewers instead of selecting a fixed owner subset.
+  const ownerIndex = ownerIndexForSource(sourceIndex, ownerCount);
   const atomBase = {
     owner_id: `owner-${String(ownerIndex).padStart(3, "0")}`,
-    source_id: `source-${String(Math.floor(index / 5)).padStart(8, "0")}`,
+    source_id: `source-${String(sourceIndex).padStart(8, "0")}`,
     source_revision: 1,
     atom_order: index % 5,
     log_position: logPosition,
@@ -272,7 +289,9 @@ export function buildSyntheticCorpus({ milestone = "M1", seed = "capacity-v1" } 
   const random = seededRandom(seed);
   const atoms = [];
   for (let index = 0; index < shape.atoms; index += 1) {
-    const ageBucket = Math.min(9, Math.floor((index * 10) / shape.atoms));
+    const sourceIndex = Math.floor(index / 5);
+    const sourceCount = shape.atoms / 5;
+    const ageBucket = ageBucketForSource(sourceIndex, sourceCount);
     atoms.push(buildAtom({
       index,
       logPosition: index + 1,
@@ -362,11 +381,23 @@ export function assertCorpusShape(corpus) {
   if (corpus.atoms.length !== expected.atoms) throw new Error("corpus atom count differs from milestone");
   const postingCount = logicalPostings(corpus.atoms).length;
   if (postingCount !== corpus.atoms.length * 25) throw new Error("corpus must have exactly 25 logical postings per atom");
-  const expectedOrganization = Math.floor((corpus.atoms.length * 7) / 10);
+  const sourceGroups = Object.values(Object.groupBy(corpus.atoms, (atom) => atom.source_id));
+  if (sourceGroups.some((atoms) => atoms.length !== 5)) {
+    throw new Error("corpus must have exactly five facts per approved meeting");
+  }
+  if (sourceGroups.some((atoms) => new Set(atoms.map((atom) => atom.policy_id)).size !== 1)) {
+    throw new Error("all facts from an approved meeting must share one policy");
+  }
+  if (sourceGroups.some((atoms) => new Set(atoms.map((atom) => atom.age_bucket)).size !== 1)) {
+    throw new Error("all facts from an approved meeting must share one age bucket");
+  }
+  const expectedOrganization = Math.floor((sourceGroups.length * 7) / 10) * 5;
   const organization = corpus.atoms.filter((atom) => atom.policy_id === POLICY_ORGANIZATION_MEMBER).length;
   if (organization !== expectedOrganization) throw new Error("corpus must have a 70/30 policy split with deterministic floor rounding");
-  const buckets = Array.from({ length: 10 }, (_, bucket) => corpus.atoms.filter((atom) => atom.age_bucket === bucket).length);
-  if (buckets.some((count) => count === 0) || Math.max(...buckets) - Math.min(...buckets) > 1) {
+  const sourceBuckets = Array.from({ length: 10 }, (_, bucket) =>
+    sourceGroups.filter((atoms) => atoms[0].age_bucket === bucket).length);
+  const buckets = sourceBuckets.map((count) => count * 5);
+  if (sourceBuckets.some((count) => count === 0) || Math.max(...sourceBuckets) - Math.min(...sourceBuckets) > 1) {
     throw new Error("corpus age buckets must be balanced");
   }
   if (!corpus.atoms.some((atom) => atom.source_age_days >= corpus.history_calendar_days)) {
