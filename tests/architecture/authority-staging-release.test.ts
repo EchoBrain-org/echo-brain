@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
-import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
+import type { StagingReleasePlanOptions, StagingReleaseRequest } from '../../tools/authority-staging-release.mjs';
 
 const temporary: string[] = [];
 const REPO = resolve(import.meta.dirname, '../..');
@@ -84,6 +84,22 @@ describe('bounded staging release operator', () => {
     expectTypeOf<Paths & { action: 'status'; contentTelemetry: 'true' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
     expectTypeOf<Paths & { action: 'promote'; approval: string }>().toMatchTypeOf<StagingReleasePlanOptions>();
     expectTypeOf<Paths & { action: 'stage'; contentTelemetry: 'true' }>().toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'install' | 'inspect-install' }>().toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'install' | 'inspect-install'; toolingMigration: 'legacy-staging-host-v1' }>().toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'install'; toolingMigration: 'anything-else' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'status'; toolingMigration: 'legacy-staging-host-v1' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'stage'; toolingMigration: 'legacy-staging-host-v1' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'promote'; approval: string; toolingMigration: 'legacy-staging-host-v1' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
+    type MigrationRequest = Extract<StagingReleaseRequest, { schema_version: 3 }>;
+    expectTypeOf<MigrationRequest>().not.toBeNever();
+    expectTypeOf<MigrationRequest['action']>().toEqualTypeOf<'install' | 'inspect-install'>();
+    expectTypeOf<MigrationRequest['kind']>().toEqualTypeOf<'echo-staging-release-request-v3'>();
+    expectTypeOf<MigrationRequest['tooling_migration']>().toEqualTypeOf<'legacy-staging-host-v1'>();
+    expectTypeOf<MigrationRequest['approval']>().toBeNull();
+    expectTypeOf<MigrationRequest['content_telemetry']>().toBeNull();
+    expectTypeOf<Omit<MigrationRequest, 'tooling_migration'>>().not.toMatchTypeOf<StagingReleaseRequest>();
+    expectTypeOf<Omit<MigrationRequest, 'action'> & { action: 'diagnose' }>().not.toMatchTypeOf<StagingReleaseRequest>();
+    expectTypeOf<Extract<StagingReleaseRequest, { schema_version: 1 | 2 }> & { tooling_migration: 'legacy-staging-host-v1' }>().not.toMatchTypeOf<StagingReleaseRequest>();
   });
 
   it('does not accept arbitrary commands or a production operation', () => {
@@ -110,10 +126,13 @@ describe('bounded staging release operator', () => {
 
   it('uses a new request version only for the exact named install migration', () => {
     const f = fixture();
+    // @ts-expect-error Untrusted JS/CLI callers still require action validation.
     expect(() => planStagingRelease({ ...f.options, action: 'status', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies)).toThrow('tooling_migration_invalid');
+    // @ts-expect-error Untrusted JS/CLI callers still require migration-name validation.
     expect(() => planStagingRelease({ ...f.options, action: 'install', toolingMigration: 'anything-else' }, f.dependencies)).toThrow('tooling_migration_invalid');
     planStagingRelease({ ...f.options, action: 'install', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies);
-    const request = f.request();
+    const request = validateReleaseRequest(f.request(), f.dependencies.readSource);
+    if (request.schema_version !== 3) throw new Error('Expected the named migration to produce a V3 request');
     expect(request).toMatchObject({
       schema_version: 3,
       kind: 'echo-staging-release-request-v3',
