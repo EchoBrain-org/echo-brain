@@ -425,11 +425,14 @@ function changeSetRequest(
   initializeBlankDataVolume = false,
   resumeRetainedAuthority = false,
 ) {
+  const edgePlanBinding =
+    action === "slot-init" ? canonicalEdgePlanBinding(input) : undefined;
   return Object.freeze({
     capabilities: Object.freeze(["CAPABILITY_IAM"]),
     changeSetName: changeSetName(input, action),
     changeSetType: type,
     clientToken: input.operationId,
+    edgePlanBinding,
     onStackFailure: type === "CREATE" ? "DO_NOTHING" : undefined,
     parameters: buildParameters(
       input,
@@ -575,19 +578,19 @@ async function planStack(
 ) {
   const existing = await describeExactStack(input, dependencies);
   const createChangeSet = adapterFunction(dependencies, "createChangeSet");
-  const planned = await createChangeSet(
-    changeSetRequest(
-      input,
-      action,
-      changeSetTypeFor(existing),
-      hostEnabled,
-      setupArtifact,
-      initializeBlankDataVolume,
-      resumeRetainedAuthority,
-    ),
+  const request = changeSetRequest(
+    input,
+    action,
+    changeSetTypeFor(existing),
+    hostEnabled,
+    setupArtifact,
+    initializeBlankDataVolume,
+    resumeRetainedAuthority,
   );
+  const planned = await createChangeSet(request);
   const plan = checkedChangeSet(planned);
   return Object.freeze({
+    edgePlanBinding: request.edgePlanBinding,
     existing,
     plan: assertChangeBoundary(plan, action),
   });
@@ -616,7 +619,11 @@ async function reviewedPlanStack(
     checkedChangeSet(await describeChangeSet(expected)),
     action,
   );
-  return Object.freeze({ existing, plan });
+  return Object.freeze({
+    edgePlanBinding: expected.edgePlanBinding,
+    existing,
+    plan,
+  });
 }
 
 async function executePlannedStack(input, plan, dependencies) {
@@ -642,7 +649,7 @@ async function executePlannedStack(input, plan, dependencies) {
   return current;
 }
 
-function publicPlan(plan, hostEnabled) {
+function publicPlan(plan, hostEnabled, edgePlanBinding = undefined) {
   return Object.freeze({
     change_set_actions: plan.actions,
     change_set_created: plan.kind === "change_set",
@@ -652,7 +659,17 @@ function publicPlan(plan, hostEnabled) {
         ? undefined
         : Object.freeze({ ...plan.artifact }),
     host_enabled: hostEnabled,
+    edge_coordinates: edgePlanBinding,
     no_changes: plan.kind === "no_changes",
+  });
+}
+
+function canonicalEdgePlanBinding(input) {
+  return Object.freeze({
+    account_id: input.edge.accountId,
+    hostname: input.edge.hostname,
+    slot_id: input.slotId,
+    zone_id: input.edge.zoneId,
   });
 }
 
@@ -1024,7 +1041,7 @@ async function runSlotInit(input, { execute = false, ...dependencies } = {}) {
       input,
       "slot-init",
       "planned",
-      publicPlan(planned.plan, false),
+      publicPlan(planned.plan, false, planned.edgePlanBinding),
     );
 
   const stack = await executePlannedStack(input, planned.plan, dependencies);
@@ -1056,7 +1073,7 @@ async function runSlotInit(input, { execute = false, ...dependencies } = {}) {
   );
   if (safeEdgeState(installed) !== "ready") refuse("edge_install_unready");
   return lifecycleReceipt(input, "slot-init", "ready", {
-    ...publicPlan(planned.plan, false),
+    ...publicPlan(planned.plan, false, planned.edgePlanBinding),
     edge_ready: true,
     stack_status: protectedStack.status,
     termination_protection: true,
@@ -1421,8 +1438,18 @@ function cloudFormationParameters(parameters) {
   }));
 }
 
-function changeSetDescription(templateSha256, changeSetType) {
-  return `echo-authority-staging-template-${templateSha256}-${changeSetType}`;
+function changeSetDescription(
+  templateSha256,
+  changeSetType,
+  edgePlanBinding = undefined,
+) {
+  const edgeBindingSuffix =
+    edgePlanBinding === undefined
+      ? ""
+      : `-edge-${createHash("sha256")
+          .update(JSON.stringify(edgePlanBinding), "utf8")
+          .digest("hex")}`;
+  return `echo-authority-staging-template-${templateSha256}-${changeSetType}${edgeBindingSuffix}`;
 }
 
 function changeActions(payload) {
@@ -1438,7 +1465,11 @@ function changeActions(payload) {
 function parametersMatch(payload, expected) {
   if (
     payload.Description !==
-    changeSetDescription(expected.templateSha256, expected.changeSetType)
+    changeSetDescription(
+      expected.templateSha256,
+      expected.changeSetType,
+      expected.edgePlanBinding,
+    )
   ) {
     return false;
   }
@@ -1739,6 +1770,7 @@ export function createAwsCliAdapters() {
             changeSetDescription(
               expected.templateSha256,
               expected.changeSetType,
+              expected.edgePlanBinding,
             ),
             "--capabilities",
             ...expected.capabilities,

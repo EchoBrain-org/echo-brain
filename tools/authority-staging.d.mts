@@ -40,6 +40,13 @@ export type ChangeSetRequest = Readonly<{
   changeSetName: string;
   changeSetType: "CREATE" | "UPDATE";
   clientToken: string;
+  /** Present only for slot-init, and bound into the reviewed description. */
+  edgePlanBinding?: Readonly<{
+    account_id: string;
+    hostname: string;
+    slot_id: string;
+    zone_id: string;
+  }>;
   onStackFailure?: "DO_NOTHING";
   templatePath: string;
   templateSha256: string;
