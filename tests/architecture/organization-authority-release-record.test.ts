@@ -93,6 +93,25 @@ const OPENROUTER_ADMISSION_VERIFIER = join(
   "verify-openrouter-decision-processor-admission-v1.js",
 );
 const roots: string[] = [];
+let isolatedUpdate: string | undefined;
+
+function updateWrapperForTest(): string {
+  if (isolatedUpdate) return isolatedUpdate;
+
+  const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-update-wrapper-"));
+  roots.push(root);
+  const deploymentDirectory = join(root, "deploy");
+  const releaseDirectory = join(deploymentDirectory, "release");
+  mkdirSync(releaseDirectory, { recursive: true });
+  isolatedUpdate = join(deploymentDirectory, "update-clean-v1.sh");
+  copyFileSync(UPDATE, isolatedUpdate);
+  copyFileSync(DEPLOY_TOOL, join(releaseDirectory, "clean-v1-release.py"));
+  copyFileSync(
+    DEPLOY_RUNTIME_PROFILE_TOOL,
+    join(releaseDirectory, "clean-v1-runtime-profile.py"),
+  );
+  return isolatedUpdate;
+}
 
 function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -486,7 +505,10 @@ function run(
   args: string[],
   environment: Record<string, string | undefined> = {},
 ) {
-  return spawnSync(command, args, {
+  const isolatedArgs = args.map((argument) =>
+    argument === UPDATE ? updateWrapperForTest() : argument,
+  );
+  return spawnSync(command, isolatedArgs, {
     cwd: REPO,
     encoding: "utf8",
     env: { ...process.env, ...environment },
@@ -494,6 +516,7 @@ function run(
 }
 
 afterEach(() => {
+  isolatedUpdate = undefined;
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
