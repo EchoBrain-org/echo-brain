@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
+import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
 
 const temporary: string[] = [];
 const REPO = resolve(import.meta.dirname, '../..');
@@ -28,7 +29,7 @@ function fixture() {
   temporary.push(directory);
   const profile = { schema_version: 1, kind: 'echo-clean-v1-runtime-profile', source_sha: COMMIT, files: Object.fromEntries(['Caddyfile.clean-v1', 'Caddyfile.clean-v1.ec2', 'compose.clean-v1.ec2.yaml', 'compose.clean-v1.yaml'].map(name => [name, readFileSync(join(REPO, 'deploy/organization-authority', name), 'utf8')])) };
   const record = (id: string) => ({ schema_version: 1, kind: 'echo-clean-v1-release', release_id: id, released_at: '2026-09-05T00:00:00Z', source_sha: COMMIT, baseline_compatibility_class: 'clean-v1', authority_image: { reference: `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}` }, person_client: { package: '@echo-brain/person-client', version: '0.1.0-internal.1', artifact_url: 'https://rehearsal.invalid/client.tgz', artifact_sha256: 'c'.repeat(64) }, runtime_profile: { profile_version: 'clean-v1-profile-1', artifact_url: 'https://rehearsal.invalid/profile.json', artifact_sha256: digest(canonical(profile) + '\n') } });
-  const options = { action: 'diagnose', acceptedRelease: join(directory, 'accepted.json'), release: join(directory, 'candidate.json'), runtimeProfile: join(directory, 'profile.json'), output: join(directory, 'operation.json'), previousToolingSource: OLD };
+  const options: StagingReleasePlanOptions = { action: 'diagnose', acceptedRelease: join(directory, 'accepted.json'), release: join(directory, 'candidate.json'), runtimeProfile: join(directory, 'profile.json'), output: join(directory, 'operation.json'), previousToolingSource: OLD };
   write(options.acceptedRelease, record('clean-v1-accepted-test'));
   write(options.release, record('clean-v1-candidate-test'));
   write(options.runtimeProfile, profile);
@@ -66,6 +67,20 @@ function inventoryOutcome(f: ReturnType<typeof fixture>): any {
 }
 
 describe('bounded staging release operator', () => {
+  it('exposes validated protocol results without losing their types', () => {
+    expectTypeOf<ReturnType<typeof stagingReleaseTarget>>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof validateReleaseRequest>>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof planStagingRelease>>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof executeStagingRelease>>().not.toBeAny();
+    expectTypeOf<ReturnType<typeof safeReleaseOutcome>>().not.toBeAny();
+    type Paths = Pick<StagingReleasePlanOptions, 'acceptedRelease' | 'release' | 'runtimeProfile' | 'output'>;
+    expectTypeOf<Paths & { action: 'promote' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'status'; approval: string }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'status'; contentTelemetry: 'true' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'promote'; approval: string }>().toMatchTypeOf<StagingReleasePlanOptions>();
+    expectTypeOf<Paths & { action: 'stage'; contentTelemetry: 'true' }>().toMatchTypeOf<StagingReleasePlanOptions>();
+  });
+
   it('does not accept arbitrary commands or a production operation', () => {
     expect(() => releaseAction('shell')).toThrow('action_invalid');
     expect(() => releaseAction('onboard')).toThrow('action_invalid');
@@ -90,6 +105,7 @@ describe('bounded staging release operator', () => {
 
   it.each(['shell', 'onboard', 'restore', 'down'])('rejects unsupported action %s before AWS', action => {
     const f = fixture();
+    // @ts-expect-error Untrusted JS/CLI callers still require runtime rejection.
     expect(() => planStagingRelease({ ...f.options, action }, f.dependencies)).toThrow('action_invalid');
     expect(f.calls).toHaveLength(0);
   });
@@ -146,7 +162,7 @@ describe('bounded staging release operator', () => {
   it('submits once and returns the same verified outcome on repeated execute', () => {
     const f = fixture(); planStagingRelease(f.options, f.dependencies);
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
-    expect(executeStagingRelease(f.options.output, f.dependencies).outcome.diagnostic.repair_eligible).toBe(true);
+    expect(executeStagingRelease(f.options.output, f.dependencies).outcome?.diagnostic).toMatchObject({ repair_eligible: true });
     expect(f.state.submissions).toBe(1);
   });
 
@@ -279,6 +295,7 @@ describe('bounded staging release operator', () => {
 
   it('requires an explicit exact-release founder authorization for promotion', () => {
     const f = fixture();
+    // @ts-expect-error Verify the runtime also refuses missing authorization.
     expect(() => planStagingRelease({ ...f.options, action: 'promote' }, f.dependencies)).toThrow();
     const candidate = JSON.parse(readFileSync(f.options.release, 'utf8'));
     const approval = join(f.directory, 'approval.json');
