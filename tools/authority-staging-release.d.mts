@@ -62,13 +62,20 @@ type RequestFields<Tool extends StagingReleaseTool> = Readonly<{
   old_tool_hashes: Readonly<Record<Tool, string>>;
 }> & RequestAction;
 
-/** Legacy receipts remain readable; only V2 plans may be submitted. */
+/** V1 receipts remain readable; V2 and named V3 migration plans may be submitted. */
 export type StagingReleaseRequest =
   | (RequestFields<LegacyTool> & Readonly<{
       schema_version: 1; kind: 'echo-staging-release-request-v1';
+      tooling_migration?: never;
     }>)
   | (RequestFields<StagingReleaseTool> & Readonly<{
       schema_version: 2; kind: 'echo-staging-release-request-v2';
+      tooling_migration?: never;
+    }>)
+  | (RequestFields<StagingReleaseTool> & Readonly<{
+      schema_version: 3; kind: 'echo-staging-release-request-v3';
+      action: 'install' | 'inspect-install';
+      tooling_migration: 'legacy-staging-host-v1';
     }>);
 
 export type StagingReleaseInspectionCategory =
@@ -166,11 +173,16 @@ export type StagingReleasePlanOptions = Readonly<{
   output: string;
   previousToolingSource?: string;
 }> & (
-  | Readonly<{ action: 'promote'; approval: string; contentTelemetry?: never }>
-  | Readonly<{ action: 'stage'; approval?: never; contentTelemetry?: 'true' | 'false' }>
+  | Readonly<{ action: 'promote'; approval: string; contentTelemetry?: never; toolingMigration?: never }>
+  | Readonly<{ action: 'stage'; approval?: never; contentTelemetry?: 'true' | 'false'; toolingMigration?: never }>
   | Readonly<{
-      action: Exclude<StagingReleaseAction, 'promote' | 'stage'>;
+      action: 'install' | 'inspect-install';
       approval?: never; contentTelemetry?: never;
+      toolingMigration?: 'legacy-staging-host-v1';
+    }>
+  | Readonly<{
+      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'install' | 'inspect-install'>;
+      approval?: never; contentTelemetry?: never; toolingMigration?: never;
     }>
 );
 export type StagingReleaseSourceReader = (commit: string, path: string) => Buffer;

@@ -123,6 +123,97 @@ class HostProtocol(unittest.TestCase):
         self.assertEqual((self.root / 'clean-data/release/current.clean-v1.json').read_bytes(), accepted_bytes)
         self.assertFalse((self.root / 'clean-data/release/candidate.clean-v1.json').exists())
 
+    def test_named_legacy_migration_is_opt_in_and_records_absence(self):
+        backup = 'backup-authority-maintenance.sh'
+        (self.root / backup).unlink()
+        refused = self.execute(self.request('install'))
+        self.assertFalse(refused['ok'])
+        self.assertEqual(refused['code'], 'precondition_failed')
+
+        request = self.request('install')
+        request['schema_version'] = 3
+        request['kind'] = 'echo-staging-release-request-v3'
+        request['tooling_migration'] = 'legacy-staging-host-v1'
+        for name in host.TOOLS:
+            if name != backup:
+                request['old_tool_hashes'][name] = host.sha((self.root / name).read_bytes())
+        result = self.execute(request)
+        self.assertTrue(result['ok'], result)
+        operation = self.root / 'clean-data/release/remote-operations' / request['operation_id']
+        self.assertEqual((operation / 'tooling-before.json').read_text(), host.canonical({
+            name: None if name == backup else request['old_tool_hashes'][name] for name in host.TOOLS
+        }).decode())
+        self.assertEqual((operation / 'tool-3.absent').read_bytes(), b'absent\n')
+        self.assertEqual(self.execute(request), result)
+        self.assertEqual(self.calls, [])
+
+    def test_named_legacy_migration_rejects_unexpected_backup_bytes(self):
+        request = self.request('install')
+        request['schema_version'] = 3
+        request['kind'] = 'echo-staging-release-request-v3'
+        request['tooling_migration'] = 'legacy-staging-host-v1'
+        for name in host.TOOLS:
+            if name != 'backup-authority-maintenance.sh':
+                request['old_tool_hashes'][name] = host.sha((self.root / name).read_bytes())
+        self.write('backup-authority-maintenance.sh', b'unexpected-backup', 0o755)
+        self.assertFalse(self.execute(request)['ok'])
+        self.assertEqual((self.root / 'update-clean-v1.sh').read_bytes(), b'old-reviewed-tool:deploy/organization-authority/update-clean-v1.sh\n')
+
+    def test_migration_absence_does_not_mask_later_invalid_tool(self):
+        request = self.request('inspect-install')
+        request.update(schema_version=3, kind='echo-staging-release-request-v3', tooling_migration='legacy-staging-host-v1')
+        (self.root / 'backup-authority-maintenance.sh').unlink()
+        result = self.execute(request)
+        self.assertTrue(result['ok'], result)
+        self.write('release/clean-v1-release.py', b'unknown bytes', 0o755)
+        request['operation_id'] = str(uuid.uuid4())
+        result = self.execute(request)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['diagnostic']['tool'], 'release/clean-v1-release.py')
+        self.assertEqual(result['diagnostic']['category'], 'tool_hash_unknown')
+
+    def test_migration_keeps_unsafe_missing_candidate_and_repair_guards(self):
+        def request(action):
+            value = self.request(action)
+            value.update(schema_version=3, kind='echo-staging-release-request-v3', tooling_migration='legacy-staging-host-v1')
+            return value
+        backup = self.root / 'backup-authority-maintenance.sh'
+        backup.unlink()
+        before = (self.root / 'update-clean-v1.sh').read_bytes()
+        for name in ('candidate.clean-v1.json', 'environment-repair.pending.json'):
+            path = self.root / 'clean-data/release' / name
+            path.write_bytes(b'{}\n'); path.chmod(0o600)
+            self.assertFalse(self.execute(request('install'))['ok'])
+            path.unlink()
+        backup.symlink_to('/does-not-exist')
+        self.assertFalse(self.execute(request('install'))['ok'])
+        backup.unlink()
+        validator = self.root / 'release/clean-v1-runtime-profile.py'
+        validator.unlink()
+        self.assertFalse(self.execute(request('install'))['ok'])
+        self.assertEqual((self.root / 'update-clean-v1.sh').read_bytes(), before)
+        self.assertEqual(self.calls, [])
+
+    def test_migration_partial_publication_is_not_reexecuted_but_new_plan_can_finish(self):
+        backup = self.root / 'backup-authority-maintenance.sh'
+        backup.unlink()
+        request = self.request('install')
+        request.update(schema_version=3, kind='echo-staging-release-request-v3', tooling_migration='legacy-staging-host-v1')
+        replace = host.os.replace
+        def interrupted(source, destination):
+            if str(destination).endswith('restore-clean-v1-host.sh'):
+                raise OSError('synthetic interruption')
+            return replace(source, destination)
+        with patch.object(host.os, 'replace', interrupted):
+            result = self.execute(request)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['code'], 'installation_failed')
+        self.assertEqual(self.execute(request), result)
+        self.assertFalse(backup.exists())
+        request['operation_id'] = str(uuid.uuid4())
+        self.assertTrue(self.execute(request)['ok'])
+        self.assertEqual(self.calls, [])
+
     def test_inspect_install_reports_ready_without_tooling_or_runtime_mutation(self):
         request = self.request('inspect-install')
         before = {name: (self.root / name).read_bytes() for name in host.TOOLS}

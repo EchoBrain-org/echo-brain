@@ -27,6 +27,7 @@ TOKEN_INSTALLER_SOURCE="$SCRIPT_DIR/install-cloudflare-tunnel-token.sh"
 ONBOARD_SOURCE="$SCRIPT_DIR/onboard-clean-v1.sh"
 UPDATER_SOURCE="$SCRIPT_DIR/update-clean-v1.sh"
 RESTORER_SOURCE="$SCRIPT_DIR/restore-clean-v1-host.sh"
+BACKUP_SOURCE="$SCRIPT_DIR/backup-authority-maintenance.sh"
 RELEASE_VALIDATOR_SOURCE="$SCRIPT_DIR/clean-v1-release.py"
 RUNTIME_PROFILE_VALIDATOR_SOURCE="$SCRIPT_DIR/clean-v1-runtime-profile.py"
 
@@ -440,6 +441,7 @@ install_authority_application_control_material() {
   install_control_file "$ONBOARD_SOURCE" "$DEPLOY_DIR/onboard-clean-v1.sh" 0755 'onboarding wrapper'
   install_control_file "$UPDATER_SOURCE" "$DEPLOY_DIR/update-clean-v1.sh" 0755 'release update wrapper'
   install_control_file "$RESTORER_SOURCE" "$DEPLOY_DIR/restore-clean-v1-host.sh" 0755 'retained-host restore wrapper'
+  install_control_file "$BACKUP_SOURCE" "$DEPLOY_DIR/backup-authority-maintenance.sh" 0755 'backup maintenance wrapper'
   install_control_file "$RELEASE_VALIDATOR_SOURCE" "$DEPLOY_DIR/release/clean-v1-release.py" 0755 'release validator'
   install_control_file "$RUNTIME_PROFILE_VALIDATOR_SOURCE" "$DEPLOY_DIR/release/clean-v1-runtime-profile.py" 0755 'runtime-profile validator'
 }
@@ -497,7 +499,7 @@ done
 [[ ${ID:-} == ubuntu ]] || fail 'this bootstrap supports Ubuntu only'
 for required_source in \
   "$UNIT_SOURCE" "$TOKEN_INSTALLER_SOURCE" "$ONBOARD_SOURCE" "$UPDATER_SOURCE" \
-  "$RESTORER_SOURCE" "$RELEASE_VALIDATOR_SOURCE" "$RUNTIME_PROFILE_VALIDATOR_SOURCE"; do
+  "$RESTORER_SOURCE" "$BACKUP_SOURCE" "$RELEASE_VALIDATOR_SOURCE" "$RUNTIME_PROFILE_VALIDATOR_SOURCE"; do
   [[ -f $required_source && ! -L $required_source ]] \
     || fail 'bootstrap source directory is missing required verified host-bundle control material'
 done

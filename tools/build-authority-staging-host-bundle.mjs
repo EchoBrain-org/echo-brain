@@ -33,6 +33,7 @@ const TOKEN_INSTALLER =
 const ONBOARD = "deploy/organization-authority/onboard-clean-v1.sh";
 const UPDATER = "deploy/organization-authority/update-clean-v1.sh";
 const RESTORER = "deploy/organization-authority/restore-clean-v1-host.sh";
+const BACKUP = "deploy/organization-authority/backup-authority-maintenance.sh";
 const RELEASE_VALIDATOR = "deploy/release/clean-v1-release.py";
 const RUNTIME_PROFILE_VALIDATOR =
   "deploy/release/clean-v1-runtime-profile.py";
@@ -47,6 +48,7 @@ const REQUIRED_FILES = Object.freeze([
   TOKEN_INSTALLER,
   ONBOARD,
   RESTORER,
+  BACKUP,
   UPDATER,
   RELEASE_VALIDATOR,
   RUNTIME_PROFILE_VALIDATOR,
