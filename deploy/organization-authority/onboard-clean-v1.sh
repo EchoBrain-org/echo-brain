@@ -35,6 +35,7 @@ ACTIVATION_LLM_ACTIVE_BACKUP=''
 ACTIVATION_ROLLBACK_FAILURE_STAGE=''
 ACTIVATION_CHILD_PID=''
 OPERATION_LOCK_HELD=false
+STAGING_RELEASE_GUARD_HELD=false
 REHEARSAL_ARCHIVE=''
 REHEARSAL_ARCHIVED_DATA=''
 REHEARSAL_ROLLBACK_ARMED=false
@@ -49,16 +50,60 @@ release_operation_lock() {
     rmdir "$OPERATION_LOCK_DIR" >/dev/null 2>&1 || true
     OPERATION_LOCK_HELD=false
   fi
+  if [[ "$STAGING_RELEASE_GUARD_HELD" == true ]]; then
+    rm -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+    rmdir "$DEPLOY_DIR/.staging-release-guard"
+    STAGING_RELEASE_GUARD_HELD=false
+  fi
 }
 
 acquire_operation_lock() {
+  acquire_staging_release_guard "${1:-}"
   if ! mkdir -m 0700 "$OPERATION_LOCK_DIR" 2>/dev/null; then
+    release_operation_lock
     fail 'another Authority activation or release operation is already in progress; follow the README operation-lock recovery steps if its owner was interrupted'
   fi
   OPERATION_LOCK_HELD=true
   if ! (umask 077; printf '%s\n' "$$" > "$OPERATION_LOCK_DIR/owner-pid"); then
     release_operation_lock
     fail 'could not record the Authority operation lock owner'
+  fi
+}
+
+acquire_staging_release_guard() {
+  local guard="$DEPLOY_DIR/.staging-release-guard"
+  if [[ -n "${ECHO_CLEAN_PARENT_GUARD_PID:-}" ]]; then
+    # Only the direct root child performing restore's resume may inherit its
+    # guard. The parent keeps ownership through the final terminal-status check.
+    [[ "${1:-}" == resume && ${EUID} -eq 0 && "$ECHO_CLEAN_PARENT_GUARD_PID" == "$PPID" ]] || \
+      fail 'inherited restore guard is not bound to this root resume child'
+    if ! python3 - "$guard" "$PPID" >/dev/null 2>&1 <<'PY'
+import os, stat, sys
+guard = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    state = os.fstat(guard)
+    if state.st_uid != 0 or stat.S_IMODE(state.st_mode) != 0o700:
+        raise SystemExit(1)
+    owner = os.open('owner-pid', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=guard)
+    with os.fdopen(owner, 'rb') as source:
+        state = os.fstat(source.fileno())
+        if not stat.S_ISREG(state.st_mode) or state.st_uid != 0 or state.st_nlink != 1:
+            raise SystemExit(1)
+        if stat.S_IMODE(state.st_mode) != 0o600 or source.read(33) != (sys.argv[2] + '\n').encode():
+            raise SystemExit(1)
+finally:
+    os.close(guard)
+PY
+    then
+      fail 'inherited restore guard owner or permissions are invalid'
+    fi
+    return 0
+  fi
+  mkdir -m 0700 "$guard" 2>/dev/null || fail 'a bounded staging release operation is in progress; preserve its root-owned guard'
+  STAGING_RELEASE_GUARD_HELD=true
+  if ! (umask 077; printf '%s\n' "$$" > "$guard/owner-pid"); then
+    release_operation_lock
+    fail 'could not record the root-owned staging release guard owner'
   fi
 }
 
@@ -1280,7 +1325,7 @@ print_slack_interactivity_action() {
 }
 
 resume() {
-  acquire_operation_lock
+  acquire_operation_lock resume
   trap 'release_operation_lock' EXIT
   trap 'exit 129' HUP
   trap 'exit 130' INT

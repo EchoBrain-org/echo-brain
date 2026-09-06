@@ -34,6 +34,8 @@ jobs:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - name: Prove staging control isolation with real POSIX ownership
+        run: sudo -n python3 -B tests/fixtures/staging-release-posix-proof.py tools/authority-staging-release-host.py deploy/organization-authority/update-clean-v1.sh deploy/organization-authority/onboard-clean-v1.sh
       - run: npm run check
 
   person-client-package:

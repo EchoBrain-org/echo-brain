@@ -353,6 +353,13 @@ operation.
 
 ### Recover an interrupted operation lock
 
+For a bounded staging-release operation, a root-owned
+`.staging-release-guard` outside `clean-data` is an additional interlock. Preserve
+it and the original operation receipt if execution is unconfirmed or reports
+`control_path_changed`. The legacy-lock cleanup below does not authorize
+removing this guard. Follow the [automated release lane](../release/README.md#automated-current-host-staging-lane)
+and investigate the exact command and pinned control-state identity first.
+
 If an activation or release wrapper was killed without running its exit trap,
 leave `clean-data/.authority-operation-lock` in place until the old Docker work
 is conclusively stopped. On the EC2 Authority host:

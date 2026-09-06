@@ -27,6 +27,7 @@ OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.au
 ROLLBACK_READER_CAPABILITY_LABEL='org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'
 STAGING_JOURNEY_TELEMETRY_CAPABILITY_LABEL='org.echobrain.authority.telemetry.staging-journey-v1'
 OPERATION_LOCK_HELD=false
+STAGING_RELEASE_GUARD_HELD=false
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -36,16 +37,36 @@ release_operation_lock() {
     rmdir "$OPERATION_LOCK_DIR" >/dev/null 2>&1 || true
     OPERATION_LOCK_HELD=false
   fi
+  if [[ "$STAGING_RELEASE_GUARD_HELD" == true ]]; then
+    rm -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+    rmdir "$DEPLOY_DIR/.staging-release-guard"
+    STAGING_RELEASE_GUARD_HELD=false
+  fi
 }
 
 acquire_operation_lock() {
+  acquire_staging_release_guard
   if ! mkdir -m 0700 "$OPERATION_LOCK_DIR" 2>/dev/null; then
+    release_operation_lock
     fail 'another Authority activation or release operation is already in progress; follow the README operation-lock recovery steps if its owner was interrupted'
   fi
   OPERATION_LOCK_HELD=true
   if ! (umask 077; printf '%s\n' "$$" > "$OPERATION_LOCK_DIR/owner-pid"); then
     release_operation_lock
     fail 'could not record the Authority operation lock owner'
+  fi
+}
+
+acquire_staging_release_guard() {
+  local guard="$DEPLOY_DIR/.staging-release-guard"
+  # The reviewed runner owns this exact nested lock; ordinary human calls
+  # acquire the same root-owned interlock for their entire operation.
+  [[ "$OPERATION_LOCK_DIR" != "$guard/wrapper-lock" ]] || return 0
+  mkdir -m 0700 "$guard" 2>/dev/null || fail 'a bounded staging release operation is in progress; preserve its root-owned guard'
+  STAGING_RELEASE_GUARD_HELD=true
+  if ! (umask 077; printf '%s\n' "$$" > "$guard/owner-pid"); then
+    release_operation_lock
+    fail 'could not record the root-owned staging release guard owner'
   fi
 }
 
@@ -203,7 +224,7 @@ create_environment_snapshot() {
     "$(field "$record" source-sha)" \
     "$(field "$record" runtime-profile-sha256)" \
     "$(field "$record" runtime-profile-version)" "$CONTENT_TELEMETRY_OVERRIDE" <<'PY'
-import os, pathlib, stat, sys, tempfile
+import os, pathlib, stat, sys
 
 source, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 image, release_id, source_sha, profile_sha, profile_version = sys.argv[3:8]
@@ -230,7 +251,9 @@ payload = [line for line in lines if not any(line.startswith(name + '=') for nam
 payload.extend(name + '=' + value for name, value in names.items())
 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 os.chmod(destination.parent, 0o700)
-fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
+# tempfile.mkstemp reifies relative dirs through abspath, losing the pinned cwd.
+temporary = destination.parent / ('.' + destination.name + '.' + os.urandom(16).hex())
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as output:
@@ -262,7 +285,7 @@ activate_release_tuple() {
     fail 'could not materialize the selected runtime profile'
   fi
   if ! python3 - "$stage_dir" "$RUNTIME_CONFIG_DIR" "$env_snapshot" "$ENV_FILE" "$profile" "$ACTIVE_RUNTIME_PROFILE" <<'PY'
-import os, pathlib, stat, sys, tempfile
+import os, pathlib, stat, sys
 
 source_dir, deploy_dir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 env_snapshot, env_file = pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4])
@@ -282,7 +305,8 @@ if {path.name for path in source_dir.iterdir()} != set(names):
     raise SystemExit('runtime profile materialization contains an unexpected file set')
 
 def replace_from(source, destination, mode):
-    fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
+    temporary = destination.parent / ('.' + destination.name + '.' + os.urandom(16).hex())
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         os.fchmod(fd, mode)
         with os.fdopen(fd, 'wb') as output, source.open('rb') as input:
@@ -382,7 +406,7 @@ environment_operation() {
   local record="$1" operation="$2" candidate_present="$3"
   python3 - "$ENV_FILE" "$(environment_snapshot_path "$record")" \
     "$record" "$RELEASE_STATE_DIR" "$operation" "$candidate_present" <<'PY'
-import hashlib, json, os, pathlib, re, stat, sys, tempfile
+import hashlib, json, os, pathlib, re, stat, sys
 
 active, snapshot, record, state = map(pathlib.Path, sys.argv[1:5])
 operation, candidate = sys.argv[5], sys.argv[6] == 'true'
@@ -448,7 +472,8 @@ def publish(path, data, replace=False):
         if private_bytes(path, publication=True) != data:
             refuse()
         return
-    fd, temporary = tempfile.mkstemp(prefix='.' + path.name + '.', dir=path.parent)
+    temporary = path.parent / ('.' + path.name + '.' + os.urandom(16).hex())
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, 'wb') as output:
@@ -572,7 +597,7 @@ remove_release_tuple() {
 copy_record() {
   local source="$1" destination="$2" mode="$3"
   python3 - "$source" "$destination" "$mode" <<'PY'
-import os, pathlib, stat, sys, tempfile
+import os, pathlib, stat, sys
 source, destination, mode = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 if mode not in {'no-replace', 'replace', 'idempotent-immutable'}:
     raise SystemExit('unsupported release record copy mode')
@@ -591,7 +616,8 @@ if mode == 'idempotent-immutable' and (destination.exists() or destination.is_sy
     ):
         raise SystemExit('existing immutable release record is unsafe or does not match')
     raise SystemExit(0)
-fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
+temporary = destination.parent / ('.' + destination.name + '.' + os.urandom(16).hex())
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'wb') as output:
@@ -912,7 +938,7 @@ persist_staging_canary_receipt() {
   local release_id="$1" receipt="$2" destination
   destination="$(staging_canary_receipt_path "$release_id")"
   python3 - "$destination" "$receipt" <<'PY'
-import os, pathlib, stat, sys, tempfile
+import os, pathlib, stat, sys
 
 destination, receipt = pathlib.Path(sys.argv[1]), (sys.argv[2] + "\n").encode("utf-8")
 parent_state = destination.parent.lstat()
@@ -928,7 +954,8 @@ if destination.exists() or destination.is_symlink():
     ):
         raise SystemExit("existing canary receipt is unsafe or does not match")
     raise SystemExit(0)
-fd, temporary = tempfile.mkstemp(prefix="." + destination.name + ".", dir=destination.parent)
+temporary = destination.parent / ('.' + destination.name + '.' + os.urandom(16).hex())
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "wb") as output:
