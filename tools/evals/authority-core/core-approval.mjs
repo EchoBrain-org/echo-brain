@@ -16,7 +16,7 @@ import {
 import {
   buildExternalHumanIdentityLinkContractV2,
   buildOrganizationToolConnectionContractV2,
-} from "../../../packages/organization-control-plane/dist/application/person-slack-reaction-approval-contracts-v2.js";
+} from "../../../packages/organization-control-plane/dist/application/organization-tool-connection-contracts-v2.js";
 import {
   PrivateSlackDmApprovalStagerV1,
 } from "../../../services/organization-authority/dist/composition/providers/slack/private-approval/private-slack-dm-approval-stager-v1.js";

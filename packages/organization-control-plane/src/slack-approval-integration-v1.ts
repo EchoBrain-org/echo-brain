@@ -1,39 +1,17 @@
 /**
  * Public integration surface for Slack-backed approval contracts and
- * persistence used by Organization Authority. This includes the retained
- * reaction approval compatibility path and the current private-DM path.
+ * persistence used by Organization Authority: the private-DM approval path.
  */
 export { openOrganizationControlDatabase } from "./persistence/open-organization-control-database.js";
 export * from "./record-visibility-policy-contracts-v1.js";
 export {
-  validatePersonSlackReactionApprovalBindingContractV2,
-  buildProviderHumanActionDurableResult,
-  buildProviderHumanSemanticActionInputV1,
-  validateProviderHumanActionDurableResult,
-  validateProviderHumanAuthorizationAllowV2,
-  validateProviderHumanIntegrationAuditEntryV2,
-  validateProviderHumanSemanticActionInputV1,
   type OrganizationToolConnectionContractV2,
   type OrganizationToolConnectionStateV2,
   validateOrganizationToolConnectionContractV2,
   validateOrganizationToolConnectionStateV2,
-} from "./application/person-slack-reaction-approval-contracts-v2.js";
+} from "./application/organization-tool-connection-contracts-v2.js";
 export { FileOrganizationSecretStore } from "./security/file-secret-store.js";
-export {
-  stagePersonSlackReactionApprovalPendingV1,
-  type StagePersonSlackReactionApprovalPendingCommandV1,
-} from "./persistence/sqlite-person-slack-reaction-approval-pending-v1.js";
 export { SqliteSlackBotTokenReaderV1 } from "./persistence/sqlite-slack-bot-token-reader-v1.js";
-export { SlackReactionApprovalObserverV1 } from "./adapters/slack/slack-reaction-approval-observer-v1.js";
-export { SqlitePersonSlackReactionApprovalFinalizationCoordinatorV2 } from "./persistence/sqlite-person-slack-reaction-approval-finalization-v2.js";
-export {
-  finalizePersonSlackReactionApprovalV2,
-  type PersonSlackReactionApprovalFinalizationCodecV2,
-  type PersonSlackReactionApprovalFinalizationCoordinatorV2,
-  type PersonSlackReactionApprovalFinalizationIdFactoryV2,
-  type PersonSlackReactionApprovalObserverV2,
-  type StoredProviderHumanActionV2,
-} from "./application/person-slack-reaction-approval-finalization-v2.js";
 export {
   PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND,
   PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,

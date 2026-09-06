@@ -11,8 +11,6 @@ const CLEAN_ENTRIES = [
   "services/organization-authority/src/clean-granola-source-main.ts",
   "services/organization-authority/src/clean-founder-main.ts",
   "packages/organization-control-plane/src/clean-slack-connect-main.ts",
-  "packages/organization-control-plane/src/clean-person-slack-approval-activate-main.ts",
-  "packages/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts",
 ] as const;
 
 interface WorkspaceExport {
@@ -255,7 +253,7 @@ describe("Organization Authority executable closure boundaries", () => {
   });
 
   for (const entry of CLEAN_ENTRIES) {
-    it(`${entry} excludes retired machine, migration, and reaction-policy runtime`, () => {
+    it(`${entry} excludes retired machine and migration runtime`, () => {
       const closure = cleanClosure(entry);
       expect(closure).toContain(entry);
       for (const path of closure) {

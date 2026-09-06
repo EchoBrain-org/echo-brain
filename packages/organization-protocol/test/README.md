@@ -7,8 +7,6 @@ The package suite covers the current public protocol responsibilities:
   verification;
 - approval and rejection payload validation against the shared decision-brief
   conformance fixture;
-- restricted-reviewer and organization-member-readable policy commitments,
-  release-draft projections, and Slack-reaction presentations;
 - Person content-policy reader selectors and frozen consequence digests;
 - provider-neutral and private Slack Block Kit human-action inputs;
 - version-4 record envelope provenance, lineage, predecessor, semantic

@@ -12,14 +12,11 @@
     "packages/organization-control-plane/src/organization-control-database-v1.ts",
     "packages/organization-control-plane/src/record-visibility-policy-contracts-v1.ts",
     "packages/organization-control-plane/src/slack-connection-setup-v1.ts",
-    "packages/organization-control-plane/src/legacy-slack-reaction-approval-activation-v1.ts",
     "packages/organization-control-plane/src/clean-runtime-v1.ts",
     "packages/organization-control-plane/src/clean-founder-v1.ts",
     "packages/organization-control-plane/src/clean-slack-identity-v1.ts",
     "packages/organization-control-plane/src/new-lineage-genesis-v1.ts",
-    "packages/organization-control-plane/src/clean-slack-connect-main.ts",
-    "packages/organization-control-plane/src/clean-person-slack-approval-activate-main.ts",
-    "packages/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts"
+    "packages/organization-control-plane/src/clean-slack-connect-main.ts"
   ],
   "owned_source_paths": [
     "packages/organization-control-plane/src/**"
@@ -63,6 +60,11 @@
         "export": "PersonApprovalPolicyId"
       },
       {
+        "name": "Organization tool connection contracts",
+        "path": "packages/organization-control-plane/src/application/organization-tool-connection-contracts-v2.ts",
+        "export": "validateOrganizationToolConnectionContractV2"
+      },
+      {
         "name": "Slack integration contracts",
         "path": "packages/organization-control-plane/src/application/slack-integration-contracts.ts",
         "export": "SlackIntegrationProvider"
@@ -71,11 +73,6 @@
         "name": "Slack connection setup command",
         "path": "packages/organization-control-plane/src/composition/slack-connection-setup-cli.ts",
         "export": "runSlackConnectionSetupCli"
-      },
-      {
-        "name": "Legacy Slack reaction approval activation command",
-        "path": "packages/organization-control-plane/src/composition/legacy-slack-reaction-approval-activation-cli.ts",
-        "export": "runLegacySlackReactionApprovalActivationCli"
       }
     ],
     "retired_source_paths": [
@@ -84,7 +81,20 @@
       "packages/organization-control-plane/src/adapters/slack/clean-slack-web-identity-provider-v1.ts",
       "packages/organization-control-plane/src/adapters/slack/clean-slack-reaction-observer-v1.ts",
       "packages/organization-control-plane/src/composition/clean-slack-connect-cli.ts",
-      "packages/organization-control-plane/src/composition/clean-person-slack-approval-activate-cli.ts"
+      "packages/organization-control-plane/src/composition/clean-person-slack-approval-activate-cli.ts",
+      "packages/organization-control-plane/src/legacy-slack-reaction-approval-activation-v1.ts",
+      "packages/organization-control-plane/src/clean-person-slack-approval-activate-main.ts",
+      "packages/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts",
+      "packages/organization-control-plane/src/composition/legacy-slack-reaction-approval-activation-cli.ts",
+      "packages/organization-control-plane/src/application/person-slack-reaction-approval-contracts-v2.ts",
+      "packages/organization-control-plane/src/application/person-slack-reaction-approval-activation-v2.ts",
+      "packages/organization-control-plane/src/application/person-slack-reaction-approval-finalization-v2.ts",
+      "packages/organization-control-plane/src/adapters/slack/slack-reaction-approval-observer-v1.ts",
+      "packages/organization-control-plane/src/persistence/sqlite-person-slack-reaction-approval-activation-v2.ts",
+      "packages/organization-control-plane/src/persistence/sqlite-person-slack-reaction-approval-finalization-v2.ts",
+      "packages/organization-control-plane/src/persistence/sqlite-person-slack-reaction-approval-pending-v1.ts",
+      "packages/organization-control-plane/src/persistence/sqlite-slack-reaction-approval-target-v1.ts",
+      "packages/organization-control-plane/src/persistence/sqlite-authority-administrator-fence-v1.ts"
     ],
     "compatibility_entrypoints": [
       {
@@ -112,22 +122,9 @@
         ]
       },
       {
-        "path": "packages/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts",
-        "targets": [
-          "packages/organization-control-plane/src/composition/legacy-slack-reaction-approval-activation-cli.ts"
-        ]
-      },
-      {
-        "path": "packages/organization-control-plane/src/clean-person-slack-approval-activate-main.ts",
-        "targets": [
-          "packages/organization-control-plane/src/clean-person-slack-reaction-approval-activate-main.ts"
-        ]
-      },
-      {
         "path": "packages/organization-control-plane/src/clean-founder-v1.ts",
         "targets": [
-          "packages/organization-control-plane/src/slack-connection-setup-v1.ts",
-          "packages/organization-control-plane/src/legacy-slack-reaction-approval-activation-v1.ts"
+          "packages/organization-control-plane/src/slack-connection-setup-v1.ts"
         ]
       }
     ]

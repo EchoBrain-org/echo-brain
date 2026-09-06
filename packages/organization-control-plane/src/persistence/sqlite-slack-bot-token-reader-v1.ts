@@ -1,7 +1,7 @@
 import {
   validateOrganizationToolConnectionStateV2,
-  type ApprovalContractSha256,
-} from "../application/person-slack-reaction-approval-contracts-v2.js";
+} from "../application/organization-tool-connection-contracts-v2.js";
+import type { ApprovalContractSha256 } from "../application/record-visibility-policy-contracts-v1.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import type Database from "better-sqlite3";
 
