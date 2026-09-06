@@ -60,6 +60,11 @@ function fixture() {
 
 afterEach(() => { for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
+function inventoryOutcome(f: ReturnType<typeof fixture>): any {
+  const request = f.request();
+  return { ...f.outcome(), diagnostic: { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(request.old_tool_hashes).map(([name, sha256]) => [name, { state: 'old', sha256 }])) } };
+}
+
 describe('bounded staging release operator', () => {
   it('does not accept arbitrary commands or a production operation', () => {
     expect(() => releaseAction('shell')).toThrow('action_invalid');
@@ -214,6 +219,62 @@ describe('bounded staging release operator', () => {
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('failed');
     expect(f.state.submissions).toBe(1);
     expect(() => safeReleaseOutcome(JSON.stringify({ ...result, action: 'inspect-install' }), { ...receipt.request, action: 'inspect-install' }, receipt.request_sha256)).toThrow('remote_outcome_unproven');
+  });
+
+  it.each(['ready', 'unknown', 'early-refusal', 'repair-pending'])('persists complete versioned inventory without resubmission: %s', kind => {
+    const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
+    const result = inventoryOutcome(f);
+    const names = Object.keys(result.diagnostic.inventory);
+    if (kind !== 'early-refusal') result.diagnostic.inventory[names[1]] = { state: 'new', sha256: f.request().files[names[1]].sha256 };
+    if (kind !== 'ready') {
+      result.ok = false; result.code = 'inspection_refused';
+      if (kind === 'unknown') {
+        result.diagnostic.category = 'tool_hash_unknown'; result.diagnostic.tool = 'update-clean-v1.sh';
+        result.diagnostic.inventory['update-clean-v1.sh'] = { state: 'unknown', sha256: '0'.repeat(64) };
+      } else if (kind === 'early-refusal') {
+        result.diagnostic.category = 'identity_invalid'; result.diagnostic.inventory = null;
+      } else result.diagnostic.category = 'repair_pending';
+    }
+    f.state.outputOverride = JSON.stringify(result);
+    const state = result.ok ? 'succeeded' : 'failed';
+    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe(state);
+    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe(state);
+    expect(f.state.submissions).toBe(1);
+    expect(JSON.parse(readFileSync(f.options.output, 'utf8')).outcome).toEqual(result);
+  });
+
+  it.each(['missing-entry', 'extra-entry', 'extra-field', 'bad-digest', 'array-digest', 'upper-digest', 'trailing-newline', 'unknown-state', 'wrong-old', 'wrong-new', 'known-as-unknown', 'missing-with-digest', 'null-ready', 'unknown-ready', 'wrong-tool', 'earlier-refusal', 'inventory-before-guards'])('rejects malformed or contradictory inventory: %s', kind => {
+    const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
+    const result = inventoryOutcome(f);
+    const inventory = result.diagnostic.inventory;
+    const tool = 'update-clean-v1.sh';
+    if (kind === 'missing-entry') delete inventory[tool];
+    if (kind === 'extra-entry') inventory['private/path'] = { state: 'old', sha256: '0'.repeat(64) };
+    if (kind === 'extra-field') inventory[tool].content = 'must-not-leak';
+    if (kind === 'bad-digest') inventory[tool].sha256 = 'must-not-leak';
+    if (kind === 'array-digest') inventory[tool].sha256 = [inventory[tool].sha256];
+    if (kind === 'upper-digest') inventory[tool].sha256 = inventory[tool].sha256.toUpperCase();
+    if (kind === 'trailing-newline') {
+      result.ok = false; result.code = 'inspection_refused'; result.diagnostic.category = 'tool_hash_unknown'; result.diagnostic.tool = tool;
+      inventory[tool] = { state: 'unknown', sha256: '0'.repeat(64) + '\n' };
+    }
+    if (kind === 'unknown-state') inventory[tool].state = 'must-not-leak';
+    if (kind === 'wrong-old') inventory[tool].sha256 = '0'.repeat(64);
+    if (kind === 'wrong-new') inventory[tool].state = 'new';
+    if (kind === 'known-as-unknown') inventory[tool].state = 'unknown';
+    if (kind === 'missing-with-digest') inventory[tool].state = 'missing';
+    if (kind === 'null-ready') result.diagnostic.inventory = null;
+    if (kind === 'unknown-ready') inventory[tool] = { state: 'unknown', sha256: '0'.repeat(64) };
+    if (['wrong-tool', 'earlier-refusal'].includes(kind)) {
+      result.ok = false; result.code = 'inspection_refused'; result.diagnostic.category = 'tool_hash_unknown'; result.diagnostic.tool = 'onboard-clean-v1.sh';
+      inventory[tool] = { state: 'unknown', sha256: '0'.repeat(64) };
+      if (kind === 'earlier-refusal') inventory['onboard-clean-v1.sh'] = { state: 'unknown', sha256: '0'.repeat(64) };
+    }
+    if (kind === 'inventory-before-guards') { result.ok = false; result.code = 'inspection_refused'; result.diagnostic.category = 'identity_invalid'; }
+    f.state.outputOverride = JSON.stringify(result);
+    expect(() => executeStagingRelease(f.options.output, f.dependencies)).toThrow();
+    expect(readFileSync(f.options.output, 'utf8')).not.toContain('must-not-leak');
+    expect(readFileSync(f.options.output, 'utf8')).not.toContain('private/path');
   });
 
   it('requires an explicit exact-release founder authorization for promotion', () => {
