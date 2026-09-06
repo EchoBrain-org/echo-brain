@@ -1,5 +1,7 @@
 """Hermetic host protocol proof; never uses AWS, Docker, metadata or live state."""
 import copy
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -119,6 +121,168 @@ class HostProtocol(unittest.TestCase):
         self.assertEqual((self.root / '.env.clean-v1').read_bytes(), before_env)
         self.assertEqual((self.root / 'clean-data/release/current.clean-v1.json').read_bytes(), accepted_bytes)
         self.assertFalse((self.root / 'clean-data/release/candidate.clean-v1.json').exists())
+
+    def test_inspect_install_reports_ready_without_tooling_or_runtime_mutation(self):
+        request = self.request('inspect-install')
+        before = {name: (self.root / name).read_bytes() for name in host.TOOLS}
+        before_env = (self.root / '.env.clean-v1').read_bytes()
+        result = self.execute(request)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['code'], 'inspection_verified')
+        self.assertEqual(result['diagnostic'], {
+            'schema_version': 1,
+            'kind': 'echo-staging-release-install-inspection-v1',
+            'category': 'ready',
+            'tool': None,
+        })
+        self.assertEqual(self.calls, [])
+        self.assertEqual({name: (self.root / name).read_bytes() for name in host.TOOLS}, before)
+        self.assertEqual((self.root / '.env.clean-v1').read_bytes(), before_env)
+        self.assertFalse((self.root / 'clean-data/release/candidate.clean-v1.json').exists())
+        self.install()
+        installed = {name: (self.root / name).read_bytes() for name in host.TOOLS}
+        result = self.execute(self.request('inspect-install'))
+        self.assertEqual(result['diagnostic']['category'], 'ready')
+        self.assertEqual({name: (self.root / name).read_bytes() for name in host.TOOLS}, installed)
+
+    def test_inspect_install_returns_only_bounded_guard_categories(self):
+        self.write('clean-data/release/current.clean-v1.json', accepted_bytes + b' ')
+        result = self.execute(self.request('inspect-install'))
+        self.assertEqual(result['diagnostic']['category'], 'accepted_record_mismatch')
+        for expected, prepare in (
+            ('hostname_mismatch', lambda: self.write('.env.clean-v1', b'ECHO_CLEAN_AUTHORITY_HOST=wrong.invalid\n')),
+            ('candidate_present', self.candidate),
+            ('repair_pending', lambda: self.write('clean-data/release/environment-repair.pending.json', b'{}\n')),
+        ):
+            self.write('clean-data/release/current.clean-v1.json', accepted_bytes)
+            candidate = self.root / 'clean-data/release/candidate.clean-v1.json'
+            pending = self.root / 'clean-data/release/environment-repair.pending.json'
+            candidate.unlink(missing_ok=True); pending.unlink(missing_ok=True)
+            self.write('.env.clean-v1', b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n')
+            prepare()
+            result = self.execute(self.request('inspect-install'))
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['code'], 'inspection_refused')
+            self.assertEqual(result['diagnostic']['category'], expected)
+            self.assertEqual(result['diagnostic']['tool'], None)
+        self.assertEqual(self.calls, [])
+
+    def test_inspect_install_identifies_only_allowlisted_missing_or_unknown_tool(self):
+        tool = 'release/clean-v1-runtime-profile.py'
+        (self.root / tool).unlink()
+        missing = self.execute(self.request('inspect-install'))
+        self.assertEqual((missing['diagnostic']['category'], missing['diagnostic']['tool']), ('tool_missing', tool))
+        self.write(tool, b'secret-marker-unreviewed-tool', 0o755)
+        unknown = self.execute(self.request('inspect-install'))
+        self.assertEqual((unknown['diagnostic']['category'], unknown['diagnostic']['tool']), ('tool_hash_unknown', tool))
+        self.assertNotIn('secret-marker', json.dumps(unknown))
+        (self.root / tool).chmod(0o666)
+        invalid = self.execute(self.request('inspect-install'))
+        self.assertEqual((invalid['diagnostic']['category'], invalid['diagnostic']['tool']), ('tool_file_invalid', tool))
+
+    def test_inspect_install_redacts_unexpected_exception_and_does_not_claim_success(self):
+        with patch.object(host, 'installer_preconditions', side_effect=RuntimeError('secret-marker exception /private/path')):
+            result = self.execute(self.request('inspect-install'))
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['code'], 'inspection_refused')
+        self.assertEqual(result['diagnostic']['category'], 'inspection_failed')
+        self.assertNotIn('secret-marker', json.dumps(result))
+        self.assertNotIn('/private/path', json.dumps(result))
+
+    def test_inspect_install_redacts_identity_exception_before_journal_creation(self):
+        request = self.request('inspect-install')
+        result = host.execute_request(request, host.sha(host.canonical(request)), root=self.root, identity=lambda *_: (_ for _ in ()).throw(RuntimeError('secret-marker identity')))
+        self.assertEqual(result['diagnostic']['category'], 'identity_invalid')
+        self.assertFalse(result['ok'])
+        self.assertFalse((self.root / 'clean-data/release/remote-operations').exists())
+
+    def test_inspection_classifies_private_file_guards(self):
+        for name, category in (('clean-data/release/current.clean-v1.json', 'accepted_record_invalid'), ('.env.clean-v1', 'environment_invalid')):
+            with self.subTest(name=name):
+                path = self.root / name
+                path.chmod(0o644)
+                result = self.execute(self.request('inspect-install'))
+                self.assertEqual(result['diagnostic']['category'], category)
+                path.chmod(0o600)
+        self.assertEqual(self.calls, [])
+
+    def test_inspection_sanitizes_refusal_codes_before_host_output(self):
+        for error in (host.Refused('secret-marker category', 'secret-marker tool'), host.Refused('ready')):
+            with patch.object(host, 'installer_preconditions', side_effect=error):
+                result = self.execute(self.request('inspect-install'))
+            self.assertEqual(result['diagnostic']['category'], 'inspection_failed')
+            self.assertFalse(result['ok'])
+            self.assertIsNone(result['diagnostic']['tool'])
+            self.assertNotIn('secret-marker', json.dumps(result))
+
+    def test_inspection_main_fallback_always_returns_safe_inspection_result(self):
+        request = self.request('inspect-install')
+        raw = host.canonical(request)
+        output = io.StringIO()
+        with patch.object(host.os, 'geteuid', return_value=0), patch.object(host, 'execute_request', side_effect=OSError('secret-marker cleanup failure')), contextlib.redirect_stdout(output):
+            host.main(host.base64.b64encode(host.gzip.compress(raw)).decode(), host.sha(raw))
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['code'], 'inspection_refused')
+        self.assertEqual(result['diagnostic']['category'], 'inspection_failed')
+        self.assertNotIn('secret-marker', output.getvalue())
+
+    def test_inspection_separates_data_ownership_and_release_control_failures(self):
+        self.data_owner = (0, 0)
+        self.assertEqual(self.execute(self.request('inspect-install'))['diagnostic']['category'], 'data_ownership_invalid')
+        self.data_owner = (999, 988)
+        self.owner_overrides = {self.root / 'clean-data/release': (999, 988)}
+        self.assertEqual(self.execute(self.request('inspect-install'))['diagnostic']['category'], 'release_control_invalid')
+        self.assertEqual(self.calls, [])
+
+    def test_installation_failure_is_distinct_from_inspection_refusal(self):
+        with patch.object(host.os, 'replace', side_effect=OSError('secret-marker replacement failure')):
+            result = self.execute(self.request('install'))
+        self.assertEqual(result['code'], 'installation_failed')
+        self.assertFalse(result['ok'])
+        self.assertNotIn('secret-marker', json.dumps(result))
+
+    def test_inspection_retains_guard_on_control_path_change_without_runtime_calls(self):
+        original = host.installer_preconditions
+        def swap(request, root):
+            (root / 'clean-data/release').rename(root / 'clean-data/release-pinned')
+            (root / 'clean-data/release').mkdir(mode=0o700)
+            return original(request, root)
+        with patch.object(host, 'installer_preconditions', side_effect=swap):
+            result = self.execute(self.request('inspect-install'))
+        self.assertEqual(result['diagnostic']['category'], 'control_path_changed')
+        self.assertFalse(result['ok'])
+        self.assertTrue((self.root / '.staging-release-guard/owner-pid').is_file())
+        self.assertFalse((self.root / 'clean-data/release/remote-operations').exists())
+        self.assertEqual(self.calls, [])
+
+    def test_inspection_preserves_existing_root_and_legacy_locks(self):
+        guard = self.root / '.staging-release-guard'
+        guard.mkdir(mode=0o700)
+        self.write('.staging-release-guard/owner-pid', b'fixture-owner\n')
+        self.assertEqual(self.execute(self.request('inspect-install'))['diagnostic']['category'], 'operation_locked')
+        self.assertEqual((guard / 'owner-pid').read_bytes(), b'fixture-owner\n')
+        (guard / 'owner-pid').unlink()
+        guard.rmdir()
+        legacy = self.root / 'clean-data/.authority-operation-lock'
+        legacy.mkdir(mode=0o700)
+        self.assertEqual(self.execute(self.request('inspect-install'))['diagnostic']['category'], 'legacy_lock_present')
+        self.assertTrue(legacy.is_dir())
+        self.assertEqual(self.calls, [])
+
+    def test_identity_and_mount_checks_have_distinct_safe_categories(self):
+        request = self.request('inspect-install')
+        identity = {'accountId': request['target']['account'], 'region': request['target']['region'], 'instanceId': request['target']['instance_id']}
+        class Opener:
+            def open(self, request, **kwargs):
+                return io.BytesIO(b'fixture-token' if request.get_method() == 'PUT' else json.dumps(identity).encode())
+        with patch.object(host, 'DEPLOY', self.root), patch.object(host.os, 'geteuid', return_value=0), patch.object(host.urllib.request, 'build_opener', return_value=Opener()), patch.object(host.os.path, 'ismount', return_value=False):
+            with self.assertRaises(host.Refused) as error:
+                host.machine_identity(request, self.root)
+            self.assertEqual(error.exception.code, 'retained_mount_invalid')
+            identity['accountId'] = 'wrong-fixture-account'
+            with self.assertRaises(host.Refused) as error:
+                host.machine_identity(request, self.root)
+            self.assertEqual(error.exception.code, 'identity_invalid')
 
     def test_data_root_requires_exact_bootstrap_owner_group_and_mode(self):
         before = (self.root / 'update-clean-v1.sh').read_bytes()

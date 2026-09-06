@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
+import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
 
 const temporary: string[] = [];
 const REPO = resolve(import.meta.dirname, '../..');
@@ -37,7 +37,8 @@ function fixture() {
   const request = () => JSON.parse(readFileSync(options.output, 'utf8')).request;
   const outcome = () => {
     const receipt = JSON.parse(readFileSync(options.output, 'utf8'));
-    return { schema_version: 1, kind: 'echo-staging-release-host-result-v1', operation_id: receipt.request.operation_id, request_sha256: receipt.request_sha256, action: receipt.request.action, ok: true, code: 'verified', diagnostic: receipt.request.action === 'diagnose' ? { schema_version: 1, kind: 'echo-clean-v1-environment-drift', release_id: receipt.request.accepted.release_id, candidate_staged: false, environment_matches: false, changed_settings: ['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'], other_bytes_changed: false, allowlisted_settings_valid: true, environment_format_supported: true, repair_pending: false, repair_eligible: true, runtime_checked: false } : null };
+    const inspection = receipt.request.action === 'inspect-install';
+    return { schema_version: 1, kind: 'echo-staging-release-host-result-v1', operation_id: receipt.request.operation_id, request_sha256: receipt.request_sha256, action: receipt.request.action, ok: true, code: inspection ? 'inspection_verified' : 'verified', diagnostic: inspection ? { schema_version: 1, kind: 'echo-staging-release-install-inspection-v1', category: 'ready', tool: null } : receipt.request.action === 'diagnose' ? { schema_version: 1, kind: 'echo-clean-v1-environment-drift', release_id: receipt.request.accepted.release_id, candidate_staged: false, environment_matches: false, changed_settings: ['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'], other_bytes_changed: false, allowlisted_settings_valid: true, environment_format_supported: true, repair_pending: false, repair_eligible: true, runtime_checked: false } : null };
   };
   const aws = (args: string[]) => {
     calls.push(args);
@@ -64,6 +65,7 @@ describe('bounded staging release operator', () => {
     expect(() => releaseAction('shell')).toThrow('action_invalid');
     expect(() => releaseAction('onboard')).toThrow('action_invalid');
     expect(releaseAction('diagnose')).toBe('diagnose');
+    expect(releaseAction('inspect-install')).toBe('inspect-install');
   });
 
   it('requires a validated request before rendering any remote command', () => {
@@ -169,6 +171,49 @@ describe('bounded staging release operator', () => {
     f.state.outputOverride = JSON.stringify(result);
     expect(() => executeStagingRelease(f.options.output, f.dependencies)).toThrow();
     expect(readFileSync(f.options.output, 'utf8')).not.toContain('must-not-leak');
+  });
+
+  it.each(['arbitrary-category', 'inconsistent-success', 'unknown-tool', 'non-string-tool'])('rejects arbitrary or inconsistent install diagnostics: %s', kind => {
+    const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
+    const result: any = f.outcome();
+    if (kind === 'arbitrary-category') result.diagnostic.category = 'must-not-leak';
+    if (kind === 'inconsistent-success') { result.ok = false; result.code = 'inspection_refused'; }
+    if (kind === 'unknown-tool') { result.ok = false; result.code = 'inspection_refused'; result.diagnostic.category = 'tool_missing'; result.diagnostic.tool = 'private/path'; }
+    if (kind === 'non-string-tool') { result.ok = false; result.code = 'inspection_refused'; result.diagnostic.category = 'tool_missing'; result.diagnostic.tool = ['update-clean-v1.sh']; }
+    f.state.outputOverride = JSON.stringify(result);
+    expect(() => executeStagingRelease(f.options.output, f.dependencies)).toThrow('remote_outcome_unproven');
+    expect(readFileSync(f.options.output, 'utf8')).not.toContain('must-not-leak');
+    expect(readFileSync(f.options.output, 'utf8')).not.toContain('private/path');
+  });
+
+  it('accepts every host inspection category with exact success and tool bindings', () => {
+    const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
+    const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
+    const host = readFileSync(join(REPO, 'tools/authority-staging-release-host.py'), 'utf8');
+    const categories = [...host.match(/^INSPECTION_CATEGORIES = \((.*)\)$/m)![1].matchAll(/'([^']+)'/g)].map(match => match[1]);
+    expect(categories).toContain('ready');
+    for (const category of categories) {
+      const result: any = f.outcome();
+      result.ok = category === 'ready';
+      result.code = result.ok ? 'inspection_verified' : 'inspection_refused';
+      result.diagnostic.category = category;
+      result.diagnostic.tool = ['tool_missing', 'tool_file_invalid', 'tool_hash_unknown'].includes(category) ? 'update-clean-v1.sh' : null;
+      expect(safeReleaseOutcome(JSON.stringify(result), receipt.request, receipt.request_sha256)).toEqual(result);
+    }
+    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
+    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
+    expect(f.state.submissions).toBe(1);
+  });
+
+  it('persists installation-phase failures without retrying or accepting them for inspection', () => {
+    const f = fixture(); planStagingRelease({ ...f.options, action: 'install' }, f.dependencies);
+    const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
+    const result = { ...f.outcome(), ok: false, code: 'installation_failed' };
+    f.state.outputOverride = JSON.stringify(result);
+    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('failed');
+    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('failed');
+    expect(f.state.submissions).toBe(1);
+    expect(() => safeReleaseOutcome(JSON.stringify({ ...result, action: 'inspect-install' }), { ...receipt.request, action: 'inspect-install' }, receipt.request_sha256)).toThrow('remote_outcome_unproven');
   });
 
   it('requires an explicit exact-release founder authorization for promotion', () => {

@@ -338,6 +338,29 @@ to the independently reviewed *currently installed* tooling. Unknown installed
 bytes stop instead of being overwritten. Replacing tooling saves private old
 copies and hashes; it never edits the accepted release or environment.
 
+When an install returns only `precondition_failed`, create a separate
+`inspect-install` plan with the same inputs and `--previous-tooling-source`.
+Inspection shares the installer's identity, mount, ownership/control-path,
+accepted-record, literal environment and hostname, candidate, old-or-new tool
+hash, and pending-repair guards. It returns only `ready` or a fixed refusal
+category; `tool_missing`, `tool_file_invalid`, and `tool_hash_unknown` identify one of the six
+fixed reviewed tool names. A refused or interrupted inspection is not an
+installation failure and is never reported as success. No exception text,
+wrapper output, environment value, unknown setting name, host-supplied path, or
+file content is returned. Identity and retained-mount failures are distinct;
+deployment-path, data-ownership and release-control failures have separate
+categories. Invalid/unreadable private records and environment files also
+produce bounded classifications. Unexpected diagnostic or cleanup failures
+return `inspection_failed`, never a successful inspection.
+
+The `installation_failed` result identifies an error during tool installation;
+it does not prove that no tooling bytes changed. Generic `precondition_failed`
+results, including historical receipts, remain valid and may also represent
+partial installation. Inspection
+does not retroactively diagnose an old attempt or authorize overwriting unknown
+tools. A ready inspection proves only current prerequisites, not runtime health
+or installation completion. Continue to stop on unknown state.
+
 ```sh
 npm run authority:staging-release -- plan \
   --action install \
@@ -351,6 +374,15 @@ npm run authority:staging-release -- execute \
 npm run authority:staging-release -- status \
   --receipt /absolute/private/releases/install-operation.json
 ```
+
+Substitute `--action inspect-install` and use a distinct receipt path for the
+non-mutating guard inspection. It never replaces tooling, invokes an updater or
+runtime wrapper, restarts containers, repairs the environment, changes release
+state, clears locks, or forces progress. It does take the transient root-owned
+staging interlock and creates the existing request/result operation journal for
+serialization and idempotency. Those bounded files are removed or retained
+according to the same guard and changed-control-path rules as every release
+action, so inspection must not be described as making zero filesystem writes.
 
 Plans contain non-secret artifacts and expire after 30 minutes. `plan` performs
 read-only account, stack, exact-instance, retained-volume and SSM-online checks;
@@ -396,6 +428,7 @@ is installed; the new installed tools must match the executing reviewed source.
 
 | Action | Preconditions and result |
 | --- | --- |
+| `inspect-install` | Checks the actual install guards and old-or-new reviewed tooling hashes without replacing tools or invoking runtime behavior. Returns a strictly allowlisted readiness/refusal diagnostic. |
 | `diagnose` | Returns the fixed secret-safe diagnostic; no runtime-health claim. |
 | `repair` | Requires accepted-only eligible telemetry drift or its exact pending repair; restores the saved environment and verifies the accepted runtime. May temporarily disable telemetry. |
 | `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
