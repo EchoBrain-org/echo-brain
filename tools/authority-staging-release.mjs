@@ -273,6 +273,32 @@ function readReceipt(path, readSource) {
   return receipt;
 }
 
+function validateToolingInventory(diagnostic, request) {
+  const inventory = diagnostic.inventory;
+  const problemCategories = { missing: 'tool_missing', invalid: 'tool_file_invalid', unknown: 'tool_hash_unknown' };
+  if (inventory === null) {
+    if (diagnostic.category === 'ready' || Object.values(problemCategories).includes(diagnostic.category)) fail('remote_outcome_unproven');
+    return;
+  }
+  exactKeys(inventory, Object.keys(TOOL_FILES));
+  let firstProblem = null;
+  for (const name of Object.keys(TOOL_FILES)) {
+    const entry = inventory[name];
+    exactKeys(entry, ['state', 'sha256']);
+    if (['missing', 'invalid'].includes(entry.state)) {
+      if (entry.sha256 !== null) fail('remote_outcome_unproven');
+    } else {
+      if (typeof entry.sha256 !== 'string' || !SHA.test(entry.sha256)) fail('remote_outcome_unproven');
+      const expected = entry.sha256 === request.files[name].sha256 ? 'new' : entry.sha256 === request.old_tool_hashes[name] ? 'old' : 'unknown';
+      if (entry.state !== expected) fail('remote_outcome_unproven');
+    }
+    if (firstProblem === null && Object.hasOwn(problemCategories, entry.state)) firstProblem = { category: problemCategories[entry.state], tool: name };
+  }
+  if (['ready', 'repair_pending'].includes(diagnostic.category)) {
+    if (firstProblem !== null) fail('remote_outcome_unproven');
+  } else if (firstProblem === null || firstProblem.category !== diagnostic.category || firstProblem.tool !== diagnostic.tool) fail('remote_outcome_unproven');
+}
+
 export function safeReleaseOutcome(raw, request, requestHash) {
   let result;
   try { result = JSON.parse(raw); } catch { fail('remote_outcome_unproven'); }
@@ -284,10 +310,13 @@ export function safeReleaseOutcome(raw, request, requestHash) {
   if (result.diagnostic !== null) {
     if (request.action === 'inspect-install') {
       const categories = ['ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'repair_pending', 'inspection_failed', 'control_path_changed'];
-      exactKeys(result.diagnostic, ['schema_version', 'kind', 'category', 'tool']);
       const diagnostic = result.diagnostic;
+      const version = diagnostic.schema_version;
+      if (![1, 2].includes(version)) fail('remote_outcome_unproven');
+      exactKeys(diagnostic, ['schema_version', 'kind', 'category', 'tool', ...(version === 2 ? ['inventory'] : [])]);
       const toolCategories = ['tool_missing', 'tool_file_invalid', 'tool_hash_unknown'];
-      if (diagnostic.schema_version !== 1 || diagnostic.kind !== 'echo-staging-release-install-inspection-v1' || !categories.includes(diagnostic.category) || (toolCategories.includes(diagnostic.category) ? typeof diagnostic.tool !== 'string' || !Object.hasOwn(TOOL_FILES, diagnostic.tool) : diagnostic.tool !== null) || result.ok !== (diagnostic.category === 'ready') || result.code !== (diagnostic.category === 'ready' ? 'inspection_verified' : 'inspection_refused')) fail('remote_outcome_unproven');
+      if (diagnostic.kind !== `echo-staging-release-install-inspection-v${version}` || !categories.includes(diagnostic.category) || (toolCategories.includes(diagnostic.category) ? typeof diagnostic.tool !== 'string' || !Object.hasOwn(TOOL_FILES, diagnostic.tool) : diagnostic.tool !== null) || result.ok !== (diagnostic.category === 'ready') || result.code !== (diagnostic.category === 'ready' ? 'inspection_verified' : 'inspection_refused')) fail('remote_outcome_unproven');
+      if (version === 2) validateToolingInventory(diagnostic, request);
       return result;
     }
     const bools = ['candidate_staged', 'environment_matches', 'other_bytes_changed', 'allowlisted_settings_valid', 'environment_format_supported', 'repair_pending', 'repair_eligible', 'runtime_checked'];

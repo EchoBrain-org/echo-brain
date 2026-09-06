@@ -130,10 +130,11 @@ class HostProtocol(unittest.TestCase):
         self.assertTrue(result['ok'], result)
         self.assertEqual(result['code'], 'inspection_verified')
         self.assertEqual(result['diagnostic'], {
-            'schema_version': 1,
-            'kind': 'echo-staging-release-install-inspection-v1',
+            'schema_version': 2,
+            'kind': 'echo-staging-release-install-inspection-v2',
             'category': 'ready',
             'tool': None,
+            'inventory': {name: {'state': 'old', 'sha256': host.sha(data)} for name, data in before.items()},
         })
         self.assertEqual(self.calls, [])
         self.assertEqual({name: (self.root / name).read_bytes() for name in host.TOOLS}, before)
@@ -144,6 +145,75 @@ class HostProtocol(unittest.TestCase):
         result = self.execute(self.request('inspect-install'))
         self.assertEqual(result['diagnostic']['category'], 'ready')
         self.assertEqual({name: (self.root / name).read_bytes() for name in host.TOOLS}, installed)
+
+    def test_inventory_collects_all_six_tools_and_retains_first_refusal(self):
+        request = self.request('inspect-install')
+        self.write(host.TOOLS[0], b'private-marker unknown fixture', 0o755)
+        self.write(host.TOOLS[1], host.base64.b64decode(request['files'][host.TOOLS[1]]['base64']), 0o755)
+        (self.root / host.TOOLS[3]).chmod(0o666)
+        (self.root / host.TOOLS[5]).unlink()
+        result = self.execute(request)
+        self.assertFalse(result['ok'])
+        self.assertEqual((result['diagnostic']['category'], result['diagnostic']['tool']), ('tool_hash_unknown', host.TOOLS[0]))
+        inventory = result['diagnostic']['inventory']
+        self.assertEqual(set(inventory), set(host.TOOLS))
+        self.assertEqual([inventory[name]['state'] for name in host.TOOLS], ['unknown', 'new', 'old', 'invalid', 'old', 'missing'])
+        self.assertEqual(inventory[host.TOOLS[0]]['sha256'], host.sha(b'private-marker unknown fixture'))
+        self.assertIsNone(inventory[host.TOOLS[3]]['sha256'])
+        self.assertIsNone(inventory[host.TOOLS[5]]['sha256'])
+        self.assertNotIn('private-marker', json.dumps(result))
+        self.assertEqual(self.execute(request), result)
+        self.assertFalse(self.execute(self.request('install'))['ok'])
+        self.assertEqual((self.root / host.TOOLS[0]).read_bytes(), b'private-marker unknown fixture')
+        self.assertEqual(self.calls, [])
+
+    def test_inventory_early_failure_has_no_fingerprints(self):
+        self.write('clean-data/release/current.clean-v1.json', accepted_bytes + b' ')
+        result = self.execute(self.request('inspect-install'))
+        self.assertEqual(result['diagnostic']['schema_version'], 2)
+        self.assertIsNone(result['diagnostic']['inventory'])
+        self.assertEqual(result['diagnostic']['category'], 'accepted_record_mismatch')
+
+    def test_inventory_pending_repair_preserves_safe_hashes_without_success(self):
+        self.write('clean-data/release/environment-repair.pending.json', b'{}\n')
+        result = self.execute(self.request('inspect-install'))
+        self.assertEqual(result['diagnostic']['category'], 'repair_pending')
+        self.assertEqual(set(result['diagnostic']['inventory']), set(host.TOOLS))
+        self.assertFalse(result['ok'])
+
+    def test_inventory_prefers_new_when_both_reviewed_digests_are_equal(self):
+        request = self.request('inspect-install')
+        name = host.TOOLS[0]
+        request['old_tool_hashes'][name] = request['files'][name]['sha256']
+        self.write(name, host.base64.b64decode(request['files'][name]['base64']), 0o755)
+        result = self.execute(request)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['diagnostic']['inventory'][name]['state'], 'new')
+
+    def test_inventory_producer_redacts_malformed_or_injected_inventory(self):
+        request = self.request('inspect-install')
+        valid = self.execute(request)['diagnostic']['inventory']
+        for kind in ('extra-tool', 'extra-field', 'raw-digest', 'newline', 'wrong-state', 'missing-with-digest', 'missing-entry', 'not-a-map'):
+            with self.subTest(kind=kind):
+                inventory = copy.deepcopy(valid)
+                tool = host.TOOLS[0]
+                if kind == 'extra-tool': inventory['private-marker/path'] = inventory[tool]
+                if kind == 'extra-field': inventory[tool]['content'] = 'private-marker content'
+                if kind == 'raw-digest': inventory[tool]['sha256'] = 'private-marker digest'
+                if kind == 'newline': inventory[tool] = {'state': 'unknown', 'sha256': '0' * 64 + '\n'}
+                if kind == 'wrong-state': inventory[tool]['state'] = 'unknown'
+                if kind == 'missing-with-digest': inventory[tool]['state'] = 'missing'
+                if kind == 'missing-entry': del inventory[tool]
+                if kind == 'not-a-map': inventory = ['private-marker']
+                result = host.inspection_result(request, host.sha(host.canonical(request)), 'ready', inventory=inventory)
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['diagnostic']['category'], 'inspection_failed')
+                self.assertIsNone(result['diagnostic']['inventory'])
+                self.assertNotIn('private-marker', json.dumps(result))
+        error = host.Refused('identity_invalid', inventory=valid)
+        result = host.inspection_failure(request, host.sha(host.canonical(request)), error)
+        self.assertEqual(result['diagnostic']['category'], 'inspection_failed')
+        self.assertIsNone(result['diagnostic']['inventory'])
 
     def test_inspect_install_returns_only_bounded_guard_categories(self):
         self.write('clean-data/release/current.clean-v1.json', accepted_bytes + b' ')
