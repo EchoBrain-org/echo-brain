@@ -5,6 +5,13 @@ Coding agents follow
 before local exercise, staging, onboarding, or deploy. Do not add a
 tool-specific procedure.
 
+Current-host staging updates use the shared
+[`authority:staging-release` automation](../release/README.md#automated-current-host-staging-lane).
+It transfers only reviewed non-secret tooling and release artifacts, and invokes
+named installed updater actions with exact-target and accepted-record checks.
+It does not automate initial onboarding, change infrastructure, or infer the
+human Slack approval and final release decision.
+
 This is the deployable Organization Authority. Its current `clean-v1`
 compatibility profile uses a new `clean-data/` directory, never imports
 previous Authority state, and uses both EC2 Compose profiles automatically.
@@ -346,6 +353,13 @@ operation.
 
 ### Recover an interrupted operation lock
 
+For a bounded staging-release operation, a root-owned
+`.staging-release-guard` outside `clean-data` is an additional interlock. Preserve
+it and the original operation receipt if execution is unconfirmed or reports
+`control_path_changed`. The legacy-lock cleanup below does not authorize
+removing this guard. Follow the [automated release lane](../release/README.md#automated-current-host-staging-lane)
+and investigate the exact command and pinned control-state identity first.
+
 If an activation or release wrapper was killed without running its exit trap,
 leave `clean-data/.authority-operation-lock` in place until the old Docker work
 is conclusively stopped. On the EC2 Authority host:
@@ -401,6 +415,12 @@ the release wrapper restores those together before it claims a recovered public
 Authority.
 
 ### Current-host recovery floor
+
+For environment drift that prevents staging, follow the release loop's
+[secret-safe diagnosis and guarded repair](../release/README.md#environment-drift-before-staging).
+The current-host wrapper can recover accepted-only staging content-telemetry
+drift without inventing a candidate. Unknown changes remain blocked; never
+overwrite an accepted snapshot to make the equality check pass.
 
 The release recovery unit above restores accepted deployment configuration. It
 does not reconstruct `clean-data/` if the Authority root volume is lost or

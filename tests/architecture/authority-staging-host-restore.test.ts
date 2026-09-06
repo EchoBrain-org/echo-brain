@@ -138,6 +138,39 @@ describe("Authority retained-host restore", () => {
     expect(script).toContain("terminal_green=true");
   });
 
+  it("keeps the parent guard through onboarding resume and terminal status", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-restore-handoff-"));
+    try {
+      mkdirSync(join(root, "release"), { mode: 0o700 });
+      writeFileSync(join(root, "release", "clean-v1-release.py"), "# fixture\n");
+      writeFileSync(join(root, "release", "clean-v1-runtime-profile.py"), "# fixture\n");
+      const rootCheck = "[[ " + "$" + "{EUID} -eq 0 ]] || fail 'run this restore command as root'";
+      const original = restoreScript();
+      const materializer = /^restore_or_no_op\(\) \{\n.*?^\}/ms;
+      expect(original).toMatch(materializer);
+      writeFileSync(join(root, "restore.sh"), original.replace(rootCheck, ": # isolated handoff proof").replace(materializer, "restore_or_no_op() { return 0; }"));
+      writeFileSync(join(root, "onboard-clean-v1.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+guard="$ECHO_TEST_DEPLOY/.staging-release-guard"
+test -f "$guard/owner-pid" || exit 42
+if mkdir "$guard" 2>/dev/null; then exit 43; fi
+if [[ "$1" == resume ]]; then
+  test "\${ECHO_CLEAN_PARENT_GUARD_PID:-}" = "$PPID" || exit 44
+else
+  printf 'terminal_green=true\\n'
+fi
+`, { mode: 0o700 });
+      const result = spawnSync("bash", [join(root, "restore.sh"), "resume", "--deploy-dir", root], {
+        encoding: "utf8", env: { ...process.env, ECHO_TEST_DEPLOY: root },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("terminal_green=true");
+      expect(() => readFileSync(join(root, ".staging-release-guard", "owner-pid"))).toThrow();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("fails closed instead of inventing or mixing state after partial, candidate, unsafe, or wrong-identity recovery inputs", () => {
     const script = restoreScript();
 

@@ -181,6 +181,13 @@ Coding agents select the lane from
 [PB-OPERATIONS-001](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
 before any staging, onboarding, or deploy command.
 
+For an existing accepted staging host, the reviewed
+[`authority:staging-release` lane](deploy/release/README.md#automated-current-host-staging-lane)
+automates non-secret artifact transfer and named release-wrapper actions without
+Session Manager copying. Login/MFA, Slack approval, and the exact candidate's
+final release decision remain human inputs; infrastructure and first onboarding
+retain their separate gates.
+
 The staging controller holds one fixed Cloudflare edge and retained EBS data
 volume around a disposable EC2 host. Its initial host onboarding and three
 retained-state host-replacement cycles have passed qualification; this does not

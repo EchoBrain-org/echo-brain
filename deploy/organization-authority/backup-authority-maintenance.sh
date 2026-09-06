@@ -24,6 +24,7 @@ OPERATION_LOCK_DIR="$DATA_DIR/.authority-operation-lock"
 MAINTENANCE_DIR="$DATA_DIR/backup-maintenance"
 STATUS_FILE="$MAINTENANCE_DIR/status.json"
 OPERATION_LOCK_HELD=false
+STAGING_RELEASE_GUARD_HELD=false
 RESTART_REQUIRED=false
 RESTART_PROVED=false
 CLEANUP_RUNNING=false
@@ -117,16 +118,40 @@ release_operation_lock() {
     rmdir "$OPERATION_LOCK_DIR" >/dev/null 2>&1 || true
     OPERATION_LOCK_HELD=false
   fi
+  if [[ "$STAGING_RELEASE_GUARD_HELD" == true ]]; then
+    # Keep the root guard if the legacy lock could not be released.
+    [[ ! -e "$OPERATION_LOCK_DIR" && ! -L "$OPERATION_LOCK_DIR" ]] || \
+      fail 'could not release the Authority operation lock; preserve its root-owned guard'
+    rm -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+    rmdir "$DEPLOY_DIR/.staging-release-guard" || \
+      fail 'could not release the root-owned staging release guard'
+    STAGING_RELEASE_GUARD_HELD=false
+  fi
 }
 
 acquire_operation_lock() {
+  acquire_staging_release_guard
   if ! mkdir -m 0700 "$OPERATION_LOCK_DIR" 2>/dev/null; then
+    # We own only the root guard, not the preexisting legacy lock.
+    rm -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+    rmdir "$DEPLOY_DIR/.staging-release-guard"
+    STAGING_RELEASE_GUARD_HELD=false
     fail 'another Authority activation or release operation is already in progress; follow the README operation-lock recovery steps if its owner was interrupted'
   fi
   OPERATION_LOCK_HELD=true
   if ! (umask 077; printf '%s\n' "$$" > "$OPERATION_LOCK_DIR/owner-pid"); then
     release_operation_lock
     fail 'could not record the Authority operation lock owner'
+  fi
+}
+
+acquire_staging_release_guard() {
+  local guard="$DEPLOY_DIR/.staging-release-guard"
+  mkdir -m 0700 "$guard" 2>/dev/null || fail 'a bounded staging release operation is in progress; preserve its root-owned guard'
+  STAGING_RELEASE_GUARD_HELD=true
+  if ! (umask 077; printf '%s\n' "$$" > "$guard/owner-pid"); then
+    release_operation_lock
+    fail 'could not record the root-owned staging release guard owner'
   fi
 }
 
@@ -458,6 +483,7 @@ complete_or_recover_on_exit() {
       write_status 'recovery_required' "restart_proof_failed_after_exit_status=$original_status" || true
       # Preserve the shared lock as an explicit fail-closed recovery marker.
       OPERATION_LOCK_HELD=false
+      STAGING_RELEASE_GUARD_HELD=false
       exit 1
     fi
   fi

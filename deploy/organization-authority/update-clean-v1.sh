@@ -21,10 +21,13 @@ RUNTIME_PROFILE_STATE_DIR="$RELEASE_STATE_DIR/runtime-profiles"
 ENVIRONMENT_STATE_DIR="$RELEASE_STATE_DIR/runtime-environments"
 CANARY_RECEIPT_DIR="$RELEASE_STATE_DIR/canary-receipts"
 ACTIVE_RUNTIME_PROFILE="$RELEASE_STATE_DIR/runtime-profile.active"
+ENVIRONMENT_REPAIR_PENDING="$RELEASE_STATE_DIR/environment-repair.pending.json"
+CONTENT_TELEMETRY_OVERRIDE=''
 OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.authority-operation-lock}"
 ROLLBACK_READER_CAPABILITY_LABEL='org.echobrain.authority.state-capability.staging-synthetic-meeting-canary-v1'
 STAGING_JOURNEY_TELEMETRY_CAPABILITY_LABEL='org.echobrain.authority.telemetry.staging-journey-v1'
 OPERATION_LOCK_HELD=false
+STAGING_RELEASE_GUARD_HELD=false
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -34,16 +37,36 @@ release_operation_lock() {
     rmdir "$OPERATION_LOCK_DIR" >/dev/null 2>&1 || true
     OPERATION_LOCK_HELD=false
   fi
+  if [[ "$STAGING_RELEASE_GUARD_HELD" == true ]]; then
+    rm -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
+    rmdir "$DEPLOY_DIR/.staging-release-guard"
+    STAGING_RELEASE_GUARD_HELD=false
+  fi
 }
 
 acquire_operation_lock() {
+  acquire_staging_release_guard
   if ! mkdir -m 0700 "$OPERATION_LOCK_DIR" 2>/dev/null; then
+    release_operation_lock
     fail 'another Authority activation or release operation is already in progress; follow the README operation-lock recovery steps if its owner was interrupted'
   fi
   OPERATION_LOCK_HELD=true
   if ! (umask 077; printf '%s\n' "$$" > "$OPERATION_LOCK_DIR/owner-pid"); then
     release_operation_lock
     fail 'could not record the Authority operation lock owner'
+  fi
+}
+
+acquire_staging_release_guard() {
+  local guard="$DEPLOY_DIR/.staging-release-guard"
+  # The reviewed runner owns this exact nested lock; ordinary human calls
+  # acquire the same root-owned interlock for their entire operation.
+  [[ "$OPERATION_LOCK_DIR" != "$guard/wrapper-lock" ]] || return 0
+  mkdir -m 0700 "$guard" 2>/dev/null || fail 'a bounded staging release operation is in progress; preserve its root-owned guard'
+  STAGING_RELEASE_GUARD_HELD=true
+  if ! (umask 077; printf '%s\n' "$$" > "$guard/owner-pid"); then
+    release_operation_lock
+    fail 'could not record the root-owned staging release guard owner'
   fi
 }
 
@@ -200,11 +223,12 @@ create_environment_snapshot() {
     "$(field "$record" release-id)" \
     "$(field "$record" source-sha)" \
     "$(field "$record" runtime-profile-sha256)" \
-    "$(field "$record" runtime-profile-version)" <<'PY'
-import os, pathlib, stat, sys, tempfile
+    "$(field "$record" runtime-profile-version)" "$CONTENT_TELEMETRY_OVERRIDE" <<'PY'
+import os, pathlib, stat, sys
 
 source, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-image, release_id, source_sha, profile_sha, profile_version = sys.argv[3:]
+image, release_id, source_sha, profile_sha, profile_version = sys.argv[3:8]
+content_telemetry = sys.argv[8]
 state = source.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
     raise SystemExit('Authority deployment environment must be a private regular file')
@@ -216,6 +240,10 @@ names = {
     'ECHO_CLEAN_RUNTIME_PROFILE_SHA256': profile_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_VERSION': profile_version,
 }
+if content_telemetry:
+    if content_telemetry not in {'true', 'false'}:
+        raise SystemExit('content telemetry must be true or false')
+    names['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'] = content_telemetry
 for name in names:
     if sum(line.startswith(name + '=') for line in lines) > 1:
         raise SystemExit('Authority deployment environment has duplicate ' + name)
@@ -223,7 +251,9 @@ payload = [line for line in lines if not any(line.startswith(name + '=') for nam
 payload.extend(name + '=' + value for name, value in names.items())
 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 os.chmod(destination.parent, 0o700)
-fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
+# tempfile.mkstemp reifies relative dirs through abspath, losing the pinned cwd.
+temporary = destination.parent / ('.' + destination.name + '.' + os.urandom(16).hex())
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as output:
@@ -255,7 +285,7 @@ activate_release_tuple() {
     fail 'could not materialize the selected runtime profile'
   fi
   if ! python3 - "$stage_dir" "$RUNTIME_CONFIG_DIR" "$env_snapshot" "$ENV_FILE" "$profile" "$ACTIVE_RUNTIME_PROFILE" <<'PY'
-import os, pathlib, stat, sys, tempfile
+import os, pathlib, stat, sys
 
 source_dir, deploy_dir = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 env_snapshot, env_file = pathlib.Path(sys.argv[3]), pathlib.Path(sys.argv[4])
@@ -275,7 +305,8 @@ if {path.name for path in source_dir.iterdir()} != set(names):
     raise SystemExit('runtime profile materialization contains an unexpected file set')
 
 def replace_from(source, destination, mode):
-    fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
+    temporary = destination.parent / ('.' + destination.name + '.' + os.urandom(16).hex())
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         os.fchmod(fd, mode)
         with os.fdopen(fd, 'wb') as output, source.open('rb') as input:
@@ -366,7 +397,182 @@ active_environment_matches() {
   local record="$1" snapshot
   stored_release_tuple_matches "$record"
   snapshot="$(environment_snapshot_path "$record")"
-  cmp -s "$ENV_FILE" "$snapshot" || fail 'release environment drifted from the accepted release record'
+  cmp -s "$ENV_FILE" "$snapshot" || fail 'release environment drifted from the accepted release record; run diagnose-environment before recovery'
+}
+
+# Only the fixed, non-secret setting name and classification booleans leave
+# this helper. Environment bytes stay in private files, never stdout or argv.
+environment_operation() {
+  local record="$1" operation="$2" candidate_present="$3"
+  python3 - "$ENV_FILE" "$(environment_snapshot_path "$record")" \
+    "$record" "$RELEASE_STATE_DIR" "$operation" "$candidate_present" <<'PY'
+import hashlib, json, os, pathlib, re, stat, sys
+
+active, snapshot, record, state = map(pathlib.Path, sys.argv[1:5])
+operation, candidate = sys.argv[5], sys.argv[6] == 'true'
+key = b'ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1='
+pending = state / 'environment-repair.pending.json'
+
+def refuse():
+    raise ValueError('unsafe environment operation')
+
+def present(path):
+    return path.exists() or path.is_symlink()
+
+def private_bytes(path, publication=False):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        # A killed atomic no-replace publication can leave its private temp
+        # hard link. Permit that only for our published evidence, never inputs.
+        links_safe = info.st_nlink == 1 or (publication and info.st_nlink == 2)
+        if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or
+                info.st_uid != os.geteuid() or not links_safe or info.st_size > 1024 * 1024):
+            refuse()
+        with os.fdopen(fd, 'rb', closefd=False) as source:
+            data = source.read(1024 * 1024 + 1)
+        if len(data) > 1024 * 1024:
+            refuse()
+        return data
+    finally:
+        os.close(fd)
+
+def split_setting(data):
+    lines = data.splitlines(keepends=True)
+    settings = [line for line in lines if line.startswith(key)]
+    valid = len(settings) <= 1 and all(line in (key + b'true\n', key + b'false\n') for line in settings)
+    return settings, b''.join(line for line in lines if not line.startswith(key)), valid
+
+def literal_environment(data):
+    # Match the onboarding writer's literal, one-assignment-per-line format.
+    # Do not mistake a setting-looking line inside a quoted/multiline value
+    # for a setting, or change another variable via interpolation of the flag.
+    for line in data.splitlines(keepends=True):
+        if not line.endswith(b'\n') or b'\r' in line or b'\x00' in line:
+            return False
+        row = line[:-1]
+        if not row.strip() or row.lstrip().startswith(b'#'):
+            continue
+        name, separator, value = row.partition(b'=')
+        if not separator or not re.fullmatch(b'[A-Za-z_][A-Za-z0-9_]*', name):
+            return False
+        if any(byte in value for byte in (b"'", b'"', b'\\', b'$', b'`')):
+            return False
+    return True
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+def publish(path, data, replace=False):
+    if not replace and present(path):
+        if private_bytes(path, publication=True) != data:
+            refuse()
+        return
+    temporary = path.parent / ('.' + path.name + '.' + os.urandom(16).hex())
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'wb') as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        if replace:
+            os.replace(temporary, path)
+        else:
+            os.link(temporary, path)
+            os.unlink(temporary)
+        sync_directory(path.parent)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+def encode(value):
+    return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
+
+try:
+    # The shell validates this canonical non-secret record and its stored tuple.
+    record_bytes = record.read_bytes()
+    release_id = json.loads(record_bytes)['release_id']
+    before, accepted = private_bytes(active), private_bytes(snapshot)
+    current_setting, other_current, current_valid = split_setting(before)
+    accepted_setting, other_accepted, accepted_valid = split_setting(accepted)
+    matches = before == accepted
+    other_changed = other_current != other_accepted
+    staging = [line for line in accepted.splitlines() if line.startswith(b'ECHO_CLEAN_AUTHORITY_HOST=')] == [b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org']
+    format_supported = literal_environment(before) and literal_environment(accepted)
+    allowed = staging and not candidate and not other_changed and current_valid and accepted_valid and format_supported
+    repair_dir = state / 'environment-repairs'
+    backup = repair_dir / (release_id + '.before.env')
+    completed = repair_dir / (release_id + '.json')
+    identity = {
+        'schema_version': 1, 'kind': 'echo-clean-v1-environment-repair',
+        'release_id': release_id,
+        'release_sha256': hashlib.sha256(record_bytes).hexdigest(),
+        'accepted_environment_sha256': hashlib.sha256(accepted).hexdigest(),
+    }
+    pending_present = present(pending)
+    receipt = None
+    if present(repair_dir):
+        info = repair_dir.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.geteuid():
+            refuse()
+    if pending_present:
+        saved = private_bytes(backup, publication=True)
+        saved_setting, other_saved, saved_valid = split_setting(saved)
+        receipt = {**identity, 'before_environment_sha256': hashlib.sha256(saved).hexdigest()}
+        if (private_bytes(pending, publication=True) != encode(receipt) or not saved_valid or not literal_environment(saved) or
+                other_saved != other_accepted or saved_setting == accepted_setting or
+                before not in (saved, accepted)):
+            refuse()
+    if operation == 'diagnose':
+        print(json.dumps({
+            'schema_version': 1, 'kind': 'echo-clean-v1-environment-drift',
+            'release_id': release_id, 'candidate_staged': candidate,
+            'environment_matches': matches,
+            'changed_settings': [key[:-1].decode()] if format_supported and current_setting != accepted_setting else [],
+            'other_bytes_changed': other_changed if format_supported else not matches,
+            'allowlisted_settings_valid': current_valid and accepted_valid,
+            'environment_format_supported': format_supported,
+            'repair_pending': pending_present,
+            'repair_eligible': allowed and (not matches or pending_present),
+            'runtime_checked': False,
+        }, sort_keys=True, separators=(',', ':')))
+    else:
+        if not allowed:
+            refuse()
+        if operation == 'check':
+            pass
+        elif operation == 'restore':
+            if not matches and not pending_present:
+                if not present(repair_dir):
+                    repair_dir.mkdir(mode=0o700)
+                    sync_directory(state)
+                publish(backup, before)
+                receipt = {**identity, 'before_environment_sha256': hashlib.sha256(before).hexdigest()}
+                publish(pending, encode(receipt))
+            elif not pending_present:
+                refuse()
+            # Recheck after preserving evidence; all wrapper actions also share
+            # the Authority operation lock. Never normalize unrelated bytes.
+            if private_bytes(active) != before or private_bytes(snapshot) != accepted or record.read_bytes() != record_bytes:
+                refuse()
+            publish(active, accepted, replace=True)
+        elif operation == 'complete':
+            if not pending_present or not matches:
+                refuse()
+            publish(completed, encode({**receipt, 'runtime_verified': True}))
+            pending.unlink()
+            sync_directory(state)
+        else:
+            refuse()
+except (OSError, ValueError, KeyError, TypeError):
+    # Do not include exceptions, paths, arbitrary setting names, or file bytes.
+    raise SystemExit('environment operation refused: unsafe files, unrelated drift, invalid setting, or mismatched repair evidence; no runtime recovery is confirmed')
+PY
 }
 
 store_release_tuple() {
@@ -391,7 +597,7 @@ remove_release_tuple() {
 copy_record() {
   local source="$1" destination="$2" mode="$3"
   python3 - "$source" "$destination" "$mode" <<'PY'
-import os, pathlib, stat, sys, tempfile
+import os, pathlib, stat, sys
 source, destination, mode = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 if mode not in {'no-replace', 'replace', 'idempotent-immutable'}:
     raise SystemExit('unsupported release record copy mode')
@@ -410,7 +616,8 @@ if mode == 'idempotent-immutable' and (destination.exists() or destination.is_sy
     ):
         raise SystemExit('existing immutable release record is unsafe or does not match')
     raise SystemExit(0)
-fd, temporary = tempfile.mkstemp(prefix='.' + destination.name + '.', dir=destination.parent)
+temporary = destination.parent / ('.' + destination.name + '.' + os.urandom(16).hex())
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, 'wb') as output:
@@ -614,6 +821,35 @@ safe_descriptor_check() {
   '
 }
 
+running_content_telemetry_matches() {
+  local expected authority_id
+  expected="$(python3 - "$ENV_FILE" <<'PY'
+import pathlib, sys
+key = 'ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1='
+rows = [line for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.startswith(key)]
+if len(rows) > 1 or any(row not in (key + 'true', key + 'false') for row in rows):
+    raise SystemExit(1)
+print(rows[0][len(key):] if rows else 'false')
+PY
+  )" || return 1
+  authority_id="$(running_container_id authority)" || return 1
+  # The complete container environment is streamed to the verifier, never
+  # printed or passed as a process argument. Only the allowlisted boolean is.
+  docker inspect --format '{{json .Config.Env}}' "$authority_id" | python3 -c '
+import json, sys
+try:
+    environment = json.load(sys.stdin)
+    if not isinstance(environment, list) or not all(isinstance(row, str) for row in environment):
+        raise ValueError()
+    key = "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1="
+    rows = [row for row in environment if row.startswith(key)]
+    valid = rows == [key + sys.argv[1]] or (not rows and sys.argv[1] == "false")
+    raise SystemExit(0 if valid else 1)
+except (ValueError, TypeError):
+    raise SystemExit(1)
+' "$expected"
+}
+
 safe_setup_status() {
   compose_clean exec -T authority node \
     services/organization-authority/dist/clean-founder-main.js \
@@ -702,7 +938,7 @@ persist_staging_canary_receipt() {
   local release_id="$1" receipt="$2" destination
   destination="$(staging_canary_receipt_path "$release_id")"
   python3 - "$destination" "$receipt" <<'PY'
-import os, pathlib, stat, sys, tempfile
+import os, pathlib, stat, sys
 
 destination, receipt = pathlib.Path(sys.argv[1]), (sys.argv[2] + "\n").encode("utf-8")
 parent_state = destination.parent.lstat()
@@ -718,7 +954,8 @@ if destination.exists() or destination.is_symlink():
     ):
         raise SystemExit("existing canary receipt is unsafe or does not match")
     raise SystemExit(0)
-fd, temporary = tempfile.mkstemp(prefix="." + destination.name + ".", dir=destination.parent)
+temporary = destination.parent / ('.' + destination.name + '.' + os.urandom(16).hex())
+fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 try:
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "wb") as output:
@@ -845,7 +1082,9 @@ restore_accepted() {
 usage() {
   cat >&2 <<'EOF'
 usage:
-  update-clean-v1.sh stage --release <canonical-release.json> --runtime-profile <canonical-profile.json>
+  update-clean-v1.sh stage --release <canonical-release.json> --runtime-profile <canonical-profile.json> [--content-telemetry <true|false>]
+  update-clean-v1.sh diagnose-environment
+  update-clean-v1.sh repair-environment --expected-release-id <accepted-release-id> --restore-accepted
   update-clean-v1.sh canary
   update-clean-v1.sh promote --release <canonical-release.json> --canary-passed
   update-clean-v1.sh rollback
@@ -861,9 +1100,58 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 ensure_state_directories || fail 'Authority release-state directories are missing or unsafe'
+if [[ -e "$ENVIRONMENT_REPAIR_PENDING" || -L "$ENVIRONMENT_REPAIR_PENDING" ]]; then
+  case "$command" in
+    diagnose-environment|repair-environment) ;;
+    *) fail 'environment repair is pending; run diagnose-environment and retry the same repair-environment command before release changes' ;;
+  esac
+fi
 case "$command" in
+  diagnose-environment)
+    [[ $# -eq 1 ]] || usage
+    selected="$CURRENT_RECORD"
+    candidate_present=false
+    if [[ -e "$CANDIDATE_RECORD" || -L "$CANDIDATE_RECORD" ]]; then
+      selected="$CANDIDATE_RECORD"
+      candidate_present=true
+    fi
+    validate "$selected"
+    stored_release_tuple_matches "$selected"
+    active_runtime_profile_matches "$selected"
+    active_materialized_profile_matches
+    environment_operation "$selected" diagnose "$candidate_present"
+    ;;
+  repair-environment)
+    [[ "${2:-}" == '--expected-release-id' && -n "${3:-}" && "${4:-}" == '--restore-accepted' && $# -eq 4 ]] || usage
+    [[ ! -e "$CANDIDATE_RECORD" && ! -L "$CANDIDATE_RECORD" ]] || fail 'environment repair refuses a staged candidate; inspect it and use the existing candidate recovery lane'
+    validate "$CURRENT_RECORD"
+    [[ "$(field "$CURRENT_RECORD" release-id)" == "$3" ]] || fail 'environment repair accepted release does not match the expected release ID'
+    stored_release_tuple_matches "$CURRENT_RECORD"
+    active_runtime_profile_matches "$CURRENT_RECORD"
+    active_materialized_profile_matches
+    environment_operation "$CURRENT_RECORD" check false
+    if [[ ! -e "$ENVIRONMENT_REPAIR_PENDING" ]]; then
+      running_exact_release "$CURRENT_RECORD" >/dev/null 2>&1 || fail 'environment repair requires the exact accepted runtime before its first mutation'
+      if cmp -s "$ENV_FILE" "$(environment_snapshot_path "$CURRENT_RECORD")"; then
+        running_content_telemetry_matches >/dev/null 2>&1 || fail 'accepted environment matches but runtime content telemetry does not; investigate runtime drift'
+        printf '{"ok":true,"stage":"environment_already_matches","runtime_verified":true}\n'
+        exit 0
+      fi
+    fi
+    environment_operation "$CURRENT_RECORD" restore false
+    if ! { start_and_check "$CURRENT_RECORD" && running_content_telemetry_matches; } >/dev/null 2>&1; then
+      fail 'accepted environment restored but runtime recovery is unconfirmed; repair remains pending; retry the same repair-environment command'
+    fi
+    environment_operation "$CURRENT_RECORD" complete false
+    printf '{"ok":true,"stage":"environment_repaired","runtime_verified":true}\n'
+    ;;
   stage)
-    [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--runtime-profile' && -n "${5:-}" && $# -eq 5 ]] || usage
+    [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--runtime-profile' && -n "${5:-}" && ( $# -eq 5 || $# -eq 7 ) ]] || usage
+    if [[ $# -eq 7 ]]; then
+      [[ "$6" == '--content-telemetry' && ( "$7" == true || "$7" == false ) ]] || usage
+      [[ "$(authority_host)" == authority-staging.echobrain.org ]] || fail 'content telemetry override is staging-only'
+      CONTENT_TELEMETRY_OVERRIDE="$7"
+    fi
     candidate="$(cd "$(dirname "$3")" && pwd -P)/$(basename "$3")"
     supplied_profile="$(cd "$(dirname "$5")" && pwd -P)/$(basename "$5")"
     validate "$candidate"
@@ -880,10 +1168,14 @@ case "$command" in
       active_runtime_profile_matches "$CURRENT_RECORD"
       active_materialized_profile_matches
       active_environment_matches "$CURRENT_RECORD"
+      if [[ -n "$CONTENT_TELEMETRY_OVERRIDE" ]]; then
+        environment_operation "$CURRENT_RECORD" check false
+      fi
       [[ "$(current_image)" == "$(field "$CURRENT_RECORD" authority-image)" ]] || fail 'environment image does not match the current accepted release record'
       running_exact_release "$CURRENT_RECORD" || fail 'current accepted release is stopped or runtime image drifted'
     else
       first_deploy=true
+      [[ -z "$CONTENT_TELEMETRY_OVERRIDE" ]] || fail 'content telemetry override requires an accepted staging release'
       if running_container_id authority >/dev/null; then
         fail 'first deployment refuses to replace an unrecorded running Authority'
       fi
@@ -894,7 +1186,8 @@ case "$command" in
       remove_release_tuple "$candidate" || true
       fail 'could not persist the staged candidate release record'
     fi
-    if activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD"; then
+    if activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD" && \
+        { [[ -z "$CONTENT_TELEMETRY_OVERRIDE" ]] || running_content_telemetry_matches; }; then
       printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":%s,"next_action":"Run one bounded post-update canary, stop for founder Slack approval and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback."}\n' "$([[ "$first_deploy" == true ]] && printf false || printf true)"
       exit 0
     fi
