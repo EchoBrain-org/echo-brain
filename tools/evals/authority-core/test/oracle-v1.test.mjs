@@ -31,6 +31,9 @@ function decodedIndex(corpus, exactHead = corpus.exact_head) {
       reviewer_principal_id: atom.reviewer_principal_id,
       reviewer_membership_id: atom.reviewer_membership_id,
       text: atom.text,
+      log_position: atom.log_position,
+      atom_order: atom.atom_order,
+      item_kind: atom.item_kind,
     })),
     postings: [...logicalPostings(atoms)],
   };
@@ -143,6 +146,19 @@ test("complete logical posting validation catches incorrect policy and content f
   const actual = decodedIndex(corpus);
   actual.facts.find((fact) => fact.policy_id === POLICY_ORGANIZATION_MEMBER).content_digest = "0".repeat(64);
   assert.throws(() => assertCompleteLogicalIndex({ corpus, exact_head: headForPosition(corpus, 350), actual }), /facts differ/);
+});
+
+test("complete logical index validation catches ranking and analyzer metadata mutations", () => {
+  const corpus = buildSyntheticCorpus({ milestone: "M1", seed: "metadata-proof" });
+  for (const [field, value] of [
+    ["log_position", 999],
+    ["atom_order", 99],
+    ["item_kind", "artifact"],
+  ]) {
+    const actual = decodedIndex(corpus);
+    actual.facts[0][field] = value;
+    assert.throws(() => assertCompleteLogicalIndex({ corpus, exact_head: corpus.exact_head, actual }), /facts differ/, field);
+  }
 });
 
 test("correct ids and digest claims cannot hide wrong returned text or reviewer ownership", () => {

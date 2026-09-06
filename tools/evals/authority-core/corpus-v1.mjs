@@ -165,7 +165,9 @@ function buildAtom({ index, logPosition, ownerCount, vocabulary, cdf, random, ag
   const policyId = Math.floor(((index + 1) * 7) / 10) > Math.floor((index * 7) / 10)
     ? POLICY_ORGANIZATION_MEMBER
     : POLICY_RESTRICTED_REVIEWER;
-  const ownerIndex = index % ownerCount;
+  // Keep all five facts from a meeting with one owner. Rotating per atom would
+  // couple reviewer identities to the repeating 70/30 policy pattern.
+  const ownerIndex = Math.floor(index / 5) % ownerCount;
   const atomBase = {
     owner_id: `owner-${String(ownerIndex).padStart(3, "0")}`,
     source_id: `source-${String(Math.floor(index / 5)).padStart(8, "0")}`,
@@ -199,7 +201,7 @@ function buildAtom({ index, logPosition, ownerCount, vocabulary, cdf, random, ag
 
 function milestoneShape(milestone) {
   const shapes = {
-    M1: { atoms: 350, historyDays: 30, workdays: 20, owners: 1 },
+    M1: { atoms: 350, historyDays: 30, workdays: 20, owners: 10 },
     M2: { atoms: 21875, historyDays: 365, workdays: 250, owners: 50 },
     M3: { atoms: 218750, historyDays: 730, workdays: 500, owners: 250 },
   };

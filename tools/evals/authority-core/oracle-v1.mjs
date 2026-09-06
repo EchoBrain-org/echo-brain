@@ -278,6 +278,9 @@ export function assertCompleteLogicalIndex({ corpus, exact_head: exactHead, actu
     reviewer_principal_id: atom.reviewer_principal_id,
     reviewer_membership_id: atom.reviewer_membership_id,
     text: atom.text,
+    log_position: atom.log_position,
+    atom_order: atom.atom_order,
+    item_kind: atom.item_kind,
   })).sort((left, right) => left.atom_id.localeCompare(right.atom_id, "en"));
   const actualFacts = actual.facts.map((fact) => ({
     atom_id: fact.atom_id,
@@ -287,6 +290,9 @@ export function assertCompleteLogicalIndex({ corpus, exact_head: exactHead, actu
     reviewer_principal_id: fact.reviewer_principal_id,
     reviewer_membership_id: fact.reviewer_membership_id,
     text: fact.text,
+    log_position: fact.log_position,
+    atom_order: fact.atom_order,
+    item_kind: fact.item_kind,
   })).sort((left, right) => left.atom_id.localeCompare(right.atom_id, "en"));
   if (JSON.stringify(actualFacts) !== JSON.stringify(expectedFacts)) {
     throw new Error("decoded index facts differ from independently derived approved facts");
