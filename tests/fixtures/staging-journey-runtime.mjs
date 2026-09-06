@@ -65,7 +65,7 @@ async function seedOwner(initialized) {
 }
 
 async function seedSlack(initialized, connectionId) {
-  const { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, buildExternalHumanIdentityLinkContractV2 } = await import(pathToFileURL(join(REPO, 'packages/organization-control-plane/dist/application/person-slack-reaction-approval-contracts-v2.js')));
+  const { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, buildExternalHumanIdentityLinkContractV2 } = await import(pathToFileURL(join(REPO, 'packages/organization-control-plane/dist/application/organization-tool-connection-contracts-v2.js')));
   const coordinates = { authority_id: initialized.authority_id, organization_id: initialized.organization_id, state_lineage_id: initialized.state_lineage_id };
   const connection = buildOrganizationToolConnectionContractV2({ ...coordinates, connection_id: connectionId, provider_issuer: 'https://slack.com', provider_tenant_kind: 'workspace', provider_tenant_id: SLACK.workspace, provider_enterprise_id: null, tool_kind: 'slack', provider_app_id: SLACK.app, provider_bot_id: SLACK.bot, provider_bot_user_id: SLACK.botUser, required_provider_scopes: SCOPES, public_connection_configuration_sha256: canonicalSha256({ fixture: true }) });
   const connectionSha = canonicalSha256(connection);
