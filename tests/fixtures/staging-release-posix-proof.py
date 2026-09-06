@@ -2,12 +2,13 @@
 
 Only synthetic files in TemporaryDirectory are touched. No AWS, metadata,
 Docker socket, real deployment, credentials, or application state is used.
-Run with: python3 -B <this-file> <host-runner-source>
+Run with: python3 -B <this-file> <host-runner-source> <updater-source>
 """
 import base64
 import importlib.util
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,8 @@ assert sys.platform == 'linux' and os.geteuid() == 0
 spec = importlib.util.spec_from_file_location('host', sys.argv[1])
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
+updater_source = pathlib.Path(sys.argv[2]).read_text()
+copy_helper = re.search(r"^copy_record\(\).*?<<'PY'\n(.*?)^PY$", updater_source, re.M | re.S).group(1)
 
 with tempfile.TemporaryDirectory(prefix='echo-posix-proof-') as temporary:
     root = pathlib.Path(temporary)
@@ -42,8 +45,17 @@ import hashlib,os,pathlib,sys
 assert os.environ['ECHO_CLEAN_RELEASE_STATE_DIR'] == '.'
 assert hashlib.sha256(pathlib.Path('current.clean-v1.json').read_bytes()).hexdigest() == 'ACCEPTED'
 assert hashlib.sha256(pathlib.Path(sys.argv[3]).read_bytes()).hexdigest() == 'CANDIDATE'
+bound_input = sys.argv[3]
+original_abspath = os.path.abspath
+def prohibit_relative_reification(path):
+ assert os.path.isabs(path), 'temporary publication reified the pinned cwd'
+ return original_abspath(path)
+os.path.abspath = prohibit_relative_reification
+sys.argv = ['actual-updater-copy', bound_input, 'copied-candidate.json', 'no-replace']
+exec(COPY_HELPER, {})
+assert hashlib.sha256(pathlib.Path('copied-candidate.json').read_bytes()).hexdigest() == 'CANDIDATE'
 PY
-'''.replace('ACCEPTED', host.sha(accepted)).replace('CANDIDATE', host.sha(candidate)).encode()
+'''.replace('COPY_HELPER', repr(copy_helper)).replace('ACCEPTED', host.sha(accepted)).replace('CANDIDATE', host.sha(candidate)).encode()
     files = {}
     for name in host.TOOLS:
         content = probe if name == 'update-clean-v1.sh' else b'# synthetic reviewed tool fixture\n'
@@ -90,4 +102,4 @@ print('service-swap-completed-root-guard-protected')
     assert (root / '.staging-release-guard/candidate.json').read_bytes() == candidate
     assert not (root / 'clean-data/release/remote-operations').exists()
     assert (root / 'clean-data/release-original/remote-operations' / request['operation_id'] / 'result.json').is_file()
-    print('PASS: real UID 999 rename cannot substitute inputs or clear the root guard; root wrapper used pinned state; second operator refused')
+    print('PASS: real UID 999 rename cannot substitute inputs or clear the root guard; actual updater copy preserves pinned I/O; second operator refused')

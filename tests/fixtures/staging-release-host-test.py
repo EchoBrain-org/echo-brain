@@ -313,9 +313,43 @@ PY
         self.assertEqual(self.execute(request, invoke=attack)['code'], 'control_path_changed')
         self.assertEqual(observed, [(True, 'verified', None)])
 
+    def test_actual_updater_copy_preserves_pinned_relative_io_for_temporary_files(self):
+        source = host.base64.b64decode(base['files']['update-clean-v1.sh']['base64']).decode()
+        code = re.search(r"^copy_record\(\).*?<<'PY'\n(.*?)^PY$", source, re.M | re.S).group(1)
+        release = self.root / 'clean-data/release'
+        held = self.root / 'clean-data/release-held'
+        held_again = self.root / 'clean-data/release-held-again'
+        original_cwd = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+        original_abspath, original_link = os.path.abspath, os.link
+        converted = []
+        def reify_then_swap(path):
+            absolute = original_abspath(path)
+            if not os.path.isabs(path):
+                converted.append(absolute)
+                held.rename(held_again)
+                held.mkdir(mode=0o700)
+            return absolute
+        def substitute_temporary(path, destination, *args, **kwargs):
+            if converted and pathlib.Path(path).is_absolute():
+                # A writable parent permits replacing a root-owned temp name.
+                pathlib.Path(path).unlink()
+                pathlib.Path(path).write_bytes(b'substituted fixture')
+            return original_link(path, destination, *args, **kwargs)
+        try:
+            os.chdir(release)
+            release.rename(held)
+            release.mkdir(mode=0o700)
+            with patch.object(sys, 'argv', ['copy-proof', 'current.clean-v1.json', 'copied.json', 'no-replace']), patch.object(os.path, 'abspath', reify_then_swap), patch.object(os, 'link', substitute_temporary):
+                exec(compile(code, '<actual-updater-copy>', 'exec'), {})
+            self.assertEqual(pathlib.Path('copied.json').read_bytes(), accepted_bytes)
+            self.assertEqual(converted, [], 'temporary publication must not reify the pinned cwd')
+        finally:
+            os.fchdir(original_cwd)
+            os.close(original_cwd)
+
     def test_installed_wrappers_hold_root_guard_even_if_legacy_lock_is_renamed(self):
         self.install()
-        for name in ('update-clean-v1.sh', 'onboard-clean-v1.sh'):
+        for name in ('update-clean-v1.sh', 'onboard-clean-v1.sh', 'backup-authority-maintenance.sh'):
             source = (self.root / name).read_text()
             functions = '\n'.join(re.search(r'^' + function + r'\(\) \{\n.*?^\}', source, re.M | re.S).group() for function in ('release_operation_lock', 'acquire_operation_lock', 'acquire_staging_release_guard'))
             script = '''set -euo pipefail

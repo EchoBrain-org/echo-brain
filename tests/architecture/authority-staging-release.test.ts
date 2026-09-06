@@ -184,6 +184,9 @@ describe('bounded staging release operator', () => {
   });
 
   it('executes the host runner hermetically against private fixture state', () => {
+    // Every inline updater publication must preserve the pinned relative cwd;
+    // tempfile.mkstemp internally applies abspath even when given a relative dir.
+    expect(readFileSync(join(REPO, 'deploy/organization-authority/update-clean-v1.sh'), 'utf8')).not.toMatch(/tempfile\.mkstemp\(/);
     const f = fixture(); planStagingRelease({ ...f.options, action: 'install' }, f.dependencies);
     const result = spawnSync('python3', ['-B', join(REPO, 'tests/fixtures/staging-release-host-test.py'), join(REPO, 'tools/authority-staging-release-host.py'), f.options.output, f.options.acceptedRelease], { encoding: 'utf8', timeout: 30000 });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -214,7 +217,7 @@ describe('bounded staging release operator', () => {
   it('round-trips the compressed reviewed runner and request without calling AWS', () => {
     const f = fixture(); planStagingRelease(f.options, f.dependencies);
     const request = f.request();
-    const source = `def main(payload, expected):\n import base64,gzip,hashlib,json\n body=gzip.decompress(base64.b64decode(payload))\n assert hashlib.sha256(body).hexdigest()==expected\n value=json.loads(body)\n assert value['schema_version']==2\n assert len(value['files'])==7\n print('verified-offline-wire')\n`;
+    const source = `def main(payload, expected):\n import base64,gzip,hashlib,json\n body=gzip.decompress(base64.b64decode(payload))\n assert hashlib.sha256(body).hexdigest()==expected\n value=json.loads(body)\n assert value['schema_version']==2\n assert len(value['files'])==8\n print('verified-offline-wire')\n`;
     const readSource = (commit: string, path: string) => path === 'tools/authority-staging-release-host.py' ? Buffer.from(source) : f.dependencies.readSource(commit, path);
     const parameters = releaseSsmParameters(request, readSource);
     const result = spawnSync('sh', ['-c', parameters.commands[0]], { encoding: 'utf8', timeout: 10000 });
@@ -233,7 +236,7 @@ describe('bounded staging release operator', () => {
     const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
     receipt.request.schema_version = 1;
     receipt.request.kind = 'echo-staging-release-request-v1';
-    for (const name of ['onboard-clean-v1.sh', 'restore-clean-v1-host.sh']) {
+    for (const name of ['onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh']) {
       delete receipt.request.files[name]; delete receipt.request.old_tool_hashes[name];
     }
     receipt.request_sha256 = digest(canonical(receipt.request) + '\n');

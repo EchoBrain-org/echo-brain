@@ -24,11 +24,12 @@ const TOOL_FILES = Object.freeze({
   'update-clean-v1.sh': 'deploy/organization-authority/update-clean-v1.sh',
   'onboard-clean-v1.sh': 'deploy/organization-authority/onboard-clean-v1.sh',
   'restore-clean-v1-host.sh': 'deploy/organization-authority/restore-clean-v1-host.sh',
+  'backup-authority-maintenance.sh': 'deploy/organization-authority/backup-authority-maintenance.sh',
   'release/clean-v1-release.py': 'deploy/release/clean-v1-release.py',
   'release/clean-v1-runtime-profile.py': 'deploy/release/clean-v1-runtime-profile.py',
 });
 const RUNNER = 'tools/authority-staging-release-host.py';
-const LEGACY_TOOL_FILES = Object.fromEntries(Object.entries(TOOL_FILES).filter(([name]) => !['onboard-clean-v1.sh', 'restore-clean-v1-host.sh'].includes(name)));
+const LEGACY_TOOL_FILES = Object.fromEntries(Object.entries(TOOL_FILES).filter(([name]) => !['onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh'].includes(name)));
 const MAX_COMMAND_BYTES = 60 * 1024;
 const TERMINAL = ['Failed', 'Cancelled', 'TimedOut', 'Undeliverable', 'Terminated'];
 const fail = code => { throw new Error(code); };
@@ -202,8 +203,13 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
     }
     const raw = jsonBytes(wire);
     if (raw.length > 768 * 1024) fail('bounded_command_too_large');
-    const compressed = gzipSync(raw, { level: 9 }).toString('base64');
-    script = `import base64,gzip,hashlib,io,json\nwith gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode('${compressed}',validate=True))) as stream:\n raw=stream.read(786433)\nif len(raw)>786432 or hashlib.sha256(raw).hexdigest()!='${digest(raw)}': raise SystemExit(1)\nwire=json.loads(raw)\nfor entry in wire['request']['files'].values():\n entry['base64']=base64.b64encode(entry.pop('utf8').encode()).decode()\nbody=(json.dumps(wire['request'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\\n').encode()\nif hashlib.sha256(body).hexdigest()!='${digest(body)}': raise SystemExit(1)\nnamespace={}\nexec(compile(wire['runner'],'<reviewed-staging-runner>','exec'),namespace)\nnamespace['main'](base64.b64encode(gzip.compress(body)).decode(),'${digest(body)}')`;
+    let compressed;
+    try {
+      // Python is already an operator/host prerequisite. Its standard-library
+      // XZ codec fits the complete interlock participant set without a courier.
+      compressed = execFileSync('python3', ['-I', '-c', 'import lzma,sys; raw=sys.stdin.buffer.read(786433); assert len(raw)<=786432; sys.stdout.buffer.write(lzma.compress(raw,format=lzma.FORMAT_XZ,preset=6))'], { input: raw, stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000, maxBuffer: 768 * 1024 }).toString('base64');
+    } catch { fail('bounded_compression_unavailable'); }
+    script = `import base64,gzip,hashlib,json,lzma\ndecoder=lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=134217728)\nraw=decoder.decompress(base64.b64decode('${compressed}',validate=True),max_length=786433)\nif not decoder.eof or decoder.unused_data or len(raw)>786432 or hashlib.sha256(raw).hexdigest()!='${digest(raw)}': raise SystemExit(1)\nwire=json.loads(raw)\nfor entry in wire['request']['files'].values():\n entry['base64']=base64.b64encode(entry.pop('utf8').encode()).decode()\nbody=(json.dumps(wire['request'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\\n').encode()\nif hashlib.sha256(body).hexdigest()!='${digest(body)}': raise SystemExit(1)\nnamespace={}\nexec(compile(wire['runner'],'<reviewed-staging-runner>','exec'),namespace)\nnamespace['main'](base64.b64encode(gzip.compress(body)).decode(),'${digest(body)}')`;
   }
   const commands = [`/usr/bin/python3 - <<'ECHO_RELEASE_PY'\n${script}\nECHO_RELEASE_PY`];
   const parameters = { commands, executionTimeout: ['1200'] };

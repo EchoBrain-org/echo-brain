@@ -20,7 +20,7 @@ import time
 import urllib.request
 
 DEPLOY = pathlib.Path('/srv/echo-authority-clean-v1')
-TOOLS = ('update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py')
+TOOLS = ('update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh', 'release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py')
 ACTIONS = ('install', 'diagnose', 'repair', 'stage', 'canary', 'status', 'rollback', 'promote')
 SAFE_CODES = ('installed', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed')
 

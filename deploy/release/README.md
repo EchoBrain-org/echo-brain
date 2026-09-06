@@ -318,8 +318,9 @@ Cloud coding tasks still stop before every live operation.
 The CLI requires a clean checkout whose exact HEAD is reachable from fetched
 `origin/main`. The reviewed CLI and host-runner source, updater and validators
 are taken from that commit. Installation also checksum-verifies and updates the
-onboarding and retained-restore wrappers' interlock checks; it does not invoke
-their actions. All five installed tools are checked before any replacement.
+onboarding, retained-restore and backup-maintenance wrappers' interlock checks;
+it does not invoke their actions. All six installed tools are checked before
+any replacement.
 The candidate image/client/profile keep their own
 release source identity; a tooling-only update does not rebuild those artifacts.
 Fetch and verify reviewed source before planning. The previous tooling source
@@ -366,17 +367,21 @@ deployment and release-control paths, the literal staging hostname, accepted-rec
 digest and candidate state. It opens the release directory without following
 symlinks, validates the opened inode, and pins the runner's working directory
 to it. The updater inherits that working directory and uses relative release
-state paths. Candidate inputs are copied into the root-owned deployment
+state paths, including exclusive temporary-file creation and publication without
+converting relative paths back through `abspath`. Candidate inputs are copied
+into the root-owned deployment
 interlock, so the updater's input canonicalization cannot follow a swapped
 service-owned path. No runtime profile or data-volume permission is changed.
 
 The root-owned `.staging-release-guard` interlock is outside `clean-data` and
 outside the container's writable mount. The runner refuses an existing guard
 or legacy `clean-data/.authority-operation-lock`; it never deletes that legacy
-lock. Updated update/onboarding wrappers acquire this same root-owned guard
+lock. Updated update/onboarding/backup-maintenance wrappers acquire this same root-owned guard
 before their legacy lock and hold it for the entire operation, even if the
 service renames the legacy lock. Retained restore holds it while materializing
-state, then hands off to onboarding's guarded resume. Only the runner's updater
+state, then hands off to onboarding's guarded resume. Backup maintenance retains
+both locks when restart proof fails, preserving the deliberate-recovery boundary.
+Only the runner's updater
 child uses the exact nested lock inside its already-held guard.
 Keep the single-operator rule, including during the first tooling installation
 and retained-host recovery. No raw environment, arbitrary
@@ -408,10 +413,13 @@ is `unconfirmed`, not proof that the runtime stopped or recovery succeeded.
 These semantics follow the [Run Command API](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html)
 and [invocation status contract](https://docs.aws.amazon.com/cli/latest/reference/ssm/get-command-invocation.html).
 
-New plans use request version 2 and a checksum-bound compressed text bundle
+New plans use request version 2 and a checksum-bound XZ-compressed text bundle
 containing the exact reviewed runner and non-secret files. The fixed loader
 checks its digest and size, reconstructs the canonical request and checks its
-digest before invoking the runner. The 60-KiB command cap is unchanged. Old
+digest before invoking the runner. Compression uses the existing operator
+Python 3 standard-library `lzma` module with a fixed preset; decoding is bounded
+by both output size and memory. No third-party package or manual courier is
+needed. The 60-KiB command cap is unchanged. Old
 version-1 receipts can still be polled with their original transport binding;
 unsubmitted version-1 plans cannot execute in the new CLI. Preserve old receipts
 and reconcile any unfinished command before planning a new operation.

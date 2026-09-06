@@ -283,6 +283,20 @@ describe("current-host backup maintenance transaction", () => {
     expect(existsSync(join(subject.root, "restart"))).toBe(false);
   });
 
+  it("refuses backup maintenance while the bounded release root guard is held", () => {
+    const subject = fixture();
+    const guard = join(subject.deploy, ".staging-release-guard");
+    mkdirSync(guard, { mode: 0o700 });
+    writeFileSync(join(guard, "owner-pid"), "99999999\n", { mode: 0o600 });
+    const result = run(["maintain", "--ack-timeout-seconds", "1"], subject.environment);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("root-owned guard");
+    expect(existsSync(join(subject.root, "down"))).toBe(false);
+    expect(existsSync(join(subject.root, "restart"))).toBe(false);
+    expect(readFileSync(join(guard, "owner-pid"), "utf8")).toBe("99999999\n");
+    expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(false);
+  });
+
   it("proves the complete accepted tuple without stopping or restarting the Authority", () => {
     const subject = fixture();
 
@@ -291,6 +305,7 @@ describe("current-host backup maintenance transaction", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("maintenance_preflight_ready=true\n");
     expect(result.stderr).toBe("");
+    expect(existsSync(join(subject.deploy, ".staging-release-guard"))).toBe(false);
     expect(existsSync(join(subject.root, "down"))).toBe(false);
     expect(existsSync(join(subject.root, "restart"))).toBe(false);
     expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
@@ -314,7 +329,7 @@ exit 1
     expect(result.status).toBe(1);
     expect(result.stdout).not.toContain("maintenance_preflight_ready=true");
     expect(result.stderr).toContain(
-      "could not release the Authority operation lock after preflight",
+      "could not release the Authority operation lock",
     );
     expect(existsSync(join(subject.root, "down"))).toBe(false);
     expect(existsSync(join(subject.root, "restart"))).toBe(false);
@@ -503,6 +518,7 @@ exit 1
     const closed = new Promise<{ code: number | null; stderr: string }>(
       (resolve) => child.once("close", (code) => resolve({ code, stderr })),
     );
+    expect(existsSync(join(subject.deploy, ".staging-release-guard", "owner-pid"))).toBe(true);
     const acknowledgement = run(
       [
         "acknowledge",
@@ -519,6 +535,7 @@ exit 1
     expect(result.stderr).toBe("");
     expect(result.code).toBe(0);
     expect(stdout).toContain("maintenance_complete=true");
+    expect(existsSync(join(subject.deploy, ".staging-release-guard"))).toBe(false);
     expect(existsSync(join(subject.root, "restart"))).toBe(true);
     expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
       false,
@@ -567,6 +584,7 @@ exit 1
     expect(result.status).toBe(1);
     expect(existsSync(join(subject.root, "down"))).toBe(true);
     expect(existsSync(join(subject.root, "restart"))).toBe(true);
+    expect(existsSync(join(subject.deploy, ".staging-release-guard", "owner-pid"))).toBe(true);
     expect(existsSync(join(subject.data, ".authority-operation-lock"))).toBe(
       true,
     );
