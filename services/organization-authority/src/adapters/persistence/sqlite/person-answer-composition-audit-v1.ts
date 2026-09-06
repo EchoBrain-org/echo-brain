@@ -35,12 +35,6 @@ export interface PersonAnswerCompositionAuditEntryV1 {
     readonly query_hit_counts: readonly number[];
   };
   readonly checked_at: string;
-  /** Optional commitment for a caller-supplied opaque operation binding. */
-  readonly operation_correlation_sha256?: Sha256Digest;
-}
-
-function validSha256Digest(value: string): boolean {
-  return /^sha256:[a-f0-9]{64}$/.test(value);
 }
 
 /** Writes the already-provisioned answer_composition variant of the one audit table. */
@@ -69,13 +63,11 @@ export class SqlitePersonAnswerCompositionAuditV1 {
       entry.retrieval.query_hit_counts.some(
         (count) => !Number.isSafeInteger(count) || count < 0 || count > 10,
       ) ||
-      (entry.operation_correlation_sha256 !== undefined &&
-        !validSha256Digest(entry.operation_correlation_sha256)) ||
       new Date(entry.checked_at).toISOString() !== entry.checked_at
     ) {
       throw new Error("Person answer composition audit entry is invalid");
     }
-    const bodyV1 = {
+    const body = {
       schema_version: 1,
       kind: "echo-person-answer-composition-audit-v1",
       context_kind: "answer_composition",
@@ -97,14 +89,6 @@ export class SqlitePersonAnswerCompositionAuditV1 {
       retrieval: entry.retrieval,
       checked_at: entry.checked_at,
     } as const;
-    const body = entry.operation_correlation_sha256 === undefined
-      ? bodyV1
-      : {
-          ...bodyV1,
-          schema_version: 2 as const,
-          kind: "echo-person-answer-composition-audit-v2" as const,
-          operation_correlation_sha256: entry.operation_correlation_sha256,
-        };
     const body_json = canonicalJson(body);
     const row_sha256 = canonicalSha256(body);
     this.database

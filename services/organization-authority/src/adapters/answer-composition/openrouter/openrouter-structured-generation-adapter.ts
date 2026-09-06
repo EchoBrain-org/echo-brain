@@ -8,12 +8,6 @@ import {
 
 export const OPENROUTER_STRUCTURED_GENERATION_TIMEOUT_MS = 30_000;
 export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
-export const STRUCTURED_GENERATION_OPERATION_CORRELATION_HEADER_V1 =
-  "x-echo-operation-correlation" as const;
-export const STRUCTURED_GENERATION_PREDECESSOR_TOKEN_HEADER_V1 =
-  "x-echo-causal-token" as const;
-export const STRUCTURED_GENERATION_CAUSAL_TOKEN_HEADER_V1 =
-  "x-echo-causal-token" as const;
 
 export type OpenRouterFailureClass =
   | "adapter_timeout"
@@ -112,39 +106,6 @@ function boundedInteger(value: number, label: string, maximum: number): void {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
     throw new OpenRouterStructuredGenerationError(`${label} is invalid`);
   }
-}
-
-const OPAQUE_TRANSPORT_VALUE = /^[A-Za-z0-9_-]{16,128}$/;
-
-function opaqueTransportValue(value: unknown): string | undefined {
-  return typeof value === "string" && OPAQUE_TRANSPORT_VALUE.test(value)
-    ? value
-    : undefined;
-}
-
-function transportHeaders(input: StructuredGenerationInput): Record<string, string> {
-  const transport = input.transport;
-  if (transport === undefined) return {};
-  const operationCorrelation = opaqueTransportValue(
-    transport.operation_correlation,
-  );
-  const predecessorToken = opaqueTransportValue(transport.predecessor_token);
-  if (
-    (transport.operation_correlation !== undefined && operationCorrelation === undefined) ||
-    (transport.predecessor_token !== undefined && predecessorToken === undefined)
-  ) {
-    throw new OpenRouterStructuredGenerationError(
-      "OpenRouter transport correlation is invalid",
-    );
-  }
-  return {
-    ...(operationCorrelation === undefined
-      ? {}
-      : { [STRUCTURED_GENERATION_OPERATION_CORRELATION_HEADER_V1]: operationCorrelation }),
-    ...(predecessorToken === undefined
-      ? {}
-      : { [STRUCTURED_GENERATION_PREDECESSOR_TOKEN_HEADER_V1]: predecessorToken }),
-  };
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -329,7 +290,6 @@ export function createOpenRouterStructuredGenerationAdapter(
       headers: {
         authorization: `Bearer ${apiKey}`,
         "content-type": "application/json",
-        ...transportHeaders(input),
       },
       signal: AbortSignal.any(signals),
       body: JSON.stringify({
@@ -404,13 +364,6 @@ export function createOpenRouterStructuredGenerationAdapter(
     }
     const root = object(payload);
     const generationUsage = successfulUsage(root?.usage);
-    const causalTokenHeader = response.headers.get(
-      STRUCTURED_GENERATION_CAUSAL_TOKEN_HEADER_V1,
-    );
-    const causalToken =
-      causalTokenHeader === null
-        ? undefined
-        : opaqueTransportValue(causalTokenHeader);
     const rootError = root === null ? null : object(root.error);
     if (!response.ok) {
       fail("OpenRouter request failed", {
@@ -426,15 +379,6 @@ export function createOpenRouterStructuredGenerationAdapter(
       fail("OpenRouter response is invalid", {
         failure_class:
           rootError === null ? "adapter_response" : "adapter_provider_error",
-        response,
-        root,
-        usage: generationUsage,
-        provider_latency_ms: providerLatency,
-      });
-    }
-    if (causalTokenHeader !== null && causalToken === undefined) {
-      fail("OpenRouter response is invalid", {
-        failure_class: "adapter_response",
         response,
         root,
         usage: generationUsage,
@@ -508,7 +452,6 @@ export function createOpenRouterStructuredGenerationAdapter(
         usage: generationUsage,
         finish_reason: completed,
         provider_latency_ms: providerLatency,
-        ...(causalToken === undefined ? {} : { causal_token: causalToken }),
       });
     } catch {
       fail("OpenRouter response is invalid", {

@@ -37,10 +37,6 @@ import {
   PERSON_ANSWER_PATH_V1,
   type PersonAnswerHttpApplicationV1,
 } from "./person-answer-http-application.js";
-import {
-  PERSON_OPERATION_CORRELATION_HEADER_V1,
-  isPersonOperationCorrelationV1,
-} from "../shared/person-operation-correlation-v1.js";
 import type { PrivateApprovalInteractionHttpApplicationV1 } from "./private-approval-interaction-http-application-v1.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
@@ -324,17 +320,6 @@ function accessToken(value: string | undefined): string {
     );
   }
   return value.slice("Bearer ".length);
-}
-
-function operationCorrelation(
-  headers: IncomingMessage["headers"],
-): string | undefined {
-  const value = headers[PERSON_OPERATION_CORRELATION_HEADER_V1];
-  if (value === undefined) return undefined;
-  if (!isPersonOperationCorrelationV1(value)) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
-  }
-  return value;
 }
 
 function recordLimit(url: URL): number | undefined {
@@ -709,16 +694,12 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
         const input = recordSearchInput(await body(request));
-        const correlation = operationCorrelation(request.headers);
         json(
           response,
           200,
           options.person_record_search.search({
             access_token: accessToken(request.headers.authorization),
             ...input,
-            ...(correlation === undefined
-              ? {}
-              : { operation_correlation: correlation }),
           }),
         );
         return;
@@ -732,7 +713,6 @@ export function createOrganizationAuthorityHttpServer(
           fail(response, 503, "unavailable");
           return;
         }
-        const correlation = operationCorrelation(request.headers);
         json(
           response,
           200,
@@ -742,9 +722,6 @@ export function createOrganizationAuthorityHttpServer(
               ? { accept_outcome_v2: true }
               : {}),
             ...answerInput(await body(request)),
-            ...(correlation === undefined
-              ? {}
-              : { operation_correlation: correlation }),
           }),
         );
         return;

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 /**
- * Synthetic corpus generator for Authority capacity V1.
+ * Provider-free synthetic corpus templates for Authority core capacity.
  *
  * This module deliberately has no import from a candidate package.  The
  * analyzer/ranking contract it independently implements is taken from
@@ -12,8 +12,8 @@ export const ANALYZER_SOURCE_SHA256 =
   "f954d0aab99025dae93d9b3fb076d74cea22399c50cc5264f42f6b1a2601e2ff";
 export const VOCABULARY_SIZE = 4096;
 export const ZIPF_EXPONENT = 1.1;
-export const POLICY_ORGANIZATION_MEMBER = "organization-member-v2";
-export const POLICY_RESTRICTED_REVIEWER = "restricted-reviewer-v2";
+export const POLICY_ORGANIZATION_MEMBER = "organization-member-readable-person-v2";
+export const POLICY_RESTRICTED_REVIEWER = "restricted-reviewer-person-v2";
 
 const DECISION_FAMILY = Object.freeze([
   "decision",

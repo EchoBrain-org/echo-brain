@@ -33,7 +33,6 @@ import {
 import {
   createReadableSearchGenerationReconcilerV1,
   readableSearchGenerationContractV1,
-  type ReadableSearchApprovedSnapshotAttestorV1,
   type ReadableSearchRelatedAtomProjectorBindingV1,
 } from "./readable-search-generation-composition.js";
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
@@ -138,7 +137,6 @@ type DecisionProcessorAdapter = ConstructorParameters<
 
 function relatedAtomProjectorBinding(
   generation: AnswerCompositionGenerationBindingV1,
-  approvedSnapshotAttestor?: ReadableSearchApprovedSnapshotAttestorV1,
 ): ReadableSearchRelatedAtomProjectorBindingV1 {
   return Object.freeze({
     structured_output: generation.structured_output,
@@ -147,14 +145,11 @@ function relatedAtomProjectorBinding(
       model: generation.generation.planner_model,
       timeout_ms: generation.generation.timeout_ms,
     }),
-    ...(approvedSnapshotAttestor === undefined
-      ? {}
-      : { approved_snapshot_attestor: approvedSnapshotAttestor }),
   });
 }
 /**
- * Narrow composition seams for external integrations and deterministic local
- * rehearsals. Production callers leave them absent by default.
+ * Narrow composition seams for deterministic local rehearsals. Production
+ * callers leave this absent and retain the concrete provider adapters.
  */
 export interface OrganizationAuthorityRuntimeDependencies {
   /** Passed straight to the Authority API runtime, for example a local OIDC fake. */
@@ -169,8 +164,6 @@ export interface OrganizationAuthorityRuntimeDependencies {
     readonly source?: MeetingSourceAdapter;
     readonly processor?: DecisionProcessorAdapter;
   };
-  /** Optional independent approval witness for projector input snapshots. */
-  readonly approved_snapshot_attestor?: ReadableSearchApprovedSnapshotAttestorV1;
 }
 
 class IdleOrganizationAuthorityProcessing
@@ -432,10 +425,7 @@ export async function openOrganizationAuthorityRuntime(
     const answerGeneration =
       dependencies.api?.answer_composition_generation ??
       config.answer_composition_generation_bundle.load();
-    const relatedAtomProjector = relatedAtomProjectorBinding(
-      answerGeneration,
-      dependencies.approved_snapshot_attestor,
-    );
+    const relatedAtomProjector = relatedAtomProjectorBinding(answerGeneration);
     const readableSearchContract = readableSearchGenerationContractV1({
       related_atom_projector: relatedAtomProjector.profile,
     });

@@ -1,91 +1,115 @@
 import assert from "node:assert/strict";
-import test from "node:test";
 import { readFileSync } from "node:fs";
-import { gradeCapacityRun, nearestRank95 } from "../grading.mjs";
+import test from "node:test";
+import { nearestRank95, scoreCoreMeasurements } from "../grading.mjs";
 
-const contract = JSON.parse(readFileSync(new URL("../metrics.v1.json", import.meta.url)));
+const contract = JSON.parse(readFileSync(new URL("../metrics.v2.json", import.meta.url)));
+const kinds = [
+  "direct_user_search", "availability_probe", "history_probe", "deterministic_answer",
+  "canonical_input", "canonical_approval", "approval_visibility",
+];
+const proofNames = ["run_integrity", "drain_and_new_work", ...contract.correctness.fault_proofs];
+
 function fixture() {
-  const operations = ["direct_user_search", "availability_probe", "history_probe", "answer", "source_revision"].map((kind, index) => ({ id: String(index), kind, offset_ms: index * 100, planned_scripted_wait_ms: kind === "answer" ? 10000 : 0 }));
+  const manifest = { operations: kinds.map((kind, index) => ({ id: kind, kind, offset_ms: index * 10 })) };
   return {
     contract,
-    manifest: { operations, approval_plan: [{ source_operation_id: "4", action: "approve", offer_after_complete_card_ms: 30000, publication_semantic_root: "publication:4" }], planned_scripted_wait_samples: [{ semantic_root: "publication:4", prescribed_wait_ms: 2000 }] },
-    operations: [...operations.map((operation) => ({ operation_id: operation.id, correct: true, completed_monotonic_ms: operation.offset_ms + (operation.kind === "answer" ? 11000 : 100), observed_provider_wait_ms: operation.planned_scripted_wait_ms })), { operation_id: "approval:4", correct: true, offered_monotonic_ms: 30500, completed_monotonic_ms: 33000, observed_provider_wait_ms: 2000 }],
+    manifest,
+    operations: manifest.operations.map((operation) => ({ operation_id: operation.id, correct: true, completed_monotonic_ms: operation.offset_ms + 100 })),
     run: { started_monotonic_ms: 0, closed_monotonic_ms: contract.workload.run_duration_ms, clock: "real-monotonic" },
   };
 }
 
-test("nearest-rank p95 counts failures as infinity rather than dropping them", () => {
+function independentlyVerifiedProofs(input) {
+  input.proofs = Object.fromEntries(proofNames.map((name) => [name, { candidate_verified: true }]));
+  input.verifier = Object.fromEntries(proofNames.map((name) => [name, async () => "pass"]));
+}
+
+test("nearest-rank p95 retains incorrect work as infinity", () => {
   assert.equal(nearestRank95([]), null);
   assert.equal(nearestRank95([...Array(18).fill(1), Infinity]), Infinity);
 });
 
-test("excellent latency numbers and self-reported flags cannot award a milestone", async () => {
-  const input = fixture();
-  input.proofs = { all_good: true };
-  const report = await gradeCapacityRun(input);
-  assert.equal(report.verdict, "not-run");
-  assert.equal(report.gates.find((gate) => gate.gate === "operation_release_and_audit").verdict, "not-run");
+test("the future V2 metrics contract has every core threshold", () => {
+  for (const name of ["search", "answer", "source_to_candidate", "approval_ack", "approval_to_search"]) assert.ok(contract.thresholds[name]);
 });
 
-test("missing and wrong results remain in the offered denominator", async () => {
+test("candidate self-attestation cannot award a result without independent verifiers", async () => {
   const input = fixture();
-  input.operations = input.operations.filter((operation) => operation.operation_id !== "0");
-  input.operations.find((operation) => operation.operation_id === "3").correct = false;
-  const report = await gradeCapacityRun(input);
-  assert.equal(report.verdict, "fail");
+  input.proofs = Object.fromEntries(proofNames.map((name) => [name, { verified: true }]));
+  const report = await scoreCoreMeasurements(input);
+  assert.equal(report.measurement_verdict, "not-run");
+  assert.equal(report.gates.find((gate) => gate.gate === "storage_fault_replay").verdict, "not-run");
+});
+
+test("independent durable and fault verifiers control the verdict", async () => {
+  const input = fixture();
+  independentlyVerifiedProofs(input);
+  let report = await scoreCoreMeasurements(input);
+  assert.equal(report.measurement_verdict, "pass");
+  assert.equal(report.qualification, false);
+  assert.equal(report.milestone_verdict, "not-run");
+  input.verifier.storage_fault_replay = async () => "fail";
+  report = await scoreCoreMeasurements(input);
+  assert.equal(report.measurement_verdict, "fail");
+});
+
+test("missing and incorrect offered work stays in the denominator with infinite latency", async () => {
+  const input = fixture();
+  input.operations = input.operations.filter((entry) => entry.operation_id !== "direct_user_search");
+  input.operations.find((entry) => entry.operation_id === "deterministic_answer").correct = false;
+  independentlyVerifiedProofs(input);
+  const report = await scoreCoreMeasurements(input);
+  assert.equal(report.measurement_verdict, "fail");
   assert.equal(report.gates.find((gate) => gate.gate === "direct_user_search").p95_ms, "infinity");
-  assert.equal(report.gates.find((gate) => gate.gate === "answer").success_fraction, 0);
+  assert.equal(report.gates.find((gate) => gate.gate === "deterministic_answer").p95_ms, "infinity");
 });
 
-test("scripted waits are diagnostic and never subtracted from end-to-end latency", async () => {
+test("a missing population is NOT-RUN and history requires 100 percent success", async () => {
   const input = fixture();
-  input.operations.find((operation) => operation.operation_id === "3").completed_monotonic_ms = 16300;
-  const report = await gradeCapacityRun(input);
-  assert.equal(report.gates.find((gate) => gate.gate === "answer").verdict, "fail");
-  assert.equal(report.diagnostics.find((value) => value.population === "answer").prescribed_scripted_wait_p95_ms, 10000);
+  input.manifest.operations = input.manifest.operations.filter((entry) => entry.kind !== "canonical_approval");
+  input.operations = input.operations.filter((entry) => entry.operation_id !== "canonical_approval");
+  input.operations.find((entry) => entry.operation_id === "history_probe").correct = false;
+  independentlyVerifiedProofs(input);
+  const report = await scoreCoreMeasurements(input);
+  assert.equal(report.gates.find((gate) => gate.gate === "canonical_approval").verdict, "not-run");
+  assert.equal(report.gates.find((gate) => gate.gate === "history_probe").required_success_fraction, 1);
+  assert.equal(report.measurement_verdict, "fail");
 });
 
-test("unexpected extra successful operations cannot dilute rates", async () => {
+test("late completion is infinity and extra evidence cannot dilute a population", async () => {
   const input = fixture();
-  input.operations.push({ operation_id: "unplanned", correct: true });
-  await assert.rejects(() => gradeCapacityRun(input), /Unplanned/);
+  input.operations.find((entry) => entry.operation_id === "direct_user_search").completed_monotonic_ms = 2_001;
+  independentlyVerifiedProofs(input);
+  const report = await scoreCoreMeasurements(input);
+  assert.equal(report.gates.find((gate) => gate.gate === "direct_user_search").p95_ms, "infinity");
+  input.operations.push({ operation_id: "extra", correct: true, completed_monotonic_ms: 1 });
+  await assert.rejects(() => scoreCoreMeasurements(input), /Unplanned/);
 });
 
-test("a shortened run cannot qualify despite successful samples", async () => {
+test("unknown work, outside-run offers, and post-close completions cannot quietly pass", async () => {
   const input = fixture();
-  input.run.closed_monotonic_ms = 1000;
-  const report = await gradeCapacityRun(input);
-  assert.equal(report.gates.find((gate) => gate.gate === "real-eight-hour-run").verdict, "not-run");
+  independentlyVerifiedProofs(input);
+  input.manifest.operations[0].kind = "unknown_work";
+  await assert.rejects(() => scoreCoreMeasurements(input), /Invalid offered operation/);
+  input.manifest.operations[0].kind = "direct_user_search";
+  input.manifest.operations[0].offset_ms = contract.workload.run_duration_ms + 1;
+  await assert.rejects(() => scoreCoreMeasurements(input), /Invalid offered operation/);
+  input.manifest.operations[0].offset_ms = 0;
+  input.operations.find((entry) => entry.operation_id === "direct_user_search").completed_monotonic_ms = input.run.closed_monotonic_ms + 1;
+  const report = await scoreCoreMeasurements(input);
+  assert.equal(report.gates.find((gate) => gate.gate === "direct_user_search").p95_ms, "infinity");
 });
 
-test("a missing card creates no approval sample; skipping an available card fails", async () => {
+test("run-integrity and drain evidence are required, nonempty, and independently verified", async () => {
   const input = fixture();
-  input.operations = input.operations.filter((operation) => operation.operation_id !== "approval:4");
-  const skipped = await gradeCapacityRun(input);
-  assert.equal(skipped.gates.find((gate) => gate.gate === "dependent-approval-offers").verdict, "fail");
-  input.operations = input.operations.filter((operation) => operation.operation_id !== "4");
-  const missing = await gradeCapacityRun(input);
-  assert.equal(missing.gates.find((gate) => gate.gate === "approval").planned, 0);
-  assert.equal(missing.gates.find((gate) => gate.gate === "source_revision").verdict, "fail");
-});
-
-test("approval must follow a complete card and includes driver dispatch delay", async () => {
-  const input = fixture();
-  const approval = input.operations.find((operation) => operation.operation_id === "approval:4");
-  approval.offered_monotonic_ms = 100;
-  await assert.rejects(() => gradeCapacityRun(input), /cannot precede/);
-  approval.offered_monotonic_ms = 80000;
-  approval.completed_monotonic_ms = 91000;
-  const report = await gradeCapacityRun(input);
-  assert.equal(report.gates.find((gate) => gate.gate === "approval").p95_ms, 60500);
-  assert.equal(report.gates.find((gate) => gate.gate === "approval").verdict, "fail");
-});
-
-test("a correct result after its deadline is a timeout with infinite latency", async () => {
-  const input = fixture();
-  input.operations.find((operation) => operation.operation_id === "0").completed_monotonic_ms = 2001;
-  const report = await gradeCapacityRun(input);
-  const gate = report.gates.find((entry) => entry.gate === "direct_user_search");
-  assert.equal(gate.p95_ms, "infinity");
-  assert.equal(gate.successful, 0);
+  independentlyVerifiedProofs(input);
+  input.proofs.run_integrity = {};
+  let report = await scoreCoreMeasurements(input);
+  assert.equal(report.gates.find((gate) => gate.gate === "run_integrity").verdict, "not-run");
+  input.proofs.run_integrity = { sealed_trace_digest: "sha256:test" };
+  input.verifier.drain_and_new_work = async () => "fail";
+  report = await scoreCoreMeasurements(input);
+  assert.equal(report.gates.find((gate) => gate.gate === "drain_and_new_work").verdict, "fail");
+  assert.equal(report.measurement_verdict, "fail");
 });

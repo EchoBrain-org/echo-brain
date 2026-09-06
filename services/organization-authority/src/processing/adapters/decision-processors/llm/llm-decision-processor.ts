@@ -24,7 +24,6 @@ import {
   type LlmCredentialResolver,
   type LlmProviderClient,
   type LlmProviderId,
-  type StructuredGenerationTransportV1,
   StructuredGenerationAttemptError,
   type StructuredGenerationResult,
 } from './llm-provider.js';
@@ -691,22 +690,6 @@ export interface LlmDecisionProcessorOptions {
   now?: () => string;
   /** Test seam for the provider-call elapsed time only. */
   now_ms?: () => number;
-  /**
-   * Optional provider-transport context derived from the admitted immutable
-   * meeting identity. It is never included in extraction prompts or output.
-   */
-  extraction_transport_context?: (
-    identity: LlmDecisionExtractionTransportIdentityV1,
-  ) => StructuredGenerationTransportV1 | undefined;
-}
-
-export interface LlmDecisionExtractionTransportIdentityV1 {
-  readonly meeting_id: string;
-  readonly source_adapter_id: string;
-  readonly source_instance_id: string;
-  readonly source_version: string;
-  readonly source_external_id: string;
-  readonly canonical_revision: string;
 }
 
 export class LlmDecisionProcessor implements DecisionProcessorAdapter {
@@ -714,8 +697,6 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
   private readonly client: LlmProviderClient;
   private readonly now: () => string;
   private readonly nowMs: () => number;
-  private readonly extractionTransportContext:
-    | LlmDecisionProcessorOptions['extraction_transport_context'];
 
   constructor(
     private readonly config: AdapterConfig,
@@ -729,7 +710,6 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     });
     this.now = options.now ?? (() => new Date().toISOString());
     this.nowMs = options.now_ms ?? (() => performance.now());
-    this.extractionTransportContext = options.extraction_transport_context;
     this.client = options.client ?? createProviderClient(config, options);
   }
 
@@ -815,12 +795,8 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       errors.push(`credential_ref is required by the ${provider} provider`);
     }
     const baseUrl = config.settings['base_url'];
-    if (
-      provider !== 'ollama' && baseUrl !== undefined
-    ) {
-      errors.push(
-        'settings.base_url is supported only by the Ollama provider',
-      );
+    if (provider !== 'ollama' && baseUrl !== undefined) {
+      errors.push('settings.base_url is supported only by the Ollama provider');
     } else if (baseUrl !== undefined) {
       try {
         const url = new URL(String(baseUrl));
@@ -933,16 +909,6 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       );
     }
     const renderedMeeting = renderMeeting(meeting);
-    const transport = this.extractionTransportContext?.(
-      Object.freeze({
-        meeting_id: meeting.id,
-        source_adapter_id: meeting.provenance.source.adapter_id,
-        source_instance_id: meeting.provenance.source.instance_id,
-        source_version: meeting.provenance.source.version,
-        source_external_id: meeting.provenance.external_id,
-        canonical_revision: meeting.provenance.canonical_revision,
-      }),
-    );
     const startedAt = this.providerStartedAt();
     let response: StructuredGenerationResult;
     try {
@@ -952,7 +918,6 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         userPrompt: renderedMeeting.prompt,
         schema: EXTRACTION_FORMAT,
         maxOutputTokens: configuredMaxOutputTokens(this.config),
-        ...(transport === undefined ? {} : { transport }),
         ...(operation?.signal === undefined
           ? {}
           : { signal: operation.signal }),

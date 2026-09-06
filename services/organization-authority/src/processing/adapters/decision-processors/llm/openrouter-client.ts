@@ -14,35 +14,6 @@ import {
 } from './llm-provider.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
-const OPAQUE_TRANSPORT_VALUE = /^[A-Za-z0-9_-]{16,128}$/u;
-
-function transportHeaders(
-  transport: StructuredGenerationRequest['transport'],
-): Record<string, string> {
-  if (transport === undefined) return {};
-  const operationCorrelation = transport.operation_correlation;
-  const predecessorToken = transport.predecessor_token;
-  if (
-    (operationCorrelation !== undefined &&
-      !OPAQUE_TRANSPORT_VALUE.test(operationCorrelation)) ||
-    (predecessorToken !== undefined &&
-      !OPAQUE_TRANSPORT_VALUE.test(predecessorToken))
-  ) {
-    throw new AdapterError(
-      'invalid_config',
-      'OpenRouter structured-generation transport is invalid',
-      false,
-    );
-  }
-  return {
-    ...(operationCorrelation === undefined
-      ? {}
-      : { 'x-echo-operation-correlation': operationCorrelation }),
-    ...(predecessorToken === undefined
-      ? {}
-      : { 'x-echo-causal-token': predecessorToken }),
-  };
-}
 
 function generationUsageObservation(
   payload: Record<string, unknown>,
@@ -92,7 +63,6 @@ export class OpenRouterClient implements LlmProviderClient {
       '/chat/completions',
       {
         method: 'POST',
-        headers: transportHeaders(request.transport),
         body: JSON.stringify({
           model: request.model,
           messages: [
@@ -182,22 +152,11 @@ export class OpenRouterClient implements LlmProviderClient {
     const requestId =
       response.headers.get('x-request-id') ??
       (nonEmptyString(payload['id']) ? payload['id'] : undefined);
-    const causalTokenHeader = response.headers.get('x-echo-causal-token');
-    if (
-      causalTokenHeader !== null &&
-      !OPAQUE_TRANSPORT_VALUE.test(causalTokenHeader)
-    ) {
-      throw invalidProviderResponse(
-        this.provider,
-        'returned an invalid causal token',
-      );
-    }
     return {
       content,
       ...(requestId === undefined ? {} : { requestId }),
       ...attemptObservation,
       ...(nonEmptyString(finishReason) ? { stopReason: finishReason } : {}),
-      ...(causalTokenHeader === null ? {} : { causalToken: causalTokenHeader }),
     };
   }
 

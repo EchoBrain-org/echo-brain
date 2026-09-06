@@ -30,7 +30,5 @@ export interface PersonAnswerHttpApplicationV1 {
     readonly access_token: string;
     readonly question: string;
     readonly accept_outcome_v2?: boolean;
-    /** Opaque request binding, supplied only through the HTTP header. */
-    readonly operation_correlation?: string;
   }): Promise<PersonAnswerResponseV1>;
 }

@@ -16,10 +16,6 @@ import type {
   PersonRecordSearchBatchReleaseV1,
 } from "./person-record-search-route.js";
 import { AuthorityOperationError } from "../domain/errors.js";
-import {
-  isPersonOperationCorrelationV1,
-  personOperationCorrelationSha256V1,
-} from "../shared/person-operation-correlation-v1.js";
 import type {
   PersonAnswerHttpApplicationV1,
   PersonAnswerPolicyV1,
@@ -112,26 +108,10 @@ export function createPersonAnswerRouteV1(
       readonly access_token: string;
       readonly question: string;
       readonly accept_outcome_v2?: boolean;
-      readonly operation_correlation?: string;
     }): Promise<PersonAnswerResponseV1> {
       const journey = options.ask_journey_telemetry?.start();
       const journeyStartedAt = journey?.startTimer() ?? 0;
       const validationStartedAt = journey?.startTimer() ?? 0;
-      if (
-        input.operation_correlation !== undefined &&
-        !isPersonOperationCorrelationV1(input.operation_correlation)
-      ) {
-        const invalidRequest = new AuthorityOperationError(
-          "invalid_request",
-          "request is invalid",
-        );
-        journey?.terminate(invalidRequest, journeyStartedAt);
-        throw invalidRequest;
-      }
-      const operationCorrelationSha256 =
-        input.operation_correlation === undefined
-          ? undefined
-          : personOperationCorrelationSha256V1(input.operation_correlation);
       try {
         validateReleasedRetrievalQuery(input.question);
       } catch (error) {
@@ -182,9 +162,6 @@ export function createPersonAnswerRouteV1(
                 : { exact_release_id: request.exact_release_id }),
               limit: 10,
               include_related_atom_packet: true,
-              ...(input.operation_correlation === undefined
-                ? {}
-                : { operation_correlation: input.operation_correlation }),
               ...(journey === undefined
                 ? {}
                 : {
@@ -313,16 +290,7 @@ export function createPersonAnswerRouteV1(
           planner: options.model,
           answerer: options.model,
           released_retrieval: releasedRetrieval,
-          audit:
-            operationCorrelationSha256 === undefined
-              ? options.audit
-              : {
-                  append: (entry) =>
-                    options.audit.append({
-                      ...entry,
-                      operation_correlation_sha256: operationCorrelationSha256,
-                    }),
-                },
+          audit: options.audit,
           generation_adapter_id: options.generation.generation_adapter_id,
           planner_model: options.generation.planner_model,
           answer_model: options.generation.answer_model,
@@ -346,16 +314,7 @@ export function createPersonAnswerRouteV1(
                   ),
               }),
         });
-        const result = await composition.answer({
-          question: input.question,
-          ...(input.operation_correlation === undefined
-            ? {}
-            : {
-                transport: {
-                  operation_correlation: input.operation_correlation,
-                },
-              }),
-        });
+        const result = await composition.answer({ question: input.question });
         const response = publicResponse(
           result,
           input.accept_outcome_v2 === true,

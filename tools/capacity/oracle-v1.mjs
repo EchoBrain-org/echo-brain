@@ -12,7 +12,7 @@ import {
 } from "./corpus-v1.mjs";
 
 /**
- * Independent V1 search oracle.  This is intentionally a plain JS
+ * Independent core search oracle. This is intentionally a plain JS
  * reimplementation, not an adapter around organization-retrieval.  Its source
  * contract is analyzer.ts SHA-256 ANALYZER_SOURCE_SHA256.
  */
@@ -84,7 +84,9 @@ function assertSameItems(expected, actual) {
     throw new Error("search result does not contain the entire expected top-k");
   }
   for (let index = 0; index < expected.length; index += 1) {
-    if (resultIdentity(expected[index]) !== resultIdentity(actual[index])) {
+    if (resultIdentity(expected[index]) !== resultIdentity(actual[index]) ||
+        actual[index].text !== expected[index].text ||
+        sha256(actual[index].text) !== expected[index].text_digest) {
       throw new Error(`search result differs at rank ${index + 1}`);
     }
   }
@@ -139,10 +141,6 @@ export function assertDirectSearchResponse({
 
 function candidateCountFor(corpus, head, reader, query) {
   return searchAtHead({ corpus, exactHead: head, reader, query, limit: 10 }).authorized_candidate_count;
-}
-
-function documentFrequency(atoms, term) {
-  return atoms.filter((atom) => analyzeDocument(atom.text, atom.item_kind).has(term)).length;
 }
 
 function selectPairQuery(corpus, head, reader, excludedQueries = new Set()) {
@@ -277,12 +275,18 @@ export function assertCompleteLogicalIndex({ corpus, exact_head: exactHead, actu
     record_hash: atom.record_hash,
     policy_id: atom.policy_id,
     content_digest: atom.content_digest,
+    reviewer_principal_id: atom.reviewer_principal_id,
+    reviewer_membership_id: atom.reviewer_membership_id,
+    text: atom.text,
   })).sort((left, right) => left.atom_id.localeCompare(right.atom_id, "en"));
   const actualFacts = actual.facts.map((fact) => ({
     atom_id: fact.atom_id,
     record_hash: fact.record_hash,
     policy_id: fact.policy_id,
     content_digest: fact.content_digest,
+    reviewer_principal_id: fact.reviewer_principal_id,
+    reviewer_membership_id: fact.reviewer_membership_id,
+    text: fact.text,
   })).sort((left, right) => left.atom_id.localeCompare(right.atom_id, "en"));
   if (JSON.stringify(actualFacts) !== JSON.stringify(expectedFacts)) {
     throw new Error("decoded index facts differ from independently derived approved facts");

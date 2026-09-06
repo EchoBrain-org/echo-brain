@@ -19,10 +19,6 @@ import {
 } from "../answer-composition/canonical-release-id.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../domain/errors.js";
-import {
-  isPersonOperationCorrelationV1,
-  personOperationCorrelationSha256V1,
-} from "../shared/person-operation-correlation-v1.js";
 import type {
   PersonRecordSearchHttpApplicationV1,
   PersonRecordSearchResponseV1,
@@ -76,8 +72,6 @@ export type ExpandReadableSearchRelatedAtomsV1 = (
 export interface PersonRecordSearchBatchInputV1 {
   readonly access_token: string;
   readonly queries: readonly string[];
-  /** Opaque request binding. It affects audit evidence only. */
-  readonly operation_correlation?: string;
   /**
    * A canonical release named by the answer question. Layer 3 applies it only
    * after normal authorization has admitted the merged evidence.
@@ -263,8 +257,6 @@ function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
     input.queries.length > 4 ||
     new Set(input.queries).size !== input.queries.length ||
     input.queries.some((query) => !validBatchQuery(query)) ||
-    (input.operation_correlation !== undefined &&
-      !isPersonOperationCorrelationV1(input.operation_correlation)) ||
     (input.exact_release_id !== undefined &&
       !isCanonicalReleaseId(input.exact_release_id)) ||
     (input.limit !== undefined &&
@@ -360,10 +352,6 @@ export function createPersonRecordSearchRouteV1(
     input: PersonRecordSearchBatchInputV1,
   ): PersonRecordSearchBatchResultV1 {
     assertValidBatch(input);
-    const operationCorrelationSha256 =
-      input.operation_correlation === undefined
-        ? undefined
-        : personOperationCorrelationSha256V1(input.operation_correlation);
     const authorization = options.sessions.authenticateAccess({
       access_token: input.access_token,
     });
@@ -552,9 +540,6 @@ export function createPersonRecordSearchRouteV1(
         JSON.parse(canonicalJson(response)) as never,
       ),
       checked_at: released.checked_at,
-      ...(operationCorrelationSha256 === undefined
-        ? {}
-        : { operation_correlation_sha256: operationCorrelationSha256 }),
     });
     const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({
       initial_authorization: releaseAuthorization(authorization),
@@ -583,15 +568,11 @@ export function createPersonRecordSearchRouteV1(
       readonly access_token: string;
       readonly query: string;
       readonly limit?: number;
-      readonly operation_correlation?: string;
     }): PersonRecordSearchResponseV1 {
       return searchBatch({
         access_token: input.access_token,
         queries: [input.query],
         ...(input.limit === undefined ? {} : { limit: input.limit }),
-        ...(input.operation_correlation === undefined
-          ? {}
-          : { operation_correlation: input.operation_correlation }),
       }).response;
     },
     searchBatch,

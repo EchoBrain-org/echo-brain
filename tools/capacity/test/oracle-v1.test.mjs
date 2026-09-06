@@ -28,6 +28,9 @@ function decodedIndex(corpus, exactHead = corpus.exact_head) {
       record_hash: atom.record_hash,
       policy_id: atom.policy_id,
       content_digest: atom.content_digest,
+      reviewer_principal_id: atom.reviewer_principal_id,
+      reviewer_membership_id: atom.reviewer_membership_id,
+      text: atom.text,
     })),
     postings: [...logicalPostings(atoms)],
   };
@@ -140,4 +143,23 @@ test("complete logical posting validation catches incorrect policy and content f
   const actual = decodedIndex(corpus);
   actual.facts.find((fact) => fact.policy_id === POLICY_ORGANIZATION_MEMBER).content_digest = "0".repeat(64);
   assert.throws(() => assertCompleteLogicalIndex({ corpus, exact_head: headForPosition(corpus, 350), actual }), /facts differ/);
+});
+
+test("correct ids and digest claims cannot hide wrong returned text or reviewer ownership", () => {
+  const corpus = buildSyntheticCorpus({ milestone: "M1", seed: "content-and-policy" });
+  const query = corpus.atoms[0].text.split(" ")[0];
+  const response = structuredClone(oracleResponse({ corpus, reader, query }));
+  assert.ok(response.items.length > 0);
+  response.items[0].text = "fabricated content";
+  assert.throws(() => assertDirectSearchResponse({
+    corpus, reader, query, response,
+    offer_head: corpus.exact_head, release_head: corpus.exact_head,
+    independently_observed_active_heads: [corpus.exact_head],
+    current_person_release_fence: personFence,
+  }), /differs at rank/);
+  const actual = decodedIndex(corpus);
+  const privateFact = actual.facts.find((fact) => fact.reviewer_principal_id !== null);
+  assert.ok(privateFact);
+  privateFact.reviewer_principal_id = "another-employee";
+  assert.throws(() => assertCompleteLogicalIndex({ corpus, exact_head: corpus.exact_head, actual }), /facts differ/);
 });

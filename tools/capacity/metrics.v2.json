@@ -1,0 +1,256 @@
+{
+  "schema_version": 2,
+  "kind": "authority-core-capacity-metrics-v2",
+  "status": "frozen-rules-baseline-not-run-full-runner-not-implemented-no-capacity-claim",
+  "definition": "../../docs/product/2026-09-05-authority-core-capacity-metrics-v2.md",
+  "evaluation_scope": {
+    "objective": "authority-core-runtime-capacity",
+    "included": [
+      "current-person-authorization",
+      "canonical-record-append",
+      "generation-publication",
+      "layer3-retrieval",
+      "deterministic-evidence-composition",
+      "approval-authorization-and-scheduling",
+      "core-driver-backpressure",
+      "durable-release-audit",
+      "replay-and-storage-fault-recovery"
+    ],
+    "excluded": [
+      "providers",
+      "http-transport",
+      "oidc",
+      "slack",
+      "llm-behavior-and-quality",
+      "prompt-selection",
+      "provider-costs-and-waits"
+    ],
+    "core_ports": "verifier-owned-deterministic-canonical-input-and-deterministic-evidence-output-adapters-inside-candidate-budget",
+    "forbidden_shortcuts": "fake-authorization-side-index-sealed-answer-map-benchmark-recognition-and-test-only-fast-path",
+    "real_runtime_paths_required": true,
+    "synthetic_template_binding": "synthetic corpus atom-id-record-head-and-record-hash templates require independent binding to actual canonical record identities before qualification"
+  },
+  "milestones": [
+    {
+      "id": "M1",
+      "active_employees": 10,
+      "history_calendar_days": 30,
+      "history_workdays": 20,
+      "historical_atoms_min": 350,
+      "historical_postings_min": 8750,
+      "history_probe_count": 200,
+      "peak_day_canonical_inputs": 6,
+      "peak_day_answers": 55,
+      "peak_day_user_searches": 55,
+      "role": "baseline-checkpoint"
+    },
+    {
+      "id": "M2",
+      "active_employees": 50,
+      "history_calendar_days": 365,
+      "history_workdays": 250,
+      "historical_atoms_min": 21875,
+      "historical_postings_min": 546875,
+      "history_probe_count": 200,
+      "peak_day_canonical_inputs": 28,
+      "peak_day_answers": 274,
+      "peak_day_user_searches": 274,
+      "role": "usable-core-capacity-target"
+    },
+    {
+      "id": "M3",
+      "active_employees": 250,
+      "history_calendar_days": 730,
+      "history_workdays": 500,
+      "historical_atoms_min": 218750,
+      "historical_postings_min": 5468750,
+      "history_probe_count": 250,
+      "peak_day_canonical_inputs": 137,
+      "peak_day_answers": 1368,
+      "peak_day_user_searches": 1368,
+      "role": "usable-core-capacity-target"
+    }
+  ],
+  "workload": {
+    "distinct_meetings_per_employee_per_workday": 0.5,
+    "approved_fraction": 0.7,
+    "atoms_per_approved_meeting": 5,
+    "mean_postings_per_atom": 25,
+    "answers_per_employee_per_workday": 5,
+    "direct_searches_per_employee_per_workday": 5,
+    "organization_member_policy_fraction": 0.7,
+    "restricted_reviewer_policy_fraction": 0.3,
+    "supported_policies": [
+      "organization-member-readable-person-v2",
+      "restricted-reviewer-person-v2"
+    ],
+    "run_duration_ms": 28800000,
+    "peak_duration_ms": 900000,
+    "peak_multiplier": 4,
+    "peak_start_window_ms": [7200000, 21600000],
+    "peak_start_selection": "sealed-after-candidate-digest",
+    "history_age_buckets": 10,
+    "history_negative_probes_extra": 20,
+    "availability_probe_interval_ms": 10000,
+    "approval_visibility_probe_interval_ms": 250,
+    "final_drain_ms_max": 600000,
+    "load_clock": "real-monotonic",
+    "short_diagnostic": "non-qualifying"
+  },
+  "thresholds": {
+    "search": {
+      "p95_ms_max": 500,
+      "completion_deadline_ms": 2000,
+      "verified_success_fraction_min": 0.995
+    },
+    "answer": {
+      "p95_ms_max": 2000,
+      "completion_deadline_ms": 5000,
+      "verified_success_fraction_min": 0.995
+    },
+    "source_to_candidate": {
+      "p95_ms_max": 1000,
+      "completion_deadline_ms": 30000,
+      "verified_success_fraction_min": 1
+    },
+    "approval_ack": {
+      "p95_ms_max": 1000,
+      "completion_deadline_ms": 5000,
+      "verified_success_fraction_min": 1
+    },
+    "approval_to_search": {
+      "p95_ms_max": 60000,
+      "completion_deadline_ms": 300000,
+      "verified_success_fraction_min": 1
+    },
+    "history_probe_success_fraction_min": 1,
+    "permission_violations_max": 0,
+    "acknowledged_durable_work_lost_max": 0,
+    "duplicate_canonical_appends_max": 0,
+    "partial_or_invalid_generation_publications_max": 0,
+    "unapproved_generation_atoms_max": 0,
+    "missing_or_wrong_logical_postings_max": 0,
+    "audit_after_result_violations_max": 0,
+    "post_kill_readiness_ms_max": 60000
+  },
+  "retrieval_oracle": {
+    "vocabulary_size": 4096,
+    "zipf_exponent": 1.1,
+    "distinct_terms_per_atom": [20, 30],
+    "term_frequency_probabilities": {"1": 0.7, "2": 0.2, "3": 0.1},
+    "query_class_fractions": {"selective": 0.4, "medium": 0.3, "broad": 0.2, "negative": 0.1},
+    "medium_authorized_candidate_count_min": 100,
+    "broad_authorized_candidate_count_min": {"M1": 200, "M2": 1000, "M3": 1000},
+    "candidate_count": "authorized-union-before-top10",
+    "direct_result": "complete-ordered-top10-ids-record-hashes-policies-and-content-digests",
+    "head_rule": "independently-observed-active-head-at-offer-or-newer-independently-validated-release-never-older-with-current-record-and-person-release-fences",
+    "logical_postings": "complete-term-atom-frequency-multiset-derived-independently-from-approved-content",
+    "generation_snapshots_min": 24,
+    "oracle_imports_candidate_modules": false
+  },
+  "correctness": {
+    "operation_kinds": [
+      "direct_user_search",
+      "availability_probe",
+      "history_probe",
+      "deterministic_answer",
+      "canonical_input",
+      "canonical_approval",
+      "approval_visibility",
+      "permission_assertion",
+      "process_kill"
+    ],
+    "timed_permission_cases": 40,
+    "permission_case_classes": [
+      "wrong-approver",
+      "revoked-member",
+      "revocation-during-answer",
+      "cross-org-session",
+      "expired-session",
+      "invalid-canonical-approval-binding",
+      "cross-segment-relationship",
+      "unapproved-content",
+      "unreleased-citation",
+      "stale-generation-release"
+    ],
+    "seeds_per_permission_class": 4,
+    "fault_proofs": [
+      "independent_active_generation_snapshots",
+      "complete_logical_posting_comparison",
+      "timed_permission_assertions",
+      "process_kill_replay",
+      "storage_fault_replay",
+      "audit_before_result",
+      "run_integrity",
+      "drain_and_new_work"
+    ],
+    "audit_before_result_required": true,
+    "required_assertions_pass_fraction_min": 1
+  },
+  "durability": {
+    "baseline_sqlite": {"journal_mode": "DELETE", "synchronous": "FULL"},
+    "weaker_synchronous_modes_forbidden": true,
+    "wal_full_or_other_equivalent_change": "eligible-only-with-independent-equivalence-fault-evidence",
+    "writer_setting_attestation": "all-writer-connections-and-setting-changes-observed-throughout",
+    "process_kill_target": "entire-candidate-cgroup-during-hidden-peak",
+    "storage_fault_boundaries": [
+      "acknowledged-approval-receipt",
+      "acknowledged-v4-append",
+      "committed-active-generation-pointer",
+      "answer-audit-before-first-result"
+    ],
+    "storage_fault_runner": "flush-aware-discard-unsynced-writes-on-dedicated-block-backed-state",
+    "positive_and_negative_fault_model_controls_required": true,
+    "lost_acknowledged_durable_effects_max": 0,
+    "process_kill_proves_power_loss": false
+  },
+  "run_protocol": {
+    "qualification_duration": "eight-real-hours",
+    "diagnostic_duration": "short-and-non-qualifying",
+    "fresh_manifest_after_candidate_digest": true,
+    "hidden_queries_and_peak": true,
+    "driver_operation_correlation": "fresh-per-offer-bound-to-core-request-result-and-durable-release-audit",
+    "correlation_is_proof_of_computation": false,
+    "candidate_can_read_verifier_manifest": false,
+    "candidate_self_reported_telemetry_is_evidence": false,
+    "qualification_attempts_per_candidate_profile_milestone_max": 1,
+    "failed_incorrect_or_unfinished_latency": "positive-infinity",
+    "empty_population": "not-run",
+    "full_runner_implemented": false
+  },
+  "reference_hardware": {
+    "id": "authority-core-capacity-reference-v2",
+    "provider": "AWS EC2",
+    "instance_type": "c7i.xlarge",
+    "region": "us-west-2",
+    "os": "Ubuntu Server 24.04 LTS x86_64; exact AMI and kernel pinned in environment lock",
+    "candidate_vcpu_limit": 4,
+    "candidate_memory_limit_bytes": 8589934592,
+    "swap_allowed": false,
+    "storage": {
+      "type": "EBS gp3",
+      "size_gib": 100,
+      "iops": 3000,
+      "throughput_mib_per_second": 125,
+      "filesystem": "ext4",
+      "mount": "dedicated-block-backed-state-volume-with-default-write-barriers"
+    },
+    "candidate_root_filesystem_readonly": true,
+    "all_candidate_children_in_resource_budget": true,
+    "persistent_state_on_tmpfs_overlay_or_memory_forbidden": true,
+    "hardware_fingerprint_required": true,
+    "environment_lock_required": true
+  },
+  "profile_pin": {
+    "algorithm": "sha256-sorted-json-rules-and-raw-definition-v1",
+    "definition_sha256": "4424f6934a50c70e47de0e17ea735a1c23793d20108b2bfbf7e8e6e1c6148014",
+    "sha256": "6ddeabbb963cfd015e7424a588566c58d547a5ffc733293cf08414220f246160",
+    "change_policy": "any-rule-or-definition-change-requires-v3-and-a-new-baseline"
+  },
+  "implementation_status": {
+    "rules_frozen": true,
+    "baseline": "not-run",
+    "full_qualification_runner": "not-implemented",
+    "capacity_claim": false
+  }
+}

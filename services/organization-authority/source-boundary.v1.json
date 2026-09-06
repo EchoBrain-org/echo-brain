@@ -503,8 +503,7 @@
       "allowed_imports": [
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
-        "services/organization-authority/src/presentation/**",
-        "services/organization-authority/src/shared/person-operation-correlation-v1.ts"
+        "services/organization-authority/src/presentation/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/organization-protocol",
@@ -529,7 +528,6 @@
         "services/organization-authority/src/composition/**",
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts",
-        "services/organization-authority/src/shared/person-operation-correlation-v1.ts",
         "services/organization-authority/src/presentation/**",
         "services/organization-authority/src/state-lineage/**",
         "services/organization-authority/src/shared/journey-telemetry-v1.ts",
@@ -706,16 +704,6 @@
       "allowed_node_builtins": [
         "crypto"
       ]
-    },
-    {
-      "name": "authority-person-operation-correlation-is-provider-neutral",
-      "from": "services/organization-authority/src/shared/person-operation-correlation-v1.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
     },
     {
       "name": "processing-core-is-tool-agnostic",

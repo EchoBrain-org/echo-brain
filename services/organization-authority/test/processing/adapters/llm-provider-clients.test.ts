@@ -249,48 +249,6 @@ describe('Anthropic provider client', () => {
 });
 
 describe('OpenRouter provider client', () => {
-  it('forwards bounded transport correlation and the returned causal token', async () => {
-    let seen: Headers | undefined;
-    const client = new OpenRouterClient({
-      credentialRef: 'env:OPENROUTER_API_KEY',
-      credentialResolver: () => 'openrouter-secret',
-      fetchImpl: async (_url, init) => {
-        seen = headers(init ?? {});
-        return new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: { content: '{"signals":[]}' },
-                finish_reason: 'stop',
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { 'x-echo-causal-token': 'extraction_successor_token_01' },
-          },
-        );
-      },
-    });
-
-    const result = await client.generateStructured({
-      ...generationRequest,
-      model: 'anthropic/claude-sonnet-test',
-      transport: {
-        operation_correlation: 'offered_operation_nonce_00001',
-        predecessor_token: 'source_predecessor_token_00001',
-      },
-    });
-
-    expect(seen?.get('x-echo-operation-correlation')).toBe(
-      'offered_operation_nonce_00001',
-    );
-    expect(seen?.get('x-echo-causal-token')).toBe(
-      'source_predecessor_token_00001',
-    );
-    expect(result.causalToken).toBe('extraction_successor_token_01');
-  });
-
   it('uses stable Chat Completions with strict required-parameter routing', async () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const client = new OpenRouterClient({

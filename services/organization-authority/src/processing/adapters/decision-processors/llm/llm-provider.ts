@@ -19,14 +19,7 @@ export interface StructuredGenerationRequest {
   userPrompt: string;
   schema: JsonObject;
   maxOutputTokens: number;
-  /** Bounded, content-free metadata for a compatible provider transport. */
-  transport?: StructuredGenerationTransportV1;
   signal?: AbortSignal;
-}
-
-export interface StructuredGenerationTransportV1 {
-  readonly operation_correlation?: string;
-  readonly predecessor_token?: string;
 }
 
 export interface StructuredGenerationResult {
@@ -38,8 +31,6 @@ export interface StructuredGenerationResult {
   cachedInputTokens?: number;
   reasoningTokens?: number;
   stopReason?: string;
-  /** Opaque successor token returned by a compatible provider transport. */
-  causalToken?: string;
 }
 
 /**

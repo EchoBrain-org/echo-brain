@@ -16,12 +16,6 @@ export interface PersonRecordReadAuditEntryV1 {
   readonly result_count: number;
   readonly response_sha256: Sha256Digest;
   readonly checked_at: string;
-  /** Optional commitment for a caller-supplied opaque operation binding. */
-  readonly operation_correlation_sha256?: Sha256Digest;
-}
-
-function validSha256Digest(value: string): boolean {
-  return /^sha256:[a-f0-9]{64}$/.test(value);
 }
 
 /**
@@ -36,16 +30,14 @@ export class SqlitePersonRecordReadAuditV1 {
     if (
       !Number.isSafeInteger(entry.result_count) ||
       entry.result_count < 0 ||
-      entry.result_count > 100 ||
-      (entry.operation_correlation_sha256 !== undefined &&
-        !validSha256Digest(entry.operation_correlation_sha256))
+      entry.result_count > 100
     ) {
       throw new Error("Person record read result count is invalid");
     }
     if (new Date(entry.checked_at).toISOString() !== entry.checked_at) {
       throw new Error("Person record read audit time must be canonical UTC");
     }
-    const bodyV1 = {
+    const body = {
       schema_version: 1,
       kind: "echo-clean-person-record-read-audit-v1",
       context_kind: "record_read",
@@ -62,14 +54,6 @@ export class SqlitePersonRecordReadAuditV1 {
       response_sha256: entry.response_sha256,
       checked_at: entry.checked_at,
     } as const;
-    const body = entry.operation_correlation_sha256 === undefined
-      ? bodyV1
-      : {
-          ...bodyV1,
-          schema_version: 2 as const,
-          kind: "echo-clean-person-record-read-audit-v2" as const,
-          operation_correlation_sha256: entry.operation_correlation_sha256,
-        };
     const body_json = canonicalJson(body);
     const row_sha256 = canonicalSha256(body);
     this.database
