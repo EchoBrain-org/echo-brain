@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import {
-  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -8,19 +7,26 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import {
+  copyCoherentWorktreeSnapshot,
+  createCoherentWorktreeSnapshot,
+} from "../fixtures/coherent-worktree.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const REGISTRY = "tools/workspace-source-boundaries.v1.json";
 const tmpDirs: string[] = [];
+let snapshot: string | undefined;
 
 afterAll(() =>
-  tmpDirs.forEach((path) => rmSync(path, { recursive: true, force: true })),
+  tmpDirs
+    .slice()
+    .reverse()
+    .forEach((path) => rmSync(path, { recursive: true, force: true })),
 );
 
 interface Registry {
@@ -96,52 +102,20 @@ function matchesGlob(path: string, pattern: string): boolean {
   return new RegExp(`${expression}$`).test(path);
 }
 
+function snapshotRepository(): string {
+  if (snapshot !== undefined) return snapshot;
+
+  const root = mkdtempSync(join(tmpdir(), "echo-workspace-boundary-snapshot-"));
+  tmpDirs.push(root);
+  snapshot = createCoherentWorktreeSnapshot(REPO, root);
+  return snapshot;
+}
+
 function fixtureRepository(): string {
-  const fixture = mkdtempSync(join(tmpdir(), "echo-workspace-boundary-"));
-  tmpDirs.push(fixture);
-  const clone = join(fixture, "repo");
-  const cloned = spawnSync("git", ["clone", "--quiet", REPO, clone], {
-    encoding: "utf8",
-  });
-  expect(cloned.status, cloned.stdout + cloned.stderr).toBe(0);
-
-  // Negative boundary tests must mutate one coherent repository snapshot. A
-  // hand-picked overlay can silently mix committed source with current
-  // manifests, which makes the guard report stale or missing imports instead
-  // of the violation under test.
-  const workingTreeDiff = spawnSync(
-    "git",
-    ["diff", "--binary", "--no-ext-diff", "HEAD", "--", "."],
-    { cwd: REPO, encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
-  );
-  expect(workingTreeDiff.status, workingTreeDiff.stderr?.toString("utf8")).toBe(
-    0,
-  );
-  if (workingTreeDiff.stdout.length > 0) {
-    const applied = spawnSync("git", ["apply", "--whitespace=nowarn", "-"], {
-      cwd: clone,
-      input: workingTreeDiff.stdout,
-      encoding: "utf8",
-    });
-    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
-  }
-
-  const untracked = spawnSync(
-    "git",
-    ["ls-files", "-z", "--others", "--exclude-standard"],
-    { cwd: REPO, encoding: "buffer" },
-  );
-  expect(untracked.status, untracked.stderr?.toString("utf8")).toBe(0);
-  for (const path of untracked.stdout.toString("utf8").split("\0")) {
-    if (path === "") continue;
-    const source = join(REPO, path);
-    if (!lstatSync(source).isFile()) continue;
-    const destination = join(clone, path);
-    mkdirSync(dirname(destination), { recursive: true });
-    cpSync(source, destination, { force: true });
-  }
-  symlinkSync(join(REPO, "node_modules"), join(clone, "node_modules"), "dir");
-  return clone;
+  const source = snapshotRepository();
+  const root = mkdtempSync(join(tmpdir(), "echo-workspace-boundary-"));
+  tmpDirs.push(root);
+  return copyCoherentWorktreeSnapshot(source, root);
 }
 
 function readFixtureJson<T>(fixture: string, path: string): T {
@@ -179,6 +153,53 @@ describe("workspace source boundaries", () => {
     const result = runBoundary(fixture);
 
     expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+
+  it("retains dirty and untracked inputs in isolated coherent worktrees", () => {
+    const sourceRoot = mkdtempSync(join(tmpdir(), "echo-coherent-source-"));
+    tmpDirs.push(sourceRoot);
+    const source = join(sourceRoot, "repo");
+    mkdirSync(join(source, "node_modules"), { recursive: true });
+    expect(spawnSync("git", ["init", "--quiet", source]).status).toBe(0);
+    expect(
+      spawnSync("git", ["-C", source, "config", "user.email", "test@example.test"])
+        .status,
+    ).toBe(0);
+    expect(
+      spawnSync("git", ["-C", source, "config", "user.name", "Test User"]).status,
+    ).toBe(0);
+    writeFileSync(join(source, "tracked.txt"), "committed\n");
+    expect(spawnSync("git", ["-C", source, "add", "tracked.txt"]).status).toBe(0);
+    expect(
+      spawnSync("git", ["-C", source, "commit", "--quiet", "-m", "initial"]).status,
+    ).toBe(0);
+    writeFileSync(join(source, "tracked.txt"), "dirty\n");
+    writeFileSync(join(source, "untracked.txt"), "untracked\n");
+
+    const snapshotRoot = mkdtempSync(join(tmpdir(), "echo-coherent-snapshot-"));
+    const firstRoot = mkdtempSync(join(tmpdir(), "echo-coherent-first-"));
+    const secondRoot = mkdtempSync(join(tmpdir(), "echo-coherent-second-"));
+    tmpDirs.push(snapshotRoot, firstRoot, secondRoot);
+    const snapshot = createCoherentWorktreeSnapshot(source, snapshotRoot);
+    const first = copyCoherentWorktreeSnapshot(snapshot, firstRoot);
+    const second = copyCoherentWorktreeSnapshot(snapshot, secondRoot);
+
+    for (const repository of [snapshot, first, second]) {
+      expect(readFileSync(join(repository, "tracked.txt"), "utf8")).toBe("dirty\n");
+      expect(readFileSync(join(repository, "untracked.txt"), "utf8")).toBe(
+        "untracked\n",
+      );
+    }
+    const listed = spawnSync(
+      "git",
+      ["-C", first, "ls-files", "--cached", "--others", "--exclude-standard"],
+      { encoding: "utf8" },
+    );
+    expect(listed.status).toBe(0);
+    expect(listed.stdout).toContain("untracked.txt");
+
+    writeFileSync(join(first, "tracked.txt"), "first fixture only\n");
+    expect(readFileSync(join(second, "tracked.txt"), "utf8")).toBe("dirty\n");
   });
 
   it("rejects a reintroduced retired workspace root", () => {

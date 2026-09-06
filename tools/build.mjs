@@ -13,15 +13,18 @@ import process from 'node:process';
 
 const repo = resolve(import.meta.dirname, '..');
 const personClient = join(repo, 'src', 'product', 'person-client');
-const compiledWorkspaces = JSON.parse(
-  readFileSync(join(repo, 'package.json'), 'utf8'),
-).workspaces.map((workspace) => workspace.split('/'));
 const personClientWorkspaces = [
   ['packages', 'federation-protocol'],
   ['packages', 'organization-protocol'],
   ['packages', 'organization-api'],
   ['src', 'product', 'person-client'],
 ];
+
+function compiledWorkspaces() {
+  return JSON.parse(
+    readFileSync(join(repo, 'package.json'), 'utf8'),
+  ).workspaces.map((workspace) => workspace.split('/'));
+}
 
 function gitOutput(args) {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
@@ -41,11 +44,31 @@ function repositorySource() {
   };
 }
 
-function cleanBuildOutputs(workspaces = compiledWorkspaces) {
+function cleanBuildOutputs(workspaces) {
   rmSync(join(repo, 'dist'), { recursive: true, force: true });
   for (const workspace of workspaces) {
     rmSync(join(repo, ...workspace, 'dist'), { recursive: true, force: true });
   }
+}
+
+function usage() {
+  return [
+    'usage: node tools/build.mjs [--help | --clean | --person-client]',
+    '',
+    'Builds all workspaces after removing their outputs by default.',
+  ].join('\n');
+}
+
+function parseArguments(argv) {
+  if (argv.length > 1 || (argv.length === 1 && !['--help', '--clean', '--person-client'].includes(argv[0]))) {
+    throw new Error(usage());
+  }
+  if (argv[0] === '--help') return { action: 'help' };
+  if (argv[0] === '--clean') return { action: 'clean' };
+  return {
+    action: 'build',
+    personClient: argv[0] === '--person-client',
+  };
 }
 
 function writePersonBuildIdentity(source) {
@@ -67,16 +90,23 @@ function writePersonBuildIdentity(source) {
   chmodSync(join(personClient, 'dist', 'main.js'), 0o755);
 }
 
-function main() {
-  if (process.argv.includes('--clean')) {
-    cleanBuildOutputs();
+function main(argv = process.argv.slice(2)) {
+  const input = parseArguments(argv);
+  if (input.action === 'help') {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
+
+  const allWorkspaces = compiledWorkspaces();
+  if (input.action === 'clean') {
+    cleanBuildOutputs(allWorkspaces);
     return;
   }
 
   const sourceBefore = repositorySource();
-  const workspaces = process.argv.includes('--person-client')
+  const workspaces = input.personClient
     ? personClientWorkspaces
-    : compiledWorkspaces;
+    : allWorkspaces;
   cleanBuildOutputs(workspaces);
   const tsc = join(repo, 'node_modules', 'typescript', 'bin', 'tsc');
   if (!existsSync(tsc)) {

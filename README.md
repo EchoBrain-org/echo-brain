@@ -70,20 +70,37 @@ npm ci
 npm run check
 ```
 
-Useful focused commands:
+Choose the smallest check that covers the change while iterating:
 
-```bash
-npm run test:person
-npm run test:authority
-npm run test:protocols
-npm run test:meeting-processing-core
-npm run test:reference-meeting-processing
-npm run test:architecture
-npm run check:architecture-boundaries
-```
+| When | Command | What it checks |
+| --- | --- | --- |
+| Editing the runtime | `npm run test:authority` | Authority service tests |
+| Editing one workspace | `npm run test:person`, `test:protocols`, `test:record`, or `test:control-plane` | That client or package's tests |
+| Editing deterministic meeting processing | `npm run test:meeting-processing-core` | Core processing tests |
+| Editing workspace dependencies or deployment tooling | `npm run test:architecture` | Cross-workspace and tooling behavior |
+| Checking dependency boundaries quickly | `npm run check:architecture-boundaries` | Forbidden imports and package boundaries |
+| Editing docs and evidence references | `npm run check:docs` | Documentation structure and Git proof references |
+| Editing the core evaluation harness | `npm run test:capacity` | Contract and verifier tests in `tools/evals/authority-core` |
+| Measuring one runtime round | `npm run capacity:checkpoint` | Deterministic, provider-independent functional checkpoint; about one minute, not an org-capacity result |
 
-`npm run check` performs boundary and documentation checks, TypeScript
-checking, linting, and the complete active test suite.
+For one test file, run `npm run build:workspaces` followed by
+`npx vitest run --config vitest.config.ts path/to/file.test.ts`.
+Workspace builds reuse TypeScript's existing outputs. `npm test` and
+`npm run build` retain clean builds so deleted modules cannot survive in outputs.
+`npm run build -- --help` describes build options without running a build.
+
+Before submitting a change, run `npm run check`: boundary and documentation
+checks, TypeScript checking, linting, and the complete active test suite.
+CI also runs both core evaluation commands above. The full suite uses at most
+two isolated test workers; mutable Git and packaging fixtures use temporary
+checkouts.
+
+The shorter `check:boundary`, `test:quality`, `eval:synthetic`,
+`profile:clean-v1-runtime`, and `check:authority-infrastructure` names are
+compatibility aliases for existing commands, not additional workflows.
+Quality and synthetic-meeting evaluations are separate from the deterministic
+core runtime hill climb. For operational tools, start with the
+[Authority operator playbook](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
 
 ## Person client artifact
 

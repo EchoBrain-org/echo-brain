@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 const REPO = process.cwd();
 const DOCS = join(REPO, "docs");
@@ -236,29 +237,58 @@ function markdownTable(source, requiredHeaders) {
   return null;
 }
 
-function gitObjectExists(spec) {
-  return (
-    spawnSync("git", ["cat-file", "-e", spec], { cwd: REPO, stdio: "ignore" })
-      .status === 0
-  );
-}
+/**
+ * Git facts are immutable for a fixed HEAD during one documentation pass.
+ * Keep this cache per checker invocation: it must not persist a historical
+ * object or reachability result into a later process or checkout.
+ */
+export function createGitCheckCache({ run = spawnSync, cwd = REPO } = {}) {
+  const objectExists = new Map();
+  const reachable = new Map();
+  const resolvedHead = run("git", ["rev-parse", "--verify", "HEAD"], {
+    cwd,
+    encoding: "utf8",
+  });
+  const head =
+    resolvedHead.status === 0 &&
+    /^[0-9a-f]{40}$/.test(resolvedHead.stdout?.trim())
+      ? resolvedHead.stdout.trim()
+      : null;
 
-function gitCommitIsReachable(sha) {
-  if (!gitObjectExists(`${sha}^{commit}`)) return false;
-  if (
-    spawnSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
-      cwd: REPO,
-      stdio: "ignore",
-    }).status === 0
-  ) {
-    return true;
-  }
-  const refs = spawnSync(
-    "git",
-    ["for-each-ref", "refs/tags", "--contains", sha, "--format=%(refname)"],
-    { cwd: REPO, encoding: "utf8" },
-  );
-  return refs.status === 0 && refs.stdout.trim().length > 0;
+  const object = (spec) => {
+    if (!objectExists.has(spec)) {
+      objectExists.set(
+        spec,
+        run("git", ["cat-file", "-e", spec], { cwd, stdio: "ignore" })
+          .status === 0,
+      );
+    }
+    return objectExists.get(spec);
+  };
+  const reachableCommit = (sha) => {
+    if (reachable.has(sha)) return reachable.get(sha);
+    let result = false;
+    if (head !== null && object(`${sha}^{commit}`)) {
+      if (
+        run("git", ["merge-base", "--is-ancestor", sha, head], {
+          cwd,
+          stdio: "ignore",
+        }).status === 0
+      ) {
+        result = true;
+      } else {
+        const refs = run(
+          "git",
+          ["for-each-ref", "refs/tags", "--contains", sha, "--format=%(refname)"],
+          { cwd, encoding: "utf8" },
+        );
+        result = refs.status === 0 && refs.stdout.trim().length > 0;
+      }
+    }
+    reachable.set(sha, result);
+    return result;
+  };
+  return Object.freeze({ object, reachable: reachableCommit });
 }
 
 function fullSha(value) {
@@ -271,7 +301,7 @@ function sameSet(left, right) {
   );
 }
 
-function validateShape(record, errors) {
+function validateShape(record, errors, git) {
   const { metadata } = record;
   if (metadata.schema_version !== 1)
     errors.push(`${record.path}: schema_version must equal 1`);
@@ -311,7 +341,7 @@ function validateShape(record, errors) {
     errors.push(
       `${record.path}: reviewed_ref must be a full lowercase commit SHA`,
     );
-  else if (!gitCommitIsReachable(metadata.reviewed_ref))
+  else if (!git.reachable(metadata.reviewed_ref))
     errors.push(`${record.path}: reviewed_ref does not name a reachable commit`);
   for (const field of RELATIONS.keys()) array(record, field, errors);
 }
@@ -415,15 +445,15 @@ function qualificationRows(record, errors) {
   return results;
 }
 
-function validateCommitRef(record, field, errors) {
+function validateCommitRef(record, field, errors, git) {
   const value = record.metadata[field];
   if (!fullSha(value))
     errors.push(`${record.path}: ${field} must be a full lowercase commit SHA`);
-  else if (!gitObjectExists(`${value}^{commit}`))
+  else if (!git.object(`${value}^{commit}`))
     errors.push(`${record.path}: ${field} does not name a local commit`);
 }
 
-function validateFailurePattern(record, evidenceIds, errors) {
+function validateFailurePattern(record, evidenceIds, errors, git) {
   const { metadata } = record;
   for (const field of [
     "origin",
@@ -444,7 +474,7 @@ function validateFailurePattern(record, evidenceIds, errors) {
       errors.push(
         `${record.path}: implementation ref must use commit:<full-sha>: ${ref}`,
       );
-    else if (!gitObjectExists(`${match[1]}^{commit}`))
+    else if (!git.object(`${match[1]}^{commit}`))
       errors.push(
         `${record.path}: implementation ref does not name a local commit ${ref}`,
       );
@@ -459,7 +489,7 @@ function validateFailurePattern(record, evidenceIds, errors) {
       errors.push(
         `${record.path}: regression ref must use repository-path@full-sha: ${ref}`,
       );
-    else if (!gitObjectExists(`${match[2]}:${match[1]}`))
+    else if (!git.object(`${match[2]}:${match[1]}`))
       errors.push(
         `${record.path}: regression test path does not exist at claimed commit: ${ref}`,
       );
@@ -478,6 +508,7 @@ function validateQualification(
   evidenceIds,
   matrices,
   errors,
+  git,
 ) {
   const { metadata } = record;
   for (const field of [
@@ -501,7 +532,7 @@ function validateQualification(
   if (!["passed", "failed", "inconclusive"].includes(metadata.result))
     errors.push(`${record.path}: invalid qualification result`);
   if (metadata.source_commit !== "not-applicable")
-    validateCommitRef(record, "source_commit", errors);
+    validateCommitRef(record, "source_commit", errors, git);
   if (
     !/^(?:sha256:[0-9a-f]{64}|not-applicable)$/.test(
       String(metadata.artifact_digest),
@@ -776,6 +807,7 @@ function managed(path) {
 }
 
 export function checkDocumentation() {
+  const git = createGitCheckCache();
   const errors = [];
   const files = markdownFiles(DOCS);
   const trackedMarkdown = trackedMarkdownFiles();
@@ -801,7 +833,7 @@ export function checkDocumentation() {
   }
   const recordsById = new Map();
   for (const record of records) {
-    validateShape(record, errors);
+    validateShape(record, errors, git);
     validateDecisionLifecycle(record, errors);
     if (typeof record.metadata.id !== "string") continue;
     const prior = recordsById.get(record.metadata.id);
@@ -825,9 +857,9 @@ export function checkDocumentation() {
   for (const record of records) {
     validateRelations(record, recordsById, errors);
     if (record.metadata.kind === "failure-pattern")
-      validateFailurePattern(record, evidenceIds, errors);
+      validateFailurePattern(record, evidenceIds, errors, git);
     if (record.metadata.kind === "qualification")
-      validateQualification(record, recordsById, evidenceIds, matrices, errors);
+      validateQualification(record, recordsById, evidenceIds, matrices, errors, git);
   }
   validateComponentBacklinks(recordsById, errors);
   validateCatalog(recordsById, errors);
@@ -836,11 +868,25 @@ export function checkDocumentation() {
   return errors;
 }
 
-const errors = checkDocumentation();
-if (errors.length) {
-  for (const error of errors) process.stderr.write(`docs: ${error}\n`);
-  process.exitCode = 1;
-} else
-  process.stdout.write(
-    "docs: metadata, relations, links, catalog, and safety checks passed\n",
-  );
+function invokedAsMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(resolve(process.argv[1])) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (invokedAsMain()) {
+  const errors = checkDocumentation();
+  if (errors.length) {
+    for (const error of errors) process.stderr.write(`docs: ${error}\n`);
+    process.exitCode = 1;
+  } else
+    process.stdout.write(
+      "docs: metadata, relations, links, catalog, and safety checks passed\n",
+    );
+}
