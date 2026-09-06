@@ -5,7 +5,6 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
-  copyFileSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -20,9 +19,10 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 
 const repository = resolve(import.meta.dirname, '..');
-const overlayRoot = join(repository, 'product', 'echo-overlay');
-const source = join(overlayRoot, 'main.swift');
-const plist = join(overlayRoot, 'Info.plist');
+const sourcePath = 'product/echo-overlay/main.swift';
+const plistPath = 'product/echo-overlay/Info.plist';
+const source = join(repository, sourcePath);
+const plist = join(repository, plistPath);
 const SHA = /^[0-9a-f]{40}$/;
 
 function fail(message) {
@@ -92,6 +92,7 @@ function run(command, args, label) {
   if (result.status !== 0) {
     fail(`${label}: ${(result.stderr || result.stdout || 'command failed').trim()}`);
   }
+  return result.stdout ?? '';
 }
 
 function sha256(path) {
@@ -100,6 +101,30 @@ function sha256(path) {
 
 function usage() {
   return 'usage: build-echo-overlay.mjs --source-sha <commit> --version <client-version> --output <new-ECHO.app.zip>';
+}
+
+function sourceSnapshot() {
+  const sha = run('git', ['rev-parse', 'HEAD'], 'could not resolve source commit')
+    .trim()
+    .toLowerCase();
+  if (!SHA.test(sha)) fail('git did not return a full source SHA');
+  const dirty = run(
+    'git',
+    ['status', '--porcelain=v1', '--untracked-files=all'],
+    'could not inspect source status',
+  );
+  return Object.freeze({ sha, clean: dirty === '' });
+}
+
+function committedFile(sourceSha, relativePath, worktreePath, label) {
+  const committed = Buffer.from(
+    run('git', ['show', `${sourceSha}:${relativePath}`], `could not read committed ${label}`),
+    'utf8',
+  );
+  if (!readFileSync(worktreePath).equals(committed)) {
+    fail(`${label} does not match its committed source`);
+  }
+  return committed;
 }
 
 function main(argv) {
@@ -123,6 +148,11 @@ function main(argv) {
   }
   regularFile(source, 'Swift source');
   regularFile(plist, 'Info.plist');
+  const before = sourceSnapshot();
+  if (!before.clean) fail('build requires clean, committed source');
+  if (before.sha !== sourceSha) fail('source SHA must match clean committed source');
+  const sourceBytes = committedFile(before.sha, sourcePath, source, 'Swift source');
+  const plistBytes = committedFile(before.sha, plistPath, plist, 'Info.plist');
   const parent = privateCanonicalDirectory(dirname(output));
   absent(output);
 
@@ -136,7 +166,11 @@ function main(argv) {
   try {
     mkdirSync(dirname(executable), { recursive: true, mode: 0o700 });
     mkdirSync(resources, { mode: 0o700 });
-    copyFileSync(plist, join(contents, 'Info.plist'));
+    // Compile a private materialization of the exact committed inputs. The
+    // post-build snapshot prevents publishing when the checkout changes.
+    const stagedSource = join(staging, 'main.swift');
+    writeFileSync(stagedSource, sourceBytes, { mode: 0o600, flag: 'wx' });
+    writeFileSync(join(contents, 'Info.plist'), plistBytes, { mode: 0o600, flag: 'wx' });
     const numericVersion = version.match(/[0-9]+\.[0-9]+\.[0-9]+/)?.[0] ?? '0.0.0';
     run(
       '/usr/bin/plutil',
@@ -170,7 +204,7 @@ function main(argv) {
         'AppKit',
         '-framework',
         'Carbon',
-        source,
+        stagedSource,
         '-o',
         executable,
       ],
@@ -185,6 +219,11 @@ function main(argv) {
     run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], 'app signature verification failed');
     run('/usr/bin/ditto', ['-c', '-k', '--keepParent', app, pending], 'app archive creation failed');
     chmodSync(pending, 0o600);
+    const after = sourceSnapshot();
+    if (
+      !after.clean ||
+      after.sha !== before.sha
+    ) fail('source changed while the overlay was building');
     try {
       linkSync(pending, output);
     } catch (error) {

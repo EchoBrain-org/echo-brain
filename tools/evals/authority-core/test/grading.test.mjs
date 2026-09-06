@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { nearestRank95, scoreCoreMeasurements } from "../grading.mjs";
 
-const contract = JSON.parse(readFileSync(new URL("../metrics.v2.json", import.meta.url)));
+const contract = JSON.parse(readFileSync(new URL("../metrics.v3.json", import.meta.url)));
 const kinds = [
   "direct_user_search", "availability_probe", "history_probe", "deterministic_answer",
   "canonical_input", "canonical_approval", "approval_visibility",
@@ -30,7 +30,7 @@ test("nearest-rank p95 retains incorrect work as infinity", () => {
   assert.equal(nearestRank95([...Array(18).fill(1), Infinity]), Infinity);
 });
 
-test("the future V2 metrics contract has every core threshold", () => {
+test("the future V3 metrics contract has every core threshold", () => {
   for (const name of ["search", "answer", "source_to_candidate", "approval_ack", "approval_to_search"]) assert.ok(contract.thresholds[name]);
 });
 

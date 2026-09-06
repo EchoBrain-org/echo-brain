@@ -5,11 +5,23 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ANALYZER_SOURCE_SHA256 } from "./corpus-v1.mjs";
 
-const ACCEPTED_V2_SHA256 = "c4f8e08d201c284f7fd3f6a2ae69a433f404b10a8ac6f08abf6e3f2789fdb7ca";
+const PROFILES = Object.freeze({
+  2: Object.freeze({
+    kind: "authority-core-capacity-metrics-v2",
+    sha256: "c4f8e08d201c284f7fd3f6a2ae69a433f404b10a8ac6f08abf6e3f2789fdb7ca",
+    hardwareId: "authority-core-capacity-reference-v2",
+  }),
+  3: Object.freeze({
+    kind: "authority-core-capacity-metrics-v3",
+    sha256: "63377b3809575957218bbecee34ea51f32e3d2f963976bf33ac949d5729857e5",
+    hardwareId: "authority-core-capacity-reference-v3",
+  }),
+});
 const here = dirname(fileURLToPath(import.meta.url));
-const contractPath = resolve(process.argv[2] ?? resolve(here, "metrics.v2.json"));
+const contractPath = resolve(process.argv[2] ?? resolve(here, "metrics.v3.json"));
 const contract = JSON.parse(readFileSync(contractPath, "utf8"));
 const definitionPath = resolve(process.argv[3] ?? resolve(dirname(contractPath), contract.definition));
+const profile = PROFILES[contract.schema_version];
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 assert.equal(
   hash(readFileSync(resolve(here, "../../../packages/organization-retrieval/src/application/analyzer.ts"))),
@@ -35,8 +47,8 @@ const gate = (value, expectedP95, expectedDeadline, expectedFraction, label) => 
   }, `${label} gate`);
 };
 
-assert.equal(contract.schema_version, 2);
-assert.equal(contract.kind, "authority-core-capacity-metrics-v2");
+assert.ok(profile, "Unsupported capacity metrics schema version");
+assert.equal(contract.kind, profile.kind);
 assert.equal(contract.status, "frozen-rules-baseline-not-run-full-runner-not-implemented-no-capacity-claim");
 assert.equal(contract.evaluation_scope.objective, "authority-core-runtime-capacity");
 assert.equal(contract.evaluation_scope.real_runtime_paths_required, true);
@@ -47,13 +59,13 @@ assert.equal(contract.provider_profile, undefined);
 assert.equal(contract.evaluation_scope.synthetic_template_binding.includes("actual canonical record identities"), true);
 
 const { profile_pin: pin, ...rules } = contract;
-assert.ok(pin, "Missing V2 profile pin");
+assert.ok(pin, `Missing V${contract.schema_version} profile pin`);
 assert.equal(pin.algorithm, "sha256-sorted-json-rules-and-raw-definition-v1");
 const definitionSha256 = hash(readFileSync(definitionPath));
 assert.equal(pin.definition_sha256, definitionSha256, "Definition digest mismatch");
 const actual = hash(canonical({ rules, definition_sha256: definitionSha256 }));
 assert.equal(pin.sha256, actual, "Rule digest mismatch");
-assert.equal(actual, ACCEPTED_V2_SHA256, "Not the frozen V2 core profile");
+assert.equal(actual, profile.sha256, `Not the frozen V${contract.schema_version} core profile`);
 
 const workload = contract.workload;
 assert.equal(workload.mean_postings_per_atom, 25);
@@ -61,6 +73,32 @@ assert.equal(workload.atoms_per_approved_meeting, 5);
 fraction(workload.organization_member_policy_fraction, "organization member policy share");
 fraction(workload.restricted_reviewer_policy_fraction, "restricted reviewer policy share");
 assert.equal(workload.organization_member_policy_fraction + workload.restricted_reviewer_policy_fraction, 1);
+if (contract.schema_version === 3) {
+  assert.deepEqual(contract.predecessor_profile, {
+    schema_version: 2,
+    definition_sha256: "07dab5141e4e4d3f609ec18a4c3f4bea0284ee9b591e5cb590a8350fd8c81db5",
+    contract_sha256: "61ff8a837248037ee66dfc030a95cbbb1eb9f4f7bba51efe676f6fb492f2473e",
+    profile_sha256: PROFILES[2].sha256,
+    baseline: "not-run",
+    replacement_reason: "V2 assigned the policy split per atom; V3 assigns one policy per approved meeting to match the canonical approval boundary.",
+  });
+  const predecessorPath = resolve(here, "metrics.v2.json");
+  const predecessorBytes = readFileSync(predecessorPath);
+  const predecessor = JSON.parse(predecessorBytes);
+  const predecessorDefinition = resolve(dirname(predecessorPath), predecessor.definition);
+  assert.equal(hash(predecessorBytes), contract.predecessor_profile.contract_sha256, "V2 contract bytes changed");
+  assert.equal(hash(readFileSync(predecessorDefinition)), contract.predecessor_profile.definition_sha256, "V2 definition bytes changed");
+  const { profile_pin: predecessorPin, ...predecessorRules } = predecessor;
+  assert.ok(predecessorPin, "V2 profile pin is missing");
+  assert.equal(predecessorPin.definition_sha256, contract.predecessor_profile.definition_sha256, "V2 definition pin changed");
+  assert.equal(
+    hash(canonical({ rules: predecessorRules, definition_sha256: contract.predecessor_profile.definition_sha256 })),
+    contract.predecessor_profile.profile_sha256,
+    "V2 profile rules changed",
+  );
+  assert.equal(workload.policy_assignment_unit, "approved-meeting");
+  assert.equal(workload.organization_member_policy_rounding, "floor(organization_member_policy_fraction * approved_meeting_count); every remaining approved meeting is restricted-reviewer");
+}
 const peakFactor = 1 + (workload.peak_multiplier - 1) * workload.peak_duration_ms / workload.run_duration_ms;
 for (const milestone of contract.milestones) {
   const atoms = Math.round(milestone.active_employees * milestone.history_workdays * workload.distinct_meetings_per_employee_per_workday * workload.approved_fraction * workload.atoms_per_approved_meeting);
@@ -122,10 +160,11 @@ assert.equal(contract.run_protocol.correlation_is_proof_of_computation, false);
 assert.equal(contract.reference_hardware.candidate_vcpu_limit, 4);
 assert.equal(contract.reference_hardware.candidate_memory_limit_bytes, 8589934592);
 assert.equal(contract.reference_hardware.swap_allowed, false);
+assert.equal(contract.reference_hardware.id, profile.hardwareId);
 assert.equal(contract.reference_hardware.instance_type, "c7i.xlarge");
 assert.equal(contract.reference_hardware.region, "us-west-2");
 assert.equal(contract.reference_hardware.storage.iops, 3000);
 assert.equal(contract.reference_hardware.storage.throughput_mib_per_second, 125);
 
-console.log(`Capacity V2 core definition verified: ${actual}`);
+console.log(`Capacity V${contract.schema_version} core definition verified: ${actual}`);
 console.log("Definition/digest and numeric checks only. Baseline and qualification runner are NOT-RUN.");

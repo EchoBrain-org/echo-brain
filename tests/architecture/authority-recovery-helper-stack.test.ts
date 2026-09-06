@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { AuthorityRecoveryHelperBundleManifest } from "../../tools/build-authority-recovery-helper-bundle.mjs";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TEMPLATE = resolve(
@@ -281,6 +282,8 @@ describe("Authority isolated recovery helper stack", () => {
   });
 
   it("pins the bundle build itself to clean Linux ARM64 source and the verifier prerequisites", () => {
+    expectTypeOf<AuthorityRecoveryHelperBundleManifest>()
+      .toHaveProperty("npm_shrinkwrap_sha256").toBeString();
     const builder = readFileSync(BUNDLE_BUILDER, "utf8");
     for (const required of [
       'process.platform !== "linux"',
