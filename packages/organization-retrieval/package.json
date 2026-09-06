@@ -8,10 +8,6 @@
     "./readable-search-engine-v1": {
       "types": "./dist/readable-search-engine-v1.d.ts",
       "import": "./dist/readable-search-engine-v1.js"
-    },
-    "./new-lineage-v1": {
-      "types": "./dist/new-lineage-v1.d.ts",
-      "import": "./dist/new-lineage-v1.js"
     }
   },
   "files": [
