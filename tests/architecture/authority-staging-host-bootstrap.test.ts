@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -187,6 +188,26 @@ ECHO_CLOUDFLARE_TUNNEL_TOKEN=resolved-test-placeholder exec "$@"
 }
 
 describe("Authority staging host bootstrap", () => {
+  it.each(['missing', 'symlink', 'regular'])('preflights the backup helper before any provisioning: %s', kind => {
+    const script = bootstrap();
+    const preflight = script.match(/^for required_source in \\\n[\s\S]*?^done$/m)?.[0];
+    expect(preflight).toBeDefined();
+    expect(script.indexOf(preflight!) + preflight!.length).toBeLessThan(script.indexOf('\nload_config\n'));
+    const root = mkdtempSync(join(tmpdir(), 'echo-bootstrap-sources-'));
+    const marker = join(root, 'provisioning-started');
+    try {
+      const sources = Object.fromEntries(['UNIT_SOURCE', 'TOKEN_INSTALLER_SOURCE', 'ONBOARD_SOURCE', 'UPDATER_SOURCE', 'RESTORER_SOURCE', 'BACKUP_SOURCE', 'RELEASE_VALIDATOR_SOURCE', 'RUNTIME_PROFILE_VALIDATOR_SOURCE'].map(name => [name, join(root, name)]));
+      for (const [name, path] of Object.entries(sources)) {
+        if (name !== 'BACKUP_SOURCE' || kind === 'regular') writeFileSync(path, 'synthetic control file\n');
+      }
+      if (kind === 'symlink') symlinkSync(sources.UPDATER_SOURCE!, sources.BACKUP_SOURCE!);
+      const result = spawnSync('/bin/bash', ['--noprofile', '--norc', '-c', `set -eu\n${bootstrapFunction('fail')}\n${preflight}\ntouch "$ECHO_TEST_MUTATION_MARKER"`], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', ...sources, ECHO_TEST_MUTATION_MARKER: marker } });
+      expect(result.status === 0, result.stderr).toBe(kind === 'regular');
+      expect(existsSync(marker)).toBe(kind === 'regular');
+      if (kind !== 'regular') expect(result.stderr).toContain('missing required verified host-bundle control material');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("pins the fixed Authority identity and verifies it instead of accepting host allocation", () => {
     const script = bootstrap();
 

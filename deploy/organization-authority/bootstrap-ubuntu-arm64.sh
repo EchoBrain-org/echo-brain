@@ -499,7 +499,7 @@ done
 [[ ${ID:-} == ubuntu ]] || fail 'this bootstrap supports Ubuntu only'
 for required_source in \
   "$UNIT_SOURCE" "$TOKEN_INSTALLER_SOURCE" "$ONBOARD_SOURCE" "$UPDATER_SOURCE" \
-  "$RESTORER_SOURCE" "$RELEASE_VALIDATOR_SOURCE" "$RUNTIME_PROFILE_VALIDATOR_SOURCE"; do
+  "$RESTORER_SOURCE" "$BACKUP_SOURCE" "$RELEASE_VALIDATOR_SOURCE" "$RUNTIME_PROFILE_VALIDATOR_SOURCE"; do
   [[ -f $required_source && ! -L $required_source ]] \
     || fail 'bootstrap source directory is missing required verified host-bundle control material'
 done
