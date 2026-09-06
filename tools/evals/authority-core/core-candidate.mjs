@@ -32,6 +32,7 @@ let control;
 let record;
 let workerError;
 let closing;
+let requestApprovalPublication;
 
 function close() {
   closing ??= (async () => {
@@ -70,6 +71,10 @@ async function open(state_directory) {
   const projectors = createRecordPolicyFactProjectorRegistryV1([createPrivateSlackBlockApprovalPolicyProjectorV1()]);
   approvals = await createCoreApproval({
     context: {
+      // Match the production composition root: approval construction happens
+      // before the lifecycle exposes its coalesced wake. Until it is bound,
+      // the periodic worker remains the conservative fallback.
+      on_terminal_action_queued: () => requestApprovalPublication?.(),
       state, authority_database: authority, control_plane_database: control,
       record_append: new OrganizationRecordAppenderV4(record, coordinates, projectors),
       signer, coordinates, next_envelope_id: () => `env_${randomUUID()}`,
@@ -103,6 +108,7 @@ async function open(state_directory) {
     start_api_runtime: async () => ({ address: { address: "core-ipc", family: "IPC", port: 0 }, close: async () => {} }),
     on_worker_error: (error) => { workerError ??= error; },
   });
+  requestApprovalPublication = () => runtime.requestApprovalPublication();
   return { source: input.source.identity, processor: input.processor.identity, worker_interval_ms: DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS };
 }
 
@@ -122,9 +128,7 @@ async function command(message) {
     case "candidate": return await state.readFrozenCandidateForSourceRevision(message.source_revision) ?? null;
     case "presentation": return approvals.poster.readPresentation(message.approval_id) ?? null;
     case "approve": {
-      const result = await approvals.offerApproval(message.input);
-      runtime.requestApprovalPublication();
-      return result;
+      return await approvals.offerApproval(message.input);
     }
     case "status": return status(message.approval_id);
     case "search": return reads.search.search({ access_token: identity[message.actor].access_token, query: message.query });

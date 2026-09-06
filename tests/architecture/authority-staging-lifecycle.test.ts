@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  awsJson,
   createAwsCliAdapters,
   runAuthorityStaging,
   validateStagingLifecycleInput,
@@ -137,7 +138,34 @@ printf 'HTTPS_PROXY_ENV=%s\\n' "\${HTTPS_PROXY-unset}" >>"$FAKE_AWS_LOG"
 printf 'NO_PROXY_ENV=%s\\n' "\${no_proxy-unset}" >>"$FAKE_AWS_LOG"
 printf 'IGNORE_ENDPOINT_ENV=%s\\n' "\${AWS_IGNORE_CONFIGURED_ENDPOINT_URLS-unset}" >>"$FAKE_AWS_LOG"
 printf 'TOKEN_ENV=%s\\nEND\\n' "\${ECHO_CLOUDFLARE_API_TOKEN-unset}" >>"$FAKE_AWS_LOG"
+case "\${FAKE_AWS_MODE-}" in
+  stall) sleep 1 ;;
+  flood)
+    i=0
+    while [ "$i" -lt 4097 ]; do
+      printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      i=$((i + 1))
+    done
+    exit 0
+    ;;
+  descendant_pipe)
+    python3 -c 'import os,time; os.setsid(); time.sleep(2)' &
+    sleep 1
+    ;;
+esac
 case " $* " in
+  *" cloudformation create-change-set "*)
+    if [ "\${FAKE_AWS_MODE-}" = persist_change_set ]; then
+      description=
+      next=false
+      for argument in "$@"; do
+        if [ "$next" = true ]; then description=$argument; break; fi
+        if [ "$argument" = --description ]; then next=true; fi
+      done
+      test -n "$description"
+      printf '%s' "$description" >"$FAKE_AWS_CHANGE_SET_DESCRIPTION"
+    fi
+    ;;
   *" cloudformation execute-change-set "*)
     count=0
     if [ -f "$FAKE_AWS_EXECUTE_COUNT" ]; then count=$(cat "$FAKE_AWS_EXECUTE_COUNT"); fi
@@ -151,7 +179,13 @@ case " $* " in
   *) cat >/dev/null ;;
 esac
 case " $* " in
-  *" cloudformation describe-change-set "*) printf '%s\\n' "$FAKE_AWS_DESCRIBE_RESPONSE" ;;
+  *" cloudformation describe-change-set "*)
+    if [ "\${FAKE_AWS_MODE-}" = persist_change_set ]; then
+      printf '{"Description":"%s",%s\\n' "$(cat "$FAKE_AWS_CHANGE_SET_DESCRIPTION")" "$FAKE_AWS_DESCRIBE_RESPONSE_SUFFIX"
+    else
+      printf '%s\\n' "$FAKE_AWS_DESCRIBE_RESPONSE"
+    fi
+    ;;
   *" ssm send-command "*)
     if [ "\${FAKE_AWS_SSM_COMMAND_ID_MODE-}" = missing ]; then
       printf '{}\\n'
@@ -362,10 +396,12 @@ function dependencies(
 ) {
   const events: string[] = [];
   const plans: Array<{
+    readonly edgePlanBinding?: Readonly<Record<string, string>>;
     readonly onStackFailure?: "DO_NOTHING";
     readonly parameters: Record<string, string>;
   }> = [];
   const reviewedPlans: Array<{
+    readonly edgePlanBinding?: Readonly<Record<string, string>>;
     readonly onStackFailure?: "DO_NOTHING";
     readonly parameters: Record<string, string>;
   }> = [];
@@ -374,9 +410,11 @@ function dependencies(
     options.terminationProtectionFailures ?? 0;
   let executeFailures = options.executeFailure === true ? 1 : 0;
   let plannedHostEnabled = false;
+  let plannedEdgeBinding: Readonly<Record<string, string>> | undefined;
   let storedResumeRetainedAuthority: string | undefined;
   const plan = (request: {
     readonly parameters: Record<string, string>;
+    readonly edgePlanBinding?: Readonly<Record<string, string>>;
     readonly changeSetType: "CREATE" | "UPDATE";
     readonly changeSetName: string;
   }) => {
@@ -418,6 +456,7 @@ function dependencies(
     },
     createChangeSet: async (request: {
       readonly parameters: Record<string, string>;
+      readonly edgePlanBinding?: Readonly<Record<string, string>>;
       readonly changeSetType: "CREATE" | "UPDATE";
       readonly changeSetName: string;
       readonly onStackFailure?: "DO_NOTHING";
@@ -426,12 +465,14 @@ function dependencies(
         `plan:${request.changeSetType}:${request.parameters.HostEnabled}`,
       );
       plans.push(request);
+      plannedEdgeBinding = request.edgePlanBinding;
       storedResumeRetainedAuthority =
         request.parameters.ResumeRetainedAuthority;
       return plan(request);
     },
     describeChangeSet: async (request: {
       readonly parameters: Record<string, string>;
+      readonly edgePlanBinding?: Readonly<Record<string, string>>;
       readonly changeSetType: "CREATE" | "UPDATE";
       readonly changeSetName: string;
       readonly onStackFailure?: "DO_NOTHING";
@@ -443,7 +484,9 @@ function dependencies(
       const result = plan(request);
       return storedResumeRetainedAuthority === undefined ||
         storedResumeRetainedAuthority ===
-          request.parameters.ResumeRetainedAuthority
+          request.parameters.ResumeRetainedAuthority &&
+          JSON.stringify(plannedEdgeBinding) ===
+            JSON.stringify(request.edgePlanBinding)
         ? result
         : { ...result, matchesExpected: false };
     },
@@ -609,6 +652,12 @@ describe("Authority staging lifecycle", () => {
 
     expect(receipt).toMatchObject({
       action: "slot-init",
+      edge_coordinates: {
+        account_id: INPUT.edge.accountId,
+        hostname: INPUT.edge.hostname,
+        slot_id: INPUT.slotId,
+        zone_id: INPUT.edge.zoneId,
+      },
       state: "planned",
       change_set_actions: [
         { action: "Add", logical_id: "StagingVpc", replacement: false },
@@ -665,6 +714,25 @@ describe("Authority staging lifecycle", () => {
     ]);
     expect(JSON.stringify(receipt)).not.toContain(TOKEN);
     expect(JSON.stringify(receipt)).not.toContain(SECRET_ARN);
+  });
+
+  it("refuses changed reviewed edge coordinates before executing slot-init", async () => {
+    const fixture = dependencies({ initialStack: { exists: false } });
+    await runAuthorityStaging("slot-init", INPUT, fixture.dependencies);
+
+    await expect(
+      runAuthorityStaging(
+        "slot-init",
+        {
+          ...INPUT,
+          edge: { ...INPUT.edge, zoneId: "d".repeat(32) },
+        },
+        { ...fixture.dependencies, execute: true },
+      ),
+    ).rejects.toThrow("change_set_not_reviewable");
+
+    expect(fixture.events).not.toContain("execute-change-set");
+    expect(fixture.events).not.toContain("edge-install-token");
   });
 
   it.each([
@@ -1997,6 +2065,7 @@ describe("Authority staging lifecycle", () => {
         expect(calls).toContain(
           `ARG=--parameters\nARG={"commands":["set -eu",`,
         );
+        expect(calls).toContain('"executionTimeout":["300"]');
         expect(calls).toContain(`${testCase.marker}\\\\n`);
         expect(calls).toContain(
           `ARG=--region\nARG=us-west-2\nARG=--document-name\nARG=AWS-RunShellScript\nARG=--instance-ids\nARG=${instanceId}`,
@@ -2015,6 +2084,128 @@ describe("Authority staging lifecycle", () => {
         await expect(testCase.run()).rejects.toThrow(
           "ssm_command_response_invalid",
         );
+    } finally {
+      restore();
+    }
+  });
+
+  it("binds every reviewed slot-init edge coordinate through the CloudFormation description", async () => {
+    const fake = withFakeAws();
+    const edgePlanBinding = {
+      account_id: INPUT.edge.accountId,
+      hostname: INPUT.edge.hostname,
+      slot_id: INPUT.slotId,
+      zone_id: INPUT.edge.zoneId,
+    };
+    const responseSuffix = JSON.stringify({
+      ChangeSetId: "change-set-edge-binding",
+      ChangeSetType: "CREATE",
+      Changes: [],
+      OnStackFailure: "DO_NOTHING",
+      Parameters: Object.entries(templateParameterVector()).map(
+        ([ParameterKey, ParameterValue]) => ({ ParameterKey, ParameterValue }),
+      ),
+      Status: "CREATE_COMPLETE",
+    }).slice(1);
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_CHANGE_SET_DESCRIPTION: join(fake.root, "description"),
+      FAKE_AWS_DESCRIBE_RESPONSE_SUFFIX: responseSuffix,
+      FAKE_AWS_LOG: fake.log,
+      FAKE_AWS_MODE: "persist_change_set",
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    const request = {
+      capabilities: ["CAPABILITY_IAM"] as const,
+      changeSetName: "echo-authority-slot-init-edge-binding",
+      changeSetType: "CREATE" as const,
+      clientToken: "staging-edge-binding-20260826",
+      edgePlanBinding,
+      onStackFailure: "DO_NOTHING" as const,
+      parameters: templateParameterVector(),
+      region: "us-west-2",
+      stackName: "echo-authority-staging-edge-binding",
+      templatePath: "/private/tmp/committed-template.json",
+      templateSha256: "d".repeat(64),
+    };
+    try {
+      const adapters = createAwsCliAdapters();
+      await expect(adapters.cloudFormation!.createChangeSet(request)).resolves.toMatchObject({
+        matchesExpected: true,
+      });
+      for (const [coordinate, value] of [
+        ["account_id", "e".repeat(32)],
+        ["zone_id", "f".repeat(32)],
+        ["hostname", "other.example.com"],
+        ["slot_id", "staging-other-slot"],
+      ] as const) {
+        await expect(
+          adapters.cloudFormation!.describeChangeSet({
+            ...request,
+            edgePlanBinding: { ...edgePlanBinding, [coordinate]: value },
+          }),
+        ).resolves.toMatchObject({ matchesExpected: false });
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  it("bounds a stalled, flooding, or pipe-holding AWS CLI child", async () => {
+    const fake = withFakeAws();
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_LOG: fake.log,
+      FAKE_AWS_MODE: "stall",
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    try {
+      await expect(
+        awsJson(["sts", "get-caller-identity", "--output", "json"], {
+          timeoutMs: 5,
+        }),
+      ).rejects.toThrow("deadline_exceeded");
+
+      process.env.FAKE_AWS_MODE = "flood";
+      await expect(
+        awsJson(["sts", "get-caller-identity", "--output", "json"], {
+          maxOutputBytes: 128,
+        }),
+      ).rejects.toThrow("output_limit_exceeded");
+
+      process.env.FAKE_AWS_MODE = "descendant_pipe";
+      const startedAt = Date.now();
+      await expect(
+        awsJson(["sts", "get-caller-identity", "--output", "json"], {
+          timeoutMs: 5,
+        }),
+      ).rejects.toThrow("deadline_exceeded");
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not resubmit an execute change set after a bounded CLI failure", async () => {
+    const fake = withFakeAws();
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_LOG: fake.log,
+      FAKE_AWS_MODE: "flood",
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    try {
+      await expect(
+        createAwsCliAdapters().cloudFormation!.executeChangeSet({
+          changeSetId: "change-set-bounded-execute",
+          changeSetType: "CREATE",
+          clientRequestToken: "staging-bounded-execute-20260826",
+          region: "us-west-2",
+          stackName: "echo-authority-staging-bounded-execute",
+        }),
+      ).rejects.toThrow("output_limit_exceeded");
+      expect(
+        readFileSync(fake.log, "utf8").match(
+          /ARG=cloudformation\nARG=execute-change-set/g,
+        ),
+      ).toHaveLength(1);
     } finally {
       restore();
     }

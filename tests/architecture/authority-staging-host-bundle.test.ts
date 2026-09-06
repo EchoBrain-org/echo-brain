@@ -279,11 +279,33 @@ describe("Authority staging host bundle", () => {
     expect(sha256(output)).toBe(archiveDigest);
   });
 
-  it("refuses to reuse a half-written archive and manifest pair", () => {
+  it("recovers an interrupted archive-first publication only after exact safe-byte checks", () => {
     const subject = fixture();
     const output = join(subject.output, "bundle.tar.gz");
     expect(build(subject.root, output).status).toBe(0);
+    const manifest = readFileSync(`${output}.manifest.json`, "utf8");
     rmSync(`${output}.manifest.json`);
+    chmodSync(output, 0o644);
+    const unsafe = build(subject.root, output, ["--reuse-identical"]);
+    expect(unsafe.status).toBe(1);
+    expect(unsafe.stderr).toContain(
+      "existing output must be a current-user-owned mode 0600 regular file",
+    );
+    expect(lstatSync(`${output}.manifest.json`, { throwIfNoEntry: false })).toBeUndefined();
+
+    chmodSync(output, 0o600);
+    const recovered = build(subject.root, output, ["--reuse-identical"]);
+    expect(recovered.status).toBe(0);
+    expect(JSON.parse(recovered.stdout)).toMatchObject({ reused: true });
+    expect(readFileSync(`${output}.manifest.json`, "utf8")).toBe(manifest);
+  });
+
+  it("refuses a manifest without its archive", () => {
+    const subject = fixture();
+    const output = join(subject.output, "bundle.tar.gz");
+    expect(build(subject.root, output).status).toBe(0);
+    rmSync(output);
+
     const half = build(subject.root, output, ["--reuse-identical"]);
     expect(half.status).toBe(1);
     expect(half.stderr).toContain(
