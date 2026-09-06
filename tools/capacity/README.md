@@ -11,7 +11,7 @@ input ports and deterministic processor/generation results replace external
 systems. The real scheduler, current-Person checks, approval authorization,
 record writes, publication, retrieval, release audits and replay stay inside.
 
-The retained code has four jobs:
+The metric components are:
 
 | File | Purpose |
 | --- | --- |
@@ -25,11 +25,7 @@ npm run test:capacity
 npm run check
 ```
 
-These commands verify the retained components. **They do not run a capacity
-benchmark.** Synthetic template identities still need binding to real canonical
-records, and the core driver, independent runtime observations and fault
-executor are not implemented. Missing work is explicit rather than represented
-by dry-run infrastructure or a runner that cannot execute the target.
+These commands verify the components. **They do not run a capacity benchmark.**
 
 `grading.mjs` is diagnostic arithmetic only. Its measurement result is never a
 qualification or milestone result: the actual run-integrity verifier and
@@ -39,3 +35,45 @@ Production Authority code matches the pre-hill-climb baseline. No optimization,
 M1 pass or usable N/history limit has been established. The earlier provider
 profile and abandoned integration harness were removed; their history remains
 in Git. The core profile requires its own baseline before claiming any gain.
+
+Stage 1 runs a single synthetic meeting through the real core in a child process:
+
+```sh
+npm run capacity:checkpoint
+```
+
+The command runs two fresh, separate organizations, one for each visibility
+policy. Each receives one meeting with five canonical facts. It checks a complete
+durable candidate and delivered presentation, absence of unapproved search
+results, durable denial of an unassigned employee's approval, the owner's real
+approval, one signed canonical record, actual generation publication, grounded
+answers, shared/private reader isolation and exact approval-receipt replay.
+After the child stops, the driver opens the real databases read-only and checks
+the frozen input, record, policy facts, active head and answer release audits.
+
+`core-candidate.mjs` composes the existing worker lifecycle, processing cycle,
+approval finalizer, record appender and search reconciler. `core-input.mjs`,
+`core-approval.mjs`, `core-identity.mjs` and `core-read-routes.mjs` provide the
+canonical ports and application setup. Person sessions are real; only the
+external verified identity is deterministic. The existing approval storage
+format contains Slack-specific fields. The fixture supplies verified-action
+inputs at the boundary after transport verification, and deterministic delivery
+results; no Slack client, HTTP payload simulator or signature handler runs.
+Current membership, assignment, connection/link, candidate and policy checks
+remain in the production finalizer. No authorization witness is injected.
+
+The worker's default 30-second poll interval and database synchronization modes
+are unchanged. Input timing includes the wait for the next poll; there is no
+manual intake wake or accelerated clock. Returned timings are parent-observed
+single-operation diagnostics on the local machine, with IPC and inspection
+overhead. They are **not p95s, capacity limits or milestone passes**. A checkpoint
+PASS means these functional assertions passed; it does not mean latency gates
+passed. The report always has `qualification: false` and
+`milestone_verdict: "not-run"`.
+
+The command prints the private report path and removes its temporary state,
+including generated signing/session material. Failure is recorded as FAIL.
+Graceful close and duplicate-receipt replay do not prove crash or power-loss
+durability. Stage 2 (independent live observations and workload/corpus binding)
+and stage 3 (crash/replay and storage faults) are not implemented. No full M1
+workload has run.

@@ -57,7 +57,8 @@
     "check:docs": "node tools/check-docs.mjs",
     "check:authority-recovery-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
     "check:authority-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
-    "test:capacity": "node tools/capacity/verify-contract.mjs && node --test tools/capacity/test/*.test.mjs",
+    "test:capacity": "npm run build:workspaces && node tools/capacity/verify-contract.mjs && node --test tools/capacity/test/*.test.mjs",
+    "capacity:checkpoint": "npm run build:workspaces && node tools/capacity/core-checkpoint.mjs",
     "check": "npm run check:architecture-boundaries && npm run check:docs && npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
