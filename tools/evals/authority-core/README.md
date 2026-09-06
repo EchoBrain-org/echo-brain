@@ -70,6 +70,10 @@ external verified identity is deterministic. The existing approval storage
 format contains Slack-specific fields. The fixture supplies verified-action
 inputs at the boundary after transport verification, and deterministic delivery
 results; no Slack client, HTTP payload simulator or signature handler runs.
+The canonical approval port requests the lifecycle's late-bound, coalesced
+publication wake after its durable queue succeeds; the IPC driver does not
+request publication itself. Until that binding exists, periodic processing is
+the fallback, matching production composition.
 Current membership, assignment, connection/link, candidate and policy checks
 remain in the production finalizer. No authorization witness is injected.
 This directly composes the shared production components; it does not start the

@@ -229,7 +229,8 @@ function receipt({ approval_id, actor: person, policy_id, offer_id, connection, 
 /**
  * Build the core-only approval lane. The caller stages a real frozen candidate
  * with `stager.stage(...)`, then enqueues one already-verified action through
- * `offerApproval`, and drives the returned coordinator in the shared worker.
+ * `offerApproval`. A late-bound observational callback requests publication
+ * after the durable queue succeeds; the shared worker drives the coordinator.
  */
 export async function createCoreApproval({ context, owner, employee, sessions } = {}) {
   if (context === null || typeof context !== "object") throw new TypeError("context is required");
@@ -309,7 +310,14 @@ export async function createCoreApproval({ context, owner, employee, sessions } 
       // Replays enqueue the byte-for-byte original verified receipt. This map
       // caches ingress evidence only; it never caches an authorization allow,
       // terminal, record, or search result.
-      return control_plane.enqueue({ disposition: "resolution", receipt: normalized });
+      const result = await control_plane.enqueue({ disposition: "resolution", receipt: normalized });
+      try {
+        context.on_terminal_action_queued?.();
+      } catch {
+        // The durable receipt is already queued. The wake is observational,
+        // just as it is in the production approval interaction boundary.
+      }
+      return result;
     },
   });
 }
