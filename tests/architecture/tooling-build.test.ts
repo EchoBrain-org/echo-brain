@@ -71,8 +71,8 @@ exit 1
   mkdirSync(resolve(compiler, '..'), { recursive: true });
   writeFileSync(
     compiler,
-    `import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+    `const { mkdirSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
 const root = process.cwd();
 mkdirSync(join(root, 'src/product/person-client/dist'), { recursive: true });
 writeFileSync(join(root, 'src/product/person-client/dist/main.js'), 'export {};\\n');
