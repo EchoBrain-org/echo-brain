@@ -62,24 +62,10 @@ const WORKSPACE_EXPORTS: ReadonlyMap<string, WorkspaceExport> = new Map([
     },
   ],
   [
-    "@echo-brain/organization-record/new-lineage-v1",
-    {
-      package_path: "packages/organization-record/package.json",
-      export_path: "./new-lineage-v1",
-    },
-  ],
-  [
     "@echo-brain/organization-retrieval/readable-search-engine-v1",
     {
       package_path: "packages/organization-retrieval/package.json",
       export_path: "./readable-search-engine-v1",
-    },
-  ],
-  [
-    "@echo-brain/organization-retrieval/new-lineage-v1",
-    {
-      package_path: "packages/organization-retrieval/package.json",
-      export_path: "./new-lineage-v1",
     },
   ],
 ]);
@@ -230,28 +216,6 @@ function cleanClosure(entry: string): ReadonlySet<string> {
 }
 
 describe("Organization Authority executable closure boundaries", () => {
-  it("uses responsibility-named record and retrieval runtimes with thin legacy shims", () => {
-    const compatibilityEntrypoints = [
-      [
-        "packages/organization-record/src/new-lineage-v1.ts",
-        'export * from "./organization-record-api-v1.js";\n',
-      ],
-      [
-        "packages/organization-retrieval/src/new-lineage-v1.ts",
-        'export * from "./readable-search-engine-v1.js";\n',
-      ],
-    ] as const;
-    for (const [path, expected] of compatibilityEntrypoints) {
-      expect(readFileSync(join(REPO, path), "utf8")).toBe(
-        `/** @deprecated Compatibility entrypoint. Use ${
-          path.includes("organization-record")
-            ? "organization-record-api-v1"
-            : "readable-search-engine-v1"
-        }. */\n${expected}`,
-      );
-    }
-  });
-
   for (const entry of CLEAN_ENTRIES) {
     it(`${entry} excludes retired machine and migration runtime`, () => {
       const closure = cleanClosure(entry);

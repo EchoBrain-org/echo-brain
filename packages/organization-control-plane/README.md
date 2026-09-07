@@ -7,11 +7,11 @@ an HTTP listener.
 New Authority code uses the responsibility-named surfaces:
 `slack-approval-integration-v1`, `slack-external-identity-integration-v1`,
 `organization-control-database-v1`, `record-visibility-policy-contracts-v1`,
-and `slack-connection-setup-v1`. Migration-era `clean-*` and `new-lineage-*`
-exports remain compatibility aliases for installed clients. The Slack approval
-integration serves the private Slack DM approval path and performs permission
-checks against current Authority membership. The earlier Slack reaction
-approval path, its owner-attributed activation command, and its
+and `slack-connection-setup-v1`. The migration-era `clean-*` and `new-lineage-*`
+alias exports were retired on 2026-09-06; no workspace imported them. The Slack
+approval integration serves the private Slack DM approval path and performs
+permission checks against current Authority membership. The earlier Slack
+reaction approval path, its owner-attributed activation command, and its
 `echo-organization-control-plane-activate-person-slack-*` binaries were removed
 on 2026-09-06; their baseline tables remain in the frozen V1 baseline until a
 versioned schema migration retires them.

@@ -23,11 +23,6 @@ export {
 } from "./signature-profile.js";
 export type { DecodedEcdsaSignature } from "./signature-profile.js";
 export {
-  createSignedDocumentWithKey,
-  signedPayload,
-  verifySignedDocument,
-} from "./signed-document.js";
-export {
   FederationProtocolValidationError,
   isFederationProtocolValidationError,
 } from "./validation-error.js";
@@ -37,6 +32,5 @@ export type {
   JsonValue,
   P256SigningKeyDescriptor,
   Sha256Digest,
-  SignedDocument,
   SignedIntegrity,
 } from "./protocol-types.js";
