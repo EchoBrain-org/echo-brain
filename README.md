@@ -200,8 +200,10 @@ For an existing accepted staging host, the reviewed
 [`authority:staging-release` lane](deploy/release/README.md#automated-current-host-staging-lane)
 automates non-secret artifact transfer and named release-wrapper actions without
 Session Manager copying. Login/MFA, Slack approval, and the exact candidate's
-final release decision remain human inputs; infrastructure and first onboarding
-retain their separate gates.
+final release decision remain human inputs. Initial onboarding retains human
+host-wrapper actions; the local operator can verify the release-installed client
+and run its authenticated Person reads. Infrastructure changes retain their
+plan-review gate.
 
 The staging controller holds one fixed Cloudflare edge and retained EBS data
 volume around a disposable EC2 host. Its initial host onboarding and three
@@ -348,9 +350,11 @@ the marker-bound completion of an interrupted blank-volume initialization; it
 does not permit reformatting a volume that already has a filesystem. Omit the
 flag only after the first host has reached ready.
 
-The initial token creation, SNS email confirmation, provider applications,
-initial-owner login, observability deployment, and first canary remain explicit human
-steps. V1 is single-operator: never run overlapping lifecycle commands for this
+Token creation, SNS email confirmation, provider setup, initial-owner login and
+the first host canary command need their designated human actor. The local
+operator executes reviewed observability plans and authenticated client checks.
+Reuse completed setup evidence while its target and configuration remain unchanged.
+V1 is single-operator: never run overlapping lifecycle commands for this
 slot from different terminals or machines. For failed-create, rollback, mount,
 and recovery procedures, follow the full staging specification rather than
 deleting or renaming the stack.

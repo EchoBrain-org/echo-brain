@@ -13,212 +13,155 @@ tested_at: null
 
 # PB-OPERATIONS-001: Select the Authority operator lane
 
-This is the shared Authority operator playbook for coding agents. The root and
-deployment READMEs and the installed host wrappers own exact command syntax;
-this file selects one safe lane and its stopping point.
+Use this shared router to choose the supported command and who acts next.
+The linked READMEs own exact syntax and recovery details; installed CLIs enforce
+target, release, lock and retry guards. `AGENTS.md` owns access and secret rules.
 
-## Scope and authority
+## Default: continue within the authorized scope
 
-Read this before any Authority operator work. `AGENTS.md` owns the exhaustive
-trigger list.
+For an accepted staging host, use the reviewed `authority:staging-release`
+lane. Reuse the host, accepted artifacts and completed setup; an ordinary update
+does not need infrastructure replacement or initial onboarding.
 
-**Cloud or isolated coding agent:** stop before every live operation. The Cloud
-boundary in `AGENTS.md` wins. This playbook does not permit AWS, SSM, secrets,
-production endpoints, Slack, Granola, or deployment.
+Plan and execute are machine steps, not repeated human approval prompts.
+Keep the user's existing authorization for its target, release, recipient and
+operation. Prepare a concrete plan before any required review; once that exact
+plan or private handoff is approved, continue without asking again. Broad
+staging delegation does not replace infrastructure change-set review or the
+final decision on a candidate release.
 
-**Local exercise:** `authority:local` needs neither AWS SSO nor live provider
-credentials. Stop if the goal needs the live edge, Slack, Granola, or a deploy.
+Reuse valid sessions and completed setup evidence. Ask for login only when
+authentication is missing or expired. Recheck evidence when its target, release,
+record head, search generation or relevant configuration changes. A completed
+Slack setup, SNS confirmation or Explorer access grant is not a new handoff on
+every round. Fresh runtime and journey evidence is still required for each run.
 
-**Founder-live AWS work:** one operator controls the staging slot. Do not run
-overlapping lifecycle commands from another terminal, machine, or agent. Pause
-for the founder to complete `aws sso login --profile echo-prod` and MFA.
+## Choose the lane
 
-Coding agents do not start interactive SSM sessions. For current-host staging
-releases, a local coding agent uses the reviewed `authority:staging-release`
-CLI. It binds one named action to the live stack/instance/volume, exact accepted
-release and reviewed source; it has no shell passthrough. A human may still use
-Session Manager for an exact installed wrapper on that host. Staging-slot and
-onboarding-transfer mutations remain confined to their existing repository
-CLIs, never raw AWS, CloudFormation, MCP mutation, or a hand-written SSM command.
-
-For a secret, credential, token, or password task, load
-`aws-secrets-manager` first. Never fetch, print, or paste a secret value. The
-Cloudflare token is supplied only as a `{{resolve:secretsmanager:...}}` dynamic
-reference through `asm-exec`. Onboarding inputs remain opaque in their private
-mode-`0700` directory and temporary transfer archive.
-
-## Select one lane
-
-| Goal | Lane and boundary |
+| Goal | Supported path |
 | --- | --- |
-| Compile, test, or exercise without the live edge | Run `npm run authority:local`; do not restage. |
-| Validate current-host staging code through the human approval boundary before review | Run `npm run test:staging-journey` on the working branch; fix connected failures locally, then run `npm run check` and review the complete change. Provider/cloud responses are simulated; this is not live delivery proof. |
-| Inspect without changing state | Run `authority:staging status` or the applicable host wrapper's `status`. |
-| Create or repair the retained AWS and Cloudflare boundary | Run `authority:staging slot-init`: plan, human review, then execute the unchanged operation. |
-| Create the first host on a never-prepared volume | Run `up --initialize-blank-data-volume`: plan, human review, then execute. |
-| Replace a host while retaining its prepared volume and edge | Run a reviewed `down`, then use a new operation ID for reviewed `up --require-authority`; keep the flag on both plan and execute. |
-| Change the accepted image on the current staging host | The local operator uses `authority:staging-release` to install reviewed tooling, stage and run the synthetic canary; stops for human Slack approval; runs the exact candidate-client checks; then requests the exact final release decision before `promote`. |
-| Inspect why reviewed tooling cannot be installed | Use the release CLI's `inspect-install` action. It evaluates the install guards without replacing tooling or invoking a runtime wrapper, and returns a bounded category plus a hash-only inventory of the six fixed tools when preceding guards pass. Unknown bytes remain refused; the inventory does not authorize replacement. |
-| Migrate the recognized mixed legacy tooling layout | Use the release README's explicit `legacy-staging-host-v1` migration for inspect/install only. It pins the known per-file old sources and permits only the backup helper's expected absence; unknown or unsafe files remain refused. |
-| Diagnose an environment mismatch before staging | The release CLI's `diagnose` action invokes installed `update-clean-v1.sh diagnose-environment`; only allowlisted setting names and safe classifications leave the host. |
-| Recover accepted-only staging content-telemetry drift | The release CLI's `repair` action binds the exact accepted record and requires an eligible diagnostic before the installed wrapper restores its snapshot. Unknown drift or a staged candidate stops this lane. |
-| Move first-onboarding input to a ready host | Run onboarding-transfer `preflight`, `plan`, human review, then `execute`. |
-| Bring the initial-owner invitation to its Mac | Use onboarding-transfer `export-plan`, review the target and accepted release, then approve the private handoff before `export-execute`; see the deployment README. |
-| Advance initial-owner onboarding | A human runs installed `onboard-clean-v1.sh resume` and follows its exact actor-scoped action. |
+| Compile or test locally | `npm run authority:local`. For the simulated staging journey, run `npm run test:staging-journey`, fix failures and run `npm run check` before review. Local tests are not live delivery proof. |
+| Inspect staging | `authority:staging status` for the slot; the release CLI's fresh `status` action for a current-host release; human host-wrapper `status` during initial onboarding. |
+| Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling, stage, canary, human Slack approval, operator client checks, human final decision, promote. Execute reviewed merged tooling from a clean checkout. |
+| First onboarding | Follow [resumable onboarding](../../deploy/organization-authority/README.md#resumable-initial-owner-onboarding) and the actor table below. Host-local onboarding remains in the human Session Manager lane. |
+| Transfer initial inputs | Onboarding-transfer `preflight`, `plan`, review the named change set, then `execute`. Run `cleanup` only when execute retains the receipt and reports `cleanup_required`. |
+| Export the initial-owner invitation | Onboarding-transfer [`export-plan` / `export-execute`](../../deploy/organization-authority/README.md#private-invitation-export-to-the-initial-owner-mac). Review the exact target, accepted release and recipient; obtain private-handoff approval if that scope is not already authorized. |
+| Create or repair the retained boundary | `authority:staging slot-init`: plan, human change-set review, execute the unchanged operation. |
+| Create the first host | Reviewed `up --initialize-blank-data-volume` on a never-prepared volume only. |
+| Replace the host, retaining data | Reviewed `down`, then a new operation ID for reviewed `up --require-authority`; keep the flag on plan and execute. |
 
-A host-bundle or image build does not activate an image. Use `update-clean` on
-the current host, or use a reviewed host bundle when creating a new host.
-
-## Status and lifecycle selection
-
-Before a live slot change, collect the private-input `authority:staging status`
-receipt. Preserve `edge_checked`, `host_ready`, and `authority_accepted`; the
-top-level state alone is not the whole observation.
+Before a slot change, preserve `edge_checked`, `host_ready` and
+`authority_accepted` from its status receipt. Use this routing:
 
 | Status | Next action |
 | --- | --- |
-| `absent` or `incomplete` | Plan `slot-init` and review its change set before execute. |
-| `planned` | Do not start competing work. Preserve the existing operation and follow the staging specification. |
-| `failed_create` or `unprotected` | Follow the receipt's `recovery_action` through the staging specification. Do not delete or rename the stack. |
-| `update_rolled_back` | Follow its `recovery_action` through the staging specification. |
-| `host_down` | Never-prepared volume: use the first-host lane. Accepted retained volume: use `up --require-authority`. |
-| `authority_unpinned` or `authority_pin_mismatch` | Stop. Set or correct the private pin only from accepted bootstrap evidence, never from the public endpoint. |
-| `authority_unready` | If first onboarding is underway, use the onboarding lane. After a failed required `up` verification receipt, repeat only that exact `up --execute --require-authority` with the same operation ID; its host-ready retry is probe-only. Otherwise stop and investigate through the staging specification. |
-| `ready` | No lifecycle change is needed. |
+| `ready` | Continue on the current host; no lifecycle change. |
+| `absent` / `incomplete` | Plan `slot-init` for review. |
+| `planned` | Resume that operation; do not start competing work. |
+| `failed_create` / `unprotected` / `update_rolled_back` | Follow the receipt's `recovery_action` in the [staging specification](../product/2026-08-26-disposable-authority-staging-sprint-v1.md). |
+| `host_down` | Choose first-host or retained-volume `up` from the table above. |
+| `authority_unpinned` / `authority_pin_mismatch` | Correct the private pin from independently trusted accepted bootstrap evidence, never the public endpoint. |
+| `authority_unready` | Use initial onboarding if underway. After a failed required `up` verification, retry only the same `up --execute --require-authority` and operation ID; this is probe-only. Otherwise investigate. |
 
-`--initialize-blank-data-volume` is only for a volume that has never reached
-first-host readiness. Until it does, retries use a new operation ID and retain
-that flag. Never use it on prepared `clean-data`.
-
-After first-host acceptance, a human copies the independently trusted
-`authority_pin_sha256` from accepted bootstrap evidence into the private
-input. Every retained-volume restart then plans and executes with
-`--require-authority`. That path resumes the retained Authority inside the
-CloudFormation bootstrap before it signals host readiness. Do not invoke
+Until first-host readiness, reviewed retries use a new operation ID and retain
+`--initialize-blank-data-volume`. Never use it on prepared `clean-data`.
+After acceptance, the human copies the independently trusted
+`authority_pin_sha256` into the private input. Retained-volume `up` resumes
+the Authority before signaling readiness. Do not invoke
 `restore-clean-v1-host.sh resume` manually for this normal path.
 
-## Transfer, host, and founder handoffs
+## Human decisions and operator work
 
-**Current-host staging update.** The local operator uses the exact command
-syntax in the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane).
-Plan and execute are machine steps, not repeated human approval prompts.
-Execute only reviewed merged tooling from a clean checkout. The CLI transfers
-non-secret source/record/profile artifacts within a bounded SSM request; no
-manual artifact upload, S3 grant, onboarding courier, or host replacement is
-needed. Its state receipt is resumable without repeating a submitted command.
+A printed `ACTION:` labels a task, not an additional approval requirement.
+Use the actor below; preserve the underlying identity, approval and health checks.
 
-After `stage` and synthetic `canary`, stop for the founder's private Slack-card
-approval. On the designated canary Mac, the local operator may install the same
-candidate's verified offline Person-client bundle and run the two absolute-path
-checks in the [release loop](../../deploy/release/README.md#ec2-authority-replacement).
-Login/MFA stays human. Only after both checks pass, show their evidence and ask
-the founder for the final decision on that exact candidate. The promotion plan
-requires a separate release- and client-digest-bound authorization recording
-those checks and that decision. It is an operator attestation, not a signature
-or evidence invented by the synthetic canary. Never create it merely because
-the PR was approved or the founder authorized automation. Run a fresh `status`
-operation and roll back the exact candidate if a check fails. No client-live or
-production release is authorized by this staging lane.
+| Task | Actor |
+| --- | --- |
+| Valid-session checks, planning, receipt polling, artifact verification, kit installation, authenticated Person reads and telemetry inspection | Local operator within the authorized lane. |
+| Missing/expired login, MFA, provider secret entry, account switching/logout, Slack identity-link exchange and Interactivity setup | Human. The operator prepares the exact next action and resumes after completion. |
+| Initial host `resume`, `status`, and `./update-clean-v1.sh canary` | Human in Session Manager. The remote release CLI does not support host onboarding. Group consecutive host commands only when no intervening human action is needed. |
+| Private Slack-card approval | Human, for that canary. |
+| Infrastructure change set or private handoff not yet approved for its exact scope | Human reviews the prepared result once. |
+| Final decision on the exact candidate release | Human, after successful candidate-client checks. |
 
-**Environment drift before an update.** Do not edit the active environment or
-accepted snapshot by hand. The installed wrapper's `diagnose-environment`
-selects the staged candidate when present, otherwise the accepted record.
-Only accepted-only drift limited to the canonical staging content-telemetry
-switch is eligible for `repair-environment`; the exact syntax and evidence
-contract are in the [release loop](../../deploy/release/README.md#environment-drift-before-staging).
-The operator reports that restoring the saved setting may disable telemetry
-until the next candidate. The founder's staging-automation delegation permits
-this narrow eligible repair; an unrelated difference still requires review.
-Recovery preserves a private before-copy, leaves the
-accepted snapshot unchanged, and must verify the accepted runtime before
-clearing its pending marker. If interrupted, retry only the same repair for
-the same accepted release. Do not remove the marker or start a candidate to
-work around it. Intended telemetry changes belong in the next candidate's
-`stage --content-telemetry` option, before its canary and promotion.
+For browser onboarding, the local operator privately transfers the invitation
+and accepted record through the reviewed export CLI, verifies the matching kit,
+then runs `"<release-matched-kit>/Start ECHO.command" <transferred-absolute-path>`.
+Keep invitation mode `0600`; never print or paste its grant. The human completes
+browser login, any required logout, and `person slack-link`. Export does not
+advance onboarding. Confirm Interactivity only when its configuration needs work.
 
-**Initial input transfer.** Run the AWS-free `preflight` before spending an AWS
-session or creating an archive. Plan creates the reviewable grant and private
-receipt; a human reviews the named change set before execute. Successful
-execute performs remote and local cleanup and returns `prepared`. Run `cleanup`
-only when execute retains the receipt and reports `cleanup_required`; do not
-create another archive, send a second command, or reuse the operation ID.
+After initial canary approval, the local operator on the designated owner Mac
+verifies the kit-installed client against the accepted release and runs:
 
-**Host access is bounded.** The release CLI is the local coding-agent lane for
-its named current-host staging actions only. It pins the verified release
-directory for the runner and updater, holds a root-owned interlock outside the
-service-writable data tree, and refuses any legacy Authority operation lock.
-Installed update/onboarding/backup-maintenance wrappers hold that same guard throughout their
-operations; retained restore holds it through materialization, its direct
-root onboarding-resume child, and terminal-status verification. The child
-validates the private root guard and parent PID and does not release it.
-A failed backup restart preserves the root guard as
-well as its legacy recovery lock. Updater temporary publication stays relative
-to the pinned directory. The updater child uses the exact private nested
-lock inside the guard. A `control_path_changed` result retains the guard for
-investigation; never remove it to force progress. Installation updates those
-wrappers' checks but does not invoke onboarding or restoration. It does not
-permit onboarding, bootstrap, arbitrary commands, or interactive access.
-Other host actions remain human-only: the human selects the exact instance,
-opens Session Manager, changes to `/srv/echo-authority-clean-v1`, and runs only
-the named installed wrapper action. Privilege elevation stays non-interactive
-and scoped to that command. Agents never open or type into that session. Stop
-on unexpected instance, installed path, accepted record, candidate, or lock state.
+```sh
+"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20
+"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY"
+```
 
-**Private invitation handoff.** The onboarding-transfer CLI's
-[bounded export](../../deploy/organization-authority/README.md#private-invitation-export-to-the-initial-owner-mac)
-reads the two fixed initial-owner handoff files after validating the accepted
-release and staging host. Use reviewed tooling from a clean checkout, prepare
-the exact export plan, and stop for approval of the private handoff before
-execute. Only recipient-encrypted bytes traverse SSM; no secret is printed or
-passed in argv. The export holds the existing host guard and does not invoke
-an onboarding wrapper, alter runtime configuration, or advance a human gate.
+Both commands must return the same release's approved canary record, with search
+using the current generation. Record bounded IDs, digests and outcomes instead
+of asking the founder to paste full records. A global command or matching
+version string alone is not exact-client evidence. If the local operator cannot
+access that Mac, provide these commands to the human once. The human host
+operator then runs `./onboard-clean-v1.sh resume` and `./onboard-clean-v1.sh status`.
+Older installed wrappers may label these reads `FOUNDER ACTION`; the delegation
+above applies to the reads only, never the Slack approval or host commands.
 
-**Resume onboarding.** Run `onboard-clean-v1.sh resume`, then stop at every
-printed `ACTION:`, `HOST ACTION:`, or `FOUNDER ACTION:`. Do not loop `resume`
-through a human gate.
+For an update, use the candidate's two checks in the
+[release loop](../../deploy/release/README.md#ec2-authority-replacement), which
+include a cited Ask. After `stage` and synthetic `canary`, stop for the founder's
+private Slack-card approval. The local operator installs the verified candidate
+client and runs its checks. Only after both checks pass, show their evidence
+and ask the founder for the final decision on that exact candidate.
+Preserve the separate release- and client-digest-bound authorization before
+`promote`. Never create it merely because the PR was approved or the founder
+authorized automation. If checks fail, run a fresh release `status` action
+and roll back the exact candidate.
 
-- For browser login, privately transfer the invitation, accepted release
-  record, and verified release-matched Person kit to the initial-owner Mac.
-  Preserve mode `0600` on the invitation and never paste its grant. Run only
-  `"<release-matched-kit>/Start ECHO.command" <transferred-absolute-path>`; do
-  not use a preexisting global `echo-brain` command. If the kit reports another
-  signed-in person, the human runs the exact installed client `person logout`
-  command printed by `resume`, then retries the same kit command.
-- For Slack link, the human runs the exact installed-client `person slack-link`
-  command printed by `resume` and completes the one-time code exchange.
-- For Interactivity, the human saves the exact Slack Request URL printed by
-  `resume`.
-- For the canary handoff, the human host operator runs
-  `./update-clean-v1.sh canary`. The founder approves its private Slack card and
-  runs both exact installed-client Person reads printed by `resume`. The host
-  operator then reruns `./onboard-clean-v1.sh resume` and
-  `./onboard-clean-v1.sh status`.
+## Evidence and completion
 
 The staging canary is synthetic and staging-only. Do not create a live Granola
-note for this flow. Terminal green requires the release-bound synthetic
-receipt, one positive Layer 1 read, one positive Layer 2 search, a healthy
-Authority, and the accepted image.
+note for this flow. Initial terminal green requires the release-bound synthetic
+receipt, positive Layer 1 and Layer 2 reads after the approved head/current
+generation, and a healthy Authority on the accepted image and runtime profile.
 
-## Stop and escalation rules
+Keep runtime behavior and observability intact: preserve configured telemetry,
+worker liveness, journey stages, model usage, logs, alarms and dashboard access.
+Correlate each canary to its release/build and retain content-free timing,
+failure/retry and read evidence. Use [RB-OPERATIONS-001](RB-OPERATIONS-001-authority-observability.md)
+for observability procedures. Track one-time SNS/viewer setup separately from
+each run's proof; report missing evidence rather than removing a check.
+The setup CLI's `runtime_observation=not_observed` and
+`runtime_status=ready_to_start` describe setup output; use the host wrapper's
+running/healthy/image/profile checks and live telemetry for runtime proof.
 
-Stop for AWS SSO MFA, Cloudflare-token creation, every CloudFormation
-change-set review, transfer of private onboarding/session material, Google
-browser login, Slack link and Interactivity setup, private Slack-card approval,
-the exact candidate's final release decision, or provider secret entry. Person
-reads in initial onboarding remain its printed founder gate; the current-host
-release lane permits the local operator to run the exact candidate-client checks.
-Show the exact actor-scoped action and wait. Unknown drift, unconfirmed remote
-execution, or destructive changes are not permission to broaden this lane.
+## Exceptions and recovery
 
-Never guess `authorityPinSha256`, place a login grant in argv or chat, use SSH
-or an interactive root shell, issue a second transfer `SendCommand`, or create
-agent-specific shortcuts that restate this playbook. If a candidate release is
-already staged, run `update-clean-v1.sh status`, then promote or roll it back
-before onboarding resumes.
+Use the [release guide](../../deploy/release/README.md#automated-current-host-staging-lane)
+for `inspect-install`, the fixed `legacy-staging-host-v1` migration, and their
+hash inventories. Use its [environment-drift procedure](../../deploy/release/README.md#environment-drift-before-staging)
+for `diagnose` and eligible accepted-only `repair`. Never edit environment files
+by hand. Check whether repair would reduce intended telemetry; preserving
+observability takes precedence over making a status check pass.
 
-Command reference: [root staging README](../../README.md),
-[Authority deployment README](../../deploy/organization-authority/README.md),
-[clean-v1 release loop](../../deploy/release/README.md#ec2-authority-replacement),
-[RB-OPERATIONS-001](RB-OPERATIONS-001-authority-observability.md),
-[RB-OPERATIONS-002](RB-OPERATIONS-002-authority-recovery-floor.md), and
-[RB-OPERATIONS-003](RB-OPERATIONS-003-protect-canonical-source-and-releases.md).
+One operator controls the slot. Coding agents do not start interactive SSM sessions.
+Agents use only the reviewed repository CLIs for bounded remote actions, never
+SSH, an interactive root shell or hand-written SSM. Other host actions remain
+human-only. An installed wrapper's root-owned guard, pinned control path, unknown
+tooling refusal and retained recovery locks remain authoritative; use the
+[host recovery procedure](../../deploy/organization-authority/README.md#recover-an-interrupted-operation-lock)
+instead of removing a lock or journal to force progress.
+
+Resume a pending remote command through its existing receipt; never send a second
+command to bypass an unconfirmed result. A completed private export is not a
+reusable login grant: if its invitation expires, obtain a human host refresh and
+a new bounded export after the previous operation is definitively complete.
+Existing approval covers an unchanged handoff scope; it does not cover a changed
+target, recipient or release. Unknown drift, unconfirmed remote execution, or
+destructive changes require investigation and any applicable human review.
+
+Cloud or isolated coding tasks do not perform live operations. The Cloud
+boundary in `AGENTS.md` wins. This playbook does not authorize production or
+client-live release. Follow `AGENTS.md` for `echo-prod` authentication and
+`aws-secrets-manager` handling; secrets never enter output, argv or chat.

@@ -34,7 +34,7 @@ defines the supported operator and employee flow.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
 
-Existing `clean-*` binaries and `clean-founder` files and wire values are
+Existing `clean-*` entrypoint filenames and `clean-founder` wire values are
 versioned compatibility names. They are not component boundaries and do not
 limit the service to a particular initial owner.
 
@@ -55,9 +55,10 @@ Use these responsibility-named commands for new automation:
 - `echo-organization-authority-admit-granola-meeting-source`
 
 The older `echo-organization-authority-init-clean-state`, `-clean-founder`,
-`-clean-person`, `-clean-live`, and `-admit-clean-granola-source` binaries
-remain compatibility commands. Existing automation may retain them; new docs
-and scripts should use the names above.
+`-clean-person`, `-clean-live`, `-synthetic-quality`, and
+`-admit-clean-granola-source` alias binaries were retired on 2026-09-06. The
+checked-in deploy scripts, container entrypoint, and harnesses already call the
+names above; automation outside this repository must use them too.
 
 Use absolute canonical paths. Private credential and invitation directories
 must be current-user `0700`; private input and invitation files must be
