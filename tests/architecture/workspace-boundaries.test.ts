@@ -1031,6 +1031,21 @@ describe("workspace source boundaries", () => {
     );
   });
 
+  it("rejects a replacement under the retired synthetic quality directory", () => {
+    const fixture = fixtureRepository();
+    const path =
+      "services/organization-authority/src/quality/replacement-quality-lane-v2.ts";
+    mkdirSync(dirname(join(fixture, path)), { recursive: true });
+    writeFileSync(join(fixture, path), "export {};\n");
+
+    const result = runBoundary(fixture);
+
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      `owned source file has no layer rule: ${path}`,
+    );
+  });
+
   it("keeps retired machine product roots absent", () => {
     const fixture = fixtureRepository();
     const orphan = join(fixture, "src/product/organization/orphan.ts");

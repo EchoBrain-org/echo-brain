@@ -581,22 +581,6 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "authority-synthetic-quality-harness-uses-only-injected-adapters",
-      "from": "services/organization-authority/src/quality/**",
-      "allowed_imports": [
-        "services/organization-authority/src/answer-composition/**",
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/quality/**"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": [
-        "fs/promises"
-      ]
-    },
-    {
       "name": "state-lineage-guard-is-read-only",
       "from": "services/organization-authority/src/state-lineage/state-lineage-preopen-guard.ts",
       "allowed_imports": [
