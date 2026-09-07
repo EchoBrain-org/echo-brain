@@ -52,13 +52,12 @@ Use these responsibility-named commands for new automation:
 - `echo-organization-authority-setup`
 - `echo-organization-authority-person-admin`
 - `echo-organization-authority-serve`
-- `echo-organization-authority-synthetic-meeting-quality`
 - `echo-organization-authority-admit-granola-meeting-source`
 
 The older `echo-organization-authority-init-clean-state`, `-clean-founder`,
-`-clean-person`, `-clean-live`, `-synthetic-quality`, and
-`-admit-clean-granola-source` binaries remain compatibility commands. Existing
-automation may retain them; new docs and scripts should use the names above.
+`-clean-person`, `-clean-live`, and `-admit-clean-granola-source` binaries
+remain compatibility commands. Existing automation may retain them; new docs
+and scripts should use the names above.
 
 Use absolute canonical paths. Private credential and invitation directories
 must be current-user `0700`; private input and invitation files must be

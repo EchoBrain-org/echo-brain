@@ -1060,7 +1060,6 @@ describe("workspace source boundaries", () => {
       "openrouter",
       "slack",
       "synthetic-demo-source",
-      "synthetic-source",
     ]);
 
     const probe = join(
@@ -1171,20 +1170,12 @@ describe("workspace source boundaries", () => {
         root: "services/organization-authority/src/processing/adapters/shared/slack/",
       },
       {
-        identifier: "synthetic-source",
-        root: "services/organization-authority/src/quality/synthetic-meeting-fixture-v1.ts",
-      },
-      {
         identifier: "openrouter",
         root: "services/organization-authority/src/composition/providers/openrouter/",
       },
       {
         identifier: "slack",
         root: "services/organization-authority/src/composition/providers/slack/",
-      },
-      {
-        identifier: "synthetic-source",
-        root: "services/organization-authority/src/composition/synthetic-meeting-quality-cli.ts",
       },
       {
         identifier: "synthetic-demo-source",

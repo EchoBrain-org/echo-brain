@@ -95,11 +95,9 @@ CI also runs both core evaluation commands above. The full suite uses at most
 two isolated test workers; mutable Git and packaging fixtures use temporary
 checkouts.
 
-The shorter `check:boundary`, `test:quality`, `eval:synthetic`,
-`profile:clean-v1-runtime`, and `check:authority-infrastructure` names are
-compatibility aliases for existing commands, not additional workflows.
-Quality and synthetic-meeting evaluations are separate from the deterministic
-core runtime hill climb. For operational tools, start with the
+The shorter `check:boundary`, `profile:clean-v1-runtime`, and
+`check:authority-infrastructure` names are compatibility aliases for existing
+commands, not additional workflows. For operational tools, start with the
 [Authority operator playbook](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
 
 ## Person client artifact
