@@ -103,26 +103,6 @@
         "root": "services/organization-authority/src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.ts"
       },
       {
-        "identifier": "synthetic-source",
-        "root": "services/organization-authority/src/quality/synthetic-meeting-fixture-v1.ts"
-      },
-      {
-        "identifier": "synthetic-source",
-        "root": "services/organization-authority/src/quality/synthetic-answer-composition-fixture-port-v1.ts"
-      },
-      {
-        "identifier": "synthetic-source",
-        "root": "services/organization-authority/src/quality/synthetic-meeting-quality-evaluator-v1.ts"
-      },
-      {
-        "identifier": "synthetic-source",
-        "root": "services/organization-authority/src/composition/synthetic-meeting-quality-cli.ts"
-      },
-      {
-        "identifier": "synthetic-source",
-        "root": "services/organization-authority/src/synthetic-meeting-quality-main.ts"
-      },
-      {
         "identifier": "synthetic-demo-source",
         "root": "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/"
       },

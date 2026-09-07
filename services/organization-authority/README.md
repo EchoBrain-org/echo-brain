@@ -34,7 +34,7 @@ defines the supported operator and employee flow.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
 
-Existing `clean-*` binaries and `clean-founder` files and wire values are
+Existing `clean-*` entrypoint filenames and `clean-founder` wire values are
 versioned compatibility names. They are not component boundaries and do not
 limit the service to a particular initial owner.
 
@@ -52,7 +52,6 @@ Use these responsibility-named commands for new automation:
 - `echo-organization-authority-setup`
 - `echo-organization-authority-person-admin`
 - `echo-organization-authority-serve`
-- `echo-organization-authority-synthetic-meeting-quality`
 - `echo-organization-authority-admit-granola-meeting-source`
 
 The older `echo-organization-authority-init-clean-state`, `-clean-founder`,

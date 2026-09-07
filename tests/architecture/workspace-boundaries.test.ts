@@ -1031,6 +1031,21 @@ describe("workspace source boundaries", () => {
     );
   });
 
+  it("rejects a replacement under the retired synthetic quality directory", () => {
+    const fixture = fixtureRepository();
+    const path =
+      "services/organization-authority/src/quality/replacement-quality-lane-v2.ts";
+    mkdirSync(dirname(join(fixture, path)), { recursive: true });
+    writeFileSync(join(fixture, path), "export {};\n");
+
+    const result = runBoundary(fixture);
+
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      `owned source file has no layer rule: ${path}`,
+    );
+  });
+
   it("keeps retired machine product roots absent", () => {
     const fixture = fixtureRepository();
     const orphan = join(fixture, "src/product/organization/orphan.ts");
@@ -1060,7 +1075,6 @@ describe("workspace source boundaries", () => {
       "openrouter",
       "slack",
       "synthetic-demo-source",
-      "synthetic-source",
     ]);
 
     const probe = join(
@@ -1171,20 +1185,12 @@ describe("workspace source boundaries", () => {
         root: "services/organization-authority/src/processing/adapters/shared/slack/",
       },
       {
-        identifier: "synthetic-source",
-        root: "services/organization-authority/src/quality/synthetic-meeting-fixture-v1.ts",
-      },
-      {
         identifier: "openrouter",
         root: "services/organization-authority/src/composition/providers/openrouter/",
       },
       {
         identifier: "slack",
         root: "services/organization-authority/src/composition/providers/slack/",
-      },
-      {
-        identifier: "synthetic-source",
-        root: "services/organization-authority/src/composition/synthetic-meeting-quality-cli.ts",
       },
       {
         identifier: "synthetic-demo-source",
