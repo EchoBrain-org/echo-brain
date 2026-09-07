@@ -180,6 +180,8 @@ jobs:
           ' "$stdout_file"
           test -x "$person_home/Applications/ECHO.app/Contents/MacOS/ECHO"
           test -x "$person_home/Library/Application Support/ECHO/bin/echo-brain"
+      - name: Exercise native owner People client with an offline fixture
+        run: npx vitest run --config vitest.config.ts tests/architecture/echo-people.test.ts
 
   authority-container:
     name: Organization authority container

@@ -21,7 +21,7 @@ private let allowedCitationPolicies: Set<String> = [
 ]
 
 // The warm dark palette published by echobrain.org, applied with native macOS typography.
-private enum EchoTheme {
+enum EchoTheme {
     static let ink = NSColor(srgbRed: 36 / 255, green: 34 / 255, blue: 34 / 255, alpha: 1)
     static let surface = NSColor(srgbRed: 29 / 255, green: 28 / 255, blue: 28 / 255, alpha: 1)
     static let inkDeep = NSColor(srgbRed: 23 / 255, green: 22 / 255, blue: 22 / 255, alpha: 1)
@@ -81,7 +81,7 @@ private enum IdentityOutcome: Sendable {
     case failure
 }
 
-private final class BoundedReader: @unchecked Sendable {
+final class BoundedReader: @unchecked Sendable {
     private let maximumBytes: Int
     private let lock = NSLock()
     private var bytes = Data()
@@ -126,7 +126,7 @@ private final class BoundedReader: @unchecked Sendable {
     }
 }
 
-private final class RunningAsk: @unchecked Sendable {
+final class RunningAsk: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false
@@ -1307,15 +1307,21 @@ private func echoHotKeyHandler(
 }
 
 @MainActor
-private final class AppDelegate: NSObject, NSApplicationDelegate {
+private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var controller: OverlayController?
     private var statusItem: NSStatusItem?
+    private var people: PeopleController?
+    private var peopleMenuItem: NSMenuItem?
     private var hotKey: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         controller = OverlayController()
         configureStatusItem()
+        people = PeopleController { [weak self] available in
+            self?.peopleMenuItem?.isHidden = !available
+        }
+        people?.checkAccess()
         registerHotKey()
         if CommandLine.arguments.contains("--show-ask") { showOverlay() }
     }
@@ -1327,6 +1333,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         controller?.shutdown()
+        people?.shutdown()
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
     }
@@ -1337,6 +1344,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func askEcho() {
         showOverlay()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        people?.checkAccess()
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        people?.conceal()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        people?.checkAccess()
+    }
+
+    @objc private func showPeople() {
+        people?.show()
     }
 
     @objc private func quit() {
@@ -1353,6 +1376,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         let ask = NSMenuItem(title: "Ask ECHO  ⌘E", action: #selector(askEcho), keyEquivalent: "")
         ask.target = self
         menu.addItem(ask)
+        let organization = NSMenuItem(title: "Organization", action: nil, keyEquivalent: "")
+        let organizationMenu = NSMenu()
+        let peopleItem = NSMenuItem(title: "People…", action: #selector(showPeople), keyEquivalent: "")
+        peopleItem.target = self
+        organizationMenu.addItem(peopleItem)
+        organization.submenu = organizationMenu
+        organization.isHidden = true
+        menu.addItem(organization)
+        peopleMenuItem = organization
+        menu.delegate = self
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit ECHO", action: #selector(quit), keyEquivalent: "q")
         quit.target = self

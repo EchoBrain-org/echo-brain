@@ -295,6 +295,44 @@ describe("Person employee lifecycle", () => {
       });
       expect(employeeWriteDenied.status).toBe(401);
 
+      // A modified client can call every route and claim any local role. The
+      // Authority derives the role from its own current session/membership.
+      async function expectManagementDenied(token?: string) {
+        for (const method of ["GET", "POST", "PUT", "DELETE"]) {
+          const body = method === "POST"
+            ? { name: "Unauthorized", email: "unauthorized@example.com" }
+            : { email: "john@example.com" };
+          const denied = await fetch(`${origin}/v1/person/employees`, {
+            method,
+            headers: {
+              ...(token ? { authorization: `Bearer ${token}` } : {}),
+              "content-type": "application/json",
+              "x-echo-membership-type": "owner",
+            },
+            ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
+          });
+          expect(denied.status, `${method} must reject non-owner access`).toBe(401);
+          expect(await denied.text()).not.toContain("login_grant");
+        }
+      }
+      for (const token of [employeeAccess, "forged-owner-access-token", undefined]) {
+        await expectManagementDenied(token);
+      }
+      const forgedRole = await fetch(`${origin}/v1/person/employees`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${employeeAccess}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Unauthorized", email: "unauthorized@example.com", membership_type: "owner" }),
+      });
+      expect(forgedRole.status).toBe(400);
+      const afterDenied = await fetch(`${origin}/v1/person/employees`, {
+        headers: { authorization: `Bearer ${founderAccess}` },
+      });
+      const afterDeniedEmployees = (await json(afterDenied)).employees as Array<Record<string, unknown>>;
+      expect(afterDeniedEmployees.some((entry) => entry.email === "unauthorized@example.com")).toBe(false);
+      expect(afterDeniedEmployees.find((entry) => entry.email === "john@example.com")).toMatchObject({
+        membership_status: "active", invitation_state: "pending",
+      });
+
       const legacyReissue = await fetch(`${origin}/v1/person/employees`, {
         method: "PUT",
         headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
@@ -373,6 +411,7 @@ describe("Person employee lifecycle", () => {
         headers: { authorization: `Bearer ${employeeAccess}` },
       });
       expect(revokedRead.status).toBe(401);
+      await expectManagementDenied(employeeAccess);
 
       const replacement = await fetch(`${origin}/v1/person/employees`, {
         method: "POST",
