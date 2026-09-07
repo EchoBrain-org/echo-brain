@@ -31,6 +31,13 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
       for email in args.dropFirst(2) { print(PeopleClient.isInvitationEmail(email)) }
       return
     }
+    if args[1] == "duplicate" {
+      let invitation = PeopleInvitation(rawValue: args[2])!
+      let membership = PeopleMembership(rawValue: args[3])!
+      let employee = PeopleEmployee(email: "a@example.test", display_name: "Employee", membership_status: membership, invitation_state: invitation)
+      print(PeopleClient.activeInvitationConflict(for: "a@example.test", in: [employee]) ?? "none")
+      return
+    }
     let owner = PeopleIdentity(name: "Owner", authority: "https://authority.example.test")
     let client = PeopleClient(executable: URL(fileURLWithPath: args[1]))
     let command: PeopleCommand
@@ -44,11 +51,13 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
     if args[2] == "cancel" { running.cancel() }
     switch client.execute(command, owner: owner, running: running) {
     case .roster(let rows):
-      print("roster:\\(rows.count):\\(rows.first?.mayReissue ?? false)")
+      print("roster:\\(rows.count):\\(rows.first?.mayReissue ?? false):\\(rows.first?.invitationLabel ?? \"\")")
     case .invitation(let path, _): print("invitation:" + path)
     case .revoked: print("revoked")
     case .unavailable: print("unavailable")
     case .unconfirmedMutation: print("unconfirmed:" + command.recoveryMessage)
+    case .unconfirmedMutationAfterIdentityChange: print("unconfirmed:" + command.recoveryMessage)
+    case .rejected(let message): print("rejected:" + message)
     case .failed: print("failed")
     }
   }
@@ -70,6 +79,10 @@ if (args[1] === "status") {
   console.log(JSON.stringify({schema_version:1,kind:"echo-person-client-status-v1",signed_in:mode !== "signed-out",display_name:"Owner",membership_type:role,connected_authority:"https://authority.example.test"}));
 } else if (mode === "denied") {
   console.error(JSON.stringify({ok:false,error:"LOGIN_GRANT_MUST_NOT_DISPLAY"})); process.exitCode = 1;
+} else if (mode.startsWith("rejected-")) {
+  const [code, mutation_outcome] = mode.slice("rejected-".length).split(":");
+  const action = { invite: "employee-invite", reissue: "employee-reissue", revoke: "employee-revoke" }[args[2]];
+  console.error(JSON.stringify({ok:false,action,error:"PRIVATE_ERROR_MUST_NOT_DISPLAY",code,mutation_outcome})); process.exitCode = 1;
 } else if (mode === "overflow") {
   process.stdout.write("x".repeat(256 * 1024));
 } else if (mode === "invalid") {
@@ -97,8 +110,17 @@ if (args[1] === "status") {
   }
 
   it("shows validated owner roster results and only permits reissue before sign-in", () => {
-    expect(run("owner").result).toBe("roster:1:true");
-    expect(run("redeemed").result).toBe("roster:1:false");
+    expect(run("owner").result).toBe("roster:1:true:Awaiting sign-in");
+    expect(run("redeemed").result).toBe("roster:1:false:Onboarded");
+  });
+
+  it("blocks a duplicate active-roster invite with the next safe action", () => {
+    const duplicate = (invitation: string, membership = "active") => execFileSync(binary, ["duplicate", invitation, membership], { encoding: "utf8" }).trim();
+    expect(duplicate("pending")).toContain("reissue");
+    expect(duplicate("expired")).toContain("reissue");
+    expect(duplicate("redeemed")).toBe("This employee has already onboarded. Ask them to sign in.");
+    expect(duplicate("none")).toBe("This employee is already a member. Ask them to sign in.");
+    expect(duplicate("pending", "revoked")).toBe("none");
   });
 
   it.each(["employee", "unknown-role", "signed-out"])("does not invoke a management operation for %s", (mode) => {
@@ -145,14 +167,33 @@ if (args[1] === "status") {
     expect(invitation.result).toBe(`invitation:${join(root, "private invitation.json")}`);
     expect(invitation.calls[1]).toEqual(["person", "employee", "invite", "--name", "A '; touch forbidden #", "--email", "a@example.test", "--out", join(root, "private invitation.json")]);
     expect(run("owner", "reissue").result).toMatch(/^invitation:/);
-    expect(run("wrong-path", "invite").result).toBe("failed");
+    expect(run("wrong-path", "invite").result).toMatch(/^unconfirmed:/);
     expect(run("owner", "revoke").result).toBe("revoked");
   });
 
-  it.each(["denied", "overflow", "invalid"])("fails closed for %s without exposing command output or retrying a mutation", (mode) => {
+  it.each([
+    ["invalid_email", "rejected:Enter a valid employee name and email address."],
+    ["invalid_name", "rejected:Enter a valid employee name and email address."],
+    ["invitation_output_invalid", "rejected:Could not save the invitation. Choose another location and try again."],
+    ["employee_already_exists", "rejected:This employee is already a member. Ask them to sign in."],
+    ["employee_onboarding_complete", "rejected:This employee has already onboarded. Ask them to sign in."],
+    ["owner_access_required", "rejected:Owner access is required to manage people. Sign in with your owner account."],
+    ["sign_in_required", "rejected:Sign in with your owner account to manage people."],
+    ["invitation_save_failed", "rejected:Couldn't save the invitation. Choose another location and try again."],
+    ["request_rejected", "rejected:The request was rejected. Refresh and try again."],
+  ])("shows a fixed actionable message for a known rejected mutation: %s", (code, expected) => {
+    const result = run(`rejected-${code}:rejected`, "invite");
+    expect(result.result).toBe(expected);
+    expect(result.result).not.toContain("PRIVATE_ERROR_MUST_NOT_DISPLAY");
+    expect(result.calls.filter((args) => args[1] === "employee")).toHaveLength(1);
+  });
+
+  it.each(["denied", "overflow", "invalid", "rejected-outcome_unknown:unknown", "rejected-request_rejected:committed"])("warns that a malformed or unknown mutation outcome must not be retried: %s", (mode) => {
     const result = run(mode, "invite");
-    expect(result.result).toBe("failed");
+    expect(result.result).toMatch(/^unconfirmed:/);
+    expect(result.result).toContain("refresh before retrying");
     expect(result.stderr).not.toContain("LOGIN_GRANT_MUST_NOT_DISPLAY");
+    expect(result.result).not.toContain("PRIVATE_ERROR_MUST_NOT_DISPLAY");
     expect(result.calls.filter((args) => args[1] === "employee")).toHaveLength(1);
   });
 
