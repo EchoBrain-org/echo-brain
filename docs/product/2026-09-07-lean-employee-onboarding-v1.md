@@ -1,6 +1,6 @@
 # Lean employee onboarding V1
 
-Status: implementation in progress; no new employee release or live qualification.
+Status: source implemented; no new employee release or live qualification.
 
 ## Outcome
 
@@ -46,8 +46,8 @@ included. Keep one versioned artifact and checksum; release selection and
 delivery remain explicit. Do not add a moving latest-channel service.
 
 The owner confirmed that ECHO has no Apple Developer Program / Developer ID
-access. Developer ID signing and notarization are deferred. Ad hoc artifacts are private cohort/test
-artifacts and are not described as notarized or ready for public self-service.
+access. Developer ID signing and notarization are deferred. Ad hoc artifacts
+are private cohort/test artifacts and are not described as notarized or ready for public self-service.
 No account credentials are required for source implementation or offline proof.
 
 ## Acceptance
@@ -64,6 +64,15 @@ No account credentials are required for source implementation or offline proof.
    pass. The retained demo graders and core evaluation commands remain intact.
 7. A real second-employee clean-Mac rehearsal and Apple distribution verification
    remain separate from source and artifact proof; record them only when run.
+
+## Verification boundary
+
+The local full check passed 1,574 tests, including interrupted sign-in recovery.
+Both new-person and existing-session paths require an Authority read before
+ready. Native compilation passes with warnings treated as errors. These are
+source checks; a second-employee login and clean-Mac distribution rehearsal
+remain pending. The visual walkthrough is also pending because the local
+Computer Use client and server reported a version mismatch.
 
 ## Source anchors
 
