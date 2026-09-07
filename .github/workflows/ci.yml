@@ -53,6 +53,8 @@ jobs:
           node-version: ${{ env.PRODUCT_NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - name: Exercise native owner People client with an offline fixture
+        run: npx vitest run --config vitest.config.ts tests/architecture/echo-people.test.ts
       - name: Pack and exercise the standalone Person client
         shell: bash
         run: |

@@ -596,6 +596,20 @@ no invitation or session; it embeds the verified offline kit and needs no
 package manager. There is one explicit approved download, with manual updates;
 no channel service or background updater is introduced.
 
+Owners use the same installed `ECHO.app`: open the menu bar icon, then
+**Organization → People**. Enter the employee's name and sign-in email, choose
+**Invite employee…**, and select a location for the private invitation folder.
+Send that employee the saved `person-invitation.json` and the approved shared
+setup download through the private cohort channel. The app displays the
+invitation expiry; issue it shortly before the employee signs in.
+
+The People window shows membership and invitation status separately. Select an
+employee to reissue a pending/expired invitation or revoke access; both actions
+ask for confirmation. Use **Refresh** to check completed onboarding. An
+employee's app hides this menu, and the Authority independently rejects every
+management request without current owner authorization. No separate admin build
+or automatic delivery service is required.
+
 On an Apple-silicon Mac running macOS 14 or later:
 
 1. Extract the download and open `ECHO.app`.

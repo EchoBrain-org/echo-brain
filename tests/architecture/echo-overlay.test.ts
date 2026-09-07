@@ -39,6 +39,7 @@ function overlayFixture() {
   chmodSync(output, 0o700);
   copyFileSync(BUILDER, join(sourceRoot, "tools", "build-echo-overlay.mjs"));
   copyFileSync(SOURCE, join(sourceRoot, "product", "echo-overlay", "main.swift"));
+  copyFileSync(resolve(REPO, "product/echo-overlay/people.swift"), join(sourceRoot, "product", "echo-overlay", "people.swift"));
   copyFileSync(PLIST, join(sourceRoot, "product", "echo-overlay", "Info.plist"));
   execFileSync("git", ["init", "-q", sourceRoot]);
   execFileSync("git", ["-C", sourceRoot, "add", "."]);
@@ -164,6 +165,18 @@ describe("native ECHO hotkey overlay", () => {
     expect(existsSync(subject.toolLog)).toBe(false);
 
     execFileSync("git", ["-C", subject.sourceRoot, "checkout", "--", "."]);
+    const peopleChangedAfterStatus = runOverlayBuilder(subject, subject.sourceSha, {
+      ECHO_OVERLAY_MUTATE_AFTER_STATUS_PATH: join(
+        subject.sourceRoot, "product", "echo-overlay", "people.swift",
+      ),
+    });
+    expect(peopleChangedAfterStatus.status).toBe(1);
+    expect(peopleChangedAfterStatus.stderr).toContain(
+      "People Swift source does not match its committed source",
+    );
+    expect(existsSync(subject.toolLog)).toBe(false);
+
+    execFileSync("git", ["-C", subject.sourceRoot, "checkout", "--", "."]);
     const changedDuringBuild = runOverlayBuilder(subject, subject.sourceSha, {
       ECHO_OVERLAY_MUTATE_PATH: join(
         subject.sourceRoot,
@@ -266,7 +279,7 @@ describe("native ECHO hotkey overlay", () => {
     const source = readFileSync(SOURCE, "utf8");
 
     expect(source).toContain("The warm dark palette published by echobrain.org");
-    expect(source).toContain("private enum EchoTheme");
+    expect(source).toContain("enum EchoTheme");
     expect(source).toContain("static let ink = NSColor(srgbRed: 36 / 255");
     expect(source).toContain("static let text = NSColor(srgbRed: 240 / 255");
     expect(source).toContain("static let goldBright = NSColor(srgbRed: 240 / 255");
