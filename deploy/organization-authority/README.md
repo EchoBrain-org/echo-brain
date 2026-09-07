@@ -214,11 +214,12 @@ https://<staging-authority-host>/v2/integrations/slack/interactions
 ./onboard-clean-v1.sh resume
 ```
 
-On the exact `authority-staging.echobrain.org` host, run
-`./update-clean-v1.sh canary`, approve its private Slack card, and complete the
-two Person reads printed by `resume`. This synthetic path is staging-only. A
-non-staging deployment still needs durable progress from its admitted live
-source before it can become terminal green.
+On the exact `authority-staging.echobrain.org` host, the human runs
+`./update-clean-v1.sh canary` and approves its private Slack card. The local
+operator on the initial-owner Mac verifies the accepted release's installed
+client and completes the two Person reads printed by `resume`. This synthetic
+path is staging-only. A non-staging deployment still needs durable progress from
+its admitted live source before it can become terminal green.
 
 The endpoint intentionally returns `503` before finalization. Do not attempt to
 validate it against a pre-finalize runtime. Event Subscriptions, Socket Mode,
@@ -276,7 +277,7 @@ the release procedure below.
 
 ## Resumable initial-owner onboarding
 
-Run this same command after each human step:
+The human host operator runs this command when the preceding handoff is complete:
 
 ```sh
 ./onboard-clean-v1.sh resume
@@ -288,14 +289,25 @@ starts the runtime for browser login and Slack linking, stops it for credential
 installation and finalization, then starts it again. It never reads SQLite,
 prints secret values, or asks for generated IDs.
 
-At each pause, follow the exact actor-scoped action printed by `resume`. For
-browser login, privately transfer its named invitation and accepted release to
+At each pause, route the task using the
+[playbook's actor table](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md#human-decisions-and-operator-work).
+An `ACTION:` prefix does not require another approval for an already authorized
+operator task. For browser login, privately transfer its named invitation and accepted release to
 the initial owner's machine and use the matching
 [release kit](../release/README.md). The invitation must be a current-user
 mode-`0600` file inside a mode-`0700` directory; never paste its contents into
 chat or a terminal. Continue until `resume` reports completion, then run
 `status`. Terminal green also requires a healthy Authority container on the
 exact accepted image.
+
+After human Slack-card approval, the local operator may run both authenticated
+Person reads on the designated initial-owner Mac. Verify the client against
+the accepted release before reading; a matching version string alone is not
+sufficient. Use the kit-installed absolute path printed by `resume`, and retain
+only bounded record/generation identifiers and pass/fail results. Both reads
+must positively return that release's canary; an empty successful response does
+not pass. If that Mac is unavailable to the operator, the human runs the commands.
+Host-local `resume` and `status` still require the human host operator.
 
 ### Private invitation export to the initial-owner Mac
 
@@ -323,7 +335,7 @@ not a record inferred from the public endpoint. On the initial-owner Mac:
 npm run authority:staging-onboarding-transfer -- export-plan \
   --input /absolute/private/invitation-export-input.json
 
-# Review the exact target and release and approve this private handoff.
+# Review the target, accepted release and recipient; reuse approval for that exact scope.
 npm run authority:staging-onboarding-transfer -- export-execute \
   --receipt /absolute/private/initial-owner-handoff/invitation-export.json
 ```
@@ -350,8 +362,12 @@ With the already verified release-matched kit, run:
   /absolute/private/initial-owner-handoff/founder-person-invitation.json
 ```
 
-Browser login and all subsequent printed onboarding actions remain human
-steps. Export does not advance onboarding or authorize a release.
+Browser login, identity changes, Slack approval and host wrapper actions remain
+human steps. The local operator handles authorized export, kit verification and
+installation, receipt polling, and the post-approval Person reads. Existing
+private-handoff approval continues to cover the same target, accepted release
+and recipient; a changed scope needs review. Export does not advance onboarding
+or authorize a release.
 
 Use this Authority-state read-only progress check after the accepted image is
 present locally:
