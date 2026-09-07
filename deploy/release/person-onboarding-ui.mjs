@@ -25,6 +25,14 @@ const httpsOrigin = value => {
       !url.search && !url.hash && (url.pathname === '/' || url.pathname === '') ? url.origin : undefined;
   } catch { return undefined; }
 };
+const signedInStatus = value => {
+  if (value?.schema_version !== 1 || value?.kind !== 'echo-person-client-status-v1' || value.signed_in !== true ||
+      typeof value.display_name !== 'string' || !value.display_name.trim() || value.display_name.length > 200 ||
+      /[\u0000-\u001f\u007f]/u.test(value.display_name)) return undefined;
+  const authority = httpsOrigin(value.connected_authority);
+  return authority ? { display_name: value.display_name, authority } : undefined;
+};
+const signedOutStatus = value => value?.schema_version === 1 && value?.kind === 'echo-person-client-status-v1' && value.signed_in === false;
 
 export async function withPrivateInvitation(path, operation) {
   const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -125,42 +133,45 @@ export async function runOnboardingAction(action, value, {
       failurePhase = 'status-failed';
       const result = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
       const status = parsed(result.stdout);
-      if (result.code !== 0 || status?.schema_version !== 1 || status?.kind !== 'echo-person-client-status-v1' ||
-          typeof status.signed_in !== 'boolean') return failed(failurePhase);
-      if (!status.signed_in) return { ok: true, phase: 'needs-invitation' };
-      if (typeof status.display_name !== 'string' || !status.display_name.trim() ||
-          status.display_name.length > 200 || /[\u0000-\u001f\u007f]/u.test(status.display_name)) return failed(failurePhase);
-      return { ok: true, phase: 'signed-in', display_name: status.display_name, authority: httpsOrigin(status.connected_authority) };
+      if (result.code !== 0) return failed(failurePhase);
+      if (signedOutStatus(status)) return { ok: true, phase: 'needs-invitation' };
+      const signedIn = signedInStatus(status);
+      if (!signedIn) return failed(failurePhase);
+      return { ok: true, phase: 'signed-in', ...signedIn };
     }
     if (action === 'continue') {
       failurePhase = 'access-failed';
       emit({ ok: true, phase: 'checking-access' });
+      const beforeResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
+      const before = beforeResult.code === 0 ? signedInStatus(parsed(beforeResult.stdout)) : undefined;
+      if (!before) return failed(failurePhase);
       const result = await run(client, ['person', 'records', '--limit', '1'], { timeoutMs: 45_000 });
       const response = parsed(result.stdout);
       if (result.code !== 0 || response?.ok !== true || response.result?.schema_version !== 1 ||
           response.result?.kind !== 'echo-clean-person-record-list-v1' || !Array.isArray(response.result.records)) return failed(failurePhase);
       const statusResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
-      const status = parsed(statusResult.stdout);
-      const authority = statusResult.code === 0 && status?.schema_version === 1 &&
-        status?.kind === 'echo-person-client-status-v1' && status.signed_in ? httpsOrigin(status.connected_authority) : undefined;
-      return { ok: true, phase: 'ready', authority };
+      const after = statusResult.code === 0 ? signedInStatus(parsed(statusResult.stdout)) : undefined;
+      if (!after || after.display_name !== before.display_name || after.authority !== before.authority) return failed(failurePhase);
+      return { ok: true, phase: 'ready', authority: after.authority };
     }
     if (action === 'logout') {
       failurePhase = 'logout-failed';
       if ((await run(client, ['person', 'logout'], { timeoutMs: 45_000 })).code !== 0) return failed(failurePhase);
+      const statusResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
+      if (statusResult.code !== 0 || !signedOutStatus(parsed(statusResult.stdout))) return failed(failurePhase);
       return { ok: true, phase: 'needs-invitation' };
     }
     failurePhase = 'login-failed';
     if (action === 'login') {
+      const beforeResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
+      if (beforeResult.code !== 0 || !signedOutStatus(parsed(beforeResult.stdout))) return failed('status-failed');
       emit({ ok: true, phase: 'sign-in' });
       const result = await run(client, ['person', 'login', '--authority-url', httpsOrigin(value), '--open-browser'], { timeoutMs: 10 * 60_000 });
       if (result.code !== 0) return failed(failurePhase);
       const statusResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
-      const status = parsed(statusResult.stdout);
-      if (statusResult.code !== 0 || status?.schema_version !== 1 || status?.kind !== 'echo-person-client-status-v1' ||
-          !status.signed_in || typeof status.display_name !== 'string' || !status.display_name.trim() ||
-          status.display_name.length > 200 || /[\u0000-\u001f\u007f]/u.test(status.display_name)) return failed(failurePhase);
-      return { ok: true, phase: 'signed-in', display_name: status.display_name, authority: httpsOrigin(status.connected_authority) };
+      const signedIn = statusResult.code === 0 ? signedInStatus(parsed(statusResult.stdout)) : undefined;
+      if (!signedIn || signedIn.authority !== httpsOrigin(value)) return failed(failurePhase);
+      return { ok: true, phase: 'signed-in', ...signedIn };
     }
     let ready = false;
     let browserFailed = false;
@@ -179,10 +190,8 @@ export async function runOnboardingAction(action, value, {
     }));
     if (result.code !== 0 || !ready || browserFailed) return failed(browserFailed ? 'browser-failed' : failurePhase);
     const statusResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
-    const status = parsed(statusResult.stdout);
-    const authority = statusResult.code === 0 && status?.schema_version === 1 &&
-      status?.kind === 'echo-person-client-status-v1' && status.signed_in ? httpsOrigin(status.connected_authority) : undefined;
-    return { ok: true, phase: 'ready', authority };
+    const signedIn = statusResult.code === 0 ? signedInStatus(parsed(statusResult.stdout)) : undefined;
+    return signedIn ? { ok: true, phase: 'ready', authority: signedIn.authority } : failed(failurePhase);
   } catch {
     return failed(failurePhase);
   }

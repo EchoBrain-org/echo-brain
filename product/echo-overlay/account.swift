@@ -39,6 +39,19 @@ private final class AccountOutputReader: @unchecked Sendable {
     }
 }
 
+// The controller owns this on the main actor. A completed subprocess may only
+// update presentation if it still belongs to the current account generation.
+final class AccountRequestGate {
+    private var generation = 0
+
+    func replace() -> Int {
+        generation &+= 1
+        return generation
+    }
+
+    func accepts(_ candidate: Int) -> Bool { candidate == generation }
+}
+
 private struct AccountStatusResponse: Decodable {
     let schema_version: Int
     let kind: String
@@ -49,27 +62,71 @@ private struct AccountStatusResponse: Decodable {
     let installed_version: String?
 }
 
-private struct AccountIdentity: Equatable {
+struct AccountIdentity: Equatable {
     let displayName: String
     let role: String
     let authority: String
     let version: String
 }
 
-private enum AccountStatus {
+enum AccountStatus {
     case signedIn(AccountIdentity)
     case signedOut
     case unavailable
 }
 
-private enum AccountOperation {
+enum AccountOperation {
     case status
     case loginAuthority(String)
     case loginInvitation(URL)
     case logout
 }
 
-private final class AccountClient: @unchecked Sendable {
+enum AccountOutcome: Equatable {
+    case ready(AccountIdentity)
+    case signedOut
+    case unavailable
+    case accessDenied
+    case failed
+    case cancelled
+}
+
+final class AccountRunning: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+    private var timedOut = false
+
+    func launch(_ process: Process) throws -> Bool {
+        lock.lock()
+        guard !cancelled else { lock.unlock(); return false }
+        self.process = process
+        do { try process.run(); lock.unlock(); return true }
+        catch { self.process = nil; lock.unlock(); throw error }
+    }
+
+    func detach(_ process: Process) {
+        lock.lock(); if self.process === process { self.process = nil }; lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock(); cancelled = true; let active = process; lock.unlock()
+        if active?.isRunning == true { active?.terminate() }
+    }
+
+    func timeOut() {
+        lock.lock(); guard !cancelled else { lock.unlock(); return }
+        timedOut = true; let active = process; lock.unlock()
+        if active?.isRunning == true { active?.terminate() }
+    }
+
+    func state() -> (cancelled: Bool, timedOut: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        return (cancelled, timedOut)
+    }
+}
+
+final class AccountClient: @unchecked Sendable {
     private let executable: URL
 
     init(executable: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -77,42 +134,79 @@ private final class AccountClient: @unchecked Sendable {
         self.executable = executable
     }
 
-    func status(completion: @escaping @MainActor (AccountStatus) -> Void) {
+    @discardableResult
+    func status(completion: @escaping @MainActor (AccountStatus) -> Void) -> AccountRunning {
+        let running = AccountRunning()
         DispatchQueue.global(qos: .userInitiated).async {
-            let status = self.readStatus()
+            let status = self.readStatus(running)
             DispatchQueue.main.async { completion(status) }
+        }
+        return running
+    }
+
+    @discardableResult
+    func perform(_ operation: AccountOperation, completion: @escaping @MainActor (AccountOutcome) -> Void) -> AccountRunning {
+        let running = AccountRunning()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome = self.execute(operation, running: running)
+            DispatchQueue.main.async { completion(outcome) }
+        }
+        return running
+    }
+
+    func execute(_ operation: AccountOperation, running: AccountRunning) -> AccountOutcome {
+        switch operation {
+        case .status:
+            switch readStatus(running) {
+            case .signedIn(let identity): return .ready(identity)
+            case .signedOut: return .signedOut
+            case .unavailable: return state(for: running)
+            }
+        case .logout:
+            guard runSilently(["person", "logout"], timeout: 45, running: running) else { return state(for: running) }
+            switch readStatus(running) {
+            case .signedOut: return .signedOut
+            case .unavailable: return state(for: running)
+            case .signedIn: return .failed
+            }
+        case .loginAuthority(let origin):
+            return login(
+                arguments: ["person", "login", "--authority-url", origin, "--open-browser"],
+                expectedOrigin: origin,
+                running: running
+            )
+        case .loginInvitation(let invitation):
+            return login(
+                arguments: ["person", "login", "--invitation", invitation.path, "--open-browser"],
+                expectedOrigin: nil,
+                running: running
+            )
         }
     }
 
-    func perform(_ operation: AccountOperation, completion: @escaping @MainActor (AccountStatus?) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let arguments: [String]
-            let timeout: TimeInterval
-            switch operation {
-            case .status:
-                DispatchQueue.main.async { completion(self.readStatus()) }
-                return
-            case .loginAuthority(let origin):
-                arguments = ["person", "login", "--authority-url", origin, "--open-browser"]
-                timeout = accountLoginTimeout
-            case .loginInvitation(let invitation):
-                arguments = ["person", "login", "--invitation", invitation.path, "--open-browser"]
-                timeout = accountLoginTimeout
-            case .logout:
-                arguments = ["person", "logout"]
-                timeout = 45
-            }
-            guard self.runSilently(arguments, timeout: timeout) else {
-                DispatchQueue.main.async { completion(nil) }
-                return
-            }
-            let status = self.readStatus()
-            DispatchQueue.main.async { completion(status) }
+    private func login(arguments: [String], expectedOrigin: String?, running: AccountRunning) -> AccountOutcome {
+        // Refuse to replace any local session without the explicit sign-out path.
+        guard case .signedOut = readStatus(running) else { return state(for: running) }
+        guard runSilently(arguments, timeout: accountLoginTimeout, running: running) else { return state(for: running) }
+        guard case .signedIn(let beforeRead) = readStatus(running),
+              expectedOrigin.map({ $0 == beforeRead.authority }) ?? true
+        else { return state(for: running) }
+        guard permissionAwareRead(running) else { return state(for: running, accessFailure: true) }
+        guard case .signedIn(let afterRead) = readStatus(running), afterRead == beforeRead else {
+            return state(for: running, accessFailure: true)
         }
+        return .ready(afterRead)
     }
 
-    private func readStatus() -> AccountStatus {
-        guard let output = runStatus() else { return .unavailable }
+    private func state(for running: AccountRunning, accessFailure: Bool = false) -> AccountOutcome {
+        let state = running.state()
+        if state.cancelled { return .cancelled }
+        if state.timedOut { return .failed }
+        return accessFailure ? .accessDenied : .unavailable
+    }
+
+    private func readStatus(_ running: AccountRunning) -> AccountStatus {
+        guard let output = runStatus(running) else { return .unavailable }
         guard let response = try? JSONDecoder().decode(AccountStatusResponse.self, from: output),
               response.schema_version == 1,
               response.kind == "echo-person-client-status-v1"
@@ -135,7 +229,7 @@ private final class AccountClient: @unchecked Sendable {
         ))
     }
 
-    private func runStatus() -> Data? {
+    private func runStatus(_ running: AccountRunning) -> Data? {
         guard executable.isFileURL, FileManager.default.isExecutableFile(atPath: executable.path) else { return nil }
         let process = Process()
         let stdout = Pipe()
@@ -145,28 +239,41 @@ private final class AccountClient: @unchecked Sendable {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
+        do { guard try running.launch(process) else { return nil } } catch { return nil }
         let reader = AccountOutputReader(limit: 32 * 1024)
         let readers = DispatchGroup()
         readers.enter()
         DispatchQueue.global(qos: .userInitiated).async {
             reader.read(from: stdout.fileHandleForReading) {
-                if process.isRunning { process.terminate() }
+                running.cancel()
             }
             readers.leave()
         }
         try? stdout.fileHandleForWriting.close()
-        let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        let deadline = DispatchWorkItem { running.timeOut() }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + accountStatusTimeout, execute: deadline)
         process.waitUntilExit()
         deadline.cancel()
-        readers.wait()
+        readers.wait(); running.detach(process)
         let (output, overflowed) = reader.result()
-        guard process.terminationStatus == 0, !overflowed else { return nil }
+        let state = running.state()
+        guard process.terminationStatus == 0, !overflowed, !state.cancelled, !state.timedOut else { return nil }
         return output
     }
 
-    private func runSilently(_ arguments: [String], timeout: TimeInterval) -> Bool {
+    private func permissionAwareRead(_ running: AccountRunning) -> Bool {
+        guard let output = runCaptured(["person", "records", "--limit", "1"], timeout: 45, running: running),
+              let root = try? JSONSerialization.jsonObject(with: output) as? [String: Any],
+              root["ok"] as? Bool == true,
+              let result = root["result"] as? [String: Any],
+              result["schema_version"] as? Int == 1,
+              result["kind"] as? String == "echo-clean-person-record-list-v1",
+              result["records"] is [Any]
+        else { return false }
+        return true
+    }
+
+    private func runSilently(_ arguments: [String], timeout: TimeInterval, running: AccountRunning) -> Bool {
         guard executable.isFileURL, FileManager.default.isExecutableFile(atPath: executable.path) else { return false }
         let process = Process()
         process.executableURL = executable
@@ -177,12 +284,43 @@ private final class AccountClient: @unchecked Sendable {
         // not cross the native UI boundary.
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return false }
-        let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        do { guard try running.launch(process) else { return false } } catch { return false }
+        let deadline = DispatchWorkItem { running.timeOut() }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout, execute: deadline)
         process.waitUntilExit()
         deadline.cancel()
-        return process.terminationStatus == 0
+        running.detach(process)
+        let state = running.state()
+        return process.terminationStatus == 0 && !state.cancelled && !state.timedOut
+    }
+
+    private func runCaptured(_ arguments: [String], timeout: TimeInterval, running: AccountRunning) -> Data? {
+        guard executable.isFileURL, FileManager.default.isExecutableFile(atPath: executable.path) else { return nil }
+        let process = Process()
+        let stdout = Pipe()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.environment = safeEnvironment()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        do { guard try running.launch(process) else { return nil } } catch { return nil }
+        let reader = AccountOutputReader(limit: 128 * 1024)
+        let readers = DispatchGroup()
+        readers.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            reader.read(from: stdout.fileHandleForReading) { running.cancel() }
+            readers.leave()
+        }
+        try? stdout.fileHandleForWriting.close()
+        let deadline = DispatchWorkItem { running.timeOut() }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout, execute: deadline)
+        process.waitUntilExit()
+        deadline.cancel(); readers.wait(); running.detach(process)
+        let (output, overflowed) = reader.result()
+        let state = running.state()
+        guard process.terminationStatus == 0, !overflowed, !state.cancelled, !state.timedOut else { return nil }
+        return output
     }
 
     private func safeEnvironment() -> [String: String] {
@@ -231,8 +369,16 @@ final class AccountController: NSObject {
     private let invitation = NSMenuItem(title: "Open invitation…", action: nil, keyEquivalent: "")
     private let switchAccount = NSMenuItem(title: "Switch account…", action: nil, keyEquivalent: "")
     private let signOut = NSMenuItem(title: "Sign out…", action: nil, keyEquivalent: "")
+    private let cancelSignIn = NSMenuItem(title: "Cancel sign-in", action: nil, keyEquivalent: "")
     private var active = false
     private var identity: AccountIdentity?
+    private var knownSignedOut = false
+    private let statusGate = AccountRequestGate()
+    private let operationGate = AccountRequestGate()
+    private var activeStatus: AccountRunning?
+    private var activeOperation: AccountRunning?
+    private var activeOperationKind: AccountOperation?
+    private var activityText = ""
 
     init(onSessionWillChange: @escaping () -> Void, mayChangeSession: @escaping () -> Bool, changed: @escaping () -> Void) {
         self.onSessionWillChange = onSessionWillChange
@@ -243,7 +389,7 @@ final class AccountController: NSObject {
         detail.isEnabled = false; organization.isEnabled = false; version.isEnabled = false
         menu.addItem(detail); menu.addItem(organization); menu.addItem(version)
         menu.addItem(.separator())
-        for item in [signIn, invitation, switchAccount, signOut] {
+        for item in [signIn, invitation, switchAccount, signOut, cancelSignIn] {
             item.target = self
             menu.addItem(item)
         }
@@ -251,6 +397,7 @@ final class AccountController: NSObject {
         invitation.action = #selector(openInvitation)
         switchAccount.action = #selector(switchPerson)
         signOut.action = #selector(signOutPerson)
+        cancelSignIn.action = #selector(cancelPendingSignIn)
         account.submenu = menu
         updateMenu()
     }
@@ -259,17 +406,27 @@ final class AccountController: NSObject {
 
     func refresh() {
         guard !active else { return }
-        client.status { [weak self] status in self?.received(status) }
+        activeStatus?.cancel()
+        let requestID = statusGate.replace()
+        activeStatus = client.status { [weak self] status in
+            guard let self, self.statusGate.accepts(requestID), !self.active else { return }
+            self.activeStatus = nil
+            self.receivedStableStatus(status)
+        }
     }
 
-    private func received(_ status: AccountStatus) {
-        active = false
+    private func receivedStableStatus(_ status: AccountStatus) {
         switch status {
         case .signedIn(let identity):
             self.identity = identity
+            knownSignedOut = false
             UserDefaults.standard.set(identity.authority, forKey: accountLastAuthorityDefaultsKey)
-        case .signedOut, .unavailable:
+        case .signedOut:
             identity = nil
+            knownSignedOut = true
+        case .unavailable:
+            identity = nil
+            knownSignedOut = false
         }
         updateMenu()
         changed()
@@ -282,7 +439,7 @@ final class AccountController: NSObject {
             organization.title = "Organization: \(identity.authority)"
             version.title = "ECHO \(identity.version)"
         } else {
-            detail.title = active ? "Updating account…" : "Not signed in"
+            detail.title = active ? activityText : (knownSignedOut ? "Not signed in" : "Account status unavailable")
             organization.title = ""
             version.title = ""
         }
@@ -292,9 +449,12 @@ final class AccountController: NSObject {
         invitation.isHidden = signedIn
         switchAccount.isHidden = !signedIn
         signOut.isHidden = !signedIn
-        let enabled = !active
-        signIn.isEnabled = enabled; invitation.isEnabled = enabled
-        switchAccount.isEnabled = enabled; signOut.isEnabled = enabled
+        cancelSignIn.isHidden = !active || !isLogin(activeOperationKind)
+        cancelSignIn.isEnabled = active && isLogin(activeOperationKind)
+        let signInEnabled = !active && knownSignedOut
+        let signedInEnabled = !active && signedIn
+        signIn.isEnabled = signInEnabled; invitation.isEnabled = signInEnabled
+        switchAccount.isEnabled = signedInEnabled; signOut.isEnabled = signedInEnabled
     }
 
     private func allowSessionChange() -> Bool {
@@ -306,12 +466,12 @@ final class AccountController: NSObject {
     }
 
     @objc private func signInWithGoogle() {
-        guard !active, allowSessionChange(), let origin = chooseAuthorityOrigin() else { return }
+        guard !active, knownSignedOut, allowSessionChange(), let origin = chooseAuthorityOrigin() else { return }
         perform(.loginAuthority(origin), progress: "Complete Google sign-in in your browser. ECHO will verify the account when you return.")
     }
 
     @objc private func openInvitation() {
-        guard !active, allowSessionChange() else { return }
+        guard !active, knownSignedOut, allowSessionChange() else { return }
         let picker = NSOpenPanel()
         picker.title = "Choose your ECHO invitation"
         picker.message = "Choose the invitation file your organization owner sent you."
@@ -330,30 +490,67 @@ final class AccountController: NSObject {
         perform(.logout, progress: "Signing out…")
     }
 
+    @objc private func cancelPendingSignIn() {
+        guard active, isLogin(activeOperationKind) else { return }
+        activityText = "Cancelling sign-in…"
+        activeOperation?.cancel()
+        updateMenu()
+    }
+
     private func perform(_ operation: AccountOperation, progress: String, thenChooseOrganization: Bool = false) {
+        _ = statusGate.replace()
+        activeStatus?.cancel()
+        activeStatus = nil
         onSessionWillChange()
         active = true
         identity = nil
-        detail.title = progress
+        knownSignedOut = false
+        activityText = progress
+        let requestID = operationGate.replace()
+        activeOperationKind = operation
         updateMenu()
-        client.perform(operation) { [weak self] status in
+        activeOperation = client.perform(operation) { [weak self] outcome in
             guard let self else { return }
-            guard let status else {
-                self.active = false; self.updateMenu()
-                self.showMessage("Account action did not finish", detail: "No account changes were retried. Try again when you are ready.")
-                return
+            guard self.operationGate.accepts(requestID) else { return }
+            self.active = false
+            self.activeOperation = nil
+            self.activeOperationKind = nil
+            self.activityText = ""
+            switch outcome {
+            case .ready(let identity):
+                self.identity = identity
+                self.knownSignedOut = false
+                UserDefaults.standard.set(identity.authority, forKey: accountLastAuthorityDefaultsKey)
+                self.changed()
+            case .signedOut:
+                self.identity = nil
+                self.knownSignedOut = true
+                self.changed()
+            case .unavailable, .accessDenied, .failed, .cancelled:
+                self.identity = nil
+                self.knownSignedOut = false
             }
-            self.received(status)
-            if case .logout = operation, case .signedOut = status, thenChooseOrganization {
+            self.updateMenu()
+            if case .logout = operation, case .signedOut = outcome, thenChooseOrganization {
                 self.signInWithGoogle()
-            } else if case .logout = operation, case .signedOut = status {
+            } else if case .logout = operation, case .signedOut = outcome {
                 self.showMessage("Signed out", detail: "You can sign in with another organization account from the ECHO menu.")
-            } else if case .signedIn = status {
+            } else if case .ready = outcome {
                 self.showMessage("Account ready", detail: "Your organization account is signed in.")
+            } else if case .cancelled = outcome {
+                self.showMessage("Sign-in cancelled", detail: "ECHO did not retry the account action.")
+            } else if case .accessDenied = outcome {
+                self.showMessage("Account access was not verified", detail: "ECHO could not complete an organization read. Check your membership before trying again.")
             } else {
-                self.showMessage("Account action did not finish", detail: "Check your connection or invitation, then try again.")
+                self.showMessage("Account status was not verified", detail: "ECHO did not retry the account action. Check your connection or invitation, then try again.")
             }
         }
+    }
+
+    private func isLogin(_ operation: AccountOperation?) -> Bool {
+        if case .loginAuthority? = operation { return true }
+        if case .loginInvitation? = operation { return true }
+        return false
     }
 
     private func chooseAuthorityOrigin() -> String? {

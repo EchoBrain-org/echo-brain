@@ -1365,6 +1365,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     func applicationDidResignActive(_ notification: Notification) {
         people?.conceal()
+        controller?.applicationDidDeactivate()
     }
 
     func menuWillOpen(_ menu: NSMenu) {

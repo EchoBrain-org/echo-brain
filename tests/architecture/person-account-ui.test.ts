@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -55,5 +55,69 @@ describe("native Person account controls", () => {
     execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", join(repo, "product/echo-onboarding/main.swift"), "-o", join(root, "proof")], {
       stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
     });
+  });
+
+  it.skipIf(process.platform !== "darwin")("requires a stable permission-aware read, cancels the exact login process, and rejects stale requests", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-account-proof-")));
+    roots.push(root);
+    const binary = join(root, "proof");
+    const cli = join(root, "cli.cjs");
+    writeFileSync(join(root, "mode"), "ready");
+    writeFileSync(join(root, "signed-in"), "false");
+    writeFileSync(cli, `#!${process.execPath}
+const fs = require("node:fs");
+const root = ${JSON.stringify(root)};
+const args = process.argv.slice(2);
+fs.appendFileSync(root + "/calls.jsonl", JSON.stringify(args) + "\\n");
+const mode = fs.readFileSync(root + "/mode", "utf8");
+if (args[1] === "status") {
+  const signedIn = fs.readFileSync(root + "/signed-in", "utf8") === "true";
+  console.log(JSON.stringify({schema_version:1,kind:"echo-person-client-status-v1",signed_in:signedIn,display_name:signedIn ? "Person" : null,membership_type:signedIn ? "employee" : null,connected_authority:signedIn ? "https://authority.example.test" : null,installed_version:"1.2.3"}));
+} else if (args[1] === "login") {
+  if (mode === "cancel") setInterval(() => {}, 1000);
+  else fs.writeFileSync(root + "/signed-in", "true");
+} else if (args[1] === "records") {
+  if (mode === "denied") process.exit(1);
+  else console.log(JSON.stringify({ok:true,result:{schema_version:1,kind:"echo-clean-person-record-list-v1",records:[]}}));
+}
+`);
+    chmodSync(cli, 0o700);
+    writeFileSync(join(root, "proof.swift"), `import AppKit
+import Foundation
+@main enum Proof {
+  static func main() {
+    let gate = AccountRequestGate()
+    let stale = gate.replace(); let current = gate.replace()
+    print("gate:\\(gate.accepts(stale)):\\(gate.accepts(current))")
+    let running = AccountRunning()
+    if CommandLine.arguments[2] == "cancel" {
+      DispatchQueue.global().asyncAfter(deadline: .now() + 0.08) { running.cancel() }
+    }
+    let client = AccountClient(executable: URL(fileURLWithPath: CommandLine.arguments[1]))
+    switch client.execute(.loginAuthority("https://authority.example.test"), running: running) {
+    case .ready(let identity): print("ready:\\(identity.authority)")
+    case .accessDenied: print("access-denied")
+    case .cancelled: print("cancelled")
+    default: print("other")
+    }
+  }
+}
+`);
+    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", account, join(root, "proof.swift"), "-o", binary], {
+      stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
+    });
+    const run = (mode: string) => {
+      writeFileSync(join(root, "mode"), mode); writeFileSync(join(root, "signed-in"), "false"); writeFileSync(join(root, "calls.jsonl"), "");
+      return spawnSync(binary, [cli, mode], { encoding: "utf8", timeout: 10_000 });
+    };
+    const ready = run("ready");
+    expect(ready.status, ready.stderr).toBe(0);
+    expect(ready.stdout.trim().split("\n")).toEqual(["gate:false:true", "ready:https://authority.example.test"]);
+    expect(readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line))).toEqual([
+      ["person", "status"], ["person", "login", "--authority-url", "https://authority.example.test", "--open-browser"],
+      ["person", "status"], ["person", "records", "--limit", "1"], ["person", "status"],
+    ]);
+    expect(run("denied").stdout.trim().split("\n").at(-1)).toBe("access-denied");
+    expect(run("cancel").stdout.trim().split("\n").at(-1)).toBe("cancelled");
   });
 });
