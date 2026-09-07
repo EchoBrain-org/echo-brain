@@ -87,6 +87,18 @@ enum PeopleCommand: Sendable {
         }
     }
     var mutates: Bool { if case .list = self { return false }; return true }
+    var recoveryMessage: String {
+        switch self {
+        case .list:
+            return "Could not load people. Check your connection and owner access, then refresh."
+        case .invite:
+            return "The invitation may already have been issued. Check the selected folder and refresh before retrying."
+        case .reissue:
+            return "The replacement may already have been issued and the previous invitation invalidated. Check the selected folder and refresh before retrying."
+        case .revoke:
+            return "Revocation may already have completed. Refresh to check this employee's status before retrying."
+        }
+    }
 }
 
 enum PeopleResult: Sendable {
@@ -94,6 +106,7 @@ enum PeopleResult: Sendable {
     case invitation(path: String, expires: Date)
     case revoked
     case unavailable
+    case unconfirmedMutation
     case failed
 }
 
@@ -130,7 +143,11 @@ final class PeopleClient: @unchecked Sendable {
     func execute(_ command: PeopleCommand, owner: PeopleIdentity, running: RunningAsk) -> PeopleResult {
         guard readOwner(running) == owner else { return .unavailable }
         guard let output = run(command.arguments, timeout: 45, running: running) else { return .failed }
-        guard readOwner(running) == owner else { return .unavailable }
+        guard readOwner(running) == owner else {
+            // Withhold private data from a changed account, but retain the fact
+            // that a write was submitted. The controller must warn before retry.
+            return command.mutates ? .unconfirmedMutation : .unavailable
+        }
         return Self.parse(output, command: command)
     }
 
@@ -219,6 +236,18 @@ final class PeopleClient: @unchecked Sendable {
         return URL(fileURLWithPath: String(cString: created), isDirectory: true)
             .appendingPathComponent("person-invitation.json")
     }
+
+    static func isInvitationEmail(_ email: String) -> Bool {
+        // Same new-invitation contract as organization-api/person-session.ts.
+        // The native proof compares these decisions against that validator.
+        guard (3...254).contains(email.utf8.count), email == email.lowercased(),
+              email == email.trimmingCharacters(in: .whitespacesAndNewlines),
+              email.range(of: #"^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$"#, options: .regularExpression) != nil
+        else { return false }
+        let parts = email.split(separator: "@", omittingEmptySubsequences: false)
+        return parts.count == 2 && parts[0].utf8.count <= 64 && parts[1].utf8.count <= 253 &&
+            parts[1].split(separator: ".", omittingEmptySubsequences: false).allSatisfy { $0.utf8.count <= 63 }
+    }
 }
 
 private final class PeopleWindow: NSWindow {
@@ -267,6 +296,7 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
     private var mutation = false
     private var choosing = false
     private var savedInvitation: URL?
+    private var mutationNotice: String?
 
     init(availability: @escaping (Bool) -> Void) {
         self.availability = availability
@@ -314,7 +344,7 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
     private func clear(resetDraft: Bool = true) {
         rows = []; table.reloadData()
         savedInvitation = nil; reveal.isHidden = true
-        status.stringValue = ""
+        status.stringValue = mutationNotice ?? ""
         if resetDraft { name.stringValue = ""; email.stringValue = "" }
         updateControls()
     }
@@ -342,15 +372,24 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
     private func run(_ command: PeopleCommand, owner: PeopleIdentity) {
         guard active == nil else { return }
         let id = UUID(); requestID = id; mutation = command.mutates
-        if command.mutates { status.stringValue = "Saving…" }
+        if command.mutates { mutationNotice = nil; status.stringValue = "Saving…" }
         active = client.perform(command, owner: owner) { [weak self] result in
             guard let self, self.requestID == id else { return }
             self.active = nil; self.mutation = false
+            if command.mutates {
+                switch result {
+                case .unconfirmedMutation, .failed:
+                    self.mutationNotice = command.recoveryMessage
+                case .invitation, .revoked:
+                    if !self.window.isVisible || !NSApp.isActive { self.mutationNotice = command.recoveryMessage }
+                default: break
+                }
+            }
             // Finish submitted mutations, but do not redisplay a private roster
             // while the user is outside ECHO. Focus/Refresh reads it afresh.
             guard self.window.isVisible, NSApp.isActive else { self.clear(); return }
             switch result {
-            case .unavailable:
+            case .unavailable, .unconfirmedMutation:
                 self.clear(); self.owner = nil; self.availability(false)
                 self.identityLabel.stringValue = "Owner access changed. Sign in with your owner account."
             case .failed:
@@ -358,21 +397,14 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                 self.identityLabel.stringValue = "Owner access could not be verified."
                 self.rows = []; self.table.reloadData()
                 self.savedInvitation = nil; self.reveal.isHidden = true
-                switch command {
-                case .list:
-                    self.status.stringValue = "Could not load people. Check your connection and owner access, then refresh."
-                case .revoke:
-                    self.status.stringValue = "Could not confirm the revocation. Refresh to check this employee's status before retrying."
-                default:
-                    self.status.stringValue = "Could not confirm the invitation. Refresh before retrying. A file may already have been saved; check the folder you selected."
-                }
+                self.status.stringValue = self.mutationNotice ?? command.recoveryMessage
             case .roster(let rows):
                 let previous = self.selected()?.email
                 self.rows = rows; self.table.reloadData()
                 if let previous, let index = rows.firstIndex(where: { $0.email == previous }) {
                     self.table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
                 }
-                if self.savedInvitation == nil {
+                if self.savedInvitation == nil, self.mutationNotice == nil {
                     self.status.stringValue = rows.isEmpty ? "No employees yet. Invite your first employee below." : "\(rows.count) employee\(rows.count == 1 ? "" : "s"). Membership and invitation status are separate."
                 }
             case .invitation(let path, let expires):
@@ -409,8 +441,7 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
         let employeeName = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             .precomposedStringWithCanonicalMapping
         let employeeEmail = email.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard peopleLabel(employeeName, maximum: 200), employeeEmail.utf8.count <= 254,
-              employeeEmail.range(of: #"^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}$"#, options: .regularExpression) != nil
+        guard peopleLabel(employeeName, maximum: 200), PeopleClient.isInvitationEmail(employeeEmail)
         else { status.stringValue = "Enter the employee's name and email address."; return }
         guard let destination = chooseDestination() else { return }
         run(.invite(name: employeeName, email: employeeEmail, path: destination.path), owner: owner)

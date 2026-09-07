@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { isExpectedPersonEmail } from "../../packages/organization-api/src/person-session.js";
 
 const repo = resolve(import.meta.dirname, "../..");
 let root: string;
@@ -26,6 +27,10 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
       let path = try PeopleClient.invitationDestination(in: URL(fileURLWithPath: args[2], isDirectory: true))
       print(path.path); return
     }
+    if args[1] == "email" {
+      for email in args.dropFirst(2) { print(PeopleClient.isInvitationEmail(email)) }
+      return
+    }
     let owner = PeopleIdentity(name: "Owner", authority: "https://authority.example.test")
     let client = PeopleClient(executable: URL(fileURLWithPath: args[1]))
     let command: PeopleCommand
@@ -43,6 +48,7 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
     case .invitation(let path, _): print("invitation:" + path)
     case .revoked: print("revoked")
     case .unavailable: print("unavailable")
+    case .unconfirmedMutation: print("unconfirmed:" + command.recoveryMessage)
     case .failed: print("failed")
     }
   }
@@ -59,6 +65,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(root + "/calls.jsonl", JSON.stringify(args) + "\\n");
 const mode = fs.readFileSync(root + "/mode", "utf8");
 if (args[1] === "status") {
+  if (mode === "status-unavailable") process.exit(1);
   const role = mode === "employee" || mode === "switched" ? "employee" : mode === "unknown-role" ? "administrator" : "owner";
   console.log(JSON.stringify({schema_version:1,kind:"echo-person-client-status-v1",signed_in:mode !== "signed-out",display_name:"Owner",membership_type:role,connected_authority:"https://authority.example.test"}));
 } else if (mode === "denied") {
@@ -69,6 +76,7 @@ if (args[1] === "status") {
   console.log("{invalid}");
 } else {
   if (mode === "switch") fs.writeFileSync(root + "/mode", "switched");
+  if (mode === "status-fails-after") fs.writeFileSync(root + "/mode", "status-unavailable");
   if (args[2] === "list") console.log(JSON.stringify({ok:true,result:{schema_version:1,kind:"echo-clean-person-employee-roster-v1",employees:[{email:"a@example.test",display_name:"Employee",membership_status:"active",invitation_state:mode === "redeemed" ? "redeemed" : "pending"}]}}));
   else if (args[2] === "revoke") console.log(JSON.stringify({ok:true,revoked:true}));
   else console.log(JSON.stringify({ok:true,output_path:mode === "wrong-path" ? "/unexpected" : args[args.indexOf("--out")+1],expires_at:"2026-09-07T20:59:51.177Z"}));
@@ -103,6 +111,33 @@ if (args[1] === "status") {
 
   it("discards a roster if the account switches before the response is displayed", () => {
     expect(run("switch").result).toBe("unavailable");
+    expect(run("status-fails-after").result).toBe("unavailable");
+  });
+
+  it.each(["switch", "status-fails-after"])("preserves a submitted mutation warning after %s", (mode) => {
+    for (const action of ["invite", "reissue", "revoke"]) {
+      const result = run(mode, action);
+      expect(result.result).toContain("unconfirmed:");
+      expect(result.result).toMatch(/[Rr]efresh/);
+      expect(result.calls.filter((args) => args[1] === "employee")).toHaveLength(1);
+      if (action !== "revoke") expect(result.result).toContain("folder");
+      if (action === "reissue") expect(result.result).toContain("previous invitation");
+    }
+  });
+
+  it("matches the Authority's new-invitation mailbox contract before choosing a folder", () => {
+    const addresses = [
+      "a@example.com", "a+b@example.com", "first.last@example.co.uk", "a_b-c%d@example.com",
+      "o'connor@example.com", "a..b@example.com", ".a@example.com", "a.@example.com",
+      "a+@example.com", "a@-example.com", "a@example-.com", "a@exam_ple.com",
+      "a@localhost", "A@example.com", "a@example.com\n", "a@éxample.com", "a@@example.com", "",
+      `${"a".repeat(64)}@example.com`, `${"a".repeat(65)}@example.com`,
+      `a@${"a".repeat(63)}.com`, `a@${"a".repeat(64)}.com`,
+      `a@${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(60)}`,
+      `a@${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`,
+    ];
+    const results = execFileSync(binary, ["email", ...addresses], { encoding: "utf8" }).trim().split("\n");
+    expect(results).toEqual(addresses.map((email) => String(isExpectedPersonEmail(email))));
   });
 
   it("keeps invitation arguments literal and accepts only the requested output path", () => {
