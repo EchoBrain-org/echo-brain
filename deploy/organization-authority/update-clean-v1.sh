@@ -448,9 +448,10 @@ def literal_environment(data):
     # Do not mistake a setting-looking line inside a quoted/multiline value
     # for a setting, or change another variable via interpolation of the flag.
     for line in data.splitlines(keepends=True):
-        if not line.endswith(b'\n') or b'\r' in line or b'\x00' in line:
+        if b'\r' in line or b'\x00' in line:
             return False
-        row = line[:-1]
+        # The onboarding writer leaves its final row unterminated.
+        row = line[:-1] if line.endswith(b'\n') else line
         if not row.strip() or row.lstrip().startswith(b'#'):
             continue
         name, separator, value = row.partition(b'=')

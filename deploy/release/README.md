@@ -269,8 +269,10 @@ repair evidence is refused. Do not paste environment files into chat.
 
 Automatic repair and the explicit candidate override accept only the
 onboarding writer's literal `NAME=value` lines (plus blank/comment lines).
+The final literal line may omit its trailing newline, as onboarding writes it;
+inspection does not normalize or rewrite those bytes.
 Quoted or multiline values, interpolation, escape syntax, alternate
-assignment syntax, and noncanonical line endings are deliberately refused;
+assignment syntax, CR/CRLF line endings, and NUL bytes are deliberately refused;
 the diagnostic reports `environment_format_supported=false`. This prevents a
 setting-looking line inside private content from being classified as a safe
 configuration change. Other valid Compose environment formats require review,

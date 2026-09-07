@@ -123,6 +123,33 @@ class HostProtocol(unittest.TestCase):
         self.assertEqual((self.root / 'clean-data/release/current.clean-v1.json').read_bytes(), accepted_bytes)
         self.assertFalse((self.root / 'clean-data/release/candidate.clean-v1.json').exists())
 
+    def test_inspection_and_install_accept_exact_onboarding_writer_output(self):
+        source = pathlib.Path(runner_path).parent.parent / 'deploy/organization-authority/onboard-clean-v1.sh'
+        writer = re.search(r'^write_exact_file\(\) \{.*?^\}', source.read_text(), re.M | re.S).group(0)
+        generated = self.root / 'onboarding.env'
+        content = 'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\nPRIVATE_FIXTURE=never-print-this-value'
+        subprocess.run(['bash', '-c', writer + '\nwrite_exact_file "$1" "$2" fixture', 'fixture', str(generated), content], check=True, capture_output=True)
+        before = generated.read_bytes()
+        self.assertFalse(before.endswith(b'\n'))
+        generated.replace(self.root / '.env.clean-v1')
+        result = self.execute(self.request('inspect-install'))
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['diagnostic']['category'], 'ready')
+        self.assertTrue(self.execute(self.request('install'))['ok'])
+        self.assertEqual((self.root / '.env.clean-v1').read_bytes(), before)
+        self.assertEqual(self.calls, [])
+
+    def test_unterminated_environment_still_refuses_ambiguous_syntax(self):
+        for row in (b"PRIVATE='quoted'", b'PRIVATE=a\\b', b'PRIVATE=$OTHER', b'PRIVATE=`command`', b'PRIVATE=a\rb', b'PRIVATE=a\0b'):
+            with self.subTest(row=row):
+                data = b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n' + row
+                self.write('.env.clean-v1', data)
+                result = self.execute(self.request('inspect-install'))
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['diagnostic']['category'], 'environment_invalid')
+                self.assertEqual((self.root / '.env.clean-v1').read_bytes(), data)
+        self.assertEqual(self.calls, [])
+
     def test_named_legacy_migration_is_opt_in_and_records_absence(self):
         backup = 'backup-authority-maintenance.sh'
         (self.root / backup).unlink()
