@@ -31,8 +31,10 @@ updates are later work.
 - Check the existing local session after installation. An employee may continue
   as that person; a real permission-aware request must succeed before ready.
   Choosing another account requires explicit logout confirmation.
-- New-person setup uses the existing `person start` flow and its private
-  invitation copy, Google handoff, readiness check, and failed-start recovery.
+- New-person setup copies the selected invitation to a bounded private temporary
+  file, then uses the existing `person start` Google handoff, readiness check,
+  and failed-start recovery. The temporary copy is removed after success,
+  failure, or a graceful cancellation.
 - Open the installed ECHO application after successful setup. Keep manual
   reinstall/update and session preservation.
 
@@ -43,8 +45,8 @@ and accepted-release tuple as its embedded kit. No invitation or session is
 included. Keep one versioned artifact and checksum; release selection and
 delivery remain explicit. Do not add a moving latest-channel service.
 
-Developer ID signing and notarization depend on the owner's Apple Developer
-Program availability. Ad hoc development artifacts are private cohort/test
+The owner confirmed that ECHO has no Apple Developer Program / Developer ID
+access. Developer ID signing and notarization are deferred. Ad hoc artifacts are private cohort/test
 artifacts and are not described as notarized or ready for public self-service.
 No account credentials are required for source implementation or offline proof.
 

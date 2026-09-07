@@ -56,6 +56,13 @@ Primary roots are `.github/`, `tools/`, and `deploy/`. The Person artifact has
 no lifecycle daemon or fleet updater; the Authority uses the server deployment
 and rollback procedure.
 
+The release-owned setup surface in `product/echo-onboarding/` embeds the exact
+offline Person kit in a native application. It invokes the existing installer
+and Person commands through a bounded bridge, checks real read access before
+ready, and hands off to the separately installed Ask ECHO overlay. It does not
+own membership, process meetings, or introduce an update service. See the
+[lean employee onboarding scope](../product/2026-09-07-lean-employee-onboarding-v1.md).
+
 ## Claim boundaries
 
 Keep these claims separate:
