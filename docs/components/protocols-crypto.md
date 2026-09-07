@@ -28,7 +28,7 @@ failure_pattern_ids:
 
 | Package | Responsibility |
 | --- | --- |
-| `federation-protocol` | Canonical JSON, signatures, signed-document primitives, and identifiers |
+| `federation-protocol` | Canonical JSON, the P-256 signature profile, signing-key descriptors, and identifiers |
 | `organization-protocol` | Signed organization facts and record envelopes |
 | `organization-api` | HTTP request and response contracts |
 

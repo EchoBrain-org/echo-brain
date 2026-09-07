@@ -20,7 +20,3 @@ export interface SignedIntegrity {
   key_id: Sha256Digest;
   signature_base64: string;
 }
-
-export interface SignedDocument {
-  integrity: SignedIntegrity;
-}

@@ -11,7 +11,6 @@ import {
   canonicalJson,
   canonicalJsonBytes,
   canonicalSha256,
-  createSignedDocumentWithKey,
   decodeStrictP256DerSignature,
   encodeP256DerSignature,
   federationId,
@@ -20,12 +19,10 @@ import {
   p256KeyId,
   parseCanonicalJson,
   sha256Digest,
-  signedPayload,
   verifyP256LowSSignature,
   verifyP256SigningKeyDescriptor,
-  verifySignedDocument,
 } from "../src/index.js";
-import type { Sha256Digest, SignedDocument } from "../src/index.js";
+import type { Sha256Digest } from "../src/index.js";
 
 interface GoldenFixture {
   fixture_version: number;
@@ -48,9 +45,6 @@ interface GoldenFixture {
     public_key_spki_der_base64: string;
     key_id: Sha256Digest;
   };
-  signed_document: SignedDocument & Record<string, unknown>;
-  canonical_signed_document_utf8_base64: string;
-  canonical_signed_document_sha256: Sha256Digest;
   utf16_property_order: {
     value: Record<string, string>;
     canonical: string;
@@ -81,27 +75,6 @@ const alternateSignature = Buffer.from(
   fixture.alternate_p256_key_vector.signature_der_base64,
   "base64",
 );
-
-function signedDocumentWithIntegrity(
-  patch: Record<string, unknown>,
-): SignedDocument {
-  return {
-    ...structuredClone(fixture.signed_document),
-    integrity: {
-      ...fixture.signed_document.integrity,
-      ...patch,
-    },
-  } as SignedDocument;
-}
-
-function expectSignedDocumentFailure(
-  document: SignedDocument,
-  message: string,
-  key = publicKey,
-  keyId = fixture.key_id,
-): void {
-  expect(() => verifySignedDocument(document, key, keyId)).toThrow(message);
-}
 
 describe("federation protocol golden fixture", () => {
   it("fixes canonical payload bytes and digests byte-for-byte", () => {
@@ -210,48 +183,6 @@ describe("federation protocol golden fixture", () => {
     ).toThrow("public key must use canonical P-256 SPKI DER bytes");
   });
 
-  it("replays deterministic signing over the exact canonical bytes", async () => {
-    const document = await createSignedDocumentWithKey(
-      fixture.payload,
-      fixture.key_id,
-      async (bytes) => {
-        expect(bytes.toString("base64")).toBe(
-          fixture.canonical_payload_utf8_base64,
-        );
-        return Buffer.from(lowSSignature);
-      },
-    );
-
-    expect(document).toEqual(fixture.signed_document);
-    expect(canonicalJsonBytes(document).toString("base64")).toBe(
-      fixture.canonical_signed_document_utf8_base64,
-    );
-    expect(canonicalSha256(document)).toBe(
-      fixture.canonical_signed_document_sha256,
-    );
-    expect(signedPayload(document)).toEqual(fixture.payload);
-    expect(() =>
-      verifySignedDocument(document, publicKey, fixture.key_id),
-    ).not.toThrow();
-  });
-
-  it("snapshots the payload before awaiting the signing provider", async () => {
-    const mutablePayload = structuredClone(fixture.payload);
-    const document = await createSignedDocumentWithKey(
-      mutablePayload,
-      fixture.key_id,
-      async () => {
-        mutablePayload.fixture_id = "evt_00000000-0000-4000-8000-000000000002";
-        return Buffer.from(lowSSignature);
-      },
-    );
-
-    expect(signedPayload(document)).toEqual(fixture.payload);
-    expect(() =>
-      verifySignedDocument(document, publicKey, fixture.key_id),
-    ).not.toThrow();
-  });
-
   it("keeps strict canonical JSON rejection behavior", () => {
     const sparse: unknown[] = [];
     sparse[1] = "value";
@@ -294,7 +225,7 @@ describe("federation protocol golden fixture", () => {
     }
   });
 
-  it("rejects signature, key, descriptor, and document mutations", () => {
+  it("rejects malformed signatures, high-S signatures, and invalid keys", () => {
     const malformedDerSignatures = [
       Buffer.from([0x30, 0x00]),
       Buffer.concat([lowSSignature, Buffer.from([0])]),
@@ -325,76 +256,6 @@ describe("federation protocol golden fixture", () => {
         lowSSignature,
       ),
     ).toThrow();
-
-    const tampered = structuredClone(fixture.signed_document);
-    tampered.fixture_id = "evt_00000000-0000-4000-8000-000000000002";
-    expect(() =>
-      verifySignedDocument(tampered, publicKey, fixture.key_id),
-    ).toThrow("signed document payload digest does not match");
-    expect(() =>
-      verifySignedDocument(
-        fixture.signed_document,
-        publicKey,
-        `sha256:${"0".repeat(64)}`,
-      ),
-    ).toThrow("signed document key id does not match the expected signer");
-    expectSignedDocumentFailure(
-      signedDocumentWithIntegrity({ canonicalization: "not-supported" }),
-      "signed document canonicalization is unsupported",
-    );
-    expectSignedDocumentFailure(
-      signedDocumentWithIntegrity({ signature_algorithm: "not-supported" }),
-      "signed document algorithm is unsupported",
-    );
-    expectSignedDocumentFailure(
-      signedDocumentWithIntegrity({
-        signature_base64: `${fixture.signature_der_base64}\n`,
-      }),
-      "signed document signature is not canonical base64",
-    );
-    expectSignedDocumentFailure(
-      signedDocumentWithIntegrity({
-        signature_base64: fixture.high_s_signature_der_base64,
-      }),
-      "ECDSA P-256 signature is not low-S",
-    );
-    expectSignedDocumentFailure(
-      signedDocumentWithIntegrity({
-        signature_base64: invalidLowSSignature.toString("base64"),
-      }),
-      "signed document signature is invalid",
-    );
-
-    const tamperedWithMatchingDigest = structuredClone(fixture.signed_document);
-    tamperedWithMatchingDigest.fixture_id =
-      "evt_00000000-0000-4000-8000-000000000002";
-    tamperedWithMatchingDigest.integrity.payload_sha256 = canonicalSha256(
-      signedPayload(tamperedWithMatchingDigest),
-    );
-    expectSignedDocumentFailure(
-      tamperedWithMatchingDigest,
-      "signed document signature is invalid",
-    );
-
-    const alternateKeyDocument = signedDocumentWithIntegrity({
-      key_id: fixture.alternate_p256_key_vector.key_id,
-      signature_base64: fixture.alternate_p256_key_vector.signature_der_base64,
-    });
-    expect(() =>
-      verifySignedDocument(
-        alternateKeyDocument,
-        alternatePublicKey,
-        fixture.alternate_p256_key_vector.key_id,
-      ),
-    ).not.toThrow();
-    const forgedKeyBinding = signedDocumentWithIntegrity({
-      signature_base64: fixture.alternate_p256_key_vector.signature_der_base64,
-    });
-    expectSignedDocumentFailure(
-      forgedKeyBinding,
-      "signed document public key does not match its expected key id",
-      alternatePublicKey,
-    );
   });
 
   it("validates canonical IDs and real UTC millisecond timestamps", () => {
@@ -447,7 +308,6 @@ describe("federation protocol golden fixture", () => {
       "canonicalJson",
       "canonicalJsonBytes",
       "canonicalSha256",
-      "createSignedDocumentWithKey",
       "decodeStrictP256DerSignature",
       "encodeP256DerSignature",
       "federationId",
@@ -456,10 +316,8 @@ describe("federation protocol golden fixture", () => {
       "p256KeyId",
       "parseCanonicalJson",
       "sha256Digest",
-      "signedPayload",
       "verifyP256LowSSignature",
       "verifyP256SigningKeyDescriptor",
-      "verifySignedDocument",
     ]);
   });
 

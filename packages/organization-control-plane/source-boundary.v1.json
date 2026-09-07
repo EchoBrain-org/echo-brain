@@ -12,10 +12,6 @@
     "packages/organization-control-plane/src/organization-control-database-v1.ts",
     "packages/organization-control-plane/src/record-visibility-policy-contracts-v1.ts",
     "packages/organization-control-plane/src/slack-connection-setup-v1.ts",
-    "packages/organization-control-plane/src/clean-runtime-v1.ts",
-    "packages/organization-control-plane/src/clean-founder-v1.ts",
-    "packages/organization-control-plane/src/clean-slack-identity-v1.ts",
-    "packages/organization-control-plane/src/new-lineage-genesis-v1.ts",
     "packages/organization-control-plane/src/clean-slack-connect-main.ts"
   ],
   "owned_source_paths": [
@@ -94,37 +90,17 @@
       "packages/organization-control-plane/src/persistence/sqlite-person-slack-reaction-approval-finalization-v2.ts",
       "packages/organization-control-plane/src/persistence/sqlite-person-slack-reaction-approval-pending-v1.ts",
       "packages/organization-control-plane/src/persistence/sqlite-slack-reaction-approval-target-v1.ts",
-      "packages/organization-control-plane/src/persistence/sqlite-authority-administrator-fence-v1.ts"
+      "packages/organization-control-plane/src/persistence/sqlite-authority-administrator-fence-v1.ts",
+      "packages/organization-control-plane/src/clean-runtime-v1.ts",
+      "packages/organization-control-plane/src/clean-founder-v1.ts",
+      "packages/organization-control-plane/src/clean-slack-identity-v1.ts",
+      "packages/organization-control-plane/src/new-lineage-genesis-v1.ts"
     ],
     "compatibility_entrypoints": [
-      {
-        "path": "packages/organization-control-plane/src/clean-runtime-v1.ts",
-        "targets": [
-          "packages/organization-control-plane/src/slack-approval-integration-v1.ts"
-        ]
-      },
-      {
-        "path": "packages/organization-control-plane/src/clean-slack-identity-v1.ts",
-        "targets": [
-          "packages/organization-control-plane/src/slack-external-identity-integration-v1.ts"
-        ]
-      },
-      {
-        "path": "packages/organization-control-plane/src/new-lineage-genesis-v1.ts",
-        "targets": [
-          "packages/organization-control-plane/src/organization-control-database-v1.ts"
-        ]
-      },
       {
         "path": "packages/organization-control-plane/src/clean-slack-connect-main.ts",
         "targets": [
           "packages/organization-control-plane/src/composition/slack-connection-setup-cli.ts"
-        ]
-      },
-      {
-        "path": "packages/organization-control-plane/src/clean-founder-v1.ts",
-        "targets": [
-          "packages/organization-control-plane/src/slack-connection-setup-v1.ts"
         ]
       }
     ]

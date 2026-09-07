@@ -3664,18 +3664,12 @@
         "openid-client": "6.8.4"
       },
       "bin": {
-        "echo-organization-authority-admit-clean-granola-source": "dist/clean-granola-source-main.js",
         "echo-organization-authority-admit-granola-meeting-source": "dist/clean-granola-source-main.js",
-        "echo-organization-authority-clean-founder": "dist/clean-founder-main.js",
-        "echo-organization-authority-clean-live": "dist/clean-live-main.js",
-        "echo-organization-authority-clean-person": "dist/clean-person-main.js",
-        "echo-organization-authority-init-clean-state": "dist/clean-reset-main.js",
         "echo-organization-authority-person-admin": "dist/clean-person-main.js",
         "echo-organization-authority-serve": "dist/clean-live-main.js",
         "echo-organization-authority-setup": "dist/clean-founder-main.js",
         "echo-organization-authority-state-bootstrap": "dist/clean-reset-main.js",
         "echo-organization-authority-synthetic-meeting-quality": "dist/synthetic-meeting-quality-main.js",
-        "echo-organization-authority-synthetic-quality": "dist/synthetic-meeting-quality-main.js",
         "echo-synthetic-demo": "dist/synthetic-demo-main.js"
       },
       "devDependencies": {

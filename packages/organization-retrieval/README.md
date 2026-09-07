@@ -1,7 +1,7 @@
 # Organization retrieval
 
-`readable-search-engine-v1` is the canonical package entrypoint. The retained
-`new-lineage-v1` path is a thin compatibility re-export.
+`readable-search-engine-v1` is the canonical and only package entrypoint; the
+`new-lineage-v1` compatibility re-export was retired on 2026-09-06.
 `application/readable-search-contracts` owns the builder's named read-model
 contracts.
 

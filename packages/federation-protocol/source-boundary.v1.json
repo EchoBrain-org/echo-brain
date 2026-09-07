@@ -16,12 +16,12 @@
   "component_index_contract": {
     "canonical_components": [
       {
-        "name": "Signed-document primitives",
-        "path": "packages/federation-protocol/src/signed-document.ts",
-        "export": "createSignedDocumentWithKey"
+        "name": "P-256 signature profile",
+        "path": "packages/federation-protocol/src/signature-profile.ts",
+        "export": "verifyP256LowSSignature"
       }
     ],
-    "retired_source_paths": [],
+    "retired_source_paths": ["packages/federation-protocol/src/signed-document.ts"],
     "compatibility_entrypoints": []
   },
   "layer_rules": [
