@@ -266,7 +266,7 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("composerScrollView.hasVerticalScroller = contentHeight > 132");
   });
 
-  it("keeps the result surface simple while citation details are deferred", () => {
+  it("keeps the result surface simple while readable sources are deferred until requested", () => {
     const source = readFileSync(SOURCE, "utf8");
 
     expect(source).toContain('PillButton(title: "Copy answer"');
@@ -283,9 +283,22 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("notification: .announcementRequested");
     expect(source).toContain("answerHeader.isHidden = true");
     expect(source).toContain("panel.titleVisibility = .hidden");
-    expect(source).not.toContain("citationLabel");
-    expect(source).not.toContain('"Citations:');
-    expect(source).not.toContain('"Policies:');
+    expect(source).toContain('PillButton(title: "Sources (0)"');
+    expect(source).toContain('process.arguments = ["person", "records", "--record-sha256", recordSha256]');
+    expect(source).toContain("private struct DisplayCitation");
+    expect(source).toContain("private static func parseSourceRecord");
+    expect(source).toContain("isSha256(citation.atom_id)");
+    expect(source).toContain("isSha256(citation.record_sha256)");
+    expect(source).toContain("records.count == 1");
+    expect(source).toContain("recordSha256 == citation.recordSha256");
+    expect(source).toContain('event["policy_id"] as? String == citation.policyID');
+    expect(source).toContain("sourceRequestIdentifier == identifier");
+    expect(source).toContain("currentCitations = []");
+    expect(source).not.toContain('process.arguments = ["person", "records", "--limit"');
+    expect(source).toContain("Source details are unavailable.");
+    expect(source).toContain("Visible to active organization members");
+    expect(source).toContain("Visible only to the approving owner");
+    expect(source).toContain("func accountWillChange()");
   });
 
   it("uses the ECHO brand palette", () => {
