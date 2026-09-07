@@ -45,10 +45,14 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
     case "invite": command = .invite(name: "A '; touch forbidden #", email: "a@example.test", path: args[3])
     case "reissue": command = .reissue(email: "a@example.test", path: args[3])
     case "revoke": command = .revoke(email: "a@example.test")
+    case "cancel-after": command = .invite(name: "A '; touch forbidden #", email: "a@example.test", path: args[3])
     default: command = .list
     }
     let running = RunningAsk()
     if args[2] == "cancel" { running.cancel() }
+    if args[2] == "cancel-after" {
+      DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { running.cancel() }
+    }
     switch client.execute(command, owner: owner, running: running) {
     case .roster(let rows):
       print("roster:\\(rows.count):\\(rows.first?.mayReissue ?? false):\\(rows.first?.invitationLabel ?? \"\")")
@@ -57,6 +61,8 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
     case .unavailable: print("unavailable")
     case .unconfirmedMutation: print("unconfirmed:" + command.recoveryMessage)
     case .unconfirmedMutationAfterIdentityChange: print("unconfirmed:" + command.recoveryMessage)
+    case .authorizationRejected(let message): print("access-denied:" + message)
+    case .invitationSaveCommitted(let message): print("committed:" + message)
     case .rejected(let message): print("rejected:" + message)
     case .failed: print("failed")
     }
@@ -79,10 +85,15 @@ if (args[1] === "status") {
   console.log(JSON.stringify({schema_version:1,kind:"echo-person-client-status-v1",signed_in:mode !== "signed-out",display_name:"Owner",membership_type:role,connected_authority:"https://authority.example.test"}));
 } else if (mode === "denied") {
   console.error(JSON.stringify({ok:false,error:"LOGIN_GRANT_MUST_NOT_DISPLAY"})); process.exitCode = 1;
+} else if (mode === "auth-denied") {
+  const action = { list: "employee-list", invite: "employee-invite", reissue: "employee-reissue", revoke: "employee-revoke" }[args[2]];
+  console.error(JSON.stringify({ok:false,action,error:"PRIVATE_ERROR_MUST_NOT_DISPLAY",code:"owner_access_required",mutation_outcome:"rejected"})); process.exitCode = 1;
 } else if (mode.startsWith("rejected-")) {
   const [code, mutation_outcome] = mode.slice("rejected-".length).split(":");
-  const action = { invite: "employee-invite", reissue: "employee-reissue", revoke: "employee-revoke" }[args[2]];
+  const action = { list: "employee-list", invite: "employee-invite", reissue: "employee-reissue", revoke: "employee-revoke" }[args[2]];
   console.error(JSON.stringify({ok:false,action,error:"PRIVATE_ERROR_MUST_NOT_DISPLAY",code,mutation_outcome})); process.exitCode = 1;
+} else if (mode === "cancel-after-launch") {
+  setTimeout(() => console.log(JSON.stringify({ok:true,output_path:args[args.indexOf("--out")+1],expires_at:"2026-09-07T20:59:51.177Z"})), 1_000);
 } else if (mode === "overflow") {
   process.stdout.write("x".repeat(256 * 1024));
 } else if (mode === "invalid") {
@@ -136,6 +147,12 @@ if (args[1] === "status") {
     expect(run("status-fails-after").result).toBe("unavailable");
   });
 
+  it("withholds the prior roster when the live list is denied or its response is malformed", () => {
+    expect(run("auth-denied").result).toBe("access-denied:Owner access is required to manage people. Sign in with your owner account.");
+    expect(run("denied").result).toBe("failed");
+    expect(run("auth-denied", "invite").result).toBe("access-denied:Owner access is required to manage people. Sign in with your owner account.");
+  });
+
   it.each(["switch", "status-fails-after"])("preserves a submitted mutation warning after %s", (mode) => {
     for (const action of ["invite", "reissue", "revoke"]) {
       const result = run(mode, action);
@@ -172,23 +189,25 @@ if (args[1] === "status") {
   });
 
   it.each([
-    ["invalid_email", "rejected:Enter a valid employee name and email address."],
-    ["invalid_name", "rejected:Enter a valid employee name and email address."],
-    ["invitation_output_invalid", "rejected:Could not save the invitation. Choose another location and try again."],
-    ["employee_already_exists", "rejected:This employee is already a member. Ask them to sign in."],
-    ["employee_onboarding_complete", "rejected:This employee has already onboarded. Ask them to sign in."],
-    ["owner_access_required", "rejected:Owner access is required to manage people. Sign in with your owner account."],
-    ["sign_in_required", "rejected:Sign in with your owner account to manage people."],
-    ["invitation_save_failed", "rejected:Couldn't save the invitation. Choose another location and try again."],
-    ["request_rejected", "rejected:The request was rejected. Refresh and try again."],
-  ])("shows a fixed actionable message for a known rejected mutation: %s", (code, expected) => {
-    const result = run(`rejected-${code}:rejected`, "invite");
+    ["invalid_email", "not_submitted", "rejected:Enter a valid employee name and email address."],
+    ["invalid_name", "not_submitted", "rejected:Enter a valid employee name and email address."],
+    ["invitation_output_invalid", "not_submitted", "rejected:Could not save the invitation. Choose another location and try again."],
+    ["employee_already_exists", "rejected", "rejected:Already a member. Refresh to check whether to reissue or sign in."],
+    ["employee_onboarding_complete", "rejected", "rejected:This employee has already onboarded. Ask them to sign in."],
+    ["request_rejected", "rejected", "rejected:The request was rejected. Refresh and try again."],
+  ])("shows a fixed actionable message for a known rejected mutation: %s", (code, outcome, expected) => {
+    const result = run(`rejected-${code}:${outcome}`, "invite");
     expect(result.result).toBe(expected);
     expect(result.result).not.toContain("PRIVATE_ERROR_MUST_NOT_DISPLAY");
     expect(result.calls.filter((args) => args[1] === "employee")).toHaveLength(1);
   });
 
-  it.each(["denied", "overflow", "invalid", "rejected-outcome_unknown:unknown", "rejected-request_rejected:committed"])("warns that a malformed or unknown mutation outcome must not be retried: %s", (mode) => {
+  it("reports a committed invitation whose private file could not be saved without encouraging another invite", () => {
+    expect(run("rejected-invitation_save_failed:committed", "invite").result)
+      .toBe("committed:Invitation was created, but the file could not be saved. Refresh, then reissue it into another folder.");
+  });
+
+  it.each(["denied", "overflow", "invalid", "rejected-outcome_unknown:unknown", "rejected-request_rejected:committed", "rejected-invitation_save_failed:rejected"])("warns that a malformed or unknown mutation outcome must not be retried: %s", (mode) => {
     const result = run(mode, "invite");
     expect(result.result).toMatch(/^unconfirmed:/);
     expect(result.result).toContain("refresh before retrying");
@@ -199,6 +218,12 @@ if (args[1] === "status") {
 
   it("does not submit a cancelled command", () => {
     expect(run("owner", "cancel")).toMatchObject({ result: "unavailable", calls: [] });
+  });
+
+  it("warns when cancellation follows a launched mutation", () => {
+    const result = run("cancel-after-launch", "cancel-after");
+    expect(result.result).toMatch(/^unconfirmed:/);
+    expect(result.calls.filter((args) => args[1] === "employee")).toHaveLength(1);
   });
 
   it("creates distinct private invitation folders without changing the selected parent", () => {

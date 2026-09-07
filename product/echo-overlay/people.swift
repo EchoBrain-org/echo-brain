@@ -98,7 +98,7 @@ enum PeopleCommand: Sendable {
     var mutates: Bool { if case .list = self { return false }; return true }
     var action: String {
         switch self {
-        case .list: return "list"
+        case .list: return "employee-list"
         case .invite: return "employee-invite"
         case .reissue: return "employee-reissue"
         case .revoke: return "employee-revoke"
@@ -125,13 +125,16 @@ enum PeopleResult: Sendable {
     case unavailable
     case unconfirmedMutation
     case unconfirmedMutationAfterIdentityChange
+    case authorizationRejected(String)
+    case invitationSaveCommitted(String)
     case rejected(String)
     case failed
 }
 
 private enum PeopleRunResult {
     case completed(stdout: Data, stderr: Data, exitStatus: Int32)
-    case cancelled
+    case cancelledBeforeLaunch
+    case cancelledAfterLaunch
     case unknown
 }
 
@@ -168,14 +171,17 @@ final class PeopleClient: @unchecked Sendable {
     func execute(_ command: PeopleCommand, owner: PeopleIdentity, running: RunningAsk) -> PeopleResult {
         guard readOwner(running) == owner else { return .unavailable }
         let output = run(command.arguments, timeout: 45, running: running)
-        if case .cancelled = output { return .unavailable }
+        if case .cancelledBeforeLaunch = output { return .unavailable }
+        if case .cancelledAfterLaunch = output {
+            return command.mutates ? .unconfirmedMutation : .failed
+        }
         guard readOwner(running) == owner else {
             // Withhold private data from a changed account, but retain the fact
             // that a write was submitted. The controller must warn before retry.
             return command.mutates ? .unconfirmedMutationAfterIdentityChange : .unavailable
         }
         switch output {
-        case .cancelled:
+        case .cancelledBeforeLaunch, .cancelledAfterLaunch:
             return .unavailable
         case .unknown:
             return command.mutates ? .unconfirmedMutation : .failed
@@ -226,7 +232,7 @@ final class PeopleClient: @unchecked Sendable {
             guard try running.launch(process) else {
                 try? output.fileHandleForWriting.close(); try? errors.fileHandleForWriting.close()
                 readers.wait(); running.detach(process)
-                return .cancelled
+                return .cancelledBeforeLaunch
             }
         } catch {
             try? output.fileHandleForWriting.close(); try? errors.fileHandleForWriting.close()
@@ -239,7 +245,7 @@ final class PeopleClient: @unchecked Sendable {
         process.waitUntilExit()
         deadline.cancel(); readers.wait(); running.detach(process)
         let state = running.state()
-        if state.cancelled { return .cancelled }
+        if state.cancelled { return .cancelledAfterLaunch }
         guard !state.timedOut, !state.outputExceeded,
               !stdout.didExceedLimit(), !stderr.didExceedLimit()
         else { return .unknown }
@@ -273,41 +279,64 @@ final class PeopleClient: @unchecked Sendable {
     }
 
     private static func parseFailure(stdout: Data, stderr: Data, command: PeopleCommand) -> PeopleResult {
-        guard command.mutates else { return .failed }
         for data in [stderr, stdout] {
             guard let failure = try? JSONDecoder().decode(PeopleFailure.self, from: data), !failure.ok,
                   failure.action == command.action,
                   let rawOutcome = failure.mutation_outcome,
                   let outcome = PeopleMutationOutcome(rawValue: rawOutcome),
-                  [.not_submitted, .rejected].contains(outcome),
-                  let code = failure.code,
-                  let message = safeFailureMessage(for: code)
+                  let code = failure.code
             else { continue }
-            return .rejected(message)
+            if ["owner_access_required", "sign_in_required"].contains(code),
+               [.not_submitted, .rejected].contains(outcome),
+               let message = authorizationMessage(for: code) {
+                return .authorizationRejected(message)
+            }
+            guard command.mutates else { continue }
+            if code == "invitation_save_failed", outcome == .committed,
+               let message = invitationSaveCommittedMessage(for: command) {
+                return .invitationSaveCommitted(message)
+            }
+            if let message = rejectedMessage(for: code, outcome: outcome) {
+                return .rejected(message)
+            }
         }
         // Failure text can contain server details or grants. A missing, malformed,
         // committed, or otherwise unknown classification never establishes that a
         // mutation was rejected, so require a refresh before another submission.
-        return .unconfirmedMutation
+        return command.mutates ? .unconfirmedMutation : .failed
     }
 
-    private static func safeFailureMessage(for code: String) -> String? {
+    private static func authorizationMessage(for code: String) -> String? {
         switch code {
-        case "invalid_email", "invalid_name":
-            return "Enter a valid employee name and email address."
-        case "invitation_output_invalid":
-            return "Could not save the invitation. Choose another location and try again."
-        case "employee_already_exists":
-            return "This employee is already a member. Ask them to sign in."
-        case "employee_onboarding_complete":
-            return "This employee has already onboarded. Ask them to sign in."
         case "owner_access_required":
             return "Owner access is required to manage people. Sign in with your owner account."
         case "sign_in_required":
             return "Sign in with your owner account to manage people."
-        case "invitation_save_failed":
-            return "Couldn't save the invitation. Choose another location and try again."
-        case "request_rejected":
+        default:
+            return nil
+        }
+    }
+
+    private static func invitationSaveCommittedMessage(for command: PeopleCommand) -> String? {
+        switch command {
+        case .invite, .reissue:
+            return "Invitation was created, but the file could not be saved. Refresh, then reissue it into another folder."
+        default:
+            return nil
+        }
+    }
+
+    private static func rejectedMessage(for code: String, outcome: PeopleMutationOutcome) -> String? {
+        switch (code, outcome) {
+        case ("invalid_email", .not_submitted), ("invalid_name", .not_submitted):
+            return "Enter a valid employee name and email address."
+        case ("invitation_output_invalid", .not_submitted):
+            return "Could not save the invitation. Choose another location and try again."
+        case ("employee_already_exists", .rejected):
+            return "Already a member. Refresh to check whether to reissue or sign in."
+        case ("employee_onboarding_complete", .rejected):
+            return "This employee has already onboarded. Ask them to sign in."
+        case ("request_rejected", .rejected):
             return "The request was rejected. Refresh and try again."
         default:
             return nil
@@ -480,6 +509,8 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                 switch result {
                 case .unconfirmedMutation, .unconfirmedMutationAfterIdentityChange, .failed:
                     self.mutationNotice = command.recoveryMessage
+                case .invitationSaveCommitted(let message):
+                    self.mutationNotice = message
                 case .invitation, .revoked:
                     if !self.window.isVisible || !NSApp.isActive { self.mutationNotice = command.recoveryMessage }
                 default: break
@@ -493,21 +524,36 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                 self.clear(); self.owner = nil; self.availability(false)
                 self.identityLabel.stringValue = "Owner access changed. Sign in with your owner account."
             case .unconfirmedMutation:
-                // The owner check still matched. Keep the existing roster, but
-                // never imply whether the submitted write completed.
+                // The owner check still matched, but an unknown write outcome
+                // cannot justify retaining a potentially stale private roster.
+                self.clear()
                 self.status.stringValue = self.mutationNotice ?? command.recoveryMessage
             case .unconfirmedMutationAfterIdentityChange:
                 // Do not retain a prior account's roster after a submitted write.
                 self.clear(); self.owner = nil; self.availability(false)
                 self.identityLabel.stringValue = "Owner access changed. Sign in with your owner account."
                 self.status.stringValue = self.mutationNotice ?? command.recoveryMessage
+            case .authorizationRejected(let message):
+                // Server authorization is authoritative for roster disclosure,
+                // even if the local status command still names this owner.
+                self.mutationNotice = nil; self.clear(); self.owner = nil; self.availability(false)
+                self.identityLabel.stringValue = "Owner access could not be verified."
+                self.status.stringValue = message
+            case .invitationSaveCommitted(let message):
+                self.clear()
+                self.status.stringValue = message
             case .rejected(let message):
                 // A structured rejection was confirmed after the owner recheck.
                 // Preserve the visible roster until the owner chooses Refresh.
                 self.status.stringValue = message
             case .failed:
-                // A local/list failure does not prove that this owner signed out.
-                // Keep valid roster data and let Refresh fetch a new snapshot.
+                self.clear()
+                if !command.mutates {
+                    // An unverified list result must never leave a prior account's
+                    // private roster visible.
+                    self.mutationNotice = nil; self.owner = nil; self.availability(false)
+                    self.identityLabel.stringValue = "Owner access could not be verified."
+                }
                 self.status.stringValue = self.mutationNotice ?? command.recoveryMessage
             case .roster(let rows):
                 let previous = self.selected()?.email
