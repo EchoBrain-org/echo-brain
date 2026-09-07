@@ -2645,6 +2645,32 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     expect(result.stderr).toContain("regular file");
   });
 
+  it("accepts onboarding's final literal line without a newline and preserves its rollback bytes", () => {
+    const fixture = environmentDriftFixture();
+    const original = fixture.original.slice(0, -1);
+    writeFileSync(fixture.envFile, original);
+    writeFileSync(fixture.snapshot, original);
+    const diagnostic = fixture.execute("diagnose-environment");
+    expect(diagnostic.status).toBe(0);
+    expect(JSON.parse(diagnostic.stdout)).toMatchObject({
+      environment_format_supported: true, environment_matches: true,
+      other_bytes_changed: false, changed_settings: [],
+    });
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(original);
+    expect(existsSync(fixture.log)).toBe(false);
+    const candidateRecord = releaseWithRuntimeProfile(fixture.profile, {
+      release_id: "clean-v1-20260822-002",
+      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)) },
+    });
+    const stage = fixture.execute("stage", "--release", writeRecord(candidateRecord),
+      "--runtime-profile", fixture.profile, "--content-telemetry", "true");
+    expect(stage.status, stage.stderr).toBe(0);
+    expect(readFileSync(fixture.envFile, "utf8")).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n");
+    expect(readFileSync(fixture.snapshot, "utf8")).toBe(original);
+    expect(fixture.execute("rollback").status).toBe(0);
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(original);
+  });
+
   it("diagnoses environment drift without disclosing names or values outside the allowlist", () => {
     const fixture = environmentDriftFixture();
     const before = readFileSync(fixture.envFile);
@@ -2872,7 +2898,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     "SYNTHETIC_INTERPOLATION=$ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1\n",
     "SYNTHETIC_ALTERNATE: literal\n",
     "SYNTHETIC_LINE_ENDING=literal\r\n",
-    "SYNTHETIC_NO_FINAL_NEWLINE=literal",
+    "SYNTHETIC_NUL=literal\0",
   ])("refuses nonliteral environments for candidate telemetry overrides (%#)", (extra) => {
     const fixture = environmentDriftFixture();
     const environment = fixture.original + extra;

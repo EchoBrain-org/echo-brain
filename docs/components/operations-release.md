@@ -9,7 +9,7 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-09-07
-reviewed_ref: 98c4ec3369f733e4515ae238ca27b452a32b522e
+reviewed_ref: c3390e95bdd2c24c97015e6d06ec5e35a10a3881
 decision_ids:
   - ADR-0004
   - ADR-0006
@@ -62,6 +62,10 @@ and Person commands through a bounded bridge, checks real read access before
 ready, and hands off to the separately installed Ask ECHO overlay. It does not
 own membership, process meetings, or introduce an update service. See the
 [lean employee onboarding scope](../product/2026-09-07-lean-employee-onboarding-v1.md).
+
+Release readers accept the onboarding writer's literal environment format,
+including a final row without a newline, while retaining the exact accepted
+environment bytes for comparison and rollback.
 
 ## Claim boundaries
 

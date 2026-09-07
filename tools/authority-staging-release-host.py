@@ -481,7 +481,9 @@ def installer_preconditions(request, root):
     require(sha(accepted) == request['accepted']['sha256'] and accepted_id == request['accepted']['release_id'], 'accepted_record_mismatch')
     with checked('environment_invalid'):
         environment = regular(root / '.env.clean-v1', True, 1024 * 1024)
-        require(environment.endswith(b'\n') and b'\r' not in environment and b'\0' not in environment, 'environment_invalid')
+        # Onboarding's write_exact_file uses printf %s, so its last literal
+        # assignment has no trailing LF. Read those bytes without rewriting them.
+        require(b'\r' not in environment and b'\0' not in environment, 'environment_invalid')
         for line in environment.splitlines():
             if line and not line.startswith(b'#'):
                 require(re.fullmatch(rb'[A-Za-z_][A-Za-z0-9_]*=[^\'"\\$`]*', line) is not None, 'environment_invalid')
