@@ -101,8 +101,13 @@ grant in output, argv, or chat.
 
 For a current-host staging update, a local coding agent may drive the reviewed
 release CLI, eligible telemetry-drift recovery, exact offline Person-client
-installation, and both candidate-client checks. Login/MFA, private Slack-card
-approval, and the exact candidate's final release decision remain human inputs.
+installation, and both candidate-client checks. During initial onboarding, the
+local operator on the designated owner Mac may also verify the release-installed
+client and run both authenticated Person reads; host wrapper actions still
+remain in the human Session Manager lane. Reuse valid sessions, completed setup
+evidence and existing approval for an unchanged operation scope. Login/MFA,
+private Slack-card approval, and the exact candidate's final release decision
+remain human inputs.
 Never fabricate that authorization or infer it from a canary receipt, PR merge,
 or blanket approval to automate. Unknown drift, unconfirmed remote execution,
 and destructive/infrastructure changes stop the automatic release lane.

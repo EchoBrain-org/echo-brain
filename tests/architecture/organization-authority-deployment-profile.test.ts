@@ -473,7 +473,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
-  it("keeps host canary commands separate from kit-installed founder reads", () => {
+  it("separates human Slack approval from delegated kit-installed client checks", () => {
     const fixture = preparedStatusFixture();
     try {
       const result = fixture.run("resume", {
@@ -485,7 +485,13 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "HOST ACTION: On the exact staging host, run ./update-clean-v1.sh canary.\n",
       );
       expect(result.stdout).toContain(
-        'FOUNDER ACTION: Approve its private Slack card, then on the initial-owner machine run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20',
+        "FOUNDER ACTION: Approve its private Slack card.\n",
+      );
+      expect(result.stdout).toContain(
+        'OPERATOR ACTION: After the founder approves, on the initial-owner machine verify the installed client matches the accepted release, then run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20',
+      );
+      expect(result.stdout).not.toMatch(
+        /^FOUNDER ACTION:.*person records/m,
       );
       expect(result.stdout).toContain(
         "HOST ACTION: On the exact staging host, rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status.",
