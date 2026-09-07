@@ -157,6 +157,29 @@ jobs:
           test -x "$kit_root/Start ECHO.command"
           test -x "$kit_root/node"
           "$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"
+          graphical_kit="$pack_dir/ECHO-macOS-arm64.zip"
+          npm run kit:person-onboarding -- \
+            --release "$release_record" \
+            --artifact "$archive" \
+            --app "$app_archive" \
+            --output "$graphical_kit"
+          graphical_extract="$RUNNER_TEMP/echo-person-graphical-kit"
+          mkdir -p "$graphical_extract"
+          ditto -x -k "$graphical_kit" "$graphical_extract"
+          codesign --verify --deep --strict "$graphical_extract/ECHO.app"
+          graphical_resources="$graphical_extract/ECHO.app/Contents/Resources/kit"
+          "$graphical_resources/node" "$graphical_resources/verify-person-onboarding-kit.mjs" "$graphical_resources"
+          HOME="$person_home" "$graphical_resources/node" \
+            "$graphical_resources/person-onboarding-ui.mjs" prepare > "$stdout_file"
+          node -e '
+            const fs = require("node:fs");
+            const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8").trim().split("\n").at(-1));
+            if (result.ok !== true || result.phase !== "needs-invitation") {
+              throw new Error("graphical kit did not install into a fresh home");
+            }
+          ' "$stdout_file"
+          test -x "$person_home/Applications/ECHO.app/Contents/MacOS/ECHO"
+          test -x "$person_home/Library/Application Support/ECHO/bin/echo-brain"
 
   authority-container:
     name: Organization authority container

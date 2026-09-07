@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-09-02
-reviewed_ref: 70c7040d455f969bd570d4ca08e39e5c28c8a328
+reviewed_at: 2026-09-07
+reviewed_ref: 98c4ec3369f733e4515ae238ca27b452a32b522e
 decision_ids:
   - ADR-0004
   - ADR-0006
@@ -55,6 +55,13 @@ them, preserve backups, recover state, and record qualification evidence.
 Primary roots are `.github/`, `tools/`, and `deploy/`. The Person artifact has
 no lifecycle daemon or fleet updater; the Authority uses the server deployment
 and rollback procedure.
+
+The release-owned setup surface in `product/echo-onboarding/` embeds the exact
+offline Person kit in a native application. It invokes the existing installer
+and Person commands through a bounded bridge, checks real read access before
+ready, and hands off to the separately installed Ask ECHO overlay. It does not
+own membership, process meetings, or introduce an update service. See the
+[lean employee onboarding scope](../product/2026-09-07-lean-employee-onboarding-v1.md).
 
 ## Claim boundaries
 

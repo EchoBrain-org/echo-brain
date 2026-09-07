@@ -1506,6 +1506,15 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       architecture: "arm64",
       node_version: "v22.22.1",
     });
+    const graphicalOutput = join(root, "ECHO-unreviewed.zip");
+    const graphical = run(process.execPath, [
+      ONBOARDING_KIT, "--release", release, "--artifact", artifact,
+      "--app", appArchive, "--runtime-node", runtime, "--output", graphicalOutput,
+    ]);
+    expect(graphical.status).toBe(1);
+    expect(graphical.stderr).toContain("graphical kit requires clean committed source matching the release");
+    expect(existsSync(graphicalOutput)).toBe(false);
+    expect(existsSync(`${graphicalOutput}.sha256`)).toBe(false);
     expect(readFileSync(`${output}.sha256`, "utf8")).toBe(
       `${receipt.kit_sha256}  ${basename(output)}\n`,
     );

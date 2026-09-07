@@ -1317,6 +1317,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         controller = OverlayController()
         configureStatusItem()
         registerHotKey()
+        if CommandLine.arguments.contains("--show-ask") { showOverlay() }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showOverlay()
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {

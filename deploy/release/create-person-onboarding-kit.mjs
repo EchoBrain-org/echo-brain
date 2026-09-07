@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -24,6 +25,7 @@ const repository = resolve(releaseDirectory, '..', '..');
 const releaseValidator = join(repository, 'tools', 'clean-v1-release.mjs');
 const verifier = join(releaseDirectory, 'verify-person-onboarding-kit.mjs');
 const starter = join(releaseDirectory, 'start-person-onboarding-kit.sh');
+const uiBridge = join(releaseDirectory, 'person-onboarding-ui.mjs');
 const overlayIdentityPath = 'ECHO.app/Contents/Resources/build-identity.v1.json';
 
 function fail(message) {
@@ -171,7 +173,61 @@ function runtimeIdentity(runtimeNode) {
 }
 
 function usage() {
-  return 'usage: create-person-onboarding-kit.mjs --release <canonical-release.json> --artifact <exact-client.tgz> --app <ECHO.app.zip> [--runtime-node <node>] --output <new-kit.tar.gz>';
+  return 'usage: create-person-onboarding-kit.mjs --release <canonical-release.json> --artifact <exact-client.tgz> --app <ECHO.app.zip> [--runtime-node <node>] --output <new-kit.tar.gz|new-ECHO.zip>';
+}
+
+function graphicalSource(release) {
+  const head = run('git', ['rev-parse', 'HEAD'], 'source identity is unavailable').trim();
+  const dirty = run('git', ['status', '--porcelain=v1', '--untracked-files=all'], 'source status is unavailable');
+  if (dirty || head !== release.source_sha) fail('graphical kit requires clean committed source matching the release');
+  const paths = [
+    'product/echo-onboarding/main.swift',
+    'product/echo-onboarding/Info.plist',
+    'deploy/release/person-onboarding-ui.mjs',
+    'deploy/release/start-person-onboarding-kit.sh',
+    'deploy/release/create-person-onboarding-kit.mjs',
+    'deploy/release/verify-person-onboarding-kit.mjs',
+    'deploy/release/release-artifact-validation.mjs',
+    'tools/clean-v1-release.mjs',
+  ];
+  return Object.fromEntries(paths.map(path => {
+    const bytes = Buffer.from(run('git', ['show', `${head}:${path}`], 'committed setup source is unavailable'));
+    if (!bytes.equals(readFileSync(join(repository, path)))) fail('setup source does not match its committed source');
+    return [path, bytes];
+  }));
+}
+
+function buildGraphicalKit({ kitRoot, stagingParent, pendingKit, release, sourceBytes }) {
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') fail('graphical kit build requires macOS arm64');
+  const app = join(stagingParent, 'ECHO.app');
+  const contents = join(app, 'Contents');
+  const resources = join(contents, 'Resources');
+  const executable = join(contents, 'MacOS', 'ECHO');
+  mkdirSync(dirname(executable), { recursive: true, mode: 0o755 });
+  mkdirSync(resources, { mode: 0o755 });
+  const swift = join(stagingParent, 'onboarding.swift');
+  writeFileSync(swift, sourceBytes['product/echo-onboarding/main.swift']);
+  writeFileSync(join(contents, 'Info.plist'), sourceBytes['product/echo-onboarding/Info.plist']);
+  cpSync(kitRoot, join(resources, 'kit'), { recursive: true });
+  writeFileSync(join(resources, 'build-identity.v1.json'), canonicalJson({
+    schema_version: 1,
+    kind: 'echo-person-onboarding-app-v1',
+    source_sha: release.source_sha,
+    release_id: release.release_id,
+    product_version: release.person_client.version,
+    platform: 'darwin',
+    architecture: 'arm64',
+  }) + '\n');
+  run('/usr/bin/plutil', ['-replace', 'CFBundleShortVersionString', '-string', release.person_client.version.match(/[0-9]+\.[0-9]+\.[0-9]+/)?.[0] ?? '0.0.0', join(contents, 'Info.plist')], 'setup app version could not be stamped');
+  run('/usr/bin/xcrun', ['swiftc', '-swift-version', '5', '-parse-as-library', '-warnings-as-errors', '-O', '-target', 'arm64-apple-macos14.0', '-framework', 'AppKit', swift, '-o', executable], 'setup app compilation failed');
+  chmodSync(executable, 0o755);
+  run('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', '--options', 'runtime', app], 'setup app signing failed');
+  run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], 'setup app signature verification failed');
+  run('/usr/bin/ditto', ['-c', '-k', '--keepParent', app, pendingKit], 'setup app archive creation failed');
+  const after = graphicalSource(release);
+  for (const [path, bytes] of Object.entries(sourceBytes)) {
+    if (!bytes.equals(after[path])) fail('setup source changed while building');
+  }
 }
 
 function main(argv) {
@@ -191,7 +247,8 @@ function main(argv) {
     else if (option === '--output') outputPath = resolve(value);
     else fail(usage());
   }
-  if (!releasePath || !artifactPath || !appPath || !outputPath || !outputPath.endsWith('.tar.gz')) fail(usage());
+  const graphical = outputPath.endsWith('.zip');
+  if (!releasePath || !artifactPath || !appPath || !outputPath || (!graphical && !outputPath.endsWith('.tar.gz'))) fail(usage());
   regularFile(releasePath, 'release record');
   regularFile(artifactPath, 'client artifact');
   regularFile(appPath, 'desktop app archive');
@@ -199,6 +256,7 @@ function main(argv) {
   regularFile(releaseValidator, 'release validator');
   regularFile(verifier, 'kit verifier');
   regularFile(starter, 'kit starter');
+  regularFile(uiBridge, 'setup bridge');
   const outputParent = privateCanonicalOutputDirectory(dirname(outputPath));
   const digestPath = `${outputPath}.sha256`;
   absentPath(outputPath, 'output kit');
@@ -214,6 +272,7 @@ function main(argv) {
   });
   verifyOverlayIdentity(appPath, release);
   const runtime = runtimeIdentity(runtimeNode);
+  const sourceBytes = graphical ? graphicalSource(release) : undefined;
   const manifest = {
     schema_version: 1,
     kind: 'echo-person-onboarding-kit-v1',
@@ -234,11 +293,12 @@ function main(argv) {
   chmodSync(stagingParent, 0o700);
   const kitName = `echo-person-onboarding-${release.release_id}`;
   const kitRoot = join(stagingParent, kitName);
-  const pendingKit = join(stagingParent, 'kit.tar.gz');
+  const pendingKit = join(stagingParent, graphical ? 'ECHO.zip' : 'kit.tar.gz');
   const pendingDigest = join(stagingParent, 'kit.tar.gz.sha256');
   try {
     mkdirSync(kitRoot, { mode: 0o700 });
     copyFileSync(starter, join(kitRoot, 'Start ECHO.command'));
+    copyFileSync(uiBridge, join(kitRoot, 'person-onboarding-ui.mjs'));
     copyFileSync(releasePath, join(kitRoot, 'release.json'));
     copyFileSync(artifactPath, join(kitRoot, 'person-client.tgz'));
     copyFileSync(appPath, join(kitRoot, 'ECHO.app.zip'));
@@ -252,6 +312,7 @@ function main(argv) {
     });
     for (const executable of [
       'Start ECHO.command',
+      'person-onboarding-ui.mjs',
       'node',
       'clean-v1-release.mjs',
       'verify-person-onboarding-kit.mjs',
@@ -259,7 +320,20 @@ function main(argv) {
     for (const privateFile of ['release.json', 'person-client.tgz', 'ECHO.app.zip', 'kit-manifest.v1.json']) {
       chmodSync(join(kitRoot, privateFile), 0o600);
     }
-    run('tar', ['-czf', pendingKit, '-C', stagingParent, kitName], 'could not create onboarding kit');
+    if (graphical) {
+      const copiedSources = {
+        'Start ECHO.command': 'deploy/release/start-person-onboarding-kit.sh',
+        'person-onboarding-ui.mjs': 'deploy/release/person-onboarding-ui.mjs',
+        'verify-person-onboarding-kit.mjs': 'deploy/release/verify-person-onboarding-kit.mjs',
+        'clean-v1-release.mjs': 'tools/clean-v1-release.mjs',
+      };
+      for (const [name, path] of Object.entries(copiedSources)) {
+        if (!readFileSync(join(kitRoot, name)).equals(sourceBytes[path])) fail('embedded setup source does not match the committed source');
+      }
+      buildGraphicalKit({ kitRoot, stagingParent, pendingKit, release, sourceBytes });
+    } else {
+      run('tar', ['-czf', pendingKit, '-C', stagingParent, kitName], 'could not create onboarding kit');
+    }
     chmodSync(pendingKit, 0o600);
     const kitSha256 = sha256File(pendingKit);
     writeFileSync(pendingDigest, `${kitSha256}  ${basename(outputPath)}\n`, {
@@ -279,8 +353,10 @@ function main(argv) {
       platform: runtime.platform,
       architecture: runtime.architecture,
       node_version: runtime.version,
-      contents: [
+      ...(graphical ? { signing: 'adhoc-hardened-runtime', distribution: 'private-cohort' } : {}),
+      contents: graphical ? ['ECHO.app'] : [
         `${kitName}/Start ECHO.command`,
+        `${kitName}/person-onboarding-ui.mjs`,
         `${kitName}/release.json`,
         `${kitName}/kit-manifest.v1.json`,
         `${kitName}/person-client.tgz`,

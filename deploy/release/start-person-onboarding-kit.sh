@@ -76,6 +76,8 @@ validate_overlay_identity() {
 }
 
 [[ $# -le 1 ]] || fail 'open Start ECHO.command or pass one invitation file path'
+install_only=0
+if [[ "${1:-}" == --install-only ]]; then install_only=1; shift; fi
 [[ -n "${HOME:-}" && "$HOME" = /* ]] || fail 'a normal macOS user HOME is required'
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || \
   fail 'this first-cohort kit supports macOS on Apple silicon only'
@@ -88,13 +90,15 @@ validate_overlay_identity() {
 "$NODE" "$RELEASE_TOOL" validate "$SCRIPT_DIR/release.json" >/dev/null
 
 invitation="${1:-}"
-if [[ -z "$invitation" ]]; then
+if [[ "$install_only" == 0 && -z "$invitation" ]]; then
   command -v osascript >/dev/null 2>&1 || fail 'choose the invitation by passing its file path to Start ECHO.command'
   invitation="$(osascript -e 'POSIX path of (choose file with prompt "Choose your ECHO invitation file")')" || \
     fail 'no invitation was selected'
 fi
-[[ "$invitation" = /* ]] || fail 'the invitation path must be absolute'
-[[ -f "$invitation" && ! -L "$invitation" ]] || fail 'the invitation must be a regular file'
+if [[ "$install_only" == 0 ]]; then
+  [[ "$invitation" = /* ]] || fail 'the invitation path must be absolute'
+  [[ -f "$invitation" && ! -L "$invitation" ]] || fail 'the invitation must be a regular file'
+fi
 
 release_id="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" release-id)"
 expected_version="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" client-version)"
@@ -303,6 +307,11 @@ if [[ "$app_needs_activation" == 1 && "$app_was_present" == 1 ]] && \
 fi
 if [[ "$app_needs_activation" == 1 && "$app_was_present" == 1 ]]; then
   overlay_backup="$app_backup"
+fi
+
+if [[ "$install_only" == 1 ]]; then
+  printf '{"ok":true,"phase":"installed"}\n'
+  exit 0
 fi
 
 invitation_root="$(mktemp -d "$application_root/.invitation.XXXXXXXX")"

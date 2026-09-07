@@ -576,6 +576,49 @@ does not stage a candidate or require inventing a future release.
 
 ## First-cohort employee onboarding kit
 
+The graphical first-cohort download is a versioned `.zip` containing one
+`ECHO.app` setup application. Build it once per accepted release, from the same
+clean committed source as the release record, client, and overlay:
+
+```sh
+npm run kit:person-onboarding -- \
+  --release /absolute/private/current.clean-v1.json \
+  --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
+  --app /absolute/private/ECHO.app.zip \
+  --output /absolute/private/ECHO-macOS-arm64-release-id.zip
+```
+
+Transfer that exact archive through the authenticated private cohort channel.
+Each employee receives their own invitation separately. The shared app contains
+no invitation or session; it embeds the verified offline kit and needs no
+package manager. There is one explicit approved download, with manual updates;
+no channel service or background updater is introduced.
+
+On an Apple-silicon Mac running macOS 14 or later:
+
+1. Extract the download and open `ECHO.app`.
+2. Choose **Install ECHO**. Setup verifies and installs the matched client/app.
+3. Choose the private invitation and complete Google sign-in. If this Mac is
+   already signed in, choose **Continue** for that account or explicitly sign
+   out before choosing another person's invitation.
+4. After a permission-aware read succeeds, setup opens Ask ECHO. Use **⌘E** or
+   the menu bar icon afterward.
+
+The setup application has its own process identity. Installing a new overlay
+can stop the old Ask ECHO process without stopping setup. Installation and
+sign-in are separate; an install-only success or locally stored session is
+never presented as verified organization access. Cancelling sign-in removes
+the temporary invitation copy, and setup exposes safe phases rather than
+provider output or authorization URLs.
+
+ECHO currently has no Apple Developer Program / Developer ID access. Graphical
+archives are **ad hoc signed private-cohort artifacts**, not notarized public
+downloads. The archive digest and authenticated transfer remain the trust
+boundary. Apple signing/notarization and a real clean-Mac employee rehearsal
+must be recorded separately before claiming public self-service distribution.
+
+The `.tar.gz` kit below remains the operator fallback.
+
 The supported first-cohort employee path is one private macOS Apple-silicon
 kit plus that employee's one-use invitation. The kit carries the exact Person
 client, the matching `ECHO.app` hotkey overlay, and a pinned Node 22.22.1
@@ -635,9 +678,8 @@ client makes one bounded existing-identity login attempt without the invitation
 grant; if no identity exists, it stops before opening Google and tells the
 employee to request a reissued invitation.
 
-The first cohort supports macOS arm64 only. A signed and notarized graphical
-installer is a later distribution improvement; it is not required for the
-operator-assisted cohort.
+The first cohort supports macOS arm64 only. Developer ID signing and notarization
+remain a later distribution improvement for both kit formats.
 
 ## Advanced client-only install or reinstall
 
