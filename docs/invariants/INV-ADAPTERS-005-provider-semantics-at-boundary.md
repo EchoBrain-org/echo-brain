@@ -7,8 +7,8 @@ component_ids:
   - CMP-PROCESSING-ADAPTERS
   - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-29
-reviewed_at: 2026-08-29
-reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
+reviewed_at: 2026-09-07
+reviewed_ref: 52652d26dab3d753333ce489f866e1e7d0d1f4aa
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Active provider boundaries: processing core, neutral orchestration, and canonical durable contracts
@@ -57,7 +57,7 @@ introduced as a conditional for one vendor.
 
 The source-boundary manifest names every active provider-owned implementation
 root, including selecting composition, ingress, identity, approval/delivery,
-and synthetic-evaluation code as well as processing adapters. One provider may
+and the active synthetic-demo source and evaluator as well as processing adapters. One provider may
 own several explicit roots. The gate rejects an unlisted adapter implementation
 or a source file under the adapter tree, and rejects a provider-neutral module
 that directly or transitively reaches any declared root. The typed
@@ -100,13 +100,21 @@ The reviewed source is covered by:
 - `services/organization-authority/test/organization-authority-private-approval-runtime.test.ts`;
 - `services/organization-authority/test/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.test.ts`;
 - `services/organization-authority/test/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.test.ts`;
-- `packages/organization-record/test/record-log-v4-append.test.ts`; and
-- the synthetic meeting-source adapter and evaluator tests.
+- `packages/organization-record/test/record-log-v4-append.test.ts`;
+- `services/organization-authority/test/processing/adapters/meeting-sources/synthetic-demo/synthetic-demo-meeting-source-v1.test.ts`; and
+- `services/organization-authority/test/composition/providers/synthetic-demo/synthetic-demo-pre-slack-evaluator-v1.test.ts`.
 
-Before evaluation, the synthetic corpus validator rejects a non-exact top-level
-shape, duplicate or empty fixture/atom/case IDs, unresolved required citations,
-invalid status or answer expectations, and citation expectations for withheld
-atoms. The evaluator no longer silently drops an unknown required atom ID.
+The Phase-1 replay corpus, quality CLI and its adapter/evaluator tests are
+retired. Their former corpus-validation behavior is no longer claimed as
+enforcement. Exact source tombstones reject those removed files, and the
+workspace boundary test rejects replacement files under `src/quality/`
+because that directory no longer has a layer rule.
+
+The active synthetic-demo lane remains separate. Its source adapter and
+pre-Slack evaluator use canonical meeting documents and the production
+processing port; their tests cover the four-meeting fixture and extraction
+defect classes without live provider calls. The external `demo/` rehearsal
+graders and deterministic core-runtime checkpoint remain available.
 
 Enforcement remains partial and this record does not claim full provider
 qualification. Static checks catch names and dependency edges but cannot prove
