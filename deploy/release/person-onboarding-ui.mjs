@@ -18,6 +18,13 @@ const messages = Object.freeze({
 });
 const failed = phase => ({ ok: false, phase, message: messages[phase] });
 const parsed = text => { try { return JSON.parse(text); } catch { return undefined; } };
+const httpsOrigin = value => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password &&
+      !url.search && !url.hash && (url.pathname === '/' || url.pathname === '') ? url.origin : undefined;
+  } catch { return undefined; }
+};
 
 export async function withPrivateInvitation(path, operation) {
   const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -95,16 +102,17 @@ export function execute(command, args, { onLine, timeoutMs = 120_000 } = {}) {
   });
 }
 
-export async function runOnboardingAction(action, invitation, {
+export async function runOnboardingAction(action, value, {
   kitRoot = import.meta.dirname,
   home = homedir(),
   run = execute,
   withInvitation = withPrivateInvitation,
   emit = () => {},
 } = {}) {
-  if (!['prepare', 'status', 'start', 'continue', 'logout'].includes(action) ||
-      (action === 'start' && (typeof invitation !== 'string' || !isAbsolute(invitation))) ||
-      (action !== 'start' && invitation !== undefined)) return failed('invalid-request');
+  if (!['prepare', 'status', 'start', 'login', 'continue', 'logout'].includes(action) ||
+      (action === 'start' && (typeof value !== 'string' || !isAbsolute(value))) ||
+      (action === 'login' && (typeof value !== 'string' || !httpsOrigin(value))) ||
+      (!['start', 'login'].includes(action) && value !== undefined)) return failed('invalid-request');
   const installer = join(kitRoot, 'Start ECHO.command');
   const client = join(home, 'Library/Application Support/ECHO/bin/echo-brain');
   let failurePhase = 'install-failed';
@@ -122,7 +130,7 @@ export async function runOnboardingAction(action, invitation, {
       if (!status.signed_in) return { ok: true, phase: 'needs-invitation' };
       if (typeof status.display_name !== 'string' || !status.display_name.trim() ||
           status.display_name.length > 200 || /[\u0000-\u001f\u007f]/u.test(status.display_name)) return failed(failurePhase);
-      return { ok: true, phase: 'signed-in', display_name: status.display_name };
+      return { ok: true, phase: 'signed-in', display_name: status.display_name, authority: httpsOrigin(status.connected_authority) };
     }
     if (action === 'continue') {
       failurePhase = 'access-failed';
@@ -131,7 +139,11 @@ export async function runOnboardingAction(action, invitation, {
       const response = parsed(result.stdout);
       if (result.code !== 0 || response?.ok !== true || response.result?.schema_version !== 1 ||
           response.result?.kind !== 'echo-clean-person-record-list-v1' || !Array.isArray(response.result.records)) return failed(failurePhase);
-      return { ok: true, phase: 'ready' };
+      const statusResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
+      const status = parsed(statusResult.stdout);
+      const authority = statusResult.code === 0 && status?.schema_version === 1 &&
+        status?.kind === 'echo-person-client-status-v1' && status.signed_in ? httpsOrigin(status.connected_authority) : undefined;
+      return { ok: true, phase: 'ready', authority };
     }
     if (action === 'logout') {
       failurePhase = 'logout-failed';
@@ -139,10 +151,21 @@ export async function runOnboardingAction(action, invitation, {
       return { ok: true, phase: 'needs-invitation' };
     }
     failurePhase = 'login-failed';
+    if (action === 'login') {
+      emit({ ok: true, phase: 'sign-in' });
+      const result = await run(client, ['person', 'login', '--authority-url', httpsOrigin(value), '--open-browser'], { timeoutMs: 10 * 60_000 });
+      if (result.code !== 0) return failed(failurePhase);
+      const statusResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
+      const status = parsed(statusResult.stdout);
+      if (statusResult.code !== 0 || status?.schema_version !== 1 || status?.kind !== 'echo-person-client-status-v1' ||
+          !status.signed_in || typeof status.display_name !== 'string' || !status.display_name.trim() ||
+          status.display_name.length > 200 || /[\u0000-\u001f\u007f]/u.test(status.display_name)) return failed(failurePhase);
+      return { ok: true, phase: 'signed-in', display_name: status.display_name, authority: httpsOrigin(status.connected_authority) };
+    }
     let ready = false;
     let browserFailed = false;
     emit({ ok: true, phase: 'sign-in' });
-    const result = await withInvitation(invitation, privatePath => run(client, ['person', 'start', '--invitation', privatePath], {
+    const result = await withInvitation(value, privatePath => run(client, ['person', 'start', '--invitation', privatePath], {
       timeoutMs: 10 * 60_000,
       onLine: line => {
         const event = parsed(line);
@@ -154,7 +177,12 @@ export async function runOnboardingAction(action, invitation, {
         if (event?.ok === true && event.phase === 'ready' && event.permission_aware_read === 'passed') ready = true;
       },
     }));
-    return result.code === 0 && ready && !browserFailed ? { ok: true, phase: 'ready' } : failed(browserFailed ? 'browser-failed' : failurePhase);
+    if (result.code !== 0 || !ready || browserFailed) return failed(browserFailed ? 'browser-failed' : failurePhase);
+    const statusResult = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
+    const status = parsed(statusResult.stdout);
+    const authority = statusResult.code === 0 && status?.schema_version === 1 &&
+      status?.kind === 'echo-person-client-status-v1' && status.signed_in ? httpsOrigin(status.connected_authority) : undefined;
+    return { ok: true, phase: 'ready', authority };
   } catch {
     return failed(failurePhase);
   }

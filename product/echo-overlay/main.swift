@@ -1311,17 +1311,29 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var controller: OverlayController?
     private var statusItem: NSStatusItem?
     private var people: PeopleController?
+    private var account: AccountController?
     private var peopleMenuItem: NSMenuItem?
     private var hotKey: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         controller = OverlayController()
-        configureStatusItem()
         people = PeopleController { [weak self] available in
             self?.peopleMenuItem?.isHidden = !available
         }
+        account = AccountController(
+            onSessionWillChange: { [weak self] in
+                self?.controller?.accountWillChange()
+                self?.people?.conceal()
+            },
+            mayChangeSession: { [weak self] in
+                !(self?.people?.hasOutstandingMutation ?? false)
+            },
+            changed: { [weak self] in self?.people?.checkAccess() }
+        )
+        configureStatusItem()
         people?.checkAccess()
+        account?.refresh()
         registerHotKey()
         if CommandLine.arguments.contains("--show-ask") { showOverlay() }
     }
@@ -1348,6 +1360,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     func applicationDidBecomeActive(_ notification: Notification) {
         people?.checkAccess()
+        account?.refresh()
     }
 
     func applicationDidResignActive(_ notification: Notification) {
@@ -1356,6 +1369,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
         people?.checkAccess()
+        account?.refresh()
     }
 
     @objc private func showPeople() {
@@ -1376,6 +1390,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let ask = NSMenuItem(title: "Ask ECHO  ⌘E", action: #selector(askEcho), keyEquivalent: "")
         ask.target = self
         menu.addItem(ask)
+        if let account { menu.addItem(account.menuItem) }
         let organization = NSMenuItem(title: "Organization", action: nil, keyEquivalent: "")
         let organizationMenu = NSMenu()
         let peopleItem = NSMenuItem(title: "People…", action: #selector(showPeople), keyEquivalent: "")

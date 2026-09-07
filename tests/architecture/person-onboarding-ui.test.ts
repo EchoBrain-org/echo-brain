@@ -73,9 +73,10 @@ describe("graphical employee onboarding bridge", () => {
     expect(await runOnboardingAction("continue", undefined, malformed.options)).toMatchObject({ ok: false, phase: "access-failed" });
     const accepted = fixture([{ code: 0, stdout: JSON.stringify({ ok: true, result: {
       schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{ private_content: "never-display" }],
-    } }) }]);
-    expect(await runOnboardingAction("continue", undefined, accepted.options)).toEqual({ ok: true, phase: "ready" });
+    } }) }, { code: 0, stdout: status(true) }]);
+    expect(await runOnboardingAction("continue", undefined, accepted.options)).toEqual({ ok: true, phase: "ready", authority: undefined });
     expect(accepted.calls[0]?.args).toEqual(["person", "records", "--limit", "1"]);
+    expect(accepted.calls[1]?.args).toEqual(["person", "status"]);
     expect(JSON.stringify(accepted.events)).not.toContain("never-display");
   });
 
@@ -84,10 +85,11 @@ describe("graphical employee onboarding bridge", () => {
       JSON.stringify({ ok: true, phase: "open-browser", authorization_url: "https://example.test/private-authorization" }),
       JSON.stringify({ ok: true, phase: "ready", permission_aware_read: "passed" }),
     ].join("\n");
-    const subject = fixture([{ code: 0, stdout: output }]);
-    expect(await runOnboardingAction("start", "/fixture/employee.json", subject.options)).toEqual({ ok: true, phase: "ready" });
+    const subject = fixture([{ code: 0, stdout: output }, { code: 0, stdout: status(true) }]);
+    expect(await runOnboardingAction("start", "/fixture/employee.json", subject.options)).toEqual({ ok: true, phase: "ready", authority: undefined });
     expect(subject.events).toContainEqual({ ok: true, phase: "sign-in" });
     expect(subject.calls[0]?.args).toEqual(["person", "start", "--invitation", "/fixture/private/invitation.json"]);
+    expect(subject.calls[1]?.args).toEqual(["person", "status"]);
     expect(JSON.stringify(subject.events)).not.toContain("private-authorization");
     const failed = fixture([{ code: 1, stdout: output }]);
     expect(await runOnboardingAction("start", "/fixture/employee.json", failed.options)).toMatchObject({ ok: false, phase: "login-failed" });
@@ -95,8 +97,22 @@ describe("graphical employee onboarding bridge", () => {
     expect(await runOnboardingAction("start", "/fixture/employee.json", absent.options)).toMatchObject({ ok: false, phase: "login-failed" });
   });
 
+  it("lets an existing person sign in through the browser without an invitation or raw browser output", async () => {
+    const subject = fixture([{ code: 0, stdout: "private provider response https://example.test/never-show" }, {
+      code: 0, stdout: status(true),
+    }]);
+    expect(await runOnboardingAction("login", "https://authority.example.test", subject.options)).toEqual({
+      ok: true, phase: "signed-in", display_name: "Example Employee", authority: undefined,
+    });
+    expect(subject.calls.map(call => call.args)).toEqual([
+      ["person", "login", "--authority-url", "https://authority.example.test", "--open-browser"],
+      ["person", "status"],
+    ]);
+    expect(JSON.stringify(subject.events)).not.toContain("never-show");
+  });
+
   it("rejects unknown actions and relative invitation paths before any subprocess", async () => {
-    for (const [action, invitation] of [["start", "relative.json"], ["unexpected", undefined]] as const) {
+    for (const [action, invitation] of [["start", "relative.json"], ["login", "http://authority.example.test"], ["unexpected", undefined]] as const) {
       const subject = fixture([]);
       expect(await runOnboardingAction(action, invitation, subject.options)).toMatchObject({ ok: false, phase: "invalid-request" });
       expect(subject.calls).toEqual([]);

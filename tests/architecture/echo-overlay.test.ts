@@ -40,6 +40,7 @@ function overlayFixture() {
   copyFileSync(BUILDER, join(sourceRoot, "tools", "build-echo-overlay.mjs"));
   copyFileSync(SOURCE, join(sourceRoot, "product", "echo-overlay", "main.swift"));
   copyFileSync(resolve(REPO, "product/echo-overlay/people.swift"), join(sourceRoot, "product", "echo-overlay", "people.swift"));
+  copyFileSync(resolve(REPO, "product/echo-overlay/account.swift"), join(sourceRoot, "product", "echo-overlay", "account.swift"));
   copyFileSync(PLIST, join(sourceRoot, "product", "echo-overlay", "Info.plist"));
   execFileSync("git", ["init", "-q", sourceRoot]);
   execFileSync("git", ["-C", sourceRoot, "add", "."]);
@@ -173,6 +174,18 @@ describe("native ECHO hotkey overlay", () => {
     expect(peopleChangedAfterStatus.status).toBe(1);
     expect(peopleChangedAfterStatus.stderr).toContain(
       "People Swift source does not match its committed source",
+    );
+    expect(existsSync(subject.toolLog)).toBe(false);
+
+    execFileSync("git", ["-C", subject.sourceRoot, "checkout", "--", "."]);
+    const accountChangedAfterStatus = runOverlayBuilder(subject, subject.sourceSha, {
+      ECHO_OVERLAY_MUTATE_AFTER_STATUS_PATH: join(
+        subject.sourceRoot, "product", "echo-overlay", "account.swift",
+      ),
+    });
+    expect(accountChangedAfterStatus.status).toBe(1);
+    expect(accountChangedAfterStatus.stderr).toContain(
+      "Account Swift source does not match its committed source",
     );
     expect(existsSync(subject.toolLog)).toBe(false);
 
