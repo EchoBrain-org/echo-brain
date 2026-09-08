@@ -10,15 +10,18 @@ private struct SetupResult: Decodable {
 
 private let onboardingLastAuthorityDefaultsKey = "org.echobrain.echo-onboarding.last-authority-origin"
 
-private func onboardingAuthorityOrigin(_ source: String) -> String? {
+func onboardingAuthorityOrigin(_ source: String) -> String? {
     guard source.count <= 2_048,
           let components = URLComponents(string: source),
-          components.scheme?.lowercased() == "https", components.host != nil,
+          components.scheme?.lowercased() == "https", let host = components.host, !host.isEmpty,
           components.user == nil, components.password == nil,
           components.query == nil, components.fragment == nil,
           components.path.isEmpty || components.path == "/"
     else { return nil }
-    var origin = components
+    var origin = URLComponents()
+    origin.scheme = "https"
+    origin.host = host.lowercased()
+    origin.port = components.port == 443 ? nil : components.port
     origin.path = ""
     return origin.url?.absoluteString
 }

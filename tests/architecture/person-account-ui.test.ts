@@ -52,6 +52,46 @@ describe("native Person account controls", () => {
     });
   });
 
+  it.skipIf(process.platform !== "darwin")("matches the installed client authority-origin normalization", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-account-origin-proof-")));
+    roots.push(root);
+    const proof = join(root, "proof.swift");
+    writeFileSync(proof, `import AppKit
+import Foundation
+@main enum Proof { static func main() {
+  print(validateAuthorityOrigin("https://EXAMPLE.COM:443/") ?? "invalid")
+  print(validateAuthorityOrigin("https://EXAMPLE.COM:444/") ?? "invalid")
+} }
+`);
+    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", account, proof, "-o", join(root, "proof")], {
+      stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
+    });
+    const result = spawnSync(join(root, "proof"), { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    // Node's URL.origin, which the installed session store persists.
+    expect(result.stdout.trim().split("\n")).toEqual(["https://example.com", "https://example.com:444"]);
+  });
+
+  it.skipIf(process.platform !== "darwin")("keeps setup authority-origin normalization aligned with the installed app", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-onboarding-origin-proof-")));
+    roots.push(root);
+    const onboarding = readFileSync(join(repo, "product/echo-onboarding/main.swift"), "utf8");
+    writeFileSync(join(root, "onboarding.swift"), onboarding.slice(0, onboarding.indexOf("@main\nprivate enum EchoOnboardingMain")));
+    writeFileSync(join(root, "proof.swift"), `import AppKit
+import Foundation
+@main enum Proof { static func main() {
+  print(onboardingAuthorityOrigin("https://EXAMPLE.COM:443/") ?? "invalid")
+  print(onboardingAuthorityOrigin("https://EXAMPLE.COM:444/") ?? "invalid")
+} }
+`);
+    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", join(root, "onboarding.swift"), join(root, "proof.swift"), "-o", join(root, "proof")], {
+      stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
+    });
+    const result = spawnSync(join(root, "proof"), { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual(["https://example.com", "https://example.com:444"]);
+  });
+
   it.skipIf(process.platform !== "darwin")("strictly compiles the onboarding interface without a real session", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-onboarding-compile-")));
     roots.push(root);

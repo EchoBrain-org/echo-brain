@@ -53,7 +53,15 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
     let running = RunningAsk()
     if args[2] == "cancel" { running.cancel() }
     if args[2] == "cancel-after" {
-      DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { running.cancel() }
+      let marker = args[3] + ".launched"
+      DispatchQueue.global().async {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+          if FileManager.default.fileExists(atPath: marker) { running.cancel(); return }
+          Thread.sleep(forTimeInterval: 0.005)
+        }
+        running.cancel()
+      }
     }
     switch client.execute(command, owner: owner, running: running) {
     case .roster(let rows):
@@ -83,6 +91,9 @@ fs.appendFileSync(root + "/calls.jsonl", JSON.stringify(args) + "\\n");
 const mode = fs.readFileSync(root + "/mode", "utf8");
 if (args[1] === "status") {
   if (mode === "status-unavailable") process.exit(1);
+  // Deliberately outlast the old 100ms cancellation timer. The proof must
+  // wait for the management operation, not race the preceding status read.
+  if (mode === "cancel-after-launch") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
   const role = mode === "employee" || mode === "switched" ? "employee" : mode === "unknown-role" ? "administrator" : "owner";
   console.log(JSON.stringify({schema_version:1,kind:"echo-person-client-status-v1",signed_in:mode !== "signed-out",display_name:"Owner",membership_type:role,connected_authority:"https://authority.example.test"}));
 } else if (mode === "denied") {
@@ -95,7 +106,8 @@ if (args[1] === "status") {
   const action = { list: "employee-list", invite: "employee-invite", reissue: "employee-reissue", revoke: "employee-revoke" }[args[2]];
   console.error(JSON.stringify({ok:false,action,error:"PRIVATE_ERROR_MUST_NOT_DISPLAY",code,mutation_outcome})); process.exitCode = 1;
 } else if (mode === "cancel-after-launch") {
-  setTimeout(() => console.log(JSON.stringify({ok:true,output_path:args[args.indexOf("--out")+1],expires_at:"2026-09-07T20:59:51.177Z"})), 1_000);
+  fs.writeFileSync(args[args.indexOf("--out")+1] + ".launched", "ready");
+  setInterval(() => {}, 1_000);
 } else if (mode === "overflow") {
   process.stdout.write("x".repeat(256 * 1024));
 } else if (mode === "invalid") {
@@ -116,6 +128,7 @@ if (args[1] === "status") {
   function run(mode: string, action = "list") {
     writeFileSync(join(root, "mode"), mode);
     writeFileSync(join(root, "calls.jsonl"), "");
+    rmSync(join(root, "private invitation.json.launched"), { force: true });
     const result = spawnSync(binary, [cli, action, join(root, "private invitation.json")], { encoding: "utf8", timeout: 15_000 });
     expect(result.status, result.stderr).toBe(0);
     const calls = readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as string[]);

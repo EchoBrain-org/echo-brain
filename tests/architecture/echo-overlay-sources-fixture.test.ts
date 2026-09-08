@@ -59,6 +59,8 @@ afterAll(() => rmSync(temporaryRoot, { recursive: true, force: true }));
     "unknown-citation-field",
     "cancelled-source-work",
     "valid-source",
+    "untitled-source",
+    "panel-resigns-key",
     "large-source",
     "mismatched-source",
     "mismatched-policy",
