@@ -7,10 +7,9 @@ private let askTimeoutSeconds: TimeInterval = 145
 private let identityTimeoutSeconds: TimeInterval = 5
 private let sourceTimeoutSeconds: TimeInterval = 15
 private let maximumProcessOutputBytes = 128 * 1024
-private let maximumCitations = 16
-private let maximumAnswerBytes = 16 * 1024
-private let maximumSourceTitleBytes = 512
-private let maximumSourceTextBytes = 2 * 1024
+private let maximumAnswerScalars = 12_000
+private let maximumDisplayedSourceScalars = 2_000
+private let maximumDisplayedSourceSignals = 32
 private let maximumQuestionScalars = 240
 private let maximumQuestionUniqueTerms = 32
 private let maximumQuestionTermBytes = 64
@@ -50,19 +49,36 @@ private func isSha256(_ value: String) -> Bool {
     ) != nil
 }
 
+private struct DynamicCodingKey: CodingKey, Hashable {
+    let stringValue: String
+    let intValue: Int?
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(stringValue: String) { self.init(stringValue) }
+    init?(intValue: Int) { return nil }
+}
+
+private func hasExactCodingKeys(_ keys: [DynamicCodingKey], _ expected: Set<String>) -> Bool {
+    Set(keys.map(\.stringValue)) == expected
+}
+
 private struct CliCitation: Decodable {
     let atom_id: String
     let record_sha256: String
     let policy_id: String
 
-    private enum CodingKeys: String, CodingKey { case atom_id, record_sha256, policy_id }
-
     init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        guard values.allKeys.count == 3 else { throw DecodingError.dataCorruptedError(forKey: .atom_id, in: values, debugDescription: "Unexpected citation fields") }
-        atom_id = try values.decode(String.self, forKey: .atom_id)
-        record_sha256 = try values.decode(String.self, forKey: .record_sha256)
-        policy_id = try values.decode(String.self, forKey: .policy_id)
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard hasExactCodingKeys(values.allKeys, ["atom_id", "record_sha256", "policy_id"]) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("atom_id"), in: values, debugDescription: "Unexpected citation fields")
+        }
+        atom_id = try values.decode(String.self, forKey: DynamicCodingKey("atom_id"))
+        record_sha256 = try values.decode(String.self, forKey: DynamicCodingKey("record_sha256"))
+        policy_id = try values.decode(String.self, forKey: DynamicCodingKey("policy_id"))
     }
 }
 
@@ -74,22 +90,22 @@ private struct CliAnswer: Decodable {
     let answer: String
     let citations: [CliCitation]
 
-    private enum CodingKeys: String, CodingKey { case schema_version, kind, generation_id, record_head, answer, citations, outcome }
-
     init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        guard values.allKeys.count == 6 || (values.allKeys.count == 7 && values.contains(.outcome)) else {
-            throw DecodingError.dataCorruptedError(forKey: .answer, in: values, debugDescription: "Unexpected answer fields")
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let base: Set<String> = ["schema_version", "kind", "generation_id", "record_head", "answer", "citations"]
+        guard hasExactCodingKeys(values.allKeys, base) || hasExactCodingKeys(values.allKeys, base.union(["outcome"])) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("answer"), in: values, debugDescription: "Unexpected answer fields")
         }
-        schema_version = try values.decode(Int.self, forKey: .schema_version)
-        kind = try values.decode(String.self, forKey: .kind)
-        generation_id = try values.decode(String.self, forKey: .generation_id)
-        record_head = try values.decode(CliRecordHead.self, forKey: .record_head)
-        answer = try values.decode(String.self, forKey: .answer)
-        citations = try values.decode([CliCitation].self, forKey: .citations)
-        if values.contains(.outcome) {
-            guard try values.decode(String.self, forKey: .outcome) == "authorship_unsupported" else {
-                throw DecodingError.dataCorruptedError(forKey: .outcome, in: values, debugDescription: "Unsupported answer outcome")
+        schema_version = try values.decode(Int.self, forKey: DynamicCodingKey("schema_version"))
+        kind = try values.decode(String.self, forKey: DynamicCodingKey("kind"))
+        generation_id = try values.decode(String.self, forKey: DynamicCodingKey("generation_id"))
+        record_head = try values.decode(CliRecordHead.self, forKey: DynamicCodingKey("record_head"))
+        answer = try values.decode(String.self, forKey: DynamicCodingKey("answer"))
+        citations = try values.decode([CliCitation].self, forKey: DynamicCodingKey("citations"))
+        let outcome = DynamicCodingKey("outcome")
+        if values.contains(outcome) {
+            guard try values.decode(String.self, forKey: outcome) == "authorship_unsupported" else {
+                throw DecodingError.dataCorruptedError(forKey: outcome, in: values, debugDescription: "Unsupported answer outcome")
             }
         }
     }
@@ -99,13 +115,13 @@ private struct CliRecordHead: Decodable {
     let position: Int
     let record_sha256: String?
 
-    private enum CodingKeys: String, CodingKey { case position, record_sha256 }
-
     init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        guard values.allKeys.count == 2 else { throw DecodingError.dataCorruptedError(forKey: .position, in: values, debugDescription: "Unexpected record head fields") }
-        position = try values.decode(Int.self, forKey: .position)
-        record_sha256 = try values.decodeIfPresent(String.self, forKey: .record_sha256)
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard hasExactCodingKeys(values.allKeys, ["position", "record_sha256"]) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("position"), in: values, debugDescription: "Unexpected record head fields")
+        }
+        position = try values.decode(Int.self, forKey: DynamicCodingKey("position"))
+        record_sha256 = try values.decodeIfPresent(String.self, forKey: DynamicCodingKey("record_sha256"))
     }
 }
 
@@ -129,18 +145,17 @@ private struct CliStatus: Decodable {
 
 private struct DisplayAnswer: Sendable {
     let answer: String
-    let citations: [DisplayCitation]
+    let sources: [DisplaySource]
 }
 
-private struct DisplayCitation: Sendable {
+private struct DisplaySource: Sendable {
     let label: String
-    let atomID: String
     let recordSha256: String
     let policyID: String
 }
 
 private struct SourceRecord: Sendable {
-    let citation: DisplayCitation
+    let source: DisplaySource
     let title: String
     let visibility: String
     let decisions: [String]
@@ -311,13 +326,13 @@ private final class CliRunner: @unchecked Sendable {
     }
 
     func sources(
-        citations: [DisplayCitation],
+        sources: [DisplaySource],
         completion: @escaping @Sendable (SourceOutcome) -> Void
     ) -> RunningAsk {
         let running = RunningAsk()
         let executable = self.executable
         DispatchQueue.global(qos: .userInitiated).async {
-            let outcome = Self.executeSources(executable: executable, citations: citations, running: running)
+            let outcome = Self.executeSources(executable: executable, sources: sources, running: running)
             DispatchQueue.main.async { completion(outcome) }
         }
         return running
@@ -404,45 +419,51 @@ private final class CliRunner: @unchecked Sendable {
         return parseFailure(stderrReader.data())
     }
 
-    private static func parseSuccess(_ data: Data) -> AskOutcome {
+    fileprivate static func parseSuccess(_ data: Data) -> AskOutcome {
         guard let envelope = try? JSONDecoder().decode(CliSuccessEnvelope.self, from: data),
               envelope.ok,
               envelope.result.schema_version == 1,
               envelope.result.kind == "echo-clean-person-answer-v1",
               !envelope.result.answer.isEmpty,
-              envelope.result.answer.utf8.count <= maximumAnswerBytes,
+              envelope.result.answer.unicodeScalars.count <= maximumAnswerScalars,
               isSha256(envelope.result.generation_id),
               envelope.result.record_head.position >= 0,
               (envelope.result.record_head.position == 0) == (envelope.result.record_head.record_sha256 == nil),
-              envelope.result.record_head.record_sha256.map(isSha256) ?? true,
-              envelope.result.citations.count <= maximumCitations
+              envelope.result.record_head.record_sha256.map(isSha256) ?? true
         else {
             return .failure("The installed ECHO client returned an invalid response.")
         }
 
         var citedAtoms = Set<String>()
-        let citations = envelope.result.citations.enumerated().compactMap { index, citation -> DisplayCitation? in
+        var sourceIndexByRecord = [String: Int]()
+        var sources: [DisplaySource] = []
+        for citation in envelope.result.citations {
             guard isSha256(citation.atom_id),
                   isSha256(citation.record_sha256),
                   allowedCitationPolicies.contains(citation.policy_id),
                   citedAtoms.insert(citation.atom_id).inserted
-            else { return nil }
-            return DisplayCitation(
-                label: "Source \(index + 1)",
-                atomID: citation.atom_id,
+            else {
+                return .failure("The installed ECHO client returned an invalid response.")
+            }
+            if let existing = sourceIndexByRecord[citation.record_sha256] {
+                guard sources[existing].policyID == citation.policy_id else {
+                    return .failure("The installed ECHO client returned an invalid response.")
+                }
+                continue
+            }
+            sourceIndexByRecord[citation.record_sha256] = sources.count
+            sources.append(DisplaySource(
+                label: "Source \(sources.count + 1)",
                 recordSha256: citation.record_sha256,
                 policyID: citation.policy_id
-            )
+            ))
         }
-        guard citations.count == envelope.result.citations.count else {
-            return .failure("The installed ECHO client returned an invalid response.")
-        }
-        return .success(DisplayAnswer(answer: envelope.result.answer, citations: citations))
+        return .success(DisplayAnswer(answer: envelope.result.answer, sources: sources))
     }
 
     private static func executeSources(
         executable: URL,
-        citations: [DisplayCitation],
+        sources: [DisplaySource],
         running: RunningAsk
     ) -> SourceOutcome {
         guard executable.isFileURL,
@@ -451,11 +472,11 @@ private final class CliRunner: @unchecked Sendable {
         else { return .unavailable }
 
         var records: [SourceRecord] = []
-        for citation in citations {
+        for source in sources {
             if running.state().cancelled { return .cancelled }
             guard let record = executeSource(
                 executable: executable,
-                citation: citation,
+                source: source,
                 running: running
             ) else {
                 return running.state().cancelled ? .cancelled : .unavailable
@@ -467,14 +488,14 @@ private final class CliRunner: @unchecked Sendable {
 
     private static func executeSource(
         executable: URL,
-        citation: DisplayCitation,
+        source: DisplaySource,
         running: RunningAsk
     ) -> SourceRecord? {
         let process = Process()
         let stdout = Pipe()
         let stderr = Pipe()
         process.executableURL = executable
-        let recordSha256 = citation.recordSha256
+        let recordSha256 = source.recordSha256
         process.arguments = ["person", "records", "--record-sha256", recordSha256]
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdout
@@ -523,10 +544,10 @@ private final class CliRunner: @unchecked Sendable {
               !stdoutReader.didExceedLimit(),
               !stderrReader.didExceedLimit()
         else { return nil }
-        return parseSourceRecord(stdoutReader.data(), citation: citation)
+        return parseSourceRecord(stdoutReader.data(), source: source)
     }
 
-    private static func parseSourceRecord(_ data: Data, citation: DisplayCitation) -> SourceRecord? {
+    fileprivate static func parseSourceRecord(_ data: Data, source: DisplaySource) -> SourceRecord? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               hasExactKeys(root, ["ok", "result"]),
               root["ok"] as? Bool == true,
@@ -539,28 +560,28 @@ private final class CliRunner: @unchecked Sendable {
               hasExactKeys(record, ["position", "approval_id", "record_sha256", "envelope"]),
               record["position"] as? Int ?? 0 > 0,
               let recordSha256 = record["record_sha256"] as? String,
-              recordSha256 == citation.recordSha256,
+              recordSha256 == source.recordSha256,
               let envelope = record["envelope"] as? [String: Any],
               let envelopeSha256 = envelope["record_sha256"] as? String,
-              envelopeSha256 == citation.recordSha256,
+              envelopeSha256 == source.recordSha256,
               let body = envelope["body"] as? [String: Any],
               let event = body["event"] as? [String: Any],
               event["kind"] as? String == "approved",
-              event["policy_id"] as? String == citation.policyID,
+              event["policy_id"] as? String == source.policyID,
               let snapshot = event["approved_snapshot"] as? [String: Any],
               let payload = snapshot["approved_payload"] as? [String: Any],
               let brief = payload["brief"] as? [String: Any],
               let meeting = brief["meeting"] as? [String: Any],
-              let title = safeSourceText(meeting["title"] as? String, maximumBytes: maximumSourceTitleBytes),
+              let title = safeSourceText(meeting["title"] as? String),
               let decisions = safeSourceSignals(brief["decisions"], kind: "decision"),
               let actions = safeSourceSignals(brief["actions"], kind: "action"),
               let rationales = safeSourceSignals(brief["rationales"], kind: "rationale")
         else { return nil }
-        let visibility = citation.policyID == "organization-member-readable-person-v2"
+        let visibility = source.policyID == "organization-member-readable-person-v2"
             ? "Visible to active organization members"
-            : "Visible only to the approving owner"
+            : "Only the approver"
         return SourceRecord(
-            citation: citation,
+            source: source,
             title: title,
             visibility: visibility,
             decisions: decisions,
@@ -573,16 +594,19 @@ private final class CliRunner: @unchecked Sendable {
         Set(object.keys) == keys
     }
 
-    private static func safeSourceText(_ value: String?, maximumBytes: Int) -> String? {
-        guard let value, value.utf8.count <= maximumBytes else { return nil }
+    private static func safeSourceText(_ value: String?) -> String? {
+        guard let value else { return nil }
         let cleaned = value.unicodeScalars.map { scalar -> String in
             CharacterSet.controlCharacters.contains(scalar) ? " " : String(scalar)
         }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? nil : cleaned
+        guard !cleaned.isEmpty else { return nil }
+        guard cleaned.unicodeScalars.count > maximumDisplayedSourceScalars else { return cleaned }
+        let ending = cleaned.unicodeScalars.index(cleaned.startIndex, offsetBy: maximumDisplayedSourceScalars - 1)
+        return String(cleaned.unicodeScalars[..<ending]) + "… (truncated)"
     }
 
     private static func safeSourceSignals(_ value: Any?, kind: String) -> [String]? {
-        guard let signals = value as? [[String: Any]], signals.count <= 32 else { return nil }
+        guard let signals = value as? [[String: Any]] else { return nil }
         var ids = Set<String>()
         var result: [String] = []
         for signal in signals {
@@ -590,9 +614,12 @@ private final class CliRunner: @unchecked Sendable {
                   let id = signal["id"] as? String,
                   !id.isEmpty,
                   ids.insert(id).inserted,
-                  let text = safeSourceText(signal["text"] as? String, maximumBytes: maximumSourceTextBytes)
+                  let text = safeSourceText(signal["text"] as? String)
             else { return nil }
-            result.append(text)
+            if result.count < maximumDisplayedSourceSignals { result.append(text) }
+        }
+        if signals.count > maximumDisplayedSourceSignals {
+            result.append("Additional approved \(kind) items are not shown.")
         }
         return result
     }
@@ -932,7 +959,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     private var requestIdentifier: UUID?
     private var activeSources: RunningAsk?
     private var sourceRequestIdentifier: UUID?
-    private var currentCitations: [DisplayCitation] = []
+    private var currentSources: [DisplaySource] = []
     private var activeIdentityLookup: RunningAsk?
     private var identityRequestIdentifier: UUID?
     private var identityText = "Signed in"
@@ -1053,6 +1080,10 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         identityLabel.stringValue = identityText
     }
 
+    func applicationDidDeactivate() {
+        clearSources()
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         hidePanel()
         return false
@@ -1161,9 +1192,9 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             sourceScrollView.isHidden = true
             emptyAnswerLabel.isHidden = true
             copyButton.isEnabled = true
-            currentCitations = answer.citations
-            sourcesButton.isEnabled = !answer.citations.isEmpty
-            sourcesButton.title = "Sources (\(answer.citations.count))"
+            currentSources = answer.sources
+            sourcesButton.isEnabled = !answer.sources.isEmpty
+            sourcesButton.title = "Sources (\(answer.sources.count))"
             announce("ECHO answer ready.")
         case .failure(let message):
             statusLabel.stringValue = "Couldn’t answer"
@@ -1199,7 +1230,11 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     @objc private func showSources() {
-        guard activeSources == nil, !currentCitations.isEmpty else { return }
+        if !sourceScrollView.isHidden {
+            showAnswer()
+            return
+        }
+        guard activeSources == nil, !currentSources.isEmpty else { return }
         let identifier = UUID()
         sourceRequestIdentifier = identifier
         answerScrollView.isHidden = true
@@ -1209,7 +1244,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         )
         sourcesButton.title = "Loading…"
         sourcesButton.isEnabled = false
-        activeSources = runner.sources(citations: currentCitations) { [weak self] outcome in
+        activeSources = runner.sources(sources: currentSources) { [weak self] outcome in
             Task { @MainActor in self?.handleSources(outcome, identifier: identifier) }
         }
     }
@@ -1218,8 +1253,8 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         guard sourceRequestIdentifier == identifier else { return }
         activeSources = nil
         sourceRequestIdentifier = nil
-        sourcesButton.title = "Sources (\(currentCitations.count))"
-        sourcesButton.isEnabled = !currentCitations.isEmpty
+        sourcesButton.title = "Back to answer"
+        sourcesButton.isEnabled = !currentSources.isEmpty
         switch outcome {
         case .success(let records):
             sourceView.textStorage?.setAttributedString(
@@ -1241,7 +1276,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         sourceRequestIdentifier = nil
         activeSources?.cancel()
         activeSources = nil
-        currentCitations = []
+        currentSources = []
         sourceView.string = ""
         sourceScrollView.isHidden = true
         if !answerView.string.isEmpty { answerScrollView.isHidden = false }
@@ -1249,9 +1284,17 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         sourcesButton.isEnabled = false
     }
 
+    private func showAnswer() {
+        guard !answerView.string.isEmpty else { return }
+        sourceScrollView.isHidden = true
+        answerScrollView.isHidden = false
+        sourcesButton.title = "Sources (\(currentSources.count))"
+        sourcesButton.isEnabled = !currentSources.isEmpty
+    }
+
     private func formatSourceRecords(_ records: [SourceRecord]) -> String {
         records.map { record in
-            var sections = ["\(record.citation.label) · \(record.title)", record.visibility]
+            var sections = ["\(record.source.label) · \(record.title)", record.visibility]
             appendSourceSection("Decisions", values: record.decisions, to: &sections)
             appendSourceSection("Actions", values: record.actions, to: &sections)
             appendSourceSection("Rationales", values: record.rationales, to: &sections)
@@ -1897,6 +1940,7 @@ private func retireRunningOverlay() -> Bool {
     }
 }
 
+#if !ECHO_OVERLAY_SOURCE_FIXTURE
 @main
 private enum EchoOverlayMain {
     @MainActor
@@ -1918,3 +1962,103 @@ private enum EchoOverlayMain {
         application.run()
     }
 }
+#else
+@main
+private enum EchoOverlaySourceFixtureMain {
+    private static let recordHash = "sha256:" + String(repeating: "b", count: 64)
+    private static let atomHash = "sha256:" + String(repeating: "c", count: 64)
+    private static let policy = "organization-member-readable-person-v2"
+
+    static func main() {
+        let mode = CommandLine.arguments.dropFirst().first ?? ""
+        let passed: Bool
+        switch mode {
+        case "valid-answer":
+            if case .success(let answer) = CliRunner.parseSuccess(answerData(citations: [citation()])), answer.sources.count == 1 {
+                passed = true
+            } else { passed = false }
+        case "duplicate-atom":
+            let duplicate = citation()
+            if case .failure = CliRunner.parseSuccess(answerData(citations: [duplicate, duplicate])) {
+                passed = true
+            } else { passed = false }
+        case "valid-source":
+            passed = CliRunner.parseSourceRecord(sourceData(), source: source())?.title == "Quarterly planning"
+        case "mismatched-source":
+            passed = CliRunner.parseSourceRecord(sourceData(hash: "sha256:" + String(repeating: "d", count: 64)), source: source()) == nil
+        case "mismatched-policy":
+            passed = CliRunner.parseSourceRecord(sourceData(policyID: "restricted-reviewer-person-v2"), source: source()) == nil
+        case "empty-source":
+            passed = CliRunner.parseSourceRecord(sourceData(records: []), source: source()) == nil
+        default:
+            passed = false
+        }
+        Darwin.exit(passed ? EXIT_SUCCESS : EXIT_FAILURE)
+    }
+
+    private static func citation() -> [String: Any] {
+        ["atom_id": atomHash, "record_sha256": recordHash, "policy_id": policy]
+    }
+
+    private static func source() -> DisplaySource {
+        DisplaySource(label: "Source 1", recordSha256: recordHash, policyID: policy)
+    }
+
+    private static func answerData(citations: [[String: Any]]) -> Data {
+        data([
+            "ok": true,
+            "result": [
+                "schema_version": 1,
+                "kind": "echo-clean-person-answer-v1",
+                "generation_id": "sha256:" + String(repeating: "a", count: 64),
+                "record_head": ["position": 1, "record_sha256": recordHash],
+                "answer": "Approved answer.",
+                "citations": citations,
+            ],
+        ])
+    }
+
+    private static func sourceData(
+        hash: String = recordHash,
+        policyID: String = policy,
+        records: [[String: Any]]? = nil
+    ) -> Data {
+        let record: [String: Any] = [
+            "position": 1,
+            "approval_id": "apr_fixture",
+            "record_sha256": hash,
+            "envelope": [
+                "record_sha256": hash,
+                "body": [
+                    "event": [
+                        "kind": "approved",
+                        "policy_id": policyID,
+                        "approved_snapshot": [
+                            "approved_payload": [
+                                "brief": [
+                                    "meeting": ["title": "Quarterly planning"],
+                                    "decisions": [["id": "d1", "kind": "decision", "text": "Keep the current plan." ]],
+                                    "actions": [["id": "a1", "kind": "action", "text": "Publish the plan." ]],
+                                    "rationales": [["id": "r1", "kind": "rationale", "text": "The evidence supports it." ]],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        return data([
+            "ok": true,
+            "result": [
+                "schema_version": 1,
+                "kind": "echo-clean-person-record-list-v1",
+                "records": records ?? [record],
+            ],
+        ])
+    }
+
+    private static func data(_ value: [String: Any]) -> Data {
+        try! JSONSerialization.data(withJSONObject: value, options: [])
+    }
+}
+#endif
