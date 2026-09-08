@@ -210,6 +210,7 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
   const payload = gzipSync(body, { level: 9 }).toString('base64');
   const runner = readSource(request.tooling_source, RUNNER).toString('utf8');
   let script = `${runner}\nmain('${payload}', '${digest(body)}')`;
+  const parametersFor = value => ({ commands: [`/usr/bin/python3 - <<'ECHO_RELEASE_PY'\n${value}\nECHO_RELEASE_PY`], executionTimeout: ['1200'] });
   if (request.schema_version >= 2) {
     // Compress text once, not separately base64-expanded files plus a plain
     // runner. The fixed loader verifies the whole reviewed, non-secret bundle.
@@ -225,14 +226,17 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
     let compressed;
     try {
       // Python is already an operator/host prerequisite. Its standard-library
-      // XZ codec and quote-free Base85 alphabet fit the complete participant
-      // set under the existing command limit without another transfer path.
-      compressed = execFileSync('python3', ['-I', '-c', 'import base64,lzma,sys; raw=sys.stdin.buffer.read(786433); assert len(raw)<=786432; sys.stdout.buffer.write(base64.b85encode(lzma.compress(raw,format=lzma.FORMAT_XZ,preset=6)))'], { input: raw, stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000, maxBuffer: 768 * 1024 }).toString('ascii');
+      // XZ plus quote-free Base85 fits larger bundles without another transfer
+      // path. Keep the original Base64 wire when it fits so saved receipts replay.
+      compressed = JSON.parse(execFileSync('python3', ['-I', '-c', 'import base64,json,lzma,sys; raw=sys.stdin.buffer.read(786433); assert len(raw)<=786432; compressed=lzma.compress(raw,format=lzma.FORMAT_XZ,preset=6); json.dump([base64.b64encode(compressed).decode(),base64.b85encode(compressed).decode()],sys.stdout)'], { input: raw, stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000, maxBuffer: 768 * 1024 }).toString('utf8'));
     } catch { fail('bounded_compression_unavailable'); }
-    script = `import base64,gzip,hashlib,json,lzma\ndecoder=lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=134217728)\nraw=decoder.decompress(base64.b85decode('${compressed}'),max_length=786433)\nif not decoder.eof or decoder.unused_data or len(raw)>786432 or hashlib.sha256(raw).hexdigest()!='${digest(raw)}': raise SystemExit(1)\nwire=json.loads(raw)\nfor entry in wire['request']['files'].values():\n entry['base64']=base64.b64encode(entry.pop('utf8').encode()).decode()\nbody=(json.dumps(wire['request'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\\n').encode()\nif hashlib.sha256(body).hexdigest()!='${digest(body)}': raise SystemExit(1)\nnamespace={}\nexec(compile(wire['runner'],'<reviewed-staging-runner>','exec'),namespace)\nnamespace['main'](base64.b64encode(gzip.compress(body)).decode(),'${digest(body)}')`;
+    const scriptFor = decode => `import base64,gzip,hashlib,json,lzma\ndecoder=lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=134217728)\nraw=decoder.decompress(${decode},max_length=786433)\nif not decoder.eof or decoder.unused_data or len(raw)>786432 or hashlib.sha256(raw).hexdigest()!='${digest(raw)}': raise SystemExit(1)\nwire=json.loads(raw)\nfor entry in wire['request']['files'].values():\n entry['base64']=base64.b64encode(entry.pop('utf8').encode()).decode()\nbody=(json.dumps(wire['request'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\\n').encode()\nif hashlib.sha256(body).hexdigest()!='${digest(body)}': raise SystemExit(1)\nnamespace={}\nexec(compile(wire['runner'],'<reviewed-staging-runner>','exec'),namespace)\nnamespace['main'](base64.b64encode(gzip.compress(body)).decode(),'${digest(body)}')`;
+    script = scriptFor(`base64.b64decode('${compressed[0]}',validate=True)`);
+    if (Buffer.byteLength(JSON.stringify(parametersFor(script))) > MAX_COMMAND_BYTES) {
+      script = scriptFor(`base64.b85decode('${compressed[1]}')`);
+    }
   }
-  const commands = [`/usr/bin/python3 - <<'ECHO_RELEASE_PY'\n${script}\nECHO_RELEASE_PY`];
-  const parameters = { commands, executionTimeout: ['1200'] };
+  const parameters = parametersFor(script);
   // Leave space for AWS-RunShellScript's document envelope under its 64 KiB limit.
   if (Buffer.byteLength(JSON.stringify(parameters)) > MAX_COMMAND_BYTES) fail('bounded_command_too_large');
   return parameters;

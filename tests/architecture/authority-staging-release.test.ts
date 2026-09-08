@@ -121,6 +121,7 @@ describe('bounded staging release operator', () => {
     expect(Buffer.byteLength(JSON.stringify(parameters))).toBeLessThan(60 * 1024);
     expect(parameters.executionTimeout).toEqual(['1200']);
     expect(parameters.commands).toHaveLength(1);
+    expect(parameters.commands[0]).toContain('b85decode');
     expect(f.calls.every(args => !['s3api', 'iam', 'secretsmanager'].includes(args[0]))).toBe(true);
   });
 
@@ -417,6 +418,37 @@ describe('bounded staging release operator', () => {
     expect(rejected.status).not.toBe(0);
     expect(rejected.stdout).toBe('');
     expect(f.state.submissions).toBe(0);
+  });
+
+  it('polls a pre-existing compact V2 Base64 receipt without changing its exact parameter binding', () => {
+    const f = fixture();
+    const readSource = (commit: string, path: string) => {
+      if (path === 'tools/authority-staging-release-host.py' ||
+          path === 'deploy/organization-authority/update-clean-v1.sh' ||
+          path === 'deploy/organization-authority/onboard-clean-v1.sh' ||
+          path === 'deploy/organization-authority/restore-clean-v1-host.sh' ||
+          path === 'deploy/organization-authority/backup-authority-maintenance.sh' ||
+          path === 'deploy/release/clean-v1-release.py' ||
+          path === 'deploy/release/clean-v1-runtime-profile.py') {
+        return Buffer.from(`compact-reviewed-source:${path}\n`);
+      }
+      return f.dependencies.readSource(commit, path);
+    };
+    const dependencies = { ...f.dependencies, readSource };
+    planStagingRelease(f.options, dependencies);
+    const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
+    const parameters = releaseSsmParameters(receipt.request, readSource);
+    expect(parameters.commands[0]).toContain('b64decode(');
+    expect(parameters.commands[0]).toContain('validate=True');
+    expect(parameters.commands[0]).not.toContain('b85decode');
+    expect(receipt.parameters_sha256).toBe(digest(canonical(parameters) + '\n'));
+
+    receipt.state = 'submitted';
+    receipt.command_id = COMMAND;
+    write(f.options.output, receipt);
+    expect(executeStagingRelease(f.options.output, dependencies, true).state).toBe('succeeded');
+    expect(f.state.submissions).toBe(0);
+    expect(f.calls.some(args => args.slice(0, 2).join(' ') === 'ssm send-command')).toBe(false);
   });
 
   it('can poll legacy receipts but never submit a legacy unpinned plan', () => {
