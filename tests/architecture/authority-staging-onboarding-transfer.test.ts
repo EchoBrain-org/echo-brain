@@ -712,6 +712,7 @@ describe("Authority staging onboarding transfer", () => {
       host_stage_path: "/srv/echo-authority-clean-v1/rehearsal-inputs/onboarding-transfer-001",
       next_human_action: expect.stringContaining("prepare-rehearsal --operation-id onboarding-transfer-001"),
     });
+    if (!result.completion_path) throw new Error("staged reuse operation must return a completion receipt path");
     const completion = JSON.parse(readFileSync(result.completion_path, "utf8"));
     expect(completion).toMatchObject({
       state: "remote_staged",
