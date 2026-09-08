@@ -285,6 +285,8 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("panel.titleVisibility = .hidden");
     expect(source).toContain('PillButton(title: "Sources (0)"');
     expect(source).toContain('process.arguments = ["person", "records", "--record-sha256", recordSha256]');
+    expect(source).toContain("maximumSourceProcessOutputBytes = 512 * 1024 + 1024");
+    expect(source).toContain("BoundedReader(maximumBytes: maximumSourceProcessOutputBytes)");
     expect(source).toContain("private struct DisplaySource");
     expect(source).toContain("fileprivate static func parseSourceRecord");
     expect(source).toContain("isSha256(citation.atom_id)");
@@ -300,6 +302,7 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("Only the approver");
     expect(source).toContain("func accountWillChange()");
     expect(source).toContain("func applicationDidDeactivate()");
+    expect(source).toContain("activeSources?.cancel()");
     expect(source).toContain("Back to answer");
   });
 

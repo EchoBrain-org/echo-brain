@@ -7,6 +7,7 @@ private let askTimeoutSeconds: TimeInterval = 145
 private let identityTimeoutSeconds: TimeInterval = 5
 private let sourceTimeoutSeconds: TimeInterval = 15
 private let maximumProcessOutputBytes = 128 * 1024
+private let maximumSourceProcessOutputBytes = 512 * 1024 + 1024
 private let maximumAnswerScalars = 12_000
 private let maximumDisplayedSourceScalars = 2_000
 private let maximumDisplayedSourceSignals = 32
@@ -501,7 +502,7 @@ private final class CliRunner: @unchecked Sendable {
         process.standardOutput = stdout
         process.standardError = stderr
 
-        let stdoutReader = BoundedReader(maximumBytes: maximumProcessOutputBytes)
+        let stdoutReader = BoundedReader(maximumBytes: maximumSourceProcessOutputBytes)
         let stderrReader = BoundedReader(maximumBytes: maximumProcessOutputBytes)
         let readers = DispatchGroup()
         readers.enter()
@@ -1814,6 +1815,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     func applicationWillTerminate(_ notification: Notification) {
         controller?.shutdown()
         people?.shutdown()
+        account?.shutdown()
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
     }
@@ -1940,7 +1942,6 @@ private func retireRunningOverlay() -> Bool {
     }
 }
 
-#if !ECHO_OVERLAY_SOURCE_FIXTURE
 @main
 private enum EchoOverlayMain {
     @MainActor
@@ -1962,103 +1963,3 @@ private enum EchoOverlayMain {
         application.run()
     }
 }
-#else
-@main
-private enum EchoOverlaySourceFixtureMain {
-    private static let recordHash = "sha256:" + String(repeating: "b", count: 64)
-    private static let atomHash = "sha256:" + String(repeating: "c", count: 64)
-    private static let policy = "organization-member-readable-person-v2"
-
-    static func main() {
-        let mode = CommandLine.arguments.dropFirst().first ?? ""
-        let passed: Bool
-        switch mode {
-        case "valid-answer":
-            if case .success(let answer) = CliRunner.parseSuccess(answerData(citations: [citation()])), answer.sources.count == 1 {
-                passed = true
-            } else { passed = false }
-        case "duplicate-atom":
-            let duplicate = citation()
-            if case .failure = CliRunner.parseSuccess(answerData(citations: [duplicate, duplicate])) {
-                passed = true
-            } else { passed = false }
-        case "valid-source":
-            passed = CliRunner.parseSourceRecord(sourceData(), source: source())?.title == "Quarterly planning"
-        case "mismatched-source":
-            passed = CliRunner.parseSourceRecord(sourceData(hash: "sha256:" + String(repeating: "d", count: 64)), source: source()) == nil
-        case "mismatched-policy":
-            passed = CliRunner.parseSourceRecord(sourceData(policyID: "restricted-reviewer-person-v2"), source: source()) == nil
-        case "empty-source":
-            passed = CliRunner.parseSourceRecord(sourceData(records: []), source: source()) == nil
-        default:
-            passed = false
-        }
-        Darwin.exit(passed ? EXIT_SUCCESS : EXIT_FAILURE)
-    }
-
-    private static func citation() -> [String: Any] {
-        ["atom_id": atomHash, "record_sha256": recordHash, "policy_id": policy]
-    }
-
-    private static func source() -> DisplaySource {
-        DisplaySource(label: "Source 1", recordSha256: recordHash, policyID: policy)
-    }
-
-    private static func answerData(citations: [[String: Any]]) -> Data {
-        data([
-            "ok": true,
-            "result": [
-                "schema_version": 1,
-                "kind": "echo-clean-person-answer-v1",
-                "generation_id": "sha256:" + String(repeating: "a", count: 64),
-                "record_head": ["position": 1, "record_sha256": recordHash],
-                "answer": "Approved answer.",
-                "citations": citations,
-            ],
-        ])
-    }
-
-    private static func sourceData(
-        hash: String = recordHash,
-        policyID: String = policy,
-        records: [[String: Any]]? = nil
-    ) -> Data {
-        let record: [String: Any] = [
-            "position": 1,
-            "approval_id": "apr_fixture",
-            "record_sha256": hash,
-            "envelope": [
-                "record_sha256": hash,
-                "body": [
-                    "event": [
-                        "kind": "approved",
-                        "policy_id": policyID,
-                        "approved_snapshot": [
-                            "approved_payload": [
-                                "brief": [
-                                    "meeting": ["title": "Quarterly planning"],
-                                    "decisions": [["id": "d1", "kind": "decision", "text": "Keep the current plan." ]],
-                                    "actions": [["id": "a1", "kind": "action", "text": "Publish the plan." ]],
-                                    "rationales": [["id": "r1", "kind": "rationale", "text": "The evidence supports it." ]],
-                                ],
-                            ],
-                        ],
-                    ],
-                ],
-            ],
-        ]
-        return data([
-            "ok": true,
-            "result": [
-                "schema_version": 1,
-                "kind": "echo-clean-person-record-list-v1",
-                "records": records ?? [record],
-            ],
-        ])
-    }
-
-    private static func data(_ value: [String: Any]) -> Data {
-        try! JSONSerialization.data(withJSONObject: value, options: [])
-    }
-}
-#endif

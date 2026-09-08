@@ -924,6 +924,7 @@ export class PersonAuthorityClient {
   records(
     accessToken: string,
     limit?: number,
+    recordSha256?: `sha256:${string}`,
   ): Promise<PersonRecordListV1> {
     if (
       limit !== undefined &&
@@ -931,9 +932,17 @@ export class PersonAuthorityClient {
     ) {
       throw new Error("Person record limit must be an integer from 1 to 100");
     }
+    if (
+      recordSha256 !== undefined &&
+      !/^sha256:[a-f0-9]{64}$/.test(recordSha256)
+    ) {
+      throw new Error("Person record SHA-256 is invalid");
+    }
     return this.getJson({
       path:
-        limit === undefined
+        recordSha256 !== undefined
+          ? `${PERSON_RECORDS_PATH_V1}?record_sha256=${recordSha256}`
+          : limit === undefined
           ? PERSON_RECORDS_PATH_V1
           : `${PERSON_RECORDS_PATH_V1}?limit=${limit}`,
       access_token: accessToken,

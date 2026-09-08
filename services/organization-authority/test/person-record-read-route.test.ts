@@ -160,4 +160,27 @@ describe("Person V4 record read route", () => {
       value.authority.close();
     }
   });
+
+  it("forwards an exact digest through the same rechecked and audited read", () => {
+    const value = setup();
+    try {
+      const record_sha256 = digest("old-cited-record");
+      const response = value.route.list({
+        access_token: "bearer-only",
+        record_sha256,
+      });
+      expect(value.inputs).toEqual([
+        expect.objectContaining({ record_sha256 }),
+      ]);
+      expect(response.kind).toBe("echo-clean-person-record-list-v1");
+      expect(value.authenticateCalls()).toBe(2);
+      expect(
+        value.authority
+          .prepare("SELECT count(*) AS count FROM authority_person_read_decision_audit_v2")
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      value.authority.close();
+    }
+  });
 });

@@ -93,6 +93,7 @@ export function createPersonRecordReadRouteV1(
     list(input: {
       readonly access_token: string;
       readonly limit?: number;
+      readonly record_sha256?: Sha256Digest;
     }): PersonRecordReadResponseV1 {
       const admitted = options.sessions.authenticateAccess({
         access_token: input.access_token,
@@ -106,6 +107,9 @@ export function createPersonRecordReadRouteV1(
         principal_id: admitted.principal_id,
         membership_id: admitted.membership_id,
         ...(input.limit === undefined ? {} : { limit: input.limit }),
+        ...(input.record_sha256 === undefined
+          ? {}
+          : { record_sha256: input.record_sha256 }),
       });
 
       const released = options.sessions.authenticateAccess({
