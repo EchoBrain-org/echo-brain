@@ -77,13 +77,19 @@ export class PersonRecordReaderV1 {
       throw new Error("Person record_sha256 must be a SHA-256 digest");
     }
 
+    // Keep the exact lookup as a separate predicate so SQLite can use the
+    // unique record digest index instead of evaluating an optional OR filter.
+    const exactRecordWhere =
+      input.record_sha256 === undefined
+        ? ""
+        : "\n            AND record.record_sha256 = ?";
     const rows = this.database
       .prepare(
         `SELECT record.position, record.approval_id, record.record_sha256,
                 record.canonical_envelope
            FROM organization_record_log AS record
           WHERE record.event_kind = 'approved'
-            AND (? IS NULL OR record.record_sha256 = ?)
+            ${exactRecordWhere}
             AND (
               EXISTS (
                 SELECT 1
@@ -110,8 +116,7 @@ export class PersonRecordReaderV1 {
           LIMIT ?`,
       )
       .all(
-        input.record_sha256 ?? null,
-        input.record_sha256 ?? null,
+        ...(input.record_sha256 === undefined ? [] : [input.record_sha256]),
         input.authority_id,
         input.organization_id,
         input.state_lineage_id,

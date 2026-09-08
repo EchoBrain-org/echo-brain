@@ -1062,7 +1062,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
 
     func hidePanel() {
         cancelIdentityLookup()
-        clearSources()
+        clearFetchedSources()
         panel.orderOut(nil)
     }
 
@@ -1082,7 +1082,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     func applicationDidDeactivate() {
-        clearSources()
+        clearFetchedSources()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -1274,15 +1274,21 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     private func clearSources() {
+        clearFetchedSources()
+        currentSources = []
+        sourcesButton.title = "Sources (0)"
+        sourcesButton.isEnabled = false
+    }
+
+    private func clearFetchedSources() {
         sourceRequestIdentifier = nil
         activeSources?.cancel()
         activeSources = nil
-        currentSources = []
         sourceView.string = ""
         sourceScrollView.isHidden = true
         if !answerView.string.isEmpty { answerScrollView.isHidden = false }
-        sourcesButton.title = "Sources (0)"
-        sourcesButton.isEnabled = false
+        sourcesButton.title = "Sources (\(currentSources.count))"
+        sourcesButton.isEnabled = !currentSources.isEmpty
     }
 
     private func showAnswer() {

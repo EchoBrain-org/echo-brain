@@ -296,6 +296,7 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain('event["policy_id"] as? String == source.policyID');
     expect(source).toContain("sourceRequestIdentifier == identifier");
     expect(source).toContain("currentSources = []");
+    expect(source).toContain("private func clearFetchedSources()");
     expect(source).not.toContain('process.arguments = ["person", "records", "--limit"');
     expect(source).toContain("Source details are unavailable.");
     expect(source).toContain("Visible to active organization members");
@@ -304,6 +305,10 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("func applicationDidDeactivate()");
     expect(source).toContain("activeSources?.cancel()");
     expect(source).toContain("Back to answer");
+    const hidePanel = source.slice(source.indexOf("func hidePanel()"), source.indexOf("func shutdown()"));
+    const deactivate = source.slice(source.indexOf("func applicationDidDeactivate()"), source.indexOf("func windowShouldClose"));
+    expect(hidePanel).toContain("clearFetchedSources()");
+    expect(deactivate).toContain("clearFetchedSources()");
   });
 
   it("uses the ECHO brand palette", () => {

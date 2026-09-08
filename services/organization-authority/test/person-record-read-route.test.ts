@@ -1,11 +1,14 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import { describe, expect, it } from "vitest";
+import { once } from "node:events";
+import { describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { createPersonRecordReadRouteV1 } from "../src/composition/person-record-read-route.js";
+import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
+import type { PersonRecordReadHttpApplicationV1 } from "../src/presentation/person-record-read-http-application.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 
@@ -140,13 +143,19 @@ describe("Person V4 record read route", () => {
     }
   });
 
-  it("does not release rows or append an audit when the current membership changes before release", () => {
+  it("does not release an exact record after membership changes and preserves prior audit evidence", () => {
     const value = setup([
+      authorization(),
+      authorization(),
       authorization(),
       authorization({ membership_id: "membership_revoked" }),
     ]);
     try {
-      expect(() => value.route.list({ access_token: "bearer-only" })).toThrow(
+      const record_sha256 = digest("old-cited-record");
+      expect(value.route.list({ access_token: "bearer-only", record_sha256 })).toMatchObject({
+        records: [{ record_sha256: digest("record-7") }],
+      });
+      expect(() => value.route.list({ access_token: "bearer-only", record_sha256 })).toThrow(
         "person authentication failed",
       );
       expect(
@@ -155,7 +164,7 @@ describe("Person V4 record read route", () => {
             `SELECT count(*) AS count FROM authority_person_read_decision_audit_v2`,
           )
           .get(),
-      ).toEqual({ count: 0 });
+      ).toEqual({ count: 1 });
     } finally {
       value.authority.close();
     }
@@ -181,6 +190,52 @@ describe("Person V4 record read route", () => {
       ).toEqual({ count: 1 });
     } finally {
       value.authority.close();
+    }
+  });
+});
+
+async function startRecordServer(application: PersonRecordReadHttpApplicationV1) {
+  const server = createOrganizationAuthorityHttpServer({
+    descriptor: {} as never,
+    sessions: {} as never,
+    oidc_provider: {} as never,
+    expected_issuer: "https://issuer.example",
+    person_record_read: application,
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("server did not bind");
+  return {
+    url: `http://127.0.0.1:${String(address.port)}`,
+    async close() { const closed = once(server, "close"); server.close(); await closed; },
+  };
+}
+
+describe("Person exact record HTTP query", () => {
+  it("accepts one exact digest and rejects duplicate or combined query keys", async () => {
+    const record_sha256 = digest("old-cited-record");
+    const list = vi.fn(() => Object.freeze({
+      schema_version: 1 as const,
+      kind: "echo-clean-person-record-list-v1" as const,
+      records: Object.freeze([]),
+    }));
+    const server = await startRecordServer({ list });
+    try {
+      const headers = { authorization: "Bearer bearer-only" };
+      const exact = await fetch(`${server.url}/v1/person/records?record_sha256=${record_sha256}`, { headers });
+      expect(exact.status).toBe(200);
+      expect(list).toHaveBeenCalledWith({ access_token: "bearer-only", record_sha256 });
+      for (const query of [
+        `record_sha256=${record_sha256}&limit=1`,
+        `record_sha256=${record_sha256}&record_sha256=${record_sha256}`,
+      ]) {
+        const response = await fetch(`${server.url}/v1/person/records?${query}`, { headers });
+        expect(response.status).toBe(400);
+      }
+      expect(list).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.close();
     }
   });
 });

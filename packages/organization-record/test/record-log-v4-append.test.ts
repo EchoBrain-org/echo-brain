@@ -1025,6 +1025,49 @@ describe("V4 organization-record append", () => {
     }
   });
 
+  it("finds an old readable record by digest without widening restricted or missing reads", async () => {
+    const db = database();
+    try {
+      const authority = protocolAuthority();
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES);
+      let oldest: { readonly record_sha256: Sha256Digest } | undefined;
+      for (let index = 0; index < 101; index += 1) {
+        const appended = await app.append(
+          appendInput({
+            authority,
+            approval_id: `approval-exact-page-${index}`,
+            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          }),
+        );
+        if (index === 0) oldest = appended;
+      }
+      const restricted = await app.append(
+        appendInput({
+          authority,
+          approval_id: "approval-exact-restricted",
+          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+        }),
+      );
+      const reader = new PersonRecordReaderV1(db);
+      const readerInput = {
+        ...COORDINATES,
+        principal_id: "principal-other",
+        membership_id: "membership-other",
+      };
+      expect(oldest).toBeDefined();
+      expect(reader.list({
+        ...readerInput,
+        principal_id: "principal-1",
+        membership_id: "membership-1",
+        record_sha256: oldest!.record_sha256,
+      })).toMatchObject([{ position: 1, record_sha256: oldest!.record_sha256 }]);
+      expect(reader.list({ ...readerInput, record_sha256: restricted.record_sha256 })).toEqual([]);
+      expect(reader.list({ ...readerInput, record_sha256: sha256Digest("missing-exact-record") })).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("materializes a verified dense retrieval-source snapshot for both person policies", async () => {
     const db = database();
     try {
