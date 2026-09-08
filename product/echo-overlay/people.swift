@@ -338,6 +338,8 @@ final class PeopleClient: @unchecked Sendable {
             return "This employee has already onboarded. Ask them to sign in."
         case ("request_rejected", .rejected):
             return "The request was rejected. Refresh and try again."
+        case ("outcome_unknown", .not_submitted):
+            return "The request was not sent. Check your connection and try again."
         default:
             return nil
         }

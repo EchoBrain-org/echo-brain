@@ -18,7 +18,9 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
     root = realpathSync(mkdtempSync(join(tmpdir(), "echo-people-proof-")));
     binary = join(root, "proof"); cli = join(root, "cli.cjs");
     const main = readFileSync(join(repo, "product/echo-overlay/main.swift"), "utf8");
-    writeFileSync(join(root, "overlay.swift"), main.slice(0, main.indexOf("@main\nprivate enum EchoOverlayMain")));
+    const entrypoint = main.indexOf("@main\nprivate enum EchoOverlayMain");
+    expect(entrypoint).toBeGreaterThan(0);
+    writeFileSync(join(root, "overlay.swift"), main.slice(0, entrypoint));
     writeFileSync(join(root, "proof.swift"), `import Foundation
 @main enum Proof {
   static func main() throws {
@@ -71,7 +73,7 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
 `);
     execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors",
       "-target", "arm64-apple-macos14.0", "-framework", "AppKit", "-framework", "Carbon",
-      join(root, "overlay.swift"), join(repo, "product/echo-overlay/people.swift"), join(root, "proof.swift"), "-o", binary],
+      join(root, "overlay.swift"), join(repo, "product/echo-overlay/people.swift"), join(repo, "product/echo-overlay/account.swift"), join(root, "proof.swift"), "-o", binary],
     { timeout: 120_000, stdio: "pipe" });
     writeFileSync(cli, `#!${process.execPath}
 const fs = require("node:fs");
@@ -195,6 +197,7 @@ if (args[1] === "status") {
     ["employee_already_exists", "rejected", "rejected:Already a member. Refresh to check whether to reissue or sign in."],
     ["employee_onboarding_complete", "rejected", "rejected:This employee has already onboarded. Ask them to sign in."],
     ["request_rejected", "rejected", "rejected:The request was rejected. Refresh and try again."],
+    ["outcome_unknown", "not_submitted", "rejected:The request was not sent. Check your connection and try again."],
   ])("shows a fixed actionable message for a known rejected mutation: %s", (code, outcome, expected) => {
     const result = run(`rejected-${code}:${outcome}`, "invite");
     expect(result.result).toBe(expected);

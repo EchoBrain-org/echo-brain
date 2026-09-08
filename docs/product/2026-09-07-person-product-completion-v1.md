@@ -1,6 +1,7 @@
 # Person product completion V1
 
-Status: implementation sprint in progress; no new release accepted.
+Status: implemented for review; live graphical rehearsal and release acceptance
+remain separate.
 
 ## Outcome
 
