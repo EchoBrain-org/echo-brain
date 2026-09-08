@@ -4,6 +4,7 @@
 !.env.example
 node_modules/
 .npm-cache/
+.worktrees/
 dist/
 coverage/
 deploy/organization-authority/data/

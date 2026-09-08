@@ -36,6 +36,9 @@ services:
       # question, prompts, released source text, raw model output, and exact
       # validation messages to its log stream as echo-authority-journey-content-v1.
       ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "${ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1:-false}"
+      # Fresh staging rehearsals can admit the four fixture notes through the
+      # normal runtime. The service rejects this setting outside staging.
+      ECHO_STAGING_SYNTHETIC_MEETINGS_DIR: "${ECHO_STAGING_SYNTHETIC_MEETINGS_DIR:-}"
     restart: unless-stopped
     stop_grace_period: 45s
     volumes:

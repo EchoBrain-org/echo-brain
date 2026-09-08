@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   canonicalSha256,
@@ -28,12 +28,59 @@ const SYNTHETIC_DEMO_CURSOR_PREFIX =
   "synthetic-demo-source:customer-demo:1.0.0:v1:";
 export const SYNTHETIC_DEMO_INITIAL_CURSOR_V1 =
   `${SYNTHETIC_DEMO_CURSOR_PREFIX}0`;
-const SYNTHETIC_DEMO_MEETING_COUNT = 4;
+export const SYNTHETIC_DEMO_MEETING_COUNT_V1 = 4;
+const SYNTHETIC_DEMO_MAXIMUM_MEETING_BYTES = 256 * 1024;
+export const SYNTHETIC_DEMO_MEETING_FILENAMES_V1 = Object.freeze([
+  "01-revenue-signal-calibration.json",
+  "02-data-handling-review.json",
+  "03-implementation-capacity-triage.json",
+  "04-commercial-exception-review.json",
+] as const);
+const SYNTHETIC_DEMO_MEETING_IDENTITIES_V1 = Object.freeze([
+  {
+    id: "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+    canonical_revision: "demo-northstar-rollout-01-r1",
+  },
+  {
+    id: "synthetic-demo-northstar-data-handling-review-2026-08-26",
+    canonical_revision: "demo-northstar-rollout-02-r1",
+  },
+  {
+    id: "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+    canonical_revision: "demo-northstar-rollout-03-r1",
+  },
+  {
+    id: "synthetic-demo-northstar-commercial-exception-2026-08-29",
+    canonical_revision: "demo-northstar-rollout-04-r1",
+  },
+] as const);
 
 export interface SyntheticDemoMeetingCorpusV1 {
   readonly meetings: readonly MeetingDocument[];
   /** SHA-256 over filename-ordered, canonical meeting documents. */
   readonly corpus_digest: Sha256Digest;
+}
+
+/**
+ * The fixed staging corpus is identified by its source identity plus these
+ * four immutable meeting/revision pairs. Admission additionally commits the
+ * whole-corpus digest; this predicate lets durable status reject a duplicate
+ * or unrelated candidate when counting the four required approvals.
+ */
+export function isSyntheticDemoFixtureMeetingV1(
+  value: unknown,
+): value is MeetingDocument {
+  try {
+    assertCanonicalMeetingDocument(value, syntheticDemoMeetingSourceIdentityV1);
+  } catch {
+    return false;
+  }
+  const meeting = value as MeetingDocument;
+  return SYNTHETIC_DEMO_MEETING_IDENTITIES_V1.some(
+    (expected) =>
+      meeting.id === expected.id &&
+      meeting.provenance.canonical_revision === expected.canonical_revision,
+  );
 }
 
 function decodeOffset(cursor: string | undefined): number {
@@ -56,21 +103,48 @@ export async function loadSyntheticDemoMeetingCorpusV1(
   meetingsDirectory: string,
 ): Promise<SyntheticDemoMeetingCorpusV1> {
   const entries = await readdir(meetingsDirectory, { withFileTypes: true });
-  const filenames = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => entry.name)
-    .sort();
-
-  if (filenames.length !== SYNTHETIC_DEMO_MEETING_COUNT) {
-    throw new Error("synthetic-demo corpus must contain four meeting JSON files");
+  const filenames = entries.map((entry) => entry.name).sort();
+  if (
+    filenames.length !== SYNTHETIC_DEMO_MEETING_COUNT_V1 ||
+    filenames.some(
+      (filename, index) =>
+        filename !== SYNTHETIC_DEMO_MEETING_FILENAMES_V1[index],
+    )
+  ) {
+    throw new Error("synthetic-demo corpus must contain only the four declared meeting JSON files");
   }
 
+  await Promise.all(
+    entries.map(async (entry) => {
+      const path = join(meetingsDirectory, entry.name);
+      const metadata = await lstat(path);
+      if (
+        !entry.isFile() ||
+        entry.isSymbolicLink() ||
+        !metadata.isFile() ||
+        metadata.isSymbolicLink() ||
+        metadata.size < 1 ||
+        metadata.size > SYNTHETIC_DEMO_MAXIMUM_MEETING_BYTES
+      ) {
+        throw new Error("synthetic-demo corpus entries must be bounded regular files");
+      }
+    }),
+  );
+
   const meetings = await Promise.all(
-    filenames.map(async (filename) => {
+    filenames.map(async (filename, index) => {
       const parsed: unknown = JSON.parse(
         await readFile(join(meetingsDirectory, filename), "utf8"),
       );
       assertCanonicalMeetingDocument(parsed, syntheticDemoMeetingSourceIdentityV1);
+      const expected = SYNTHETIC_DEMO_MEETING_IDENTITIES_V1[index]!;
+      if (
+        !isSyntheticDemoFixtureMeetingV1(parsed) ||
+        parsed.id !== expected.id ||
+        parsed.provenance.canonical_revision !== expected.canonical_revision
+      ) {
+        throw new Error("synthetic-demo corpus has an unexpected fixture meeting");
+      }
       return parsed;
     }),
   );

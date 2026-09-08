@@ -15,12 +15,14 @@ import {
   OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
   OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
 } from "./providers/openrouter/openrouter-decision-processor-config-v1.js";
+import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
   "--state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> " +
   "--slack-signing-secret-file <absolute-path> " +
-  "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>]";
+  "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>] " +
+  "[--staging-synthetic-meetings-dir <absolute-path>]";
 const STAGING_CANARY_USAGE =
   "usage: echo-organization-authority-serve staging-private-dm-canary " +
   "--release-id <canonical-clean-v1-release-id>";
@@ -60,6 +62,7 @@ function flags(
     "--client-secret-file",
     "--slack-signing-secret-file",
     "--worker-interval-ms",
+    "--staging-synthetic-meetings-dir",
   ]);
   const parsed: Record<string, string | undefined> = {};
   for (let index = 0; index < argv.length; index += 2) {
@@ -159,6 +162,29 @@ export async function runOrganizationAuthorityServiceCli(
     }
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
+    const environmentSyntheticMeetingsDirectory =
+      process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
+    const requestedSyntheticMeetingsDirectory =
+      parsed["--staging-synthetic-meetings-dir"] ??
+      (environmentSyntheticMeetingsDirectory === ""
+        ? undefined
+        : environmentSyntheticMeetingsDirectory);
+    if (
+      parsed["--staging-synthetic-meetings-dir"] !== undefined &&
+      environmentSyntheticMeetingsDirectory !== undefined &&
+      environmentSyntheticMeetingsDirectory !== "" &&
+      environmentSyntheticMeetingsDirectory !==
+        parsed["--staging-synthetic-meetings-dir"]
+    ) {
+      throw new Error("staging synthetic meetings directory differs between command and environment");
+    }
+    const stagingSyntheticMeetingsDirectory =
+      requestedSyntheticMeetingsDirectory === undefined
+        ? undefined
+        : assertStagingSyntheticMeetingSourceSelectionV1({
+            authority_url: manifest.authority_url,
+            meetings_directory: requestedSyntheticMeetingsDirectory,
+          });
     stagingJourneyTelemetry =
       manifest.authority_url ===
       STAGING_AUTHORITY_ORIGIN_V1
@@ -223,6 +249,13 @@ export async function runOrganizationAuthorityServiceCli(
       granola_owner_email_file: manifest.granola_owner_email_file,
       // The V1 manifest retains its serialized compatibility field.
       openrouter_credential_file: manifest.llm_credential_file,
+      ...(stagingSyntheticMeetingsDirectory === undefined
+        ? {}
+        : {
+            staging_synthetic_meetings_directory:
+              stagingSyntheticMeetingsDirectory,
+            staging_synthetic_owner_email: manifest.owner_email,
+          }),
       on_worker_error: () => {
         io.stderr(`${LEGACY_CLEAN_LIVE_WORKER_FAILURE_EVENT_V1}\n`);
       },

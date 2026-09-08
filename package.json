@@ -57,7 +57,7 @@
     "check:authority-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
     "test:capacity": "npm run build:workspaces && node tools/evals/authority-core/verify-contract.mjs && node --test tools/evals/authority-core/test/*.test.mjs",
     "capacity:checkpoint": "npm run build:workspaces && node tools/evals/authority-core/core-checkpoint.mjs",
-    "check": "npm run check:architecture-boundaries && npm run check:docs && npm run typecheck && npm run lint && npm test"
+    "check": "npm run check:architecture-boundaries && npm run check:docs && npm run lint && npm run build && tsc --noEmit -p tsconfig.json && vitest run --config vitest.config.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.11",

@@ -89,8 +89,10 @@ Workspace builds reuse TypeScript's existing outputs. `npm test` and
 `npm run build` retain clean builds so deleted modules cannot survive in outputs.
 `npm run build -- --help` describes build options without running a build.
 
-Before submitting a change, run `npm run check`: boundary and documentation
-checks, TypeScript checking, linting, and the complete active test suite.
+Use the focused command that covers the change during the inner loop. Before
+submitting the final reviewable tree, run `npm run check`: boundary and
+documentation checks, TypeScript checking, linting, and the complete active
+test suite.
 CI also runs both core evaluation commands above. The full suite uses at most
 two isolated test workers; mutable Git and packaging fixtures use temporary
 checkouts.

@@ -110,8 +110,8 @@ PY
 usage() {
   cat >&2 <<'EOF'
 usage:
-  onboard-clean-v1.sh doctor --input-dir <absolute-private-input-directory>
-  onboard-clean-v1.sh prepare --input-dir <absolute-private-input-directory>
+  onboard-clean-v1.sh doctor --input-dir <absolute-private-input-directory> [--staging-synthetic-meetings-dir <absolute-private-four-note-directory>]
+  onboard-clean-v1.sh prepare --input-dir <absolute-private-input-directory> [--staging-synthetic-meetings-dir <absolute-private-four-note-directory>]
   onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
   onboard-clean-v1.sh resume
@@ -146,6 +146,13 @@ input_owner_email=''
 input_authority_host=''
 input_aws_region=''
 input_channel=''
+input_staging_synthetic_meetings_dir=''
+STAGING_MEETING_FILES=(
+  01-revenue-signal-calibration.json
+  02-data-handling-review.json
+  03-implementation-capacity-triage.json
+  04-commercial-exception-review.json
+)
 
 portable_stat_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
@@ -158,6 +165,43 @@ portable_stat_uid() {
 require_input_dir_argument() {
   [[ $# -eq 2 && "$1" == --input-dir && "$2" = /* ]] || usage
   input_dir="$2"
+}
+
+require_preparation_arguments() {
+  input_staging_synthetic_meetings_dir=''
+  if [[ $# -eq 4 ]]; then
+    [[ "$3" == --staging-synthetic-meetings-dir && "$4" = /* ]] || usage
+    input_staging_synthetic_meetings_dir="$4"
+    set -- "$1" "$2"
+  fi
+  require_input_dir_argument "$@"
+}
+
+check_staging_meeting_input() {
+  [[ -n "$input_staging_synthetic_meetings_dir" ]] || return 0
+  [[ "$input_authority_host" == authority-staging.echobrain.org ]] || return 1
+  python3 - "$input_staging_synthetic_meetings_dir" "$input_runtime_profile" "${STAGING_MEETING_FILES[@]}" <<'PY'
+import json, os, pathlib, stat, sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    directory = path.lstat()
+    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid() or stat.S_IMODE(directory.st_mode) != 0o700:
+        raise ValueError()
+    profile = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding='utf-8'))
+    if 'ECHO_STAGING_SYNTHETIC_MEETINGS_DIR:' not in profile['files']['compose.clean-v1.yaml']:
+        raise ValueError()
+    if sorted(item.name for item in path.iterdir()) != sorted(sys.argv[3:]):
+        raise ValueError()
+    for name in sys.argv[3:]:
+        item = (path / name).lstat()
+        if not stat.S_ISREG(item.st_mode) or item.st_uid != os.geteuid() or item.st_nlink != 1:
+            raise ValueError()
+        if stat.S_IMODE(item.st_mode) != 0o600 or not 0 < item.st_size <= 256 * 1024:
+            raise ValueError()
+except (OSError, ValueError, KeyError, TypeError):
+    raise SystemExit(1)
+PY
 }
 
 read_input_manifest() {
@@ -408,7 +452,7 @@ doctor_json() {
 }
 
 doctor() {
-  require_input_dir_argument "$@"
+  require_preparation_arguments "$@"
   if ! command -v docker >/dev/null 2>&1; then doctor_json false docker_missing 'Install Docker, then rerun doctor.'; return; fi
   if ! docker compose version >/dev/null 2>&1; then doctor_json false docker_compose_missing 'Install Docker Compose v2, then rerun doctor.'; return; fi
   if ! command -v python3 >/dev/null 2>&1; then doctor_json false python3_missing 'Install python3, then rerun doctor.'; return; fi
@@ -420,6 +464,7 @@ doctor() {
   if [[ "$(portable_stat_uid "$input_dir")" != "$(id -u)" || "$(portable_stat_mode "$input_dir")" != 700 ]]; then doctor_json false input_dir_permissions_invalid 'Make the input directory current-executor-owned with mode 0700.'; return; fi
   if ! check_input_dir; then doctor_json false input_files_invalid 'Use exactly the documented current-executor-owned regular files with mode 0600.'; return; fi
   if ! read_input_manifest; then doctor_json false input_manifest_invalid 'Use the exact manifest schema and safe ordinary values from the committed example.'; return; fi
+  if ! check_staging_meeting_input; then doctor_json false staging_meetings_invalid 'Use the staging hostname and exactly four private regular meeting files, with no evaluator or extra files.'; return; fi
   if ! runtime_identity_is_valid "$input_runtime_user"; then doctor_json false runtime_user_invalid 'Create a non-root runtime user and run as root or that runtime user.'; return; fi
   if ! runtime_executor_can_prepare "$input_runtime_user"; then doctor_json false runtime_executor_invalid 'Run prepare as root or as the selected runtime user.'; return; fi
   if ! python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null 2>&1; then doctor_json false release_invalid 'Replace release.json with a canonical clean-v1 release record.'; return; fi
@@ -650,6 +695,21 @@ require_prepared() {
   for required in oidc-config.json oidc-client-secret slack-bot-token slack-signing-secret granola-credential-source granola-owner-email llm-credential-source; do
     [[ -f "$PRIVATE_DIR/$required" && ! -L "$PRIVATE_DIR/$required" ]] || fail "fixed private input is missing: $required"
   done
+  staging_meetings_directory >/dev/null
+}
+
+staging_meetings_directory() {
+  local directory runtime_directory
+  directory="$(sed -n 's/^staging_synthetic_meetings_dir=//p' "$SETUP_FILE")"
+  runtime_directory="$(sed -n 's/^ECHO_STAGING_SYNTHETIC_MEETINGS_DIR=//p' "$ENV_FILE")"
+  [[ "$runtime_directory" == "$directory" ]] || \
+    fail 'synthetic meeting input differs from the prepared runtime environment'
+  [[ -n "$directory" ]] || return 0
+  [[ "$directory" == /echo-clean/meetings && "$(setup_value authority_host)" == authority-staging.echobrain.org ]] || \
+    fail 'synthetic meeting input is restricted to the fixed staging directory'
+  require_safe_directory_target "$DATA_DIR/meetings" 'staging meetings directory'
+  [[ -d "$DATA_DIR/meetings" ]] || fail 'prepared staging meeting files are missing'
+  printf '%s\n' "$directory"
 }
 
 ensure_image() {
@@ -822,14 +882,14 @@ print_staged_candidate_status() {
 }
 
 prepare() {
-  require_input_dir_argument "$@"
+  require_preparation_arguments "$@"
   local doctor_result
-  doctor_result="$(doctor --input-dir "$input_dir")"
+  doctor_result="$(doctor "$@")"
   [[ "$doctor_result" == '{"ok":true,'* ]] || fail 'doctor did not report this input directory ready; run doctor directly for its safe next action'
   # Doctor runs the complete preflight. Read the same fixed sources again in
   # this process before persisting them, so prepare never accepts a different
   # shape than the one it just checked.
-  check_input_dir && read_input_manifest && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && validate_input_oidc_callback || \
+  check_input_dir && read_input_manifest && check_staging_meeting_input && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && validate_input_oidc_callback || \
     fail 'input directory changed after doctor; rerun prepare'
   require_host_prerequisites
   select_runtime_identity "$input_runtime_user"
@@ -897,6 +957,10 @@ ECHO_CLEAN_AWS_REGION=$input_aws_region
 ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/$input_authority_host
 ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$input_channel
 ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
+  if [[ -n "$input_staging_synthetic_meetings_dir" ]]; then
+    setup+=$'\n''staging_synthetic_meetings_dir=/echo-clean/meetings'
+    env+=$'\n''ECHO_STAGING_SYNTHETIC_MEETINGS_DIR=/echo-clean/meetings'
+  fi
   write_exact_file "$SETUP_FILE" "$setup" 'setup configuration' runtime
   write_exact_file "$ENV_FILE" "$env" 'Compose environment'
   write_exact_file "$runtime_environment_path" "$env" 'runtime environment snapshot' runtime
@@ -909,6 +973,16 @@ ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
   copy_exact_private "$input_granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
   copy_exact_private "$input_llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
   write_exact_private "$PRIVATE_DIR/granola-owner-email" "$input_owner_email" 'Granola owner email'
+  if [[ -n "$input_staging_synthetic_meetings_dir" ]]; then
+    require_safe_directory_target "$DATA_DIR/meetings" 'staging meetings directory'
+    install -d -m 0700 "$DATA_DIR/meetings"
+    own_for_runtime "$DATA_DIR/meetings"
+    local name
+    for name in "${STAGING_MEETING_FILES[@]}"; do
+      [[ ! -L "$DATA_DIR/meetings/$name" ]] || fail 'existing staging meeting destination is unsafe'
+      copy_exact_private "$input_staging_synthetic_meetings_dir/$name" "$DATA_DIR/meetings/$name" 'staging meeting'
+    done
+  fi
   materialize_runtime_profile "$ACTIVE_RUNTIME_PROFILE_FILE" "$release_id"
   # This render is intentionally offline: prepare never builds or pulls an image.
   compose_clean config >/dev/null
@@ -1311,8 +1385,14 @@ activate_provider_credentials() {
 }
 
 finalize() {
+  local directory
+  directory="$(staging_meetings_directory)"
+  set -- "$SETUP_COMMAND" finalize --state-dir /echo-clean/state
+  if [[ -n "$directory" ]]; then
+    set -- "$@" --staging-synthetic-meetings-dir "$directory"
+  fi
   compose_clean run --rm --no-deps --entrypoint node authority \
-    "$SETUP_COMMAND" finalize --state-dir /echo-clean/state
+    "$@"
 }
 
 slack_interactivity_request_url() {
@@ -1320,6 +1400,11 @@ slack_interactivity_request_url() {
 }
 
 print_slack_interactivity_action() {
+  if [[ -n "$(staging_meetings_directory)" ]]; then
+    printf 'ACTION: In Slack App settings, enable Interactivity & Shortcuts, set Request URL to %s, and save it. Rerun onboard-clean-v1.sh resume for the four-meeting approval and read checks.\n' \
+      "$(slack_interactivity_request_url)"
+    return
+  fi
   printf 'ACTION: In Slack App settings, enable Interactivity & Shortcuts, set Request URL to %s, and save it. Then create the bounded canary and rerun onboard-clean-v1.sh resume.\n' \
     "$(slack_interactivity_request_url)"
 }
@@ -1386,6 +1471,14 @@ resume() {
         ;;
       ready_to_start)
         start_runtime
+        if [[ -n "$(staging_meetings_directory)" ]]; then
+          printf 'FOUNDER ACTION: Approve the four synthetic meeting cards in Slack, selecting Team for the first three and Only me for the commercial exception.\n'
+          printf 'OPERATOR ACTION: Verify the release-installed owner client can list and search the approved meetings; then verify the employee can read Team records and cannot read the commercial exception.\n'
+          printf 'HOST ACTION: Rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status after the approved head and search generation are current.\n'
+          printf 'PROOF: Terminal green requires all four published fixture approvals and current owner reads; the visibility choices and employee permission checks require separate manual verification.\n'
+          print_status "$(setup_status)"
+          return
+        fi
         printf 'HOST ACTION: On the exact staging host, run ./update-clean-v1.sh canary.\n'
         printf 'FOUNDER ACTION: Approve its private Slack card.\n'
         printf 'OPERATOR ACTION: After the founder approves, on the initial-owner machine verify the installed client matches the accepted release, then run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20 and "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY".\n'

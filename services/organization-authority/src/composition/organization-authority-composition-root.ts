@@ -10,6 +10,7 @@ import {
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
 import { createGranolaMeetingSourceBundleV1 } from "./providers/granola/granola-meeting-source-bundle-v1.js";
+import { createSyntheticDemoMeetingSourceBundleV1 } from "./providers/synthetic-demo/synthetic-demo-meeting-source-bundle-v1.js";
 import { createOpenRouterDecisionProcessorBundleV1 } from "./providers/openrouter/openrouter-decision-processor-bundle-v1.js";
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
 import { createPrivateSlackApprovalWorkflowBundleV1 } from "./providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.js";
@@ -17,6 +18,7 @@ import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./providers/sl
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.js";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<
@@ -27,8 +29,11 @@ export interface OrganizationAuthorityServiceConfig
     | "answer_composition_generation_bundle"
     | "record_policy_fact_projectors"
   > {
-  readonly granola_credential_file: string;
-  readonly granola_owner_email_file: string;
+  readonly granola_credential_file?: string;
+  readonly granola_owner_email_file?: string;
+  /** Both fixture fields are required together and staging-origin guarded. */
+  readonly staging_synthetic_meetings_directory?: string;
+  readonly staging_synthetic_owner_email?: string;
   readonly openrouter_credential_file: string;
   readonly slack_signing_secret_file: string;
   readonly slack_connection_id: string;
@@ -61,13 +66,15 @@ export interface OrganizationAuthorityServiceDependencies
  * The deployable service composition root. This is the only component that
  * selects the current Granola, OpenRouter, and Slack provider bundles.
  */
-export function openOrganizationAuthorityService(
+export async function openOrganizationAuthorityService(
   config: OrganizationAuthorityServiceConfig,
   dependencies: OrganizationAuthorityServiceDependencies = {},
 ): Promise<OpenedOrganizationAuthorityRuntime> {
   const {
     granola_credential_file,
     granola_owner_email_file,
+    staging_synthetic_meetings_directory,
+    staging_synthetic_owner_email,
     openrouter_credential_file,
     slack_signing_secret_file,
     slack_connection_id,
@@ -75,6 +82,31 @@ export function openOrganizationAuthorityService(
     on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
+  let meetingSourceBundle;
+  if (staging_synthetic_meetings_directory === undefined) {
+    if (
+      granola_credential_file === undefined ||
+      granola_owner_email_file === undefined ||
+      staging_synthetic_owner_email !== undefined
+    ) {
+      throw new Error("organization Authority service requires the committed Granola source");
+    }
+    meetingSourceBundle = createGranolaMeetingSourceBundleV1({
+      granola_credential_file,
+      granola_owner_email_file,
+    });
+  } else {
+    if (staging_synthetic_owner_email === undefined) {
+      throw new Error("staging synthetic meeting source requires the admitted owner email");
+    }
+    meetingSourceBundle = await createSyntheticDemoMeetingSourceBundleV1({
+      meetings_directory: assertStagingSyntheticMeetingSourceSelectionV1({
+        authority_url: sharedConfig.authority_url,
+        meetings_directory: staging_synthetic_meetings_directory,
+      }),
+      owner_email: staging_synthetic_owner_email,
+    });
+  }
   const sharedProcessingAdapterOverrides =
     dependencies.processing_adapter_overrides === undefined
       ? undefined
@@ -97,10 +129,7 @@ export function openOrganizationAuthorityService(
   return openOrganizationAuthorityRuntime(
     {
       ...sharedConfig,
-      meeting_source_bundle: createGranolaMeetingSourceBundleV1({
-        granola_credential_file,
-        granola_owner_email_file,
-      }),
+      meeting_source_bundle: meetingSourceBundle,
       decision_processor_bundle: createOpenRouterDecisionProcessorBundleV1({
         credential_file: openrouter_credential_file,
       }),

@@ -26,8 +26,9 @@ failures, operations, and proof for exact runs.
   deployment, and qualification are separate claims.
 
 Dated sprint, migration, and rollout documents under `docs/product/` are
-historical context. They do not define the current navigation or component
-names.
+historical context. Start from the system maps and operation index above;
+follow a dated document only when a current record links to it for rationale or
+exact evidence.
 
 Components are the navigation layer. Cross-cutting records are written once,
 linked by stable ID, and not copied between component pages.
@@ -53,13 +54,10 @@ linked by stable ID, and not copied between component pages.
 
 Read [contributing](contributing.md) before changing a durable record.
 
-## Product contracts and truth
+## Evidence boundaries
 
-`docs/product/` keeps direction and implementation contracts while their
-durable decisions, invariants, failures, and proof are extracted. Do not
-delete useful history merely to shorten the active tree.
-
-Use each artifact for its own claim: code and schemas for implementation;
-invariants for required safety; ADRs for why; tests for repeatable behavior;
-qualification reports for one exact artifact and configuration; private
-receipts for raw bounded evidence; and issues for unresolved work.
+Use code and schemas for implementation, invariants for required safety, ADRs
+for rationale, tests for repeatable behavior, qualification reports for one
+exact artifact and configuration, private receipts for raw bounded evidence,
+and issues for unresolved work. Keep useful history; do not make it the default
+operator route.

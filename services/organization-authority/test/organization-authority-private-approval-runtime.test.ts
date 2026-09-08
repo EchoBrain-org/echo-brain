@@ -50,6 +50,7 @@ import {
   openOrganizationAuthorityService,
   type OrganizationAuthorityServiceConfig,
 } from "../src/composition/organization-authority-composition-root.js";
+import { openSyntheticDemoOrganizationAuthorityServiceV1 } from "../src/composition/synthetic-demo-organization-authority-composition-root-v1.js";
 import {
   openOrganizationAuthorityRuntime,
 } from "../src/composition/organization-authority-runtime.js";
@@ -956,6 +957,17 @@ afterEach(() => {
 });
 
 describe("Organization Authority runtime private approval lane", () => {
+  it("rejects the legacy synthetic entrypoint outside the exact staging Authority", async () => {
+    const fixture = await admittedFixture();
+    await expect(
+      openSyntheticDemoOrganizationAuthorityServiceV1({
+        ...fixture.config,
+        meetings_directory: "/fixture/meetings",
+        owner_email: "founder@example.com",
+      }),
+    ).rejects.toThrow("staging synthetic meeting source is allowed only");
+  });
+
   it("starts the Authority API before finalize without reading provider credentials", async () => {
     const parent = root();
     const initialized = bootstrapOrganizationAuthorityState({
