@@ -363,10 +363,10 @@ deleting or renaming the stack.
 
 ### Initial host onboarding input transfer
 
-Do not SSH, copy credentials into a terminal, or open a root shell. The first
-staging onboarding input moves through one short-lived, KMS-encrypted and
+Do not SSH, copy credentials into a terminal, or open a root shell. In the
+ordinary nine-file onboarding mode, the input moves through one short-lived, KMS-encrypted and
 versioned transfer bucket. The host receives permission for only the exact
-object version during one bounded SSM command, with a 15-minute IAM expiry as
+object version during one bounded SSM command, with a 30-minute IAM expiry as
 a backstop that starts when the plan is made. Execute refuses a grant with less
 than eight minutes left for CloudFormation plus the 300-second Run Command
 plugin timeout. The controller polls for a terminal SSM result for up to six
@@ -377,6 +377,13 @@ accepts exactly the nine established regular input files, including
 `prepare` without exposing their output, then revokes the host permission and
 permanently deletes that exact S3 version. The private local archive and receipt
 are removed only after both remote cleanup steps are proved.
+
+For a fresh four-meeting rehearsal, the controller also accepts the fixed
+fixture directory. If the original provider input folder is unavailable,
+the [server-local provider reuse path](deploy/organization-authority/README.md#reuse-provider-credentials-for-a-fresh-staging-rehearsal)
+transfers only the three new configuration/release files and four meeting
+files. It stages them for human host replacement and preparation, preserves a
+nonsecret completion receipt, and keeps provider credentials on EC2.
 
 Before it sends the SSM command, the controller atomically records an
 `ssm_submitting` receipt; immediately after SSM returns an exact command ID it

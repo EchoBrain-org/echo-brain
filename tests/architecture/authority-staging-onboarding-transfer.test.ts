@@ -60,6 +60,16 @@ function inputDirectory() {
   return path;
 }
 
+function reusableStagingInputDirectory() {
+  const path = privateDirectory("echo-authority-rehearsal-input-");
+  for (const name of INPUT_FILES.slice(0, 3)) {
+    const file = join(path, name);
+    writeFileSync(file, `${name}\n`, { mode: 0o600 });
+    chmodSync(file, 0o600);
+  }
+  return path;
+}
+
 function stagingSyntheticMeetingsDirectory() {
   const path = privateDirectory("echo-authority-staging-meetings-");
   for (const name of STAGING_SYNTHETIC_MEETING_FILES) {
@@ -242,7 +252,12 @@ function fakeAws(options: {
   };
 }
 
-function privateConfig(source: string, archive: string, stagingSyntheticMeetingsDir?: string) {
+function privateConfig(
+  source: string,
+  archive: string,
+  stagingSyntheticMeetingsDir?: string,
+  reuseCurrentProviderInputs?: boolean | string,
+) {
   const path = join(archive, "input.json");
   writeFileSync(path, JSON.stringify({
     region: "us-west-2",
@@ -253,12 +268,47 @@ function privateConfig(source: string, archive: string, stagingSyntheticMeetings
     ...(stagingSyntheticMeetingsDir === undefined
       ? {}
       : { stagingSyntheticMeetingsDir }),
+    ...(reuseCurrentProviderInputs === undefined
+      ? {}
+      : { reuseCurrentProviderInputs }),
   }), { mode: 0o600 });
   chmodSync(path, 0o600);
   return path;
 }
 
 describe("Authority staging onboarding input preflight", () => {
+  it("accepts server-local provider input reuse only for the selected four-fixture rehearsal", () => {
+    const source = reusableStagingInputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+
+    const report = preflightOnboardingInput(
+      privateConfig(source, archive, meetings, true),
+    );
+
+    expect(report).toMatchObject({
+      ready: true,
+      reuse_current_provider_inputs: true,
+      required_files: INPUT_FILES.slice(0, 3).map((name) => ({ name, state: "ready" })),
+    });
+  });
+
+  it.each([false, "true"])('rejects reuseCurrentProviderInputs=%j', (reuseCurrentProviderInputs) => {
+    const source = reusableStagingInputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+    expect(() => preflightOnboardingInput(
+      privateConfig(source, archive, meetings, reuseCurrentProviderInputs),
+    )).toThrow("reuse_current_provider_inputs_invalid");
+  });
+
+  it("rejects provider input reuse without the selected four-fixture source", () => {
+    const source = reusableStagingInputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    expect(() => preflightOnboardingInput(
+      privateConfig(source, archive, undefined, true),
+    )).toThrow("reuse_current_provider_inputs_requires_staging_synthetic_meetings");
+  });
   it("reports the selected four-fixture directory alongside the ordinary private input", () => {
     const source = inputDirectory();
     const archive = privateDirectory("echo-authority-onboarding-archive-");
@@ -620,6 +670,168 @@ describe("Authority staging onboarding transfer", () => {
     expect(joined).toContain('test "$(find "$meetings" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = 4');
     expect(joined).toContain('doctor --input-dir "$input" --staging-synthetic-meetings-dir "$meetings" >/dev/null 2>&1');
     expect(joined).toContain('prepare --input-dir "$input" --staging-synthetic-meetings-dir "$meetings" >/dev/null 2>&1');
+  });
+
+  it("archives only the three non-secret rehearsal inputs with the four fixed fixtures", () => {
+    const source = reusableStagingInputDirectory();
+    const output = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+    const archive = createOnboardingInputArchive({
+      sourceDir: source,
+      stagingSyntheticMeetingsDir: meetings,
+      reuseCurrentProviderInputs: true,
+      output: join(output, "rehearsal.tar.gz"),
+    });
+
+    expect(tarEntries(archive.path).map((entry) => entry.name)).toEqual([
+      ...INPUT_FILES.slice(0, 3),
+      ...STAGING_SYNTHETIC_MEETING_FILES.map((name) => `staging-meetings/${name}`),
+    ]);
+    expect(readFileSync(archive.path).includes(Buffer.from("slack-bot-token"))).toBe(false);
+    expect(readFileSync(archive.path).includes(Buffer.from("llm-credential"))).toBe(false);
+  });
+
+  it("persists reuse mode and invokes only host-local rehearsal input staging", () => {
+    const source = reusableStagingInputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+    const config = privateConfig(source, archive, meetings, true);
+    const fake = fakeAws();
+    const plan = planOnboardingTransfer(config, fake);
+    const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
+    rmSync(config);
+
+    expect(receipt).toMatchObject({
+      staging_synthetic_meetings: true,
+      reuse_current_provider_inputs: true,
+    });
+    const result = executeOnboardingTransfer(plan.receipt_path, fake);
+    expect(result).toMatchObject({
+      action: "execute",
+      state: "staged_awaiting_human",
+      host_stage_path: "/srv/echo-authority-clean-v1/rehearsal-inputs/onboarding-transfer-001",
+      next_human_action: expect.stringContaining("prepare-rehearsal --operation-id onboarding-transfer-001"),
+    });
+    const completion = JSON.parse(readFileSync(result.completion_path, "utf8"));
+    expect(completion).toMatchObject({
+      state: "remote_staged",
+      courier_cleanup_state: "complete",
+      operation_id: "onboarding-transfer-001",
+      artifact_sha256: receipt.sha256,
+      region: "us-west-2",
+      stack_name: "echo-authority-staging-test",
+      instance_id: "i-12345678",
+      host_stage_path: "/srv/echo-authority-clean-v1/rehearsal-inputs/onboarding-transfer-001",
+    });
+    expect(completion.next_human_action).toContain("replace-rehearsal --confirm-no-live-users --reuse-provider-inputs onboarding-transfer-001");
+    expect(existsSync(plan.receipt_path)).toBe(false);
+    const send = fake.calls.find((args) => args[0] === "ssm" && args[1] === "send-command")!;
+    const parameters = JSON.parse(send[send.indexOf("--parameters") + 1]!) as { commands: string[] };
+    const command = parameters.commands.join("\n");
+    expect(command).toContain("stage-rehearsal-inputs --operation-id 'onboarding-transfer-001'");
+    expect(command).toContain(`--artifact-sha256 '${receipt.sha256}'`);
+    expect(command).not.toContain(" doctor ");
+    expect(command).not.toContain(" prepare ");
+    expect(command).not.toContain("slack-bot-token");
+    expect(command).not.toContain("llm-credential");
+  });
+
+  it("keeps the remote-prepared transfer receipt when rehearsal completion cannot be written", () => {
+    const source = reusableStagingInputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+    const fake = fakeAws();
+    const plan = planOnboardingTransfer(
+      privateConfig(source, archive, meetings, true),
+      fake,
+    );
+
+    expect(() => executeOnboardingTransfer(plan.receipt_path, {
+      ...fake,
+      writeStageReceipt: () => { throw new Error("disk unavailable"); },
+    })).toThrow("rehearsal_stage_completion_unproven");
+    expect(existsSync(plan.receipt_path)).toBe(true);
+    expect(JSON.parse(readFileSync(plan.receipt_path, "utf8"))).toMatchObject({
+      state: "remote_prepared",
+      reuse_current_provider_inputs: true,
+    });
+    expect(executeOnboardingTransfer(plan.receipt_path, fake)).toMatchObject({
+      state: "staged_awaiting_human",
+    });
+    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
+  });
+
+  it("keeps a recoverable tracking receipt if final rehearsal completion replacement fails after courier cleanup", () => {
+    const source = reusableStagingInputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+    const fake = fakeAws();
+    const plan = planOnboardingTransfer(
+      privateConfig(source, archive, meetings, true),
+      fake,
+    );
+
+    expect(() => executeOnboardingTransfer(plan.receipt_path, {
+      ...fake,
+      replaceStageReceipt: () => { throw new Error("disk unavailable"); },
+    })).toThrow("rehearsal_stage_completion_unproven");
+    expect(existsSync(plan.receipt_path)).toBe(true);
+    expect(fake.calls.some((args) => args[0] === "s3api" && args[1] === "delete-object")).toBe(true);
+    const completionPath = join(archive, "rehearsal-inputs-onboarding-transfer-001.json");
+    expect(JSON.parse(readFileSync(completionPath, "utf8"))).toMatchObject({
+      state: "remote_staged",
+      courier_cleanup_state: "pending",
+    });
+
+    expect(executeOnboardingTransfer(plan.receipt_path, fake)).toMatchObject({
+      state: "staged_awaiting_human",
+    });
+    expect(existsSync(plan.receipt_path)).toBe(false);
+    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(1);
+  });
+
+  it("blocks a new rehearsal plan when that operation already has a durable completion", () => {
+    const source = reusableStagingInputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+    const fake = fakeAws();
+    const plan = planOnboardingTransfer(
+      privateConfig(source, archive, meetings, true),
+      fake,
+    );
+    expect(executeOnboardingTransfer(plan.receipt_path, fake)).toMatchObject({
+      state: "staged_awaiting_human",
+    });
+
+    expect(() => planOnboardingTransfer(
+      privateConfig(source, archive, meetings, true),
+      fake,
+    )).toThrow("rehearsal_stage_completion_exists");
+  });
+
+  it("writes a rehearsal completion when cleanup reconciles an already submitted successful command", () => {
+    const source = reusableStagingInputDirectory();
+    const archive = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+    const fake = fakeAws();
+    const plan = planOnboardingTransfer(
+      privateConfig(source, archive, meetings, true),
+      fake,
+    );
+    const receipt = JSON.parse(readFileSync(plan.receipt_path, "utf8"));
+    Object.assign(receipt, {
+      state: "ssm_submitted",
+      command_id: "command-1",
+      submission_started_at: "1970-01-01T00:00:00Z",
+    });
+    writeFileSync(plan.receipt_path, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
+
+    expect(cleanupOnboardingTransfer(plan.receipt_path, fake)).toMatchObject({
+      action: "cleanup",
+      state: "staged_awaiting_human",
+    });
+    expect(existsSync(plan.receipt_path)).toBe(false);
+    expect(fake.calls.filter((args) => args[0] === "ssm" && args[1] === "send-command")).toHaveLength(0);
   });
 
   it("binds the selected fixture mode into the receipt before the local controller can disappear", () => {

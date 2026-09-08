@@ -292,6 +292,74 @@ single-record `update-clean-v1.sh canary` for this initial fixture proof. It
 does not change the separate final approval required to promote a candidate
 release.
 
+### Reuse provider credentials for a fresh staging rehearsal
+
+Use this path when the current staging Authority is complete and healthy but
+the original Mac onboarding input directory is unavailable. Provider credentials
+stay on the host. The organization, memberships, sessions, signing identity and
+knowledge base are still recreated by the ordinary fresh onboarding flow.
+
+Roll back any staged candidate, then install the reviewed host tooling through
+the current-host release lane. Verify the accepted Authority is complete and
+healthy before capturing provider inputs. Host tooling may advance independently of the exact
+server image, Person client and runtime profile selected for the new rehearsal.
+
+Create a private input directory containing only `onboarding.clean-v1.json`,
+`release.json` and `runtime-profile.json`. Supply the separately prepared four
+meeting files and select the reuse mode in the private transfer controller:
+
+```json
+{
+  "region": "us-west-2",
+  "operationId": "onboarding-fresh-four-meetings-001",
+  "stackName": "echo-authority-staging-v1",
+  "privateInputDir": "/absolute/private/new-rehearsal-input",
+  "archiveDir": "/absolute/private/new-rehearsal-transfer",
+  "stagingSyntheticMeetingsDir": "/absolute/private/staging-four-meetings",
+  "reuseCurrentProviderInputs": true
+}
+```
+
+Run the same transfer `preflight`, `plan`, change-set review and `execute`
+sequence. This mode sends exactly three configuration/release files and four
+meeting files. The bounded remote action stages them under the operation ID;
+it does not capture credentials, stop the Authority, reset data or prepare a
+new organization. The transfer retains a nonsecret completion receipt after
+removing its temporary S3 object and access grant.
+
+After that transfer completes, the human host operator runs the named wrapper
+commands in Session Manager, using the operation ID from the receipt:
+
+```sh
+./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users \
+  --reuse-provider-inputs onboarding-fresh-four-meetings-001
+./onboard-clean-v1.sh prepare-rehearsal \
+  --operation-id onboarding-fresh-four-meetings-001
+./onboard-clean-v1.sh resume
+```
+
+Before stopping the old Authority, replacement validates the staged inputs,
+the current accepted release and completed healthy runtime, and the same
+staging host, owner, runtime user, Region and Slack identity-link channel.
+It copies only the six provider input files into a private host directory
+outside `clean-data`. The Granola and model-provider source files are used;
+old installed credentials, databases and signing keys are not carried into the
+new organization. Normal onboarding verifies the providers again.
+
+The existing archive-and-reset procedure preserves the old rehearsal for
+recovery. `prepare-rehearsal` consumes the operation-bound inputs through normal
+preparation and removes the temporary credential copies only after preparation
+succeeds. A failed preparation retains its inputs for an exact retry. Preserve
+an interrupted operation's receipt and lock, and follow the shared recovery
+procedure instead of deleting them or starting a competing operation.
+
+The new environment is rendered from its release-matched profile. Region and
+host remain bound to the existing log group, and the current explicit staging
+journey content-telemetry setting is preserved. Duplicate or malformed settings,
+or a new profile unable to preserve that setting, stop replacement before data
+is reset. No old environment file is copied into the new rehearsal. Continue
+with the browser login, Slack link and four-card permission proof above.
+
 ## Resumable initial-owner onboarding
 
 The human host operator runs this command when the preceding handoff is complete:
