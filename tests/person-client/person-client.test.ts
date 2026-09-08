@@ -1341,6 +1341,40 @@ describe("Person client", () => {
     });
   });
 
+  it.each([401, 409])(
+    "treats a malformed %i employee-write error as an unknown outcome",
+    async (statusCode) => {
+      await withHome(async (home) => {
+        const authority = authorityDescriptor();
+        const client = new PersonClient({
+          home_directory: home,
+          now: () => NOW,
+          fetch: async (input) => {
+            if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+              return json({ authority_descriptor: authority });
+            }
+            return json({ unexpected: "error shape" }, statusCode);
+          },
+        });
+        await client.installSession("https://authority.example", {
+          ...ROTATED_SESSION,
+          membership_type: "owner",
+        });
+
+        await expect(
+          client.inviteEmployee({
+            name: "Jane Doe",
+            email: "jane@example.com",
+            output_path: join(home, `employee-invitation-${statusCode}.json`),
+          }),
+        ).rejects.toMatchObject({
+          code: "outcome_unknown",
+          mutation_outcome: "unknown",
+        } satisfies Partial<EmployeeMutationError>);
+      });
+    },
+  );
+
   it("reports a duplicate employee as a typed rejected CLI mutation", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();

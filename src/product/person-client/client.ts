@@ -95,7 +95,10 @@ function employeeRequestFailure(
     return new EmployeeMutationError("sign_in_required", "not_submitted", error.message);
   }
   if (error instanceof PersonAuthorityClientError) {
-    if (error.status === 409 && conflictCode !== undefined) {
+    // Status alone cannot establish a rejected mutation. The Authority
+    // client's error code is validated from its error envelope; malformed
+    // error bodies retain their HTTP status but are `invalid_response`.
+    if (error.code === "conflict" && error.status === 409 && conflictCode !== undefined) {
       return new EmployeeMutationError(
         conflictCode,
         "rejected",
@@ -104,7 +107,7 @@ function employeeRequestFailure(
           : error.message,
       );
     }
-    if (error.status === 401) {
+    if (error.code === "unauthorized" && error.status === 401) {
       // The employee-management request itself reached the Authority. A
       // current session may have lost owner eligibility between the local
       // check and this write, so this is a rejected write, not a preflight.
@@ -129,7 +132,9 @@ function employeeSessionFailure(error: unknown): EmployeeMutationError {
   if (error instanceof EmployeeMutationError) return error;
   if (
     error instanceof PersonClientSessionUnavailableError ||
-    (error instanceof PersonAuthorityClientError && error.status === 401)
+    (error instanceof PersonAuthorityClientError &&
+      error.code === "unauthorized" &&
+      error.status === 401)
   ) {
     return new EmployeeMutationError("sign_in_required", "not_submitted", error.message);
   }
