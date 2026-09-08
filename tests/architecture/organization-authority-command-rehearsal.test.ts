@@ -279,6 +279,9 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
       expect(status).toBe(0);
       oneJson(output);
     },
+    admit_staging_synthetic_source: async () => {
+      throw new Error("the ordinary onboarding rehearsal must retain its Granola source");
+    },
   };
 }
 

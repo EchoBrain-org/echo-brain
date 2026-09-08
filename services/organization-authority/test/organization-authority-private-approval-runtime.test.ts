@@ -1030,11 +1030,15 @@ describe("Organization Authority runtime private approval lane", () => {
   it("rejects a changed Granola owner before it can construct the source", async () => {
     const fixture = await activeFixture();
     await fixture.runtime.close();
+    const granolaOwnerEmailFile = fixture.config.granola_owner_email_file;
+    if (granolaOwnerEmailFile === undefined) {
+      throw new Error("active Granola fixture must include its owner email file");
+    }
     writeFileSync(
-      fixture.config.granola_owner_email_file,
+      granolaOwnerEmailFile,
       "replacement-owner@example.com",
     );
-    chmodSync(fixture.config.granola_owner_email_file, 0o600);
+    chmodSync(granolaOwnerEmailFile, 0o600);
     await expect(openOrganizationAuthorityService(fixture.config)).rejects.toThrow(
       /owner differs from the admitted custodian commitment/,
     );

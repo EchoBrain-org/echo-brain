@@ -1350,7 +1350,11 @@ describe("Organization Authority setup coordinator", () => {
           "--staging-synthetic-meetings-dir",
           "/echo-clean/meetings",
         ],
-        { stdout: () => undefined, stderr: (value) => (stderr += value) },
+        {
+          stdout: () => undefined,
+          stderr: (value) => (stderr += value),
+          read_stdin: async () => "",
+        },
         dependencies([]),
       ),
     ).toBe(1);
