@@ -262,6 +262,6 @@ describe("Authority minimal observability stack", () => {
     expect(heartbeat).toContain("approximately every 60 seconds");
     expect(heartbeat).toContain("content-free and best effort");
     expect(heartbeat).toContain("log-stream-only permission");
-    expect(heartbeat).toContain("Do not enable or rehearse this transport against");
+    expect(heartbeat).toMatch(/Do not\s+enable or rehearse this transport against/);
   });
 });

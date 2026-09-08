@@ -79,6 +79,7 @@ const ALLOWED_LEAF_IMPORTS = new Set([
   "node:crypto",
   "node:events",
   "node:fs",
+  "node:fs/promises",
   "node:http",
   "node:net",
   "node:path",
