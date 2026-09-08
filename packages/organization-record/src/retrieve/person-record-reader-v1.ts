@@ -19,6 +19,7 @@ export interface PersonRecordReaderV1Input {
   readonly principal_id: string;
   readonly membership_id: string;
   readonly limit?: number;
+  readonly record_sha256?: Sha256Digest;
 }
 
 export interface PersonReadableRecordV1 {
@@ -69,13 +70,26 @@ export class PersonRecordReaderV1 {
         `Person record limit must be an integer from 1 to ${MAX_LIMIT}`,
       );
     }
+    if (
+      input.record_sha256 !== undefined &&
+      !/^sha256:[a-f0-9]{64}$/.test(input.record_sha256)
+    ) {
+      throw new Error("Person record_sha256 must be a SHA-256 digest");
+    }
 
+    // Keep the exact lookup as a separate predicate so SQLite can use the
+    // unique record digest index instead of evaluating an optional OR filter.
+    const exactRecordWhere =
+      input.record_sha256 === undefined
+        ? ""
+        : "\n            AND record.record_sha256 = ?";
     const rows = this.database
       .prepare(
         `SELECT record.position, record.approval_id, record.record_sha256,
                 record.canonical_envelope
            FROM organization_record_log AS record
           WHERE record.event_kind = 'approved'
+            ${exactRecordWhere}
             AND (
               EXISTS (
                 SELECT 1
@@ -102,6 +116,7 @@ export class PersonRecordReaderV1 {
           LIMIT ?`,
       )
       .all(
+        ...(input.record_sha256 === undefined ? [] : [input.record_sha256]),
         input.authority_id,
         input.organization_id,
         input.state_lineage_id,
@@ -110,7 +125,7 @@ export class PersonRecordReaderV1 {
         input.state_lineage_id,
         input.principal_id,
         input.membership_id,
-        limit,
+        input.record_sha256 === undefined ? limit : 1,
       ) as Array<{
       readonly position: number;
       readonly approval_id: string;

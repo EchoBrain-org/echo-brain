@@ -5,6 +5,22 @@ private struct SetupResult: Decodable {
     let ok: Bool
     let phase: String
     let display_name: String?
+    let authority: String?
+}
+
+private let onboardingLastAuthorityDefaultsKey = "org.echobrain.echo-onboarding.last-authority-origin"
+
+private func onboardingAuthorityOrigin(_ source: String) -> String? {
+    guard source.count <= 2_048,
+          let components = URLComponents(string: source),
+          components.scheme?.lowercased() == "https", components.host != nil,
+          components.user == nil, components.password == nil,
+          components.query == nil, components.fragment == nil,
+          components.path.isEmpty || components.path == "/"
+    else { return nil }
+    var origin = components
+    origin.path = ""
+    return origin.url?.absoluteString
 }
 
 @MainActor
@@ -94,14 +110,14 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
             picker.canChooseDirectories = false
             picker.allowsMultipleSelection = false
             guard picker.runModal() == .OK, let invitation = picker.url else { return }
-            run("start", invitation: invitation.path)
+            run("start", value: invitation.path)
         } else {
             run(nextAction)
         }
     }
 
     @objc private func alternate() {
-        if nextAction == "start", let active {
+        if (nextAction == "start" || nextAction == "login"), let active {
             cancelled = true
             secondary.isEnabled = false
             status.stringValue = "Cancelling sign-in…"
@@ -109,6 +125,11 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
             return
         }
         guard active == nil else { return }
+        if nextAction == "start" {
+            guard let authority = chooseAuthorityOrigin() else { return }
+            run("login", value: authority)
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "Sign out of this ECHO account?"
         alert.informativeText = "You can then choose another person's invitation."
@@ -117,7 +138,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         if alert.runModal() == .alertFirstButtonReturn { run("logout") }
     }
 
-    private func run(_ action: String, invitation: String? = nil) {
+    private func run(_ action: String, value: String? = nil) {
         guard let kit = Bundle.main.resourceURL?.appendingPathComponent("kit") else {
             showFailure("install-failed")
             return
@@ -125,7 +146,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         let process = Process()
         let output = Pipe()
         process.executableURL = kit.appendingPathComponent("node")
-        process.arguments = [kit.appendingPathComponent("person-onboarding-ui.mjs").path, action] + (invitation.map { [$0] } ?? [])
+        process.arguments = [kit.appendingPathComponent("person-onboarding-ui.mjs").path, action] + (value.map { [$0] } ?? [])
         process.environment = [
             "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -140,12 +161,12 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         cancelled = false
         nextAction = action
         primary.isEnabled = false
-        secondary.isHidden = action != "start"
+        secondary.isHidden = action != "start" && action != "login"
         secondary.isEnabled = true
         secondary.title = "Cancel sign-in"
         spinner.startAnimation(nil)
         status.stringValue = action == "prepare" ? "Installing the approved ECHO app…" :
-            action == "start" ? "Complete Google sign-in in your browser. ECHO will check your access when you return." :
+            (action == "start" || action == "login") ? "Complete Google sign-in in your browser. ECHO will check your access when you return." :
             action == "logout" ? "Signing out…" : "Checking your organization access…"
         try? output.fileHandleForWriting.close()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -179,6 +200,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         guard succeeded && result.ok else { showFailure(result.phase); return }
         switch result.phase {
         case "signed-in":
+            rememberAuthority(result.authority)
             heading.stringValue = "ECHO is installed"
             detail.stringValue = "Signed in as \(result.display_name ?? "your existing account")."
             status.stringValue = "Continue to verify your organization access."
@@ -192,7 +214,10 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
             status.stringValue = "Your organization owner provides the invitation."
             primary.title = "Choose invitation"
             nextAction = "start"
+            secondary.title = "Sign in with existing account"
+            secondary.isHidden = false
         case "ready":
+            rememberAuthority(result.authority)
             heading.stringValue = "You're ready"
             detail.stringValue = "Your organization access is verified. Ask ECHO is opening."
             status.stringValue = "Use ⌘E or the ECHO menu bar icon to ask a question."
@@ -213,7 +238,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
             primary.title = "Continue setup"
             status.stringValue = phase == "browser-failed" ?
                 "Your browser could not open. Check your default browser, then try sign-in again." :
-                "Sign-in did not finish. Try your invitation again. If it has expired, ask your owner for a new one."
+                "Sign-in did not finish. Try again. If your invitation expired, ask your owner for a new one."
         } else if phase == "access-failed" {
             nextAction = "continue"
             primary.title = "Try again"
@@ -225,6 +250,29 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
             primary.title = "Try installation again"
             status.stringValue = "ECHO could not finish setup. Try again with the approved download from your owner."
         }
+    }
+
+    private func chooseAuthorityOrigin() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Sign in with an existing account"
+        alert.informativeText = "Enter your organization’s HTTPS address. Setup remembers only the last successful address on this Mac."
+        let field = NSTextField(string: UserDefaults.standard.string(forKey: onboardingLastAuthorityDefaultsKey) ?? "")
+        field.placeholderString = "https://organization.example"
+        field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        guard let authority = onboardingAuthorityOrigin(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            status.stringValue = "Enter an HTTPS organization address without a path, query, or fragment."
+            return nil
+        }
+        return authority
+    }
+
+    private func rememberAuthority(_ authority: String?) {
+        guard let authority, let origin = onboardingAuthorityOrigin(authority) else { return }
+        UserDefaults.standard.set(origin, forKey: onboardingLastAuthorityDefaultsKey)
     }
 
     private func openInstalledApp() {

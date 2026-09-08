@@ -40,6 +40,7 @@ function overlayFixture() {
   copyFileSync(BUILDER, join(sourceRoot, "tools", "build-echo-overlay.mjs"));
   copyFileSync(SOURCE, join(sourceRoot, "product", "echo-overlay", "main.swift"));
   copyFileSync(resolve(REPO, "product/echo-overlay/people.swift"), join(sourceRoot, "product", "echo-overlay", "people.swift"));
+  copyFileSync(resolve(REPO, "product/echo-overlay/account.swift"), join(sourceRoot, "product", "echo-overlay", "account.swift"));
   copyFileSync(PLIST, join(sourceRoot, "product", "echo-overlay", "Info.plist"));
   execFileSync("git", ["init", "-q", sourceRoot]);
   execFileSync("git", ["-C", sourceRoot, "add", "."]);
@@ -177,6 +178,18 @@ describe("native ECHO hotkey overlay", () => {
     expect(existsSync(subject.toolLog)).toBe(false);
 
     execFileSync("git", ["-C", subject.sourceRoot, "checkout", "--", "."]);
+    const accountChangedAfterStatus = runOverlayBuilder(subject, subject.sourceSha, {
+      ECHO_OVERLAY_MUTATE_AFTER_STATUS_PATH: join(
+        subject.sourceRoot, "product", "echo-overlay", "account.swift",
+      ),
+    });
+    expect(accountChangedAfterStatus.status).toBe(1);
+    expect(accountChangedAfterStatus.stderr).toContain(
+      "Account Swift source does not match its committed source",
+    );
+    expect(existsSync(subject.toolLog)).toBe(false);
+
+    execFileSync("git", ["-C", subject.sourceRoot, "checkout", "--", "."]);
     const changedDuringBuild = runOverlayBuilder(subject, subject.sourceSha, {
       ECHO_OVERLAY_MUTATE_PATH: join(
         subject.sourceRoot,
@@ -253,7 +266,7 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("composerScrollView.hasVerticalScroller = contentHeight > 132");
   });
 
-  it("keeps the result surface simple while citation details are deferred", () => {
+  it("keeps the result surface simple while readable sources are deferred until requested", () => {
     const source = readFileSync(SOURCE, "utf8");
 
     expect(source).toContain('PillButton(title: "Copy answer"');
@@ -270,9 +283,32 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("notification: .announcementRequested");
     expect(source).toContain("answerHeader.isHidden = true");
     expect(source).toContain("panel.titleVisibility = .hidden");
-    expect(source).not.toContain("citationLabel");
-    expect(source).not.toContain('"Citations:');
-    expect(source).not.toContain('"Policies:');
+    expect(source).toContain('PillButton(title: "Sources (0)"');
+    expect(source).toContain('process.arguments = ["person", "records", "--record-sha256", recordSha256]');
+    expect(source).toContain("maximumSourceProcessOutputBytes = 512 * 1024 + 1024");
+    expect(source).toContain("BoundedReader(maximumBytes: maximumSourceProcessOutputBytes)");
+    expect(source).toContain("private struct DisplaySource");
+    expect(source).toContain("fileprivate static func parseSourceRecord");
+    expect(source).toContain("isSha256(citation.atom_id)");
+    expect(source).toContain("isSha256(citation.record_sha256)");
+    expect(source).toContain("records.count == 1");
+    expect(source).toContain("recordSha256 == source.recordSha256");
+    expect(source).toContain('event["policy_id"] as? String == source.policyID');
+    expect(source).toContain("sourceRequestIdentifier == identifier");
+    expect(source).toContain("currentSources = []");
+    expect(source).toContain("private func clearFetchedSources()");
+    expect(source).not.toContain('process.arguments = ["person", "records", "--limit"');
+    expect(source).toContain("Source details are unavailable.");
+    expect(source).toContain("Visible to active organization members");
+    expect(source).toContain("Only the approver");
+    expect(source).toContain("func accountWillChange()");
+    expect(source).toContain("func applicationDidDeactivate()");
+    expect(source).toContain("activeSources?.cancel()");
+    expect(source).toContain("Back to answer");
+    const hidePanel = source.slice(source.indexOf("func hidePanel()"), source.indexOf("func shutdown()"));
+    const deactivate = source.slice(source.indexOf("func applicationDidDeactivate()"), source.indexOf("func windowShouldClose"));
+    expect(hidePanel).toContain("clearFetchedSources()");
+    expect(deactivate).toContain("clearFetchedSources()");
   });
 
   it("uses the ECHO brand palette", () => {

@@ -46,7 +46,7 @@ struct PeopleEmployee: Decodable, Sendable {
         switch invitation_state {
         case .pending: return "Awaiting sign-in"
         case .expired: return "Expired"
-        case .redeemed: return "Signed in"
+        case .redeemed: return "Onboarded"
         case .none: return "None"
         }
     }
@@ -69,6 +69,15 @@ private struct PeopleInvitationResult: Decodable {
     let expires_at: String
 }
 private struct PeopleRevokeResult: Decodable { let ok: Bool; let revoked: Bool }
+private struct PeopleFailure: Decodable {
+    let ok: Bool
+    let action: String?
+    let error: String?
+    let code: String?
+    let mutation_outcome: String?
+}
+
+private enum PeopleMutationOutcome: String { case not_submitted, rejected, committed, unknown }
 
 enum PeopleCommand: Sendable {
     case list
@@ -87,6 +96,14 @@ enum PeopleCommand: Sendable {
         }
     }
     var mutates: Bool { if case .list = self { return false }; return true }
+    var action: String {
+        switch self {
+        case .list: return "employee-list"
+        case .invite: return "employee-invite"
+        case .reissue: return "employee-reissue"
+        case .revoke: return "employee-revoke"
+        }
+    }
     var recoveryMessage: String {
         switch self {
         case .list:
@@ -107,7 +124,18 @@ enum PeopleResult: Sendable {
     case revoked
     case unavailable
     case unconfirmedMutation
+    case unconfirmedMutationAfterIdentityChange
+    case authorizationRejected(String)
+    case invitationSaveCommitted(String)
+    case rejected(String)
     case failed
+}
+
+private enum PeopleRunResult {
+    case completed(stdout: Data, stderr: Data, exitStatus: Int32)
+    case cancelledBeforeLaunch
+    case cancelledAfterLaunch
+    case unknown
 }
 
 final class PeopleClient: @unchecked Sendable {
@@ -142,24 +170,41 @@ final class PeopleClient: @unchecked Sendable {
     // exposed by the application command line.
     func execute(_ command: PeopleCommand, owner: PeopleIdentity, running: RunningAsk) -> PeopleResult {
         guard readOwner(running) == owner else { return .unavailable }
-        guard let output = run(command.arguments, timeout: 45, running: running) else { return .failed }
+        let output = run(command.arguments, timeout: 45, running: running)
+        if case .cancelledBeforeLaunch = output { return .unavailable }
+        if case .cancelledAfterLaunch = output {
+            return command.mutates ? .unconfirmedMutation : .failed
+        }
         guard readOwner(running) == owner else {
             // Withhold private data from a changed account, but retain the fact
             // that a write was submitted. The controller must warn before retry.
-            return command.mutates ? .unconfirmedMutation : .unavailable
+            return command.mutates ? .unconfirmedMutationAfterIdentityChange : .unavailable
         }
-        return Self.parse(output, command: command)
+        switch output {
+        case .cancelledBeforeLaunch, .cancelledAfterLaunch:
+            return .unavailable
+        case .unknown:
+            return command.mutates ? .unconfirmedMutation : .failed
+        case .completed(let stdout, let stderr, let exitStatus):
+            guard exitStatus == 0 else {
+                return Self.parseFailure(stdout: stdout, stderr: stderr, command: command)
+            }
+            let result = Self.parse(stdout, command: command)
+            if command.mutates, case .failed = result { return .unconfirmedMutation }
+            return result
+        }
     }
 
     private func readOwner(_ running: RunningAsk) -> PeopleIdentity? {
-        guard let bytes = run(["person", "status"], timeout: 5, running: running),
+        guard case let .completed(bytes, _, exitStatus) = run(["person", "status"], timeout: 5, running: running),
+              exitStatus == 0,
               let status = try? JSONDecoder().decode(PeopleStatus.self, from: bytes)
         else { return nil }
         return status.owner
     }
 
-    private func run(_ arguments: [String], timeout: TimeInterval, running: RunningAsk) -> Data? {
-        guard executable.isFileURL, FileManager.default.isExecutableFile(atPath: executable.path) else { return nil }
+    private func run(_ arguments: [String], timeout: TimeInterval, running: RunningAsk) -> PeopleRunResult {
+        guard executable.isFileURL, FileManager.default.isExecutableFile(atPath: executable.path) else { return .unknown }
         let process = Process()
         let output = Pipe()
         let errors = Pipe()
@@ -184,11 +229,15 @@ final class PeopleClient: @unchecked Sendable {
             }
         }
         do {
-            guard try running.launch(process) else { throw CocoaError(.userCancelled) }
+            guard try running.launch(process) else {
+                try? output.fileHandleForWriting.close(); try? errors.fileHandleForWriting.close()
+                readers.wait(); running.detach(process)
+                return .cancelledBeforeLaunch
+            }
         } catch {
             try? output.fileHandleForWriting.close(); try? errors.fileHandleForWriting.close()
             readers.wait(); running.detach(process)
-            return nil
+            return .unknown
         }
         try? output.fileHandleForWriting.close(); try? errors.fileHandleForWriting.close()
         let deadline = DispatchWorkItem { running.timeOut() }
@@ -196,10 +245,11 @@ final class PeopleClient: @unchecked Sendable {
         process.waitUntilExit()
         deadline.cancel(); readers.wait(); running.detach(process)
         let state = running.state()
-        guard process.terminationStatus == 0, !state.cancelled, !state.timedOut,
-              !state.outputExceeded, !stdout.didExceedLimit(), !stderr.didExceedLimit()
-        else { return nil }
-        return stdout.data()
+        if state.cancelled { return .cancelledAfterLaunch }
+        guard !state.timedOut, !state.outputExceeded,
+              !stdout.didExceedLimit(), !stderr.didExceedLimit()
+        else { return .unknown }
+        return .completed(stdout: stdout.data(), stderr: stderr.data(), exitStatus: process.terminationStatus)
     }
 
     static func parse(_ data: Data, command: PeopleCommand) -> PeopleResult {
@@ -228,6 +278,73 @@ final class PeopleClient: @unchecked Sendable {
         }
     }
 
+    private static func parseFailure(stdout: Data, stderr: Data, command: PeopleCommand) -> PeopleResult {
+        for data in [stderr, stdout] {
+            guard let failure = try? JSONDecoder().decode(PeopleFailure.self, from: data), !failure.ok,
+                  failure.action == command.action,
+                  let rawOutcome = failure.mutation_outcome,
+                  let outcome = PeopleMutationOutcome(rawValue: rawOutcome),
+                  let code = failure.code
+            else { continue }
+            if ["owner_access_required", "sign_in_required"].contains(code),
+               [.not_submitted, .rejected].contains(outcome),
+               let message = authorizationMessage(for: code) {
+                return .authorizationRejected(message)
+            }
+            guard command.mutates else { continue }
+            if code == "invitation_save_failed", outcome == .committed,
+               let message = invitationSaveCommittedMessage(for: command) {
+                return .invitationSaveCommitted(message)
+            }
+            if let message = rejectedMessage(for: code, outcome: outcome) {
+                return .rejected(message)
+            }
+        }
+        // Failure text can contain server details or grants. A missing, malformed,
+        // committed, or otherwise unknown classification never establishes that a
+        // mutation was rejected, so require a refresh before another submission.
+        return command.mutates ? .unconfirmedMutation : .failed
+    }
+
+    private static func authorizationMessage(for code: String) -> String? {
+        switch code {
+        case "owner_access_required":
+            return "Owner access is required to manage people. Sign in with your owner account."
+        case "sign_in_required":
+            return "Sign in with your owner account to manage people."
+        default:
+            return nil
+        }
+    }
+
+    private static func invitationSaveCommittedMessage(for command: PeopleCommand) -> String? {
+        switch command {
+        case .invite, .reissue:
+            return "Invitation was created, but the file could not be saved. Refresh, then reissue it into another folder."
+        default:
+            return nil
+        }
+    }
+
+    private static func rejectedMessage(for code: String, outcome: PeopleMutationOutcome) -> String? {
+        switch (code, outcome) {
+        case ("invalid_email", .not_submitted), ("invalid_name", .not_submitted):
+            return "Enter a valid employee name and email address."
+        case ("invitation_output_invalid", .not_submitted):
+            return "Could not save the invitation. Choose another location and try again."
+        case ("employee_already_exists", .rejected):
+            return "Already a member. Refresh to check whether to reissue or sign in."
+        case ("employee_onboarding_complete", .rejected):
+            return "This employee has already onboarded. Ask them to sign in."
+        case ("request_rejected", .rejected):
+            return "The request was rejected. Refresh and try again."
+        case ("outcome_unknown", .not_submitted):
+            return "The request was not sent. Check your connection and try again."
+        default:
+            return nil
+        }
+    }
+
     static func invitationDestination(in parent: URL) throws -> URL {
         guard parent.isFileURL else { throw CocoaError(.fileWriteInvalidFileName) }
         let canonical = parent.resolvingSymlinksInPath().standardizedFileURL
@@ -247,6 +364,18 @@ final class PeopleClient: @unchecked Sendable {
         let parts = email.split(separator: "@", omittingEmptySubsequences: false)
         return parts.count == 2 && parts[0].utf8.count <= 64 && parts[1].utf8.count <= 253 &&
             parts[1].split(separator: ".", omittingEmptySubsequences: false).allSatisfy { $0.utf8.count <= 63 }
+    }
+
+    static func activeInvitationConflict(for email: String, in employees: [PeopleEmployee]) -> String? {
+        guard let existing = employees.first(where: { $0.membership_status == .active && $0.email == email }) else { return nil }
+        switch existing.invitation_state {
+        case .pending, .expired:
+            return "This employee already has an invitation. Select them and reissue it instead."
+        case .redeemed:
+            return "This employee has already onboarded. Ask them to sign in."
+        case .none:
+            return "This employee is already a member. Ask them to sign in."
+        }
     }
 }
 
@@ -297,6 +426,8 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
     private var choosing = false
     private var savedInvitation: URL?
     private var mutationNotice: String?
+
+    var hasOutstandingMutation: Bool { mutation }
 
     init(availability: @escaping (Bool) -> Void) {
         self.availability = availability
@@ -378,8 +509,10 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
             self.active = nil; self.mutation = false
             if command.mutates {
                 switch result {
-                case .unconfirmedMutation, .failed:
+                case .unconfirmedMutation, .unconfirmedMutationAfterIdentityChange, .failed:
                     self.mutationNotice = command.recoveryMessage
+                case .invitationSaveCommitted(let message):
+                    self.mutationNotice = message
                 case .invitation, .revoked:
                     if !self.window.isVisible || !NSApp.isActive { self.mutationNotice = command.recoveryMessage }
                 default: break
@@ -389,14 +522,40 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
             // while the user is outside ECHO. Focus/Refresh reads it afresh.
             guard self.window.isVisible, NSApp.isActive else { self.clear(); return }
             switch result {
-            case .unavailable, .unconfirmedMutation:
+            case .unavailable:
                 self.clear(); self.owner = nil; self.availability(false)
                 self.identityLabel.stringValue = "Owner access changed. Sign in with your owner account."
-            case .failed:
-                self.owner = nil; self.availability(false)
+            case .unconfirmedMutation:
+                // The owner check still matched, but an unknown write outcome
+                // cannot justify retaining a potentially stale private roster.
+                self.clear()
+                self.status.stringValue = self.mutationNotice ?? command.recoveryMessage
+            case .unconfirmedMutationAfterIdentityChange:
+                // Do not retain a prior account's roster after a submitted write.
+                self.clear(); self.owner = nil; self.availability(false)
+                self.identityLabel.stringValue = "Owner access changed. Sign in with your owner account."
+                self.status.stringValue = self.mutationNotice ?? command.recoveryMessage
+            case .authorizationRejected(let message):
+                // Server authorization is authoritative for roster disclosure,
+                // even if the local status command still names this owner.
+                self.mutationNotice = nil; self.clear(); self.owner = nil; self.availability(false)
                 self.identityLabel.stringValue = "Owner access could not be verified."
-                self.rows = []; self.table.reloadData()
-                self.savedInvitation = nil; self.reveal.isHidden = true
+                self.status.stringValue = message
+            case .invitationSaveCommitted(let message):
+                self.clear()
+                self.status.stringValue = message
+            case .rejected(let message):
+                // A structured rejection was confirmed after the owner recheck.
+                // Preserve the visible roster until the owner chooses Refresh.
+                self.status.stringValue = message
+            case .failed:
+                self.clear()
+                if !command.mutates {
+                    // An unverified list result must never leave a prior account's
+                    // private roster visible.
+                    self.mutationNotice = nil; self.owner = nil; self.availability(false)
+                    self.identityLabel.stringValue = "Owner access could not be verified."
+                }
                 self.status.stringValue = self.mutationNotice ?? command.recoveryMessage
             case .roster(let rows):
                 let previous = self.selected()?.email
@@ -443,6 +602,9 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
         let employeeEmail = email.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard peopleLabel(employeeName, maximum: 200), PeopleClient.isInvitationEmail(employeeEmail)
         else { status.stringValue = "Enter the employee's name and email address."; return }
+        if let message = PeopleClient.activeInvitationConflict(for: employeeEmail, in: rows) {
+            status.stringValue = message; return
+        }
         guard let destination = chooseDestination() else { return }
         run(.invite(name: employeeName, email: employeeEmail, path: destination.path), owner: owner)
     }

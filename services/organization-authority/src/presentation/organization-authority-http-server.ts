@@ -339,6 +339,18 @@ function recordLimit(url: URL): number | undefined {
   return limit;
 }
 
+function recordSha256(url: URL): `sha256:${string}` | undefined {
+  const value = url.searchParams.get("record_sha256");
+  if (value === null) return undefined;
+  if (
+    [...url.searchParams.entries()].length !== 1 ||
+    !/^sha256:[a-f0-9]{64}$/.test(value)
+  ) {
+    throw new AuthorityOperationError("invalid_request", "request is invalid");
+  }
+  return value as `sha256:${string}`;
+}
+
 function recordSearchInput(value: unknown): {
   readonly query: string;
   readonly limit?: number;
@@ -673,13 +685,17 @@ export function createOrganizationAuthorityHttpServer(
           fail(response, 503, "unavailable");
           return;
         }
-        const limit = recordLimit(url);
+        const exactRecord = recordSha256(url);
+        const limit = exactRecord === undefined ? recordLimit(url) : undefined;
         json(
           response,
           200,
           options.person_record_read.list({
             access_token: accessToken(request.headers.authorization),
             ...(limit === undefined ? {} : { limit }),
+            ...(exactRecord === undefined
+              ? {}
+              : { record_sha256: exactRecord }),
           }),
         );
         return;

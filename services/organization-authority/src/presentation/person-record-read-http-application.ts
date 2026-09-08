@@ -20,5 +20,6 @@ export interface PersonRecordReadHttpApplicationV1 {
   list(input: {
     readonly access_token: string;
     readonly limit?: number;
+    readonly record_sha256?: PersonRecordDigestV1;
   }): PersonRecordReadResponseV1;
 }

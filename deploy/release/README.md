@@ -605,7 +605,8 @@ invitation expiry; issue it shortly before the employee signs in.
 
 The People window shows membership and invitation status separately. Select an
 employee to reissue a pending/expired invitation or revoke access; both actions
-ask for confirmation. Use **Refresh** to check completed onboarding. An
+ask for confirmation. Use **Refresh** to check completed onboarding; **Onboarded**
+means the invitation was redeemed, not that the employee is currently online. An
 employee's app hides this menu, and the Authority independently rejects every
 management request without current owner authorization. No separate admin build
 or automatic delivery service is required.
@@ -614,11 +615,17 @@ On an Apple-silicon Mac running macOS 14 or later:
 
 1. Extract the download and open `ECHO.app`.
 2. Choose **Install ECHO**. Setup verifies and installs the matched client/app.
-3. Choose the private invitation and complete Google sign-in. If this Mac is
-   already signed in, choose **Continue** for that account or explicitly sign
-   out before choosing another person's invitation.
+3. For a new membership, choose the private invitation and complete Google
+   sign-in. Existing members can choose **Sign in with existing account** and enter their
+   organization address without another invitation. If this Mac is already
+   signed in, choose **Continue** for that account or explicitly sign out first.
 4. After a permission-aware read succeeds, setup opens Ask ECHO. Use **⌘E** or
    the menu bar icon afterward.
+
+The installed app's **Account** menu supports returning sign-in, invitation
+sign-in, sign-out, and switching accounts. **Sources** on an answer opens its
+cited records through a fresh permission-aware read; **Back to answer** returns
+to the answer. These controls use the release-installed Person client.
 
 The setup application has its own process identity. Installing a new overlay
 can stop the old Ask ECHO process without stopping setup. Installation and

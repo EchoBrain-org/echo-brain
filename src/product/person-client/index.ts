@@ -10,7 +10,10 @@ export {
   type PersonRecordSearchV1,
 } from "./authority-client.js";
 export {
+  EmployeeMutationError,
   PersonClient,
+  type EmployeeMutationErrorCode,
+  type EmployeeMutationOutcome,
   type PersonClientOptions,
   type PersonClientSessionSummary,
 } from "./client.js";

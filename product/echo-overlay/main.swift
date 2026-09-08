@@ -5,7 +5,12 @@ import Foundation
 
 private let askTimeoutSeconds: TimeInterval = 145
 private let identityTimeoutSeconds: TimeInterval = 5
+private let sourceTimeoutSeconds: TimeInterval = 15
 private let maximumProcessOutputBytes = 128 * 1024
+private let maximumSourceProcessOutputBytes = 512 * 1024 + 1024
+private let maximumAnswerScalars = 12_000
+private let maximumDisplayedSourceScalars = 2_000
+private let maximumDisplayedSourceSignals = 32
 private let maximumQuestionScalars = 240
 private let maximumQuestionUniqueTerms = 32
 private let maximumQuestionTermBytes = 64
@@ -36,15 +41,89 @@ enum EchoTheme {
     static let selection = gold.withAlphaComponent(0.36)
 }
 
+private let sha256Pattern = try! NSRegularExpression(pattern: "^sha256:[a-f0-9]{64}$")
+
+private func isSha256(_ value: String) -> Bool {
+    sha256Pattern.firstMatch(
+        in: value,
+        range: NSRange(location: 0, length: (value as NSString).length)
+    ) != nil
+}
+
+private struct DynamicCodingKey: CodingKey, Hashable {
+    let stringValue: String
+    let intValue: Int?
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(stringValue: String) { self.init(stringValue) }
+    init?(intValue: Int) { return nil }
+}
+
+private func hasExactCodingKeys(_ keys: [DynamicCodingKey], _ expected: Set<String>) -> Bool {
+    Set(keys.map(\.stringValue)) == expected
+}
+
 private struct CliCitation: Decodable {
+    let atom_id: String
+    let record_sha256: String
     let policy_id: String
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard hasExactCodingKeys(values.allKeys, ["atom_id", "record_sha256", "policy_id"]) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("atom_id"), in: values, debugDescription: "Unexpected citation fields")
+        }
+        atom_id = try values.decode(String.self, forKey: DynamicCodingKey("atom_id"))
+        record_sha256 = try values.decode(String.self, forKey: DynamicCodingKey("record_sha256"))
+        policy_id = try values.decode(String.self, forKey: DynamicCodingKey("policy_id"))
+    }
 }
 
 private struct CliAnswer: Decodable {
     let schema_version: Int
     let kind: String
+    let generation_id: String
+    let record_head: CliRecordHead
     let answer: String
     let citations: [CliCitation]
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let base: Set<String> = ["schema_version", "kind", "generation_id", "record_head", "answer", "citations"]
+        guard hasExactCodingKeys(values.allKeys, base) || hasExactCodingKeys(values.allKeys, base.union(["outcome"])) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("answer"), in: values, debugDescription: "Unexpected answer fields")
+        }
+        schema_version = try values.decode(Int.self, forKey: DynamicCodingKey("schema_version"))
+        kind = try values.decode(String.self, forKey: DynamicCodingKey("kind"))
+        generation_id = try values.decode(String.self, forKey: DynamicCodingKey("generation_id"))
+        record_head = try values.decode(CliRecordHead.self, forKey: DynamicCodingKey("record_head"))
+        answer = try values.decode(String.self, forKey: DynamicCodingKey("answer"))
+        citations = try values.decode([CliCitation].self, forKey: DynamicCodingKey("citations"))
+        let outcome = DynamicCodingKey("outcome")
+        if values.contains(outcome) {
+            guard try values.decode(String.self, forKey: outcome) == "authorship_unsupported" else {
+                throw DecodingError.dataCorruptedError(forKey: outcome, in: values, debugDescription: "Unsupported answer outcome")
+            }
+        }
+    }
+}
+
+private struct CliRecordHead: Decodable {
+    let position: Int
+    let record_sha256: String?
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard hasExactCodingKeys(values.allKeys, ["position", "record_sha256"]) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("position"), in: values, debugDescription: "Unexpected record head fields")
+        }
+        position = try values.decode(Int.self, forKey: DynamicCodingKey("position"))
+        record_sha256 = try values.decodeIfPresent(String.self, forKey: DynamicCodingKey("record_sha256"))
+    }
 }
 
 private struct CliSuccessEnvelope: Decodable {
@@ -67,6 +146,22 @@ private struct CliStatus: Decodable {
 
 private struct DisplayAnswer: Sendable {
     let answer: String
+    let sources: [DisplaySource]
+}
+
+private struct DisplaySource: Sendable {
+    let label: String
+    let recordSha256: String
+    let policyID: String
+}
+
+private struct SourceRecord: Sendable {
+    let source: DisplaySource
+    let title: String
+    let visibility: String
+    let decisions: [String]
+    let actions: [String]
+    let rationales: [String]
 }
 
 private enum AskOutcome: Sendable {
@@ -79,6 +174,12 @@ private enum IdentityOutcome: Sendable {
     case signedIn(String)
     case signedOut
     case failure
+}
+
+private enum SourceOutcome: Sendable {
+    case success([SourceRecord])
+    case unavailable
+    case cancelled
 }
 
 final class BoundedReader: @unchecked Sendable {
@@ -225,6 +326,19 @@ private final class CliRunner: @unchecked Sendable {
         return running
     }
 
+    func sources(
+        sources: [DisplaySource],
+        completion: @escaping @Sendable (SourceOutcome) -> Void
+    ) -> RunningAsk {
+        let running = RunningAsk()
+        let executable = self.executable
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome = Self.executeSources(executable: executable, sources: sources, running: running)
+            DispatchQueue.main.async { completion(outcome) }
+        }
+        return running
+    }
+
     private static func execute(
         executable: URL,
         question: String,
@@ -306,20 +420,209 @@ private final class CliRunner: @unchecked Sendable {
         return parseFailure(stderrReader.data())
     }
 
-    private static func parseSuccess(_ data: Data) -> AskOutcome {
+    fileprivate static func parseSuccess(_ data: Data) -> AskOutcome {
         guard let envelope = try? JSONDecoder().decode(CliSuccessEnvelope.self, from: data),
               envelope.ok,
               envelope.result.schema_version == 1,
               envelope.result.kind == "echo-clean-person-answer-v1",
               !envelope.result.answer.isEmpty,
-              envelope.result.citations.allSatisfy({
-                  allowedCitationPolicies.contains($0.policy_id)
-              })
+              envelope.result.answer.unicodeScalars.count <= maximumAnswerScalars,
+              isSha256(envelope.result.generation_id),
+              envelope.result.record_head.position >= 0,
+              (envelope.result.record_head.position == 0) == (envelope.result.record_head.record_sha256 == nil),
+              envelope.result.record_head.record_sha256.map(isSha256) ?? true
         else {
             return .failure("The installed ECHO client returned an invalid response.")
         }
 
-        return .success(DisplayAnswer(answer: envelope.result.answer))
+        var citedAtoms = Set<String>()
+        var sourceIndexByRecord = [String: Int]()
+        var sources: [DisplaySource] = []
+        for citation in envelope.result.citations {
+            guard isSha256(citation.atom_id),
+                  isSha256(citation.record_sha256),
+                  allowedCitationPolicies.contains(citation.policy_id),
+                  citedAtoms.insert(citation.atom_id).inserted
+            else {
+                return .failure("The installed ECHO client returned an invalid response.")
+            }
+            if let existing = sourceIndexByRecord[citation.record_sha256] {
+                guard sources[existing].policyID == citation.policy_id else {
+                    return .failure("The installed ECHO client returned an invalid response.")
+                }
+                continue
+            }
+            sourceIndexByRecord[citation.record_sha256] = sources.count
+            sources.append(DisplaySource(
+                label: "Source \(sources.count + 1)",
+                recordSha256: citation.record_sha256,
+                policyID: citation.policy_id
+            ))
+        }
+        return .success(DisplayAnswer(answer: envelope.result.answer, sources: sources))
+    }
+
+    private static func executeSources(
+        executable: URL,
+        sources: [DisplaySource],
+        running: RunningAsk
+    ) -> SourceOutcome {
+        guard executable.isFileURL,
+              executable.path.hasPrefix("/"),
+              FileManager.default.isExecutableFile(atPath: executable.path)
+        else { return .unavailable }
+
+        var records: [SourceRecord] = []
+        for source in sources {
+            if running.state().cancelled { return .cancelled }
+            guard let record = executeSource(
+                executable: executable,
+                source: source,
+                running: running
+            ) else {
+                return running.state().cancelled ? .cancelled : .unavailable
+            }
+            records.append(record)
+        }
+        return .success(records)
+    }
+
+    private static func executeSource(
+        executable: URL,
+        source: DisplaySource,
+        running: RunningAsk
+    ) -> SourceRecord? {
+        let process = Process()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.executableURL = executable
+        let recordSha256 = source.recordSha256
+        process.arguments = ["person", "records", "--record-sha256", recordSha256]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        let stdoutReader = BoundedReader(maximumBytes: maximumSourceProcessOutputBytes)
+        let stderrReader = BoundedReader(maximumBytes: maximumProcessOutputBytes)
+        let readers = DispatchGroup()
+        readers.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stdoutReader.read(from: stdout.fileHandleForReading) { running.exceedOutputLimit() }
+            readers.leave()
+        }
+        readers.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            stderrReader.read(from: stderr.fileHandleForReading) { running.exceedOutputLimit() }
+            readers.leave()
+        }
+        do {
+            guard try running.launch(process) else {
+                try? stdout.fileHandleForWriting.close(); try? stderr.fileHandleForWriting.close(); readers.wait()
+                return nil
+            }
+        } catch {
+            try? stdout.fileHandleForWriting.close(); try? stderr.fileHandleForWriting.close(); readers.wait()
+            running.detach(process)
+            return nil
+        }
+        try? stdout.fileHandleForWriting.close()
+        try? stderr.fileHandleForWriting.close()
+        let timeout = DispatchWorkItem { running.timeOut() }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + sourceTimeoutSeconds,
+            execute: timeout
+        )
+        process.waitUntilExit()
+        timeout.cancel()
+        readers.wait()
+        running.detach(process)
+
+        let state = running.state()
+        guard process.terminationStatus == 0,
+              !state.cancelled,
+              !state.timedOut,
+              !state.outputExceeded,
+              !stdoutReader.didExceedLimit(),
+              !stderrReader.didExceedLimit()
+        else { return nil }
+        return parseSourceRecord(stdoutReader.data(), source: source)
+    }
+
+    fileprivate static func parseSourceRecord(_ data: Data, source: DisplaySource) -> SourceRecord? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              hasExactKeys(root, ["ok", "result"]),
+              root["ok"] as? Bool == true,
+              let result = root["result"] as? [String: Any],
+              hasExactKeys(result, ["schema_version", "kind", "records"]),
+              result["schema_version"] as? Int == 1,
+              result["kind"] as? String == "echo-clean-person-record-list-v1",
+              let records = result["records"] as? [[String: Any]], records.count == 1,
+              let record = records.first,
+              hasExactKeys(record, ["position", "approval_id", "record_sha256", "envelope"]),
+              record["position"] as? Int ?? 0 > 0,
+              let recordSha256 = record["record_sha256"] as? String,
+              recordSha256 == source.recordSha256,
+              let envelope = record["envelope"] as? [String: Any],
+              let envelopeSha256 = envelope["record_sha256"] as? String,
+              envelopeSha256 == source.recordSha256,
+              let body = envelope["body"] as? [String: Any],
+              let event = body["event"] as? [String: Any],
+              event["kind"] as? String == "approved",
+              event["policy_id"] as? String == source.policyID,
+              let snapshot = event["approved_snapshot"] as? [String: Any],
+              let payload = snapshot["approved_payload"] as? [String: Any],
+              let brief = payload["brief"] as? [String: Any],
+              let meeting = brief["meeting"] as? [String: Any],
+              let title = safeSourceText(meeting["title"] as? String),
+              let decisions = safeSourceSignals(brief["decisions"], kind: "decision"),
+              let actions = safeSourceSignals(brief["actions"], kind: "action"),
+              let rationales = safeSourceSignals(brief["rationales"], kind: "rationale")
+        else { return nil }
+        let visibility = source.policyID == "organization-member-readable-person-v2"
+            ? "Visible to active organization members"
+            : "Only the approver"
+        return SourceRecord(
+            source: source,
+            title: title,
+            visibility: visibility,
+            decisions: decisions,
+            actions: actions,
+            rationales: rationales
+        )
+    }
+
+    private static func hasExactKeys(_ object: [String: Any], _ keys: Set<String>) -> Bool {
+        Set(object.keys) == keys
+    }
+
+    private static func safeSourceText(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let cleaned = value.unicodeScalars.map { scalar -> String in
+            CharacterSet.controlCharacters.contains(scalar) ? " " : String(scalar)
+        }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return nil }
+        guard cleaned.unicodeScalars.count > maximumDisplayedSourceScalars else { return cleaned }
+        let ending = cleaned.unicodeScalars.index(cleaned.startIndex, offsetBy: maximumDisplayedSourceScalars - 1)
+        return String(cleaned.unicodeScalars[..<ending]) + "… (truncated)"
+    }
+
+    private static func safeSourceSignals(_ value: Any?, kind: String) -> [String]? {
+        guard let signals = value as? [[String: Any]] else { return nil }
+        var ids = Set<String>()
+        var result: [String] = []
+        for signal in signals {
+            guard signal["kind"] as? String == kind,
+                  let id = signal["id"] as? String,
+                  !id.isEmpty,
+                  ids.insert(id).inserted,
+                  let text = safeSourceText(signal["text"] as? String)
+            else { return nil }
+            if result.count < maximumDisplayedSourceSignals { result.append(text) }
+        }
+        if signals.count > maximumDisplayedSourceSignals {
+            result.append("Additional approved \(kind) items are not shown.")
+        }
+        return result
     }
 
     private static func parseFailure(_ data: Data) -> AskOutcome {
@@ -639,6 +942,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     private let composerScrollView = NSScrollView()
     private let askButton = PillButton(title: "Ask", target: nil, action: nil)
     private let copyButton = PillButton(title: "Copy answer", target: nil, action: nil)
+    private let sourcesButton = PillButton(title: "Sources (0)", target: nil, action: nil)
     private let spinner = NSProgressIndicator()
     private let identityLabel = NSTextField(labelWithString: "Signed in")
     private let statusLabel = NSTextField(labelWithString: "Ready when you are")
@@ -648,10 +952,15 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     private let emptyAnswerLabel = NSTextField(wrappingLabelWithString: "Ask a focused question and ECHO will synthesize the approved context you can access.")
     private let answerView = NSTextView()
     private let answerScrollView = NSScrollView()
+    private let sourceView = NSTextView()
+    private let sourceScrollView = NSScrollView()
     private let answerHeader = NSStackView()
     private var composerHeightConstraint: NSLayoutConstraint?
     private var activeAsk: RunningAsk?
     private var requestIdentifier: UUID?
+    private var activeSources: RunningAsk?
+    private var sourceRequestIdentifier: UUID?
+    private var currentSources: [DisplaySource] = []
     private var activeIdentityLookup: RunningAsk?
     private var identityRequestIdentifier: UUID?
     private var identityText = "Signed in"
@@ -702,6 +1011,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     private func resetConversation() {
+        clearSources()
         composer.string = ""
         composer.needsDisplay = true
         composer.isEditable = true
@@ -710,11 +1020,14 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         askButton.setAccessibilityLabel("Ask ECHO")
         resetCopyFeedback()
         copyButton.isEnabled = false
+        sourcesButton.isEnabled = false
+        sourcesButton.title = "Sources (0)"
         statusLabel.stringValue = "Ready when you are"
         statusLabel.textColor = EchoTheme.mutedText
         answerView.string = ""
         answerHeader.isHidden = true
         answerScrollView.isHidden = true
+        sourceScrollView.isHidden = true
         emptyAnswerLabel.isHidden = false
         emptyAnswerLabel.textColor = EchoTheme.faintText
         emptyAnswerLabel.stringValue = "Ask a focused question and ECHO will synthesize the approved context you can access."
@@ -749,13 +1062,27 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
 
     func hidePanel() {
         cancelIdentityLookup()
+        clearFetchedSources()
         panel.orderOut(nil)
     }
 
     func shutdown() {
         cancelActiveAsk()
         cancelIdentityLookup()
+        clearSources()
         panel.orderOut(nil)
+    }
+
+    func accountWillChange() {
+        cancelActiveAsk()
+        cancelIdentityLookup()
+        resetConversation()
+        identityText = "Signed in"
+        identityLabel.stringValue = identityText
+    }
+
+    func applicationDidDeactivate() {
+        clearFetchedSources()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -814,6 +1141,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         if composer.string != validation.question { composer.string = validation.question }
 
         cancelActiveAsk()
+        clearSources()
         resetCopyFeedback()
         let identifier = UUID()
         requestIdentifier = identifier
@@ -823,9 +1151,12 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         askButton.setAccessibilityLabel("Cancel ECHO request")
         askButton.isEnabled = true
         copyButton.isEnabled = false
+        sourcesButton.isEnabled = false
+        sourcesButton.title = "Sources (0)"
         answerView.string = ""
         answerHeader.isHidden = true
         answerScrollView.isHidden = true
+        sourceScrollView.isHidden = true
         emptyAnswerLabel.isHidden = false
         emptyAnswerLabel.textColor = EchoTheme.faintText
         emptyAnswerLabel.stringValue = "ECHO is checking the approved context available to you."
@@ -859,8 +1190,12 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             answerView.scrollRangeToVisible(NSRange(location: 0, length: 0))
             answerHeader.isHidden = false
             answerScrollView.isHidden = false
+            sourceScrollView.isHidden = true
             emptyAnswerLabel.isHidden = true
             copyButton.isEnabled = true
+            currentSources = answer.sources
+            sourcesButton.isEnabled = !answer.sources.isEmpty
+            sourcesButton.title = "Sources (\(answer.sources.count))"
             announce("ECHO answer ready.")
         case .failure(let message):
             statusLabel.stringValue = "Couldn’t answer"
@@ -868,6 +1203,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             answerView.string = ""
             answerHeader.isHidden = true
             answerScrollView.isHidden = true
+            sourceScrollView.isHidden = true
             emptyAnswerLabel.isHidden = false
             emptyAnswerLabel.textColor = EchoTheme.mutedText
             emptyAnswerLabel.stringValue = message
@@ -892,6 +1228,90 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         activeAsk?.cancel()
         activeAsk = nil
         setThinking(false)
+    }
+
+    @objc private func showSources() {
+        if !sourceScrollView.isHidden {
+            showAnswer()
+            return
+        }
+        guard activeSources == nil, !currentSources.isEmpty else { return }
+        let identifier = UUID()
+        sourceRequestIdentifier = identifier
+        answerScrollView.isHidden = true
+        sourceScrollView.isHidden = false
+        sourceView.textStorage?.setAttributedString(
+            NSAttributedString(string: "Loading sources…", attributes: Self.sourceAttributes)
+        )
+        sourcesButton.title = "Loading…"
+        sourcesButton.isEnabled = false
+        activeSources = runner.sources(sources: currentSources) { [weak self] outcome in
+            Task { @MainActor in self?.handleSources(outcome, identifier: identifier) }
+        }
+    }
+
+    private func handleSources(_ outcome: SourceOutcome, identifier: UUID) {
+        guard sourceRequestIdentifier == identifier else { return }
+        activeSources = nil
+        sourceRequestIdentifier = nil
+        sourcesButton.title = "Back to answer"
+        sourcesButton.isEnabled = !currentSources.isEmpty
+        switch outcome {
+        case .success(let records):
+            sourceView.textStorage?.setAttributedString(
+                NSAttributedString(string: formatSourceRecords(records), attributes: Self.sourceAttributes)
+            )
+            sourceView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+            announce("Sources ready.")
+        case .unavailable:
+            sourceView.textStorage?.setAttributedString(
+                NSAttributedString(string: "Source details are unavailable.", attributes: Self.sourceAttributes)
+            )
+            announce("Source details are unavailable.")
+        case .cancelled:
+            break
+        }
+    }
+
+    private func clearSources() {
+        clearFetchedSources()
+        currentSources = []
+        sourcesButton.title = "Sources (0)"
+        sourcesButton.isEnabled = false
+    }
+
+    private func clearFetchedSources() {
+        sourceRequestIdentifier = nil
+        activeSources?.cancel()
+        activeSources = nil
+        sourceView.string = ""
+        sourceScrollView.isHidden = true
+        if !answerView.string.isEmpty { answerScrollView.isHidden = false }
+        sourcesButton.title = "Sources (\(currentSources.count))"
+        sourcesButton.isEnabled = !currentSources.isEmpty
+    }
+
+    private func showAnswer() {
+        guard !answerView.string.isEmpty else { return }
+        sourceScrollView.isHidden = true
+        answerScrollView.isHidden = false
+        sourcesButton.title = "Sources (\(currentSources.count))"
+        sourcesButton.isEnabled = !currentSources.isEmpty
+    }
+
+    private func formatSourceRecords(_ records: [SourceRecord]) -> String {
+        records.map { record in
+            var sections = ["\(record.source.label) · \(record.title)", record.visibility]
+            appendSourceSection("Decisions", values: record.decisions, to: &sections)
+            appendSourceSection("Actions", values: record.actions, to: &sections)
+            appendSourceSection("Rationales", values: record.rationales, to: &sections)
+            return sections.joined(separator: "\n")
+        }.joined(separator: "\n\n")
+    }
+
+    private func appendSourceSection(_ title: String, values: [String], to sections: inout [String]) {
+        guard !values.isEmpty else { return }
+        sections.append("\(title)\n" + values.map { "• \($0)" }.joined(separator: "\n"))
     }
 
     @objc private func copyAnswer() {
@@ -1130,6 +1550,36 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         answerScrollView.documentView = answerView
         answerScrollView.translatesAutoresizingMaskIntoConstraints = false
 
+        sourceView.isEditable = false
+        sourceView.isSelectable = true
+        sourceView.drawsBackground = false
+        sourceView.font = NSFont.systemFont(ofSize: 13.5)
+        sourceView.textColor = EchoTheme.text
+        sourceView.selectedTextAttributes = [
+            .backgroundColor: EchoTheme.selection,
+            .foregroundColor: EchoTheme.text,
+        ]
+        sourceView.textContainerInset = NSSize(width: 4, height: 6)
+        sourceView.autoresizingMask = [.width]
+        sourceView.setAccessibilityLabel("Answer sources")
+
+        sourceScrollView.hasVerticalScroller = true
+        sourceScrollView.autohidesScrollers = true
+        sourceScrollView.borderType = .noBorder
+        sourceScrollView.drawsBackground = false
+        sourceView.frame = sourceScrollView.contentView.bounds
+        sourceView.minSize = .zero
+        sourceView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        sourceView.isVerticallyResizable = true
+        sourceView.isHorizontallyResizable = false
+        sourceView.textContainer?.widthTracksTextView = true
+        sourceScrollView.documentView = sourceView
+        sourceScrollView.isHidden = true
+        sourceScrollView.translatesAutoresizingMaskIntoConstraints = false
+
         let answerTitle = NSTextField(labelWithString: "Answer")
         answerTitle.attributedStringValue = NSAttributedString(
             string: "ANSWER",
@@ -1150,10 +1600,19 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         copyButton.setAccessibilityLabel("Copy answer")
         copyButton.translatesAutoresizingMaskIntoConstraints = false
 
+        sourcesButton.target = self
+        sourcesButton.action = #selector(showSources)
+        sourcesButton.isBordered = false
+        sourcesButton.style = .quiet
+        sourcesButton.isEnabled = false
+        sourcesButton.setAccessibilityLabel("Show answer sources")
+        sourcesButton.translatesAutoresizingMaskIntoConstraints = false
+
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         answerHeader.addArrangedSubview(answerTitle)
         answerHeader.addArrangedSubview(spacer)
+        answerHeader.addArrangedSubview(sourcesButton)
         answerHeader.addArrangedSubview(copyButton)
         answerHeader.orientation = .horizontal
         answerHeader.spacing = 8
@@ -1178,6 +1637,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         answerArea.translatesAutoresizingMaskIntoConstraints = false
         answerArea.addSubview(answerHeader)
         answerArea.addSubview(answerScrollView)
+        answerArea.addSubview(sourceScrollView)
         answerArea.addSubview(emptyAnswerLabel)
 
         let hintLabel = NSTextField(labelWithString: "Return to ask · Shift-Return for a new line · Esc to close")
@@ -1232,6 +1692,10 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             answerScrollView.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 12),
             answerScrollView.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -12),
             answerScrollView.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor, constant: -12),
+            sourceScrollView.topAnchor.constraint(equalTo: answerHeader.bottomAnchor, constant: 8),
+            sourceScrollView.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 12),
+            sourceScrollView.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -12),
+            sourceScrollView.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor, constant: -12),
             emptyAnswerLabel.centerYAnchor.constraint(equalTo: answerArea.centerYAnchor),
             emptyAnswerLabel.topAnchor.constraint(greaterThanOrEqualTo: answerArea.topAnchor, constant: 16),
             emptyAnswerLabel.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 38),
@@ -1284,6 +1748,17 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         ]
     }()
 
+    private static let sourceAttributes: [NSAttributedString.Key: Any] = {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        paragraph.paragraphSpacing = 8
+        return [
+            .font: NSFont.systemFont(ofSize: 13.5),
+            .foregroundColor: EchoTheme.text,
+            .paragraphStyle: paragraph,
+        ]
+    }()
+
     private func updateComposerHeight() {
         guard let textContainer = composer.textContainer,
               let layoutManager = composer.layoutManager
@@ -1311,17 +1786,29 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var controller: OverlayController?
     private var statusItem: NSStatusItem?
     private var people: PeopleController?
+    private var account: AccountController?
     private var peopleMenuItem: NSMenuItem?
     private var hotKey: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         controller = OverlayController()
-        configureStatusItem()
         people = PeopleController { [weak self] available in
             self?.peopleMenuItem?.isHidden = !available
         }
+        account = AccountController(
+            onSessionWillChange: { [weak self] in
+                self?.controller?.accountWillChange()
+                self?.people?.conceal()
+            },
+            mayChangeSession: { [weak self] in
+                !(self?.people?.hasOutstandingMutation ?? false)
+            },
+            changed: { [weak self] in self?.people?.checkAccess() }
+        )
+        configureStatusItem()
         people?.checkAccess()
+        account?.refresh()
         registerHotKey()
         if CommandLine.arguments.contains("--show-ask") { showOverlay() }
     }
@@ -1334,6 +1821,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     func applicationWillTerminate(_ notification: Notification) {
         controller?.shutdown()
         people?.shutdown()
+        account?.shutdown()
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
     }
@@ -1348,14 +1836,17 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     func applicationDidBecomeActive(_ notification: Notification) {
         people?.checkAccess()
+        account?.refresh()
     }
 
     func applicationDidResignActive(_ notification: Notification) {
         people?.conceal()
+        controller?.applicationDidDeactivate()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         people?.checkAccess()
+        account?.refresh()
     }
 
     @objc private func showPeople() {
@@ -1376,6 +1867,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let ask = NSMenuItem(title: "Ask ECHO  ⌘E", action: #selector(askEcho), keyEquivalent: "")
         ask.target = self
         menu.addItem(ask)
+        if let account { menu.addItem(account.menuItem) }
         let organization = NSMenuItem(title: "Organization", action: nil, keyEquivalent: "")
         let organizationMenu = NSMenu()
         let peopleItem = NSMenuItem(title: "People…", action: #selector(showPeople), keyEquivalent: "")

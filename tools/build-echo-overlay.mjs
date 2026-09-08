@@ -21,7 +21,9 @@ import process from 'node:process';
 const repository = resolve(import.meta.dirname, '..');
 const sourcePath = 'product/echo-overlay/main.swift';
 const peoplePath = 'product/echo-overlay/people.swift';
+const accountPath = 'product/echo-overlay/account.swift';
 const peopleSource = join(repository, peoplePath);
+const accountSource = join(repository, accountPath);
 const plistPath = 'product/echo-overlay/Info.plist';
 const source = join(repository, sourcePath);
 const plist = join(repository, plistPath);
@@ -151,11 +153,13 @@ function main(argv) {
   regularFile(source, 'Swift source');
   regularFile(plist, 'Info.plist');
   regularFile(peopleSource, 'People Swift source');
+  regularFile(accountSource, 'Account Swift source');
   const before = sourceSnapshot();
   if (!before.clean) fail('build requires clean, committed source');
   if (before.sha !== sourceSha) fail('source SHA must match clean committed source');
   const sourceBytes = committedFile(before.sha, sourcePath, source, 'Swift source');
   const peopleBytes = committedFile(before.sha, peoplePath, peopleSource, 'People Swift source');
+  const accountBytes = committedFile(before.sha, accountPath, accountSource, 'Account Swift source');
   const plistBytes = committedFile(before.sha, plistPath, plist, 'Info.plist');
   const parent = privateCanonicalDirectory(dirname(output));
   absent(output);
@@ -176,6 +180,8 @@ function main(argv) {
     writeFileSync(stagedSource, sourceBytes, { mode: 0o600, flag: 'wx' });
     const stagedPeople = join(staging, 'people.swift');
     writeFileSync(stagedPeople, peopleBytes, { mode: 0o600, flag: 'wx' });
+    const stagedAccount = join(staging, 'account.swift');
+    writeFileSync(stagedAccount, accountBytes, { mode: 0o600, flag: 'wx' });
     writeFileSync(join(contents, 'Info.plist'), plistBytes, { mode: 0o600, flag: 'wx' });
     const numericVersion = version.match(/[0-9]+\.[0-9]+\.[0-9]+/)?.[0] ?? '0.0.0';
     run(
@@ -212,6 +218,7 @@ function main(argv) {
         'Carbon',
         stagedSource,
         stagedPeople,
+        stagedAccount,
         '-o',
         executable,
       ],
