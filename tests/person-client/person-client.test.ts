@@ -17,6 +17,7 @@ import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-br
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  EmployeeMutationError,
   PersonClient,
   runPersonClientCli,
 } from "../../src/product/person-client/index.js";
@@ -363,6 +364,56 @@ describe("Person client", () => {
     });
   });
 
+  it("retrieves one exact readable cited record without approximating through a page", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const recordSha256 = `sha256:${"d".repeat(64)}` as const;
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/v1/authority-descriptor") {
+          return json({ authority_descriptor: authority });
+        }
+        expect(url.pathname + url.search).toBe(
+          `/v1/person/records?record_sha256=${recordSha256}`,
+        );
+        expect(init?.method).toBe("GET");
+        return json({
+          schema_version: 1,
+          kind: "echo-clean-person-record-list-v1",
+          records: [{
+            position: 1,
+            approval_id: fixtureId("apr", 1),
+            record_sha256: recordSha256,
+            envelope: { old: true },
+          }],
+        });
+      };
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: fetchImpl });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(client.records(undefined, undefined, recordSha256)).resolves.toMatchObject({
+        kind: "echo-clean-person-record-list-v1",
+        records: [{ position: 1, record_sha256: recordSha256 }],
+      });
+    });
+  });
+
+  it("rejects invalid and combined exact-record options before network access", async () => {
+    for (const argv of [
+      ["records", "--record-sha256", "sha256:nope"],
+      ["records", "--record-sha256", `sha256:${"a".repeat(64)}`, "--limit", "1"],
+      ["records", "--record-sha256", `sha256:${"a".repeat(64)}`, "--query", "x"],
+    ]) {
+      let called = false;
+      const status = await runPersonClientCli(argv, {
+        stdout: { write: () => true },
+        stderr: { write: () => true },
+        fetch: async () => { called = true; throw new Error("unexpected network"); },
+      });
+      expect(status).toBe(2);
+      expect(called).toBe(false);
+    }
+  });
+
   it("uses the same records command for a readable-search query", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
@@ -376,7 +427,7 @@ describe("Person client", () => {
         expect(url.pathname).toBe("/v1/person/records");
         expect(url.search).toBe("");
         expect(init?.method).toBe("POST");
-        expect(JSON.parse(String(init?.body))).toEqual({ query: "pricing" });
+        expect(JSON.parse(String(init?.body))).toEqual({ query: "pricing", limit: 5 });
         expect(new Headers(init?.headers).get("authorization")).toBe(
           `Bearer ${ROTATED_SESSION.access_token}`,
         );
@@ -406,7 +457,7 @@ describe("Person client", () => {
       let stdout = "";
       let stderr = "";
       const status = await runPersonClientCli(
-        ["records", "--query", "pricing"],
+        ["records", "--query", "pricing", "--limit", "5"],
         {
           stdout: { write: (value) => ((stdout += String(value)), true) },
           stderr: { write: (value) => ((stderr += String(value)), true) },
@@ -1091,7 +1142,10 @@ describe("Person client", () => {
       writeFileSync(output, "reserved\n", { mode: 0o600 });
       await expect(
         client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "invitation_output_invalid",
+        mutation_outcome: "not_submitted",
+      } satisfies Partial<EmployeeMutationError>);
       expect(mutations).toBe(0);
     });
   });
@@ -1117,9 +1171,12 @@ describe("Person client", () => {
       });
       chmodSync(home, 0o755);
       try {
-        await expect(
-          client.reissueEmployee({ email: "jane@example.com", output_path: join(home, "invite.json") }),
-        ).rejects.toThrow(/0700/);
+      await expect(
+        client.reissueEmployee({ email: "jane@example.com", output_path: join(home, "invite.json") }),
+      ).rejects.toMatchObject({
+        code: "invitation_output_invalid",
+        mutation_outcome: "not_submitted",
+      } satisfies Partial<EmployeeMutationError>);
       } finally {
         chmodSync(home, 0o700);
       }
@@ -1147,7 +1204,10 @@ describe("Person client", () => {
       });
       await expect(
         client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
-      ).rejects.toThrow("Person Authority request failed");
+      ).rejects.toMatchObject({
+        code: "outcome_unknown",
+        mutation_outcome: "unknown",
+      } satisfies Partial<EmployeeMutationError>);
       expect(existsSync(output)).toBe(false);
     });
   });
@@ -1178,7 +1238,10 @@ describe("Person client", () => {
           email: "jane@example.com",
           output_path: output,
         }),
-      ).rejects.toThrow(/identity onboarding is already complete.*Authority URL/);
+      ).rejects.toMatchObject({
+        code: "employee_onboarding_complete",
+        mutation_outcome: "rejected",
+      } satisfies Partial<EmployeeMutationError>);
       expect(existsSync(output)).toBe(false);
     });
   });
@@ -1205,8 +1268,124 @@ describe("Person client", () => {
       });
       await expect(
         client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "invitation_save_failed",
+        mutation_outcome: "committed",
+      } satisfies Partial<EmployeeMutationError>);
       expect(readFileSync(output, "utf8")).toBe("created by another local writer\n");
+    });
+  });
+
+  it("marks local employee authorization failures as not submitted", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      let mutations = 0;
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          mutations += 1;
+          throw new Error("employee write must not run");
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+
+      await expect(
+        client.inviteEmployee({
+          name: "Jane Doe",
+          email: "jane@example.com",
+          output_path: join(home, "employee-invitation.json"),
+        }),
+      ).rejects.toMatchObject({
+        code: "owner_access_required",
+        mutation_outcome: "not_submitted",
+      } satisfies Partial<EmployeeMutationError>);
+      expect(mutations).toBe(0);
+    });
+  });
+
+  it("marks Authority authorization rejection after an employee write as rejected", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      let employeeWrites = 0;
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          employeeWrites += 1;
+          return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_type: "owner",
+      });
+
+      await expect(
+        client.inviteEmployee({
+          name: "Jane Doe",
+          email: "jane@example.com",
+          output_path: join(home, "employee-invitation.json"),
+        }),
+      ).rejects.toMatchObject({
+        code: "owner_access_required",
+        mutation_outcome: "rejected",
+      } satisfies Partial<EmployeeMutationError>);
+      expect(employeeWrites).toBe(1);
+    });
+  });
+
+  it("reports a duplicate employee as a typed rejected CLI mutation", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_type: "owner",
+      });
+      let stderr = "";
+      const outputPath = join(home, "employee-invitation.json");
+      const status = await runPersonClientCli(
+        [
+          "employee",
+          "invite",
+          "--name",
+          "Jane Doe",
+          "--email",
+          "jane@example.com",
+          "--out",
+          outputPath,
+        ],
+        {
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          stdout: { write: () => true },
+          home_directory: home,
+          now: () => NOW,
+          fetch: async (input) => {
+            expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
+            return json({ error: { code: "conflict", message: "request failed" } }, 409);
+          },
+        },
+      );
+
+      expect(status).toBe(1);
+      expect(existsSync(outputPath)).toBe(false);
+      expect(JSON.parse(stderr)).toMatchObject({
+        ok: false,
+        action: "employee-invite",
+        code: "employee_already_exists",
+        mutation_outcome: "rejected",
+        error: "Person Authority rejected the request",
+      });
     });
   });
 
@@ -1686,6 +1865,43 @@ describe("Person client", () => {
       expect(JSON.parse(stderr)).toMatchObject({
         ok: false,
         action: "start",
+        error: expect.stringContaining("already signed in"),
+      });
+    });
+  });
+
+  it("refuses browser login while this Mac already has a Person session", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      let networkCalls = 0;
+      let stdout = "";
+      let stderr = "";
+
+      const status = await runPersonClientCli(
+        ["login", "--authority-url", "https://authority.example"],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          fetch: async () => {
+            networkCalls += 1;
+            throw new Error("browser login must not start for an existing session");
+          },
+        },
+      );
+
+      expect(status).toBe(1);
+      expect(networkCalls).toBe(0);
+      expect(stdout).toBe("");
+      expect(JSON.parse(stderr)).toMatchObject({
+        ok: false,
+        action: "login",
         error: expect.stringContaining("already signed in"),
       });
     });

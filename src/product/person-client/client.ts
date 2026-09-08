@@ -57,6 +57,105 @@ export interface PersonClientSessionSummary {
   readonly hard_reauthentication_at: string;
 }
 
+export type EmployeeMutationErrorCode =
+  | "invalid_email"
+  | "invalid_name"
+  | "invitation_output_invalid"
+  | "employee_already_exists"
+  | "employee_onboarding_complete"
+  | "owner_access_required"
+  | "sign_in_required"
+  | "invitation_save_failed"
+  | "request_rejected"
+  | "outcome_unknown";
+
+export type EmployeeMutationOutcome =
+  | "not_submitted"
+  | "rejected"
+  | "committed"
+  | "unknown";
+
+export class EmployeeMutationError extends Error {
+  constructor(
+    public readonly code: EmployeeMutationErrorCode,
+    public readonly mutation_outcome: EmployeeMutationOutcome,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EmployeeMutationError";
+  }
+}
+
+function employeeRequestFailure(
+  error: unknown,
+  conflictCode: "employee_already_exists" | "employee_onboarding_complete" | undefined,
+): EmployeeMutationError {
+  if (error instanceof EmployeeMutationError) return error;
+  if (error instanceof PersonClientSessionUnavailableError) {
+    return new EmployeeMutationError("sign_in_required", "not_submitted", error.message);
+  }
+  if (error instanceof PersonAuthorityClientError) {
+    if (error.status === 409 && conflictCode !== undefined) {
+      return new EmployeeMutationError(
+        conflictCode,
+        "rejected",
+        conflictCode === "employee_onboarding_complete"
+          ? "Employee identity onboarding is already complete; use person login with the Authority URL on the employee machine."
+          : error.message,
+      );
+    }
+    if (error.status === 401) {
+      // The employee-management request itself reached the Authority. A
+      // current session may have lost owner eligibility between the local
+      // check and this write, so this is a rejected write, not a preflight.
+      return new EmployeeMutationError("owner_access_required", "rejected", error.message);
+    }
+    if (
+      error.status !== null &&
+      error.status < 500 &&
+      error.code !== "invalid_response"
+    ) {
+      return new EmployeeMutationError("request_rejected", "rejected", error.message);
+    }
+  }
+  return new EmployeeMutationError(
+    "outcome_unknown",
+    "unknown",
+    error instanceof Error ? error.message : "Employee request outcome is unknown",
+  );
+}
+
+function employeeSessionFailure(error: unknown): EmployeeMutationError {
+  if (error instanceof EmployeeMutationError) return error;
+  if (
+    error instanceof PersonClientSessionUnavailableError ||
+    (error instanceof PersonAuthorityClientError && error.status === 401)
+  ) {
+    return new EmployeeMutationError("sign_in_required", "not_submitted", error.message);
+  }
+  return new EmployeeMutationError(
+    "outcome_unknown",
+    "not_submitted",
+    error instanceof Error ? error.message : "Employee request could not start",
+  );
+}
+
+function validateEmployeeDisplayName(name: string): void {
+  if (
+    name.length < 1 ||
+    name.length > 200 ||
+    name !== name.trim() ||
+    name !== name.normalize("NFC") ||
+    /[\u0000-\u001f\u007f]/.test(name)
+  ) {
+    throw new EmployeeMutationError(
+      "invalid_name",
+      "not_submitted",
+      "Employee name is invalid",
+    );
+  }
+}
+
 function summary(
   stored: StoredPersonClientSessionV1,
 ): PersonClientSessionSummary {
@@ -210,6 +309,23 @@ export class PersonClient {
     return this.store.read();
   }
 
+  private async employeeManagementSession(): Promise<StoredPersonClientSessionV1> {
+    let stored: StoredPersonClientSessionV1;
+    try {
+      stored = await this.accessSession();
+    } catch (error) {
+      throw employeeSessionFailure(error);
+    }
+    if (stored.session.membership_type !== "owner") {
+      throw new EmployeeMutationError(
+        "owner_access_required",
+        "not_submitted",
+        "Employee management requires owner access",
+      );
+    }
+    return stored;
+  }
+
   async logout(): Promise<void> {
     const claimed = this.store.claimLogout();
     try {
@@ -237,6 +353,7 @@ export class PersonClient {
   async records(
     limit?: number,
     query?: string,
+    recordSha256?: `sha256:${string}`,
   ): Promise<PersonRecordListV1 | PersonRecordSearchV1> {
     const stored = await this.accessSession();
     if (query !== undefined) {
@@ -249,6 +366,7 @@ export class PersonClient {
     return await this.authority(stored.authority_origin).records(
       stored.session.access_token,
       limit,
+      recordSha256,
     );
   }
 
@@ -340,27 +458,58 @@ export class PersonClient {
     email: string;
     output_path: string;
   }): Promise<{ output_path: string; expires_at: string }> {
-    const outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
-    const stored = await this.accessSession();
-    return await this.issueEmployeeInvitation(
-      outputPath,
-      input.email,
-      "invite",
-      () =>
+    validateEmployeeDisplayName(input.name);
+    if (!isExpectedPersonEmail(input.email)) {
+      throw new EmployeeMutationError(
+        "invalid_email",
+        "not_submitted",
+        "Employee email must be a canonical lowercase mailbox",
+      );
+    }
+    let outputPath: string;
+    try {
+      outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
+    } catch (error) {
+      throw new EmployeeMutationError(
+        "invitation_output_invalid",
+        "not_submitted",
+        (error as Error).message,
+      );
+    }
+    const stored = await this.employeeManagementSession();
+    try {
+      return await this.issueEmployeeInvitation(outputPath, input.email, "invite", () =>
         this.authority(stored.authority_origin).inviteEmployee(
           { name: input.name, email: input.email },
           stored.session.access_token,
-        ),
-      stored.authority_origin,
-    );
+        ), stored.authority_origin);
+    } catch (error) {
+      throw employeeRequestFailure(error, "employee_already_exists");
+    }
   }
 
   async reissueEmployee(input: {
     email: string;
     output_path: string;
   }): Promise<{ output_path: string; expires_at: string }> {
-    const outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
-    const stored = await this.accessSession();
+    if (!isCanonicalPersonEmail(input.email)) {
+      throw new EmployeeMutationError(
+        "invalid_email",
+        "not_submitted",
+        "Employee email must be a canonical durable identity",
+      );
+    }
+    let outputPath: string;
+    try {
+      outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
+    } catch (error) {
+      throw new EmployeeMutationError(
+        "invitation_output_invalid",
+        "not_submitted",
+        (error as Error).message,
+      );
+    }
+    const stored = await this.employeeManagementSession();
     try {
       return await this.issueEmployeeInvitation(
         outputPath,
@@ -374,25 +523,27 @@ export class PersonClient {
         stored.authority_origin,
       );
     } catch (error) {
-      if (
-        error instanceof PersonAuthorityClientError &&
-        error.code === "conflict" &&
-        error.status === 409
-      ) {
-        throw new Error(
-          "Employee identity onboarding is already complete; use person login with the Authority URL on the employee machine.",
-        );
-      }
-      throw error;
+      throw employeeRequestFailure(error, "employee_onboarding_complete");
     }
   }
 
   async revokeEmployee(email: string): Promise<void> {
-    const stored = await this.accessSession();
-    await this.authority(stored.authority_origin).revokeEmployee(
-      { email },
-      stored.session.access_token,
-    );
+    if (!isCanonicalPersonEmail(email)) {
+      throw new EmployeeMutationError(
+        "invalid_email",
+        "not_submitted",
+        "Employee email must be a canonical durable identity",
+      );
+    }
+    const stored = await this.employeeManagementSession();
+    try {
+      await this.authority(stored.authority_origin).revokeEmployee(
+        { email },
+        stored.session.access_token,
+      );
+    } catch (error) {
+      throw employeeRequestFailure(error, undefined);
+    }
   }
 
   private async issueEmployeeInvitation(
@@ -402,19 +553,14 @@ export class PersonClient {
     issue: () => Promise<{ login_grant: string; expires_at: string }>,
     authorityOrigin: string,
   ): Promise<{ output_path: string; expires_at: string }> {
-    if (mode === "invite" && !isExpectedPersonEmail(email)) {
-      throw new Error("Employee email must be a canonical lowercase mailbox");
-    }
-    if (mode === "reissue" && !isCanonicalPersonEmail(email)) {
-      throw new Error("Employee email must be a canonical durable identity");
-    }
     const issued = await issue();
     // A different local writer can win after preflight. O_EXCL leaves its
     // file untouched; the owner can safely reissue the one-time grant.
-    writePersonOnboardingInvitation(
-      outputPath,
-      mode === "invite" || isExpectedPersonEmail(email)
-        ? {
+    try {
+      writePersonOnboardingInvitation(
+        outputPath,
+        mode === "invite" || isExpectedPersonEmail(email)
+          ? {
             schema_version: 2,
             kind: "echo-person-onboarding-invitation",
             authority_url: authorityOrigin,
@@ -422,14 +568,21 @@ export class PersonClient {
             expires_at: issued.expires_at,
             expected_email: email,
           }
-        : {
+          : {
             schema_version: 1,
             kind: "echo-person-onboarding-invitation",
             authority_url: authorityOrigin,
             login_grant: issued.login_grant,
             expires_at: issued.expires_at,
           },
-    );
+      );
+    } catch (error) {
+      throw new EmployeeMutationError(
+        "invitation_save_failed",
+        "committed",
+        error instanceof Error ? error.message : "Employee invitation could not be saved",
+      );
+    }
     return Object.freeze({ output_path: outputPath, expires_at: issued.expires_at });
   }
 }

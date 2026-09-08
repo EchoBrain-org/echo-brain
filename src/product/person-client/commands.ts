@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
-import { PersonClient } from "./client.js";
+import { EmployeeMutationError, PersonClient } from "./client.js";
 import { PersonAuthorityClientError } from "./authority-client.js";
 import { PersonClientSessionUnavailableError } from "./session-store.js";
 import { startPersonLoopbackHandoff } from "./browser-login-handoff.js";
@@ -45,6 +45,8 @@ const OPTIONS = {
   email: { type: "string" },
   out: { type: "string" },
   limit: { type: "string" },
+  "open-browser": { type: "boolean" },
+  "record-sha256": { type: "string" },
 } as const;
 
 type Option = keyof typeof OPTIONS;
@@ -53,7 +55,7 @@ const RULES: Readonly<
   Record<string, { accepts?: readonly Option[]; requires?: readonly Option[] }>
 > = {
   login: {
-    accepts: ["invitation", "authority-url"],
+    accepts: ["invitation", "authority-url", "open-browser"],
   },
   start: {
     accepts: ["invitation"],
@@ -66,7 +68,7 @@ const RULES: Readonly<
     accepts: ["question"],
     requires: ["question"],
   },
-  records: { accepts: ["limit", "query"] },
+  records: { accepts: ["limit", "query", "record-sha256"] },
   exclusions: {
     accepts: ["source-adapter-id", "source-instance-id"],
     requires: ["source-adapter-id", "source-instance-id"],
@@ -123,9 +125,9 @@ Run \`echo-brain person <command> --help\` for command options.
 
 Installs the invited identity, opens Google sign-in, verifies one permission-aware read, and reports ready.
 `,
-  login: `usage: echo-brain person login (--invitation <path> | --authority-url <url>)
+  login: `usage: echo-brain person login (--invitation <path> | --authority-url <url>) [--open-browser]
 
-Provide exactly one option. The browser handoff completes sign-in without pasting callback data.
+Provide exactly one identity option. --open-browser opens the handoff automatically; otherwise the URL is printed for manual opening.
 `,
   status: `usage: echo-brain person status
 
@@ -139,9 +141,9 @@ Removes the local session. A revoked session is also removed locally.
 
 Ask one bounded question. ECHO searches only records you may read and returns a cited answer.
 `,
-  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>]
+  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex>]
 
-Without --query, lists recent released records. With --query, searches the current search index generation.
+Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
 `,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
@@ -382,6 +384,18 @@ async function completePersonLogin(input: {
   }
 }
 
+function requireSignedOut(client: PersonClient): void {
+  try {
+    client.sessionSummary();
+  } catch (error) {
+    if (error instanceof PersonClientSessionUnavailableError) return;
+    throw error;
+  }
+  throw new Error(
+    "This Mac is already signed in to ECHO. Use the installed client for this person, or run `echo-brain person logout` before onboarding a different person.",
+  );
+}
+
 export async function runPersonClientCli(
   argv: readonly string[],
   dependencies: PersonClientCliDependencies = {},
@@ -421,7 +435,7 @@ export async function runPersonClientCli(
     }).values as Record<Option, string | boolean | undefined>;
     const accepted = new Set(rule.accepts ?? []);
     for (const [name, value] of Object.entries(values)) {
-      if (value !== undefined && !accepted.has(name as Option)) {
+      if (value !== undefined && value !== false && !accepted.has(name as Option)) {
         throw new Error(
           `--${name} is not valid with \`echo-brain person ${action}\``,
         );
@@ -442,8 +456,36 @@ export async function runPersonClientCli(
         "`echo-brain person login` requires exactly one of --invitation or --authority-url",
       );
     }
+    if (action === "records") {
+      if (
+        values["record-sha256"] !== undefined &&
+        (values.limit !== undefined || values.query !== undefined)
+      ) {
+        throw new Error("--record-sha256 cannot be combined with --query or --limit");
+      }
+      if (
+        typeof values["record-sha256"] === "string" &&
+        !/^sha256:[a-f0-9]{64}$/.test(values["record-sha256"])
+      ) {
+        throw new Error("--record-sha256 must be sha256 followed by 64 lowercase hex characters");
+      }
+    }
   } catch (error) {
-    print(stderr, { ok: false, error: (error as Error).message });
+    const employeeMutation =
+      action === "employee-invite" ||
+      action === "employee-reissue" ||
+      action === "employee-revoke";
+    print(stderr, {
+      ok: false,
+      error: (error as Error).message,
+      ...(employeeMutation
+        ? {
+            action,
+            code: "outcome_unknown",
+            mutation_outcome: "not_submitted",
+          }
+        : {}),
+    });
     return 2;
   }
 
@@ -465,6 +507,7 @@ export async function runPersonClientCli(
   try {
     switch (action) {
       case "login": {
+        requireSignedOut(client);
         const invitation =
           typeof values.invitation === "string"
             ? readPersonOnboardingInvitation(values.invitation)
@@ -479,6 +522,17 @@ export async function runPersonClientCli(
           ...(dependencies.random_bytes === undefined
             ? {}
             : { random_bytes: dependencies.random_bytes }),
+          ...(values["open-browser"] === true
+            ? {
+                open_browser: async (url: string) => {
+                  const opened = await (
+                    dependencies.open_authorization_url ?? openAuthorizationUrl
+                  )(url);
+                  if (!opened) throw new Error("Person browser could not be opened");
+                  return true;
+                },
+              }
+            : {}),
         });
         break;
       }
@@ -486,16 +540,7 @@ export async function runPersonClientCli(
         const invitation = readPersonOnboardingInvitation(
           requiredText(values, "invitation"),
         );
-        try {
-          client.sessionSummary();
-          throw new Error(
-            "This Mac is already signed in to ECHO. Use the installed client for this person, or run `echo-brain person logout` before onboarding a different person.",
-          );
-        } catch (error) {
-          if (!(error instanceof PersonClientSessionUnavailableError)) {
-            throw error;
-          }
-        }
+        requireSignedOut(client);
         await completePersonLogin({
           client,
           authority_url: invitation.authority_url,
@@ -580,12 +625,16 @@ export async function runPersonClientCli(
         break;
       case "records": {
         const query = values.query;
+        const recordSha256 = values["record-sha256"];
         try {
           print(stdout, {
             ok: true,
             result: await client.records(
               optionalRecordLimit(values, query === undefined ? 100 : 10),
               typeof query === "string" ? query : undefined,
+              typeof recordSha256 === "string"
+                ? (recordSha256 as `sha256:${string}`)
+                : undefined,
             ),
           });
         } catch (error) {
@@ -709,6 +758,9 @@ export async function runPersonClientCli(
       ok: false,
       action,
       error: (error as Error).message,
+      ...(error instanceof EmployeeMutationError
+        ? { code: error.code, mutation_outcome: error.mutation_outcome }
+        : {}),
     });
     return 1;
   }
