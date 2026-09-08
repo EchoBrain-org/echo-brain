@@ -24,8 +24,17 @@ export type OnboardingTransferAws = Readonly<{
 
 export function createOnboardingInputArchive(input: Readonly<{
   sourceDir: string;
+  /** Optional exact four-file staging fixture directory. */
+  stagingSyntheticMeetingsDir?: string;
   output: string;
 }>): Readonly<{ path: string; sha256: string }>;
+
+export type OnboardingTransferPreflightFile = Readonly<{
+  name: string;
+  state: "ready" | "missing" | "empty" | "too_large" | "not_private_regular";
+  detail: string | null;
+  bytes?: number;
+}>;
 
 /**
  * The local AWS CLI boundary: fixed to echo-prod and stripped of inherited
@@ -46,24 +55,29 @@ export function preflightOnboardingInput(configPath: string): Readonly<{
   ready: boolean;
   operation_id: string;
   directory_private: boolean;
-  required_files: readonly Readonly<{
-    name: string;
-    state: "ready" | "missing" | "empty" | "too_large" | "not_private_regular";
-    detail: string | null;
-    bytes?: number;
-  }>[];
+  required_files: readonly OnboardingTransferPreflightFile[];
   /** Count only: preflight deliberately does not disclose unexpected names. */
   unexpected_file_count: number;
   total_bytes: number;
   total_bytes_limit: number;
   /** Exact number of bytes to remove from required inputs, zero when in limit. */
   bytes_over_limit: number;
+  /** Present only when the controller selected the fixed four-fixture source. */
+  staging_synthetic_meetings?: Readonly<{
+    directory_private: boolean;
+    required_files: readonly OnboardingTransferPreflightFile[];
+    /** Count only: extra fixture names are never disclosed. */
+    unexpected_file_count: number;
+    ready: boolean;
+  }>;
   next_action: string;
 }>;
 
 export function onboardingTransferSsmCommands(input: Readonly<{
   region: string;
   artifact: OnboardingTransferArtifact;
+  /** Receipt-bound selected source; omitted preserves the ordinary nine-file flow. */
+  stagingSyntheticMeetings?: boolean;
 }>): readonly string[];
 
 export function planOnboardingTransfer(configPath: string, options?: Readonly<{

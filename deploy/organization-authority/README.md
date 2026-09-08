@@ -108,6 +108,28 @@ the input is not ready, so it can gate the rest of a run. Without it, a missing
 credential surfaces only after authentication, planning, and the archive step, as one opaque
 `input_directory_shape_invalid`.
 
+For a fresh four-meeting rehearsal, add the prepared fixture directory to the
+same private controller JSON:
+
+```json
+{
+  "stagingSyntheticMeetingsDir": "/absolute/private/staging-four-meetings"
+}
+```
+
+The directory must be a current-user mode-`0700` directory containing exactly
+the four mode-`0600` fixture files named below. The transfer includes those
+files in the checksum-bound courier archive and records the selected source in
+the private receipt, so `execute` does not depend on the controller still
+existing. `preflight` reports the fixture directory separately and applies the
+aggregate size limit to both directories. Leave this property out for ordinary
+onboarding; the established nine-file archive and host invocation are unchanged.
+Before planning this selected source, install matching reviewed host tooling
+through the [current-host staging release lane](../../deploy/release/README.md#automated-current-host-staging-lane).
+An older installed wrapper does not accept the selected-source flag; its failed
+prepare command cleans the bounded courier rather than preserving a usable
+fixture transfer.
+
 The secrets are never placed in command arguments or normal wrapper output.
 `prepare` installs byte-exact fixed server copies with mode `0600` under its
 mode-`0700` private data directory.
@@ -237,14 +259,9 @@ node ../../demo/staging/prepare-fixtures.mjs \
   --output /absolute/private/staging-four-meetings \
   --owner owner@example.com
 
-# Privately transfer that directory to the staging host, preserving its modes.
-# On the staging host, use it alongside the ordinary private input directory.
-./onboard-clean-v1.sh doctor \
-  --input-dir /absolute/private/echo-onboarding \
-  --staging-synthetic-meetings-dir /absolute/private/staging-four-meetings
-./onboard-clean-v1.sh prepare \
-  --input-dir /absolute/private/echo-onboarding \
-  --staging-synthetic-meetings-dir /absolute/private/staging-four-meetings
+# Add `stagingSyntheticMeetingsDir` to the private onboarding-transfer
+# controller. Its bounded courier delivers this exact directory together with
+# the ordinary nine input files and invokes doctor and prepare with it.
 ```
 
 The four required filenames are
