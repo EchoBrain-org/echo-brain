@@ -319,6 +319,29 @@ describe("Authority staging onboarding input preflight", () => {
     expect(report).toMatchObject({ ready: true, staging_synthetic_meetings: { ready: true } });
   });
 
+  it.each([false, true])("rejects a synthetic meeting over the host's 256 KiB limit in complete and reuse bundles (reuse=%s)", (reuseCurrentProviderInputs) => {
+    const source = reuseCurrentProviderInputs ? reusableStagingInputDirectory() : inputDirectory();
+    const output = privateDirectory("echo-authority-onboarding-archive-");
+    const meetings = stagingSyntheticMeetingsDirectory();
+    truncateSync(join(meetings, STAGING_SYNTHETIC_MEETING_FILES[0]), 256 * 1024 + 1);
+    const config = privateConfig(source, output, meetings, reuseCurrentProviderInputs || undefined);
+
+    const report = preflightOnboardingInput(config);
+
+    expect(report.ready).toBe(false);
+    expect(report.staging_synthetic_meetings?.required_files[0]).toMatchObject({
+      name: STAGING_SYNTHETIC_MEETING_FILES[0],
+      state: "too_large",
+      detail: "exceeds 262144 bytes",
+    });
+    expect(() => createOnboardingInputArchive({
+      sourceDir: source,
+      stagingSyntheticMeetingsDir: meetings,
+      ...(reuseCurrentProviderInputs ? { reuseCurrentProviderInputs: true } : {}),
+      output: join(output, `${reuseCurrentProviderInputs ? "reuse" : "complete"}.tar.gz`),
+    })).toThrow("input_file_too_large");
+  });
+
   it("reports missing, extra, linked, and non-private selected fixtures without exposing extra names", () => {
     const source = inputDirectory();
     const archive = privateDirectory("echo-authority-onboarding-archive-");
@@ -366,15 +389,16 @@ describe("Authority staging onboarding input preflight", () => {
     const source = inputDirectory();
     const archive = privateDirectory("echo-authority-onboarding-archive-");
     const meetings = stagingSyntheticMeetingsDirectory();
-    for (const name of INPUT_FILES) truncateSync(join(source, name), 4 * 1024 * 1024);
-    for (const name of STAGING_SYNTHETIC_MEETING_FILES) truncateSync(join(meetings, name), 2 * 1024 * 1024);
+    for (const name of INPUT_FILES) truncateSync(join(source, name), 5 * 1024 * 1024);
+    const totalBytes = 45 * 1024 * 1024 + STAGING_SYNTHETIC_MEETING_FILES
+      .reduce((total, name) => total + readFileSync(join(meetings, name)).length, 0);
 
     const report = preflightOnboardingInput(privateConfig(source, archive, meetings));
 
     expect(report).toMatchObject({
       ready: false,
-      total_bytes: 44 * 1024 * 1024,
-      bytes_over_limit: 4 * 1024 * 1024,
+      total_bytes: totalBytes,
+      bytes_over_limit: totalBytes - 40 * 1024 * 1024,
       staging_synthetic_meetings: { ready: true },
     });
   });

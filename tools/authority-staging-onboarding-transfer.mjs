@@ -53,6 +53,10 @@ const SSM_SUBMISSION_WINDOW_MS = 10 * 60 * 1000;
 const SSM_SUBMISSION_BUFFER_MS = 2 * 60 * 1000;
 const MAXIMUM_INPUT_FILE_BYTES = 10 * 1024 * 1024;
 const MAXIMUM_INPUT_TOTAL_BYTES = 40 * 1024 * 1024;
+// The host wrapper accepts exactly these four meeting fixtures and caps each
+// one at 256 KiB. Reject earlier so a plan cannot courier an input that the
+// approved host command will necessarily refuse.
+const MAXIMUM_STAGING_SYNTHETIC_MEETING_FILE_BYTES = 256 * 1024;
 const INPUT_FILES = Object.freeze([
   "onboarding.clean-v1.json",
   "release.json",
@@ -221,7 +225,7 @@ function tarHeader(name, size) {
   return header;
 }
 
-function exactPrivateInputLeaves({ sourceDir, names, prefix = "", directoryCode, shapeCode, fileCode, rejectDirectorySymlink = false }) {
+function exactPrivateInputLeaves({ sourceDir, names, prefix = "", directoryCode, shapeCode, fileCode, maximumFileBytes = MAXIMUM_INPUT_FILE_BYTES, rejectDirectorySymlink = false }) {
   const source = rejectDirectorySymlink
     ? privateDirectoryWithoutSymlink(sourceDir, directoryCode)
     : privateDirectory(sourceDir, directoryCode);
@@ -232,6 +236,7 @@ function exactPrivateInputLeaves({ sourceDir, names, prefix = "", directoryCode,
     archiveName: `${prefix}${name}`,
     path: resolve(source, name),
     state: privateRegularFile(resolve(source, name), fileCode),
+    maximumFileBytes,
   }));
 }
 
@@ -257,6 +262,7 @@ export function createOnboardingInputArchive({ sourceDir, stagingSyntheticMeetin
       directoryCode: "staging_synthetic_meetings_directory_not_private",
       shapeCode: "staging_synthetic_meetings_directory_shape_invalid",
       fileCode: "staging_synthetic_meetings_file_not_private_regular",
+      maximumFileBytes: MAXIMUM_STAGING_SYNTHETIC_MEETING_FILE_BYTES,
       rejectDirectorySymlink: true,
     });
   const destination = pathOutsideRepository(output, "archive_inside_repo");
@@ -266,7 +272,7 @@ export function createOnboardingInputArchive({ sourceDir, stagingSyntheticMeetin
   let totalBytes = 0;
   for (const leaf of [...inputLeaves, ...fixtureLeaves]) {
     const { path, state, archiveName } = leaf;
-    if (state.size > MAXIMUM_INPUT_FILE_BYTES) refuse("input_file_too_large");
+    if (state.size > leaf.maximumFileBytes) refuse("input_file_too_large");
     totalBytes += state.size;
     if (totalBytes > MAXIMUM_INPUT_TOTAL_BYTES) refuse("input_total_too_large");
     const content = readFileSync(path);
@@ -1521,7 +1527,7 @@ export function cleanupOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS }
  * before any of that begins. It reports metadata only, never file content, and
  * makes no network or AWS call.
  */
-function preflightPrivateDirectory(path, names, directoryCode, fileCode, rejectDirectorySymlink = false) {
+function preflightPrivateDirectory(path, names, directoryCode, fileCode, maximumFileBytes = MAXIMUM_INPUT_FILE_BYTES, rejectDirectorySymlink = false) {
   let sourceDir;
   let directoryPrivate = true;
   try {
@@ -1551,11 +1557,11 @@ function preflightPrivateDirectory(path, names, directoryCode, fileCode, rejectD
     }
     if (state.size === 0)
       return Object.freeze({ name, state: "empty", detail: "file is empty" });
-    if (state.size > MAXIMUM_INPUT_FILE_BYTES)
+    if (state.size > maximumFileBytes)
       return Object.freeze({
         name,
         state: "too_large",
-        detail: `exceeds ${MAXIMUM_INPUT_FILE_BYTES} bytes`,
+        detail: `exceeds ${maximumFileBytes} bytes`,
       });
     return Object.freeze({ name, state: "ready", detail: null, bytes: state.size });
   });
@@ -1588,6 +1594,7 @@ export function preflightOnboardingInput(configPath) {
       STAGING_SYNTHETIC_MEETING_FILES,
       "staging_synthetic_meetings_directory_not_private",
       "staging_synthetic_meetings_file_not_private_regular",
+      MAXIMUM_STAGING_SYNTHETIC_MEETING_FILE_BYTES,
       true,
     );
   const totalBytes = input.totalBytes + (fixtures?.totalBytes ?? 0);
