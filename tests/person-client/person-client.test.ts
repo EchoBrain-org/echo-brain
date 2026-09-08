@@ -2207,6 +2207,98 @@ describe("Person client", () => {
     });
   });
 
+  it("opens the existing-identity browser handoff only when requested", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const authorizationUrl = "https://identity.example/authorize?state=state";
+      const opened: string[] = [];
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(
+        ["login", "--authority-url", "https://authority.example", "--open-browser"],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          open_authorization_url: (url) => {
+            opened.push(url);
+            return true;
+          },
+          fetch: async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === "/v2/session/oidc/begin") {
+              const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+              expect(request.kind).toBe("existing_identity_login");
+              const handoff = request.loopback_handoff as Record<string, string>;
+              queueMicrotask(() => {
+                void globalThis.fetch(handoff.url, {
+                  method: "POST",
+                  headers: { "content-type": "application/x-www-form-urlencoded" },
+                  body: new URLSearchParams({
+                    token: handoff.token,
+                    session: Buffer.from(canonicalJson(ROTATED_SESSION as never), "utf8").toString("base64url"),
+                  }),
+                });
+              });
+              return json({ authorization_url: authorizationUrl, expires_at: "2026-08-18T00:10:00.000Z" }, 201);
+            }
+            expect(path).toBe("/v1/authority-descriptor");
+            return json({ authority_descriptor: authority });
+          },
+        },
+      );
+
+      expect(status).toBe(0);
+      expect(stderr).toBe("");
+      expect(opened).toEqual([authorizationUrl]);
+      const lines = stdout.trim().split("\n").map((line) => JSON.parse(line));
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatchObject({ ok: true, phase: "open-browser", browser_opened: true });
+      expect(lines[0]).not.toHaveProperty("authorization_url");
+      expect(lines[1]).toMatchObject({ ok: true, phase: "installed" });
+      expect(stdout).not.toContain(authorizationUrl);
+      expect(stdout).not.toContain(ROTATED_SESSION.access_token);
+      expect(stdout).not.toContain(ROTATED_SESSION.refresh_token);
+      expect(new PersonClient({ home_directory: home }).sessionSummary()).toMatchObject({
+        membership_type: "employee",
+      });
+    });
+  });
+
+  it("fails a requested browser launch without installing a Person session", async () => {
+    await withHome(async (home) => {
+      const authorizationUrl = "https://identity.example/authorize?state=state";
+      const opened: string[] = [];
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(
+        ["login", "--authority-url", "https://authority.example", "--open-browser"],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          open_authorization_url: (url) => {
+            opened.push(url);
+            return false;
+          },
+          fetch: async (input) => {
+            expect(new URL(String(input)).pathname).toBe("/v2/session/oidc/begin");
+            return json({ authorization_url: authorizationUrl, expires_at: "2026-08-18T00:10:00.000Z" }, 201);
+          },
+        },
+      );
+
+      expect(status).toBe(1);
+      expect(opened).toEqual([authorizationUrl]);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("Person browser could not be opened");
+      expect(stderr).not.toContain(authorizationUrl);
+      expect(() => new PersonClient({ home_directory: home }).sessionSummary()).toThrow();
+    });
+  });
+
   it("recovers an expired consumed invitation through existing-identity login", async () => {
     await withHome(async (home) => {
       const invitationPath = join(home, "person-onboarding.json");
