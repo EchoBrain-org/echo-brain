@@ -16,6 +16,7 @@ RUNTIME_PROFILES_DIR="$RELEASE_DIR/runtime-profiles"
 RUNTIME_ENVIRONMENTS_DIR="$RELEASE_DIR/runtime-environments"
 ACTIVE_RUNTIME_PROFILE_FILE="$RELEASE_DIR/runtime-profile.active"
 OPERATION_LOCK_DIR="$DATA_DIR/.authority-operation-lock"
+REHEARSAL_INPUTS_DIR="$DEPLOY_DIR/rehearsal-inputs"
 RELEASE_TOOL="$DEPLOY_DIR/../release/clean-v1-release.py"
 if [[ -f "$DEPLOY_DIR/release/clean-v1-release.py" ]]; then
   RELEASE_TOOL="$DEPLOY_DIR/release/clean-v1-release.py"
@@ -41,6 +42,9 @@ REHEARSAL_ARCHIVED_DATA=''
 REHEARSAL_ROLLBACK_ARMED=false
 REHEARSAL_RUNTIME_STOPPED=false
 REHEARSAL_DATA_MUTATED=false
+REHEARSAL_STAGE_DIRECTORY=''
+REHEARSAL_STAGE_CAPTURED=false
+PREPARE_CONTENT_TELEMETRY_OVERRIDE=''
 
 fail() { printf 'onboard-clean-v1: %s\n' "$*" >&2; exit 1; }
 
@@ -112,8 +116,10 @@ usage() {
 usage:
   onboard-clean-v1.sh doctor --input-dir <absolute-private-input-directory> [--staging-synthetic-meetings-dir <absolute-private-four-note-directory>]
   onboard-clean-v1.sh prepare --input-dir <absolute-private-input-directory> [--staging-synthetic-meetings-dir <absolute-private-four-note-directory>]
+  onboard-clean-v1.sh stage-rehearsal-inputs --operation-id <onboarding-id> --artifact-sha256 <sha256> --input-dir <absolute-private-nonsecret-input-directory> --staging-synthetic-meetings-dir <absolute-private-four-note-directory>
+  onboard-clean-v1.sh prepare-rehearsal --operation-id <onboarding-id>
   onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
-  onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
+  onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id>]
   onboard-clean-v1.sh resume
   onboard-clean-v1.sh status
 EOF
@@ -160,6 +166,231 @@ portable_stat_mode() {
 
 portable_stat_uid() {
   stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1"
+}
+
+portable_stat_nlink() {
+  stat -c '%h' "$1" 2>/dev/null || stat -f '%l' "$1"
+}
+
+require_rehearsal_operation_id() {
+  [[ "$1" =~ ^onboarding-[a-z0-9][a-z0-9-]{7,63}$ ]] || \
+    fail 'rehearsal operation id is invalid'
+}
+
+require_rehearsal_artifact_sha256() {
+  [[ "$1" =~ ^[a-f0-9]{64}$ ]] || fail 'rehearsal artifact sha256 is invalid'
+}
+
+rehearsal_stage_dir() {
+  require_rehearsal_operation_id "$1"
+  printf '%s/%s\n' "$REHEARSAL_INPUTS_DIR" "$1"
+}
+
+require_regular_private_file() {
+  local path="$1"
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  [[ "$(portable_stat_uid "$path")" == "$(id -u)" ]] || return 1
+  [[ "$(portable_stat_mode "$path")" == 600 ]] || return 1
+  [[ "$(portable_stat_nlink "$path")" == 1 ]] || return 1
+}
+
+check_rehearsal_nonsecret_input_dir() {
+  [[ "$input_dir" = /* && -d "$input_dir" && ! -L "$input_dir" ]] || return 1
+  [[ "$(portable_stat_uid "$input_dir")" == "$(id -u)" ]] || return 1
+  [[ "$(portable_stat_mode "$input_dir")" == 700 ]] || return 1
+  local name path
+  local -a expected=("$INPUT_MANIFEST_NAME" "$INPUT_RELEASE_NAME" "$INPUT_RUNTIME_PROFILE_NAME")
+  for name in "${expected[@]}"; do
+    path="$input_dir/$name"
+    require_regular_private_file "$path" || return 1
+  done
+  shopt -s nullglob dotglob
+  local entries=("$input_dir"/*)
+  shopt -u nullglob dotglob
+  [[ ${#entries[@]} -eq ${#expected[@]} ]] || return 1
+  input_release="$input_dir/$INPUT_RELEASE_NAME"
+  input_runtime_profile="$input_dir/$INPUT_RUNTIME_PROFILE_NAME"
+}
+
+check_rehearsal_meeting_input() {
+  [[ -n "$input_staging_synthetic_meetings_dir" ]] || return 1
+  check_staging_meeting_input
+}
+
+runtime_profile_supports_content_telemetry() {
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    value = json.load(open(sys.argv[1], encoding='utf-8'))
+    compose = value['files']['compose.clean-v1.yaml']
+    assert 'ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "${ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1:-false}"' in compose
+except Exception:
+    raise SystemExit(1)
+PY
+}
+
+rehearsal_stage_marker() {
+  printf '%s/stage.json\n' "$1"
+}
+
+require_safe_rehearsal_stage() {
+  local stage="$1" marker
+  [[ -d "$REHEARSAL_INPUTS_DIR" && ! -L "$REHEARSAL_INPUTS_DIR" ]] || return 1
+  [[ "$(portable_stat_uid "$REHEARSAL_INPUTS_DIR")" == "$(id -u)" && "$(portable_stat_mode "$REHEARSAL_INPUTS_DIR")" == 700 ]] || return 1
+  [[ -d "$stage" && ! -L "$stage" ]] || return 1
+  [[ "$(portable_stat_uid "$stage")" == "$(id -u)" && "$(portable_stat_mode "$stage")" == 700 ]] || return 1
+  marker="$(rehearsal_stage_marker "$stage")"
+  [[ -f "$marker" && ! -L "$marker" && "$(portable_stat_uid "$marker")" == "$(id -u)" && "$(portable_stat_mode "$marker")" == 600 && "$(portable_stat_nlink "$marker")" == 1 ]]
+}
+
+write_rehearsal_stage_marker() {
+  local stage="$1" state="$2" operation_id="$3" artifact_sha256="$4" telemetry="$5"
+  local temporary marker
+  marker="$(rehearsal_stage_marker "$stage")"
+  temporary="$(mktemp "$stage/.stage.XXXXXX")" || return 1
+  chmod 0600 "$temporary"
+  python3 - "$temporary" "$stage" "$state" "$operation_id" "$artifact_sha256" "$telemetry" \
+    "$input_runtime_user" "$input_owner_email" "$input_authority_host" "$input_aws_region" "$input_channel" <<'PY'
+import hashlib, json, os, stat, sys
+path, stage, state, operation_id, artifact, telemetry, runtime_user, owner_email, host, region, channel = sys.argv[1:]
+if state not in {'staged', 'captured', 'reset', 'completed'} or telemetry not in {'unset', 'true', 'false'}:
+    raise SystemExit(1)
+files = {}
+for directory, names in {
+    'nonsecret': ['onboarding.clean-v1.json', 'release.json', 'runtime-profile.json'],
+    'meetings': ['01-revenue-signal-calibration.json', '02-data-handling-review.json', '03-implementation-capacity-triage.json', '04-commercial-exception-review.json'],
+}.items():
+    for name in names:
+        item = os.path.join(stage, directory, name)
+        status = os.lstat(item)
+        if not stat.S_ISREG(status.st_mode) or stat.S_IMODE(status.st_mode) != 0o600 or status.st_nlink != 1:
+            raise SystemExit(1)
+        with open(item, 'rb') as source:
+            files[f'{directory}/{name}'] = hashlib.sha256(source.read()).hexdigest()
+value = {
+    'schema_version': 1,
+    'kind': 'echo-clean-v1-rehearsal-stage-v1',
+    'state': state,
+    'operation_id': operation_id,
+    'artifact_sha256': artifact,
+    'runtime_user': runtime_user,
+    'owner_email': owner_email,
+    'authority_host': host,
+    'aws_region': region,
+    'slack_approval_channel_id': channel,
+    'content_telemetry': None if telemetry == 'unset' else telemetry == 'true',
+    'file_sha256': files,
+}
+with open(path, 'w', encoding='utf-8') as target:
+    json.dump(value, target, sort_keys=True, separators=(',', ':'))
+    target.write('\n')
+os.chmod(path, 0o600)
+PY
+  mv -f "$temporary" "$marker"
+}
+
+read_rehearsal_stage_marker() {
+  local stage="$1"
+  python3 - "$(rehearsal_stage_marker "$stage")" <<'PY'
+import json, sys
+try:
+    value = json.load(open(sys.argv[1], encoding='utf-8'))
+    expected = {'schema_version', 'kind', 'state', 'operation_id', 'artifact_sha256', 'runtime_user', 'owner_email', 'authority_host', 'aws_region', 'slack_approval_channel_id', 'content_telemetry', 'file_sha256'}
+    assert set(value) == expected
+    assert value['schema_version'] == 1 and value['kind'] == 'echo-clean-v1-rehearsal-stage-v1'
+    assert value['state'] in {'staged', 'captured', 'reset', 'completed'}
+    assert len(value['artifact_sha256']) == 64 and all(char in '0123456789abcdef' for char in value['artifact_sha256'])
+    assert isinstance(value['content_telemetry'], (bool, type(None)))
+    names = {'nonsecret/onboarding.clean-v1.json', 'nonsecret/release.json', 'nonsecret/runtime-profile.json', 'meetings/01-revenue-signal-calibration.json', 'meetings/02-data-handling-review.json', 'meetings/03-implementation-capacity-triage.json', 'meetings/04-commercial-exception-review.json'}
+    assert set(value['file_sha256']) == names
+    assert all(isinstance(item, str) and len(item) == 64 and all(char in '0123456789abcdef' for char in item) for item in value['file_sha256'].values())
+    for key in expected - {'schema_version', 'content_telemetry', 'file_sha256'}:
+        assert isinstance(value[key], str) and '\n' not in value[key] and '\r' not in value[key]
+    print(value['state'])
+    print(value['operation_id'])
+    print(value['artifact_sha256'])
+    print(value['runtime_user'])
+    print(value['owner_email'])
+    print(value['authority_host'])
+    print(value['aws_region'])
+    print(value['slack_approval_channel_id'])
+    print('unset' if value['content_telemetry'] is None else str(value['content_telemetry']).lower())
+except Exception:
+    raise SystemExit(1)
+PY
+}
+
+stage_material_matches_marker() {
+  python3 - "$(rehearsal_stage_marker "$1")" "$1" <<'PY'
+import hashlib, json, os, stat, sys
+try:
+    value = json.load(open(sys.argv[1], encoding='utf-8'))
+    stage = sys.argv[2]
+    for relative, digest in value['file_sha256'].items():
+        item = os.path.join(stage, relative)
+        status = os.lstat(item)
+        assert stat.S_ISREG(status.st_mode) and stat.S_IMODE(status.st_mode) == 0o600 and status.st_nlink == 1
+        assert hashlib.sha256(open(item, 'rb').read()).hexdigest() == digest
+except Exception:
+    raise SystemExit(1)
+PY
+}
+
+prepared_rehearsal_matches_stage() {
+  local stage="$1" telemetry="$2" name
+  stage_material_matches_marker "$stage" || return 1
+  cmp -s "$stage/nonsecret/$INPUT_RELEASE_NAME" "$RELEASE_FILE" || return 1
+  cmp -s "$stage/nonsecret/$INPUT_RUNTIME_PROFILE_NAME" "$ACTIVE_RUNTIME_PROFILE_FILE" || return 1
+  [[ "$(environment_content_telemetry_bool "$ACTIVE_RUNTIME_PROFILE_FILE")" == "$telemetry" ]] || return 1
+  for name in "${STAGING_MEETING_FILES[@]}"; do
+    cmp -s "$stage/meetings/$name" "$DATA_DIR/meetings/$name" || return 1
+  done
+}
+
+stage_marker_matches_current_preparation() {
+  local stage="$1" expected_state="$2" values
+  values="$(read_rehearsal_stage_marker "$stage")" || return 1
+  local state operation artifact runtime owner host region channel telemetry
+  local marker_line
+  local -a _rehearsal_marker_values=()
+  while IFS= read -r marker_line; do _rehearsal_marker_values+=("$marker_line"); done <<< "$values"
+  [[ ${#_rehearsal_marker_values[@]} -eq 9 ]] || return 1
+  state="${_rehearsal_marker_values[0]}"; operation="${_rehearsal_marker_values[1]}"; artifact="${_rehearsal_marker_values[2]}"
+  runtime="${_rehearsal_marker_values[3]}"; owner="${_rehearsal_marker_values[4]}"; host="${_rehearsal_marker_values[5]}"
+  region="${_rehearsal_marker_values[6]}"; channel="${_rehearsal_marker_values[7]}"; telemetry="${_rehearsal_marker_values[8]}"
+  [[ "$state" == "$expected_state" && "$runtime" == "$(setup_value runtime_user)" && "$owner" == "$(setup_value owner_email)" && "$host" == "$(setup_value authority_host)" && "$region" == "$(setup_value aws_region)" && "$channel" == "$(setup_value slack_approval_channel_id)" ]] || return 1
+  [[ "$telemetry" == unset || "$telemetry" == true || "$telemetry" == false ]] && stage_material_matches_marker "$stage"
+}
+
+environment_content_telemetry_bool() {
+  local profile="$1" value
+  runtime_profile_supports_content_telemetry "$profile" || return 1
+  value="$(python3 - "$ENV_FILE" <<'PY'
+import sys
+try:
+    lines = open(sys.argv[1], encoding='utf-8').read().splitlines()
+    values = [line.split('=', 1)[1] for line in lines if line.startswith('ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=')]
+    if not values:
+        print('false')
+    elif len(values) == 1 and values[0] in {'true', 'false'}:
+        print(values[0])
+    else:
+        raise ValueError()
+except Exception:
+    raise SystemExit(1)
+PY
+)" || return 1
+  [[ "$value" == true || "$value" == false ]] || return 1
+  printf '%s\n' "$value"
+}
+
+running_content_telemetry_bool() {
+  local container value
+  container="$(compose_clean ps -q authority 2>/dev/null)" || return 1
+  [[ -n "$container" && "$container" != *$'\n'* && "$container" != *$'\r'* ]] || return 1
+  value="$(docker inspect --format '{{range .Config.Env}}{{if eq . "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true"}}true{{end}}{{if eq . "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false"}}false{{end}}{{end}}' "$container" 2>/dev/null)" || return 1
+  [[ "$value" == true || "$value" == false ]] || return 1
+  printf '%s\n' "$value"
 }
 
 require_input_dir_argument() {
@@ -382,6 +613,7 @@ check_input_dir() {
     [[ -f "$path" && ! -L "$path" ]] || return 1
     [[ "$(portable_stat_uid "$path")" == "$(id -u)" ]] || return 1
     [[ "$(portable_stat_mode "$path")" == 600 ]] || return 1
+    [[ "$(portable_stat_nlink "$path")" == 1 ]] || return 1
   done
   shopt -s nullglob dotglob
   local entries=("$input_dir"/*)
@@ -414,6 +646,7 @@ check_provider_activation_input_dir() {
     [[ -f "$path" && ! -L "$path" ]] || return 1
     [[ "$(portable_stat_uid "$path")" == "$(id -u)" ]] || return 1
     [[ "$(portable_stat_mode "$path")" == 600 ]] || return 1
+    [[ "$(portable_stat_nlink "$path")" == 1 ]] || return 1
   done
   shopt -s nullglob dotglob
   local entries=("$input_dir"/*)
@@ -476,6 +709,63 @@ doctor() {
   if ! safe_directory_target "$RUNTIME_PROFILES_DIR"; then doctor_json false clean_runtime_profiles_path_invalid 'Remove or repair the unsafe deployment runtime-profiles path before preparing.'; return; fi
   if ! safe_directory_target "$RUNTIME_ENVIRONMENTS_DIR"; then doctor_json false clean_runtime_environments_path_invalid 'Remove or repair the unsafe deployment runtime-environments path before preparing.'; return; fi
   doctor_json true ready 'Run prepare with the same input directory.'
+}
+
+stage_rehearsal_inputs() {
+  [[ $# -eq 8 && "$1" == --operation-id && "$3" == --artifact-sha256 && "$5" == --input-dir && "$7" == --staging-synthetic-meetings-dir && "$2" != '' && "$4" != '' && "$6" = /* && "$8" = /* ]] || usage
+  local operation_id="$2" artifact_sha256="$4" stage temporary name
+  require_rehearsal_operation_id "$operation_id"
+  require_rehearsal_artifact_sha256 "$artifact_sha256"
+  input_dir="$6"
+  input_staging_synthetic_meetings_dir="$8"
+  require_host_prerequisites
+  check_rehearsal_nonsecret_input_dir && read_input_manifest && check_rehearsal_meeting_input && \
+    python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null && \
+    validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && \
+    runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
+    fail 'rehearsal transfer inputs are invalid or incomplete'
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  if [[ -e "$REHEARSAL_INPUTS_DIR" || -L "$REHEARSAL_INPUTS_DIR" ]]; then
+    [[ -d "$REHEARSAL_INPUTS_DIR" && ! -L "$REHEARSAL_INPUTS_DIR" && "$(portable_stat_uid "$REHEARSAL_INPUTS_DIR")" == "$(id -u)" && "$(portable_stat_mode "$REHEARSAL_INPUTS_DIR")" == 700 ]] || \
+      fail 'rehearsal input parent is unsafe'
+  else
+    install -d -m 0700 "$REHEARSAL_INPUTS_DIR"
+  fi
+  stage="$(rehearsal_stage_dir "$operation_id")"
+  if [[ -e "$stage" || -L "$stage" ]]; then
+    require_safe_rehearsal_stage "$stage" || fail 'existing rehearsal stage is unsafe'
+    stage_marker_matches_current_preparation "$stage" staged || fail 'existing rehearsal stage is not reusable for the current Authority'
+    [[ "$(read_rehearsal_stage_marker "$stage" | sed -n '3p')" == "$artifact_sha256" ]] || fail 'existing rehearsal stage has a different artifact binding'
+    for name in "$INPUT_MANIFEST_NAME" "$INPUT_RELEASE_NAME" "$INPUT_RUNTIME_PROFILE_NAME"; do
+      cmp -s "$input_dir/$name" "$stage/nonsecret/$name" || fail 'existing rehearsal stage has different non-secret inputs'
+    done
+    for name in "${STAGING_MEETING_FILES[@]}"; do
+      cmp -s "$input_staging_synthetic_meetings_dir/$name" "$stage/meetings/$name" || fail 'existing rehearsal stage has different synthetic meetings'
+    done
+    printf 'rehearsal_inputs_staged=true\noperation_id=%s\nnext_action=Run the human replace-rehearsal action with this operation id.\n' "$operation_id"
+    return
+  fi
+  temporary="$(mktemp -d "$REHEARSAL_INPUTS_DIR/.${operation_id}.XXXXXX")" || fail 'could not create rehearsal input staging directory'
+  chmod 0700 "$temporary"
+  install -d -m 0700 "$temporary/nonsecret" "$temporary/meetings" || { rm -rf -- "$temporary"; fail 'could not create rehearsal input staging directories'; }
+  for name in "$INPUT_MANIFEST_NAME" "$INPUT_RELEASE_NAME" "$INPUT_RUNTIME_PROFILE_NAME"; do
+    install -m 0600 "$input_dir/$name" "$temporary/nonsecret/$name" || { rm -rf -- "$temporary"; fail 'could not stage rehearsal non-secret input'; }
+  done
+  for name in "${STAGING_MEETING_FILES[@]}"; do
+    install -m 0600 "$input_staging_synthetic_meetings_dir/$name" "$temporary/meetings/$name" || { rm -rf -- "$temporary"; fail 'could not stage rehearsal synthetic meeting'; }
+  done
+  REHEARSAL_STAGE_DIRECTORY="$temporary"
+  write_rehearsal_stage_marker "$temporary" staged "$operation_id" "$artifact_sha256" unset || {
+    rm -rf -- "$temporary"
+    fail 'could not write rehearsal stage receipt'
+  }
+  mv "$temporary" "$stage" || {
+    rm -rf -- "$temporary"
+    fail 'could not finalize rehearsal input stage'
+  }
+  REHEARSAL_STAGE_DIRECTORY=''
+  printf 'rehearsal_inputs_staged=true\noperation_id=%s\nnext_action=Run the human replace-rehearsal action with this operation id.\n' "$operation_id"
 }
 
 require_host_prerequisites() {
@@ -900,11 +1190,13 @@ prepare() {
   require_safe_directory_target "$DATA_DIR" 'clean data path'
   install -d -m 0700 "$DATA_DIR"
   chmod 0700 "$DATA_DIR"
-  acquire_operation_lock
-  trap 'release_operation_lock' EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  if [[ "$OPERATION_LOCK_HELD" != true ]]; then
+    acquire_operation_lock
+    trap 'release_operation_lock' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+  fi
   require_safe_directory_target "$DATA_DIR" 'clean data path'
   require_safe_directory_target "$PRIVATE_DIR" 'clean private-input path'
   require_safe_directory_target "$RELEASE_DIR" 'clean release path'
@@ -957,6 +1249,11 @@ ECHO_CLEAN_AWS_REGION=$input_aws_region
 ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/$input_authority_host
 ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$input_channel
 ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
+  if [[ "$PREPARE_CONTENT_TELEMETRY_OVERRIDE" == true || "$PREPARE_CONTENT_TELEMETRY_OVERRIDE" == false ]]; then
+    runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
+      fail 'runtime profile does not support the preserved staging content telemetry setting'
+    env+=$'\n'"ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=$PREPARE_CONTENT_TELEMETRY_OVERRIDE"
+  fi
   if [[ -n "$input_staging_synthetic_meetings_dir" ]]; then
     setup+=$'\n''staging_synthetic_meetings_dir=/echo-clean/meetings'
     env+=$'\n''ECHO_STAGING_SYNTHETIC_MEETINGS_DIR=/echo-clean/meetings'
@@ -1010,6 +1307,52 @@ bootstrap() {
     < "$PRIVATE_DIR/slack-bot-token"
 }
 
+capture_rehearsal_provider_inputs() {
+  local stage destination name source
+  stage="$1"
+  destination="$stage/input"
+  [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
+  install -d -m 0700 "$destination" || return 1
+  for name in "$INPUT_MANIFEST_NAME" "$INPUT_RELEASE_NAME" "$INPUT_RUNTIME_PROFILE_NAME"; do
+    install -m 0600 "$stage/nonsecret/$name" "$destination/$name" || return 1
+  done
+  local -a sources=(
+    "$PRIVATE_DIR/oidc-config.json:$INPUT_OIDC_CONFIG_NAME"
+    "$PRIVATE_DIR/oidc-client-secret:$INPUT_OIDC_SECRET_NAME"
+    "$PRIVATE_DIR/slack-bot-token:$INPUT_SLACK_TOKEN_NAME"
+    "$PRIVATE_DIR/slack-signing-secret:$INPUT_SLACK_SIGNING_SECRET_NAME"
+    "$PRIVATE_DIR/granola-credential-source:$INPUT_GRANOLA_CREDENTIAL_NAME"
+    "$PRIVATE_DIR/llm-credential-source:$INPUT_LLM_CREDENTIAL_NAME"
+  )
+  for source in "${sources[@]}"; do
+    name="${source#*:}"
+    source="${source%%:*}"
+    require_runtime_private_file "$source" 'existing provider input'
+    install -m 0600 "$source" "$destination/$name" || return 1
+  done
+  input_dir="$destination"
+  check_input_dir && read_input_manifest && validate_input_oidc_callback && \
+    check_staging_meeting_input && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" || return 1
+}
+
+remove_rehearsal_captured_inputs() {
+  local stage destination
+  stage="$1"
+  destination="$stage/input"
+  [[ -d "$destination" && ! -L "$destination" && "$(portable_stat_uid "$destination")" == "$(id -u)" && "$(portable_stat_mode "$destination")" == 700 ]] || return 1
+  rm -f "$destination/$INPUT_MANIFEST_NAME" "$destination/$INPUT_RELEASE_NAME" "$destination/$INPUT_RUNTIME_PROFILE_NAME" \
+    "$destination/$INPUT_OIDC_CONFIG_NAME" "$destination/$INPUT_OIDC_SECRET_NAME" "$destination/$INPUT_SLACK_TOKEN_NAME" \
+    "$destination/$INPUT_SLACK_SIGNING_SECRET_NAME" "$destination/$INPUT_GRANOLA_CREDENTIAL_NAME" "$destination/$INPUT_LLM_CREDENTIAL_NAME" || return 1
+  rmdir "$destination"
+}
+
+restore_rehearsal_stage_after_failed_replace() {
+  local stage="$1" operation="$2" artifact="$3" telemetry="$4"
+  [[ -n "$stage" && "$REHEARSAL_STAGE_CAPTURED" == true ]] || return 0
+  remove_rehearsal_captured_inputs "$stage" >/dev/null 2>&1 || return 1
+  write_rehearsal_stage_marker "$stage" staged "$operation" "$artifact" "$telemetry" >/dev/null 2>&1
+}
+
 replace_rehearsal_rollback_on_exit() {
   local exit_status="${1:-1}" restored=true restarted=true archived_environment
   trap - EXIT HUP INT TERM
@@ -1055,6 +1398,10 @@ replace_rehearsal_rollback_on_exit() {
       printf 'onboard-clean-v1: interrupted rehearsal replacement requires recovery from %s\n' "$REHEARSAL_ARCHIVE" >&2
     fi
   fi
+  if [[ "$restored" == true ]]; then
+    restore_rehearsal_stage_after_failed_replace "$REHEARSAL_STAGE_DIRECTORY" "${REHEARSAL_OPERATION_ID:-}" "${REHEARSAL_ARTIFACT_SHA256:-}" "${REHEARSAL_CONTENT_TELEMETRY:-unset}" || \
+      printf 'onboard-clean-v1: captured rehearsal provider inputs were retained for manual secure recovery\n' >&2
+  fi
   release_operation_lock
   exit "$exit_status"
 }
@@ -1066,7 +1413,16 @@ disarm_rehearsal_rollback() {
 }
 
 replace_rehearsal() {
-  [[ $# -eq 1 && "$1" == --confirm-no-live-users ]] || usage
+  local reuse_operation_id='' reuse_stage='' current_telemetry='' configured_telemetry=''
+  local -a marker_values=()
+  if [[ $# -eq 1 && "$1" == --confirm-no-live-users ]]; then
+    :
+  elif [[ $# -eq 3 && "$1" == --confirm-no-live-users && "$2" == --reuse-provider-inputs ]]; then
+    reuse_operation_id="$3"
+    require_rehearsal_operation_id "$reuse_operation_id"
+  else
+    usage
+  fi
   acquire_operation_lock
   trap 'replace_rehearsal_rollback_on_exit "$?"' EXIT
   trap 'exit 129' HUP
@@ -1081,7 +1437,63 @@ replace_rehearsal() {
     fail 'clean rehearsal data directory is not the retained data mount'
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || \
     fail 'clean rehearsal environment file is unsafe'
+  if [[ -n "$reuse_operation_id" ]]; then
+    require_prepared
+    staged_candidate_present && fail 'a candidate release is staged; finish its promotion or rollback before replacing this rehearsal'
+    select_runtime_identity "$(setup_value runtime_user)"
+    require_image_present
+    local status_json
+    status_json="$(setup_status)"
+    terminal_green "$status_json" || \
+      fail 'provider-input reuse requires a complete, healthy Authority using the accepted image'
+    reuse_stage="$(rehearsal_stage_dir "$reuse_operation_id")"
+    require_safe_rehearsal_stage "$reuse_stage" || fail 'rehearsal input stage is missing or unsafe'
+    input_dir="$reuse_stage/nonsecret"
+    input_staging_synthetic_meetings_dir="$reuse_stage/meetings"
+    check_rehearsal_nonsecret_input_dir && read_input_manifest && check_rehearsal_meeting_input && \
+      python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null && \
+      validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && \
+      runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
+      fail 'staged rehearsal inputs are invalid or incomplete'
+    stage_marker_matches_current_preparation "$reuse_stage" staged || \
+      fail 'staged rehearsal inputs do not match the current Authority owner, host, runtime, region, and Slack channel'
+    local marker_line
+    marker_values=()
+    while IFS= read -r marker_line; do marker_values+=("$marker_line"); done <<< "$(read_rehearsal_stage_marker "$reuse_stage")"
+    [[ ${#marker_values[@]} -eq 9 && "${marker_values[1]}" == "$reuse_operation_id" ]] || fail 'staged rehearsal receipt is invalid'
+    REHEARSAL_STAGE_DIRECTORY="$reuse_stage"
+    REHEARSAL_OPERATION_ID="$reuse_operation_id"
+    REHEARSAL_ARTIFACT_SHA256="${marker_values[2]}"
+    runtime_profile_supports_content_telemetry "$ACTIVE_RUNTIME_PROFILE_FILE" || \
+      fail 'current runtime profile does not support content telemetry preservation'
+    configured_telemetry="$(environment_content_telemetry_bool "$ACTIVE_RUNTIME_PROFILE_FILE")" || \
+      fail 'current Compose environment has an invalid content telemetry setting'
+    current_telemetry="$(running_content_telemetry_bool)" || \
+      fail 'could not verify the running Authority content telemetry setting'
+    [[ "$configured_telemetry" == "$current_telemetry" ]] || \
+      fail 'running Authority content telemetry differs from the verified Compose setting; resolve the drift before replacing the rehearsal'
+    REHEARSAL_CONTENT_TELEMETRY="$configured_telemetry"
+    local required_source
+    for required_source in \
+      "$PRIVATE_DIR/oidc-config.json" "$PRIVATE_DIR/oidc-client-secret" \
+      "$PRIVATE_DIR/slack-bot-token" "$PRIVATE_DIR/slack-signing-secret" \
+      "$PRIVATE_DIR/granola-credential-source" "$PRIVATE_DIR/llm-credential-source"; do
+      require_runtime_private_file "$required_source" 'existing provider input'
+    done
+  fi
   REHEARSAL_ROLLBACK_ARMED=true
+  if [[ -n "$reuse_operation_id" ]]; then
+    REHEARSAL_STAGE_CAPTURED=true
+    capture_rehearsal_provider_inputs "$reuse_stage" || \
+      fail 'could not securely capture the current provider inputs before rehearsal replacement'
+    local capture_doctor
+    capture_doctor="$(doctor --input-dir "$reuse_stage/input" --staging-synthetic-meetings-dir "$reuse_stage/meetings")" || \
+      fail 'captured rehearsal inputs did not pass the preparation preflight'
+    [[ "$capture_doctor" == '{"ok":true,'* ]] || \
+      fail 'captured rehearsal inputs did not pass the preparation preflight'
+    write_rehearsal_stage_marker "$reuse_stage" captured "$reuse_operation_id" "$REHEARSAL_ARTIFACT_SHA256" "$REHEARSAL_CONTENT_TELEMETRY" || \
+      fail 'could not bind captured provider inputs to the rehearsal receipt'
+  fi
   REHEARSAL_RUNTIME_STOPPED=true
   compose_clean down --remove-orphans
   local archive_root="$DEPLOY_DIR/retired-rehearsals" archive archived_data
@@ -1113,8 +1525,70 @@ replace_rehearsal() {
     -delete; then
     fail 'could not clear the retired rehearsal; automatic rollback will run'
   fi
+  if [[ -n "$reuse_operation_id" ]]; then
+    write_rehearsal_stage_marker "$reuse_stage" reset "$reuse_operation_id" "$REHEARSAL_ARTIFACT_SHA256" "$REHEARSAL_CONTENT_TELEMETRY" || \
+      fail 'rehearsal was reset but the captured-input receipt could not be updated; retain the private stage for recovery'
+  fi
   disarm_rehearsal_rollback
-  printf 'rehearsal_replaced=true\narchive=%s\nnext_action=Run prepare with the new exact release and onboarding inputs.\n' "$archive"
+  if [[ -n "$reuse_operation_id" ]]; then
+    printf 'rehearsal_replaced=true\narchive=%s\noperation_id=%s\nnext_action=Run prepare-rehearsal with this operation id.\n' "$archive" "$reuse_operation_id"
+  else
+    printf 'rehearsal_replaced=true\narchive=%s\nnext_action=Run prepare with the new exact release and onboarding inputs.\n' "$archive"
+  fi
+}
+
+prepare_rehearsal() {
+  [[ $# -eq 2 && "$1" == --operation-id ]] || usage
+  local operation_id="$2" stage artifact telemetry state
+  local -a marker_values=()
+  require_rehearsal_operation_id "$operation_id"
+  require_host_prerequisites
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  stage="$(rehearsal_stage_dir "$operation_id")"
+  require_safe_rehearsal_stage "$stage" || fail 'rehearsal input stage is missing or unsafe'
+  local marker_line
+  marker_values=()
+  while IFS= read -r marker_line; do marker_values+=("$marker_line"); done <<< "$(read_rehearsal_stage_marker "$stage")"
+  [[ ${#marker_values[@]} -eq 9 && "${marker_values[1]}" == "$operation_id" ]] || fail 'rehearsal stage receipt is invalid'
+  state="${marker_values[0]}"; artifact="${marker_values[2]}"; telemetry="${marker_values[8]}"
+  if [[ "$state" == completed ]]; then
+    require_prepared
+    stage_marker_matches_current_preparation "$stage" completed || \
+      fail 'completed rehearsal receipt does not match the prepared Authority'
+    prepared_rehearsal_matches_stage "$stage" "$telemetry" || \
+      fail 'completed rehearsal material does not match the prepared Authority'
+    if [[ -e "$stage/input" || -L "$stage/input" ]]; then
+      remove_rehearsal_captured_inputs "$stage" || \
+        fail 'completed rehearsal still has unsafe captured provider inputs'
+    fi
+    printf 'rehearsal_prepared=true\noperation_id=%s\nnext_action=Run onboard-clean-v1.sh resume on this server.\n' "$operation_id"
+    return
+  fi
+  [[ "$state" == reset ]] || fail 'rehearsal inputs must be captured and the prior rehearsal reset before preparation'
+  [[ "$telemetry" == true || "$telemetry" == false ]] || fail 'rehearsal receipt is missing the preserved content telemetry setting'
+  stage_material_matches_marker "$stage" || fail 'staged rehearsal inputs no longer match the transfer receipt'
+  input_dir="$stage/input"
+  input_staging_synthetic_meetings_dir="$stage/meetings"
+  check_input_dir && read_input_manifest && check_rehearsal_meeting_input && \
+    python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null && \
+    validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && \
+    runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
+    fail 'captured rehearsal inputs are invalid or incomplete'
+  cmp -s "$stage/input/$INPUT_MANIFEST_NAME" "$stage/nonsecret/$INPUT_MANIFEST_NAME" && \
+    cmp -s "$stage/input/$INPUT_RELEASE_NAME" "$stage/nonsecret/$INPUT_RELEASE_NAME" && \
+    cmp -s "$stage/input/$INPUT_RUNTIME_PROFILE_NAME" "$stage/nonsecret/$INPUT_RUNTIME_PROFILE_NAME" || \
+    fail 'captured rehearsal non-secret inputs no longer match the staged transfer material'
+  PREPARE_CONTENT_TELEMETRY_OVERRIDE="$telemetry"
+  prepare --input-dir "$input_dir" --staging-synthetic-meetings-dir "$input_staging_synthetic_meetings_dir"
+  write_rehearsal_stage_marker "$stage" completed "$operation_id" "$artifact" "$telemetry" || \
+    fail 'rehearsal prepared but its completion receipt could not be written'
+  remove_rehearsal_captured_inputs "$stage" || \
+    fail 'rehearsal prepared but captured provider inputs could not be securely removed; rerun prepare-rehearsal to finish cleanup'
+  printf 'rehearsal_prepared=true\noperation_id=%s\nnext_action=Run onboard-clean-v1.sh resume on this server.\n' "$operation_id"
 }
 
 resume_bootstrap() {
@@ -1154,6 +1628,8 @@ require_runtime_private_file() {
     fail "$label destination is not runtime-user-owned"
   [[ "$(portable_stat_mode "$path")" == 600 ]] || \
     fail "$label destination is not mode 0600"
+  [[ "$(portable_stat_nlink "$path")" == 1 ]] || \
+    fail "$label destination must not be hard-linked"
 }
 
 replace_runtime_private() {
@@ -1521,6 +1997,8 @@ status() {
 case "${1:-}" in
   doctor) shift; doctor "$@" ;;
   prepare) shift; prepare "$@" ;;
+  stage-rehearsal-inputs) shift; stage_rehearsal_inputs "$@" ;;
+  prepare-rehearsal) shift; prepare_rehearsal "$@" ;;
   activate-provider-credentials) shift; activate_provider_credentials "$@" ;;
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
   resume) [[ $# -eq 1 ]] || usage; resume ;;

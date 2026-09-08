@@ -53,6 +53,10 @@ const SSM_SUBMISSION_WINDOW_MS = 10 * 60 * 1000;
 const SSM_SUBMISSION_BUFFER_MS = 2 * 60 * 1000;
 const MAXIMUM_INPUT_FILE_BYTES = 10 * 1024 * 1024;
 const MAXIMUM_INPUT_TOTAL_BYTES = 40 * 1024 * 1024;
+// The host wrapper accepts exactly these four meeting fixtures and caps each
+// one at 256 KiB. Reject earlier so a plan cannot courier an input that the
+// approved host command will necessarily refuse.
+const MAXIMUM_STAGING_SYNTHETIC_MEETING_FILE_BYTES = 256 * 1024;
 const INPUT_FILES = Object.freeze([
   "onboarding.clean-v1.json",
   "release.json",
@@ -64,6 +68,14 @@ const INPUT_FILES = Object.freeze([
   "granola-credential",
   "llm-credential",
 ]);
+const REUSABLE_STAGING_INPUT_FILES = Object.freeze(INPUT_FILES.slice(0, 3));
+const STAGING_SYNTHETIC_MEETING_FILES = Object.freeze([
+  "01-revenue-signal-calibration.json",
+  "02-data-handling-review.json",
+  "03-implementation-capacity-triage.json",
+  "04-commercial-exception-review.json",
+]);
+const STAGING_SYNTHETIC_MEETINGS_PREFIX = "staging-meetings/";
 const AMBIENT_AWS_CREDENTIAL_KEYS = Object.freeze([
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
@@ -135,6 +147,18 @@ function privateDirectory(path, code) {
   return real;
 }
 
+function privateDirectoryWithoutSymlink(path, code) {
+  const candidate = resolve(path);
+  let state;
+  try {
+    state = lstatSync(candidate);
+  } catch {
+    refuse(code);
+  }
+  if (state.isSymbolicLink()) refuse(code);
+  return privateDirectory(candidate, code);
+}
+
 function privateRegularFile(path, code) {
   let state;
   try {
@@ -201,30 +225,58 @@ function tarHeader(name, size) {
   return header;
 }
 
+function exactPrivateInputLeaves({ sourceDir, names, prefix = "", directoryCode, shapeCode, fileCode, maximumFileBytes = MAXIMUM_INPUT_FILE_BYTES, rejectDirectorySymlink = false }) {
+  const source = rejectDirectorySymlink
+    ? privateDirectoryWithoutSymlink(sourceDir, directoryCode)
+    : privateDirectory(sourceDir, directoryCode);
+  const actual = new Set(readdirSync(source));
+  if (actual.size !== names.length || names.some((name) => !actual.has(name)))
+    refuse(shapeCode);
+  return names.map((name) => Object.freeze({
+    archiveName: `${prefix}${name}`,
+    path: resolve(source, name),
+    state: privateRegularFile(resolve(source, name), fileCode),
+    maximumFileBytes,
+  }));
+}
+
 /** Build an exact, deterministic archive from the established input shape. */
-export function createOnboardingInputArchive({ sourceDir, output }) {
-  const source = privateDirectory(sourceDir, "input_directory_not_private");
+export function createOnboardingInputArchive({ sourceDir, stagingSyntheticMeetingsDir, reuseCurrentProviderInputs, output }) {
+  if (reuseCurrentProviderInputs !== undefined && reuseCurrentProviderInputs !== true)
+    refuse("reuse_current_provider_inputs_invalid");
+  if (reuseCurrentProviderInputs === true && stagingSyntheticMeetingsDir === undefined)
+    refuse("reuse_current_provider_inputs_requires_staging_synthetic_meetings");
+  const inputLeaves = exactPrivateInputLeaves({
+    sourceDir,
+    names: reuseCurrentProviderInputs === true ? REUSABLE_STAGING_INPUT_FILES : INPUT_FILES,
+    directoryCode: "input_directory_not_private",
+    shapeCode: "input_directory_shape_invalid",
+    fileCode: "input_file_not_private_regular",
+  });
+  const fixtureLeaves = stagingSyntheticMeetingsDir === undefined
+    ? []
+    : exactPrivateInputLeaves({
+      sourceDir: stagingSyntheticMeetingsDir,
+      names: STAGING_SYNTHETIC_MEETING_FILES,
+      prefix: STAGING_SYNTHETIC_MEETINGS_PREFIX,
+      directoryCode: "staging_synthetic_meetings_directory_not_private",
+      shapeCode: "staging_synthetic_meetings_directory_shape_invalid",
+      fileCode: "staging_synthetic_meetings_file_not_private_regular",
+      maximumFileBytes: MAXIMUM_STAGING_SYNTHETIC_MEETING_FILE_BYTES,
+      rejectDirectorySymlink: true,
+    });
   const destination = pathOutsideRepository(output, "archive_inside_repo");
   if (existsSync(destination)) refuse("archive_destination_exists");
   if (!basename(destination).endsWith(".tar.gz")) refuse("archive_suffix_invalid");
-
-  const actual = new Set(readdirSync(source));
-  if (
-    actual.size !== INPUT_FILES.length ||
-    INPUT_FILES.some((name) => !actual.has(name))
-  ) {
-    refuse("input_directory_shape_invalid");
-  }
   const chunks = [];
   let totalBytes = 0;
-  for (const name of INPUT_FILES) {
-    const path = resolve(source, name);
-    const state = privateRegularFile(path, "input_file_not_private_regular");
-    if (state.size > MAXIMUM_INPUT_FILE_BYTES) refuse("input_file_too_large");
+  for (const leaf of [...inputLeaves, ...fixtureLeaves]) {
+    const { path, state, archiveName } = leaf;
+    if (state.size > leaf.maximumFileBytes) refuse("input_file_too_large");
     totalBytes += state.size;
     if (totalBytes > MAXIMUM_INPUT_TOTAL_BYTES) refuse("input_total_too_large");
     const content = readFileSync(path);
-    chunks.push(tarHeader(name, content.length), content);
+    chunks.push(tarHeader(archiveName, content.length), content);
     const padding = (512 - (content.length % 512)) % 512;
     if (padding) chunks.push(Buffer.alloc(padding, 0));
   }
@@ -250,14 +302,25 @@ function parseConfig(path) {
     "operationId",
     "stackName",
     "privateInputDir",
+    "stagingSyntheticMeetingsDir",
+    "reuseCurrentProviderInputs",
     "archiveDir",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key)))
     refuse("transfer_input_property_not_allowed");
+  const reuseCurrentProviderInputs = value.reuseCurrentProviderInputs;
+  if (reuseCurrentProviderInputs !== undefined && reuseCurrentProviderInputs !== true)
+    refuse("reuse_current_provider_inputs_invalid");
+  if (reuseCurrentProviderInputs === true && value.stagingSyntheticMeetingsDir === undefined)
+    refuse("reuse_current_provider_inputs_requires_staging_synthetic_meetings");
   return Object.freeze({
     archiveDir: exact(value.archiveDir, /^\/.+/, "archive_directory_invalid"),
     operationId: exact(value.operationId, OPERATION, "operation_id_invalid"),
     privateInputDir: exact(value.privateInputDir, /^\/.+/, "input_directory_invalid"),
+    stagingSyntheticMeetingsDir: value.stagingSyntheticMeetingsDir === undefined
+      ? undefined
+      : exact(value.stagingSyntheticMeetingsDir, /^\/.+/, "staging_synthetic_meetings_directory_invalid"),
+    reuseCurrentProviderInputs,
     region: exact(value.region, REGION, "region_invalid"),
     stackName: exact(value.stackName, STACK, "stack_name_invalid"),
   });
@@ -641,7 +704,104 @@ function clearParameters() {
 }
 
 /** The only remote code path. It emits one fixed success marker and nothing else. */
-export function onboardingTransferSsmCommands({ artifact, region }) {
+export function onboardingTransferSsmCommands({ artifact, region, stagingSyntheticMeetings = false, reuseCurrentProviderInputs = false, operationId }) {
+  const selectedSyntheticMeetings = stagingSyntheticMeetings === true;
+  const reuseCurrentProvider = reuseCurrentProviderInputs === true;
+  if (reuseCurrentProvider && !selectedSyntheticMeetings)
+    refuse("reuse_current_provider_inputs_requires_staging_synthetic_meetings");
+  const stageOperationId = reuseCurrentProvider
+    ? exact(operationId, OPERATION, "operation_id_invalid")
+    : undefined;
+  const archiveFixtureNames = STAGING_SYNTHETIC_MEETING_FILES.map(
+    (name) => `${STAGING_SYNTHETIC_MEETINGS_PREFIX}${name}`,
+  );
+  const fixtureInputFiles = reuseCurrentProvider
+    ? REUSABLE_STAGING_INPUT_FILES
+    : INPUT_FILES;
+  const fixtureExtraction = selectedSyntheticMeetings
+    ? `
+meetings="$workdir/meetings"
+python3 - "$archive" "$input" "$meetings" <<'PY'
+import os
+import sys
+import tarfile
+
+archive, destination, meetings_destination = sys.argv[1:]
+expected_input = ${JSON.stringify(fixtureInputFiles)}
+expected_meetings = ${JSON.stringify(archiveFixtureNames)}
+expected = expected_input + expected_meetings
+maximum_file_bytes = ${MAXIMUM_INPUT_FILE_BYTES}
+maximum_total_bytes = ${MAXIMUM_INPUT_TOTAL_BYTES}
+with tarfile.open(archive, "r:gz") as source:
+    members = source.getmembers()
+    if [member.name for member in members] != expected:
+        raise SystemExit(1)
+    if any(not member.isreg() or member.issym() or member.islnk() or member.size > maximum_file_bytes for member in members):
+        raise SystemExit(1)
+    if sum(member.size for member in members) > maximum_total_bytes:
+        raise SystemExit(1)
+    os.mkdir(destination, 0o700)
+    os.mkdir(meetings_destination, 0o700)
+    for member in members:
+        source_file = source.extractfile(member)
+        if source_file is None:
+            raise SystemExit(1)
+        if member.name in expected_input:
+            target = os.path.join(destination, member.name)
+        else:
+            target = os.path.join(meetings_destination, member.name[len("${STAGING_SYNTHETIC_MEETINGS_PREFIX}"):])
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            while True:
+                chunk = source_file.read(131072)
+                if not chunk:
+                    break
+                output.write(chunk)
+        os.chmod(target, 0o600)
+PY
+chmod 0700 "$input" "$meetings"
+for name in ${fixtureInputFiles.join(" ")}; do test -f "$input/$name" && test ! -L "$input/$name"; done
+test "$(find "$input" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${fixtureInputFiles.length}
+for name in ${STAGING_SYNTHETIC_MEETING_FILES.join(" ")}; do test -f "$meetings/$name" && test ! -L "$meetings/$name"; done
+test "$(find "$meetings" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${STAGING_SYNTHETIC_MEETING_FILES.length}
+`
+    : `
+python3 - "$archive" "$input" <<'PY'
+import os
+import sys
+import tarfile
+
+archive, destination = sys.argv[1:]
+expected = ${JSON.stringify(INPUT_FILES)}
+maximum_file_bytes = ${MAXIMUM_INPUT_FILE_BYTES}
+maximum_total_bytes = ${MAXIMUM_INPUT_TOTAL_BYTES}
+with tarfile.open(archive, "r:gz") as source:
+    members = source.getmembers()
+    if [member.name for member in members] != expected:
+        raise SystemExit(1)
+    if any(not member.isreg() or member.issym() or member.islnk() or member.size > maximum_file_bytes for member in members):
+        raise SystemExit(1)
+    if sum(member.size for member in members) > maximum_total_bytes:
+        raise SystemExit(1)
+    os.mkdir(destination, 0o700)
+    for member in members:
+        source_file = source.extractfile(member)
+        if source_file is None:
+            raise SystemExit(1)
+        target = os.path.join(destination, member.name)
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            while True:
+                chunk = source_file.read(131072)
+                if not chunk:
+                    break
+                output.write(chunk)
+        os.chmod(target, 0o600)
+PY
+chmod 0700 "$input"
+for name in ${INPUT_FILES.join(" ")}; do test -f "$input/$name" && test ! -L "$input/$name"; done
+test "$(find "$input" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = ${INPUT_FILES.length}
+`;
   return Object.freeze([
     "set -eu",
     "umask 077",
@@ -656,17 +816,18 @@ export function onboardingTransferSsmCommands({ artifact, region }) {
     'test "$downloaded" = true',
     `printf '%s  %s\\n' '${artifact.sha256}' "$archive" | sha256sum -c - >/dev/null`,
     'input="$workdir/input"',
-    'python3 - "$archive" "$input" <<\'PY\'\nimport os\nimport sys\nimport tarfile\n\narchive, destination = sys.argv[1:]\nexpected = ["onboarding.clean-v1.json", "release.json", "runtime-profile.json", "oidc-config.json", "oidc-client-secret", "slack-bot-token", "slack-signing-secret", "granola-credential", "llm-credential"]\nmaximum_file_bytes = 10 * 1024 * 1024\nmaximum_total_bytes = 40 * 1024 * 1024\nwith tarfile.open(archive, "r:gz") as source:\n    members = source.getmembers()\n    if [member.name for member in members] != expected:\n        raise SystemExit(1)\n    if any(not member.isreg() or member.issym() or member.islnk() or member.size > maximum_file_bytes for member in members):\n        raise SystemExit(1)\n    if sum(member.size for member in members) > maximum_total_bytes:\n        raise SystemExit(1)\n    os.mkdir(destination, 0o700)\n    for member in members:\n        source_file = source.extractfile(member)\n        if source_file is None:\n            raise SystemExit(1)\n        target = os.path.join(destination, member.name)\n        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n        with os.fdopen(descriptor, "wb") as output:\n            while True:\n                chunk = source_file.read(131072)\n                if not chunk:\n                    break\n                output.write(chunk)\n        os.chmod(target, 0o600)\nPY',
-    'chmod 0700 "$input"',
-    'for name in onboarding.clean-v1.json release.json runtime-profile.json oidc-config.json oidc-client-secret slack-bot-token slack-signing-secret granola-credential llm-credential; do test -f "$input/$name" && test ! -L "$input/$name"; done',
-    'test "$(find "$input" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d " ")" = 9',
-    '/srv/echo-authority-clean-v1/onboard-clean-v1.sh doctor --input-dir "$input" >/dev/null 2>&1',
-    '/srv/echo-authority-clean-v1/onboard-clean-v1.sh prepare --input-dir "$input" >/dev/null 2>&1',
+    fixtureExtraction,
+    ...(reuseCurrentProvider
+      ? [`/srv/echo-authority-clean-v1/onboard-clean-v1.sh stage-rehearsal-inputs --operation-id '${stageOperationId}' --artifact-sha256 '${artifact.sha256}' --input-dir "$input" --staging-synthetic-meetings-dir "$meetings" >/dev/null 2>&1`]
+      : [
+        `/srv/echo-authority-clean-v1/onboard-clean-v1.sh doctor --input-dir "$input"${selectedSyntheticMeetings ? ' --staging-synthetic-meetings-dir "$meetings"' : ""} >/dev/null 2>&1`,
+        `/srv/echo-authority-clean-v1/onboard-clean-v1.sh prepare --input-dir "$input"${selectedSyntheticMeetings ? ' --staging-synthetic-meetings-dir "$meetings"' : ""} >/dev/null 2>&1`,
+      ]),
     `printf '${SUCCESS.trim()}\\n'`,
   ]);
 }
 
-function submitSsmTransfer({ artifact, instanceId, region }, aws) {
+function submitSsmTransfer({ artifact, instanceId, region, stagingSyntheticMeetings, reuseCurrentProviderInputs, operationId }, aws) {
   const sent = awsJson([
     "ssm",
     "send-command",
@@ -680,7 +841,13 @@ function submitSsmTransfer({ artifact, instanceId, region }, aws) {
     instanceId,
     "--parameters",
     JSON.stringify({
-      commands: onboardingTransferSsmCommands({ artifact, region }),
+      commands: onboardingTransferSsmCommands({
+        artifact,
+        region,
+        stagingSyntheticMeetings,
+        reuseCurrentProviderInputs,
+        operationId,
+      }),
       executionTimeout: ["300"],
     }),
     "--cloud-watch-output-config",
@@ -814,6 +981,12 @@ function readReceipt(path) {
     exact(receipt.bucket, BUCKET, "receipt_invalid") === undefined ||
     exact(receipt.key_arn, /^arn:(aws|aws-us-gov|aws-cn):kms:[a-z0-9-]+:[0-9]{12}:key\/[A-Fa-f0-9-]{36}$/, "receipt_invalid") === undefined ||
     exact(receipt.sha256, SHA256, "receipt_invalid") === undefined ||
+    (receipt.staging_synthetic_meetings !== undefined &&
+      receipt.staging_synthetic_meetings !== true) ||
+    (receipt.reuse_current_provider_inputs !== undefined &&
+      receipt.reuse_current_provider_inputs !== true) ||
+    (receipt.reuse_current_provider_inputs === true &&
+      receipt.staging_synthetic_meetings !== true) ||
     typeof receipt.object_key !== "string" ||
     !/^authority-staging\/onboarding\/onboarding-[a-z0-9][a-z0-9-]{7,63}\.tar\.gz$/.test(receipt.object_key) ||
     (receipt.state === "uploading" && (
@@ -842,6 +1015,55 @@ function readReceipt(path) {
 
 function receiptPath(config) {
   return resolve(config.archiveDir, `onboarding-transfer-${config.operationId}.json`);
+}
+
+function rehearsalStageCompletionPath(receiptPathname, receipt) {
+  return resolve(
+    dirname(receiptPathname),
+    `rehearsal-inputs-${receipt.operation_id}.json`,
+  );
+}
+
+function rehearsalStageCompletion(receipt, courierCleanupState) {
+  return Object.freeze({
+    schema_version: 1,
+    kind: "echo-authority-staging-rehearsal-inputs-v1",
+    state: "remote_staged",
+    courier_cleanup_state: courierCleanupState,
+    operation_id: receipt.operation_id,
+    artifact_sha256: receipt.sha256,
+    region: receipt.region,
+    stack_name: receipt.stack_name,
+    instance_id: receipt.instance_id,
+    host_stage_path: `/srv/echo-authority-clean-v1/rehearsal-inputs/${receipt.operation_id}`,
+    next_human_action: `./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users --reuse-provider-inputs ${receipt.operation_id} && ./onboard-clean-v1.sh prepare-rehearsal --operation-id ${receipt.operation_id}`,
+  });
+}
+
+function persistRehearsalStageCompletion(receiptPathname, receipt, courierCleanupState, persist = writeReceipt, replace = replaceReceipt) {
+  const path = rehearsalStageCompletionPath(receiptPathname, receipt);
+  const completion = rehearsalStageCompletion(receipt, courierCleanupState);
+  if (!existsSync(path)) return persist(path, completion);
+  privateRegularFile(path, "rehearsal_stage_completion_not_private_regular");
+  let prior;
+  try {
+    prior = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    refuse("rehearsal_stage_completion_invalid");
+  }
+  if (
+    prior?.kind !== completion.kind ||
+    prior?.operation_id !== completion.operation_id ||
+    prior?.artifact_sha256 !== completion.artifact_sha256 ||
+    prior?.region !== completion.region ||
+    prior?.stack_name !== completion.stack_name ||
+    prior?.instance_id !== completion.instance_id ||
+    prior?.host_stage_path !== completion.host_stage_path
+  ) {
+    refuse("rehearsal_stage_completion_conflict");
+  }
+  replace(path, completion);
+  return path;
 }
 
 function preflightReceiptPath(path) {
@@ -963,7 +1185,7 @@ function reconcileSubmittedReceipt(receiptPathname, receipt, aws) {
   return remotePrepared;
 }
 
-function cleanupReceipt(receiptPathname, receipt, aws) {
+function cleanupRemoteCourier(receiptPathname, receipt, aws) {
   receipt = reconcileSubmittedReceipt(receiptPathname, receipt, aws);
   if (!grantIsAbsent(receipt, aws)) refuse("onboarding_grant_absence_unproven");
   if (receipt.state === "uploading") {
@@ -972,6 +1194,11 @@ function cleanupReceipt(receiptPathname, receipt, aws) {
   } else {
     deleteExactObject({ artifact: artifactFromReceipt(receipt), region: receipt.region }, aws);
   }
+  return receipt;
+}
+
+function cleanupReceipt(receiptPathname, receipt, aws) {
+  receipt = cleanupRemoteCourier(receiptPathname, receipt, aws);
   removeLocalRecoveryMaterial(receiptPathname, receipt);
   return Object.freeze({
     action: "cleanup",
@@ -979,15 +1206,69 @@ function cleanupReceipt(receiptPathname, receipt, aws) {
   });
 }
 
+function completeRehearsalInputStaging(receiptPathname, receipt, aws, persistCompletion, replaceCompletion = replaceReceipt, action = "execute") {
+  let completionPath;
+  try {
+    completionPath = persistRehearsalStageCompletion(
+      receiptPathname,
+      receipt,
+      "pending",
+      persistCompletion,
+    );
+  } catch {
+    refuse("rehearsal_stage_completion_unproven");
+  }
+  try {
+    receipt = cleanupRemoteCourier(receiptPathname, receipt, aws);
+  } catch {
+    refuse("onboarding_transfer_cleanup_required");
+  }
+  try {
+    persistRehearsalStageCompletion(
+      receiptPathname,
+      receipt,
+      "complete",
+      persistCompletion,
+      replaceCompletion,
+    );
+  } catch {
+    refuse("rehearsal_stage_completion_unproven");
+  }
+  try {
+    removeLocalRecoveryMaterial(receiptPathname, receipt);
+  } catch {
+    refuse("onboarding_transfer_cleanup_required");
+  }
+  const completed = rehearsalStageCompletion(receipt, "complete");
+  return Object.freeze({
+    action,
+    state: "staged_awaiting_human",
+    completion_path: completionPath,
+    host_stage_path: completed.host_stage_path,
+    next_human_action: completed.next_human_action,
+  });
+}
+
 export function planOnboardingTransfer(configPath, { aws = DEFAULT_AWS, writeReceipt: persistReceipt = writeReceipt } = {}) {
   const config = parseConfig(configPath);
   const plannedReceiptPath = preflightReceiptPath(receiptPath(config));
+  if (
+    config.reuseCurrentProviderInputs === true &&
+    existsSync(rehearsalStageCompletionPath(
+      plannedReceiptPath,
+      { operation_id: config.operationId },
+    ))
+  ) {
+    refuse("rehearsal_stage_completion_exists");
+  }
   let archive;
   let receipt;
   let path;
   try {
     archive = createOnboardingInputArchive({
       sourceDir: config.privateInputDir,
+      stagingSyntheticMeetingsDir: config.stagingSyntheticMeetingsDir,
+      reuseCurrentProviderInputs: config.reuseCurrentProviderInputs,
       output: resolve(config.archiveDir, `${config.operationId}.tar.gz`),
     });
     const stack = checkedStack(config.region, config.stackName, aws);
@@ -1026,6 +1307,12 @@ export function planOnboardingTransfer(configPath, { aws = DEFAULT_AWS, writeRec
       command_id: null,
       submission_started_at: null,
       template_sha256: templateSha256(),
+      ...(config.stagingSyntheticMeetingsDir === undefined
+        ? {}
+        : { staging_synthetic_meetings: true }),
+      ...(config.reuseCurrentProviderInputs === undefined
+        ? {}
+        : { reuse_current_provider_inputs: true }),
     });
     path = persistReceipt(plannedReceiptPath, receipt);
     const artifact = uploadExactObject({
@@ -1080,7 +1367,12 @@ export function planOnboardingTransfer(configPath, { aws = DEFAULT_AWS, writeRec
   }
 }
 
-export function executeOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS, replaceReceipt: persistReceipt = replaceReceipt } = {}) {
+export function executeOnboardingTransfer(receiptPathname, {
+  aws = DEFAULT_AWS,
+  replaceReceipt: persistReceipt = replaceReceipt,
+  writeStageReceipt: persistStageReceipt = writeReceipt,
+  replaceStageReceipt: persistStageReplacement = replaceReceipt,
+} = {}) {
   let receipt = readReceipt(receiptPathname);
   if (receipt.state === "ssm_submitted") {
     const reconciled = reconcileSubmittedReceipt(receiptPathname, receipt, aws);
@@ -1092,6 +1384,14 @@ export function executeOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS, 
       }
       refuse("onboarding_transfer_failed_cleaned");
     }
+    if (reconciled.reuse_current_provider_inputs === true)
+      return completeRehearsalInputStaging(
+        receiptPathname,
+        reconciled,
+        aws,
+        persistStageReceipt,
+        persistStageReplacement,
+      );
     cleanupReceipt(receiptPathname, reconciled, aws);
     return Object.freeze({ action: "execute", state: "prepared" });
   }
@@ -1099,6 +1399,18 @@ export function executeOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS, 
     reconcileSubmittedReceipt(receiptPathname, receipt, aws);
     cleanupReceipt(receiptPathname, receipt, aws);
     refuse("onboarding_transfer_outcome_unproven_cleaned");
+  }
+  if (
+    receipt.state === "remote_prepared" &&
+    receipt.reuse_current_provider_inputs === true
+  ) {
+    return completeRehearsalInputStaging(
+      receiptPathname,
+      receipt,
+      aws,
+      persistStageReceipt,
+      persistStageReplacement,
+    );
   }
   if (receipt.state !== "planned") refuse("receipt_not_planned");
   if (Date.parse(receipt.access_expires_at) - (aws.now ?? Date.now)() < 8 * 60 * 1000) {
@@ -1128,7 +1440,14 @@ export function executeOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS, 
       refuse("ssm_command_submission_unproven");
     }
     receipt = submitting;
-    const commandId = submitSsmTransfer({ artifact: artifactFromReceipt(receipt), instanceId: receipt.instance_id, region: receipt.region }, aws);
+    const commandId = submitSsmTransfer({
+      artifact: artifactFromReceipt(receipt),
+      instanceId: receipt.instance_id,
+      region: receipt.region,
+      stagingSyntheticMeetings: receipt.staging_synthetic_meetings === true,
+      reuseCurrentProviderInputs: receipt.reuse_current_provider_inputs === true,
+      operationId: receipt.operation_id,
+    }, aws);
     const submitted = Object.freeze({ ...receipt, state: "ssm_submitted", command_id: commandId });
     try {
       persistReceipt(receiptPathname, submitted);
@@ -1148,10 +1467,22 @@ export function executeOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS, 
   } catch (error) {
     if (
       error instanceof TransferError &&
-      ["ssm_command_terminal_unproven", "ssm_command_submission_unproven", "ssm_command_submission_quarantined", "remote_prepare_receipt_unproven"].includes(error.code)
+      ["ssm_command_terminal_unproven", "ssm_command_submission_unproven", "ssm_command_submission_quarantined", "remote_prepare_receipt_unproven", "rehearsal_stage_completion_unproven"].includes(error.code)
     )
       throw error;
     transferFailure = error;
+  }
+  if (
+    transferFailure === undefined &&
+    receipt.reuse_current_provider_inputs === true
+  ) {
+    return completeRehearsalInputStaging(
+      receiptPathname,
+      receipt,
+      aws,
+      persistStageReceipt,
+      persistStageReplacement,
+    );
   }
   try {
     cleanupReceipt(receiptPathname, receipt, aws);
@@ -1163,7 +1494,26 @@ export function executeOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS, 
 }
 
 export function cleanupOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS } = {}) {
-  const receipt = readReceipt(receiptPathname);
+  let receipt = readReceipt(receiptPathname);
+  if (
+    receipt.state === "ssm_submitted" &&
+    receipt.reuse_current_provider_inputs === true
+  ) {
+    receipt = reconcileSubmittedReceipt(receiptPathname, receipt, aws);
+  }
+  if (
+    receipt.state === "remote_prepared" &&
+    receipt.reuse_current_provider_inputs === true
+  ) {
+    return completeRehearsalInputStaging(
+      receiptPathname,
+      receipt,
+      aws,
+      writeReceipt,
+      replaceReceipt,
+      "cleanup",
+    );
+  }
   return cleanupReceipt(receiptPathname, receipt, aws);
 }
 
@@ -1177,29 +1527,27 @@ export function cleanupOnboardingTransfer(receiptPathname, { aws = DEFAULT_AWS }
  * before any of that begins. It reports metadata only, never file content, and
  * makes no network or AWS call.
  */
-export function preflightOnboardingInput(configPath) {
-  const config = parseConfig(configPath);
+function preflightPrivateDirectory(path, names, directoryCode, fileCode, maximumFileBytes = MAXIMUM_INPUT_FILE_BYTES, rejectDirectorySymlink = false) {
   let sourceDir;
   let directoryPrivate = true;
   try {
-    sourceDir = privateDirectory(
-      config.privateInputDir,
-      "input_directory_not_private",
-    );
+    sourceDir = rejectDirectorySymlink
+      ? privateDirectoryWithoutSymlink(path, directoryCode)
+      : privateDirectory(path, directoryCode);
   } catch {
     directoryPrivate = false;
-    sourceDir = resolve(config.privateInputDir);
+    sourceDir = resolve(path);
   }
   const present = directoryPrivate
     ? new Set(readdirSync(sourceDir))
     : new Set();
-  const files = INPUT_FILES.map((name) => {
+  const files = names.map((name) => {
     if (!present.has(name))
       return Object.freeze({ name, state: "missing", detail: null });
     const path = resolve(sourceDir, name);
     let state;
     try {
-      state = privateRegularFile(path, "input_file_not_private_regular");
+      state = privateRegularFile(path, fileCode);
     } catch {
       return Object.freeze({
         name,
@@ -1209,26 +1557,68 @@ export function preflightOnboardingInput(configPath) {
     }
     if (state.size === 0)
       return Object.freeze({ name, state: "empty", detail: "file is empty" });
-    if (state.size > MAXIMUM_INPUT_FILE_BYTES)
+    if (state.size > maximumFileBytes)
       return Object.freeze({
         name,
         state: "too_large",
-        detail: `exceeds ${MAXIMUM_INPUT_FILE_BYTES} bytes`,
+        detail: `exceeds ${maximumFileBytes} bytes`,
       });
     return Object.freeze({ name, state: "ready", detail: null, bytes: state.size });
   });
   const unexpected = [...present]
-    .filter((name) => !INPUT_FILES.includes(name))
+    .filter((name) => !names.includes(name))
     .sort();
-  const totalBytes = files.reduce((total, file) => total + (file.bytes ?? 0), 0);
-  const blocking = files.filter((file) => file.state !== "ready");
+  return Object.freeze({
+    directoryPrivate,
+    files: Object.freeze(files),
+    unexpectedFileCount: unexpected.length,
+    totalBytes: files.reduce((total, file) => total + (file.bytes ?? 0), 0),
+    blocking: Object.freeze(files.filter((file) => file.state !== "ready")),
+  });
+}
+
+export function preflightOnboardingInput(configPath) {
+  const config = parseConfig(configPath);
+  const input = preflightPrivateDirectory(
+    config.privateInputDir,
+    config.reuseCurrentProviderInputs === true
+      ? REUSABLE_STAGING_INPUT_FILES
+      : INPUT_FILES,
+    "input_directory_not_private",
+    "input_file_not_private_regular",
+  );
+  const fixtures = config.stagingSyntheticMeetingsDir === undefined
+    ? undefined
+    : preflightPrivateDirectory(
+      config.stagingSyntheticMeetingsDir,
+      STAGING_SYNTHETIC_MEETING_FILES,
+      "staging_synthetic_meetings_directory_not_private",
+      "staging_synthetic_meetings_file_not_private_regular",
+      MAXIMUM_STAGING_SYNTHETIC_MEETING_FILE_BYTES,
+      true,
+    );
+  const totalBytes = input.totalBytes + (fixtures?.totalBytes ?? 0);
   const bytesOverLimit = Math.max(0, totalBytes - MAXIMUM_INPUT_TOTAL_BYTES);
-  const totalTooLarge = bytesOverLimit > 0;
-  const ready =
-    directoryPrivate &&
-    blocking.length === 0 &&
-    unexpected.length === 0 &&
-    !totalTooLarge;
+  const inputReady =
+    input.directoryPrivate &&
+    input.blocking.length === 0 &&
+    input.unexpectedFileCount === 0;
+  const fixturesReady = fixtures === undefined || (
+    fixtures.directoryPrivate &&
+    fixtures.blocking.length === 0 &&
+    fixtures.unexpectedFileCount === 0
+  );
+  const ready = inputReady && fixturesReady && bytesOverLimit === 0;
+  const inputNextAction = !input.directoryPrivate
+    ? "make the input directory a current-user 0700 directory"
+    : input.unexpectedFileCount > 0
+      ? `remove ${input.unexpectedFileCount} unexpected ${input.unexpectedFileCount === 1 ? "file" : "files"} from the private input directory, then rerun preflight`
+      : `supply or repair: ${input.blocking.map((file) => file.name).join(", ")}`;
+  const fixturesNextAction = fixtures === undefined || !fixtures.directoryPrivate
+    ? "make the staging synthetic meetings directory a current-user 0700 directory"
+    : fixtures.unexpectedFileCount > 0
+      ? `remove ${fixtures.unexpectedFileCount} unexpected ${fixtures.unexpectedFileCount === 1 ? "file" : "files"} from the staging synthetic meetings directory, then rerun preflight`
+      : `supply or repair staging synthetic meetings: ${fixtures.blocking.map((file) => file.name).join(", ")}`;
   return Object.freeze({
     schema_version: 1,
     kind: "echo-authority-staging-onboarding-preflight-v1",
@@ -1236,25 +1626,36 @@ export function preflightOnboardingInput(configPath) {
     state: ready ? "ready" : "incomplete",
     ready,
     operation_id: config.operationId,
-    directory_private: directoryPrivate,
-    required_files: Object.freeze(files),
+    ...(config.reuseCurrentProviderInputs === undefined
+      ? {}
+      : { reuse_current_provider_inputs: true }),
+    directory_private: input.directoryPrivate,
+    required_files: input.files,
     // Names can themselves be sensitive or misleading operational metadata.
     // A preflight report only needs to say that the strict allowlist was not
     // met; archive construction remains the authoritative exact-name check.
-    unexpected_file_count: unexpected.length,
+    unexpected_file_count: input.unexpectedFileCount,
     total_bytes: totalBytes,
     total_bytes_limit: MAXIMUM_INPUT_TOTAL_BYTES,
     bytes_over_limit: bytesOverLimit,
     // The one line an operator needs before spending an AWS session on this.
+    ...(fixtures === undefined
+      ? {}
+      : {
+        staging_synthetic_meetings: Object.freeze({
+          directory_private: fixtures.directoryPrivate,
+          required_files: fixtures.files,
+          unexpected_file_count: fixtures.unexpectedFileCount,
+          ready: fixturesReady,
+        }),
+      }),
     next_action: ready
       ? "run plan"
-      : !directoryPrivate
-        ? "make the input directory a current-user 0700 directory"
-        : unexpected.length > 0
-          ? `remove ${unexpected.length} unexpected ${unexpected.length === 1 ? "file" : "files"} from the private input directory, then rerun preflight`
-          : totalTooLarge
-            ? `reduce total required input bytes by at least ${bytesOverLimit}, to at most ${MAXIMUM_INPUT_TOTAL_BYTES}, then rerun preflight`
-            : `supply or repair: ${blocking.map((file) => file.name).join(", ")}`,
+      : bytesOverLimit > 0
+        ? `reduce total required input bytes by at least ${bytesOverLimit}, to at most ${MAXIMUM_INPUT_TOTAL_BYTES}, then rerun preflight`
+        : !inputReady
+          ? inputNextAction
+          : fixturesNextAction,
   });
 }
 
