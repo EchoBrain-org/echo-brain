@@ -20,6 +20,9 @@ describe("native Person account controls", () => {
     expect(source).toContain("validateAuthorityOrigin");
     expect(source).toContain("UserDefaults.standard.set");
     expect(source).toContain("onSessionWillChange()");
+    expect(source).toContain("AccountObservation");
+    expect(source).toContain("func shutdown()");
+    expect(source).toContain("activeOperation?.cancel()");
     expect(source).toContain("Sign out of this ECHO account?");
     expect(source).not.toMatch(/authorization_url|OAuthURL|grant|URLSession/);
   });
@@ -86,6 +89,9 @@ if (args[1] === "status") {
 import Foundation
 @main enum Proof {
   static func main() {
+    let observation = AccountObservation()
+    let observedIdentity = AccountIdentity(displayName: "Person", role: "Employee", authority: "https://authority.example.test", version: "1.2.3")
+    print("observed:\\(observation.accept(.unavailable)):\\(observation.accept(.unavailable)):\\(observation.accept(.signedIn(observedIdentity)))\\(observation.accept(.signedIn(observedIdentity)))\\(observation.accept(.signedOut))")
     let gate = AccountRequestGate()
     let stale = gate.replace(); let current = gate.replace()
     print("gate:\\(gate.accepts(stale)):\\(gate.accepts(current))")
@@ -112,7 +118,7 @@ import Foundation
     };
     const ready = run("ready");
     expect(ready.status, ready.stderr).toBe(0);
-    expect(ready.stdout.trim().split("\n")).toEqual(["gate:false:true", "ready:https://authority.example.test"]);
+    expect(ready.stdout.trim().split("\n")).toEqual(["observed:false:false:truefalsetrue", "gate:false:true", "ready:https://authority.example.test"]);
     expect(readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line))).toEqual([
       ["person", "status"], ["person", "login", "--authority-url", "https://authority.example.test", "--open-browser"],
       ["person", "status"], ["person", "records", "--limit", "1"], ["person", "status"],

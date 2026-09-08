@@ -355,6 +355,37 @@ private func validateAuthorityOrigin(_ source: String) -> String? {
     return value
 }
 
+private enum AccountObservedState: Equatable {
+    case signedIn(AccountIdentity)
+    case signedOut
+    case unavailable
+}
+
+// The first status has no prior account-scoped content to clear. Every later
+// distinct result is an external account transition and must invalidate it.
+final class AccountObservation {
+    private var current: AccountObservedState?
+
+    func accept(_ status: AccountStatus) -> Bool {
+        let next = AccountObservedState(status)
+        defer { current = next }
+        guard let current else { return false }
+        return current != next
+    }
+
+    func record(_ status: AccountStatus) { current = AccountObservedState(status) }
+}
+
+private extension AccountObservedState {
+    init(_ status: AccountStatus) {
+        switch status {
+        case .signedIn(let identity): self = .signedIn(identity)
+        case .signedOut: self = .signedOut
+        case .unavailable: self = .unavailable
+        }
+    }
+}
+
 @MainActor
 final class AccountController: NSObject {
     private let client = AccountClient()
@@ -379,6 +410,7 @@ final class AccountController: NSObject {
     private var activeOperation: AccountRunning?
     private var activeOperationKind: AccountOperation?
     private var activityText = ""
+    private let observation = AccountObservation()
 
     init(onSessionWillChange: @escaping () -> Void, mayChangeSession: @escaping () -> Bool, changed: @escaping () -> Void) {
         self.onSessionWillChange = onSessionWillChange
@@ -404,6 +436,16 @@ final class AccountController: NSObject {
 
     var menuItem: NSMenuItem { account }
 
+    func shutdown() {
+        _ = statusGate.replace()
+        _ = operationGate.replace()
+        activeStatus?.cancel()
+        activeOperation?.cancel()
+        activeStatus = nil
+        activeOperation = nil
+        activeOperationKind = nil
+    }
+
     func refresh() {
         guard !active else { return }
         activeStatus?.cancel()
@@ -416,6 +458,7 @@ final class AccountController: NSObject {
     }
 
     private func receivedStableStatus(_ status: AccountStatus) {
+        if observation.accept(status) { onSessionWillChange() }
         switch status {
         case .signedIn(let identity):
             self.identity = identity
@@ -521,14 +564,17 @@ final class AccountController: NSObject {
                 self.identity = identity
                 self.knownSignedOut = false
                 UserDefaults.standard.set(identity.authority, forKey: accountLastAuthorityDefaultsKey)
+                self.observation.record(.signedIn(identity))
                 self.changed()
             case .signedOut:
                 self.identity = nil
                 self.knownSignedOut = true
+                self.observation.record(.signedOut)
                 self.changed()
             case .unavailable, .accessDenied, .failed, .cancelled:
                 self.identity = nil
                 self.knownSignedOut = false
+                self.observation.record(.unavailable)
             }
             self.updateMenu()
             if case .logout = operation, case .signedOut = outcome, thenChooseOrganization {
