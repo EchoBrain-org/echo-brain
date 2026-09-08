@@ -25,6 +25,8 @@ const runtimeState = vi.hoisted(() => ({
   slack_signing_secret_file: undefined as string | undefined,
   slack_connection_id: undefined as string | undefined,
   openrouter_credential_file: undefined as string | undefined,
+  staging_synthetic_meetings_directory: undefined as string | undefined,
+  staging_synthetic_owner_email: undefined as string | undefined,
   ask_journey_telemetry: undefined as object | undefined,
   meeting_approval_journey_telemetry: undefined as object | undefined,
   staging_meeting_approval_journey_telemetry_enabled: undefined as
@@ -73,6 +75,8 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly slack_signing_secret_file: string;
     readonly slack_connection_id: string;
     readonly openrouter_credential_file: string;
+    readonly staging_synthetic_meetings_directory?: string;
+    readonly staging_synthetic_owner_email?: string;
   }) => {
     if (runtimeState.open_gate !== undefined) await runtimeState.open_gate;
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
@@ -91,6 +95,10 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.slack_signing_secret_file = config.slack_signing_secret_file;
     runtimeState.slack_connection_id = config.slack_connection_id;
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
+    runtimeState.staging_synthetic_meetings_directory =
+      config.staging_synthetic_meetings_directory;
+    runtimeState.staging_synthetic_owner_email =
+      config.staging_synthetic_owner_email;
     return {
       address: { address: "127.0.0.1", port: 43179 },
       processing: runtimeState.processing,
@@ -141,6 +149,7 @@ const { runOrganizationAuthorityServiceCli } =
 afterEach(() => {
   delete process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1;
   delete process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1;
+  delete process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
   delete process.env.ECHO_BUILD_NUMBER;
   delete process.env.ECHO_SOURCE_SHA;
   runtimeState.worker_error = undefined;
@@ -152,6 +161,8 @@ afterEach(() => {
   runtimeState.slack_signing_secret_file = undefined;
   runtimeState.slack_connection_id = undefined;
   runtimeState.openrouter_credential_file = undefined;
+  runtimeState.staging_synthetic_meetings_directory = undefined;
+  runtimeState.staging_synthetic_owner_email = undefined;
   runtimeState.ask_journey_telemetry = undefined;
   runtimeState.meeting_approval_journey_telemetry = undefined;
   runtimeState.staging_meeting_approval_journey_telemetry_enabled = undefined;
@@ -427,6 +438,32 @@ describe("admitted runtime CLI events", () => {
     expect(runtimeState.openrouter_credential_file).toBe(
       "/private/llm.credential",
     );
+  });
+
+  it("selects the staging fixture source from the deployment environment", async () => {
+    runtimeState.authority_url = "https://authority-staging.echobrain.org";
+    process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR = "/echo-clean/meetings";
+    const running = start({ stderr: () => undefined });
+
+    await vi.waitFor(() =>
+      expect(runtimeState.staging_synthetic_meetings_directory).toBe(
+        "/echo-clean/meetings",
+      ),
+    );
+    expect(runtimeState.staging_synthetic_owner_email).toBe(
+      "founder@example.com",
+    );
+    process.emit("SIGTERM");
+    await expect(running).resolves.toBe(0);
+  });
+
+  it("rejects a fixture source when the manifest points at a non-staging Authority", async () => {
+    process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR = "/echo-clean/meetings";
+
+    await expect(
+      start({ stderr: () => undefined }),
+    ).resolves.toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
   });
 
   it("writes the closed worker lifecycle event without mutation", async () => {

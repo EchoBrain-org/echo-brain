@@ -1,5 +1,15 @@
 # Synthetic demo staging switchover
 
+> **New fresh staging rehearsals use the normal Authority source path.** Start
+> with [Fresh four-meeting staging rehearsal](../../deploy/organization-authority/README.md#fresh-four-meeting-staging-rehearsal), which keeps the accepted
+> runtime profile, observability, and approval flow. It replaces the old
+> isolated demo switchover for new work.
+
+This document preserves the earlier isolated switchover as historical
+compatibility material until the new path reaches full evaluator and card-preview
+parity. Do not use it to start a new rehearsal or to reset the normal staging
+organization.
+
 This lane runs the synthetic-demo composition on the existing disposable staging
 hostname without changing the accepted clean-live state or deployment files. It
 is permitted only after an operator confirms there are no live staging users and

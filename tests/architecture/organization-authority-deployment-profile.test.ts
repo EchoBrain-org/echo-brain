@@ -516,6 +516,55 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
+  it.each([false, true])("finalizes and hands off the prepared source (synthetic=%s)", (synthetic) => {
+    const fixture = preparedStatusFixture();
+    try {
+      if (synthetic) {
+        const setup = join(fixture.privateDir, "onboard-clean-v1.conf");
+        writeFileSync(setup, readFileSync(setup, "utf8") +
+          "authority_host=authority-staging.echobrain.org\nstaging_synthetic_meetings_dir=/echo-clean/meetings\n");
+        const environment = join(fixture.deploy, ".env.clean-v1");
+        const bytes = readFileSync(environment, "utf8") +
+          "ECHO_STAGING_SYNTHETIC_MEETINGS_DIR=/echo-clean/meetings\n";
+        writeFileSync(environment, bytes);
+        writeFileSync(join(fixture.releaseDir, "runtime-environments/clean-v1-status-test.env"), bytes);
+        mkdirSync(join(fixture.deploy, "clean-data/meetings"), { mode: 0o700 });
+      }
+      const finalized = fixture.run("resume", {
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"run_finalize"}',
+      });
+      expect(finalized.status, finalized.stderr).toBe(0);
+      const finalization = readFileSync(fixture.calls, "utf8").split("\n")
+        .find((line) => line.includes("clean-founder-main.js finalize"));
+      expect(finalization).toContain("finalize --state-dir /echo-clean/state");
+      expect(finalization?.includes("--staging-synthetic-meetings-dir /echo-clean/meetings"))
+        .toBe(synthetic);
+      expect(finalized.stdout.includes("Then create the bounded canary")).toBe(!synthetic);
+      const waiting = fixture.run("resume", {
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"ready_to_start"}',
+      });
+      expect(waiting.status, waiting.stderr).toBe(0);
+      if (synthetic) {
+        expect(waiting.stdout).toContain("Approve the four synthetic meeting cards");
+        expect(waiting.stdout).not.toContain("./update-clean-v1.sh canary");
+      } else {
+        expect(waiting.stdout).toContain("./update-clean-v1.sh canary");
+      }
+      // A selector present on only one side must fail before any source runs.
+      const setup = join(fixture.privateDir, "onboard-clean-v1.conf");
+      writeFileSync(setup, synthetic
+        ? readFileSync(setup, "utf8").replace("staging_synthetic_meetings_dir=/echo-clean/meetings\n", "")
+        : readFileSync(setup, "utf8") + "staging_synthetic_meetings_dir=/echo-clean/meetings\n");
+      writeFileSync(fixture.calls, "");
+      const mismatch = fixture.run("resume");
+      expect(mismatch.status).not.toBe(0);
+      expect(mismatch.stderr).toContain("synthetic meeting input differs");
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/compose .* (up|run)/);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("reports a complete canary safely when the Authority is stopped or drifted", () => {
     const fixture = preparedStatusFixture();
     try {
@@ -1263,6 +1312,52 @@ describe("clean-v1 Organization Authority deployment profile", () => {
           "utf8",
         ),
       ).toBe("rehearsal-data-must-survive");
+
+      // The same stopped-state wrapper can prepare the four notes without
+      // creating a second Compose/runtime lane or forwarding its evaluator.
+      const meetings = join(root, "meetings");
+      mkdirSync(meetings, { mode: 0o700 });
+      for (const name of readdirSync(join(REPO, "demo/meetings"))) {
+        const contents = readFileSync(join(REPO, "demo/meetings", name), "utf8")
+          .replaceAll("owner@example.test", "founder@example.com");
+        writeFileSync(join(meetings, name), contents, { mode: 0o600 });
+      }
+      const syntheticArguments = [
+        ...prepareArguments,
+        "--staging-synthetic-meetings-dir", meetings,
+      ];
+      const syntheticDoctor = () => spawnSync("bash", [
+        join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir,
+        "--staging-synthetic-meetings-dir", meetings,
+      ], { ...commandEnvironment, encoding: "utf8" });
+      expect(JSON.parse(syntheticDoctor().stdout).code).toBe("staging_meetings_invalid");
+      for (const path of [manifest, oidcConfig]) {
+        writeFileSync(path, readFileSync(path, "utf8")
+          .replaceAll("authority.example.com", "authority-staging.echobrain.org"));
+      }
+      writeFileSync(join(meetings, "expectations.json"), "{}", { mode: 0o600 });
+      expect(JSON.parse(syntheticDoctor().stdout).code).toBe("staging_meetings_invalid");
+      rmSync(join(meetings, "expectations.json"));
+      expect(JSON.parse(syntheticDoctor().stdout).ok).toBe(true);
+      expect(execFileSync("bash", syntheticArguments, commandEnvironment).toString())
+        .toContain("prepared=true");
+      const fixtureEnvironment = readFileSync(join(deploy, ".env.clean-v1"), "utf8");
+      expect(fixtureEnvironment).toContain("ECHO_STAGING_SYNTHETIC_MEETINGS_DIR=/echo-clean/meetings");
+      expect(fixtureEnvironment).toContain("ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/authority-staging.echobrain.org");
+      expect(readFileSync(join(deploy, "clean-data/release/runtime-environments/clean-v1-onboarding-test.env"), "utf8"))
+        .toBe(fixtureEnvironment);
+      expect(readdirSync(join(deploy, "clean-data/meetings")).sort())
+        .toEqual(readdirSync(meetings).sort());
+      expect(execFileSync("bash", syntheticArguments, commandEnvironment).toString())
+        .toContain("prepared=true");
+      const firstMeeting = readdirSync(meetings).sort()[0]!;
+      const admittedCopy = readFileSync(join(deploy, "clean-data/meetings", firstMeeting), "utf8");
+      writeFileSync(join(meetings, firstMeeting), admittedCopy + "\n");
+      const changed = spawnSync("bash", syntheticArguments, { ...commandEnvironment, encoding: "utf8" });
+      expect(changed.status).toBe(1);
+      expect(changed.stderr).toContain("staging meeting conflicts");
+      expect(readFileSync(join(deploy, "clean-data/meetings", firstMeeting), "utf8"))
+        .toBe(admittedCopy);
       rmSync(join(deploy, "clean-data"), { recursive: true });
       symlinkSync(inputDir, join(deploy, "clean-data"), "dir");
       expect(() =>

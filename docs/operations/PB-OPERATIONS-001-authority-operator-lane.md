@@ -79,8 +79,8 @@ Use the actor below; preserve the underlying identity, approval and health check
 | --- | --- |
 | Valid-session checks, planning, receipt polling, artifact verification, kit installation, authenticated Person reads and telemetry inspection | Local operator within the authorized lane. |
 | Missing/expired login, MFA, provider secret entry, account switching/logout, Slack identity-link exchange and Interactivity setup | Human. The operator prepares the exact next action and resumes after completion. |
-| Initial host `resume`, `status`, and `./update-clean-v1.sh canary` | Human in Session Manager. The remote release CLI does not support host onboarding. Group consecutive host commands only when no intervening human action is needed. |
-| Private Slack-card approval | Human, for that canary. |
+| Initial host `resume`, `status`, and release-canary `./update-clean-v1.sh canary` | Human in Session Manager. The remote release CLI does not support host onboarding. Group consecutive host commands only when no intervening human action is needed. |
+| Private Slack-card approval | Human, for each card. |
 | Infrastructure change set or private handoff not yet approved for its exact scope | Human reviews the prepared result once. |
 | Final decision on the exact candidate release | Human, after successful candidate-client checks. |
 
@@ -91,8 +91,9 @@ Keep invitation mode `0600`; never print or paste its grant. The human completes
 browser login, any required logout, and `person slack-link`. Export does not
 advance onboarding. Confirm Interactivity only when its configuration needs work.
 
-After initial canary approval, the local operator on the designated owner Mac
-verifies the kit-installed client against the accepted release and runs:
+For the ordinary release-canary path, after initial approval the local operator
+on the designated owner Mac verifies the kit-installed client against the
+accepted release and runs:
 
 ```sh
 "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20
@@ -107,6 +108,8 @@ access that Mac, provide these commands to the human once. The human host
 operator then runs `./onboard-clean-v1.sh resume` and `./onboard-clean-v1.sh status`.
 Older installed wrappers may label these reads `FOUNDER ACTION`; the delegation
 above applies to the reads only, never the Slack approval or host commands.
+For the fresh four-meeting source, use the linked rehearsal's four approvals
+and owner/employee read checks instead of this single-canary query.
 
 For an update, use the candidate's two checks in the
 [release loop](../../deploy/release/README.md#ec2-authority-replacement), which
@@ -122,9 +125,13 @@ and roll back the exact candidate.
 ## Evidence and completion
 
 The staging canary is synthetic and staging-only. Do not create a live Granola
-note for this flow. Initial terminal green requires the release-bound synthetic
-receipt, positive Layer 1 and Layer 2 reads after the approved head/current
-generation, and a healthy Authority on the accepted image and runtime profile.
+note for this flow. Ordinary initial terminal green requires the release-bound
+synthetic receipt. A [fresh four-meeting rehearsal](../../deploy/organization-authority/README.md#fresh-four-meeting-staging-rehearsal)
+instead requires all four admitted fixture meetings to have published approvals.
+Both require positive Layer 1 and Layer 2 owner reads after the approved
+head/current generation, and a healthy Authority on the accepted image and
+runtime profile. Fixture visibility choices and employee read/denial checks
+remain separate manual rehearsal evidence; terminal green does not prove them.
 
 Keep runtime behavior and observability intact: preserve configured telemetry,
 worker liveness, journey stages, model usage, logs, alarms and dashboard access.

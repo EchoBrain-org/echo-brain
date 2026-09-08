@@ -247,20 +247,24 @@ before accepting the candidate, preserving the currently accepted runtime. The
 Docker `awslogs` driver
 delivers the JSON lines using the host role's log-stream-only permission, so no
 AWS credential is exposed to a browser. Journey metrics, alarms, dashboards,
-and the operator Explorer remain Phase 4 through Phase 6 work; their absence is
-not a Phase 1 liveness failure. Do not enable or rehearse this transport against
-a production Authority in this sprint.
+and the operator Explorer are separate from this core liveness loop. Do not
+enable or rehearse this transport against a production Authority in this sprint.
 
-#### Staging journey overview design - Phase 4, not yet deployed
+#### Staging journey overview and Explorer
 
-The Phase 4 formatter and
-`authority-staging-journey-observability-v1.template.json` are implemented and
-locally verified. The dedicated stack is **staging-only**, distinct from the
+A read-only staging inspection on 2026-09-08 verified the journey overview,
+the fixed Explorer Lambda and policy, and a redacted Journey Explorer query.
+This is dated staging evidence, not a standing claim about a future deployment:
+inspect the stack, alarm state, and current journey before relying on it. The
+overview and Explorer remain staging-only and are never a production
+observability path.
+
+The formatter and `authority-staging-journey-observability-v1.template.json`
+are dedicated to staging and distinct from the
 generic `authority-observability-v1.template.json` stack, and can select only
 `/echo-brain/authority/authority-staging.echobrain.org`. It therefore cannot
 create a production journey resource, permission, dashboard, alarm, retention
-change, or deployment path. This is not evidence that the stack has been
-deployed, that any metric is live, or that a live journey has been rehearsed.
+change, or deployment path.
 
 The overview emits content-free CloudWatch Embedded Metric Format (EMF) records
 beside the canonical raw `echo-authority-journey-stage-v1`, liveness, and
@@ -345,25 +349,22 @@ alarm consumes the explicit pending-work observation above, not a best-effort
 join in a dashboard query. Latency and token anomaly alarms are explicitly
 deferred until a measured staging baseline exists.
 
-Phase 4 local verification covers formatter, transport, template/query, and
+Local verification covers formatter, transport, template/query, and
 deterministic fixture reconciliation: dashboard aggregates reconcile with the
-fixture's raw canonical journey events and approved-search state. No AWS stack
-deployment, live CloudWatch proof, or live journey rehearsal is claimed here.
+fixture's raw canonical journey events and approved-search state.
 
-#### Staging Journey Explorer backend - Phase 5, locally implemented and not deployed
+#### Explorer backend
 
 The separate `authority-staging-journey-explorer-v1.template.json` and its
-inline Node handler are locally implemented and tested, but have not been
-deployed. They are staging-only and accept only
+inline Node handler are staging-only and accept only
 `/echo-brain/authority/authority-staging.echobrain.org` as the source log group.
 The backend is invoked directly by a CloudWatch custom widget. It is not a
 public service: there is no function URL, API Gateway route,
 application-managed or end-user AWS credential, direct widget permission to
-CloudWatch Logs, or mutation operation. After the Phase 6 permission-set
-assignment, the companion policy grants the signed-in console operator only
+CloudWatch Logs, or mutation operation. The companion policy grants the
+signed-in console operator only
 invocation of the exact Lambda. It does not establish the scope of other
-policies in that session; Phase 6 must review the effective permission set
-separately.
+policies in that session; review the effective permission set separately.
 
 The handler accepts only three fixed operations:
 
@@ -419,11 +420,11 @@ Identity Center permission set. The inline staging Lambda relies on the Node
 runtime-provided AWS SDK v3; a portable production bundle and pinned SDK
 version are deferred to a future production review.
 
-#### Staging Journey Explorer UI - Phase 6, locally implemented and not deployed
+#### Explorer UI
 
-The Phase 6 renderer is locally implemented and locally tested in the Phase 4
-staging overview dashboard, but no AWS deployment, permission-set assignment,
-widget trust, live query, Ask/approval rehearsal, or sprint exit has occurred.
+The renderer is implemented in the staging overview dashboard. It remains a
+read-only, staging-only surface; the dated inspection above does not authorize
+production use or a broader Identity Center assignment.
 The dashboard passes a static endpoint, not an operator-supplied ARN:
 
 ```text
@@ -460,16 +461,17 @@ would exceed its bounded safe size returns fixed error markup rather than
 truncating data or exposing raw logs. Operators should narrow the range and
 retry a `result_limit_exceeded` response.
 
-##### Pending staging-only change-set and rehearsal checklist
+##### Changing the staging journey stacks
 
-This checklist is deliberately not live evidence. Use an IAM Identity Center
+Use an IAM Identity Center
 operator session obtained with `aws sso login --profile echo-prod`; do not use
 `aws login`, root credentials, SSH, an interactive root shell, a production
 target, or a shared permission set. Prefer the AWS MCP server when it is
 available. Stop before execution if account, Region, source log group, resource
 set, or permission-set scope is not clearly staging-only.
 
-1. Confirm the account and Region with a read-only identity check, for example:
+1. Confirm the account, Region, current stack, and assignment with read-only
+   inspection before proposing a change, for example:
 
    ```sh
    aws sts get-caller-identity --profile echo-prod
@@ -506,10 +508,9 @@ set, or permission-set scope is not clearly staging-only.
    aggregate evidence. Stop and investigate any missing, partial, unredacted,
    cross-environment, or inconsistent result.
 
-No AWS deployment, permission-set assignment, widget trust, live CloudWatch
-query, Ask/approval rehearsal, or production change is claimed by Phases 5 or
-6 until this checklist has been completed and its staging-only evidence has
-been reviewed.
+Use this procedure only to change the staging journey stacks or their access
+assignment. Normal journey inspection uses the existing verified configuration;
+it does not require repeating setup or a change set.
 
 ### 6. Rehearse the sanitized worker-failure signal
 

@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,46 @@ describe("synthetic demo meeting source", () => {
 
       await expect(loadSyntheticDemoMeetingCorpusV1(copiedMeetings)).rejects.toThrow(
         /source|identity/i,
+      );
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects extra entries and symlinked corpus files", async () => {
+    const temporaryRoot = await mkdtemp(join(tmpdir(), "echo-synthetic-demo-"));
+    const copiedMeetings = join(temporaryRoot, "meetings");
+    try {
+      await cp(meetingsDirectory, copiedMeetings, { recursive: true });
+      await writeFile(join(copiedMeetings, "unexpected.json"), "{}\n");
+      await expect(loadSyntheticDemoMeetingCorpusV1(copiedMeetings)).rejects.toThrow(
+        "only the four declared",
+      );
+      await rm(join(copiedMeetings, "unexpected.json"));
+      const target = join(copiedMeetings, "01-revenue-signal-calibration.json");
+      const replacement = join(temporaryRoot, "replacement.json");
+      await cp(target, replacement);
+      await rm(target);
+      await symlink(replacement, target);
+      await expect(loadSyntheticDemoMeetingCorpusV1(copiedMeetings)).rejects.toThrow(
+        "bounded regular files",
+      );
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("binds each declared filename to its distinct fixture revision", async () => {
+    const temporaryRoot = await mkdtemp(join(tmpdir(), "echo-synthetic-demo-"));
+    const copiedMeetings = join(temporaryRoot, "meetings");
+    try {
+      await cp(meetingsDirectory, copiedMeetings, { recursive: true });
+      await cp(
+        join(copiedMeetings, "01-revenue-signal-calibration.json"),
+        join(copiedMeetings, "02-data-handling-review.json"),
+      );
+      await expect(loadSyntheticDemoMeetingCorpusV1(copiedMeetings)).rejects.toThrow(
+        "unexpected fixture meeting",
       );
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true });

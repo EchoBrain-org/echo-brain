@@ -240,6 +240,24 @@ describe("synthetic-demo meeting-source admission", () => {
         },
       }),
     ).resolves.toMatchObject({ outcome: "already_admitted" });
+    const changedFixture = join(
+      personalizedMeetings,
+      "01-revenue-signal-calibration.json",
+    );
+    writeFileSync(
+      changedFixture,
+      readFileSync(changedFixture, "utf8").replace(
+        "Revenue signal calibration",
+        "Changed revenue signal calibration",
+      ),
+    );
+    await expect(
+      admitSyntheticDemoMeetingSource({
+        state_directory: input.state_directory,
+        meetings_directory: personalizedMeetings,
+        processor,
+      }),
+    ).rejects.toThrow("semantic input conflicts");
     await expect(
       admitSyntheticDemoMeetingSource({
         state_directory: input.state_directory,
@@ -250,6 +268,6 @@ describe("synthetic-demo meeting-source admission", () => {
         },
       }),
     ).rejects.toThrow("semantic input conflicts");
-    expect(preflightCalls).toBe(4);
+    expect(preflightCalls).toBe(5);
   });
 });

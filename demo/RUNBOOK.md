@@ -23,8 +23,9 @@ logs, state databases, indexing commands, or an internal approval dashboard.
 - Replace `owner@example.test` in all meetings with one lowercase staging member
   email that resolves to an active Authority membership and linked Slack user.
 - Keep the real meeting provider cursor untouched.
-- Use a fresh scenario/revision namespace when rerunning a previously terminal
-  demo so the runtime does not correctly treat it as an idempotent replay.
+- Rerun a completed demo with fresh unreleased staging state through the linked
+  rehearsal procedure. The four fixture IDs and revisions stay fixed; replay in
+  the same admitted state is idempotent.
 - Verify the Ask ECHO team user is an active organization member. That identity
   plays Audrey, the account newcomer, in every team-visible ask. For the
   privacy proof, use that team user and the exact owner/approver as two distinct
@@ -41,10 +42,15 @@ The wording intentionally omits the meeting titles and internal phrases such as
 
 ## Runtime commands
 
-On the disposable EC2 staging host, use `staging/STAGING.md`; its bounded
-switchover selects this entrypoint, keeps demo state separate, and restores the
-accepted clean-live runtime. The direct commands below are for an already
-isolated operator environment.
+For a new rehearsal, use [Fresh four-meeting staging rehearsal](../deploy/organization-authority/README.md#fresh-four-meeting-staging-rehearsal).
+It selects the four notes in the normal Authority runtime and retains its
+observability, approval, and read paths. Continue with the customer-facing
+sequence below once onboarding is ready.
+
+The direct commands below are compatibility commands for an existing isolated
+demo state whose manifest Authority URL is exactly
+`https://authority-staging.echobrain.org`. Other origins are rejected. The old
+`staging/STAGING.md` switchover is historical; do not use it for a new rehearsal.
 
 Use the same absolute isolated state and personalized meeting-copy paths for
 admission and service startup:

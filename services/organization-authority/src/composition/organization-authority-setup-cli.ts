@@ -45,6 +45,8 @@ import {
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
 import { runGranolaMeetingSourceAdmissionCli } from "./providers/granola/granola-meeting-source-admission-cli.js";
+import { admitSyntheticDemoMeetingSource } from "./providers/synthetic-demo/synthetic-demo-meeting-source-admission.js";
+import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "./providers/openrouter/openrouter-decision-processor-admission-commitment.js";
 import {
   OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
   OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
@@ -62,6 +64,12 @@ import {
   isStagingSyntheticMeetingCanaryEnvelopeV1,
   stagingSyntheticMeetingCanaryInputFromEnvelopeV1,
 } from "../shared/staging-synthetic-meeting-canary-envelope-v1.js";
+import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
+import {
+  isSyntheticDemoFixtureMeetingV1,
+  SYNTHETIC_DEMO_MEETING_COUNT_V1,
+  syntheticDemoMeetingSourceIdentityV1,
+} from "../processing/adapters/meeting-sources/synthetic-demo/synthetic-demo-meeting-source-v1.js";
 
 const MANIFEST_DIRECTORY = "onboarding";
 const MANIFEST_FILENAME = "clean-founder-v1.json";
@@ -82,7 +90,7 @@ const USAGE = `usage:
   echo-organization-authority-setup bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> --slack-approval-channel-id <id> [--artifact-revision <revision>] < slack-bot-token
   echo-organization-authority-setup resume --state-dir <absolute-path> < slack-bot-token
   echo-organization-authority-setup credentials-install --state-dir <absolute-path> --granola-credential-file <absolute-private-path> --granola-owner-email-file <absolute-private-path> --llm-credential-file <absolute-private-path>
-  echo-organization-authority-setup finalize --state-dir <absolute-path>
+  echo-organization-authority-setup finalize --state-dir <absolute-path> [--staging-synthetic-meetings-dir <absolute-path>]
   echo-organization-authority-setup status --state-dir <absolute-path>
 
 The legacy --slack-approval-channel-id flag names the temporary public initial-owner
@@ -158,6 +166,7 @@ interface BootstrapInput {
 
 interface FinalizeInput {
   readonly state_directory: string;
+  readonly staging_synthetic_meetings_directory?: string;
 }
 
 interface CredentialInstallInput extends FinalizeInput {
@@ -218,6 +227,11 @@ export interface OrganizationAuthoritySetupCliDependencies {
     readonly state_directory: string;
     readonly granola_credential_file: string;
     readonly granola_owner_email_file: string;
+    readonly llm_credential_file: string;
+  }) => Promise<void>;
+  readonly admit_staging_synthetic_source: (input: {
+    readonly state_directory: string;
+    readonly meetings_directory: string;
     readonly llm_credential_file: string;
   }) => Promise<void>;
   /** Test seam only; production derives these facts from durable state. */
@@ -380,6 +394,16 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       ),
     );
   },
+  admit_staging_synthetic_source: async (input) => {
+    await admitSyntheticDemoMeetingSource({
+      state_directory: input.state_directory,
+      meetings_directory: input.meetings_directory,
+      processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({
+        instance_id: PROCESSOR_INSTANCE_ID,
+        credential_reference: `file:${input.llm_credential_file}`,
+      }),
+    });
+  },
 };
 
 function absolutePath(value: string, label: string): string {
@@ -446,6 +470,39 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
 }
 
 function parseFinalize(arguments_: readonly string[]): FinalizeInput {
+  const accepted = new Set([
+    "--state-dir",
+    "--staging-synthetic-meetings-dir",
+  ]);
+  const values = new Map<string, string>();
+  for (let index = 0; index < arguments_.length; index += 2) {
+    const key = arguments_[index];
+    const value = arguments_[index + 1];
+    if (
+      key === undefined ||
+      value === undefined ||
+      value.length === 0 ||
+      !accepted.has(key) ||
+      values.has(key)
+    ) throw new Error(USAGE);
+    values.set(key, value);
+  }
+  const stateDirectory = values.get("--state-dir");
+  if (stateDirectory === undefined) throw new Error(USAGE);
+  return Object.freeze({
+    state_directory: absolutePath(stateDirectory, "state directory"),
+    ...(values.get("--staging-synthetic-meetings-dir") === undefined
+      ? {}
+      : {
+          staging_synthetic_meetings_directory: absolutePath(
+            values.get("--staging-synthetic-meetings-dir")!,
+            "staging synthetic meetings directory",
+          ),
+        }),
+  });
+}
+
+function parseStateDirectory(arguments_: readonly string[]): FinalizeInput {
   if (arguments_.length !== 2 || arguments_[0] !== "--state-dir") {
     throw new Error(USAGE);
   }
@@ -999,11 +1056,25 @@ interface InitialOwnerSetupStatus {
   readonly founder_slack_link_active: boolean;
   readonly granola_credentials_valid: boolean;
   readonly granola_admission_present: boolean;
+  /** New generic fields retain the legacy Granola status vocabulary. */
+  readonly source_admission_present?: boolean;
+  readonly source_mode?: "granola" | "staging_synthetic";
   readonly slack_verification?: SafeSlackVerification;
   readonly granola_admission_proof?: {
     readonly owner_observation_assurance: "provider_record_owner_observed";
     readonly owner_observed_at: string;
   };
+}
+
+function sourceAdmissionPresent(full: InitialOwnerSetupStatus): boolean {
+  return full.source_admission_present ?? full.granola_admission_present;
+}
+
+function sourceMode(full: InitialOwnerSetupStatus):
+  | "granola"
+  | "staging_synthetic"
+  | "none" {
+  return full.source_mode ?? (full.granola_admission_present ? "granola" : "none");
 }
 
 /**
@@ -1076,7 +1147,7 @@ function nextOrganizationAuthoritySetupStep(input: {
   if (!input.full.founder_oidc_bound) return "complete_founder_browser_login";
   if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
   if (!input.full.granola_credentials_valid) return "install_provider_credentials";
-  if (!input.full.granola_admission_present) return "run_finalize";
+  if (!sourceAdmissionPresent(input.full)) return "run_finalize";
   return "ready_to_start";
 }
 
@@ -1365,6 +1436,92 @@ function stagingSyntheticCanaryObserved(
   return false;
 }
 
+interface SyntheticFixtureApprovalEvidence {
+  readonly source_admitted: boolean;
+  readonly all_fixture_meetings_approved: boolean;
+}
+
+/**
+ * The fixed fixture source cannot use a one-record canary as completion
+ * evidence. Each candidate must belong to the singleton's admitted source,
+ * preserve its canonical bytes, name one of the four fixed revisions, and
+ * have a corresponding published approval record. Distinct meeting IDs keep
+ * retries and duplicate approvals from inflating the count.
+ */
+function syntheticFixtureApprovalEvidence(
+  manifest: OrganizationAuthoritySetupManifestV1,
+  authority: Database.Database,
+  record: Database.Database,
+): SyntheticFixtureApprovalEvidence {
+  const admission = authority
+    .prepare(
+      `SELECT semantic_input_sha256
+         FROM authority_live_source_admission_v2
+        WHERE singleton = 1 AND organization_id = ? AND principal_id = ?
+          AND membership_id = ? AND membership_type = 'owner'
+          AND source_adapter_id = ? AND source_adapter_instance_id = ?
+          AND source_adapter_version = ?
+        LIMIT 1`,
+    )
+    .get(
+      manifest.organization_id,
+      manifest.owner_principal_id,
+      manifest.owner_membership_id,
+      syntheticDemoMeetingSourceIdentityV1.adapter_id,
+      syntheticDemoMeetingSourceIdentityV1.instance_id,
+      syntheticDemoMeetingSourceIdentityV1.version,
+    ) as { readonly semantic_input_sha256: string } | undefined;
+  if (admission === undefined) {
+    return Object.freeze({
+      source_admitted: false,
+      all_fixture_meetings_approved: false,
+    });
+  }
+  const candidates = authority
+    .prepare(
+      `SELECT candidate.meeting_json, candidate.meeting_sha256, outbox.approval_id
+         FROM authority_live_source_candidates_v2 AS candidate
+         JOIN authority_live_approval_outbox_v2 AS outbox
+           ON outbox.candidate_id = candidate.candidate_id
+        WHERE candidate.admission_semantic_input_sha256 = ?
+          AND candidate.disposition = 'actionable'`,
+    )
+    .all(admission.semantic_input_sha256) as readonly {
+    readonly meeting_json: string;
+    readonly meeting_sha256: string;
+    readonly approval_id: string;
+  }[];
+  const approvedMeetingIds = new Set<string>();
+  for (const candidate of candidates) {
+    try {
+      const meeting = JSON.parse(candidate.meeting_json) as unknown;
+      if (
+        canonicalJson(meeting as never) !== candidate.meeting_json ||
+        canonicalSha256(meeting as never) !== candidate.meeting_sha256 ||
+        !isSyntheticDemoFixtureMeetingV1(meeting) ||
+        record
+          .prepare(
+            `SELECT 1 FROM organization_record_log
+              WHERE event_kind = 'approved' AND action = 'approve'
+                AND approval_id = ?
+              LIMIT 1`,
+          )
+          .get(candidate.approval_id) === undefined
+      ) {
+        continue;
+      }
+      approvedMeetingIds.add(meeting.id);
+    } catch {
+      // A malformed candidate or record mapping cannot become setup evidence.
+    }
+  }
+  return Object.freeze({
+    source_admitted: true,
+    all_fixture_meetings_approved:
+      approvedMeetingIds.size === SYNTHETIC_DEMO_MEETING_COUNT_V1,
+  });
+}
+
 /**
  * Read only durable proof. The head and active-generation pointer are read
  * before and after the proof query: any append or generation publication in
@@ -1401,6 +1558,11 @@ function setupCanaryEvidence(
       )
       .get() !== undefined;
     const syntheticStagingCanaryObserved = stagingSyntheticCanaryObserved(
+      manifest,
+      authority,
+      record,
+    );
+    const syntheticFixtureApproval = syntheticFixtureApprovalEvidence(
       manifest,
       authority,
       record,
@@ -1443,7 +1605,9 @@ function setupCanaryEvidence(
       sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
     if (!stable) return EMPTY_SETUP_CANARY_EVIDENCE;
     const complete =
-      (sourceProgressObserved || syntheticStagingCanaryObserved)&&
+      (syntheticFixtureApproval.source_admitted
+        ? syntheticFixtureApproval.all_fixture_meetings_approved
+        : sourceProgressObserved || syntheticStagingCanaryObserved) &&
       approvedRecordPresent &&
       activeGenerationCurrent &&
       ownerLayer1ReadAfterHead &&
@@ -1490,6 +1654,7 @@ function initialOwnerSetupStatus(
     });
     let initialOwnerOidcBound = false;
     let granolaAdmissionProof: InitialOwnerSetupStatus["granola_admission_proof"];
+    let admittedSourceMode: InitialOwnerSetupStatus["source_mode"];
     try {
       initialOwnerOidcBound = authority.prepare(
         `SELECT 1 FROM authority_oidc_identity_bindings AS binding
@@ -1505,12 +1670,11 @@ function initialOwnerSetupStatus(
         manifest.owner_membership_id,
       ) !== undefined;
       const admission = authority.prepare(
-        `SELECT source_custodian_assurance, source_custodian_observed_at
+        `SELECT source_adapter_id, source_adapter_instance_id,
+                source_custodian_assurance, source_custodian_observed_at
            FROM authority_live_source_admission_v2
           WHERE singleton = 1 AND organization_id = ? AND principal_id = ?
             AND membership_id = ? AND membership_type = 'owner'
-            AND source_adapter_id = 'granola'
-            AND source_adapter_instance_id = ?
             AND processor_adapter_id = 'llm'
             AND processor_instance_id = ?
           LIMIT 1`,
@@ -1518,23 +1682,36 @@ function initialOwnerSetupStatus(
         manifest.organization_id,
         manifest.owner_principal_id,
         manifest.owner_membership_id,
-        SOURCE_INSTANCE_ID,
         PROCESSOR_INSTANCE_ID,
       ) as
         | {
+            readonly source_adapter_id: unknown;
+            readonly source_adapter_instance_id: unknown;
             readonly source_custodian_assurance: unknown;
             readonly source_custodian_observed_at: unknown;
           }
         | undefined;
       if (
+        admission?.source_adapter_id === "granola" &&
+        admission.source_adapter_instance_id === SOURCE_INSTANCE_ID &&
         admission?.source_custodian_assurance ===
           "provider_record_owner_observed" &&
         typeof admission.source_custodian_observed_at === "string"
       ) {
+        admittedSourceMode = "granola";
         granolaAdmissionProof = Object.freeze({
           owner_observation_assurance: "provider_record_owner_observed",
           owner_observed_at: admission.source_custodian_observed_at,
         });
+      } else if (
+        admission?.source_adapter_id === "synthetic-demo-source" &&
+        admission.source_adapter_instance_id === "customer-demo" &&
+        admission.source_custodian_assurance ===
+          "authority_initial_owner_identity" &&
+        typeof admission.source_custodian_observed_at === "string" &&
+        manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN
+      ) {
+        admittedSourceMode = "staging_synthetic";
       }
     } finally {
       authority.close();
@@ -1642,6 +1819,10 @@ function initialOwnerSetupStatus(
         founder_slack_link_active: initialOwnerSlackIdentityLinkActive,
         granola_credentials_valid: granolaCredentialsValid,
         granola_admission_present: granolaAdmissionProof !== undefined,
+        source_admission_present: admittedSourceMode !== undefined,
+        ...(admittedSourceMode === undefined
+          ? {}
+          : { source_mode: admittedSourceMode }),
         ...(slackVerification === undefined ? {} : { slack_verification: slackVerification }),
         ...(granolaAdmissionProof === undefined
           ? {}
@@ -1921,7 +2102,43 @@ async function finalize(
       `organization setup finalize requires ${missing.join(", ")}`,
     );
   }
-  if (!full.granola_admission_present) {
+  const stagingSyntheticMeetingsDirectory =
+    input.staging_synthetic_meetings_directory === undefined
+      ? undefined
+      : assertStagingSyntheticMeetingSourceSelectionV1({
+          authority_url: manifest.authority_url,
+          meetings_directory: input.staging_synthetic_meetings_directory,
+        });
+  const admittedMode = sourceMode(full);
+  if (sourceAdmissionPresent(full)) {
+    if (
+      stagingSyntheticMeetingsDirectory !== undefined &&
+      admittedMode !== "staging_synthetic"
+    ) {
+      throw new Error("staging synthetic finalization conflicts with the admitted source");
+    }
+    if (
+      stagingSyntheticMeetingsDirectory === undefined &&
+      admittedMode !== "granola"
+    ) {
+      throw new Error("the admitted staging synthetic source requires its fixture selector at runtime");
+    }
+    if (stagingSyntheticMeetingsDirectory !== undefined) {
+      // Admission is idempotent only when the current bounded corpus and its
+      // processor commitment still match the immutable singleton.
+      await dependencies.admit_staging_synthetic_source({
+        state_directory: manifest.state_directory,
+        meetings_directory: stagingSyntheticMeetingsDirectory,
+        llm_credential_file: manifest.llm_credential_file,
+      });
+    }
+  } else if (stagingSyntheticMeetingsDirectory !== undefined) {
+    await dependencies.admit_staging_synthetic_source({
+      state_directory: manifest.state_directory,
+      meetings_directory: stagingSyntheticMeetingsDirectory,
+      llm_credential_file: manifest.llm_credential_file,
+    });
+  } else {
     await dependencies.admit_source({
       state_directory: manifest.state_directory,
       granola_credential_file: manifest.granola_credential_file,
@@ -1935,8 +2152,13 @@ async function finalize(
       runtime_status: "ready_to_start",
       runtime_observation: "not_observed",
       canary_status: "not_complete",
+      source_mode:
+        stagingSyntheticMeetingsDirectory === undefined ? "granola" : "staging_synthetic",
+      source_admission_present: true,
       next_instruction:
-        "Restart the same echo-organization-authority-serve serve command. The admitted Granola source begins at its post-cutoff boundary.",
+        stagingSyntheticMeetingsDirectory === undefined
+          ? "Restart the same echo-organization-authority-serve serve command. The admitted Granola source begins at its post-cutoff boundary."
+          : "Restart the same echo-organization-authority-serve serve command with the same staging synthetic fixture selector.",
     } as never)}\n`,
   );
 }
@@ -1962,6 +2184,8 @@ function status(
         founder_slack_link_active: false,
         granola_credentials_valid: false,
         granola_admission_present: false,
+        source_mode: "none",
+        source_admission_present: false,
         source_progress_observed: false,
         synthetic_staging_canary_observed: false,
         approved_record_present: false,
@@ -2031,6 +2255,8 @@ function status(
       founder_slack_link_active: full.founder_slack_link_active,
       granola_credentials_valid: full.granola_credentials_valid,
       granola_admission_present: full.granola_admission_present,
+      source_mode: sourceMode(full),
+      source_admission_present: sourceAdmissionPresent(full),
       source_progress_observed: canary.source_progress_observed,
       synthetic_staging_canary_observed:
         canary.synthetic_staging_canary_observed ?? false,
@@ -2058,7 +2284,7 @@ export async function runOrganizationAuthoritySetupCli(
       return 0;
     }
     if (argv[0] === "resume") {
-      await resume(parseFinalize(argv.slice(1)), io, dependencies);
+      await resume(parseStateDirectory(argv.slice(1)), io, dependencies);
       return 0;
     }
     if (argv[0] === "finalize") {
@@ -2070,7 +2296,7 @@ export async function runOrganizationAuthoritySetupCli(
       return 0;
     }
     if (argv[0] === "status") {
-      status(parseFinalize(argv.slice(1)), io, dependencies);
+      status(parseStateDirectory(argv.slice(1)), io, dependencies);
       return 0;
     }
     throw new Error(USAGE);

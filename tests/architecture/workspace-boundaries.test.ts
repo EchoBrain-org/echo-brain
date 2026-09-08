@@ -21,6 +21,7 @@ const REPO = resolve(import.meta.dirname, "../..");
 const REGISTRY = "tools/workspace-source-boundaries.v1.json";
 const tmpDirs: string[] = [];
 let snapshot: string | undefined;
+let moduleLoaderFixture: string | undefined;
 
 afterAll(() =>
   tmpDirs
@@ -116,6 +117,13 @@ function fixtureRepository(): string {
   const root = mkdtempSync(join(tmpdir(), "echo-workspace-boundary-"));
   tmpDirs.push(root);
   return copyCoherentWorktreeSnapshot(source, root);
+}
+
+function fixtureForModuleLoaderCases(): string {
+  if (moduleLoaderFixture === undefined) {
+    moduleLoaderFixture = fixtureRepository();
+  }
+  return moduleLoaderFixture;
 }
 
 function readFixtureJson<T>(fixture: string, path: string): T {
@@ -872,15 +880,18 @@ describe("workspace source boundaries", () => {
       ],
     ],
     ["bare require call", [`require('@forbidden/pkg');`]],
-  ])("rejects a module loader: %s", (_name, lines) => {
-    const fixture = fixtureRepository();
+  ])("rejects a module loader: %s", (name, lines) => {
+    // Every case replaces the entire source file before invoking the checker,
+    // so these otherwise independent cases can safely share one isolated
+    // worktree without reducing coverage.
+    const fixture = fixtureForModuleLoaderCases();
     writeFileSync(
       join(fixture, "packages/federation-protocol/src/index.ts"),
       `${lines.join("\n")}\n`,
     );
     const result = runBoundary(fixture);
-    expect(result.status).not.toBe(0);
-    expect(result.stdout + result.stderr).toContain(
+    expect(result.status, name).not.toBe(0);
+    expect(result.stdout + result.stderr, name).toContain(
       "module loaders are forbidden",
     );
   });
