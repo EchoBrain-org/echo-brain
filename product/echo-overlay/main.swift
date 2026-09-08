@@ -573,11 +573,11 @@ private final class CliRunner: @unchecked Sendable {
               let payload = snapshot["approved_payload"] as? [String: Any],
               let brief = payload["brief"] as? [String: Any],
               let meeting = brief["meeting"] as? [String: Any],
-              let title = safeSourceText(meeting["title"] as? String),
               let decisions = safeSourceSignals(brief["decisions"], kind: "decision"),
               let actions = safeSourceSignals(brief["actions"], kind: "action"),
               let rationales = safeSourceSignals(brief["rationales"], kind: "rationale")
         else { return nil }
+        let title = safeSourceText(meeting["title"] as? String) ?? "Untitled meeting"
         let visibility = source.policyID == "organization-member-readable-person-v2"
             ? "Visible to active organization members"
             : "Only the approver"
@@ -1082,6 +1082,12 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     func applicationDidDeactivate() {
+        clearFetchedSources()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        // A nonactivating hotkey panel can lose focus without ECHO ever
+        // becoming the active application.
         clearFetchedSources()
     }
 

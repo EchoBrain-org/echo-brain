@@ -7,6 +7,7 @@ private enum EchoOverlaySourceFixtureMain {
     private static let policy = "organization-member-readable-person-v2"
     private static let restrictedPolicy = "restricted-reviewer-person-v2"
 
+    @MainActor
     static func main() {
         let mode = CommandLine.arguments.dropFirst().first ?? ""
         let passed: Bool
@@ -49,6 +50,16 @@ private enum EchoOverlaySourceFixtureMain {
             passed = running.state().cancelled
         case "valid-source":
             passed = CliRunner.parseSourceRecord(sourceData(), source: source())?.title == "Quarterly planning"
+        case "untitled-source":
+            let detail = CliRunner.parseSourceRecord(sourceData(meeting: ["id": "meeting-fixture"]), source: source())
+            passed = detail?.title == "Untitled meeting"
+                && detail?.decisions == ["Keep the current plan."]
+                && detail?.actions == ["Publish the plan."]
+                && detail?.rationales == ["The evidence supports it."]
+        case "panel-resigns-key":
+            _ = NSApplication.shared
+            NSApp.setActivationPolicy(.prohibited)
+            passed = OverlayController.proveInactivePanelFocusLoss(source: source())
         case "large-source":
             let large = String(repeating: "x", count: 130 * 1024)
             let detail = CliRunner.parseSourceRecord(sourceData(decisionText: large), source: source())
@@ -97,6 +108,7 @@ private enum EchoOverlaySourceFixtureMain {
         hash: String = recordHash,
         policyID: String = policy,
         decisionText: String = "Keep the current plan.",
+        meeting: [String: Any] = ["id": "meeting-fixture", "title": "Quarterly planning"],
         records: [[String: Any]]? = nil
     ) -> Data {
         let record: [String: Any] = [
@@ -112,7 +124,7 @@ private enum EchoOverlaySourceFixtureMain {
                         "approved_snapshot": [
                             "approved_payload": [
                                 "brief": [
-                                    "meeting": ["title": "Quarterly planning"],
+                                    "meeting": meeting,
                                     "decisions": [["id": "d1", "kind": "decision", "text": decisionText]],
                                     "actions": [["id": "a1", "kind": "action", "text": "Publish the plan."]],
                                     "rationales": [["id": "r1", "kind": "rationale", "text": "The evidence supports it."]],
@@ -135,5 +147,39 @@ private enum EchoOverlaySourceFixtureMain {
 
     private static func data(_ value: [String: Any]) -> Data {
         try! JSONSerialization.data(withJSONObject: value, options: [])
+    }
+}
+
+// Exercise the real panel delegate and its private presentation state without
+// showing a window, activating ECHO, reading a session, or launching a client.
+extension OverlayController {
+    fileprivate static func proveInactivePanelFocusLoss(source: DisplaySource) -> Bool {
+        let controller = OverlayController()
+        let pending = RunningAsk()
+        let requestID = UUID()
+        controller.currentSources = [source]
+        controller.answerView.string = "An existing approved answer."
+        controller.sourceView.string = "Private source details"
+        controller.sourceScrollView.isHidden = false
+        controller.activeSources = pending
+        controller.sourceRequestIdentifier = requestID
+        guard !NSApp.isActive else { return false }
+
+        controller.panel.delegate?.windowDidResignKey?(
+            Notification(name: NSWindow.didResignKeyNotification, object: controller.panel)
+        )
+        // A completed read from before focus loss must also remain withheld.
+        controller.handleSources(.unavailable, identifier: requestID)
+        let passed = !NSApp.isActive
+            && controller.sourceView.string.isEmpty
+            && controller.sourceScrollView.isHidden
+            && controller.currentSources.count == 1
+            && controller.sourcesButton.isEnabled
+            && controller.answerView.string == "An existing approved answer."
+            && controller.activeSources == nil
+            && controller.sourceRequestIdentifier == nil
+            && pending.state().cancelled
+        controller.shutdown()
+        return passed
     }
 }
