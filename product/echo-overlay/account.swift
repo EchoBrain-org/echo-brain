@@ -338,18 +338,21 @@ private func validAccountLabel(_ value: String, maximum: Int) -> Bool {
         value.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) }
 }
 
-private func validateAuthorityOrigin(_ source: String) -> String? {
+func validateAuthorityOrigin(_ source: String) -> String? {
     guard source.count <= 2_048,
           let components = URLComponents(string: source),
           components.scheme?.lowercased() == "https",
-          components.host != nil,
+          let host = components.host, !host.isEmpty,
           components.user == nil,
           components.password == nil,
           components.query == nil,
           components.fragment == nil,
           components.path.isEmpty || components.path == "/"
     else { return nil }
-    var origin = components
+    var origin = URLComponents()
+    origin.scheme = "https"
+    origin.host = host.lowercased()
+    origin.port = components.port == 443 ? nil : components.port
     origin.path = ""
     guard let value = origin.url?.absoluteString else { return nil }
     return value
