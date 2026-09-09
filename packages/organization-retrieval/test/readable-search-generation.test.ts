@@ -413,6 +413,70 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
+  it("ranks by BM25 over the reader's admitted segments only, so private statistics never move member results", () => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      // Two member atoms tie on tf-sum for "beta gamma" and on BM25 when the
+      // scoring scope is the member segment alone (df(beta) = df(gamma) = 1).
+      // The tie-break (same log position, lower atom order first) puts the
+      // gamma atom first. Five private atoms also contain "gamma"; if their
+      // document frequency leaked into a member's scope, gamma would become
+      // common, the beta atom would win, and the order would flip.
+      const gammaAtom = atomWith("member-gamma", { atom_order: 0, text: "alpha gamma" });
+      const betaAtom = atomWith("member-beta", { atom_order: 1, text: "alpha beta" });
+      const privateAtoms = Array.from({ length: 5 }, (_, index) =>
+        atomWith(`private-${index}`, {
+          record_position: 1,
+          atom_order: 10 + index,
+          text: `gamma private${index}`,
+          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+          policy_contract_sha256: digest(`policy-${RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2}`),
+          reviewer_principal_id: "prn_reviewer",
+          reviewer_membership_id: "mem_reviewer",
+        }),
+      );
+      const built = buildReadableSearchGenerationV1(
+        input(directory, [gammaAtom, betaAtom, ...privateAtoms]),
+      );
+      const active_generation = {
+        generation_id: built.manifest.generation_id,
+        manifest_sha256: built.manifest_sha256,
+        retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
+        exact_head: built.manifest.exact_head,
+      };
+      warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation });
+      const member = searchReadableSearchGenerationV1({
+        state_directory: directory,
+        active_generation,
+        reader: { principal_id: "prn_member", membership_id: "mem_member" },
+        query: "beta gamma",
+      });
+      expect(member.items.map((item) => item.text)).toEqual(["alpha gamma", "alpha beta"]);
+
+      // The exact reviewer's scope includes the private segment, so for them
+      // "gamma" is common (6 of 7 documents) and the rare "beta" atom ranks first.
+      const reviewer = searchReadableSearchGenerationV1({
+        state_directory: directory,
+        active_generation,
+        reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer" },
+        query: "beta gamma",
+      });
+      expect(reviewer.items[0]?.text).toBe("alpha beta");
+      expect(reviewer.items).toHaveLength(7);
+
+      // A common function word must not outrank the atom that has the rare term.
+      const noisy = searchReadableSearchGenerationV1({
+        state_directory: directory,
+        active_generation,
+        reader: { principal_id: "prn_reviewer", membership_id: "mem_reviewer" },
+        query: "gamma gamma beta",
+      });
+      expect(noisy.items[0]?.text).toBe("alpha beta");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("stores a canonical segment-local pair and expands it from a warmed authorized anchor", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {

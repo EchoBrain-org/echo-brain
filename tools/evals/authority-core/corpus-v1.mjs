@@ -6,10 +6,10 @@ import { createHash } from "node:crypto";
  * This module deliberately has no import from a candidate package.  The
  * analyzer/ranking contract it independently implements is taken from
  * packages/organization-retrieval/src/application/analyzer.ts at:
- * f954d0aab99025dae93d9b3fb076d74cea22399c50cc5264f42f6b1a2601e2ff
+ * 340d7f303a96bfb59b9661ce998a6b12b7cfd4947322eae7cd9a794451415d91
  */
 export const ANALYZER_SOURCE_SHA256 =
-  "f954d0aab99025dae93d9b3fb076d74cea22399c50cc5264f42f6b1a2601e2ff";
+  "340d7f303a96bfb59b9661ce998a6b12b7cfd4947322eae7cd9a794451415d91";
 export const VOCABULARY_SIZE = 4096;
 export const ZIPF_EXPONENT = 1.1;
 export const POLICY_ORGANIZATION_MEMBER = "organization-member-readable-person-v2";

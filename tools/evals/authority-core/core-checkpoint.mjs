@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
 import Database from "better-sqlite3";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { analyzeDocument, analyzeQuery } from "./corpus-v1.mjs";
+import { bm25Score, compareCandidates } from "./oracle-v1.mjs";
 
 const POLICIES = ["organization-member-readable-person-v2", "restricted-reviewer-person-v2"];
 const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-core-stage1-")));
@@ -82,6 +84,39 @@ function meetingInput(identities) {
     })),
   };
   return { meeting, decisions };
+}
+
+/**
+ * Expected order under the pinned ranking contract, computed independently of
+ * the candidate: every atom here is a decision from one record, so log
+ * position ties and BM25 length normalization plus atom order decide.
+ */
+function expectedSearchOrder(texts, query) {
+  const terms = analyzeQuery(query);
+  const documents = texts.map((text, index) => {
+    const frequencies = analyzeDocument(text, "decision");
+    let length = 0;
+    for (const frequency of frequencies.values()) length += frequency;
+    return { text, index, frequencies, length };
+  });
+  const document_frequency = new Map();
+  let total_term_count = 0;
+  for (const document of documents) {
+    total_term_count += document.length;
+    for (const term of document.frequencies.keys()) document_frequency.set(term, (document_frequency.get(term) ?? 0) + 1);
+  }
+  const statistics = { document_count: documents.length, total_term_count, document_frequency };
+  return documents
+    .map((document) => ({
+      text: document.text,
+      score: bm25Score(document.frequencies, document.length, terms, statistics),
+      log_position: 1,
+      atom_order: document.index,
+      atom_id: String(document.index),
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort(compareCandidates)
+    .map((candidate) => candidate.text);
 }
 
 async function until(read, accepts, label, timeout = 40_000) {
@@ -166,7 +201,7 @@ async function scenario(policy, index) {
     const response = await candidate.call("search", { actor: "owner", query: "launch" });
     assert.equal(response.items.length, 5, "approved search visibility");
     const visibilityMs = performance.now() - approvalOffered;
-    assert.deepEqual(response.items.map((item) => item.text), input.decisions.signals.map((item) => item.text));
+    assert.deepEqual(response.items.map((item) => item.text), expectedSearchOrder(input.decisions.signals.map((item) => item.text), "launch"));
     assert.ok(response.items.every((item) => item.policy_id === policy));
     const employee = await candidate.call("search", { actor: "employee", query: "launch" });
     assert.deepEqual(employee.items, policy === POLICIES[0] ? response.items : []);

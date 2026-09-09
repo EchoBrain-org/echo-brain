@@ -56,6 +56,7 @@
     "check:authority-recovery-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
     "check:authority-infrastructure": "node tools/validate-authority-recovery-templates.mjs",
     "test:capacity": "npm run build:workspaces && node tools/evals/authority-core/verify-contract.mjs && node --test tools/evals/authority-core/test/*.test.mjs",
+    "eval:retrieval-quality": "npm run build:workspaces && node tools/evals/authority-core/retrieval-quality.mjs",
     "capacity:checkpoint": "npm run build:workspaces && node tools/evals/authority-core/core-checkpoint.mjs",
     "check": "npm run check:architecture-boundaries && npm run check:docs && npm run lint && npm run build && tsc --noEmit -p tsconfig.json && vitest run --config vitest.config.ts"
   },

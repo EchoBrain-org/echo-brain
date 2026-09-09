@@ -10,7 +10,7 @@ import {
   policyForSource,
 } from "../corpus-v1.mjs";
 
-const contract = JSON.parse(readFileSync(new URL("../metrics.v3.json", import.meta.url)));
+const contract = JSON.parse(readFileSync(new URL("../metrics.v4.json", import.meta.url)));
 
 test("M1 history represents every contracted employee with coherent meeting ownership and policy", () => {
   const milestone = contract.milestones.find(({ id }) => id === "M1");
@@ -30,7 +30,7 @@ test("M1 history represents every contracted employee with coherent meeting owne
   }
 });
 
-test("every V3 milestone rounds source-level policy, owner, and age assignments without materializing history", () => {
+test("every V4 milestone rounds source-level policy, owner, and age assignments without materializing history", () => {
   for (const milestone of contract.milestones) {
     const meetingCount = milestone.historical_atoms_min / contract.workload.atoms_per_approved_meeting;
     let sharedMeetings = 0;

@@ -87,11 +87,85 @@ export interface ReadableSearchCandidateOrder {
   readonly atom_id: string;
 }
 
-export function readableSearchScore(
+/**
+ * Scoring contract V2: Okapi BM25 over the reader's admitted scope, evaluated
+ * in fixed-point integers so every runtime and the independent capacity
+ * oracle reproduce identical scores and therefore identical tie-breaks.
+ *
+ * - k1 and b are the conventional defaults. They are part of the generation
+ *   contract; changing them is a new scorer id.
+ * - IDF uses the Robertson/Sparck-Jones form with the +1 floor, so a term in
+ *   every document still scores above zero and never goes negative.
+ * - Corpus statistics are the union of the segments the reader may read.
+ *   Nothing about a segment the reader cannot see influences a score.
+ * - The closed decision family is a controlled category, not vocabulary. Its
+ *   members score with a constant unit weight instead of IDF, so the kind
+ *   boost does not vanish once every decision atom carries the category term.
+ */
+export const READABLE_SEARCH_SCORER_ID = 'echo-bm25-fixed-point-v1';
+export const READABLE_SEARCH_BM25_K1 = 1.2;
+export const READABLE_SEARCH_BM25_B = 0.75;
+export const READABLE_SEARCH_SCORE_SCALE = 1_000_000;
+
+export interface ReadableSearchCorpusStatistics {
+  /** Documents in the scoring scope. */
+  readonly document_count: number;
+  /** Sum of document lengths (term occurrences, controlled category included) in scope. */
+  readonly total_term_count: number;
+  /** Documents in scope containing each term. Absent means zero. */
+  readonly document_frequency: ReadonlyMap<string, number>;
+}
+
+export function readableSearchDocumentLength(
   frequencies: ReadonlyMap<string, number>,
-  queryTerms: readonly string[],
 ): number {
-  return queryTerms.reduce((score, term) => score + (frequencies.get(term) ?? 0), 0);
+  let length = 0;
+  for (const frequency of frequencies.values()) length += frequency;
+  return length;
+}
+
+/** Fixed-point IDF: round(ln(1 + (N - df + 0.5) / (df + 0.5)) * scale). */
+export function readableSearchInverseDocumentFrequency(
+  documentFrequency: number,
+  documentCount: number,
+): number {
+  if (documentFrequency <= 0 || documentCount <= 0) return 0;
+  const value = Math.log(
+    1 + (documentCount - documentFrequency + 0.5) / (documentFrequency + 0.5),
+  );
+  return Math.round(value * READABLE_SEARCH_SCORE_SCALE);
+}
+
+export function readableSearchScoreV2(
+  frequencies: ReadonlyMap<string, number>,
+  documentLength: number,
+  queryTerms: readonly string[],
+  statistics: ReadableSearchCorpusStatistics,
+): number {
+  const averageLength =
+    statistics.document_count === 0
+      ? 0
+      : statistics.total_term_count / statistics.document_count;
+  let score = 0;
+  for (const term of queryTerms) {
+    const frequency = frequencies.get(term) ?? 0;
+    if (frequency === 0) continue;
+    const normalized =
+      averageLength === 0
+        ? 1
+        : (frequency * (READABLE_SEARCH_BM25_K1 + 1)) /
+          (frequency +
+            READABLE_SEARCH_BM25_K1 *
+              (1 - READABLE_SEARCH_BM25_B + (READABLE_SEARCH_BM25_B * documentLength) / averageLength));
+    const weight = DECISION_TERM_FAMILY.has(term)
+      ? READABLE_SEARCH_SCORE_SCALE
+      : readableSearchInverseDocumentFrequency(
+          statistics.document_frequency.get(term) ?? 0,
+          statistics.document_count,
+        );
+    score += Math.round(weight * normalized);
+  }
+  return score;
 }
 
 export function compareReadableSearchCandidates(
