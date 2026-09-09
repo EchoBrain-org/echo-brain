@@ -14,6 +14,13 @@ const here = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const DEFAULT_EXPECTATIONS = resolve(here, "expectations.json");
 const DEFAULT_MEETINGS = resolve(here, "meetings");
 const INSUFFICIENT_ANSWER = "Insufficient accessible evidence to answer this question.";
+// Existing public unavailable outcome / content-free Layer 4 failure classes.
+// Kept external: do not import the runtime to interpret a captured diagnostic.
+const UNAVAILABLE_REASONS = new Set([
+  "unavailable", "adapter_timeout", "adapter_transport", "adapter_http",
+  "adapter_provider_error", "adapter_finish", "adapter_refusal", "adapter_response",
+  "adapter_json", "core_validation"
+]);
 const CARD_FIELDS = [
   "meeting title",
   "decision, action, and rationale text",
@@ -47,38 +54,80 @@ function sameStringSet(actual, expected) {
     JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
 }
 
-function validateAnsweredClaims(require, answer, expected, label) {
-  const facts = expected?.required_answer_facts;
-  const factChecks = expected?.required_answer_fact_checks;
+function nonempty(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function uniqueStrings(value) {
+  return strings(value) && value.every(nonempty) && new Set(value).size === value.length;
+}
+
+function validateAnsweredClaims(require, answer, expected, groups, label) {
   require(Array.isArray(answer?.claims), `${label} claims must be an array`);
-  require(Array.isArray(facts), `${label} expected facts must be an array`);
-  require(Array.isArray(factChecks) && factChecks.length === facts?.length, `${label} fact checks must match expected facts`);
-  require(answer?.claims?.length === facts?.length, `${label} requires exactly one claim per expected fact`);
-
-  const seen = new Map();
+  require(answer?.claims?.length === expected.material_group_ids.length, `${label} requires exactly one mapping per material group`);
+  const seen = new Set();
+  const spans = new Set();
   for (const claim of answer?.claims ?? []) {
-    const validIndex = Number.isInteger(claim?.fact_index) && claim.fact_index >= 0 && claim.fact_index < (facts?.length ?? 0);
-    require(validIndex, `${label} claim has invalid fact_index`);
-    if (!validIndex) continue;
-
-    seen.set(claim.fact_index, (seen.get(claim.fact_index) ?? 0) + 1);
-    const factCheck = factChecks?.[claim.fact_index];
-    require(isObject(factCheck) && strings(factCheck.required_phrases) && factCheck.required_phrases.length > 0, `${label} fact ${claim.fact_index} has invalid required phrases`);
-    require(strings(factCheck?.required_citation_meeting_ids), `${label} fact ${claim.fact_index} has invalid required citations`);
+    const group = groups.find((item) => item.id === claim?.group_id);
+    const mapped = group && expected.material_group_ids.includes(group.id);
+    require(mapped, `${label} has an unknown or unmapped group`);
+    require(!seen.has(claim?.group_id), `${label} has a duplicate group mapping`);
+    seen.add(claim?.group_id);
+    if (!mapped) continue;
     const observed = claim?.observed_text;
-    require(typeof observed === "string" && observed.trim().length > 0, `${label} claim lacks observed answer text`);
-    require(typeof answer?.answer_text === "string" && typeof observed === "string" && answer.answer_text.includes(observed), `${label} claim text is not present in the captured answer`);
-    for (const phrase of factCheck?.required_phrases ?? []) require(typeof observed === "string" && normalized(observed).includes(normalized(phrase)), `${label} fact ${claim.fact_index} lacks required phrase ${phrase}`);
-    require(sameStringSet(claim?.citation_meeting_ids, factCheck?.required_citation_meeting_ids), `${label} fact ${claim.fact_index} citations do not match`);
-    for (const meetingId of claim?.citation_meeting_ids ?? []) require(answer?.citation_meeting_ids?.includes(meetingId), `${label} fact ${claim.fact_index} citation is not in the answer citations`);
+    require(nonempty(observed), `${label} group ${group.id} lacks observed answer text`);
+    require(typeof answer?.answer_text === "string" && nonempty(observed) && answer.answer_text.includes(observed), `${label} group ${group.id} span is absent from the answer`);
+    require(!spans.has(observed), `${label} maps one span to multiple groups`);
+    spans.add(observed);
+    if (claim?.outcome === "insufficient_approved_information") {
+      require(group.allow_insufficient === true, `${label} group ${group.id} must be answered`);
+      require(nonempty(group.insufficient_answer) && observed === group.insufficient_answer, `${label} group ${group.id} lacks its explicit insufficient-evidence statement`);
+      require(sameStringSet(claim.citation_meeting_ids, []), `${label} insufficient group has citations`);
+    } else {
+      require(claim?.outcome === "answered", `${label} group ${group.id} has invalid outcome`);
+      for (const phrase of group.required_phrases) require(typeof observed === "string" && normalized(observed).includes(normalized(phrase)), `${label} group ${group.id} lacks a required phrase`);
+      require(uniqueStrings(claim?.citation_meeting_ids) && claim.citation_meeting_ids.length > 0, `${label} group ${group.id} lacks unique source provenance`);
+      for (const meetingId of claim?.citation_meeting_ids ?? []) {
+        require(group.allowed_source_meeting_ids.includes(meetingId), `${label} group ${group.id} has invalid source provenance`);
+        require(answer?.citation_meeting_ids?.includes(meetingId), `${label} group ${group.id} source is absent from answer citations`);
+      }
+    }
   }
-  for (let index = 0; index < (facts?.length ?? 0); index += 1) require(seen.get(index) === 1, `${label} requires exactly one claim for fact ${index}`);
+  for (const id of expected.material_group_ids) require(seen.has(id), `${label} is missing group ${id}`);
+}
+
+function validateAnswer(require, answer, expected, groups) {
+  const label = expected.id;
+  require(isObject(answer), `${label} capture is missing`);
+  require(answer?.principal === expected.principal, `${label} used the wrong principal`);
+  require(answer?.approval_state === expected.approval_state, `${label} used the wrong approval state`);
+  require(answer?.outcome === expected.expected_outcome, `${label} has the wrong outcome`);
+  require(nonempty(answer?.answer_text), `${label} answer text is missing`);
+  require(sameStringSet(answer?.citation_meeting_ids, expected.required_citation_meeting_ids), `${label} citations do not match the expected visible meetings`);
+  require(uniqueStrings(answer?.retrieved_record_ids), `${label} retrieved record IDs must be unique strings`);
+  require(sameStringSet(answer?.fixture_only_atom_ids, []), `${label} used a fixture-only atom`);
+  for (const forbidden of expected.must_not_reveal) require(!normalized(answer?.answer_text ?? "").includes(normalized(forbidden)), `${label} contains forbidden text`);
+  if (expected.expected_outcome === "answered") {
+    require(nonempty(answer?.record_generation_id) && nonempty(answer?.release_head), `${label} lacks the exact generation and release/head`);
+    validateAnsweredClaims(require, answer, expected, groups, label);
+  } else {
+    require(answer?.answer_text?.trim() === INSUFFICIENT_ANSWER, `${label} is not the required non-disclosing response`);
+    require(sameStringSet(answer?.retrieved_record_ids, []), `${label} retrieved inaccessible records`);
+    require(Array.isArray(answer?.claims) && answer.claims.length === 0, `${label} neutral answer has group mappings`);
+  }
 }
 
 function digestTrial(trial) {
   return createHash("sha256")
     .update(JSON.stringify({
+      outcome: trial.outcome,
       answer_text: trial.answer_text,
+      claims: trial.claims.map((claim) => ({
+        group_id: claim.group_id,
+        outcome: claim.outcome,
+        observed_text: claim.observed_text,
+        citation_meeting_ids: [...claim.citation_meeting_ids].sort()
+      })).sort((a, b) => a.group_id.localeCompare(b.group_id)),
       citation_meeting_ids: [...trial.citation_meeting_ids].sort(),
       retrieved_record_ids: [...trial.retrieved_record_ids].sort()
     }))
@@ -108,8 +157,8 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     };
     try {
       verify(require);
-    } catch (error) {
-      failures.push(`invalid evidence: ${error instanceof Error ? error.message : String(error)}`);
+    } catch {
+      failures.push("invalid or malformed evidence");
     }
     checks.push({ id, name, passed: failures.length === 0, failures });
   };
@@ -120,6 +169,10 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     : [];
   const expectedById = new Map(expectedMeetings.map((meeting) => [meeting.meeting_id, meeting]));
   const records = new Map();
+  const cases = expectations?.retrieval_cases ?? [];
+  const groups = expectations?.answer_groups ?? [];
+  const repeatability = [];
+  const coverage = [];
 
   check("01", "Four canonical meetings validate without a demo-only runtime schema.", (require) => {
     require(validTopLevel, "result, expectations, and meeting documents must be objects/arrays");
@@ -216,18 +269,40 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     }
   });
 
-  check("07", "Before approval, the main question returns no facts or citations.", (require) => {
-    const expected = expectations?.retrieval_cases?.find((item) => item.id === "before-approval-rollout-question");
-    const answer = (result?.answers ?? []).find((item) => item?.case_id === expected?.id);
-    require(isObject(answer) && isObject(expected), "missing before-approval answer capture or expectation");
-    require(answer?.principal === expected?.principal, "before-approval answer used the wrong principal");
-    require(answer?.outcome === "insufficient_approved_information", "before-approval outcome is not insufficient information");
-    require(strings(answer?.citation_meeting_ids) && answer.citation_meeting_ids.length === 0, "before-approval answer has citations");
-    require(strings(answer?.retrieved_record_ids) && answer.retrieved_record_ids.length === 0, "before-approval answer retrieved records");
-    require(answer?.answer_text?.trim() === INSUFFICIENT_ANSWER, "before-approval answer is not the required non-disclosing response");
-    for (const forbidden of expectations?.retrieval_cases?.[0]?.must_not_reveal ?? []) {
-      require(!normalized(answer.answer_text).includes(normalized(forbidden)), `before-approval answer reveals ${forbidden}`);
+  check("15", "The oracle and captures have a complete, unique case and group inventory.", (require) => {
+    require(Array.isArray(cases) && cases.length >= 4, "case inventory is missing");
+    require(uniqueStrings(cases.map((item) => item.id)), "oracle has duplicate or invalid case IDs");
+    require(Array.isArray(result?.answers), "answers must be an array");
+    require(sameStringSet(result?.answers?.map((item) => item?.case_id), cases.map((item) => item.id)), "captured case IDs contain missing, duplicate, or unexpected cases");
+    require(Array.isArray(groups) && groups.length > 0 && uniqueStrings(groups.map((item) => item.id)), "oracle has missing, duplicate, or invalid groups");
+    for (const group of groups) {
+      require(["conclusion", "condition"].includes(group.category), "oracle group category is invalid");
+      require(uniqueStrings(group.required_phrases) && group.required_phrases.length > 0, "oracle group textual checks are missing");
+      require(uniqueStrings(group.allowed_source_meeting_ids) && group.allowed_source_meeting_ids.length > 0 && group.allowed_source_meeting_ids.every((id) => expectedById.has(id)), "oracle group source meetings are invalid");
+      require(typeof group.allow_insufficient === "boolean", "oracle group insufficient-evidence policy is missing");
+      if (group.allow_insufficient) require(nonempty(group.insufficient_answer), "oracle permitted insufficient group lacks explicit wording");
     }
+    for (const expected of cases) {
+      require(nonempty(expected.question) && nonempty(expected.principal) && nonempty(expected.approval_state), "oracle case question or access context is missing");
+      require(["answered", "insufficient_approved_information"].includes(expected.expected_outcome), "oracle case outcome is invalid");
+      require(strings(expected.must_not_reveal), "oracle case forbidden-text checks are missing");
+      require(uniqueStrings(expected.material_group_ids), "oracle case has duplicate or invalid group mappings");
+      const mapped = expected.material_group_ids.map((id) => groups.find((group) => group.id === id));
+      require(mapped.every(Boolean), "oracle case maps an unknown group");
+      require(expected.expected_outcome === "answered" ? mapped.length > 0 : mapped.length === 0, "oracle groups do not match case outcome");
+      require(sameStringSet(expected.required_citation_meeting_ids, [...new Set(mapped.flatMap((group) => group?.allowed_source_meeting_ids ?? []))]), "oracle citations do not match mapped groups");
+      const primary = cases.find((item) => item.id === expected.primary_case_id);
+      require(primary?.primary_case_id === primary?.id && isObject(primary), "case has no direct primary mapping");
+      for (const field of ["principal", "approval_state", "expected_outcome", "material_group_ids", "required_citation_meeting_ids", "must_not_reveal"]) {
+        require(JSON.stringify(expected[field]) === JSON.stringify(primary?.[field]), `paraphrase differs from primary in ${field}`);
+      }
+    }
+  });
+
+  check("07", "Before approval, the main question returns no facts or citations.", (require) => {
+    const expected = cases.find((item) => item.id === "before-approval-rollout-question");
+    const answer = result?.answers?.find((item) => item?.case_id === expected?.id);
+    validateAnswer(require, answer, expected, groups);
   });
 
   check("08", "After Team approval, the main answer contains every required proposition.", (require) => {
@@ -236,18 +311,27 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     require(isObject(answer) && isObject(expected), "missing post-approval answer capture or expectation");
     require(answer?.principal === expected?.principal, "post-approval answer used the wrong principal");
     require(answer?.outcome === "answered", "post-approval outcome is not answered");
-    validateAnsweredClaims(require, answer, expected, "post-approval");
-    for (const forbidden of expected?.must_not_reveal ?? []) require(!normalized(answer?.answer_text ?? "").includes(normalized(forbidden)), `post-approval answer reveals ${forbidden}`);
+    validateAnswer(require, answer, expected, groups);
     const maximumWords = expectations?.quality_gate?.maximum_target_words_for_rollout_answer;
     if (Number.isInteger(maximumWords)) require(answer.answer_text.trim().split(/\s+/).length <= maximumWords, `post-approval answer exceeds ${maximumWords} words`);
   });
 
-  check("09", "Each proposition cites the correct source meeting.", (require) => {
-    for (const expected of expectations?.retrieval_cases ?? []) {
-      const answer = (result?.answers ?? []).find((item) => item?.case_id === expected.id);
-      require(isObject(answer), `missing answer capture ${expected.id}`);
-      require(strings(answer?.citation_meeting_ids), `${expected.id} citations must be a string array`);
-      require(sameStringSet(answer?.citation_meeting_ids, expected.required_citation_meeting_ids ?? []), `${expected.id} citations do not match required meetings`);
+  check("09", "Every captured case covers its material groups with visible source provenance.", (require) => {
+    for (const expected of cases) {
+      const answer = result?.answers?.find((item) => item?.case_id === expected.id);
+      // Optional fields copied from existing content-free answer-composition
+      // audit evidence. Record retrieval alone does not prove context inclusion.
+      const retrieval = answer?.retrieval;
+      const validCounts = isObject(retrieval) && [retrieval.released_atom_count, retrieval.context_atom_count].every((count) => Number.isInteger(count) && count >= 0) && retrieval.context_atom_count <= retrieval.released_atom_count;
+      if (retrieval !== undefined) require(validCounts, `${expected.id} has invalid captured retrieval counts`);
+      const contextState = validCounts ? (retrieval.context_atom_count === 0 ? "empty" : "nonempty") : "not_captured";
+      coverage.push({
+        case_id: expected.id,
+        context_state: contextState,
+        missing_group_ids: expected.material_group_ids.filter((id) => !Array.isArray(answer?.claims) || !answer.claims.some((claim) => claim?.group_id === id))
+      });
+      if (validCounts) require(expected.expected_outcome === "answered" ? retrieval.context_atom_count > 0 : retrieval.released_atom_count === 0, `${expected.id} captured retrieval counts contradict its expected outcome`);
+      validateAnswer(require, answer, expected, groups);
     }
   });
 
@@ -268,6 +352,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
       require(strings(answer?.fixture_only_atom_ids) && answer.fixture_only_atom_ids.length === 0, `${answer?.case_id} used a fixture-only atom`);
       for (const recordId of answer?.retrieved_record_ids ?? []) require(records.has(recordId), `${answer?.case_id} used unapproved record ${recordId}`);
       const expected = expectations?.retrieval_cases?.find((item) => item.id === answer?.case_id);
+      for (const meetingId of answer?.citation_meeting_ids ?? []) require(answer?.retrieved_record_ids?.some((id) => records.get(id)?.meeting_id === meetingId), "answer citation has no retrieved approved record");
       if (expected?.principal === "normal_team_member") {
         for (const recordId of answer?.retrieved_record_ids ?? []) require(records.get(recordId)?.policy === "team", `${answer?.case_id} retrieved an Only-me record`);
       }
@@ -280,11 +365,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     require(isObject(answer) && isObject(expected), "missing team private-price answer capture");
     require(result?.operator_checks?.answer_identities_verified === true, "operator did not confirm the Ask ECHO identities");
     require(answer?.principal === expected?.principal, "team private-price answer used the wrong principal");
-    require(answer?.outcome === "insufficient_approved_information", "team private-price outcome is not insufficient information");
-    require(strings(answer?.citation_meeting_ids) && answer.citation_meeting_ids.length === 0, "team private-price answer has citations");
-    require(strings(answer?.retrieved_record_ids) && answer.retrieved_record_ids.length === 0, "team private-price answer retrieved records");
-    require(answer?.answer_text?.trim() === INSUFFICIENT_ANSWER, "team private-price answer is not the required non-disclosing response");
-    for (const forbidden of expected?.must_not_reveal ?? []) require(!normalized(answer.answer_text).includes(normalized(forbidden)), `team private-price answer reveals ${forbidden}`);
+    validateAnswer(require, answer, expected, groups);
   });
 
   check("12", "The exact Only-me approver can retrieve the private price.", (require) => {
@@ -294,42 +375,77 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     require(result?.operator_checks?.answer_identities_verified === true, "operator did not confirm the Ask ECHO identities");
     require(answer?.principal === expected?.principal, "approver price answer did not use the exact owner/approver principal");
     require(answer?.outcome === "answered", "approver private-price outcome is not answered");
-    validateAnsweredClaims(require, answer, expected, "approver private-price");
+    validateAnswer(require, answer, expected, groups);
     require(strings(answer?.citation_meeting_ids) && answer.citation_meeting_ids.includes("synthetic-demo-northstar-commercial-exception-2026-08-29"), "approver answer lacks commercial citation");
     const commercialRecordIds = new Set((result?.approved_records ?? []).filter((record) => record?.meeting_id === "synthetic-demo-northstar-commercial-exception-2026-08-29").map((record) => record.record_id));
     require(strings(answer?.retrieved_record_ids) && answer.retrieved_record_ids.length > 0 && answer.retrieved_record_ids.every((recordId) => commercialRecordIds.has(recordId)), "approver price answer did not use only the commercial record");
   });
 
-  check("13", "Repeated queries are deterministic for the same record generation.", (require) => {
+  check("13", "Repeated queries are stable only within one generation and release/head; availability stays visible.", (require) => {
+    const answeredCases = cases.filter((item) => item.expected_outcome === "answered");
     require(Array.isArray(result?.determinism), "determinism must be an array");
-    for (const caseId of ["after-team-approval-rollout-question", "approver-private-price-question"]) {
-      const run = result?.determinism?.find((item) => item?.case_id === caseId);
-      require(isObject(run), `missing determinism evidence for ${caseId}`);
-      require(typeof run?.record_generation_id === "string" && run.record_generation_id.length > 0, `${caseId} record generation is missing`);
-      require(Array.isArray(run?.trials) && run.trials.length >= 2, `${caseId} requires at least two trials`);
-      const trialDigests = new Set();
+    require(sameStringSet(result?.determinism?.map((item) => item?.case_id), answeredCases.map((item) => item.id)), "repeatability has missing, duplicate, or unexpected cases");
+    for (const expected of answeredCases) {
+      const run = result?.determinism?.find((item) => item?.case_id === expected.id);
+      const captured = result?.answers?.find((item) => item?.case_id === expected.id);
+      require(nonempty(run?.record_generation_id) && nonempty(run?.release_head), `${expected.id} run lacks generation or release/head`);
+      require(run?.record_generation_id === captured?.record_generation_id && run?.release_head === captured?.release_head, `${expected.id} run differs from captured generation or release/head`);
+      require(Array.isArray(run?.trials), `${expected.id} trials must be an array`);
+      require(uniqueStrings(run?.trials?.map((trial) => trial?.trial_id)), `${expected.id} trials require unique IDs`);
+      const summary = { case_id: expected.id, trial_count: run?.trials?.length ?? 0, success_count: 0, unavailable_count: 0, status_503_count: 0, reason_counts: {}, stable: false };
+      repeatability.push(summary);
+      const digests = new Set();
+      let validTrials = uniqueStrings(run?.trials?.map((trial) => trial?.trial_id));
+      const requireTrial = (condition, detail) => {
+        require(condition, detail);
+        if (!condition) validTrials = false;
+      };
       for (const trial of run?.trials ?? []) {
-        require(isObject(trial) && typeof trial.answer_text === "string" && strings(trial.citation_meeting_ids) && strings(trial.retrieved_record_ids), `${caseId} trial is invalid`);
-        if (isObject(trial) && typeof trial.answer_text === "string" && strings(trial.citation_meeting_ids) && strings(trial.retrieved_record_ids)) trialDigests.add(digestTrial(trial));
+        try {
+          const samePair = trial?.record_generation_id === run.record_generation_id && trial?.release_head === run.release_head;
+          requireTrial(samePair, `${expected.id} trial changed generation or release/head`);
+          if (trial?.outcome === "unavailable") {
+            summary.unavailable_count += 1;
+            if (trial.http_status === 503) summary.status_503_count += 1;
+            requireTrial(Number.isInteger(trial.http_status) && trial.http_status >= 400 && trial.http_status <= 599, `${expected.id} unavailable trial lacks error status`);
+            // Reasons are captured symbolic codes, never provider messages or answer text.
+            const validReason = UNAVAILABLE_REASONS.has(trial.reason_code);
+            requireTrial(validReason, `${expected.id} unavailable trial lacks a content-free reason code`);
+            if (validReason) summary.reason_counts[trial.reason_code] = (Object.hasOwn(summary.reason_counts, trial.reason_code) ? summary.reason_counts[trial.reason_code] : 0) + 1;
+            requireTrial(!["answer_text", "claims", "citation_meeting_ids", "retrieved_record_ids"].some((key) => Object.hasOwn(trial, key)), `${expected.id} unavailable trial contains answer evidence`);
+            continue;
+          }
+          summary.success_count += 1;
+          validateAnswer(requireTrial, trial, expected, groups);
+          requireTrial(trial?.case_id === expected.id, `${expected.id} trial used another case`);
+          // Never compare text or records across a changed pair.
+          if (samePair && run.record_generation_id === captured?.record_generation_id && run.release_head === captured?.release_head) {
+            const digest = digestTrial(trial);
+            digests.add(digest);
+            requireTrial(digest === digestTrial(captured), `${expected.id} trial differs from the evaluated capture`);
+          }
+        } catch {
+          requireTrial(false, `${expected.id} trial has malformed evidence`);
+        }
       }
-      require(trialDigests.size === 1, `${caseId} trials are not deterministic`);
+      require(summary.success_count >= 2, `${expected.id} requires at least two successful trials`);
+      summary.stable = validTrials && digests.size === 1 && summary.success_count >= 2 && run.trials.every((trial) => trial.record_generation_id === run.record_generation_id && trial.release_head === run.release_head) && [...digests][0] === digestTrial(captured);
+      require(summary.stable, `${expected.id} successful trials are not stable for the captured pair`);
     }
   });
 
   check("14", "The hero question returns the required answer in six consecutive post-approval trials.", (require) => {
     const hero = result?.determinism?.find((item) => item?.case_id === "after-team-approval-rollout-question");
-    const captured = result?.answers?.find((item) => item?.case_id === "after-team-approval-rollout-question");
-    require(Array.isArray(hero?.trials) && hero.trials.length >= 6, "hero question requires six consecutive trials");
-    require(isObject(captured) && captured?.outcome === "answered", "captured hero answer is missing");
-    const expectedCitationIds = expectations?.retrieval_cases?.find((item) => item.id === "after-team-approval-rollout-question")?.required_citation_meeting_ids ?? [];
+    let consecutive = 0;
+    let longest = 0;
     for (const trial of hero?.trials ?? []) {
-      require(trial?.answer_text === captured?.answer_text, "a hero trial differs from the evaluated captured answer");
-      require(JSON.stringify([...(trial?.citation_meeting_ids ?? [])].sort()) === JSON.stringify([...expectedCitationIds].sort()), "a hero trial has incorrect citations");
-      require((trial?.retrieved_record_ids ?? []).length > 0, "a hero trial did not retrieve approved records");
+      consecutive = trial?.outcome === "answered" ? consecutive + 1 : 0;
+      longest = Math.max(longest, consecutive);
     }
+    require(longest >= 6, "hero question requires six consecutive successful trials; unavailable attempts break the sequence");
   });
 
-  return { passed: checks.every((item) => item.passed), checks };
+  return { passed: checks.every((item) => item.passed), checks, coverage, repeatability };
 }
 
 function printUsage() {
@@ -355,14 +471,16 @@ function main(argv) {
     console.log(`${item.passed ? "PASS" : "FAIL"} ${item.id} ${item.name}`);
     for (const failure of item.failures) console.log(`  - ${failure}`);
   }
+  for (const summary of report.coverage) console.log(`COVERAGE ${JSON.stringify(summary)}`);
+  for (const summary of report.repeatability) console.log(`REPEAT ${JSON.stringify(summary)}`);
   if (!report.passed) process.exitCode = 1;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     main(process.argv.slice(2));
-  } catch (error) {
-    console.error(`FAIL evaluator input: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    console.error("FAIL evaluator input: unable to read or validate captured evidence");
     process.exitCode = 1;
   }
 }

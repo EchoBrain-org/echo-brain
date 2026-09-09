@@ -149,3 +149,64 @@ to the evaluation files, their existing CI job and this handoff; it uses `Refs #
 Preparation baseline: independent dependencies installed; **10 existing evaluator
 tests passed** and `npm run check:docs` passed. No workspace build was needed for
 these source-only tests. This baseline does not establish live answer quality.
+
+## Implemented capture contract
+
+The external oracle now has 21 cases: the four original cases, four supporting
+questions, one supported false-premise question, and two paraphrases for each of
+six core answered questions, varying Echo/Northstar aliases, date formats and
+wording. `answer_groups` declares each group's category,
+text checks, allowed source meetings and `allow_insufficient` policy once.
+Each case supplies an ordered `material_group_ids` list and a direct
+`primary_case_id`; paraphrases must retain their primary's access context,
+groups, citation set, outcome and forbidden text. All groups in this fixed,
+approved-record scenario require answers. The evaluator also tests an explicitly
+permitted group-level insufficiency using a modified synthetic oracle.
+
+The captured-result CLI is unchanged. Existing captures must be extended with
+all cases and the following evidence before they can pass:
+
+- Each answer includes its exact `principal` and `approval_state`, plus
+  `record_generation_id` and `release_head` for answered cases. `release_head`
+  is the exact release/source-head identifier used for that capture, not the
+  evaluator's current checkout.
+- The existing `claims` array now uses stable `group_id` mappings instead of
+  positional `fact_index`. Each mapping includes `outcome`, `observed_text`,
+  and `citation_meeting_ids`. An answered span must appear in the answer,
+  contain every required phrase and cite only allowed sources also present
+  in answer-level citations. A permitted insufficient mapping uses the oracle's
+  exact `insufficient_answer` and has no group citations. Answer-level citations
+  still equal the case's expected visible meeting set.
+- Every answered case has one `determinism` entry bound to its capture's exact
+  generation/head, with distinct `trial_id` values. Successful trials contain
+  the same evidence fields as answers. At least two successful trials must agree
+  with that case's capture in outcome, text, groups, citations and record IDs.
+  The hero additionally needs six consecutive successful trials. Different
+  cases and different generation/head pairs are never compared for equality.
+- An unavailable trial records `outcome: "unavailable"`, the same generation/head,
+  `trial_id`, `http_status`, and `reason_code`, without answer evidence. Reasons
+  use the existing public `unavailable` code or content-free Layer 4 failure
+  classes such as `adapter_timeout`; provider messages are rejected. The report
+  retains total, success, unavailable, HTTP 503 and per-reason counts. The 503
+  rate is `status_503_count / trial_count`. An unavailable attempt interrupts the
+  consecutive hero sequence even when successful outputs are stable.
+- Optional `retrieval.released_atom_count` and `retrieval.context_atom_count`
+  are copied from existing content-free answer-composition evidence. Coverage
+  reports distinguish `empty`, `nonempty` and `not_captured` context alongside
+  missing group IDs. Nonempty context does not prove that a particular omitted
+  group's source reached composition; record IDs alone do not prove that either.
+
+CLI reports contain check results, static case/group IDs, bounded reason codes
+and counts. They do not print captured answer spans, provider messages or parse
+error excerpts. No runtime or telemetry schema is changed.
+
+The original failing baseline was a duplicate captured hero case: the existing
+10 tests passed, while the new rejection test failed with `true !== false` and
+Node exit status 1. The required `check` CI job now runs
+`node --test demo/test/rehearsal-evaluator.test.mjs` directly, without a failure
+mask; its result feeds the existing `CI required checks` aggregate.
+
+Synthetic positives prove this evaluator contract only. Deterministic phrase
+checks are deliberately narrow and cannot establish semantic truth, catch every
+possible contradiction, verify capture authenticity or measure live product
+quality. Runtime changes and live qualification remain separate under `Refs #112`.

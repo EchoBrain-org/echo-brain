@@ -369,13 +369,277 @@
       "fixture oracle content"
     ]
   },
+  "answer_groups": [
+    {
+      "id": "promise-limit",
+      "category": "conclusion",
+      "description": "Do not promise all 28 locations for September 16.",
+      "required_phrases": [
+        "do not promise all 28 locations",
+        "september 16"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "conditional-window",
+      "category": "conclusion",
+      "description": "September 16 is a conditional onboarding window for the first 10 locations.",
+      "required_phrases": [
+        "september 16",
+        "conditional onboarding window",
+        "first 10 locations"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "signed-addendum",
+      "category": "condition",
+      "description": "Before production access, the revised data-processing addendum must be signed.",
+      "required_phrases": [
+        "before production access",
+        "revised data-processing addendum",
+        "must be signed"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "verified-security-contact",
+      "category": "condition",
+      "description": "Before production access, the named security contact must be verified.",
+      "required_phrases": [
+        "before production access",
+        "named security contact",
+        "must be verified"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "readiness-review",
+      "category": "condition",
+      "description": "Confirm implementation readiness, data-handling status and the location list at the September 12 review before confirming the onboarding window.",
+      "required_phrases": [
+        "implementation readiness",
+        "data-handling status",
+        "location list",
+        "september 12",
+        "before confirming"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "adoption-gate",
+      "category": "condition",
+      "description": "Later expansion requires at least 8 of the first 10 locations to complete four consecutive weekly workflows without manual correction.",
+      "required_phrases": [
+        "later expansion requires",
+        "at least 8 of the first 10 locations",
+        "four consecutive weekly workflows",
+        "without manual correction"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "capacity-rationale",
+      "category": "conclusion",
+      "description": "There is no operating plan to staff all 28 locations yet; full-launch wording would lose its qualification when repeated.",
+      "required_phrases": [
+        "no operating plan",
+        "28 locations",
+        "lose its qualification"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "wording-deadline",
+      "category": "condition",
+      "description": "Corrected customer wording is due September 3.",
+      "required_phrases": [
+        "corrected customer wording",
+        "due september 3"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "location-list-deadline",
+      "category": "condition",
+      "description": "Confirm the first 10 locations by September 4.",
+      "required_phrases": [
+        "confirm the first 10 locations",
+        "by september 4"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "capacity-deadline",
+      "category": "condition",
+      "description": "Reserve the implementation pod and send capacity assumptions by September 4.",
+      "required_phrases": [
+        "reserve the implementation pod",
+        "capacity assumptions",
+        "by september 4"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "addendum-deadline",
+      "category": "condition",
+      "description": "Send the revised addendum by September 5.",
+      "required_phrases": [
+        "send the revised addendum",
+        "by september 5"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "security-deadline",
+      "category": "condition",
+      "description": "Verify the named security contact by September 8.",
+      "required_phrases": [
+        "verify the named security contact",
+        "by september 8"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "dashboard-deadline",
+      "category": "condition",
+      "description": "Publish the adoption dashboard by September 11 with workflow completion by location, consecutive-week counts and manual corrections.",
+      "required_phrases": [
+        "adoption dashboard",
+        "by september 11",
+        "workflow completion by location",
+        "consecutive-week counts",
+        "manual corrections"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "expansion-review",
+      "category": "condition",
+      "description": "Review expansion only after the four-week adoption evidence exists, not before the September 16 onboarding window.",
+      "required_phrases": [
+        "review expansion only after",
+        "four-week adoption evidence exists",
+        "not before the september 16 onboarding window"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "adoption-rationale",
+      "category": "conclusion",
+      "description": "Initial logins can reflect training or curiosity; repeated workflows demonstrate durable adoption before a broader commitment.",
+      "required_phrases": [
+        "initial logins",
+        "training or curiosity",
+        "repeated workflows",
+        "before a broader commitment"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "evaluation-price",
+      "category": "conclusion",
+      "description": "$22 per location.",
+      "required_phrases": [
+        "$22 per location"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-commercial-exception-2026-08-29"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "price-scope",
+      "category": "condition",
+      "description": "The price covers the first 10 locations only.",
+      "required_phrases": [
+        "first 10 locations only"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-commercial-exception-2026-08-29"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "evaluation-term",
+      "category": "condition",
+      "description": "It is a 30-day evaluation only.",
+      "required_phrases": [
+        "30-day evaluation only"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-commercial-exception-2026-08-29"
+      ],
+      "allow_insufficient": false
+    },
+    {
+      "id": "pricing-follow-on",
+      "category": "condition",
+      "description": "Standard pricing resumes afterward unless Finance approves a new exception.",
+      "required_phrases": [
+        "standard pricing resumes afterward",
+        "unless finance approves a new exception"
+      ],
+      "allowed_source_meeting_ids": [
+        "synthetic-demo-northstar-commercial-exception-2026-08-29"
+      ],
+      "allow_insufficient": false
+    }
+  ],
   "retrieval_cases": [
     {
       "id": "before-approval-rollout-question",
+      "primary_case_id": "before-approval-rollout-question",
+      "question": "Can we promise Echo that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
       "principal": "normal_team_member",
       "approval_state": "no meeting approved",
-      "question": "Can we promise Echo that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
       "expected_outcome": "insufficient_approved_information",
+      "material_group_ids": [],
       "required_citation_meeting_ids": [],
       "must_not_reveal": [
         "meeting titles",
@@ -388,144 +652,670 @@
     },
     {
       "id": "after-team-approval-rollout-question",
+      "primary_case_id": "after-team-approval-rollout-question",
+      "question": "Can we promise Echo that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
       "principal": "normal_team_member",
       "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
-      "question": "Can we promise Echo that all 28 locations will be live on September 16? What can we safely commit to, what must happen first, and what work remains by when?",
       "expected_outcome": "answered",
-      "required_answer_facts": [
-        "Do not promise all 28 locations for September 16.",
-        "September 16 is a conditional onboarding window for the first 10 locations.",
-        "Before production access, the revised addendum must be signed, the named security contact verified, and implementation readiness confirmed at the September 12 review.",
-        "Later expansion requires at least 8 of the first 10 locations to complete four consecutive weekly workflows without manual correction."
-      ],
-      "required_answer_fact_checks": [
-        {
-      "required_phrases": [
-        "28 locations",
-        "september 16",
-        "not promise"
-          ],
-          "required_citation_meeting_ids": [
-            "synthetic-demo-northstar-implementation-capacity-2026-08-28"
-          ]
-        },
-        {
-          "required_phrases": [
-            "conditional",
-            "onboarding",
-            "10 locations"
-          ],
-          "required_citation_meeting_ids": [
-            "synthetic-demo-northstar-implementation-capacity-2026-08-28"
-          ]
-        },
-        {
-          "required_phrases": [
-            "addendum",
-            "signed",
-            "security contact",
-            "verified",
-            "september 12",
-            "readiness"
-          ],
-          "required_citation_meeting_ids": [
-            "synthetic-demo-northstar-data-handling-review-2026-08-26",
-            "synthetic-demo-northstar-implementation-capacity-2026-08-28"
-          ]
-        },
-        {
-          "required_phrases": [
-            "8",
-            "10",
-            "four consecutive",
-            "weekly workflows",
-            "manual correction"
-          ],
-          "required_citation_meeting_ids": [
-            "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
-          ]
-        }
+      "material_group_ids": [
+        "promise-limit",
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "adoption-gate"
       ],
       "required_citation_meeting_ids": [
-        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
         "synthetic-demo-northstar-data-handling-review-2026-08-26",
-        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
       ],
       "must_not_reveal": [
         "$22",
-        "a private price exists",
-        "the rejected all-28 proposals as current decisions"
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
       ]
     },
     {
       "id": "team-member-private-price-question",
+      "primary_case_id": "team-member-private-price-question",
+      "question": "What special price did Echo receive?",
       "principal": "normal_team_member",
       "approval_state": "chapter 4 approved as Only me by a different principal",
-      "question": "What special price did Echo receive?",
       "expected_outcome": "insufficient_approved_information",
+      "material_group_ids": [],
       "required_citation_meeting_ids": [],
       "must_not_reveal": [
         "$22",
         "10 locations",
         "30 days",
         "standard pricing",
-        "the existence of a private commercial record"
+        "the existence of a private commercial record",
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record"
       ]
     },
     {
       "id": "approver-private-price-question",
+      "primary_case_id": "approver-private-price-question",
+      "question": "What special price did Echo receive?",
       "principal": "exact_owner_approver",
       "approval_state": "chapter 4 approved as Only me by this principal",
-      "question": "What special price did Echo receive?",
       "expected_outcome": "answered",
-      "required_answer_facts": [
-        "$22 per location",
-        "first 10 locations only",
-        "30-day evaluation only",
-        "standard pricing afterward unless Finance approves a new exception"
-      ],
-      "required_answer_fact_checks": [
-        {
-      "required_phrases": [
-        "$22",
-        "per location"
-          ],
-          "required_citation_meeting_ids": [
-            "synthetic-demo-northstar-commercial-exception-2026-08-29"
-          ]
-        },
-        {
-          "required_phrases": [
-            "10 locations",
-            "only"
-          ],
-          "required_citation_meeting_ids": [
-            "synthetic-demo-northstar-commercial-exception-2026-08-29"
-          ]
-        },
-        {
-          "required_phrases": [
-            "30-day",
-            "evaluation",
-            "only"
-          ],
-          "required_citation_meeting_ids": [
-            "synthetic-demo-northstar-commercial-exception-2026-08-29"
-          ]
-        },
-        {
-          "required_phrases": [
-            "standard pricing",
-            "finance",
-            "exception"
-          ],
-          "required_citation_meeting_ids": [
-            "synthetic-demo-northstar-commercial-exception-2026-08-29"
-          ]
-        }
+      "material_group_ids": [
+        "evaluation-price",
+        "price-scope",
+        "evaluation-term",
+        "pricing-follow-on"
       ],
       "required_citation_meeting_ids": [
         "synthetic-demo-northstar-commercial-exception-2026-08-29"
+      ],
+      "must_not_reveal": []
+    },
+    {
+      "id": "safe-commitment-question",
+      "primary_case_id": "safe-commitment-question",
+      "question": "What can I safely promise Echo for September 16, what must I avoid promising, and why?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "promise-limit",
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "adoption-gate",
+        "capacity-rationale"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26",
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "first-10-prerequisites-question",
+      "primary_case_id": "first-10-prerequisites-question",
+      "question": "What must happen before the first 10 Echo locations can go live in the September 16 window?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "remaining-work-question",
+      "primary_case_id": "remaining-work-question",
+      "question": "What work remains on Echo and when is it due, separating the September 16 onboarding window from later expansion?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "wording-deadline",
+        "location-list-deadline",
+        "capacity-deadline",
+        "addendum-deadline",
+        "security-deadline",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "dashboard-deadline",
+        "adoption-gate",
+        "expansion-review"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "expansion-rule-question",
+      "primary_case_id": "expansion-rule-question",
+      "question": "When can Echo expand beyond the first 10 locations, what evidence will we use, and why?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "adoption-gate",
+        "dashboard-deadline",
+        "expansion-review",
+        "adoption-rationale"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "confirmed-launch-premise-question",
+      "primary_case_id": "confirmed-launch-premise-question",
+      "question": "Since all 28 Echo locations are confirmed to launch on September 16, can I announce that commitment?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "promise-limit",
+        "conditional-window",
+        "capacity-rationale"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "after-team-approval-rollout-question-paraphrase-1",
+      "primary_case_id": "after-team-approval-rollout-question",
+      "question": "Can we commit all 28 Echo sites to go live on 9/16/2026? What is safe to promise, what must happen first, and what still has to happen by when?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "promise-limit",
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "adoption-gate"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26",
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "after-team-approval-rollout-question-paraphrase-2",
+      "primary_case_id": "after-team-approval-rollout-question",
+      "question": "For Northstar (Echo), are all 28 locations promised for 16 September? Explain the safe commitment, initial locations, prerequisites, remaining work and dates.",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "promise-limit",
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "adoption-gate"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26",
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "approver-private-price-question-paraphrase-1",
+      "primary_case_id": "approver-private-price-question",
+      "question": "What evaluation price was approved for the Echo account, for which locations and duration, and what pricing follows?",
+      "principal": "exact_owner_approver",
+      "approval_state": "chapter 4 approved as Only me by this principal",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "evaluation-price",
+        "price-scope",
+        "evaluation-term",
+        "pricing-follow-on"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-commercial-exception-2026-08-29"
+      ],
+      "must_not_reveal": []
+    },
+    {
+      "id": "approver-private-price-question-paraphrase-2",
+      "primary_case_id": "approver-private-price-question",
+      "question": "For Echo, explain the special rate, initial locations covered, evaluation period and terms after it ends.",
+      "principal": "exact_owner_approver",
+      "approval_state": "chapter 4 approved as Only me by this principal",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "evaluation-price",
+        "price-scope",
+        "evaluation-term",
+        "pricing-follow-on"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-commercial-exception-2026-08-29"
+      ],
+      "must_not_reveal": []
+    },
+    {
+      "id": "safe-commitment-question-paraphrase-1",
+      "primary_case_id": "safe-commitment-question",
+      "question": "What can we commit to the Echo account for 9/16/2026, what should we avoid promising, and why?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "promise-limit",
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "adoption-gate",
+        "capacity-rationale"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26",
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "safe-commitment-question-paraphrase-2",
+      "primary_case_id": "safe-commitment-question",
+      "question": "For 16 September, what is safe to promise Echo about going live, what is excluded, and why?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "promise-limit",
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "adoption-gate",
+        "capacity-rationale"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26",
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "first-10-prerequisites-question-paraphrase-1",
+      "primary_case_id": "first-10-prerequisites-question",
+      "question": "What still has to happen before the initial 10 Echo sites go live in the 9/16/2026 window?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "first-10-prerequisites-question-paraphrase-2",
+      "primary_case_id": "first-10-prerequisites-question",
+      "question": "For the Echo account, which prerequisites gate onboarding the first ten locations on 16 September?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "conditional-window",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "remaining-work-question-paraphrase-1",
+      "primary_case_id": "remaining-work-question",
+      "question": "For the Echo account, what still has to happen by when for 9/16/2026 onboarding versus later expansion?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "wording-deadline",
+        "location-list-deadline",
+        "capacity-deadline",
+        "addendum-deadline",
+        "security-deadline",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "dashboard-deadline",
+        "adoption-gate",
+        "expansion-review"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "remaining-work-question-paraphrase-2",
+      "primary_case_id": "remaining-work-question",
+      "question": "List outstanding Echo work and deadlines, separating the 16 September onboarding window from expanding afterward.",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "wording-deadline",
+        "location-list-deadline",
+        "capacity-deadline",
+        "addendum-deadline",
+        "security-deadline",
+        "signed-addendum",
+        "verified-security-contact",
+        "readiness-review",
+        "dashboard-deadline",
+        "adoption-gate",
+        "expansion-review"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28",
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "synthetic-demo-northstar-data-handling-review-2026-08-26"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "expansion-rule-question-paraphrase-1",
+      "primary_case_id": "expansion-rule-question",
+      "question": "When may Northstar/Echo grow past the initial ten sites, using which evidence and rationale?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "adoption-gate",
+        "dashboard-deadline",
+        "expansion-review",
+        "adoption-rationale"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
+      ]
+    },
+    {
+      "id": "expansion-rule-question-paraphrase-2",
+      "primary_case_id": "expansion-rule-question",
+      "question": "What allows Echo to expand after the first 10 locations, how is that measured, and why that rule?",
+      "principal": "normal_team_member",
+      "approval_state": "chapters 1-3 approved as Team; chapter 4 approved as Only me",
+      "expected_outcome": "answered",
+      "material_group_ids": [
+        "adoption-gate",
+        "dashboard-deadline",
+        "expansion-review",
+        "adoption-rationale"
+      ],
+      "required_citation_meeting_ids": [
+        "synthetic-demo-northstar-revenue-signal-calibration-2026-08-24",
+        "synthetic-demo-northstar-implementation-capacity-2026-08-28"
+      ],
+      "must_not_reveal": [
+        "$22",
+        "twenty-two dollars",
+        "30-day",
+        "30 days",
+        "standard pricing",
+        "finance",
+        "order form",
+        "private price",
+        "private commercial",
+        "hidden record",
+        "yes, all 28",
+        "all 28 locations are confirmed",
+        "all 28 locations will be live",
+        "confirmed 28-location launch"
       ]
     }
   ],
@@ -538,7 +1328,7 @@
       "Rejected or proposed alternatives are never presented as current decisions.",
       "The answer distinguishes prerequisites for the first 10 from evidence needed for later expansion.",
       "Private content is neither disclosed nor hinted at to an unauthorized requester.",
-      "The same question and record generation produce the same result."
+      "The same question, record generation and release/head produce the same outcome, text, groups, citations and record IDs; unavailable attempts remain counted separately."
     ]
   }
 }
