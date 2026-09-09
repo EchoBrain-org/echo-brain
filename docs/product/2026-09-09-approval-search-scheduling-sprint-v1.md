@@ -208,7 +208,7 @@ both runs. No zero-latency claim follows from this test. Source extraction and
 terminal provider calls can still hold the writer gate; synchronous snapshot,
 SQLite, and index building still occupy the Node event loop.
 
-Validation: the expanded focused command covers 96 tests in nine files;
+Pre-BM25 validation: the expanded focused command covers 96 tests in nine files;
 `npm run test:capacity` passes 27 tests; `npm run capacity:checkpoint` passes both
 policy scenarios with `qualification:false`. Its observed acknowledgement/search
 times were 3/119 ms for Team and 5/203 ms for Only me while other local checks
@@ -217,5 +217,10 @@ were running; these single-meeting observations are not a capacity qualification
 lint, build and type checking. Localhost tests require execution outside the
 network sandbox. Live rehearsal and deployment remain pending.
 
-The refreshed remote `main` still ended at PR #152 during this verification;
-BM25 was not merged. Refresh and run combined proofs if it lands before merge.
+After those checks, BM25 merged in PR #154 at `5d7116e`. This branch incorporates
+that main-line change without conflicts. The capacity checkpoint retains its
+independent BM25 ranking assertions and the new search drain. Combined focused,
+capacity, full-repository and required CI results are recorded on
+[PR #155](https://github.com/EchoBrain-org/echo-brain/pull/155).
+The virtual-clock measurements above predate BM25 and remain scheduling evidence,
+not a new retrieval-quality or capacity baseline.
