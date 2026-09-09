@@ -172,6 +172,7 @@ export interface MeetingApprovalJourneyTelemetryPortV1 {
   failAwaitingSearch(
     attempts: readonly MeetingApprovalJourneyStageAttemptV1[],
     error: unknown,
+    cancelled?: boolean,
   ): void;
 
   close(): void;

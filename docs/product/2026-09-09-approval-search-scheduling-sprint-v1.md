@@ -1,6 +1,6 @@
 # Approval scheduling: implementation handoff
 
-Status: prepared for a separate implementation session; no runtime changes yet.
+Status: implemented offline on the prepared branch; live acceptance pending.
 Issue: [#153](https://github.com/EchoBrain-org/echo-brain/issues/153), rehearsal finding **02**.
 Branch: `fix/approval-search-scheduling`. Worktree: `.worktrees/approval-search-scheduling`.
 Base: `db5153e09c94c3132fbc8c856df9748af1107d9f`, including merged PR #152.
@@ -152,3 +152,70 @@ the focused command above passed **51 tests in 5 files** on unchanged applicatio
 code. The HTTP acknowledgement test required localhost access outside the sandbox.
 This proves the starting suites work, not that the scheduling issue is fixed.
 Full checks and the new failing-then-passing behavioral proof belong to implementation.
+
+## Implementation evidence
+
+The lifecycle now runs finalize/append/recovery under the existing writer gate
+and requests search after successful writer completion. One deferred search task
+owns all post-startup reconciliation, including periodic, approval, supersession,
+and operator triggers. It retains one active pass and one pending wake. Failure
+does not generate a new wake; an existing wake survives a failure, and normal
+periodic cycles can recover later. Supersession immediately schedules the latest
+head after a finite burst. Snapshot verification, immutable validation, the
+non-yielding exact-head publication boundary, and PR #152 batching remain intact.
+
+Search owns an independent core-runtime root with the explicit lifecycle scope
+and retains the `search_reconciliation` phase reporter. The integration proof
+links all coalesced journeys to actual search operations, preserves development
+content capture, and keeps superseded journeys eligible for publication.
+Cancellation closes its attempt without creating a retry on restart, using the
+existing telemetry-sidecar observation-kind column; no schema migration is needed.
+
+Operator work still excludes both writers and search. `drain(signal)` waits for
+queued publication and search without acquiring operator exclusion or triggering
+a retry. The existing capacity candidate and checkpoint use that barrier before
+searching. Shutdown stops API ingress (including requests on existing sockets),
+cancels queued callbacks, aborts both workers, and awaits cleanup before closing
+handles. An adapter that ignores abort delays close until it settles; database
+handles are never closed underneath it.
+
+The first regression failed on unchanged scheduling: HTTP-acknowledged later
+approvals had durable queue receipts while the record count remained at two.
+The final integration proof uses real SQLite finalization, append and retrieval,
+real localhost HTTP ingress, and synthetic provider ports. It varies one/four
+later Team approvals while always including an Only me approval and a rejection;
+an additional case makes the actual projector reject malformed model output.
+The second pass publishes the latest head, and member retrieval excludes the
+restricted record. Adjacent tests retain duplicate-click, revoked-membership,
+authorization-fence, restart, and durable-acknowledgement coverage.
+
+[Offline measurements](2026-09-09-approval-search-scheduling-offline-evidence.json)
+compare the identical fixture against `db5153e` and the candidate. Date and
+performance use a virtual clock; the first enrichment model is held for 250 ms
+after later clicks, with one scheduling tick on either side. These values
+describe ordering under a controlled stall, **not wall-clock performance**:
+
+| Later approved journeys, both burst sizes | Before | After |
+| --- | ---: | ---: |
+| Durable queue receipt to finalization start | 251 virtual ms | 0 virtual ms |
+| Durable queue receipt to append completion | 251 virtual ms | 0 virtual ms |
+| Durable queue receipt to successful terminal-card update | 251 virtual ms | 0 virtual ms |
+| Durable queue receipt to search readiness | 251 virtual ms | 251 virtual ms |
+
+Zero means completion on the first scheduled turn without advancing the virtual
+clock. The initial two approvals reach search readiness at 252 virtual ms in
+both runs. No zero-latency claim follows from this test. Source extraction and
+terminal provider calls can still hold the writer gate; synchronous snapshot,
+SQLite, and index building still occupy the Node event loop.
+
+Validation: the expanded focused command covers 96 tests in nine files;
+`npm run test:capacity` passes 27 tests; `npm run capacity:checkpoint` passes both
+policy scenarios with `qualification:false`. Its observed acknowledgement/search
+times were 3/119 ms for Team and 5/203 ms for Only me while other local checks
+were running; these single-meeting observations are not a capacity qualification.
+`npm run check` passes 1,710 tests in 156 files, including architecture, docs,
+lint, build and type checking. Localhost tests require execution outside the
+network sandbox. Live rehearsal and deployment remain pending.
+
+The refreshed remote `main` still ended at PR #152 during this verification;
+BM25 was not merged. Refresh and run combined proofs if it lands before merge.

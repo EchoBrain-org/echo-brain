@@ -350,6 +350,7 @@ describe("private Slack interactions application V1", () => {
 
   it("writes the HTTP acknowledgement before an idle worker starts publication", async () => {
     const order: string[] = [];
+    let closing = false;
     let queued = false;
     let publicationStarted!: () => void;
     const published = new Promise<void>((resolve) => {
@@ -400,6 +401,7 @@ describe("private Slack interactions application V1", () => {
     });
     const ingress = createPrivateSlackApprovalHttpAdapterV1(application);
     const server = createOrganizationAuthorityHttpServer({
+      is_closing: () => closing,
       descriptor: {} as never,
       sessions: {} as never,
       oidc_provider: {} as never,
@@ -430,6 +432,19 @@ describe("private Slack interactions application V1", () => {
       expect(response.status).toBe(200);
       await published;
       expect(order).toEqual(["enqueue", "acknowledgement", "publication"]);
+      closing = true;
+      const rejected = await fetch(`http://127.0.0.1:${address.port}${ingress.path}`, {
+        method: "POST",
+        headers: {
+          "content-type": signed.content_type,
+          "x-slack-request-timestamp": signed.slack_request_timestamp,
+          "x-slack-signature": signed.slack_signature,
+        },
+        body: Buffer.from(signed.raw_body),
+      });
+      expect(rejected.status).toBe(503);
+      await rejected.text();
+      expect(order.filter((item) => item === "enqueue")).toHaveLength(1);
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

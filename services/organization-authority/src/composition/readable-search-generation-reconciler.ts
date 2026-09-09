@@ -122,12 +122,12 @@ function pointerHead(
 }
 
 /**
- * One single-flight exact-head reconciler for the admitted-search V1 flow.
+ * Exact-head reconciler for the admitted-search V1 flow. Callers serialize it.
  *
- * The serialized processing worker is the only V4 writer and invokes this after its
- * coalesced append phase. The snapshot closes before generation IO begins. A
- * final head comparison prevents an obsolete completed generation from being
- * published if that ownership rule is widened later.
+ * Startup runs before the API binds; the lifecycle search task owns every later
+ * invocation. The writer can advance during enrichment. Snapshot capture closes
+ * its read transaction before IO, and the final head check and pointer mutation
+ * form one non-yielding critical section that fences obsolete generations.
  */
 export class ReadableSearchGenerationReconcilerV1<
   Snapshot extends ReadableSearchSnapshotV1,

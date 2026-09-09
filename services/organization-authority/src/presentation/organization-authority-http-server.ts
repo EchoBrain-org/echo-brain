@@ -75,6 +75,8 @@ export interface AuthorityOidcAuthorizationUrlProvider {
 }
 
 export interface OrganizationAuthorityHttpServerOptions {
+  /** Lifecycle ingress fence, including pipelined requests on existing sockets. */
+  readonly is_closing?: () => boolean;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly descriptor: OrganizationAuthorityDescriptorV1;
   readonly sessions: PersonIdentitySessionApplication;
@@ -444,6 +446,10 @@ export function createOrganizationAuthorityHttpServer(
     activeHttp += 1;
     annotateCoreRuntimeV1({ counts: { active_http: activeHttp } });
     try {
+      if (options.is_closing?.()) {
+        response.setHeader("connection", "close");
+        throw new AuthorityOperationError("unavailable", "Authority is closing");
+      }
       const url = new URL(request.url ?? "/", "http://localhost");
       const method = request.method ?? "GET";
       const approvalIngress = options.private_approval_interaction_ingress;
