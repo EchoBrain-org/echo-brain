@@ -25,6 +25,8 @@ import {
   analyzeReadableSearchDocument,
   analyzeReadableSearchQuery,
   compareReadableSearchCandidates,
+  readableSearchScoreV2,
+  type ReadableSearchCorpusStatistics,
 } from "./application/analyzer.js";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
@@ -1195,6 +1197,76 @@ interface ReadableSearchSegmentRows {
   readonly content_by_atom: ReadonlyMap<Sha256Digest, ReadableSearchContentRow>;
   readonly postings: readonly ReadableSearchTermPostingRow[];
   readonly related_atom_pairs: readonly ReadableSearchRelatedAtomPairRow[];
+  /**
+   * Derived once from the validated immutable postings. Scoring merges these
+   * across the segments one reader may read, so no statistic ever crosses a
+   * policy boundary.
+   */
+  readonly statistics: ReadableSearchCorpusStatistics;
+  readonly length_by_atom: ReadonlyMap<Sha256Digest, number>;
+}
+
+/** Sum the statistics of the segments a reader is admitted to. */
+function unionStatistics(
+  segments: readonly ReadableSearchSegmentRows[],
+  terms: readonly string[],
+): ReadableSearchCorpusStatistics {
+  let document_count = 0;
+  let total_term_count = 0;
+  const document_frequency = new Map<string, number>();
+  for (const segment of segments) {
+    document_count += segment.statistics.document_count;
+    total_term_count += segment.statistics.total_term_count;
+    for (const term of terms) {
+      const frequency = segment.statistics.document_frequency.get(term);
+      if (frequency !== undefined)
+        document_frequency.set(term, (document_frequency.get(term) ?? 0) + frequency);
+    }
+  }
+  return { document_count, total_term_count, document_frequency };
+}
+
+/**
+ * Score every admitted atom that matches at least one query term. Postings are
+ * scanned once per segment; only query-term frequencies are materialized.
+ */
+function scoreAdmittedCandidates(
+  admitted: readonly ReadableSearchSegmentRows[],
+  terms: readonly string[],
+): Array<{
+  readonly fact: ReadableSearchFactRow;
+  readonly content: ReadableSearchContentRow;
+  readonly score: number;
+}> {
+  const statistics = unionStatistics(admitted, terms);
+  const queryTerms = new Set(terms);
+  const candidates: Array<{
+    readonly fact: ReadableSearchFactRow;
+    readonly content: ReadableSearchContentRow;
+    readonly score: number;
+  }> = [];
+  for (const segment of admitted) {
+    const matched = new Map<Sha256Digest, Map<string, number>>();
+    for (const posting of segment.postings) {
+      if (!queryTerms.has(posting.term)) continue;
+      let frequencies = matched.get(posting.atom_id);
+      if (frequencies === undefined) {
+        frequencies = new Map<string, number>();
+        matched.set(posting.atom_id, frequencies);
+      }
+      frequencies.set(posting.term, posting.term_frequency);
+    }
+    for (const fact of segment.facts) {
+      const frequencies = matched.get(fact.atom_id);
+      const content = segment.content_by_atom.get(fact.atom_id);
+      const length = segment.length_by_atom.get(fact.atom_id);
+      if (frequencies === undefined || content === undefined || length === undefined)
+        continue;
+      const score = readableSearchScoreV2(frequencies, length, terms, statistics);
+      if (score > 0) candidates.push({ fact, content, score });
+    }
+  }
+  return candidates;
 }
 
 interface ValidatedActiveGenerationHandleV1 {
@@ -1718,6 +1790,20 @@ function readAndValidateReadableSearchSegment(
       )
         throw new Error("readable-search engine related atom pair is invalid");
     }
+    const document_frequency = new Map<string, number>();
+    const lengthByAtom = new Map<Sha256Digest, number>();
+    let total_term_count = 0;
+    for (const posting of postings) {
+      document_frequency.set(
+        posting.term,
+        (document_frequency.get(posting.term) ?? 0) + 1,
+      );
+      lengthByAtom.set(
+        posting.atom_id,
+        (lengthByAtom.get(posting.atom_id) ?? 0) + posting.term_frequency,
+      );
+      total_term_count += posting.term_frequency;
+    }
     return {
       manifest: segment,
       facts,
@@ -1725,6 +1811,12 @@ function readAndValidateReadableSearchSegment(
       content_by_atom: contentByAtom,
       postings,
       related_atom_pairs: relatedAtomPairs,
+      statistics: {
+        document_count: facts.length,
+        total_term_count,
+        document_frequency,
+      },
+      length_by_atom: lengthByAtom,
     };
   } finally {
     for (const database of databases.values()) database.close();
@@ -1908,26 +2000,7 @@ function validateAndWarmReadableSearchGenerationV1(
     manifest,
     segments: Object.freeze(validatedSegments),
   });
-  const candidates: Array<{
-    readonly fact: ReadableSearchFactRow;
-    readonly content: ReadableSearchContentRow;
-    readonly score: number;
-  }> = [];
-  for (const segment of admitted) {
-    const scoreByAtom = new Map<Sha256Digest, number>();
-    for (const posting of segment.postings)
-      if (terms.includes(posting.term))
-        scoreByAtom.set(
-          posting.atom_id,
-          (scoreByAtom.get(posting.atom_id) ?? 0) + posting.term_frequency,
-        );
-    for (const fact of segment.facts) {
-      const score = scoreByAtom.get(fact.atom_id);
-      const content = segment.content_by_atom.get(fact.atom_id);
-      if (score === undefined || content === undefined) continue;
-      candidates.push({ fact, content, score });
-    }
-  }
+  const candidates = scoreAdmittedCandidates(admitted, terms);
   candidates.sort((left, right) =>
     compareReadableSearchCandidates(
       {
@@ -2097,26 +2170,7 @@ export function searchReadableSearchGenerationV1(
         segment.manifest.reviewer_principal_id === input.reader.principal_id &&
         segment.manifest.reviewer_membership_id === input.reader.membership_id),
   );
-  const candidates: Array<{
-    readonly fact: ReadableSearchFactRow;
-    readonly content: ReadableSearchContentRow;
-    readonly score: number;
-  }> = [];
-  for (const segment of admitted) {
-    const scoreByAtom = new Map<Sha256Digest, number>();
-    for (const posting of segment.postings)
-      if (terms.includes(posting.term))
-        scoreByAtom.set(
-          posting.atom_id,
-          (scoreByAtom.get(posting.atom_id) ?? 0) + posting.term_frequency,
-        );
-    for (const fact of segment.facts) {
-      const score = scoreByAtom.get(fact.atom_id);
-      const content = segment.content_by_atom.get(fact.atom_id);
-      if (score !== undefined && content !== undefined)
-        candidates.push({ fact, content, score });
-    }
-  }
+  const candidates = scoreAdmittedCandidates(admitted, terms);
   candidates.sort((left, right) =>
     compareReadableSearchCandidates(
       {
@@ -2162,3 +2216,13 @@ export {
   readableSearchPlaneBaselineSha256,
   readableSearchPlaneBaselineSha256V1,
 } from "./persistence/baseline.js";
+export {
+  READABLE_SEARCH_BM25_B,
+  READABLE_SEARCH_BM25_K1,
+  READABLE_SEARCH_SCORE_SCALE,
+  READABLE_SEARCH_SCORER_ID,
+  readableSearchDocumentLength,
+  readableSearchInverseDocumentFrequency,
+  readableSearchScoreV2,
+  type ReadableSearchCorpusStatistics,
+} from "./application/analyzer.js";

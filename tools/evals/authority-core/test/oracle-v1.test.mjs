@@ -45,7 +45,7 @@ test("M1 generator is deterministic and fulfills corpus shape", () => {
   assert.equal(first.exact_head.hash, second.exact_head.hash);
   assert.equal(first.atoms.length, 350);
   assert.deepEqual(assertCorpusShape(first), { posting_count: 8750, age_buckets: Array(10).fill(35) });
-  assert.equal(ANALYZER_SOURCE_SHA256, "f954d0aab99025dae93d9b3fb076d74cea22399c50cc5264f42f6b1a2601e2ff");
+  assert.equal(ANALYZER_SOURCE_SHA256, "340d7f303a96bfb59b9661ce998a6b12b7cfd4947322eae7cd9a794451415d91");
 });
 
 test("query plan contains broad, medium, selective and ordinary negative queries", () => {
