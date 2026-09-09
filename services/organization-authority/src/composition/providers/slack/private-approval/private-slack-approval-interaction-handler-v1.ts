@@ -1,3 +1,4 @@
+import { annotateCoreRuntimeV1, coreRuntimeIdentityV1 } from "../../../../shared/core-runtime-observation-v1.js";
 import { AuthorityOperationError } from "../../../../domain/errors.js";
 import type {
   MeetingApprovalJourneyClockV1,
@@ -227,6 +228,10 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
       }
       if (interaction.disposition === "presentation_change") return "accepted";
 
+      try {
+        const journey = input.journey_telemetry?.readForApproval(interaction.approval_id);
+        annotateCoreRuntimeV1({ action: coreRuntimeIdentityV1("approval_action", interaction.provider_action_key_sha256), ...(journey ? { linked_journey_ids: [journey.journey_id] } : {}) });
+      } catch { /* optional correlation */ }
       let queueAttempt: MeetingApprovalJourneyStageAttemptV1 | null = null;
       try {
         const observedAt = canonicalNow(now);

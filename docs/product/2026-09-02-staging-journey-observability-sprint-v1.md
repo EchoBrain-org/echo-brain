@@ -12,6 +12,20 @@ a retrieval-grounded Ask and a human-approved meeting decision. This sprint
 adds no production telemetry, dashboard, alert, retention, IAM, or deployment
 change.
 
+## Scoped evolution (2026-09-08)
+
+The [area-1 handoff](2026-09-08-core-runtime-observability-sprint-v1.md)
+authorizes core runtime diagnostics and rich opt-in development input/output
+through the existing staging transport. Its V2 contracts extend this historical
+Ask/approval scope: original V1 metadata remains readable, while the existing
+content switch additionally covers meeting input, model requests/responses and
+validation failures. The [observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md)
+defines chunk completeness, credential exclusion, measured execution/retry
+accounting, shared-build attribution and the updated Explorer. Historical
+content-free/Ask-only restrictions below describe the original sprint; they do
+not override that explicit development authorization. Production defaults and
+live deployment/acceptance remain separate.
+
 ## Decision
 
 Staging will make one product operation inspectable from ingress to terminal

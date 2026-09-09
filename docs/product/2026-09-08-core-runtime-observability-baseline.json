@@ -1,0 +1,164 @@
+{
+  "kind": "echo-core-runtime-observability-historical-measurements",
+  "schema_version": 1,
+  "purpose": "Sanitized historical evidence for area 1 implementation; not a capacity qualification or synthetic test result.",
+  "source": "Completed four-meeting staging rehearsal, CloudWatch query bd0b44cb-8f9d-4e71-b281-5d0c462e9626 and operator observations.",
+  "release_id": "clean-v1-20260908-four-meetings-9f186bc",
+  "runtime_source_sha": "9f186bc2d045d4dfe4737959bed19058fa56a2e3",
+  "build_number": "34272767863",
+  "worktree_base_sha": "b760a2dd5187e63b98db0417f049b110d1d0b296",
+  "approval_measurements": [
+    {
+      "meeting": "Revenue signal calibration",
+      "journey_id": "1522c45d-3376-4589-afc2-ee0528364f3c",
+      "action_received_at": "2026-09-08T23:49:39.902Z",
+      "queued_at": "2026-09-08T23:49:39.947Z",
+      "terminal_started_at": "2026-09-08T23:49:39.961Z",
+      "request_verify_and_enqueue_seconds": 0.045,
+      "queue_to_terminal_start_seconds": 0.014,
+      "server_receive_to_record_appended_seconds": 0.47,
+      "server_receive_to_search_started_seconds": 0.704,
+      "search_publication_seconds": 2.043,
+      "server_receive_to_search_published_seconds": 2.748
+    },
+    {
+      "meeting": "Data handling review",
+      "journey_id": "ee11d409-5e63-4957-81cb-229e1e0c46ae",
+      "action_received_at": "2026-09-08T23:49:44.342Z",
+      "queued_at": "2026-09-08T23:49:44.385Z",
+      "terminal_started_at": "2026-09-08T23:49:44.397Z",
+      "request_verify_and_enqueue_seconds": 0.043,
+      "queue_to_terminal_start_seconds": 0.012,
+      "server_receive_to_record_appended_seconds": 0.443,
+      "server_receive_to_search_started_seconds": 0.675,
+      "search_publication_seconds": 9.872,
+      "server_receive_to_search_published_seconds": 10.547
+    },
+    {
+      "meeting": "Implementation capacity triage",
+      "journey_id": "ce8b43d7-dad6-42bd-902b-003e06211be0",
+      "action_received_at": "2026-09-08T23:49:48.634Z",
+      "queued_at": "2026-09-08T23:49:48.676Z",
+      "terminal_started_at": "2026-09-08T23:49:54.911Z",
+      "request_verify_and_enqueue_seconds": 0.042,
+      "queue_to_terminal_start_seconds": 6.235,
+      "server_receive_to_record_appended_seconds": 6.733,
+      "server_receive_to_search_started_seconds": 7.043,
+      "search_publication_seconds": 33.156,
+      "server_receive_to_search_published_seconds": 40.2
+    },
+    {
+      "meeting": "Commercial exception review",
+      "journey_id": "cdf59f57-0471-4496-9496-e78de9e0457d",
+      "action_received_at": "2026-09-08T23:49:57.280Z",
+      "queued_at": "2026-09-08T23:49:57.321Z",
+      "terminal_started_at": "2026-09-08T23:50:28.855Z",
+      "request_verify_and_enqueue_seconds": 0.041,
+      "queue_to_terminal_start_seconds": 31.534,
+      "server_receive_to_record_appended_seconds": 32.035,
+      "server_receive_to_search_started_seconds": 32.271,
+      "search_publication_seconds": 61.212,
+      "server_receive_to_search_published_seconds": 93.483
+    }
+  ],
+  "initial_delivery": {
+    "first_intake_to_fourth_card_seconds": 353.841,
+    "extraction_seconds_all_attempts": 139.98,
+    "slack_staging_seconds": 3.236,
+    "remaining_elapsed_seconds": 210.625,
+    "failed_attempt_count": 4,
+    "failed_attempt_seconds": 74.215,
+    "failed_attempt_reported_tokens": 13176,
+    "all_attempts_reported_tokens": 26017
+  },
+  "extraction_attempts": [
+    {
+      "journey_id": "1522c45d-3376-4589-afc2-ee0528364f3c",
+      "attempt": 1,
+      "event": "succeeded",
+      "elapsed_ms": 13859,
+      "total_tokens": 2929
+    },
+    {
+      "journey_id": "cdf59f57-0471-4496-9496-e78de9e0457d",
+      "attempt": 1,
+      "event": "failed",
+      "elapsed_ms": 19449,
+      "total_tokens": 3335
+    },
+    {
+      "journey_id": "cdf59f57-0471-4496-9496-e78de9e0457d",
+      "attempt": 2,
+      "event": "failed",
+      "elapsed_ms": 16990,
+      "total_tokens": 3171
+    },
+    {
+      "journey_id": "cdf59f57-0471-4496-9496-e78de9e0457d",
+      "attempt": 3,
+      "event": "failed",
+      "elapsed_ms": 18975,
+      "total_tokens": 3259
+    },
+    {
+      "journey_id": "cdf59f57-0471-4496-9496-e78de9e0457d",
+      "attempt": 4,
+      "event": "succeeded",
+      "elapsed_ms": 18970,
+      "total_tokens": 3313
+    },
+    {
+      "journey_id": "ce8b43d7-dad6-42bd-902b-003e06211be0",
+      "attempt": 1,
+      "event": "failed",
+      "elapsed_ms": 18801,
+      "total_tokens": 3411
+    },
+    {
+      "journey_id": "ce8b43d7-dad6-42bd-902b-003e06211be0",
+      "attempt": 2,
+      "event": "succeeded",
+      "elapsed_ms": 20496,
+      "total_tokens": 3642
+    },
+    {
+      "journey_id": "ee11d409-5e63-4957-81cb-229e1e0c46ae",
+      "attempt": 1,
+      "event": "succeeded",
+      "elapsed_ms": 12440,
+      "total_tokens": 2957
+    }
+  ],
+  "ask": {
+    "employee_request_seconds": 16.247,
+    "sample_count": 1,
+    "request_during_last_rebuild": "Authorization succeeded; retrieval unavailable; later reads recovered."
+  },
+  "monitoring_evidence": {
+    "recovery_email_delivered": true,
+    "delivered_topic_name": "echo-authority-observability-v1-authority-alerts",
+    "different_topic_previously_reported_empty": "echo-authority-staging-observability-v1-authority-alerts",
+    "transition": "ALARM -> OK",
+    "transition_at": "2026-09-08T23:51:02Z",
+    "metric_namespace": "EchoBrain/AuthorityOperations",
+    "metric_name": "WorkerFailure",
+    "metric_dimensions": [],
+    "metric_period_seconds": 300,
+    "metric_statistic": "Sum",
+    "alarm_threshold": 3,
+    "live_host_and_topic_mapping": "pending local operator verification; no fresh AWS inspection in preparation"
+  },
+  "limits": [
+    "Times begin at server-side action verification, not the physical mouse click.",
+    "No independent Slack terminal-render stage; search start only bounds completion of the rendering attempt.",
+    "Search stage includes related-atom model projection and generation building; substage/model-only timing unavailable.",
+    "Fourth attempt2 follows skipped observations, not a failed search retry.",
+    "Four samples do not establish a scaling complexity or load capacity.",
+    "The 210.625-second residual matching timer intervals is inference, not directly measured timer spans.",
+    "Model-only, local build, database and resource attribution within search preparation is unknown.",
+    "Email evidence does not identify the originating host/environment or establish duplicate delivery.",
+    "Recovery email receipt is confirmed; ALARM email delivery was not separately supplied."
+  ],
+  "qualification": false,
+  "runtime_changes_during_handoff": false
+}

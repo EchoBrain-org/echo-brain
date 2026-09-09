@@ -1,3 +1,4 @@
+import { currentCoreRuntimeDetailV1, observeCoreRuntimeSyncV1 } from "../../../../src/shared/core-runtime-observation-v1.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -56,6 +57,19 @@ function metric(record: Record<string, unknown>, name: string): unknown {
 }
 
 describe("staging journey EMF metrics v1", () => {
+  it("keeps shared-build references in the existing meeting funnel without multiplying build latency", () => {
+    const event = observeCoreRuntimeSyncV1("search_publication", () => createJourneyTelemetryEventV1({
+      journey_id: JOURNEY_ID, sequence: 1, observed_at: OBSERVED_AT,
+      context: { environment: "staging", workflow: "meeting_approval", release_sha: RELEASE_SHA, build_number: 123 },
+      event: { stage: "meeting_search_publication", event: "succeeded", elapsed_ms: 100, outcome: "published",
+        diagnostic: currentCoreRuntimeDetailV1()!, accounting: { kind: "shared_reference", execution_attempt: 1, retry_count: 0 } },
+    }), { observer: () => {} });
+    const records = formatJourneyTelemetryMetricsV1(event);
+    expect(records).toContainEqual(expect.objectContaining({ workflow: "meeting_approval", stage: "meeting_search_publication", StageSucceeded: 1 }));
+    expect(records.every((record) => record.StageClosedLatencyMs === undefined)).toBe(true);
+    expect(records).toContainEqual(expect.objectContaining({ stage: "meeting_search_publication", outcome: "published", TerminalOutcome: 1 }));
+  });
+
   it("projects a closed LLM stage into exact independent metric dimension sets", () => {
     const records = formatJourneyTelemetryMetricsV1(journey({}));
     expect(records).toHaveLength(2);
@@ -153,7 +167,7 @@ describe("staging journey EMF metrics v1", () => {
     expect(records[0]).not.toHaveProperty("outcome");
   });
 
-  it("counts only attempts after the first as retries", () => {
+  it("counts only explicit failed-execution retries and leaves historical ordinals unknown", () => {
     const first = formatJourneyTelemetryMetricsV1(journey({
       event: "started",
       elapsed_ms: 0,
@@ -165,6 +179,7 @@ describe("staging journey EMF metrics v1", () => {
       elapsed_ms: 0,
       llm_usage: null,
       attempt: 2,
+      accounting: { kind: "execution", execution_attempt: 2, retry_count: 1, retry_of_attempt: 1 },
     }));
     expect(first[0]).toMatchObject({ StageStarted: 1 });
     expect(first[0]).not.toHaveProperty("StageRetryAttempt");
@@ -328,7 +343,7 @@ describe("staging journey EMF metrics v1", () => {
       succeeded: 36,
       failed: 3,
       skipped: 4,
-      retries: 1,
+      retries: 0, // Legacy attempt ordinals do not prove retries.
       llm_attempts: 6,
       llm_usage_reported: 4,
       llm_total_available: 4,

@@ -2,6 +2,7 @@ import { canonicalJson } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   formatStagingJourneyContentRecordV1,
+  formatStagingJourneyContentRecordsV2,
   STAGING_JOURNEY_CONTENT_KIND_V1,
   STAGING_JOURNEY_CONTENT_MAX_STRING_CHARACTERS_V1,
   STAGING_JOURNEY_CONTENT_MAX_RECORD_BYTES_V1,
@@ -100,6 +101,21 @@ describe("staging journey content telemetry formatter", () => {
     expect(content.atoms[0]?.skip).toBeNull();
     expect(content.nested.deep.value).toBeNull();
     expect(() => canonicalJson(record as never)).not.toThrow();
+  });
+
+  it.each([
+    { journey_id: "not-a-journey" },
+    { sequence: 0 },
+    { observed_at: "2026-09-03T21:13:42Z" },
+    { release_sha: "not-a-release" },
+    { build_number: 0 },
+    { stage: "meeting_extraction" },
+    { content_kind: "raw_provider_body" },
+    { span_id: "not-a-span" },
+  ])("rejects malformed V2 capture metadata %j", (invalid) => {
+    expect(formatStagingJourneyContentRecordsV2({
+      ...BASE, content: "fixture", ...invalid,
+    } as never)).toEqual([]);
   });
 
   it("replaces content that still exceeds the record byte bound after string bounding", () => {

@@ -1,3 +1,4 @@
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, type CoreRuntimeObserverV1 } from "../shared/core-runtime-observation-v1.js";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
@@ -37,6 +38,7 @@ export type ReadableSearchGenerationReconciliationV1 =
 export interface ReadableSearchGenerationReconcilerV1Options<
   Snapshot extends ReadableSearchSnapshotV1,
 > {
+  readonly observation?: CoreRuntimeObserverV1;
   readonly authority: Database.Database;
   readonly organization_id: string;
   readonly retrieval_contract_sha256: Sha256Digest;
@@ -148,11 +150,16 @@ export class ReadableSearchGenerationReconcilerV1<
   async reconcile(
     signal: AbortSignal,
   ): Promise<ReadableSearchGenerationReconciliationV1> {
+    return observeCoreRuntimeV1("search_reconciliation", () => this.reconcileObserved(signal), this.options.observation === undefined ? undefined : { observer: this.options.observation });
+  }
+
+  private async reconcileObserved(signal: AbortSignal): Promise<ReadableSearchGenerationReconciliationV1> {
     signal.throwIfAborted();
     const observedHead = head(
       this.options.read_record_head(),
       "readable-search observed record head",
     );
+    annotateCoreRuntimeV1({ counts: { current_head: observedHead.position } });
     const active = this.activeGeneration();
     if (
       active !== null &&
@@ -168,16 +175,18 @@ export class ReadableSearchGenerationReconcilerV1<
         this.options.retrieval_contract_sha256 &&
       sameHead(pointerHead(active), observedHead)
     ) {
-      this.options.prepare_generation?.({
+      observeCoreRuntimeSyncV1("search_validation", () => this.options.prepare_generation?.({
         generation_id: active.generation_id,
         manifest_sha256: active.manifest_sha256,
         retrieval_contract_sha256: active.retrieval_contract_sha256,
         record_head: pointerHead(active),
-      });
+      }));
+      annotateCoreRuntimeV1({ result: "current", generation: active.generation_id });
       return Object.freeze({ status: "current", record_head: observedHead });
     }
 
-    const capturedSnapshot = this.options.capture_snapshot();
+    const capturedSnapshot = observeCoreRuntimeSyncV1("search_snapshot", this.options.capture_snapshot);
+    annotateCoreRuntimeV1({ counts: { captured_head: capturedSnapshot.record_head.position } });
     const capturedHead = head(
       capturedSnapshot.record_head,
       "readable-search captured record head",
@@ -192,7 +201,7 @@ export class ReadableSearchGenerationReconcilerV1<
     const snapshot =
       this.options.enrich_snapshot === undefined
         ? capturedSnapshot
-        : await this.options.enrich_snapshot(capturedSnapshot, signal);
+        : await observeCoreRuntimeV1("search_enrichment", async () => this.options.enrich_snapshot!(capturedSnapshot, signal));
     const enrichedHead = head(
       snapshot.record_head,
       "readable-search enriched snapshot head",
@@ -204,7 +213,7 @@ export class ReadableSearchGenerationReconcilerV1<
     }
     signal.throwIfAborted();
 
-    const built = this.options.build_generation(snapshot);
+    const built = observeCoreRuntimeSyncV1("search_build", () => this.options.build_generation(snapshot));
     const builtHead = head(
       built.record_head,
       "readable-search built record head",
@@ -220,7 +229,7 @@ export class ReadableSearchGenerationReconcilerV1<
     }
     digest(built.generation_id, "readable-search generation_id");
     digest(built.manifest_sha256, "readable-search manifest");
-    this.options.prepare_generation?.(built);
+    observeCoreRuntimeSyncV1("search_validation", () => this.options.prepare_generation?.(built));
     signal.throwIfAborted();
 
     const currentHead = head(
@@ -228,6 +237,7 @@ export class ReadableSearchGenerationReconcilerV1<
       "readable-search publish record head",
     );
     if (!sameHead(currentHead, capturedHead)) {
+      annotateCoreRuntimeV1({ result: "superseded", counts: { current_head: currentHead.position } });
       this.options.invalidate_generation?.();
       return Object.freeze({
         status: "superseded",
@@ -242,7 +252,7 @@ export class ReadableSearchGenerationReconcilerV1<
         "readable-search publication time is not a canonical UTC timestamp",
       );
     }
-    this.options.authority.transaction(() => {
+    observeCoreRuntimeSyncV1("search_publication", () => this.options.authority.transaction(() => {
       this.options.authority
         .prepare(
           `INSERT INTO authority_readable_search_active_generation (
@@ -268,7 +278,8 @@ export class ReadableSearchGenerationReconcilerV1<
           builtHead.record_sha256,
           publishedAt,
         );
-    })();
+    })());
+    annotateCoreRuntimeV1({ result: "published", generation: built.generation_id, counts: { published_head: builtHead.position } });
     return Object.freeze({
       status: "published",
       record_head: builtHead,

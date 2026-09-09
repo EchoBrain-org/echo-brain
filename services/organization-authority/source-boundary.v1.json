@@ -41,7 +41,9 @@
     "http",
     "net",
     "path",
-    "util"
+    "util",
+    "async_hooks",
+    "perf_hooks"
   ],
   "runtime_assets": [
     "services/organization-authority/baselines/authority-baseline-v1.sql",
@@ -497,7 +499,8 @@
       "allowed_imports": [
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
-        "services/organization-authority/src/presentation/**"
+        "services/organization-authority/src/presentation/**",
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/organization-protocol",
@@ -535,7 +538,8 @@
         "services/organization-authority/src/processing/core/processing/brief.ts",
         "services/organization-authority/src/processing/admitted-meeting-processing/**",
         "services/organization-authority/src/processing/adapters/approval-resolution/slack/**",
-        "services/organization-authority/src/quality/**"
+        "services/organization-authority/src/quality/**",
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -554,14 +558,16 @@
         "fs",
         "http",
         "net",
-        "path"
+        "path",
+        "perf_hooks"
       ]
     },
     {
       "name": "authority-answer-composition-consumes-only-readable-search-release",
       "from": "services/organization-authority/src/answer-composition/**",
       "allowed_imports": [
-        "services/organization-authority/src/answer-composition/**"
+        "services/organization-authority/src/answer-composition/**",
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
@@ -574,7 +580,8 @@
       "from": "services/organization-authority/src/adapters/answer-composition/**",
       "allowed_imports": [
         "services/organization-authority/src/adapters/answer-composition/**",
-        "services/organization-authority/src/answer-composition/**"
+        "services/organization-authority/src/answer-composition/**",
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -631,7 +638,8 @@
       "allowed_imports": [
         "services/organization-authority/src/processing/admitted-meeting-processing/**",
         "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts"
+        "services/organization-authority/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts",
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -676,7 +684,9 @@
     {
       "name": "authority-journey-telemetry-is-provider-neutral-and-content-free",
       "from": "services/organization-authority/src/shared/journey-telemetry-v1.ts",
-      "allowed_imports": [],
+      "allowed_imports": [
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
+      ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": [
@@ -701,7 +711,8 @@
       "from": "services/organization-authority/src/processing/adapters/decision-processors/llm/llm-*.ts",
       "allowed_imports": [
         "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/decision-processors/llm/**"
+        "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -799,6 +810,17 @@
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-core-runtime-observations-have-no-business-dependencies",
+      "from": "services/organization-authority/src/shared/core-runtime-observation-v1.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "async_hooks",
+        "crypto"
+      ]
     }
   ]
 }

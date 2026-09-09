@@ -95,3 +95,10 @@ Graceful close and duplicate-receipt replay do not prove crash or power-loss
 durability. Stage 2 (independent live observations and workload/corpus binding)
 and stage 3 (crash/replay and storage faults) are not implemented. No full M1
 workload has run.
+
+Measure local instrumentation cost with `node tools/evals/authority-core/observation-cost.mjs`
+after the workspace build. It alternates off/metadata/content modes over real
+empty-corpus builds and reports time, event/byte volume and endpoint memory.
+[Recorded samples](../../../docs/product/2026-09-08-core-runtime-observability-overhead.json)
+include limitations. This is a diagnostic; it does not change the pinned capacity
+contract or award qualification.

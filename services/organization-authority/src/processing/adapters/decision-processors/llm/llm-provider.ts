@@ -1,3 +1,4 @@
+import { observeCoreRuntimeSyncV1, observeCoreModelUsageV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1 } from "../../../../shared/core-runtime-observation-v1.js";
 import {
   AdapterError,
   type AdapterErrorCode,
@@ -224,6 +225,7 @@ export async function requestProviderJson(
   signal: AbortSignal | undefined,
   fetchImpl: typeof fetch,
 ): Promise<ProviderJsonResponse> {
+  if (typeof init.body === "string") captureCoreRuntimeContentV1("model_request", { provider, body: init.body });
   const signals = [AbortSignal.timeout(requestTimeoutMs)];
   if (signal !== undefined) signals.push(signal);
   let response: Response;
@@ -255,9 +257,17 @@ export async function requestProviderJson(
       true,
     );
   }
-  if (!response.ok) throw providerStatusError(provider, response.status);
+  annotateCoreRuntimeV1({ counts: { http_status: response.status } });
+  if (!response.ok) {
+    captureCoreRuntimeContentV1("model_response", { provider, status: response.status, body_status: "not_read_after_http_rejection", request_id: response.headers.get("x-request-id") });
+    throw providerStatusError(provider, response.status);
+  }
   try {
-    return { payload: await response.json(), response };
+    const body = await response.text();
+    captureCoreRuntimeContentV1("model_response", { provider, request_id: response.headers.get("x-request-id"), body });
+    const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(body) as unknown);
+    observeCoreModelUsageV1(payload);
+    return { payload, response };
   } catch {
     throw new AdapterError(
       'temporarily_unavailable',

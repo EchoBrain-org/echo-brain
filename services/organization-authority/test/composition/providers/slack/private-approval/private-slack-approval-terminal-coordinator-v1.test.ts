@@ -235,6 +235,44 @@ describe("private Slack approval terminal coordinator v1", () => {
     );
   });
 
+  it("keeps a competing click and its restart recovery out of the winning append/search outcome", async () => {
+    const value = terminal("approved");
+    const harness = authorityHarness(value);
+    const denied: any[] = [];
+    let queued = [{ receipt: { approval_id: APPROVAL_ID, provider_action_key_sha256: digest("losing-click") } }];
+    let appends = 0;
+    const control_plane = {
+      listQueued: () => queued,
+      listDenied: () => denied,
+      listTerminals: () => [value],
+      finalize: async () => { throw new PrivateApprovalFinalizationConflictError(); },
+      recordDenied: () => { denied.push({ approval_id: APPROVAL_ID }); queued = []; },
+    };
+    const options = {
+      control_plane: control_plane as any, authority: harness.authority,
+      record_writer: { appendApproved: async () => {
+        appends++;
+        return { receipt: { body: {}, receipt_sha256: digest("receipt"), signing_key_descriptor: {}, signature: "signature" } };
+      } } as never,
+      poster: { renderTerminal: async () => ({ kind: "done" as const }) },
+    };
+    const before = telemetryHarness();
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({ ...options, journey_telemetry: before.telemetry });
+    await coordinator.observeAndFinalizePendingApprovals(new AbortController().signal);
+    expect(appends).toBe(0); // The losing click precedes the winner's first append.
+    const restarted = telemetryHarness();
+    const recovery = new PrivateSlackApprovalTerminalCoordinatorV1({ ...options, journey_telemetry: restarted.telemetry });
+    await recovery.recoverV4Appends(new AbortController().signal);
+    await recovery.recoverV4Appends(new AbortController().signal);
+    expect(appends).toBe(1);
+    expect(harness.records).toHaveLength(1);
+    for (const events of [before.events, restarted.events]) {
+      expect(events.some((event) => event.outcome === "denied" || event.kind === "skip" || event.kind === "fail")).toBe(false);
+      expect(events).toContainEqual(expect.objectContaining({ stage: "meeting_terminal_persist", outcome: "approved" }));
+    }
+    expect(restarted.events).toContainEqual(expect.objectContaining({ kind: "awaiting", approvalId: APPROVAL_ID }));
+  });
+
   it("observes a finalized queued action with its durable terminal outcome", async () => {
     const value = terminal("approved");
     const harness = authorityHarness(value);

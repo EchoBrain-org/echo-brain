@@ -1,3 +1,6 @@
+import { join } from "node:path";
+import { readdirSync, statSync } from "node:fs";
+import { currentCoreRuntimeDetailV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
 import {
   canonicalJson,
   canonicalSha256,
@@ -241,6 +244,8 @@ interface ReconciliationSnapshotV1 {
   readonly related_atom_pairs?: readonly ReadableSearchRelatedAtomPairV1[];
 }
 
+const observedSegmentInputs = new WeakMap<object, Map<string, string>>();
+
 function visibilitySegmentKey(atom: RecordRetrievalSourceSnapshotV1["atoms"][number]): string {
   return canonicalJson({
     policy_id: atom.policy_id,
@@ -270,8 +275,14 @@ export async function projectSnapshotRelatedAtomsV1(input: {
     if (segment === undefined) segments.set(key, [atom]);
     else segment.push(atom);
   }
+  const observing = currentCoreRuntimeDetailV1() !== null;
+  const previous = observing ? observedSegmentInputs.get(input.projector) ?? new Map<string, string>() : new Map<string, string>();
+  let recomputed = 0, unchanged = 0, changed = 0, newlyObserved = 0;
+  annotateCoreRuntimeV1({ counts: { visibility_groups: segments.size, reused_count: 0 } });
+  let included = 0;
+  let excluded = 0;
   const pairs: ReadableSearchRelatedAtomPairV1[] = [];
-  for (const atoms of segments.values()) {
+  for (const [segmentKey, atoms] of segments) {
     input.signal.throwIfAborted();
     // The search builder can retain more atoms than one bounded projection
     // call. Keep its full lexical corpus, but choose the newest deterministic
@@ -297,7 +308,18 @@ export async function projectSnapshotRelatedAtomsV1(input: {
       selected.push(atom);
       selectedTextBytes += textBytes;
     }
-    if (new Set(selected.map((atom) => atom.record_sha256)).size < 2) continue;
+    if (new Set(selected.map((atom) => atom.record_sha256)).size < 2) { excluded += atoms.length; continue; }
+    recomputed += 1;
+    if (observing) {
+      const fingerprint = coreRuntimeIdentityV1("projection_input", JSON.stringify(selected.map((atom) => atom.atom_id)));
+      const prior = previous.get(segmentKey);
+      if (prior === undefined) newlyObserved += 1;
+      else if (prior === fingerprint) unchanged += 1;
+      else changed += 1;
+      previous.set(segmentKey, fingerprint);
+    }
+    included += selected.length;
+    excluded += atoms.length - selected.length;
     const projected = await projectRelatedAtomsV1({
       atoms: selected.map((atom) =>
         Object.freeze({
@@ -329,6 +351,8 @@ export async function projectSnapshotRelatedAtomsV1(input: {
       );
     }
   }
+  if (observing) observedSegmentInputs.set(input.projector, previous);
+  annotateCoreRuntimeV1({ counts: { included_count: included, excluded_count: excluded, recomputed_count: recomputed, unchanged_group_count: unchanged, changed_group_count: changed, newly_observed_group_count: newlyObserved } });
   return Object.freeze({
     ...input.snapshot,
     related_atom_pairs: Object.freeze(pairs),
@@ -454,6 +478,10 @@ export function createReadableSearchGenerationReconcilerV1(input: {
             input.root.state_lineage_id,
           ),
       });
+      if (currentCoreRuntimeDetailV1() !== null) {
+        try { annotateCoreRuntimeV1({ counts: { record_count: sourceSnapshot.rows.length, atom_count: sourceSnapshot.atoms.length, input_bytes: Buffer.byteLength(JSON.stringify(sourceSnapshot)) } }); }
+        catch { annotateCoreRuntimeV1({ counts: { input_bytes: null } }); }
+      }
       const capturedHead: ReadableSearchRecordHeadV1 =
         sourceSnapshot.head === null
           ? Object.freeze({ position: 0, record_sha256: null })
@@ -540,6 +568,13 @@ export function createReadableSearchGenerationReconcilerV1(input: {
         atoms,
         related_atom_pairs: snapshot.related_atom_pairs,
       });
+      if (currentCoreRuntimeDetailV1() !== null) {
+        try {
+          const bytes = readdirSync(built.generation_directory, { recursive: true, withFileTypes: true })
+            .filter((entry) => entry.isFile()).reduce((total, entry) => total + statSync(join(entry.parentPath, entry.name)).size, 0);
+          annotateCoreRuntimeV1({ counts: { output_bytes: bytes } });
+        } catch { annotateCoreRuntimeV1({ counts: { output_bytes: null } }); }
+      }
       return Object.freeze({
         generation_id: built.manifest.generation_id,
         manifest_sha256: built.manifest_sha256,

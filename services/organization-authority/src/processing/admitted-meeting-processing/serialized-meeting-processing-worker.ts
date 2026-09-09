@@ -1,6 +1,8 @@
+import { annotateCoreRuntimeV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "../../shared/core-runtime-observation-v1.js";
 export const DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS = 30_000;
 
 export interface SerializedMeetingProcessingWorkerOptions {
+  readonly observation?: CoreRuntimeObservationScopeV1;
   readonly runCycle: (signal: AbortSignal) => Promise<void>;
   readonly intervalMs?: number;
   /** A cycle failure notification; callback failures never stop the worker. */
@@ -40,6 +42,7 @@ export class SerializedMeetingProcessingWorker {
    */
   private tail: Promise<void> = Promise.resolve();
   private exclusiveActive = false;
+  private readonly pending = new Map<object, number>();
 
   constructor(
     private readonly options: SerializedMeetingProcessingWorkerOptions,
@@ -64,9 +67,19 @@ export class SerializedMeetingProcessingWorker {
    * periodic worker. The worker abort signal also terminates it during close.
    */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    return observeCoreRuntimeRootV1("worker_request", () => this.runExclusiveObserved(operation), this.options.observation);
+  }
+
+  private runExclusiveObserved<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const enqueued = performance.now();
+    const ticket = {};
+    this.pending.set(ticket, enqueued);
+    annotateCoreRuntimeV1({ counts: { pending_depth: this.pending.size, oldest_age_ms: Math.floor(enqueued - (this.pending.values().next().value ?? enqueued)) } });
     const start = (): Promise<T> => {
+      this.pending.delete(ticket);
+      annotateCoreRuntimeV1({ counts: { gate_wait_ms: Math.max(0, Math.floor(performance.now() - enqueued)) } });
       this.controller.signal.throwIfAborted();
-      return operation(this.controller.signal);
+      return observeCoreRuntimeV1("worker_execution", () => operation(this.controller.signal));
     };
     let task: Promise<T>;
     if (this.exclusiveActive) {
@@ -93,15 +106,22 @@ export class SerializedMeetingProcessingWorker {
   private async run(): Promise<void> {
     const signal = this.controller.signal;
     while (!signal.aborted) {
+      let failed = false;
       try {
         await this.runExclusive((exclusiveSignal) =>
           this.options.runCycle(exclusiveSignal),
         );
       } catch (failure) {
+        failed = true;
         if (!signal.aborted) this.report(failure);
       }
       if (signal.aborted) return;
-      await pause(this.intervalMs, signal);
+      await observeCoreRuntimeRootV1("worker_timer", async () => {
+        const scheduled = performance.now();
+        annotateCoreRuntimeV1({ result: failed ? "cycle_failure" : "periodic", counts: { scheduled_delay_ms: this.intervalMs } });
+        await pause(this.intervalMs, signal);
+        annotateCoreRuntimeV1({ result: signal.aborted ? "cancelled" : failed ? "cycle_failure" : "periodic", counts: { wake_lateness_ms: Math.max(0, Math.floor(performance.now() - scheduled - this.intervalMs)) } });
+      }, this.options.observation);
     }
   }
 

@@ -1,3 +1,4 @@
+import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
 import {
   canonicalJson,
   canonicalSha256,
@@ -369,6 +370,7 @@ export function createPersonRecordSearchRouteV1(
       pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 ||
       !sameHead(pointer, head)
     ) {
+      annotateCoreRuntimeV1({ result: "unavailable", counts: { current_head: head.position, published_head: pointer?.record_head_position ?? null }, ...(pointer === null ? {} : { generation: pointer.generation_id }) });
       clearReadableSearchActiveGenerationV1();
       unavailable();
     }

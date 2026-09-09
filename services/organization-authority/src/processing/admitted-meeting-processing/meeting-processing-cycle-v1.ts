@@ -1,3 +1,4 @@
+import { coreRuntimeIdentityV1, annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "../../shared/core-runtime-observation-v1.js";
 import {
   assertCanonicalDecisionSet,
   assertCanonicalMeetingBatch,
@@ -446,10 +447,11 @@ export class AdmittedMeetingProcessingCycleV1 {
         this.options.processor,
         this.options.source_cursor_policy,
       );
-      const batch = await this.options.source.pull(
+      annotateCoreRuntimeV1({ cursor: coreRuntimeIdentityV1("source_cursor", admission.source.cursor) });
+      const batch = await observeCoreRuntimeV1("source_poll", () => this.options.source.pull(
         { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
         signal === undefined ? undefined : { signal },
-      );
+      ));
       assertCanonicalMeetingBatch(batch);
       if (batch.meetings.length > MAXIMUM_PULL_LIMIT) {
         throw new Error(
@@ -467,10 +469,10 @@ export class AdmittedMeetingProcessingCycleV1 {
             result: { kind: "empty" as const, cursor_advanced: false as const },
           };
         }
-        const advanced = await this.options.state.advanceCursor({
+        const advanced = await observeCoreRuntimeV1("source_cursor", async () => { const advanced = await this.options.state.advanceCursor({
           expected_cursor: admission.source.cursor,
-          next_cursor: batch.next_cursor,
-        });
+          next_cursor: batch.next_cursor!,
+        }); annotateCoreRuntimeV1({ result: advanced ? "advanced" : "retry_pending" }); return advanced; });
         return advanced === "advanced"
           ? {
               kind: "complete" as const,
@@ -530,6 +532,8 @@ export class AdmittedMeetingProcessingCycleV1 {
     }, signal);
     if (intake.kind === "complete") return intake.result;
     const { admission, batch, meeting, reviewPolicy, frozen, journey } = intake;
+    annotateCoreRuntimeV1({ source_revision: coreRuntimeIdentityV1("source_revision", JSON.stringify([meeting.provenance.external_id, meeting.provenance.canonical_revision])) });
+    if (journey) annotateCoreRuntimeV1({ linked_journey_ids: [journey.journey_id] });
     if (frozen !== undefined) {
       this.bindCandidate(journey, frozen);
       this.reconcileFrozenCandidateStages(journey, frozen);
@@ -747,10 +751,10 @@ export class AdmittedMeetingProcessingCycleV1 {
         cursor_advanced: false,
       };
     }
-    const advanced = await this.options.state.advanceCursor({
+    const advanced = await observeCoreRuntimeV1("source_cursor", async () => { const advanced = await this.options.state.advanceCursor({
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,
-    });
+    }); annotateCoreRuntimeV1({ result: advanced ? "advanced" : "retry_pending" }); return advanced; });
     if (advanced !== "advanced") {
       return {
         kind: "staged_cursor_not_advanced",
@@ -770,10 +774,10 @@ export class AdmittedMeetingProcessingCycleV1 {
     if (nextCursor === undefined || nextCursor === admission.source.cursor) {
       return { ...outcome, cursor_advanced: false };
     }
-    const advanced = await this.options.state.advanceCursor({
+    const advanced = await observeCoreRuntimeV1("source_cursor", async () => { const advanced = await this.options.state.advanceCursor({
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,
-    });
+    }); annotateCoreRuntimeV1({ result: advanced ? "advanced" : "retry_pending" }); return advanced; });
     if (advanced === "advanced") {
       return { ...outcome, cursor_advanced: true };
     }
@@ -799,10 +803,10 @@ export class AdmittedMeetingProcessingCycleV1 {
     if (nextCursor === undefined || nextCursor === admission.source.cursor) {
       return { kind, cursor_advanced: false };
     }
-    const advanced = await this.options.state.advanceCursor({
+    const advanced = await observeCoreRuntimeV1("source_cursor", async () => { const advanced = await this.options.state.advanceCursor({
       expected_cursor: admission.source.cursor,
       next_cursor: nextCursor,
-    });
+    }); annotateCoreRuntimeV1({ result: advanced ? "advanced" : "retry_pending" }); return advanced; });
     if (advanced === "advanced") {
       return kind === "no_signals"
         ? { kind: "no_signals_cursor_advanced", cursor_advanced: true }

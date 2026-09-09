@@ -1,3 +1,4 @@
+import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -55,6 +56,7 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 }
 
 export interface OrganizationAuthorityApiRuntimeDependencies {
+  readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
   readonly external_identity_runtime_bundle?: PersonExternalIdentityRuntimeBundleV1;
@@ -195,6 +197,7 @@ export async function startOrganizationAuthorityApiRuntime(
       sessions,
       oidc_provider: provider,
       expected_issuer: config.oidc.issuer,
+      ...(dependencies.core_runtime_observation === undefined ? {} : { core_runtime_observation: dependencies.core_runtime_observation }),
       person_record_read: createPersonRecordReadRouteV1({
         authority_id: metadata.authority_id,
         organization_id: metadata.organization_id,

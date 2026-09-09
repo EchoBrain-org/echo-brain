@@ -1,3 +1,4 @@
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -74,6 +75,7 @@ export interface AuthorityOidcAuthorizationUrlProvider {
 }
 
 export interface OrganizationAuthorityHttpServerOptions {
+  readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly descriptor: OrganizationAuthorityDescriptorV1;
   readonly sessions: PersonIdentitySessionApplication;
   readonly oidc_provider: AuthorityOidcAuthorizationUrlProvider;
@@ -435,7 +437,12 @@ export function createOrganizationAuthorityHttpServer(
   validateProviderIngressRoutes(options);
   const handoffs = new Map<string, PendingLoopbackHandoff>();
   const oidcBeginWindows = new Map<string, OidcBeginClientWindow>();
-  return createServer(async (request, response) => {
+  let activeHttp = 0;
+  return createServer((request, response) => observeCoreRuntimeV1("http_request", async () => {
+    const responseFinished = options.core_runtime_observation?.observer === undefined ? undefined :
+      new Promise<void>((resolve) => { response.once("finish", resolve); response.once("close", resolve); });
+    activeHttp += 1;
+    annotateCoreRuntimeV1({ counts: { active_http: activeHttp } });
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
       const method = request.method ?? "GET";
@@ -761,6 +768,10 @@ export function createOrganizationAuthorityHttpServer(
         return;
       }
       fail(response, 500, "internal");
+    } finally {
+      if (responseFinished !== undefined) await responseFinished;
+      activeHttp -= 1;
+      annotateCoreRuntimeV1({ counts: { http_status: response.statusCode, active_http: activeHttp } });
     }
-  });
+  }, options.core_runtime_observation));
 }

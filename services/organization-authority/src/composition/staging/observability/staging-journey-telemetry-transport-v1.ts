@@ -1,11 +1,14 @@
+import { monitorEventLoopDelay } from "node:perf_hooks";
+import type { CoreRuntimeObservationScopeV1 } from "../../../shared/core-runtime-observation-v1.js";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
-  createJourneyTelemetryEventV1,
+  createJourneyTelemetryV1,
+  recanonicalizeJourneyTelemetryEventV1,
   type JourneyTelemetryObserverV1,
 } from "../../../shared/journey-telemetry-v1.js";
 import {
-  formatStagingJourneyContentRecordV1,
-  type StagingJourneyContentRecordInputV1,
+  formatStagingJourneyContentRecordsV2,
+  type StagingJourneyContentRecordInputV2,
 } from "./staging-journey-content-telemetry-v1.js";
 import {
   formatApprovedSearchBacklogMetricsV1,
@@ -35,6 +38,7 @@ export interface StagingJourneyTelemetryLivenessEventV1 {
   readonly release_sha: string;
   readonly build_number: number;
   readonly event: "startup" | "heartbeat";
+  readonly delivery?: Readonly<Record<string, number>>;
 }
 
 export interface StagingApprovedSearchBacklogEventV1 {
@@ -66,12 +70,14 @@ export interface StagingJourneyTelemetryTransportOptionsV1 {
 }
 
 export type StagingJourneyContentObserverV1 = (
-  record: StagingJourneyContentRecordInputV1,
+  record: StagingJourneyContentRecordInputV2,
 ) => void;
 
 export interface StagingJourneyTelemetryTransportV1 {
   /** False only when the deploy identity is unsafe to emit. */
   readonly enabled: boolean;
+  readonly core_runtime: CoreRuntimeObservationScopeV1;
+  readonly observation_failure: () => void;
   /** Immutable deploy identity for future staging journey emitters. */
   readonly identity: StagingJourneyTelemetryIdentityV1 | null;
   /**
@@ -125,6 +131,8 @@ function defaultScheduler(): StagingJourneyTelemetrySchedulerV1 {
 function disabledTransport(): StagingJourneyTelemetryTransportV1 {
   return Object.freeze({
     enabled: false,
+    core_runtime: {},
+    observation_failure: () => undefined,
     identity: null,
     start: () => undefined,
     observer: () => undefined,
@@ -155,15 +163,25 @@ export function createStagingJourneyTelemetryTransportV1(
   let started = false;
   let intervalId: unknown | undefined;
   let intervalScheduled = false;
+  const delivery = { writes_attempted: 0, writes_failed: 0, writes_pending: 0, writes_dropped: 0, rejected_events: 0, attempted_bytes: 0, observer_overhead_us: 0, partial_captures: 0 };
+  let eventLoop: ReturnType<typeof monitorEventLoopDelay> | undefined;
+
 
   function write(value: unknown): void {
+    const began = performance.now();
     try {
-      void Promise.resolve(dependencies.write(`${canonicalJson(value)}\n`)).catch(
-        () => undefined,
-      );
-    } catch {
-      // Telemetry is strictly outside service control flow.
-    }
+      if (delivery.writes_pending >= 1000) { delivery.writes_dropped += 1; return; }
+      const line = `${canonicalJson(value)}\n`;
+      delivery.writes_attempted += 1;
+      delivery.attempted_bytes += Buffer.byteLength(line);
+      delivery.writes_pending += 1;
+      let result: void | Promise<void>;
+      try { result = dependencies.write(line); }
+      catch { delivery.writes_pending -= 1; delivery.writes_failed += 1; return; }
+      if (result === undefined) delivery.writes_pending -= 1;
+      else void Promise.resolve(result).catch(() => { delivery.writes_failed += 1; }).finally(() => { delivery.writes_pending -= 1; });
+    } catch { delivery.writes_failed += 1; }
+    finally { delivery.observer_overhead_us += Math.max(0, Math.floor((performance.now() - began) * 1000)); }
   }
 
   function emitLiveness(event: StagingJourneyTelemetryLivenessEventV1["event"]): void {
@@ -179,6 +197,7 @@ export function createStagingJourneyTelemetryTransportV1(
         release_sha: immutableIdentity.release_sha,
         build_number: immutableIdentity.build_number,
         event,
+        delivery: { ...delivery },
       } satisfies StagingJourneyTelemetryLivenessEventV1;
       write(liveness);
       write(formatStagingJourneyLivenessMetricV1(observedAt));
@@ -198,34 +217,13 @@ export function createStagingJourneyTelemetryTransportV1(
         return;
       }
       // Reconstruct the contract before serialization to drop injected fields.
-      const normalized = createJourneyTelemetryEventV1({
-        journey_id: event.journey_id,
-        sequence: event.sequence,
-        observed_at: event.observed_at,
-        context: {
-          environment: event.environment,
-          workflow: event.workflow,
-          release_sha: event.release_sha,
-          build_number: event.build_number,
-        },
-        event: {
-          stage: event.stage,
-          event: event.event,
-          outcome: event.outcome,
-          failure_class: event.failure_class,
-          retryable: event.retryable,
-          attempt: event.attempt,
-          elapsed_ms: event.elapsed_ms,
-          queue_age_ms: event.queue_age_ms,
-          retrieval: event.retrieval,
-          llm_usage: event.llm_usage,
-        },
-      });
+      const normalized = recanonicalizeJourneyTelemetryEventV1(event);
       write(normalized);
       for (const metric of formatJourneyTelemetryMetricsV1(normalized)) {
         write(metric);
       }
     } catch {
+      delivery.rejected_events += 1;
       // An invalid observer input is omitted rather than surfacing to callers.
     }
   };
@@ -239,10 +237,12 @@ export function createStagingJourneyTelemetryTransportV1(
       ) {
         return;
       }
-      const formatted = formatStagingJourneyContentRecordV1(record);
-      if (formatted === null) return;
-      write(formatted);
+      const records = formatStagingJourneyContentRecordsV2(record);
+      if (records.length === 0) delivery.rejected_events += 1;
+      if (records[0]?.truncated === true) delivery.partial_captures += 1;
+      for (const formatted of records) write(formatted);
     } catch {
+      delivery.rejected_events += 1;
       // Content telemetry is strictly outside answer control flow.
     }
   };
@@ -268,12 +268,40 @@ export function createStagingJourneyTelemetryTransportV1(
         // Invalid backlog health must remain outside approval control flow.
       }
     };
+  const coreJourneys = new Map<string, { journey: NonNullable<ReturnType<ReturnType<typeof createJourneyTelemetryV1>["resumeJourney"]>>; content_sequence: number }>();
+  const coreEmitter = createJourneyTelemetryV1(observer);
+  const coreRuntime: CoreRuntimeObservationScopeV1 = {
+    observer(event) {
+      let entry = coreJourneys.get(event.operation_id);
+      if (!entry) {
+        if (coreJourneys.size >= 1000) { delivery.writes_dropped += 1; return; }
+        const journey = coreEmitter.resumeJourney({ environment: "staging", workflow: "core_runtime", ...immutableIdentity, journey_id: event.operation_id, previous_sequence: 0 });
+        if (!journey) return;
+        entry = { journey, content_sequence: 0 };
+        coreJourneys.set(event.operation_id, entry);
+      }
+      entry.journey.emit({ stage: "core_operation", event: event.event, elapsed_ms: event.elapsed_ms, diagnostic: { ...event,
+          event_loop_delay: eventLoop && Number.isFinite(eventLoop.mean) ? "process_sample" : "unavailable",
+          counts: { ...event.counts, event_loop_delay_max_us: eventLoop && Number.isFinite(eventLoop.mean) ? Math.max(0, Math.floor(eventLoop.max / 1000)) : null } },
+        ...(event.event === "failed" ? { failure_class: event.result === "cancelled" ? "cancelled" : "unknown", retryable: event.result !== "cancelled" } : {}) });
+      if (event.root && event.event !== "started") coreJourneys.delete(event.operation_id);
+    },
+    ...(contentEnabled ? { content_observer(event) {
+      const entry = coreJourneys.get(event.operation_id);
+      if (!entry) return;
+      contentObserver({ journey_id: event.operation_id, sequence: ++entry.content_sequence, observed_at: now(), ...immutableIdentity,
+        stage: "core_operation", content_kind: event.content_kind, span_id: event.span_id, content: event.content });
+    } } satisfies CoreRuntimeObservationScopeV1 : {}),
+  };
   return Object.freeze({
     enabled: true,
+    core_runtime: coreRuntime,
+    observation_failure: () => { delivery.rejected_events += 1; },
     identity: immutableIdentity,
     start(): void {
       if (closed || started) return;
       started = true;
+      try { eventLoop = monitorEventLoopDelay({ resolution: 20 }); eventLoop.enable(); } catch { /* optional resource measurement */ }
       emitLiveness("startup");
       try {
         intervalId = scheduler.set_interval(
@@ -292,6 +320,8 @@ export function createStagingJourneyTelemetryTransportV1(
     close(): void {
       if (closed) return;
       closed = true;
+      try { eventLoop?.disable(); } catch { /* observation only */ }
+      coreJourneys.clear();
       if (!intervalScheduled) return;
       try {
         scheduler.clear_interval(intervalId);

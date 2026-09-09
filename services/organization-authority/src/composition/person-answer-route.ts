@@ -1,3 +1,4 @@
+import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
 import { randomUUID } from "node:crypto";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
@@ -110,6 +111,7 @@ export function createPersonAnswerRouteV1(
       readonly accept_outcome_v2?: boolean;
     }): Promise<PersonAnswerResponseV1> {
       const journey = options.ask_journey_telemetry?.start();
+      if (journey?.journey_id) annotateCoreRuntimeV1({ linked_journey_ids: [journey.journey_id] });
       const journeyStartedAt = journey?.startTimer() ?? 0;
       const validationStartedAt = journey?.startTimer() ?? 0;
       try {
