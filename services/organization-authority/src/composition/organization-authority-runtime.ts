@@ -212,7 +212,7 @@ class OrganizationAuthorityProcessingCoordinator
     return this.approvals.appendFinalizedApprovalsToV4(signal);
   }
 
-  async reconcileReadableSearchGeneration(signal: AbortSignal): Promise<void> {
+  async reconcileReadableSearchGeneration(signal: AbortSignal): ReturnType<OrganizationAuthorityProcessingCycleV1["reconcileReadableSearchGeneration"]> {
     let attempts: readonly MeetingApprovalJourneyStageAttemptV1[] = [];
     try {
       attempts = this.journeyTelemetry?.beginAwaitingSearch() ?? [];
@@ -223,6 +223,7 @@ class OrganizationAuthorityProcessingCoordinator
     try {
       annotateCoreRuntimeV1({ linked_journey_ids: attempts.map((attempt) => attempt.journey_id) });
       const result = await this.readableSearch.reconcile(signal);
+      signal.throwIfAborted();
       if (
         typeof result === "object" &&
         result !== null &&
@@ -236,19 +237,13 @@ class OrganizationAuthorityProcessingCoordinator
         } catch {
           // Search publication is authoritative; run-detail telemetry is not.
         }
+        return { status: result.status };
       } else {
-        try {
-          this.journeyTelemetry?.failAwaitingSearch(
-            attempts,
-            new TypeError("unrecognized readable-search reconciliation result"),
-          );
-        } catch {
-          // Search publication is authoritative; run-detail telemetry is not.
-        }
+        throw new TypeError("unrecognized readable-search reconciliation result");
       }
     } catch (error) {
       try {
-        this.journeyTelemetry?.failAwaitingSearch(attempts, error);
+        this.journeyTelemetry?.failAwaitingSearch(attempts, error, signal.aborted);
       } catch {
         // Search publication is authoritative; run-detail telemetry is not.
       }
@@ -485,6 +480,7 @@ export async function openOrganizationAuthorityRuntime(
       address: runtime.address,
       processing: "active",
       runExclusive: (operation) => runtime.runExclusive(operation),
+      drain: (signal) => runtime.drain(signal),
       requestApprovalPublication,
       ...(config.run_staging_synthetic_private_dm_canary === undefined
         ? {}

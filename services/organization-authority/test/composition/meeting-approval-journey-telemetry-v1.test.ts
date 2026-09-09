@@ -495,6 +495,32 @@ describe("meeting approval journey telemetry v1", () => {
     );
   });
 
+  it("keeps cancelled search pending across restart without counting its continuation as a retry", async () => {
+    const path = stateFile();
+    const events: JourneyTelemetryEventV1[] = [];
+    const state = openState(path);
+    const recorder = telemetry(state, events);
+    const intake = recorder.beginOrResumeSource(source())!;
+    recorder.bindCandidate(intake, { candidate_id: "cancelled", approval_id: "cancelled" });
+    recorder.markAwaitingSearch("cancelled");
+    const attempts = recorder.beginAwaitingSearch();
+    recorder.failAwaitingSearch(attempts, new Error("abort-ignoring adapter failed late"), true);
+    await flushObserver();
+    expect(state.listApprovedRecordsAwaitingSearch()).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ event: "failed", failure_class: "cancelled", retryable: false });
+    recorder.close();
+    const restartedState = openState(path);
+    const restarted = telemetry(restartedState, events);
+    try {
+      const next = restarted.beginAwaitingSearch();
+      await flushObserver();
+      expect(next).toHaveLength(1);
+      expect(events.at(-1)?.accounting).toMatchObject({ execution_attempt: 2, retry_count: 0, retry_of_attempt: null });
+      restarted.completeAwaitingSearch(next, "published");
+      expect(restartedState.listApprovedRecordsAwaitingSearch()).toEqual([]);
+    } finally { restarted.close(); }
+  });
+
   it("closes failed search work and leaves the record pending for the next reconciliation", async () => {
     const events: JourneyTelemetryEventV1[] = [];
     const recorder = telemetry(openState(stateFile()), events, {

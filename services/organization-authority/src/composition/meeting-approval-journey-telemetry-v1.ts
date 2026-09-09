@@ -418,14 +418,16 @@ class MeetingApprovalJourneyTelemetryV1
     if (attempt === null) return;
     try {
       const ended = this.captureClock();
+      const failure = classifyFailure(error, input);
       const reserved = this.state.reserveStageClose(
         attempt.journey_id,
         attempt.stage,
         attempt.attempt,
         "failed",
         ended.observed_at,
+        false,
+        failure.failure_class === "cancelled",
       );
-      const failure = classifyFailure(error, input);
       this.emit(attempt.journey_id, reserved.sequence, ended.observed_at, {
         stage: attempt.stage,
         event: "failed",
@@ -646,10 +648,11 @@ class MeetingApprovalJourneyTelemetryV1
   failAwaitingSearch(
     attempts: readonly MeetingApprovalJourneyStageAttemptV1[],
     error: unknown,
+    cancelled = false,
   ): void {
     try {
       for (const attempt of attempts) {
-        this.failStage(attempt, error);
+        this.failStage(attempt, error, cancelled ? { failure_class: "cancelled", retryable: false } : {});
       }
       this.awaitingSearchBatches.delete(attempts);
     } catch {

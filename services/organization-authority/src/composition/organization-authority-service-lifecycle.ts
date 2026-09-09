@@ -1,4 +1,5 @@
-import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1, observeCoreRuntimeRootV1 } from "../shared/core-runtime-observation-v1.js";
+import { ReadableSearchReconciliationTask } from "./readable-search-reconciliation-task.js";
 import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
 import type { AddressInfo } from "node:net";
 import {
@@ -40,7 +41,9 @@ export interface OrganizationAuthorityProcessingCycleV1 {
    * record head after the complete append phase. Implementations may no-op
    * while the processing service is waiting for its activation prerequisites.
    */
-  reconcileReadableSearchGeneration(signal: AbortSignal): Promise<void>;
+  reconcileReadableSearchGeneration(signal: AbortSignal): Promise<{
+    readonly status: "current" | "published" | "superseded";
+  } | void>;
   /** Optional composition seam for source/extraction/staging phase telemetry. */
   setWorkerLifecycle?(lifecycle: MeetingProcessingWorkerPhaseRunnerV1): void;
   /** True only when the processing implementation emits its inner phases. */
@@ -71,13 +74,16 @@ export interface OrganizationAuthorityServiceLifecycleDependencies {
 
 export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
-  /** Runs bounded operator work through the same gate as the processing worker. */
+  /** Excludes both writer and search work for bounded operator mutations. */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  /** Waits for queued writer/search work; callers must supply a bounded signal.
+   * This is a readiness barrier, not operator exclusion or a retry trigger. */
+  drain(signal: AbortSignal): Promise<void>;
   /**
    * Asks the worker to publish queued approval actions now instead of at the
    * next periodic cycle. It runs only the approval phases (finalize, append,
-   * reconcile) through the same exclusive gate as the periodic cycle, so no
-   * second writer is introduced. Requests made while one is still waiting for
+   * then requests search) through the same writer gate as the periodic cycle.
+   * Requests made while one is still waiting for
    * the gate coalesce into that one run; a request made while a publication is
    * already executing schedules exactly one follow-up run. It never throws and
    * never blocks the caller; failures go to `on_worker_error`.
@@ -113,20 +119,13 @@ export async function runOrganizationAuthorityProcessingCycleV1(
     );
   }
   signal.throwIfAborted();
-  await phase("approval_observation", () =>
-    processing.observeAndFinalizePendingApprovals(signal),
-  );
-  signal.throwIfAborted();
-  await phase("record_append", () => processing.appendFinalizedApprovalsToV4(signal));
-  signal.throwIfAborted();
-  await phase("search_reconciliation", () =>
-    processing.reconcileReadableSearchGeneration(signal),
-  );
+  await runOrganizationAuthorityApprovalPublicationV1(processing, signal, lifecycle);
 }
 
 /**
  * Runs only the approval-publication phases of the cycle: finalize queued
- * actions, append approved ones to V4, and reconcile the search generation.
+ * actions and append approved ones to V4. The lifecycle requests search after
+ * releasing the writer gate.
  * Source intake is deliberately excluded so an approval never waits behind a
  * source poll or an extraction call. The periodic cycle still runs these same
  * phases, so a lost or failed publication request is recovered by the next
@@ -147,9 +146,6 @@ export async function runOrganizationAuthorityApprovalPublicationV1(
   signal.throwIfAborted();
   await phase("record_append", () => processing.appendFinalizedApprovalsToV4(signal));
   signal.throwIfAborted();
-  await phase("search_reconciliation", () =>
-    processing.reconcileReadableSearchGeneration(signal),
-  );
 }
 
 /**
@@ -197,6 +193,25 @@ export async function startOrganizationAuthorityServiceLifecycle(
     startup.signal.throwIfAborted();
     api = await startApi(config.api, dependencies.api ?? {});
     const startedApi = api;
+    const reportError = (failure: unknown): void => {
+      try {
+        dependencies.on_worker_error?.(failure instanceof Error ? failure : new Error(String(failure)));
+      } catch { /* observational only */ }
+    };
+    const search = new ReadableSearchReconciliationTask(
+      (signal) => observeCoreRuntimeRootV1("search_reconciliation", async () => {
+        try {
+          const result = await lifecycle.runPhase("search_reconciliation",
+            () => dependencies.processing.reconcileReadableSearchGeneration(signal), signal);
+          if (result !== undefined) annotateCoreRuntimeV1({ result: result.status });
+          return result;
+        } catch (error) {
+          annotateCoreRuntimeV1({ result: signal.aborted ? "cancelled" : "failed" });
+          throw error;
+        }
+      }, dependencies.core_runtime_observation),
+      reportError,
+    );
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
@@ -214,20 +229,28 @@ export async function startOrganizationAuthorityServiceLifecycle(
           throw error;
         }
       },
+      onCycleComplete: () => search.request(),
       onError: dependencies.on_worker_error,
     });
     let closing = false;
+    const shutdown = new AbortController();
     let publicationPending = false;
     let publicationImmediate: ReturnType<typeof setImmediate> | undefined;
+    let publicationTail: Promise<void> = Promise.resolve();
+    let cancelPublication: (() => void) | undefined;
     const requestApprovalPublication = (): void => {
       if (closing) return;
       if (publicationPending) { annotateCoreRuntimeV1({ result: "coalesced" }); return; }
       publicationPending = true;
+      let complete!: () => void;
+      publicationTail = new Promise((resolve) => { complete = resolve; });
+      cancelPublication = complete;
       // An idle runExclusive gate starts synchronously. Yield to the next
       // event-loop turn so the ingress can write its HTTP acknowledgement
       // before SQLite finalization begins, including any busy-lock wait.
       publicationImmediate = setImmediate(() => {
         publicationImmediate = undefined;
+        cancelPublication = undefined;
         void worker
           .runExclusive(async (signal) => {
             // Clear before running so a request that arrives mid-publication
@@ -239,40 +262,84 @@ export async function startOrganizationAuthorityServiceLifecycle(
               lifecycle,
             );
           })
+          .then(() => { if (!closing) search.request(); })
           .catch((failure: unknown) => {
             // `publicationPending` was already cleared when the run started;
             // the only pre-start failure is the closed worker's aborted signal.
             if (closing) return;
-            try {
-              dependencies.on_worker_error?.(
-                failure instanceof Error ? failure : new Error(String(failure)),
-              );
-            } catch {
-              // Error reporting is observational and cannot become control flow.
-            }
-          });
+            reportError(failure);
+          })
+          .finally(complete);
       });
     };
+    let closed: Promise<void> | undefined;
     return {
       address: startedApi.address,
-      runExclusive: (operation) => worker.runExclusive(operation),
+      runExclusive: async (operation) => {
+        search.suspend();
+        try {
+          return await worker.runExclusive(async (signal) => {
+            await search.waitForActive();
+            signal.throwIfAborted();
+            return operation(signal);
+          });
+        } finally {
+          search.resume();
+          if (!closing) search.request();
+        }
+      },
+      drain: async (deadline) => {
+        const signal = AbortSignal.any([deadline, shutdown.signal]);
+        signal.throwIfAborted();
+        // A caller's deadline bounds waiting only; it must not abort shared
+        // work. Cleanup and handle ownership always remain with close().
+        let abort!: () => void;
+        const cancelled = new Promise<never>((_resolve, reject) => {
+          abort = () => reject(signal.reason);
+          signal.addEventListener("abort", abort, { once: true });
+        });
+        try {
+          await Promise.race([cancelled, (async () => {
+            let observedPublication: Promise<void>;
+            do {
+              observedPublication = publicationTail;
+              await observedPublication;
+              signal.throwIfAborted();
+              await worker.runExclusive(async () => undefined);
+              signal.throwIfAborted();
+              await search.drain();
+              signal.throwIfAborted();
+            } while (publicationTail !== observedPublication);
+          })()]);
+        } finally { signal.removeEventListener("abort", abort); }
+      },
       requestApprovalPublication,
-      close: async () => {
+      close: () => {
+        if (closed !== undefined) return closed;
         closing = true;
+        shutdown.abort();
         if (publicationImmediate !== undefined) {
           clearImmediate(publicationImmediate);
           publicationImmediate = undefined;
           publicationPending = false;
+          cancelPublication?.();
+          cancelPublication = undefined;
         }
-        try {
+        startedApi.stopAcceptingRequests?.();
+        const searchClosed = search.close();
+        const workerClosed = worker.close();
+        closed = (async () => {
           try {
-            await worker.close();
+            try {
+              await Promise.all([workerClosed, searchClosed]);
+            } finally {
+              await startedApi.close();
+            }
           } finally {
-            await startedApi.close();
+            clearHandle();
           }
-        } finally {
-          clearHandle();
-        }
+        })();
+        return closed;
       },
     };
   } catch (error) {

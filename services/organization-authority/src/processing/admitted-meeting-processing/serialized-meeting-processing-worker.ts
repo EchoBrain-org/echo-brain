@@ -5,6 +5,8 @@ export interface SerializedMeetingProcessingWorkerOptions {
   readonly observation?: CoreRuntimeObservationScopeV1;
   readonly runCycle: (signal: AbortSignal) => Promise<void>;
   readonly intervalMs?: number;
+  /** Requests derived work only after the cycle releases the writer gate. */
+  readonly onCycleComplete?: () => void;
   /** A cycle failure notification; callback failures never stop the worker. */
   readonly onError?: (error: Error) => void;
 }
@@ -111,6 +113,7 @@ export class SerializedMeetingProcessingWorker {
         await this.runExclusive((exclusiveSignal) =>
           this.options.runCycle(exclusiveSignal),
         );
+        if (!signal.aborted) this.options.onCycleComplete?.();
       } catch (failure) {
         failed = true;
         if (!signal.aborted) this.report(failure);

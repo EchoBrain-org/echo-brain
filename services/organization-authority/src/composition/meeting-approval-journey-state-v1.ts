@@ -438,13 +438,13 @@ export class MeetingApprovalJourneyStateV1 {
     const rows = this.database.prepare(`SELECT attempt, result, observation_kind FROM meeting_approval_stage_attempts_v1
       WHERE journey_id = ? AND stage = ? AND status != 'skipped' AND attempt <= ? ORDER BY attempt`).all(journeyId(journeyIdValue), meetingStage(stageValue), attempt) as { attempt: number; result: string | null; observation_kind: string }[];
     const current = rows.at(-1);
-    const executions = rows.filter((row) => row.observation_kind === "execution");
+    const executions = rows.filter((row) => row.observation_kind === "execution" || row.observation_kind === "cancelled");
     const prior = executions.filter((row) => row.attempt < attempt);
     const previous = prior.at(-1);
     const kind = current?.observation_kind === "recovery" ? "recovery" : rows.some((row) => row.observation_kind === "legacy") ? "legacy" : "execution";
     return Object.freeze({ kind, execution_attempt: executions.length,
-      retry_count: executions.filter((_, index) => index > 0 && executions[index - 1]?.result === "failed").length,
-      retry_of_attempt: kind === "execution" && previous?.result === "failed" ? previous.attempt : null });
+      retry_count: executions.filter((_, index) => index > 0 && executions[index - 1]?.result === "failed" && executions[index - 1]?.observation_kind !== "cancelled").length,
+      retry_of_attempt: kind === "execution" && previous?.result === "failed" && previous.observation_kind !== "cancelled" ? previous.attempt : null });
   }
 
   reserveStageClose(
@@ -454,6 +454,7 @@ export class MeetingApprovalJourneyStateV1 {
     resultValue: MeetingApprovalJourneyStageResultV1,
     observedAtValue: string,
     recovered = false,
+    cancelled = false,
   ): { readonly sequence: number } {
     const id = journeyId(journeyIdValue);
     const stage = meetingStage(stageValue);
@@ -480,10 +481,10 @@ export class MeetingApprovalJourneyStateV1 {
         .prepare(
           `UPDATE meeting_approval_stage_attempts_v1
               SET status = 'closed', result = ?, closed_at = ?, close_sequence = ?,
-                  observation_kind = CASE WHEN ? THEN 'recovery' ELSE observation_kind END
+                  observation_kind = CASE WHEN ? THEN 'recovery' WHEN ? THEN 'cancelled' ELSE observation_kind END
             WHERE journey_id = ? AND stage = ? AND attempt = ? AND status = 'open'`,
         )
-        .run(result, observedAt, sequence, recovered ? 1 : 0, id, stage, attempt);
+        .run(result, observedAt, sequence, recovered ? 1 : 0, cancelled ? 1 : 0, id, stage, attempt);
       return Object.freeze({ sequence });
     })();
   }

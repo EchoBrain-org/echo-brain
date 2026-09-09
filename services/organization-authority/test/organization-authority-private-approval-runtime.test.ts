@@ -27,7 +27,9 @@ import {
   buildOrganizationToolConnectionStateV2,
 } from "../../../packages/organization-control-plane/src/application/organization-tool-connection-contracts-v2.js";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeContentV1 } from "../src/shared/core-runtime-observation-v1.js";
+import type { JourneyTelemetryEventV1 } from "../src/shared/journey-telemetry-v1.js";
 import type {
   BegunPersonOidcLogin,
   PersonAccessAuthorization,
@@ -354,6 +356,7 @@ const healthy = (): AdapterHealth => ({ status: "healthy", checked_at: NOW });
 
 function fakeSource(
   identity: MeetingSourceAdapter["identity"],
+  count = 1,
 ): MeetingSourceAdapter & { readonly pulls: () => number } {
   let pulls = 0;
   const meeting: MeetingDocument = {
@@ -397,11 +400,17 @@ function fakeSource(
     healthCheck: async () => healthy(),
     pull: async (request) => {
       pulls += 1;
-      return pulls === 1
+      const index = pulls - 1;
+      return pulls <= count
         ? {
-            meetings: [meeting],
+            meetings: [index === 0 ? meeting : ({
+              ...meeting,
+              id: `${meeting.id}-${index}`,
+              provenance: { ...meeting.provenance, external_id: `${meeting.provenance.external_id}-${index}`,
+                canonical_revision: canonicalSha256({ note: "live-test", index }) },
+            })],
             next_cursor: createGranolaPostCutoffCursor(
-              "2026-08-22T12:00:01.000Z",
+              new Date(Date.parse(NOW) + pulls * 1_000).toISOString(),
             ),
           }
         : { meetings: [], next_cursor: request.cursor };
@@ -1207,6 +1216,120 @@ describe("Organization Authority runtime private approval lane", () => {
       expect(fixture.errors).toEqual([]);
     } finally {
       await runtime.close();
+    }
+  });
+
+  it.each([{ burst: 1, failModel: false }, { burst: 4, failModel: false }, { burst: 1, failModel: true }])("finalizes burst $burst during unresolved enrichment (projector failure: $failModel)", async ({ burst, failModel }) => {
+    const fixture = await admittedFixture({ seed_private_slack_connection: true });
+    vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate", "setTimeout", "clearTimeout", "Date", "performance"] });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let modelCalls = 0;
+    let activeModels = 0;
+    let maxActiveModels = 0;
+    const observations: CoreRuntimeObservationV1[] = [];
+    const contents: CoreRuntimeContentV1[] = [];
+    const journeys: JourneyTelemetryEventV1[] = [];
+    const runtime = await openOrganizationAuthorityService({ ...fixture.config, worker_interval_ms: 1_000,
+      authority_url: "https://authority-staging.echobrain.org",
+      oidc: { ...fixture.config.oidc, redirect_uri: "https://authority-staging.echobrain.org/v2/session/oidc/callback" },
+      core_runtime_observation: { observer: (event) => { observations.push(event); }, content_observer: (event) => { contents.push(event); } },
+      staging_meeting_approval_journey_telemetry_enabled: true,
+      meeting_approval_journey_telemetry: {
+        observer: (event) => { journeys.push(event); }, release_sha: "a".repeat(40), build_number: 42,
+        extraction_provider: "openrouter", extraction_model: "deepseek/deepseek-v3.2",
+      },
+    }, {
+      processing_adapter_overrides: {
+        source: fakeSource(fixture.source.identity, 4 + burst),
+        processor: fakeProcessor(fixture.processorIdentity),
+        private_approval_card_poster: fixture.poster,
+      },
+      api: { answer_composition_generation: {
+        generation: { generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
+          planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
+          timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 },
+        structured_output: { generate: async () => observeCoreRuntimeV1("model_call", async () => {
+          modelCalls++;
+          activeModels++;
+          maxActiveModels = Math.max(maxActiveModels, activeModels);
+          try {
+            captureCoreRuntimeContentV1("model_request", { fixture: "approval-search-scheduling" });
+            if (modelCalls === 1) await blocked;
+            captureCoreRuntimeContentV1("model_response", { relationships: [] });
+            return modelCalls === 1 && failModel ? { relationships: "invalid" } : { relationships: [] };
+          } finally { activeModels--; }
+        }) },
+      } },
+    });
+    const record = openOrganizationRecordDatabase(join(fixture.initialized.state_directory, "record-log.sqlite"), { fileMustExist: true });
+    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
+    const control = openOrganizationControlDatabase(join(fixture.initialized.state_directory, "integrations.sqlite"), { fileMustExist: true });
+    const count = () => (record.prepare("SELECT COUNT(*) AS n FROM organization_record_log").get() as { n: number }).n;
+    try {
+      await runtime.runExclusive(async () => undefined);
+      await vi.advanceTimersByTimeAsync((3 + burst) * 1_000 + 1);
+      expect(fixture.errors.map((error) => error.message)).toEqual([]);
+      expect(fixture.poster.published).toHaveLength(4 + burst);
+      for (const card of fixture.poster.published.slice(0, 2)) {
+        const response = await clickCard({ fixture: { ...fixture, runtime }, card, action: "approve", policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID });
+        expect(response.status).toBe(200);
+        await response.text();
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(count()).toBe(2);
+      expect(modelCalls).toBe(1);
+      for (const [index, card] of fixture.poster.published.slice(2).entries()) {
+        const response = await clickCard({ fixture: { ...fixture, runtime }, card, action: index === burst + 1 ? "reject" : "approve", policy_id: index >= burst ? RESTRICTED_REVIEWER_PERSON_POLICY_ID : ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID });
+        expect(response.status).toBe(200);
+        await response.text();
+      }
+      await vi.advanceTimersByTimeAsync(250);
+      // Every HTTP acknowledgement follows a real durable receipt; the search
+      // model promise is still held. Only scheduled callbacks are advanced.
+      expect(control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_signed_action_receipts_v2").get()).toEqual({ n: 4 + burst });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(count()).toBe(3 + burst);
+      expect(fixture.poster.terminal).toHaveLength(4 + burst);
+      expect(control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_terminal_evidence_v2").get()).toEqual({ n: 4 + burst });
+      expect(modelCalls).toBe(1);
+      expect(authority.prepare("SELECT record_head_position FROM authority_readable_search_active_generation").get()).toEqual({ record_head_position: 0 });
+      expect(journeys.filter((event) => event.stage === "meeting_search_publication" && event.event === "succeeded")).toEqual([]);
+      release();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(modelCalls).toBe(2);
+      expect(maxActiveModels).toBe(1);
+      expect(authority.prepare("SELECT record_head_position FROM authority_readable_search_active_generation").get()).toEqual({ record_head_position: 3 + burst });
+      expect(fixture.errors).toHaveLength(failModel ? 1 : 0);
+      const route = createOwnerAndMemberSearchRoute({ fixture: { ...fixture, runtime }, authority, record });
+      const memberResult = await route.search({ access_token: "member", query: "migration" });
+      expect(memberResult.items.length).toBeGreaterThan(0);
+      expect(memberResult.items.every((atom) => atom.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID)).toBe(true);
+      expect(fixture.poster.terminal.find((card) => card.approval_id === fixture.poster.published.at(-1)?.approval_id)).toMatchObject({ outcome: "rejected" });
+      expect(fixture.poster.terminal.find((card) => card.approval_id === fixture.poster.published.at(-2)?.approval_id)).toMatchObject({ outcome: "approved", policy_label: "Only me" });
+      const modelOperations = new Set(observations.filter((event) => event.phase === "model_call").map((event) => event.operation_id));
+      expect(modelOperations.size).toBe(2);
+      const searchRoots = observations.filter((event) => modelOperations.has(event.operation_id) && event.root && event.event === "succeeded");
+      expect(searchRoots.map((event) => event.result)).toEqual(failModel ? ["published"] : ["superseded", "published"]);
+      expect(searchRoots.every((event) => event.phase === "search_reconciliation" && event.parent_span_id === null)).toBe(true);
+      expect(observations.filter((event) => modelOperations.has(event.operation_id) && event.phase === "worker_execution")).toEqual([]);
+      expect(contents.filter((event) => modelOperations.has(event.operation_id) && event.content_kind !== "validation_error").map((event) => event.content_kind)).toEqual(["model_request", "model_response", "model_request", "model_response"]);
+      const searchSuccesses = journeys.filter((event) => event.stage === "meeting_search_publication" && event.event === "succeeded");
+      expect(searchSuccesses.filter((event) => event.outcome === "superseded")).toHaveLength(failModel ? 0 : 2);
+      expect(searchSuccesses.filter((event) => event.outcome === "published")).toHaveLength(3 + burst);
+      expect(new Set(searchSuccesses.map((event) => event.journey_id)).size).toBe(3 + burst);
+      for (const event of searchSuccesses) {
+        expect(event.accounting?.kind).toBe("shared_reference");
+        expect(event.accounting?.retry_count).toBe(failModel && event.attempt === 2 ? 1 : 0);
+        expect(event.diagnostic?.operation_id).toBe(searchRoots.find((root) => root.result === event.outcome)?.operation_id);
+      }
+    } finally {
+      release();
+      await runtime.close();
+      record.close();
+      authority.close();
+      control.close();
+      vi.useRealTimers();
     }
   });
 

@@ -197,7 +197,9 @@ async function scenario(policy, index) {
     const approvalOffered = performance.now();
     await candidate.call("approve", { input: approval });
     const ackMs = performance.now() - approvalOffered;
-    const response = await until(() => candidate.call("search", { actor: "owner", query: "launch" }), (result) => result.items.length === 5, "approved search visibility", 10_000);
+    await candidate.call("drain");
+    const response = await candidate.call("search", { actor: "owner", query: "launch" });
+    assert.equal(response.items.length, 5, "approved search visibility");
     const visibilityMs = performance.now() - approvalOffered;
     assert.deepEqual(response.items.map((item) => item.text), expectedSearchOrder(input.decisions.signals.map((item) => item.text), "launch"));
     assert.ok(response.items.every((item) => item.policy_id === policy));
