@@ -150,26 +150,35 @@ const RETRIEVAL_STAGES = new Set([
 ]);
 const ENDPOINT_ARN =
   /^arn:(aws|aws-us-gov|aws-cn):lambda:([a-z0-9-]+):([0-9]{12}):function:customWidget-echo-staging-journey-explorer-v1$/;
+const PARSED_EVENT = "fields jsonParse(@message) as parsed";
 const BASE =
-  "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms, accounting.kind as accounting_kind, accounting.execution_attempt as execution_attempt, accounting.retry_count as retry_count, accounting.retry_of_attempt as retry_of_attempt, jsonStringify(diagnostic) as diagnostic_json";
+  "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms, accounting.kind as accounting_kind, accounting.execution_attempt as execution_attempt, accounting.retry_count as retry_count, accounting.retry_of_attempt as retry_of_attempt, jsonStringify(parsed.diagnostic) as diagnostic_json";
+const BASE_DISPLAY =
+  "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms, accounting_kind, execution_attempt, retry_count, retry_of_attempt, diagnostic_json";
 const LIST_QUERY =
-  "fields " +
-  BASE +
+  PARSED_EVENT +
   ' | filter kind = "' +
   KIND +
-  '" and environment = "staging" and ispresent(journey_id) | sort observed_at desc | limit ' +
+  '" and environment = "staging" and ispresent(journey_id) | fields ' +
+  BASE +
+  " | display " +
+  BASE_DISPLAY +
+  " | sort observed_at desc | limit " +
   LIST_LIMIT;
 let cached;
 
 function detailQuery(id) {
   return (
-    "fields " +
-    BASE +
-    ', retrieval.planned_query_count as retrieval_planned_query_count, retrieval.query_hit_count as retrieval_query_hit_count, retrieval.released_atom_count as retrieval_released_atom_count, retrieval.context_atom_count as retrieval_context_atom_count, retrieval.citation_count as retrieval_citation_count, llm_usage.provider as llm_provider, llm_usage.model as llm_model, llm_usage.usage_status as llm_usage_status, llm_usage.provider_latency_ms as llm_provider_latency_ms, llm_usage.input_tokens as llm_input_tokens, llm_usage.output_tokens as llm_output_tokens, llm_usage.total_tokens as llm_total_tokens, llm_usage.cached_input_tokens as llm_cached_input_tokens, llm_usage.reasoning_tokens as llm_reasoning_tokens, llm_usage.finish_reason as llm_finish_reason | filter kind = "' +
+    PARSED_EVENT +
+    ' | filter kind = "' +
     KIND +
     '" and environment = "staging" and journey_id = "' +
     id +
-    '" | sort observed_at asc, sequence asc | limit ' +
+    '" | fields ' +
+    BASE +
+    ', retrieval.planned_query_count as retrieval_planned_query_count, retrieval.query_hit_count as retrieval_query_hit_count, retrieval.released_atom_count as retrieval_released_atom_count, retrieval.context_atom_count as retrieval_context_atom_count, retrieval.citation_count as retrieval_citation_count, llm_usage.provider as llm_provider, llm_usage.model as llm_model, llm_usage.usage_status as llm_usage_status, llm_usage.provider_latency_ms as llm_provider_latency_ms, llm_usage.input_tokens as llm_input_tokens, llm_usage.output_tokens as llm_output_tokens, llm_usage.total_tokens as llm_total_tokens, llm_usage.cached_input_tokens as llm_cached_input_tokens, llm_usage.reasoning_tokens as llm_reasoning_tokens, llm_usage.finish_reason as llm_finish_reason | display ' +
+    BASE_DISPLAY +
+    ', retrieval_planned_query_count, retrieval_query_hit_count, retrieval_released_atom_count, retrieval_context_atom_count, retrieval_citation_count, llm_provider, llm_model, llm_usage_status, llm_provider_latency_ms, llm_input_tokens, llm_output_tokens, llm_total_tokens, llm_cached_input_tokens, llm_reasoning_tokens, llm_finish_reason | sort observed_at asc, sequence asc | limit ' +
     DETAIL_LIMIT
   );
 }
@@ -346,7 +355,7 @@ function stage(raw) {
       if (!kind || execution_attempt === null || retry_count === null || retry_count > Math.max(0, execution_attempt - 1)) return null;
       accounting = { kind, execution_attempt, retry_count, retry_of_attempt: uint(raw.retry_of_attempt, 1) };
     }
-    if (raw.diagnostic_json !== undefined) {
+    if (raw.diagnostic_json !== undefined && raw.diagnostic_json !== "") {
       diagnostic = diagnosticDetail(raw.diagnostic_json);
       if (!diagnostic) return null;
     }
@@ -1151,7 +1160,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
           : data;
       }
       if (parsed.operation === "health") {
-        const rows = await run('fields observed_at, release_sha, build_number, jsonStringify(delivery) as delivery_json | filter kind = "echo-authority-journey-telemetry-liveness-v1" and environment = "staging" | sort observed_at desc | limit 25', parsed.start, parsed.end, 25);
+        const rows = await run(`${PARSED_EVENT} | filter kind = "echo-authority-journey-telemetry-liveness-v1" and environment = "staging" | fields observed_at, release_sha, build_number, jsonStringify(parsed.delivery) as delivery_json | display observed_at, release_sha, build_number, delivery_json | sort observed_at desc | limit 25`, parsed.start, parsed.end, 25);
         const health = rows.map((fields) => {
           const raw = row(fields); if (iso(raw.observed_at) === null) return null;
           let delivery; try { delivery = JSON.parse(raw.delivery_json); } catch { delivery = {}; }
@@ -1162,7 +1171,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
         return parsed.render ? rendered(frame("Transport health", `<p>Cumulative per process. Unknown values were not measured in historical heartbeats. These counters cannot prove downstream log ingestion.</p><pre>${escapeHtml(JSON.stringify(health, null, 2))}</pre>`)) : { health };
       }
       if (parsed.operation === "related") {
-        const results = await run(`fields ${BASE} | filter kind = "${KIND}" and environment = "staging" and jsonStringify(diagnostic.linked_journey_ids) like /${parsed.journeyId}/ | sort observed_at asc | limit ${DETAIL_LIMIT}`, Math.max(0, current - MAX_RANGE), current, DETAIL_LIMIT);
+        const results = await run(`${PARSED_EVENT} | filter kind = "${KIND}" and environment = "staging" and jsonStringify(parsed.diagnostic.linked_journey_ids) like /${parsed.journeyId}/ | fields ${BASE} | display ${BASE_DISPLAY} | sort observed_at asc | limit ${DETAIL_LIMIT}`, Math.max(0, current - MAX_RANGE), current, DETAIL_LIMIT);
         if (results.length >= DETAIL_LIMIT) throw resultLimitError();
         const operations = new Map();
         for (const fields of results) { const item = stage(row(fields)); if (item?.diagnostic) operations.set(item.diagnostic.operation_id, item.diagnostic.phase); }

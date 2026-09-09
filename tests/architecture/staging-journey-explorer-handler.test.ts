@@ -211,6 +211,192 @@ describe("staging Journey Explorer custom widget", () => {
     expect(client.sent.some((command) => command instanceof Stop)).toBe(false);
   });
 
+  it("uses an explicit @message map for nested v2 diagnostics", async () => {
+    const spanId = "22222222-2222-4222-8222-222222222222";
+    const diagnostic = JSON.stringify({
+      operation_id: id,
+      span_id: spanId,
+      parent_span_id: null,
+      phase: "ask_request",
+      purpose: "ask_request",
+      root: true,
+      linked_journey_ids: [],
+      counts: {},
+      result: null,
+      generation: null,
+    });
+    const explicitProjection = event({
+      schema_version: 2,
+      workflow: "core_runtime",
+      stage: "core_operation",
+      outcome: null,
+      diagnostic_json: diagnostic,
+    });
+    const discoveredMapProjection = event({
+      schema_version: 2,
+      workflow: "core_runtime",
+      stage: "core_operation",
+      outcome: null,
+      diagnostic_json: "",
+    });
+    let query = "";
+    const client = new Client([
+      (command: unknown) => {
+        query = String((command as Start).input.queryString);
+        return { queryId: "q" };
+      },
+      () => ({
+        status: "Complete",
+        results: query.includes("jsonParse(@message)")
+          ? [explicitProjection]
+          : [discoveredMapProjection],
+      }),
+    ]);
+
+    await expect(handler(client)({ operation: "list" })).resolves.toMatchObject({
+      journeys: [expect.objectContaining({ journey_id: id })],
+    });
+    expect(query).toContain("jsonParse(@message)");
+    expect(query).toContain("jsonStringify(parsed.diagnostic)");
+  });
+
+  it("accepts accounted v2 Ask and meeting stages when their optional diagnostic projection is empty", async () => {
+    const secondId = "33333333-3333-4333-8333-333333333333";
+    const accounting = {
+      schema_version: 2,
+      accounting_kind: "execution",
+      execution_attempt: 1,
+      retry_count: 0,
+      diagnostic_json: "",
+    };
+    const client = new Client([
+      { queryId: "q" },
+      {
+        status: "Complete",
+        results: [
+          event(accounting),
+          event({
+            ...accounting,
+            journey_id: secondId,
+            workflow: "meeting_approval",
+            stage: "meeting_candidate_persist",
+            outcome: "actionable",
+          }),
+        ],
+      },
+    ]);
+
+    await expect(handler(client)({ operation: "list" })).resolves.toMatchObject({
+      journeys: expect.arrayContaining([
+        expect.objectContaining({ journey_id: id, workflow: "ask" }),
+        expect.objectContaining({
+          journey_id: secondId,
+          workflow: "meeting_approval",
+        }),
+      ]),
+    });
+  });
+
+  it("uses an explicit @message map for liveness delivery counters", async () => {
+    const delivered = JSON.stringify({
+      writes_attempted: 4,
+      writes_failed: 0,
+      writes_pending: 0,
+      writes_dropped: 0,
+      rejected_events: 1,
+      attempted_bytes: 32,
+      observer_overhead_us: 9,
+      partial_captures: 0,
+    });
+    let query = "";
+    const client = new Client([
+      (command: unknown) => {
+        query = String((command as Start).input.queryString);
+        return { queryId: "q" };
+      },
+      () => ({
+        status: "Complete",
+        results: [
+          row({
+            observed_at: "2026-09-02T11:59:00.000Z",
+            release_sha: "a".repeat(40),
+            build_number: 42,
+            delivery_json: query.includes("jsonStringify(parsed.delivery)")
+              ? delivered
+              : "",
+          }),
+        ],
+      }),
+    ]);
+
+    await expect(handler(client)({ operation: "health" })).resolves.toMatchObject({
+      health: [
+        expect.objectContaining({
+          delivery: expect.objectContaining({
+            writes_attempted: 4,
+            rejected_events: 1,
+          }),
+        }),
+      ],
+    });
+    expect(query).toContain("jsonStringify(parsed.delivery)");
+  });
+
+  it("uses an explicit @message map to find related core operations", async () => {
+    const operationId = "44444444-4444-4444-8444-444444444444";
+    const spanId = "55555555-5555-4555-8555-555555555555";
+    const diagnostic = JSON.stringify({
+      operation_id: operationId,
+      span_id: spanId,
+      parent_span_id: null,
+      phase: "search_reconciliation",
+      purpose: "search_reconciliation",
+      root: true,
+      linked_journey_ids: [id],
+      counts: {},
+      result: null,
+      generation: null,
+    });
+    let query = "";
+    const client = new Client([
+      (command: unknown) => {
+        query = String((command as Start).input.queryString);
+        return { queryId: "q" };
+      },
+      () => ({
+        status: "Complete",
+        results: query.includes(
+          "jsonStringify(parsed.diagnostic.linked_journey_ids)",
+        )
+          ? [
+              event({
+                journey_id: operationId,
+                schema_version: 2,
+                workflow: "core_runtime",
+                stage: "core_operation",
+                outcome: null,
+                diagnostic_json: diagnostic,
+              }),
+            ]
+          : [],
+      }),
+    ]);
+
+    await expect(
+      handler(client)({ operation: "related", journey_id: id }),
+    ).resolves.toMatchObject({
+      related_operations: [
+        expect.objectContaining({
+          journey_id: operationId,
+          phase: "search_reconciliation",
+        }),
+      ],
+    });
+    expect(query).toContain(
+      "jsonStringify(parsed.diagnostic.linked_journey_ids)",
+    );
+  });
+
   it("rejects unknown, query, query-id, injection, and noncanonical inputs before querying", async () => {
     const client = new Client([]);
     const invoke = handler(client);
