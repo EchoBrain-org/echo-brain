@@ -1,9 +1,9 @@
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import { createJourneyTelemetryV1 } from "../../../shared/journey-telemetry-v1.js";
 import type { CoreRuntimeObservationScopeV1 } from "../../../shared/core-runtime-observation-v1.js";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
-  createJourneyTelemetryEventV1,
+  createJourneyTelemetryV1,
+  recanonicalizeJourneyTelemetryEventV1,
   type JourneyTelemetryObserverV1,
 } from "../../../shared/journey-telemetry-v1.js";
 import {
@@ -217,31 +217,7 @@ export function createStagingJourneyTelemetryTransportV1(
         return;
       }
       // Reconstruct the contract before serialization to drop injected fields.
-      const normalized = createJourneyTelemetryEventV1({
-        journey_id: event.journey_id,
-        sequence: event.sequence,
-        observed_at: event.observed_at,
-        context: {
-          environment: event.environment,
-          workflow: event.workflow,
-          release_sha: event.release_sha,
-          build_number: event.build_number,
-        },
-        event: {
-          stage: event.stage,
-          event: event.event,
-          outcome: event.outcome,
-          failure_class: event.failure_class,
-          retryable: event.retryable,
-          attempt: event.attempt,
-        ...(event.diagnostic === undefined ? {} : { diagnostic: event.diagnostic }),
-        ...(event.accounting === undefined ? {} : { accounting: event.accounting }),
-          elapsed_ms: event.elapsed_ms,
-          queue_age_ms: event.queue_age_ms,
-          retrieval: event.retrieval,
-          llm_usage: event.llm_usage,
-        },
-      });
+      const normalized = recanonicalizeJourneyTelemetryEventV1(event);
       write(normalized);
       for (const metric of formatJourneyTelemetryMetricsV1(normalized)) {
         write(metric);

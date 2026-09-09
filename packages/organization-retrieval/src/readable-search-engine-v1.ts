@@ -601,14 +601,29 @@ function buildSegment(
     const facts = databases.get("facts")!;
     const content = databases.get("content")!;
     const lexical = databases.get("lexical")!;
-    for (const atom of atoms) {
-      const content_binding_sha256 = contentBinding(atom);
-      const provenance_binding_sha256 = provenanceBinding(atom);
-      facts
-        .prepare(
-          `INSERT INTO retrieval_permission_fact (atom_id, authority_id, organization_id, state_lineage_id, envelope_sha256, log_position, record_hash, atom_order, signal_id_sha256, item_kind, approval_id, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, authorization_audit_event_id, authorization_audit_sequence, authorization_audit_entry_sha256, provider_action_sha256, authorization_proof_sha256, content_binding_sha256, provenance_binding_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
+    const boundAtoms = atoms.map((atom) => ({
+      atom,
+      content_binding_sha256: contentBinding(atom),
+      provenance_binding_sha256: provenanceBinding(atom),
+    }));
+    const insertFact = facts.prepare(
+      `INSERT INTO retrieval_permission_fact (atom_id, authority_id, organization_id, state_lineage_id, envelope_sha256, log_position, record_hash, atom_order, signal_id_sha256, item_kind, approval_id, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, authorization_audit_event_id, authorization_audit_sequence, authorization_audit_entry_sha256, provider_action_sha256, authorization_proof_sha256, content_binding_sha256, provenance_binding_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertRelatedAtomPair = facts.prepare(
+      "INSERT INTO retrieval_related_atom_pair (left_atom_id, right_atom_id) VALUES (?, ?)",
+    );
+    const insertContent = content.prepare(
+      `INSERT INTO retrieval_content_atom (atom_id, log_position, record_hash, atom_order, item_kind, text, text_sha256, content_binding_sha256, provenance_binding_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertDocument = lexical.prepare(
+      `INSERT INTO retrieval_lexical_document (atom_id, log_position, atom_order, content_binding_sha256) VALUES (?, ?, ?, ?)`,
+    );
+    const insertPosting = lexical.prepare(
+      "INSERT INTO retrieval_term_posting (term, atom_id, term_frequency) VALUES (?, ?, ?)",
+    );
+    facts.transaction(() => {
+      for (const { atom, content_binding_sha256, provenance_binding_sha256 } of boundAtoms)
+        insertFact.run(
           atom.atom_id,
           atom.authority_id,
           atom.organization_id,
@@ -632,11 +647,12 @@ function buildSegment(
           content_binding_sha256,
           provenance_binding_sha256,
         );
-      content
-        .prepare(
-          `INSERT INTO retrieval_content_atom (atom_id, log_position, record_hash, atom_order, item_kind, text, text_sha256, content_binding_sha256, provenance_binding_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
+      for (const pair of relatedAtomPairs)
+        insertRelatedAtomPair.run(pair.left_atom_id, pair.right_atom_id);
+    })();
+    content.transaction(() => {
+      for (const { atom, content_binding_sha256, provenance_binding_sha256 } of boundAtoms)
+        insertContent.run(
           atom.atom_id,
           atom.record_position,
           atom.record_sha256,
@@ -647,32 +663,21 @@ function buildSegment(
           content_binding_sha256,
           provenance_binding_sha256,
         );
-      lexical
-        .prepare(
-          `INSERT INTO retrieval_lexical_document (atom_id, log_position, atom_order, content_binding_sha256) VALUES (?, ?, ?, ?)`,
-        )
-        .run(
+    })();
+    lexical.transaction(() => {
+      for (const { atom, content_binding_sha256 } of boundAtoms) {
+        insertDocument.run(
           atom.atom_id,
           atom.record_position,
           atom.atom_order,
           content_binding_sha256,
         );
-      for (const [term, term_frequency] of analyzeReadableSearchDocument(
-        atom.text,
-        atom.item_kind,
-      ))
-        lexical
-          .prepare(
-            "INSERT INTO retrieval_term_posting (term, atom_id, term_frequency) VALUES (?, ?, ?)",
-          )
-          .run(term, atom.atom_id, term_frequency);
-    }
-    for (const pair of relatedAtomPairs)
-      facts
-        .prepare(
-          "INSERT INTO retrieval_related_atom_pair (left_atom_id, right_atom_id) VALUES (?, ?)",
-        )
-        .run(pair.left_atom_id, pair.right_atom_id);
+        for (const [term, term_frequency] of analyzeReadableSearchDocument(
+          atom.text,
+          atom.item_kind,
+        )) insertPosting.run(term, atom.atom_id, term_frequency);
+      }
+    })();
     const factRows = rows(
       facts,
       "SELECT * FROM retrieval_permission_fact ORDER BY log_position, atom_order, atom_id",

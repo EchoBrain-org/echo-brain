@@ -610,31 +610,14 @@ export function createJourneyTelemetryEventV1(input: {
   });
 }
 
-function recanonicalizeJourneyTelemetryEventV1(event: JourneyTelemetryEventV1): JourneyTelemetryEventV1 {
+/** Revalidate observer input through the same strict allowlist as new events. */
+export function recanonicalizeJourneyTelemetryEventV1(event: JourneyTelemetryEventV1): JourneyTelemetryEventV1 {
   return createJourneyTelemetryEventV1({
     journey_id: event.journey_id,
     sequence: event.sequence,
     observed_at: event.observed_at,
-    context: {
-      environment: event.environment,
-      workflow: event.workflow,
-      release_sha: event.release_sha,
-      build_number: event.build_number,
-    },
-    event: {
-      stage: event.stage,
-      event: event.event,
-      outcome: event.outcome,
-      failure_class: event.failure_class,
-      retryable: event.retryable,
-      attempt: event.attempt,
-      ...(event.diagnostic === undefined ? {} : { diagnostic: event.diagnostic }),
-      ...(event.accounting === undefined ? {} : { accounting: event.accounting }),
-      elapsed_ms: event.elapsed_ms,
-      queue_age_ms: event.queue_age_ms,
-      retrieval: event.retrieval,
-      llm_usage: event.llm_usage,
-    },
+    context: event,
+    event,
   });
 }
 

@@ -81,6 +81,22 @@ describe("core runtime observations through the existing journey channel", () =>
     expect(records.some((record) => record.content_kind === "model_request")).toBe(true);
     expect(records.some((record) => record.content_kind === "model_response")).toBe(true);
     expect(lines.join("")).not.toContain("fixture-credential-never-record");
+
+    const closedCall = callsObserved[1];
+    const accounting = { kind: "execution", execution_attempt: 2, retry_count: 1, retry_of_attempt: 1 };
+    const beforeInjected = lines.length;
+    transport.observer({
+      ...closedCall,
+      injected: "must-not-serialize",
+      accounting: { ...accounting, injected: "must-not-serialize" },
+      diagnostic: {
+        ...closedCall.diagnostic,
+        injected: "must-not-serialize",
+        counts: { ...closedCall.diagnostic.counts, injected: "must-not-serialize" },
+      },
+    });
+    expect(JSON.parse(lines[beforeInjected]!)).toEqual({ ...closedCall, accounting });
+    expect(lines.slice(beforeInjected).join("")).not.toContain("must-not-serialize");
     transport.close();
   });
 
@@ -114,7 +130,20 @@ describe("core runtime observations through the existing journey channel", () =>
     } });
     expect(records.length).toBeGreaterThan(1);
     expect(records.every((record) => record.truncated === false && Buffer.byteLength(JSON.stringify(record)) < 200_000)).toBe(true);
-    const content = JSON.parse(records.map((record) => record.content).join(""));
+    const serialized = records.map((record) => record.content).join("");
+    records.forEach((record, index) => {
+      expect(record).toMatchObject({
+        schema_version: 2, environment: "staging", workflow: "core_runtime",
+        ...identity, journey_id: linked, sequence: 1,
+        observed_at: "2026-09-08T00:00:00.000Z",
+        stage: "core_operation", content_kind: "meeting_input", span_id: null,
+        capture_id: `${linked}:1`, encoding: "json_chunks",
+        chunk_index: index, chunk_count: records.length,
+        captured_bytes: Buffer.byteLength(serialized), truncated: false,
+      });
+      expect(Object.isFrozen(record)).toBe(true);
+    });
+    const content = JSON.parse(serialized);
     expect(content.text).toBe(text);
     for (const sentinel of ["fixture-bearer", "fixture-password", "fixture-signing", "fixture-grant", "fixture-key", "fixture-echo-grant", "fixture-echo-bearer"]) expect(JSON.stringify(records)).not.toContain(sentinel);
     const partial = formatStagingJourneyContentRecordsV2({ ...identity, journey_id: linked, sequence: 2, observed_at: "2026-09-08T00:00:00.000Z", stage: "core_operation", content_kind: "model_response", content: "x".repeat(9 * 1024 * 1024) });

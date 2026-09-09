@@ -135,10 +135,9 @@ function serializedBytes(record: StagingJourneyContentRecordV1): number | null {
   }
 }
 
-/** Returns null for any malformed identity, so callers write nothing rather than a partial record. */
-export function formatStagingJourneyContentRecordV1(
-  input: StagingJourneyContentRecordInputV1,
-): StagingJourneyContentRecordV1 | null {
+function formatContentIdentity(input: Pick<StagingJourneyContentRecordInputV1,
+  "journey_id" | "sequence" | "observed_at" | "release_sha" | "build_number"
+>) {
   if (
     typeof input?.journey_id !== "string" ||
     !UUID_V4.test(input.journey_id) ||
@@ -148,24 +147,35 @@ export function formatStagingJourneyContentRecordV1(
     typeof input.release_sha !== "string" ||
     !GIT_COMMIT_SHA.test(input.release_sha) ||
     !Number.isSafeInteger(input.build_number) ||
-    input.build_number < 1 ||
-    !includes(STAGING_JOURNEY_CONTENT_STAGES_V1, input.stage) ||
-    !includes(STAGING_JOURNEY_CONTENT_KINDS_V1, input.content_kind)
+    input.build_number < 1
   ) {
     return null;
   }
-  const state: BoundingState = { truncated: false };
-  const content = bounded(input.content, 0, state);
-  const base = {
-    schema_version: STAGING_JOURNEY_CONTENT_SCHEMA_VERSION_V1,
+  return {
     kind: STAGING_JOURNEY_CONTENT_KIND_V1,
     environment: "staging" as const,
-    workflow: "ask" as const,
     journey_id: input.journey_id,
     sequence: input.sequence,
     observed_at: input.observed_at,
     release_sha: input.release_sha,
     build_number: input.build_number,
+  };
+}
+
+/** Returns null for any malformed identity, so callers write nothing rather than a partial record. */
+export function formatStagingJourneyContentRecordV1(
+  input: StagingJourneyContentRecordInputV1,
+): StagingJourneyContentRecordV1 | null {
+  const identity = formatContentIdentity(input);
+  if (identity === null ||
+      !includes(STAGING_JOURNEY_CONTENT_STAGES_V1, input.stage) ||
+      !includes(STAGING_JOURNEY_CONTENT_KINDS_V1, input.content_kind)) return null;
+  const state: BoundingState = { truncated: false };
+  const content = bounded(input.content, 0, state);
+  const base = {
+    ...identity,
+    schema_version: STAGING_JOURNEY_CONTENT_SCHEMA_VERSION_V1,
+    workflow: "ask" as const,
     stage: input.stage,
     content_kind: input.content_kind,
   };
@@ -234,8 +244,8 @@ export function sanitizeJourneyContentV2(input: unknown): { content: unknown; tr
 }
 
 export function formatStagingJourneyContentRecordsV2(input: StagingJourneyContentRecordInputV2): readonly Record<string, unknown>[] {
-  const admitted = formatStagingJourneyContentRecordV1({ ...input, stage: "ask_validation", content_kind: "question", content: null });
-  if (admitted === null ||
+  const identity = formatContentIdentity(input);
+  if (identity === null ||
       ![...STAGING_JOURNEY_CONTENT_STAGES_V1, "core_operation"].includes(input.stage) ||
       ![...STAGING_JOURNEY_CONTENT_KINDS_V1, "meeting_input", "model_request", "model_response", "validation_error"].includes(input.content_kind) ||
       (input.span_id !== undefined && !UUID_V4.test(input.span_id))) return [];
@@ -245,11 +255,12 @@ export function formatStagingJourneyContentRecordsV2(input: StagingJourneyConten
   const characters = Array.from(serialized);
   const size = 24_000;
   const chunkCount = Math.max(1, Math.ceil(characters.length / size));
+  const capturedBytes = Buffer.byteLength(serialized);
   return Array.from({ length: chunkCount }, (_, index) => Object.freeze({
-    ...admitted, schema_version: 2, workflow: input.stage === "core_operation" ? "core_runtime" : "ask",
+    ...identity, schema_version: 2, workflow: input.stage === "core_operation" ? "core_runtime" : "ask",
     stage: input.stage, content_kind: input.content_kind,
     span_id: input.span_id ?? null, capture_id: `${input.journey_id}:${input.sequence}`,
     truncated: sanitized.truncated, encoding: "json_chunks", chunk_index: index, chunk_count: chunkCount,
-    captured_bytes: Buffer.byteLength(serialized), content: characters.slice(index * size, (index + 1) * size).join(""),
+    captured_bytes: capturedBytes, content: characters.slice(index * size, (index + 1) * size).join(""),
   }));
 }

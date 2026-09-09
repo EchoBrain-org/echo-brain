@@ -475,136 +475,90 @@ retry a `result_limit_exceeded` response.
 
 #### Reading core runtime evidence (V2)
 
-The [area-1 handoff](../product/2026-09-08-core-runtime-observability-sprint-v1.md)
-extends the existing event kind with `schema_version: 2` when diagnostic or
-execution-accounting fields are present. Original V1 records remain readable.
-Core observations use workflow `core_runtime`, stage `core_operation`, an
-operation UUID, span/parent UUIDs, and finite `phase` and `purpose` categories.
-They share the existing JSON-lines/EMF path. Metadata is enabled only through
-the existing staging transport gate and immutable image identity.
+V2 adds diagnostics and execution accounting to the existing event kind;
+V1 remains readable. Core events use `core_runtime` / `core_operation`,
+operation/span/parent UUIDs, and finite phase/purpose categories. The existing
+staging gate and immutable image identity enable metadata on the JSON-lines/EMF
+path. See the [implementation and acceptance record](../product/2026-09-08-core-runtime-observability-sprint-v1.md).
 
-Select a slow meeting or Ask, then use **Linked core operations** to inspect its
-worker or server operation. A worker request has an independent operation even
-when HTTP schedules it and returns first. `gate_wait_ms` measures admission to
-the serial gate; its child `worker_execution` measures execution. Timer spans
-record the scheduled delay, actual wake lateness, periodic/failure reason and
-cancellation. A coalesced approval wake is marked on the requesting operation.
-These observations distinguish the existing 30-second timer from gate waits.
-No scheduling or retry interval changes are part of this extension.
+Select a slow meeting or Ask, then use **Linked core operations**:
 
-Search exposes snapshot, enrichment, related-model calls, local build,
-validation and publication separately. Captured/current/published record heads
-and generation identity show exact-head availability or supersession. Record,
-atom, input/output byte, visibility-group, selected/excluded and recomputation
-counts describe actual work. Changed/unchanged/newly-observed group counts are
-relative to this process's previous observed projection input; after restart
-there is no historical comparison. `reused_count: 0` reports the current lack
-of a projection cache. Shared search references link covered approvals to the
-same operation; do not sum their durations or model usage as separate builds.
+| Evidence | Interpretation |
+| --- | --- |
+| Gate wait and child worker execution | Separates queue admission from execution. Queued work owns a trace after its scheduling HTTP request ends. |
+| Timer delay, lateness, reason and cancellation | Distinguishes the existing 30-second poll/failure timer from gate waits; coalesced approval wakes appear on the requesting operation. |
+| Search snapshot, enrichment, model, build, validation and publication | Heads/generation identify availability or supersession. Atom/record/byte/group and selected/excluded counts identify work. |
+| Changed/unchanged/new projection groups; `reused_count: 0` | Compares with the previous observed input in this process, not persisted history or a cache. Restart loses that comparison. |
+| Model calls, purpose, nullable usage and parse/schema/grounding spans | Distinguishes provider failures from validation and separates extraction, related projection, planner and answer work. Request IDs are hashed in metadata; sanitized content may retain them. |
+| HTTP finish/close and Slack `done`/`uncertain`/failure | Server/provider observations, separate from approval commit and searchable publication; they do not measure client receipt or a person's card-view time. |
 
-Every actual model call has its own span, purpose, nullable usage and bounded
-provider/model/finish categories. Provider request IDs are domain-separated
-hashes in metadata and may be present verbatim in sanitized content. Parse,
-schema and grounding boundaries remain separate from provider failures.
-Extraction HTTP rejection preserves the existing immediate error behavior:
-its content record explicitly says `not_read_after_http_rejection`; it does
-not claim to contain that rejected body. Successful HTTP responses, including
-invalid JSON, retain their actual response text in the content channel.
+Shared search references identify one operation covering several approvals.
+Count that build once. `CoreModel*` and legacy `Llm*` metrics overlap; do not
+add them together. Only the new projection includes related-search model calls.
 
-The HTTP span ends at response finish or connection close; it is server-side
-observation, not client receipt or a person's card-view time. The Slack terminal
-update span reports provider `done`/`uncertain` or failure separately from
-approval commit and searchable publication. The existing Ask stage sequence,
-current-Person checks, exact-head reads and audit-before-release still apply.
+The sidecar upgrades V1 rows to historical `legacy` observations. A skip consumes
+an event sequence, not an execution attempt. Measured retries link prior failed
+executions; interrupted work/durable-state reconstruction is `recovery`, with
+no measured failure duration or invented model retry. A competing click leaves
+the winning append/search intact. Historical retry counts remain unknown.
 
-The Explorer displays nested spans, links, raw finite diagnostic fields,
-missing sequence counts, union of observed machine intervals and the remaining
-unaccounted interval. Overlapping spans count once; these fields are diagnostic
-coverage, not an exclusive CPU accounting or a proven distributed critical
-path. UTC positions provide cross-operation correlation and monotonic clocks
-provide new elapsed durations. Recovery has no measured elapsed time. V1
-retry counts are visibly unknown, never `attempt - 1`.
-
-The disposable sidecar upgrades from schema 1 to 2, preserving historical rows
-as `legacy`. A skip reserves only an event sequence, not an execution attempt.
-A newly measured retry links a prior failed execution. Interrupted stages and
-facts recovered from durable state are labelled `recovery`, not measured
-failure/retry latency or extra LLM attempts. A competing click is recorded as
-such without denying or skipping the winning append/search. The overview shows
-measured retries and an explicit historical-unknown count. Do not combine
-`CoreModel*` totals with the existing `Llm*` projections: those are overlapping
-views of the same calls, and the old projection does not cover related search.
-
-CPU, RSS, heap, filesystem operation counters, event-loop delay, active model
-calls and active HTTP requests are process observations and can overlap other
-operations. Event-loop maximum is since transport startup, not an exclusive
-span sample. SQLite lock time and disk-I/O latency are explicitly unavailable;
-filesystem counters are not latency or physical-byte measurements. Host-level
-resource attribution still requires operator evidence.
+Explorer uses UTC for correlation and monotonic elapsed durations for new work.
+Its union of machine intervals counts overlap once and exposes unaccounted time
+and sequence gaps. This is diagnostic coverage, not exclusive CPU accounting
+or a proven distributed critical path. CPU/RSS/heap, filesystem counters,
+active HTTP/model counts and event-loop delay can overlap other operations.
+Event-loop maximum is since transport startup. SQLite lock and disk-I/O latency
+are unavailable; filesystem counters are neither latency nor physical bytes.
 
 #### Opt-in development content and transport completeness
 
-For the explicitly authorized area-1 development rehearsal,
-`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true` additionally captures meeting
-input, actual model request/response bodies, exact validation error evidence,
-and the existing Ask prompts, released context and answers. It requires the
-existing staging metadata gate and valid deploy identity. The default content
-switch, production configuration, retention, permissions and deployment lane
-are unchanged. This is the scoped evolution of the original Ask-only contract.
+`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true` extends Ask capture to meeting
+input, actual model requests/responses and validation evidence. It requires the
+existing staging metadata gate and deploy identity. Production defaults,
+retention, permissions and the deployment lane are unchanged.
 
-V2 content uses `json_chunks`, capture ID/sequence, span ID, UTC time, chunk
-index/count, total captured bytes and an explicit `truncated` flag. Chunks have
-24,000 Unicode characters. The sanitizer bounds traversal at 32 levels and an
-8 Mi character/node budget; overflow is partial, not complete capture. It
-excludes credential/key/grant fields and recognized secrets in text, including
-bearer/basic authorization, private keys and opaque grant shapes. Producers
-project request bodies rather than headers, request/configuration objects or
-credential resolvers. Redacted values are intentionally not reconstructable.
-The Explorer rejects saturated queries and responses above its 1 MiB display
-bound instead of silently shortening evidence. Large individual captures may
-therefore require the operator's existing bounded log-inspection lane.
+V2 records contain `json_chunks`, capture ID/sequence, span/time, chunk index/count,
+captured bytes and `truncated`. Chunks hold 24,000 Unicode characters. Sanitization
+is bounded to 32 levels and an 8 Mi character/node budget; overflow is partial.
+Credential/key/grant fields and recognized secrets in text are redacted.
+Producers submit bodies rather than transport headers/configuration or credential
+resolvers. Redacted content cannot be reconstructed.
 
-Heartbeat `delivery` fields report local writes attempted/failed/pending/dropped,
-rejected observations, attempted bytes, writer/serialization overhead in
-microseconds and partial captures. Pending writes and active core operations
-are bounded at 1,000. Counters are cumulative for that process; they do not
-prove downstream awslogs/CloudWatch ingestion. A completely dropped tail may
-lack a detectable sequence gap: compare heartbeat health and durable outcomes,
-and treat a missing terminal as incomplete. A broken writer cannot report its
-own failure until some output succeeds. Observer/sidecar/content failures stay
-outside business control flow.
+Successful HTTP bodies, including invalid JSON, are captured. Extraction HTTP
+rejections preserve immediate failure: `not_read_after_http_rejection` explicitly
+means the body was not read. Explorer checks chunk/byte consistency and rejects
+saturated queries or output above 1 MiB instead of silently truncating. Larger
+captures require the existing bounded log-inspection lane.
+
+Heartbeat `delivery` counts attempted/failed/pending/dropped writes, rejected
+observations, attempted bytes, serialization/writer microseconds and partial
+captures. Pending writes and active operations are bounded at 1,000. Counts are
+process-cumulative local evidence, not CloudWatch ingestion acknowledgement.
+A dropped tail may leave no gap; compare heartbeat health and durable results,
+and treat missing terminals as incomplete. A broken writer can report failure
+only after output recovers. Observation failures never control business outcomes.
 
 #### Runtime metric and alarm attribution
 
-The legacy `EchoBrain/AuthorityOperations` metrics have no dimensions and may
-combine events from multiple contributing log groups in the same account and
-Region. An alarm email alone cannot identify the host. The received recovery
-email at `2026-09-08T23:51:02Z` concerned
-`echo-authority-observability-v1-authority-alerts`; the earlier empty subscription
-inspection concerned a different staging topic. Neither justifies a subscription
-replacement or deletion.
+Legacy `EchoBrain/AuthorityOperations` metrics have no dimensions and can mix
+source log groups. An alarm email cannot identify the host. The received recovery
+email concerned `echo-authority-observability-v1-authority-alerts`, a different
+topic from the earlier empty-subscription inspection; this is not evidence for
+replacing or deleting subscriptions.
 
-`authority-observability-v1.template.json` keeps the legacy filters and enabled
-alarm actions, and adds matching filters in
-`EchoBrain/AuthorityOperations/${AuthorityHost}`. The two comparison alarms
-have `ActionsEnabled: false`, so the proposed update adds no duplicate alarm
-notifications. This host-specific namespace separates source attribution while
-preserving historical metrics. Namespace, name and dimensions define metric
-identity; filters and alarms must select the same identity. See the official
-[CloudWatch metric concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html),
-[metric transformation contract](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-logs-metricfilter-metrictransformation.html),
-and [alarm actions contract](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudwatch-alarm.html).
+The runtime template preserves legacy filters/actions and adds matching filters
+under `EchoBrain/AuthorityOperations/${AuthorityHost}`. Both comparison alarms
+have `ActionsEnabled: false`. `RuntimeMonitoringAttribution` identifies the stack,
+host, log group, metric namespaces, alarms and ALARM/OK topic. Before changing
+alert routing, the operator must verify that chain through the confirmed
+subscription, compare both metrics, and record recovery delivery. Keep legacy
+actions effective until the reviewed transition. No live attribution or
+four-meeting candidate acceptance is established by offline proofs.
 
-The new `RuntimeMonitoringAttribution` output and comparison descriptions expose
-stack, host, source log group, namespaces, worker alarms and ALARM/OK topic.
-Before any future transition, the local operator must verify the actual
-stack -> host/log group -> metric identity -> alarm -> ALARM/OK topic ->
-confirmed subscription chain, compare both metrics over a bounded window, and
-record recovery delivery. Keep legacy actions effective until that separate
-reviewed transition. This PR performs no live inspection, SNS repair, deploy or
-subscription change. Four-meeting candidate traces, increasing workload and
-infrastructure attribution remain pending; offline proofs do not complete live
-acceptance.
+Metric namespace/name/dimensions must match between filters and alarms. References:
+[metric concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html),
+[metric transformations](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-logs-metricfilter-metrictransformation.html),
+[alarm actions](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudwatch-alarm.html).
 
 ##### Changing the staging journey stacks
 
