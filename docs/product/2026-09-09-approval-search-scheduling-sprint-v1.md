@@ -217,7 +217,7 @@ were running; these single-meeting observations are not a capacity qualification
 lint, build and type checking. Localhost tests require execution outside the
 network sandbox. Live rehearsal and deployment remain pending.
 
-After those checks, BM25 merged in PR #154 at `5d7116e`. This branch incorporates
+After those checks, BM25 merged in PR #154 at `5d7116e`. Merge `05de937` incorporates
 that main-line change without conflicts. The capacity checkpoint retains its
 independent BM25 ranking assertions and the new search drain. Combined focused,
 capacity, full-repository and required CI results are recorded on
