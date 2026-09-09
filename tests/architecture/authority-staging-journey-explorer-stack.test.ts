@@ -209,8 +209,10 @@ describe("staging Journey Explorer backend stack", () => {
     expect(deployedSyntax.status, deployedSyntax.stderr).toBe(0);
     expect(code.ZipFile).not.toContain("SOURCE");
     expect(code.ZipFile).not.toMatch(
-      /event\.(?:query|queryId)|@message|GetLogRecord|FilterLogEvents/,
+      /event\.(?:query|queryId)|GetLogRecord|FilterLogEvents/,
     );
+    expect(code.ZipFile).toContain("jsonParse(@message)");
+    expect(code.ZipFile).toContain("display ");
   });
 
   it("creates only an exact invoke policy for later approved Identity Center assignment", () => {
