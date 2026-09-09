@@ -1,6 +1,7 @@
 # Answer coverage evaluation sprint V1
 
-Status: implementation handoff. Baseline: `main` at `db5153e` (PR #152).
+Status: implemented; review and live qualification pending. Original baseline:
+`main` at `db5153e` (PR #152). Integrated with `c67fcd3` (PRs #154 and #155).
 Worktree: `.worktrees/answer-coverage-112`; branch: `test/answer-coverage-112`.
 Tracking: `Refs #112`; issue #112 remains open because runtime prompt and
 validation decisions remain separate.
@@ -44,7 +45,7 @@ Retain each existing primary case and require one capture for each:
 | Primary case | Expected result | Required groups |
 | --- | --- | --- |
 | Before-approval rollout | Neutral insufficient answer | No disclosure, citation, retrieval, or hint of hidden records. |
-| Team rollout | Answered | Promise limit; first-10 conditional window; production prerequisites and September 12 readiness; four-week adoption gate. |
+| Team rollout | Answered | Promise limit; first-10 conditional window; production prerequisites and September 12 readiness; outstanding work and its six deadlines; four-week adoption gate and later expansion review. |
 | Team private price | Neutral insufficient answer | No price, scope, term, pricing follow-on, citation, retrieval, or existence hint. |
 | Exact approver private price | Answered | Price; first-10-only scope; 30-day evaluation; standard-pricing/Finance follow-on. |
 
@@ -162,6 +163,12 @@ Each case supplies an ordered `material_group_ids` list and a direct
 groups, citation set, outcome and forbidden text. All groups in this fixed,
 approved-record scenario require answers. The evaluator also tests an explicitly
 permitted group-level insufficiency using a modified synthetic oracle.
+
+The hero and both paraphrases ask what work remains and when it is due. Their
+required groups therefore include the six work deadlines and the later expansion
+review, even though a separate supporting question also tests that information.
+An independent regression rejects the earlier six-group answer that omitted this
+clause. The 180-word hero limit is retained.
 
 The captured-result CLI is unchanged. Existing captures must be extended with
 all cases and the following evidence before they can pass:

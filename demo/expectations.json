@@ -663,7 +663,14 @@
         "signed-addendum",
         "verified-security-contact",
         "readiness-review",
-        "adoption-gate"
+        "adoption-gate",
+        "wording-deadline",
+        "location-list-deadline",
+        "capacity-deadline",
+        "addendum-deadline",
+        "security-deadline",
+        "dashboard-deadline",
+        "expansion-review"
       ],
       "required_citation_meeting_ids": [
         "synthetic-demo-northstar-implementation-capacity-2026-08-28",
@@ -925,7 +932,14 @@
         "signed-addendum",
         "verified-security-contact",
         "readiness-review",
-        "adoption-gate"
+        "adoption-gate",
+        "wording-deadline",
+        "location-list-deadline",
+        "capacity-deadline",
+        "addendum-deadline",
+        "security-deadline",
+        "dashboard-deadline",
+        "expansion-review"
       ],
       "required_citation_meeting_ids": [
         "synthetic-demo-northstar-implementation-capacity-2026-08-28",
@@ -962,7 +976,14 @@
         "signed-addendum",
         "verified-security-contact",
         "readiness-review",
-        "adoption-gate"
+        "adoption-gate",
+        "wording-deadline",
+        "location-list-deadline",
+        "capacity-deadline",
+        "addendum-deadline",
+        "security-deadline",
+        "dashboard-deadline",
+        "expansion-review"
       ],
       "required_citation_meeting_ids": [
         "synthetic-demo-northstar-implementation-capacity-2026-08-28",

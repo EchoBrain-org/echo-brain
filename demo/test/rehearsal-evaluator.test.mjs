@@ -229,6 +229,31 @@ function syncTrials(result, id) {
   run.trials = run.trials.map((trial) => ({ ...structuredClone(capture(result, id)), trial_id: trial.trial_id }));
 }
 
+const heroDeadlineGroups = [
+  "wording-deadline",
+  "location-list-deadline",
+  "capacity-deadline",
+  "addendum-deadline",
+  "security-deadline",
+  "dashboard-deadline",
+  "expansion-review"
+];
+
+for (const id of [heroId, `${heroId}-paraphrase-1`, `${heroId}-paraphrase-2`]) {
+  test(`${id} rejects an answer that omits all remaining-work deadlines`, () => {
+    const result = passingResult();
+    const answer = capture(result, id);
+    for (const groupId of heroDeadlineGroups) {
+      const claim = answer.claims.find((item) => item.group_id === groupId);
+      if (!claim) continue;
+      answer.answer_text = answer.answer_text.replace(claim.observed_text, "");
+      answer.claims = answer.claims.filter((item) => item !== claim);
+    }
+    syncTrials(result, id);
+    rejects(result, "09");
+  });
+}
+
 for (const mutation of ["missing", "unexpected", "duplicate", "replaced"]) {
   test(`rejects ${mutation} captured case inventory`, () => {
     const result = passingResult();
