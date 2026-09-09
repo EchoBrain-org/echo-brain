@@ -229,7 +229,7 @@ export function readableSearchGenerationContractV1(input: Readonly<{
           "deciding",
         ],
         decision_item_category_term: "decision",
-        score: "sum-matched-term-frequency",
+        score: READABLE_SEARCH_SCORER_ID,
         order: [
           "score-desc",
           "record-position-desc",

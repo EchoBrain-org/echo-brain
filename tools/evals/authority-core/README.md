@@ -1,4 +1,4 @@
-# Authority core capacity hill climb
+# Authority core evals
 
 Optimize the shared runtime's latency and efficiency as active employees **N**
 and retained history grow. The
@@ -29,6 +29,8 @@ The metric components are:
 | `corpus-v1.mjs` | Generate provider-free history templates and logical postings. |
 | `oracle-v1.mjs` | Independently check ranking (BM25 fixed-point, ADR-0011), observed heads, content, policy ownership and the complete index. |
 | `grading.mjs` | Score every offered operation for diagnostics; failed work is infinite latency. It cannot award a milestone. |
+| `retrieval-quality.mjs` | Measure target recall and rank through the real search engine, using the existing corpus generator. |
+| `search-generation-fixture.mjs` | Build, warm and clean up one real generation for the ranking benchmark and oracle agreement test. |
 
 ```sh
 npm run test:capacity
@@ -36,15 +38,40 @@ npm run check
 ```
 
 These commands verify the components. **They do not run a capacity benchmark.**
-CI runs the component tests and the single-meeting checkpoint after the repository
-checks.
+CI runs the component tests (including ranking quality and 180 oracle/engine
+comparisons) and the single-meeting checkpoint after the repository checks.
+
+For a repeatable ranking diagnostic:
+
+```sh
+npm run eval:retrieval-quality -- --out /tmp/echo-retrieval-quality.json
+```
+
+Defaults: 650 atoms, 300 member-readable target facts, seed
+`retrieval-quality-v1`. Each target supplies two rare text terms; the three
+query classes add zero, three or five frequent terms. Each reports Recall@10,
+MRR@10 and top-1. Targets are selected before scoring, so this measures target
+retrieval independently of the formula oracle. `test:capacity` requires every
+target to remain first for this default fixture. The runner uses the shipped engine;
+there is no alternate scorer implementation. Override `--atoms`, `--queries`
+or `--seed` for exploration.
+
+The report includes corpus/query/code hashes, seed, runtime versions and local
+build/warm/search timings. Timings are diagnostics, not capacity qualification
+or a speedup claim. This artificial-vocabulary test cannot establish natural
+language answer quality; [the four-meeting evaluator](../../../demo/README.md)
+remains the acceptance path for captured answers, citations and visibility.
+
+The frozen V4 definition names the test's original location under
+`tools/evals/retrieval-quality/test/`; it now lives at
+`test/oracle-engine-agreement.test.mjs`. The V4 rules and pins are unchanged.
 
 `grading.mjs` is diagnostic arithmetic only. Its measurement result is never a
 qualification or milestone result: the actual run-integrity verifier and
 milestone protocol remain unimplemented.
 
-Production Authority code matches the pre-hill-climb baseline. No optimization,
-M1 pass or usable N/history limit has been established. The earlier provider
+No core latency improvement, M1 pass or usable N/history limit has been
+established. The earlier provider
 profile and abandoned integration harness were removed; their history remains
 in Git. The core profile requires its own baseline before claiming any gain.
 

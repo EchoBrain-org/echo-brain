@@ -27,19 +27,19 @@ three times scores three times a single mention. Nothing observes this in the
 demo corpus, where a handful of atoms all fit in one answer context. It is
 measurable as soon as the corpus is larger than the top ten.
 
-Measured on 2026-09-09 (`tools/evals/retrieval-quality`, container, same
-tokenizer for both scorers):
+The retained real-engine check runs through the existing Authority core evals:
+`npm run eval:retrieval-quality`. With 650 synthetic atoms, seed
+`retrieval-quality-v1`, and 300 target facts, BM25 retrieves the target first
+for all 900 queries: two rare content terms alone, with three frequent terms,
+and with five frequent terms. Recall@10 and MRR@10 are 1.00 in every class.
+The five frequent terms occur in an average 79.14% of this corpus's atoms.
 
-| View | Term-frequency sum | BM25 |
-| --- | --- | --- |
-| BEIR SciFact, 300 human-labeled queries, nDCG@10 | 0.096 | 0.662 |
-| Same, Recall@10 | 0.182 | 0.791 |
-| Real engine, 650 synthetic atoms, two content terms, Recall@10 | 1.00 | 1.00 |
-| Same query plus three function words present in ~90% of atoms | 0.55 | 1.00 |
-| Same query plus five function words | 0.25 | 1.00 |
-
-Published BM25 on SciFact is about 0.665 nDCG@10, so the tokenizer and the
-reference formula are sane.
+This is a deterministic ranking regression check using artificial vocabulary,
+not evidence of natural-language answer quality or a capacity improvement.
+Earlier exploratory SciFact and old/new scorer comparisons had no retained
+input/result hashes; those numbers are not acceptance evidence. Their one-off
+runner and duplicate reference scorer have been removed. Current reports bind
+their corpus, query plan and executed code with hashes for later comparisons.
 
 ADR-0007 requires a decision before Layer 2 retrieval behavior changes and
 asks for evidence from real question evaluations before adding a refinement
@@ -49,9 +49,8 @@ new model call, no new read authority and no change to what is released.
 
 Options considered:
 
-1. Keep term-frequency sum. Rejected: it is below the lexical floor every
-   comparable system starts from, and the capacity hill climb would freeze it
-   into a baseline that later has to be discarded.
+1. Keep term-frequency sum. Rejected: it gives ubiquitous words the same
+   weight as distinguishing terms, and repetition raises scores linearly.
 2. BM25 with corpus statistics over the whole generation. Rejected: a member's
    scores would depend on how often a term occurs in private segments the
    member cannot read.
@@ -112,8 +111,10 @@ Evidence: `packages/organization-retrieval/test/analyzer.test.ts` (IDF
 ordering, saturation, controlled-term weight, caller-supplied scope);
 `packages/organization-retrieval/test/readable-search-generation.test.ts`
 (private-segment statistics never move a member's results);
-`tools/evals/retrieval-quality/test/oracle-engine-agreement.test.mjs`
+`tools/evals/authority-core/test/oracle-engine-agreement.test.mjs`
 (oracle and engine agree on 180 held-out top tens);
-`tools/evals/retrieval-quality/README.md` (how the numbers above are produced).
+`tools/evals/authority-core/test/retrieval-quality.test.mjs` (target recall
+with frequent terms, included in the existing CI suite);
+`tools/evals/authority-core/README.md` (how the numbers above are produced).
 Acceptance is not a capacity result and not a claim about answer quality;
 the mechanically enforceable claim is the ranking contract above.
