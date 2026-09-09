@@ -1,3 +1,4 @@
+import { annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "../shared/core-runtime-observation-v1.js";
 /**
  * Disposable Layer 2 projection core for material cross-record relationships.
  * It receives only approved retrieval-atom summaries from one exact visibility
@@ -258,6 +259,9 @@ function boundedPairs(
 export async function projectRelatedAtomsV1(
   input: ProjectRelatedAtomsInputV1,
 ): Promise<readonly RelatedAtomPairV1[]> {
+  return observeCoreRuntimeV1("related_projection", () => projectObserved(input));
+}
+async function projectObserved(input: ProjectRelatedAtomsInputV1): Promise<readonly RelatedAtomPairV1[]> {
   if (!nonEmptyString(input.model)) {
     throw new RelatedAtomProjectorError("related atom projector model is invalid");
   }
@@ -282,8 +286,10 @@ export async function projectRelatedAtomsV1(
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
   const unique = new Map<string, RelatedAtomPairV1>();
-  for (const proposed of parseResponse(response)) {
+  const proposals = observeCoreRuntimeSyncV1("model_schema", () => parseResponse(response));
+  for (const proposed of proposals) {
     const pair = supportedCrossRecordPair(proposed, byId);
+    if (pair === undefined) captureCoreRuntimeContentV1("validation_error", { boundary: "related_pair_grounding", rejected: proposed });
     if (pair !== undefined) {
       unique.set(pairKey(pair), pair);
     }
@@ -291,6 +297,8 @@ export async function projectRelatedAtomsV1(
   const sorted = [...unique.values()].sort((left, right) =>
     pairKey(left).localeCompare(pairKey(right)),
   );
-  return boundedPairs(sorted);
+  const accepted = boundedPairs(sorted);
+  annotateCoreRuntimeV1({ counts: { included_count: accepted.length, excluded_count: proposals.length - accepted.length } });
+  return accepted;
 }
 import { canonicalSha256 } from "@echo-brain/federation-protocol";

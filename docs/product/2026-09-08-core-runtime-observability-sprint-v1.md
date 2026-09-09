@@ -1,6 +1,6 @@
 # Area 1: core runtime observability implementation handoff
 
-**Status:** prepared for a separate implementation session; no implementation or deployment yet.
+**Status:** area-1 implementation present with offline evidence below; live acceptance pending. No deployment.
 **Branch:** `feat/core-runtime-observability`.
 **Base:** fetched `origin/main` at `b760a2dd5187e63b98db0417f049b110d1d0b296` (PR #151).
 **Observed runtime:** `clean-v1-20260908-four-meetings-9f186bc`, source `9f186bc2d045d4dfe4737959bed19058fa56a2e3`, CI run `34272767863`.
@@ -135,3 +135,84 @@ Cloud completion means implemented coverage, meaningful offline evidence, requir
 The preparation session creates only this brief and the sanitized historical measurement file. Source code, deployment state and installed products are unchanged. Subsequent commits should clearly identify implementation and validation results, including any area-1 item that remains pending or only partially addressed.
 
 Preparation baseline: Node `22.22.1` / npm `10.9.4` verified; independent `npm ci --no-audit --no-fund` completed; `npm run build:workspaces` passed; the focused command above passed **83 tests in 8 files** against unchanged application code. Historical extraction counts, durations and token totals reconcile. This baseline does not prove the proposed missing telemetry exists. The full `npm run check` and candidate/live verification remain required for the implementation.
+
+
+## Implementation record (2026-09-09)
+
+The branch extends the existing staging journey transport, EMF projections and
+Explorer with V2 core-operation detail and opt-in chunked content. The shared
+observation module is injected at the existing service composition boundary.
+Worker admission/execution/timers, source/cursor/extraction, model and validation
+calls, approval/Slack, shared search preparation/publication and HTTP/Ask paths
+emit correlated evidence. Production defaults and canonical behavior are
+unchanged. The updated [runbook](../operations/RB-OPERATIONS-001-authority-observability.md)
+explains fields, query operations, accounting and remaining unknowns.
+
+Two focused tests first reproduced missing search-phase observations and a
+skip consuming the winning search's first execution attempt. Both now pass.
+Additional regressions exercise V1 sidecar migration, interrupted-stage recovery,
+a losing approval click before append and after restart, independent queued
+worker traces after HTTP completion, concurrent operations, actual adapter
+failure followed by success, throwing observers/writers, content overflow,
+credential exclusion, Explorer field preservation/escaping and overlapping
+intervals. Existing tests continue to cover uncertain Slack retry, exact-head
+search failure, visibility boundaries, authorization, audit and replay.
+
+A search operation is linked to its covered approval journeys once. Meeting
+publication references carry outcomes but do not multiply the measured shared
+latency. Core model totals cover related projection as well as extraction and
+Ask; they overlap the original LLM projections and must not be added together.
+Skips, recovery and historical ordinals are distinguished from measured
+executions/retries. Restart inference does not manufacture measured failure
+latency or a model retry. The dashboard reports historical retry uncertainty.
+
+The runtime monitoring template preserves existing filters and enabled alarm
+actions. Host-attributed comparison metrics/alarms are additive, with comparison
+notifications disabled. Source mapping is inspectable through descriptions and
+`RuntimeMonitoringAttribution`; no topic or subscription is repaired or removed.
+
+### Offline overhead evidence
+
+[Recorded samples](2026-09-08-core-runtime-observability-overhead.json) were
+produced with `node tools/measure-core-runtime-observation.mjs` after the workspace
+build, on Node 22.22.1. Eight alternating batches per mode each performed ten
+real zero-head snapshot/build/validation/publication passes, with identical
+88,000-byte synthetic content supplied to the hook. There were no model or
+network calls; the writer counted output bytes in memory.
+
+| Mode | Median per 10 builds | Events per batch | Output bytes per batch | RSS endpoint range (bytes) |
+| --- | ---: | ---: | ---: | ---: |
+| Off | 140.982 ms | 0 | 0 | 62,504,960-108,216,320 |
+| Metadata | 143.764 ms | 240 | 173,270-173,390 | 65,421,312-114,065,408 |
+| Content | 165.079 ms | 280 | 1,075,913-1,075,990 | 66,584,576-120,225,792 |
+
+The sample file also records per-batch heap deltas. Endpoint memory shares one
+process, so warm caches and GC affect these ranges. This is an instrumentation
+cost experiment over an empty corpus, not a model latency result, load benchmark,
+acceptable-overhead threshold or capacity qualification. Downstream ingestion,
+nonempty/increasing history, and host resource costs remain to be measured.
+
+### Verification and remaining operator work
+
+- Workspace build, documentation checks and lint passed during implementation.
+- Focused telemetry/compatibility suite: 127 tests in 14 files passed; later
+  regression additions and adjacent suites passed independently.
+- Adjacent model/approval suite: 70 tests in four files passed.
+- `npm run capacity:checkpoint` passed both visibility policies with real core
+  authorization, record/publication/retrieval/audit and duplicate replay. Its
+  result remains `qualification: false`, `milestone_verdict: "not-run"`.
+- Final `npm run check` is required at the review head; the PR proof records
+  its final result. The initial sandbox run could not bind loopback fixture
+  ports; verification runs outside that restriction. Earlier
+  assertions for the V1 content shape and executable import allowlist were
+  updated for the new versioned contract.
+
+The local operator still must perform the exact candidate's four-meeting
+rehearsal, inspect complete traces and content across actual providers, increase
+workload/history, verify observable Slack/Ask outcomes, and bind live metrics,
+alarms and the received notification to the actual source host. SQLite lock
+latency, disk-I/O latency and client-observed response duration are explicitly
+unavailable here. Rejected extraction HTTP bodies remain explicitly uncaptured
+to preserve the adapter's immediate rejection behavior. Content is sanitized,
+bounded and can be partial; a missing tail or failed downstream ingestion is
+not proven complete by local writer success. No live acceptance is claimed.

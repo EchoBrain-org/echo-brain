@@ -66,9 +66,7 @@ describe("staging journey telemetry transport v1", () => {
     expect(callback).toBeUndefined();
 
     transport.start();
-    expect(lines[0]).toBe(
-      `${canonicalJson(liveness("startup", STARTED_AT))}\n`,
-    );
+    expect(JSON.parse(lines[0]!)).toMatchObject(liveness("startup", STARTED_AT));
     expect(JSON.parse(lines[1] ?? "{}")).toMatchObject({
       _aws: {
         Timestamp: Date.parse(STARTED_AT),
@@ -83,9 +81,7 @@ describe("staging journey telemetry transport v1", () => {
       JourneyTelemetryAlive: 1,
     });
     callback?.();
-    expect(lines[2]).toBe(
-      `${canonicalJson(liveness("heartbeat", HEARTBEAT_AT))}\n`,
-    );
+    expect(JSON.parse(lines[2]!)).toMatchObject(liveness("heartbeat", HEARTBEAT_AT));
     expect(JSON.parse(lines[3] ?? "{}")).toMatchObject({
       _aws: { Timestamp: Date.parse(HEARTBEAT_AT) },
       JourneyTelemetryAlive: 1,
@@ -540,7 +536,7 @@ describe("staging journey content telemetry switch", () => {
     transport.content_observer({ ...record, journey_id: "nope" });
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0] ?? "")).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       kind: "echo-authority-journey-content-v1",
       environment: "staging",
       workflow: "ask",
@@ -551,7 +547,7 @@ describe("staging journey content telemetry switch", () => {
       stage: "ask_answer",
       content_kind: "answer_output",
       truncated: false,
-      content: { value: { status: "answered" } },
+      content: JSON.stringify({ value: { status: "answered" } }),
     });
     transport.close();
     transport.content_observer(record);

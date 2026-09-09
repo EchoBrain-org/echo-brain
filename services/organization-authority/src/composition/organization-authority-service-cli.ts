@@ -212,6 +212,7 @@ export async function runOrganizationAuthorityServiceCli(
         ? undefined
         : {
             observer: stagingJourneyTelemetry.observer,
+            on_observation_failure: stagingJourneyTelemetry.observation_failure,
             approved_search_backlog_observer:
               stagingJourneyTelemetry.approved_search_backlog_observer,
             release_sha: stagingJourneyTelemetry.identity.release_sha,
@@ -220,6 +221,7 @@ export async function runOrganizationAuthorityServiceCli(
             extraction_model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
           } as const;
     const runtime = await openOrganizationAuthorityService({
+      ...(stagingJourneyTelemetry?.enabled ? { core_runtime_observation: stagingJourneyTelemetry.core_runtime } : {}),
       state_directory: stateDirectory,
       host,
       port: positiveInteger(

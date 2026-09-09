@@ -95,3 +95,11 @@ Graceful close and duplicate-receipt replay do not prove crash or power-loss
 durability. Stage 2 (independent live observations and workload/corpus binding)
 and stage 3 (crash/replay and storage faults) are not implemented. No full M1
 workload has run.
+
+The separate [core-runtime observation experiment](../../../docs/product/2026-09-08-core-runtime-observability-overhead.json)
+measures instrumentation cost with `node tools/measure-core-runtime-observation.mjs`
+after `npm run build:workspaces`. It alternates disabled, metadata and content
+modes over real zero-head generation builds with identical synthetic input.
+It reports time, event/output volume and endpoint memory samples, makes no
+provider calls, and does not modify this benchmark's pinned contract or award
+qualification. It cannot establish a workload limit or provider-latency gain.

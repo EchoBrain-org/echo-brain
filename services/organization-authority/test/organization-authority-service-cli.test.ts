@@ -333,7 +333,7 @@ describe("admitted runtime CLI events", () => {
       if (enabled) {
         expect(records).toHaveLength(1);
         expect(records[0]).toMatchObject({
-          schema_version: 1,
+          schema_version: 2,
           environment: "staging",
           workflow: "ask",
           release_sha: releaseSha,
@@ -341,7 +341,7 @@ describe("admitted runtime CLI events", () => {
           stage: "ask_validation",
           content_kind: "question",
           truncated: false,
-          content: { question: "CONTENT-SWITCH-QUESTION" },
+          content: JSON.stringify({ question: "CONTENT-SWITCH-QUESTION" }),
         });
       } else {
         expect(records).toHaveLength(0);

@@ -1,3 +1,5 @@
+import { observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "../../services/organization-authority/src/shared/core-runtime-observation-v1.js";
+import { createStagingJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -1114,7 +1116,7 @@ describe("staging Journey Explorer custom widget", () => {
     expect(detail).toContain("usage: unavailable");
     expect(detail).toContain("total tokens: not reported");
     expect(detail).toContain("cached input tokens: not reported");
-    expect(detail).toContain(">2</td><td>not reported</td>");
+    expect(detail).toContain(">unknown (legacy ordinal)</td><td>not reported</td>");
     expect(detail).toMatch(
       /Back to recent runs<\/button><cwdb-action action="call" display="widget" endpoint="arn:aws:lambda:us-west-2:012345678901:function:customWidget-echo-staging-journey-explorer-v1">(.*?)<\/cwdb-action>/,
     );
@@ -1254,5 +1256,43 @@ describe("staging Journey Explorer custom widget", () => {
         endpointArn: endpoint,
       }),
     ).resolves.toEqual({ error: "invalid_request" });
+  });
+});
+
+
+describe("core observation Explorer round trip", () => {
+  it("reads real emitted V2 spans, preserves diagnostic fields, and renders escaped content", async () => {
+    const lines: string[] = [];
+    const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 42 }, { write: (line) => { lines.push(line); } }, { content_enabled: true });
+    await observeCoreRuntimeV1("search_reconciliation", async () => {
+      annotateCoreRuntimeV1({ linked_journey_ids: [id], counts: { captured_head: 4 } });
+      observeCoreRuntimeSyncV1("search_build", () => { annotateCoreRuntimeV1({ counts: { atom_count: 12 } }); });
+    }, transport.core_runtime);
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    const events = lines.map((line) => JSON.parse(line) as Record<string, unknown>).filter((item) => item.kind === "echo-authority-journey-stage-v1");
+    const operationId = String(events[0]!.journey_id);
+    const rows = events.map((item) => row({ ...item, diagnostic_json: JSON.stringify(item.diagnostic) } as Record<string, string>));
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
+    const result = await handler(client)({ operation: "detail", journey_id: operationId });
+    expect(result).toMatchObject({ history_complete: true, status: "complete", missing_sequence_count: 0, stages: expect.arrayContaining([expect.objectContaining({ diagnostic: expect.objectContaining({ phase: "search_build", counts: expect.objectContaining({ atom_count: 12 }), linked_journey_ids: [id] }) })]) });
+    const related = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
+    expect(await handler(related)({ operation: "related", journey_id: id })).toMatchObject({ related_operations: [expect.objectContaining({ journey_id: operationId })] });
+    const chunks = [row({ journey_id: id, sequence: 1, schema_version: 2, content_kind: "validation_error", capture_id: `${id}:1`, chunk_count: 2, chunk_index: 0, truncated: false, content: '<script>alert("fixture")</script>' })];
+    const content = new Client([{ queryId: "q" }, { status: "Complete", results: chunks }]);
+    const rendered = String(await handler(content)({ operation: "content", journey_id: id, capture_sequence: 1, render: true }));
+    expect(rendered).toContain("incomplete: missing or conflicting chunks");
+    expect(rendered).toContain("&lt;script&gt;");
+    expect(rendered).not.toContain('<script>alert');
+    transport.close();
+  });
+
+  it("counts overlapping spans once and distinguishes explicit execution retries from legacy ordinals", async () => {
+    const rows = [
+      event({ stage: "ask_validation", event: "started", outcome: null, observed_at: "2026-09-02T11:58:00.000Z", elapsed_ms: 0 }),
+      event({ sequence: 2, stage: "ask_authorization", event: "succeeded", outcome: null, observed_at: "2026-09-02T11:58:01.000Z", elapsed_ms: 1000, schema_version: 2, accounting_kind: "execution", execution_attempt: 1, retry_count: 0 }),
+      event({ sequence: 3, observed_at: "2026-09-02T11:58:02.000Z", elapsed_ms: 2000 }),
+    ];
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: rows }]);
+    expect(await handler(client)({ operation: "detail", journey_id: id })).toMatchObject({ observed_interval_union_ms: 2000, unaccounted_interval_ms: 0 });
   });
 });

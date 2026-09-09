@@ -93,6 +93,32 @@ afterEach(() => {
 });
 
 describe("meeting approval journey telemetry v1", () => {
+  it("does not count a skip before execution as a retry, including after restart", async () => {
+    const path = stateFile();
+    const events: JourneyTelemetryEventV1[] = [];
+    let recorder = telemetry(openState(path), events);
+    const intake = recorder.beginOrResumeSource(source())!;
+    recorder.succeedStage(intake);
+    recorder.skipStage(intake, "meeting_search_publication");
+    recorder.close();
+    recorder = telemetry(openState(path), events);
+    const first = recorder.beginStage(intake, "meeting_search_publication")!;
+    recorder.failStage(first, new Error("fixture build failure"));
+    const second = recorder.beginStage(intake, "meeting_search_publication")!;
+    recorder.succeedStage(second, { outcome: "published" });
+    await flushObserver();
+    expect(first.attempt).toBe(1);
+    expect(events.filter((event) => event.stage === "meeting_search_publication"))
+      .toEqual([
+        expect.objectContaining({ event: "skipped", accounting: { kind: "skip", execution_attempt: 0, retry_count: 0 } }),
+        expect.objectContaining({ event: "started", accounting: { kind: "execution", execution_attempt: 1, retry_count: 0, retry_of_attempt: null } }),
+        expect.objectContaining({ event: "failed", accounting: { kind: "execution", execution_attempt: 1, retry_count: 0, retry_of_attempt: null } }),
+        expect.objectContaining({ event: "started", accounting: { kind: "execution", execution_attempt: 2, retry_count: 1, retry_of_attempt: 1 } }),
+        expect.objectContaining({ event: "succeeded", accounting: { kind: "execution", execution_attempt: 2, retry_count: 1, retry_of_attempt: 1 } }),
+      ]);
+    recorder.close();
+  });
+
   it("emits a deterministic source start and success sequence without serializing business values", async () => {
     const events: JourneyTelemetryEventV1[] = [];
     const recorder = telemetry(openState(stateFile()), events, {
@@ -366,6 +392,7 @@ describe("meeting approval journey telemetry v1", () => {
         observed_at: SOURCE_CLOSED,
         stage: "meeting_extraction",
         event: "failed",
+        accounting: expect.objectContaining({ kind: "recovery", retry_count: 0 }),
         attempt: 1,
         elapsed_ms: 0,
         failure_class: "unknown",
@@ -389,6 +416,7 @@ describe("meeting approval journey telemetry v1", () => {
         observed_at: SOURCE_CARD_STAGED,
         stage: "meeting_extraction",
         event: "started",
+        accounting: expect.objectContaining({ kind: "execution", execution_attempt: 1, retry_count: 0, retry_of_attempt: null }),
         attempt: 2,
       }),
     ]);

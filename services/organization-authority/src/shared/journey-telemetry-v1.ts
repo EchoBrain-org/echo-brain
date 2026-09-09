@@ -1,3 +1,4 @@
+import { normalizeCoreRuntimeDetailV1, type CoreRuntimeDetailV1 } from "./core-runtime-observation-v1.js";
 import { randomUUID } from "node:crypto";
 
 /**
@@ -16,10 +17,11 @@ export const JOURNEY_ENVIRONMENTS_V1 = Object.freeze([
 ] as const);
 export type JourneyEnvironmentV1 = (typeof JOURNEY_ENVIRONMENTS_V1)[number];
 
-export const JOURNEY_WORKFLOWS_V1 = Object.freeze(["ask", "meeting_approval"] as const);
+export const JOURNEY_WORKFLOWS_V1 = Object.freeze(["ask", "meeting_approval", "core_runtime"] as const);
 export type JourneyWorkflowV1 = (typeof JOURNEY_WORKFLOWS_V1)[number];
 
 export const JOURNEY_STAGES_V1 = Object.freeze([
+  "core_operation",
   "ask_validation",
   "ask_authorization",
   "ask_planner",
@@ -202,7 +204,16 @@ export interface JourneyTelemetryContextV1 {
 }
 
 /** Only stage-local fields are accepted after a journey has started. */
+export interface JourneyExecutionAccountingV2 {
+  readonly kind: "execution" | "skip" | "recovery" | "competing_action" | "legacy" | "shared_reference";
+  readonly execution_attempt: number;
+  readonly retry_count: number;
+  readonly retry_of_attempt?: number | null;
+}
+
 export interface JourneyStageEventInputV1 {
+  readonly accounting?: JourneyExecutionAccountingV2;
+  readonly diagnostic?: CoreRuntimeDetailV1;
   readonly stage: JourneyStageV1;
   readonly event: JourneyEventV1;
   readonly outcome?: JourneyOutcomeV1 | null;
@@ -217,7 +228,9 @@ export interface JourneyStageEventInputV1 {
 }
 
 export interface JourneyTelemetryEventV1 extends JourneyTelemetryContextV1 {
-  readonly schema_version: typeof JOURNEY_TELEMETRY_SCHEMA_VERSION_V1;
+  readonly schema_version: 1 | 2;
+  readonly accounting?: JourneyExecutionAccountingV2;
+  readonly diagnostic?: CoreRuntimeDetailV1;
   readonly kind: typeof JOURNEY_TELEMETRY_KIND_V1;
   readonly observed_at: string;
   readonly journey_id: JourneyIdV1;
@@ -277,6 +290,7 @@ const ASK_COUNT_STAGES = new Set<JourneyStageV1>([
   "ask_response",
 ]);
 const STAGES_BY_WORKFLOW = Object.freeze({
+    core_runtime: Object.freeze(["core_operation"] as const),
     ask: Object.freeze([
       "ask_validation",
       "ask_authorization",
@@ -481,6 +495,14 @@ function normalizeLlmUsage(input: JourneyLlmUsageInputV1): JourneyLlmUsageV1 {
   });
 }
 
+function normalizeAccounting(input: JourneyExecutionAccountingV2): JourneyExecutionAccountingV2 {
+  if (!["execution", "skip", "recovery", "competing_action", "legacy", "shared_reference"].includes(input.kind)) invalid("accounting kind");
+  const execution_attempt = validSequence(input.execution_attempt, "execution_attempt", 0);
+  const retry_count = validSequence(input.retry_count, "retry_count", 0);
+  if (retry_count > Math.max(0, execution_attempt - 1)) invalid("retry count exceeds executions");
+  return Object.freeze({ kind: input.kind, execution_attempt, retry_count, ...(input.retry_of_attempt === undefined ? {} : { retry_of_attempt: input.retry_of_attempt === null ? null : validSequence(input.retry_of_attempt, "retry_of_attempt", 1) }) });
+}
+
 function normalizeOutcome(
   stage: JourneyStageV1,
   event: JourneyEventV1,
@@ -563,7 +585,9 @@ export function createJourneyTelemetryEventV1(input: {
     invalid("queue_age_ms is only allowed for approval action verification");
   }
   return Object.freeze({
-    schema_version: JOURNEY_TELEMETRY_SCHEMA_VERSION_V1,
+    schema_version: input.event.accounting === undefined && input.event.diagnostic === undefined ? JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 : 2,
+    ...(input.event.diagnostic === undefined ? {} : { diagnostic: normalizeCoreRuntimeDetailV1(input.event.diagnostic) }),
+    ...(input.event.accounting === undefined ? {} : { accounting: normalizeAccounting(input.event.accounting) }),
     kind: JOURNEY_TELEMETRY_KIND_V1,
     observed_at: timestamp(input.observed_at),
     journey_id: journeyId,
@@ -604,6 +628,8 @@ function recanonicalizeJourneyTelemetryEventV1(event: JourneyTelemetryEventV1): 
       failure_class: event.failure_class,
       retryable: event.retryable,
       attempt: event.attempt,
+      ...(event.diagnostic === undefined ? {} : { diagnostic: event.diagnostic }),
+      ...(event.accounting === undefined ? {} : { accounting: event.accounting }),
       elapsed_ms: event.elapsed_ms,
       queue_age_ms: event.queue_age_ms,
       retrieval: event.retrieval,

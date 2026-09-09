@@ -161,7 +161,7 @@ describe("Authority minimal observability stack", () => {
     expect(readyFilter.Properties).toMatchObject({
       FilterPattern: '{ $.kind = "echo-clean-live-runtime-ready-v1" }',
     });
-    expect(alarms).toHaveLength(4);
+    expect(alarms).toHaveLength(6);
     for (const [, alarm] of alarms) {
       expect(alarm.Properties?.AlarmActions).toEqual([{ Ref: "AlertTopic" }]);
       expect(alarm.Properties?.OKActions).toEqual([{ Ref: "AlertTopic" }]);
@@ -196,6 +196,21 @@ describe("Authority minimal observability stack", () => {
         TreatMissingData: "notBreaching",
       });
     }
+  });
+
+  it("retains effective legacy alarms while exposing disabled host-attributed comparisons", () => {
+    const stack = template();
+    for (const metric of ["WorkerFailure", "RuntimeReady"]) {
+      const legacy = resource(stack, `${metric}MetricFilter`).Properties!;
+      const attributed = resource(stack, `Attributed${metric}MetricFilter`).Properties!;
+      const alarm = resource(stack, `Attributed${metric}Alarm`).Properties!;
+      expect(attributed.LogGroupName).toEqual(legacy.LogGroupName);
+      expect(attributed.FilterPattern).toEqual(legacy.FilterPattern);
+      expect(attributed.MetricTransformations).toMatchObject([{ MetricName: metric, MetricNamespace: { "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}" } }]);
+      expect(alarm).toMatchObject({ ActionsEnabled: false, Namespace: { "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}" }, MetricName: metric, Period: 300, Threshold: 3 });
+      expect(resource(stack, `Repeated${metric}Alarm`).Properties!.ActionsEnabled).not.toBe(false);
+    }
+    expect(stack.Outputs.RuntimeMonitoringAttribution).toBeDefined();
   });
 
   it("attaches narrowly scoped Docker log-write permissions to the supplied host role", () => {

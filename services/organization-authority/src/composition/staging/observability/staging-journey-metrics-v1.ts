@@ -82,6 +82,8 @@ function normalizedStagingEvent(
         failure_class: event.failure_class,
         retryable: event.retryable,
         attempt: event.attempt,
+        ...(event.diagnostic === undefined ? {} : { diagnostic: event.diagnostic }),
+        ...(event.accounting === undefined ? {} : { accounting: event.accounting }),
         elapsed_ms: event.elapsed_ms,
         queue_age_ms: event.queue_age_ms,
         retrieval: event.retrieval,
@@ -132,18 +134,24 @@ export function formatJourneyTelemetryMetricsV1(
   const timestamp = canonicalTimestamp(event.observed_at);
   if (timestamp === null) return Object.freeze([]);
 
-  const workflowStage = { workflow: event.workflow, stage: event.stage };
+  const workflowStage = { workflow: event.workflow, stage: (event.workflow === "core_runtime" ? event.diagnostic?.phase : undefined) ?? event.stage };
   const records: StagingJourneyMetricRecordV1[] = [];
 
+  if (event.diagnostic?.phase === "model_call" && event.event !== "started") {
+    const counts = event.diagnostic.counts;
+    const values: MetricValue[] = [["CoreModelAttempt", 1, "Count"]];
+    if (counts.total_tokens != null) values.push(["CoreModelTotalTokens", counts.total_tokens, "Count"], ["CoreModelUsageReported", 1, "Count"]);
+    records.push(record(timestamp, { workflow: "core_runtime", stage: event.diagnostic.purpose }, values));
+  }
   if (event.event === "started") {
     const metrics: MetricValue[] = [["StageStarted", 1, "Count"]];
-    if (event.attempt > 1) metrics.push(["StageRetryAttempt", 1, "Count"]);
+    if (event.accounting?.kind === "execution" && event.accounting.retry_of_attempt != null) metrics.push(["StageRetryAttempt", 1, "Count"]);
     records.push(record(timestamp, workflowStage, metrics));
   }
   if (event.event === "succeeded") {
     records.push(record(timestamp, workflowStage, [
       ["StageSucceeded", 1, "Count"],
-      ["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"],
+      ...(["shared_reference", "recovery"].includes(event.accounting?.kind ?? "") ? [] : [["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"] as MetricValue]),
     ]));
     if (event.outcome !== null) {
       records.push(record(timestamp, {
@@ -155,7 +163,7 @@ export function formatJourneyTelemetryMetricsV1(
   if (event.event === "failed") {
     records.push(record(timestamp, workflowStage, [
       ["StageFailed", 1, "Count"],
-      ["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"],
+      ...(["shared_reference", "recovery"].includes(event.accounting?.kind ?? "") ? [] : [["StageClosedLatencyMs", event.elapsed_ms, "Milliseconds"] as MetricValue]),
     ]));
     records.push(record(timestamp, {
       ...workflowStage,
@@ -169,7 +177,7 @@ export function formatJourneyTelemetryMetricsV1(
     records.push(record(timestamp, workflowStage, [["StageSkipped", 1, "Count"]]));
   }
 
-  if (event.llm_usage !== null) {
+  if (event.llm_usage !== null && event.accounting?.kind !== "recovery") {
     const usage = event.llm_usage;
     const metrics: MetricValue[] = [
       ["LlmAttempt", 1, "Count"],

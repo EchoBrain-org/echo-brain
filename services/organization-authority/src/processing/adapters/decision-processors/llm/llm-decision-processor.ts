@@ -1,3 +1,4 @@
+import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "../../../../shared/core-runtime-observation-v1.js";
 import { createHash } from 'node:crypto';
 import {
   AdapterError,
@@ -451,7 +452,7 @@ function rawSignals(
 ): ParsedRawSignals {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    parsed = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(content) as unknown);
   } catch {
     throw new AdapterError(
       'temporarily_unavailable',
@@ -908,11 +909,15 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         false,
       );
     }
+    captureCoreRuntimeContentV1("meeting_input", meeting);
     const renderedMeeting = renderMeeting(meeting);
     const startedAt = this.providerStartedAt();
     let response: StructuredGenerationResult;
     try {
-      response = await this.client.generateStructured({
+      response = await observeCoreRuntimeV1("model_call", async () => {
+        observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model });
+        annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(SYSTEM_PROMPT + renderedMeeting.prompt), input_tokens: null, output_tokens: null, total_tokens: null } });
+        const value = await this.client.generateStructured({
         model: this.model,
         systemPrompt: SYSTEM_PROMPT,
         userPrompt: renderedMeeting.prompt,
@@ -921,6 +926,10 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         ...(operation?.signal === undefined
           ? {}
           : { signal: operation.signal }),
+        });
+        observeCoreModelMetadataV1({ provider: this.client.provider, model: this.model, ...(value.requestId === undefined ? {} : { request_id: value.requestId }), ...(value.stopReason === undefined ? {} : { finish_reason: value.stopReason }) });
+        annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(value.content), input_tokens: value.inputTokens ?? null, output_tokens: value.outputTokens ?? null, total_tokens: value.totalTokens ?? null, provider_latency_ms: this.providerElapsedMs(startedAt) } });
+        return value;
       });
     } catch (error) {
       const observation =
@@ -973,7 +982,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     });
     assertNotCancelled(operation?.signal, 'extraction');
 
-    const extracted = rawSignals(response.content, meeting.time?.timezone);
+    const extracted = observeCoreRuntimeSyncV1("model_schema", () => rawSignals(response.content, meeting.time?.timezone));
 
     // The response is accepted only when every declared signal is grounded.
     const verified: {
@@ -981,6 +990,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       id: string;
       evidence: EvidenceSpan[];
     }[] = [];
+    observeCoreRuntimeSyncV1("model_grounding", () => {
     for (const raw of extracted.signals) {
       const seenEvidenceIds = new Set<string>();
       const evidence: EvidenceSpan[] = [];
@@ -1020,6 +1030,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         evidence,
       });
     }
+    });
     const decisionIdsByRawIndex = new Map(
       verified
         .filter((entry) => entry.raw.kind === 'decision')

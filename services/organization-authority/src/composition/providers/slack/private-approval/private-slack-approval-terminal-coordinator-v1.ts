@@ -1,3 +1,4 @@
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "../../../../shared/core-runtime-observation-v1.js";
 /**
  * Private Block Kit D2-to-D3 worker.
  *
@@ -120,6 +121,8 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
       signal.throwIfAborted();
       const approvalId = queued.receipt.approval_id;
       this.synthesizeActionQueueSuccessIfMissing(approvalId);
+      const knownDecision = this.observedDurableDecision(approvalId);
+      if (knownDecision !== null) this.synthesizeTerminalSuccessIfMissing(knownDecision);
       const terminalAttempt = this.beginTerminalStage(approvalId);
       try {
         const terminal = await this.options.control_plane.finalize(
@@ -141,7 +144,7 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
             throw recordError;
           }
           this.succeedStage(terminalAttempt, { outcome: "denied" });
-          this.skipRejectedOrDeniedDownstreamStages(approvalId);
+          if (knownDecision === null) this.skipRejectedOrDeniedDownstreamStages(approvalId);
           continue;
         }
         // A competing terminal click cannot become the decision terminal.
@@ -156,8 +159,9 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
             this.failStage(terminalAttempt, recordError);
             throw recordError;
           }
-          this.succeedStage(terminalAttempt, { outcome: "denied" });
-          this.skipRejectedOrDeniedDownstreamStages(approvalId);
+          annotateCoreRuntimeV1({ result: "competing_action" });
+          const winner = this.observedDurableDecision(approvalId);
+          if (winner !== null) this.succeedStage(terminalAttempt, { outcome: winner.outcome });
           continue;
         }
         this.failStage(terminalAttempt, error);
@@ -257,8 +261,7 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     if (this.hasTerminalStage(approvalId, "meeting_approval_action_queue")) return;
     const attempt = this.beginStageForApproval(
       approvalId,
-      "meeting_approval_action_queue",
-    );
+      "meeting_approval_action_queue", "recovery");
     this.succeedStage(attempt);
   }
 
@@ -274,12 +277,13 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
       for (const denied of this.options.control_plane.listDenied()) {
         signal.throwIfAborted();
         const approvalId = denied.approval_id;
+        const winner = this.observedDurableDecision(approvalId);
+        if (winner !== null) { this.synthesizeTerminalSuccessIfMissing(winner); continue; }
         this.synthesizeActionQueueSuccessIfMissing(approvalId);
         if (!this.hasTerminalStage(approvalId, "meeting_terminal_persist")) {
           const attempt = this.beginStageForApproval(
             approvalId,
-            "meeting_terminal_persist",
-          );
+            "meeting_terminal_persist", "recovery");
           this.succeedStage(attempt, { outcome: "denied" });
         }
         this.skipRejectedOrDeniedDownstreamStages(approvalId);
@@ -290,18 +294,24 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     }
   }
 
+  private observedDurableDecision(approvalId: string): DurablePrivateApprovalTerminalV1 | null {
+    if (!this.options.journey_telemetry) return null;
+    try { return this.options.control_plane.listTerminals().find((terminal) => terminal.resolution.approval_id === approvalId) ?? null; }
+    catch { return null; }
+  }
+
   private synthesizeTerminalSuccessIfMissing(
     terminal: DurablePrivateApprovalTerminalV1,
   ): void {
     const approvalId = terminal.resolution.approval_id;
     if (this.hasTerminalStage(approvalId, "meeting_terminal_persist")) return;
-    const attempt = this.beginStageForApproval(approvalId, "meeting_terminal_persist");
+    const attempt = this.beginStageForApproval(approvalId, "meeting_terminal_persist", "recovery");
     this.succeedStage(attempt, { outcome: terminal.outcome });
   }
 
   private synthesizeRecordAppendSuccessIfMissing(approvalId: string): void {
     if (!this.hasTerminalStage(approvalId, "meeting_record_append")) {
-      const attempt = this.beginStageForApproval(approvalId, "meeting_record_append");
+      const attempt = this.beginStageForApproval(approvalId, "meeting_record_append", "recovery");
       this.succeedStage(attempt);
     }
     // Re-mark independently of the stage event. A crash or disposable-sidecar
@@ -337,9 +347,10 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
       | "meeting_approval_action_queue"
       | "meeting_terminal_persist"
       | "meeting_record_append",
+    observationKind: "execution" | "recovery" = "execution",
   ): MeetingApprovalJourneyStageAttemptV1 | null {
     try {
-      return this.options.journey_telemetry?.beginStageForApproval(approvalId, stage) ?? null;
+      return this.options.journey_telemetry?.beginStageForApproval(approvalId, stage, undefined, observationKind) ?? null;
     } catch {
       return null;
     }
@@ -394,7 +405,12 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     if (presentation === undefined) {
       throw new Error("private terminal has no frozen Slack card presentation");
     }
-    const outcome = await this.options.poster.renderTerminal({
+    const outcome = await observeCoreRuntimeV1("slack_terminal_update", async () => {
+      try {
+        const journey = this.options.journey_telemetry?.readForApproval(terminal.approval_id);
+        if (journey) annotateCoreRuntimeV1({ linked_journey_ids: [journey.journey_id] });
+      } catch { /* optional correlation */ }
+      const result = await this.options.poster.renderTerminal({
       approval_id: terminal.approval_id,
       outcome: terminal.outcome,
       policy_label:
@@ -403,6 +419,9 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
           : null,
       dm_channel_id: presentation.assignment.dm_channel.channel_id,
       provider_message_ts: presentation.provider_message_ts,
+      });
+      annotateCoreRuntimeV1({ result: result.kind === "done" ? "done" : "uncertain" });
+      return result;
     });
     if (outcome.kind === "done") {
       await this.options.authority.markTerminalCardRendered(

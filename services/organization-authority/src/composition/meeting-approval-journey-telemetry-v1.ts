@@ -1,3 +1,4 @@
+import { currentCoreRuntimeDetailV1 } from "../shared/core-runtime-observation-v1.js";
 import { join } from "node:path";
 import type { AdapterError } from "../processing/core/contracts/adapter.js";
 import { AdapterError as AdapterFailure } from "../processing/core/contracts/adapter.js";
@@ -48,6 +49,7 @@ export type MeetingApprovalSearchBacklogObserverV1 = (
 export interface MeetingApprovalJourneyTelemetryConfigV1 {
   readonly state_directory: string;
   readonly observer: JourneyTelemetryObserverV1;
+  readonly on_observation_failure?: () => void;
   readonly release_sha: string;
   readonly build_number: number;
   readonly extraction_provider: JourneyLlmProviderV1;
@@ -180,6 +182,7 @@ class MeetingApprovalJourneyTelemetryV1
             open.attempt,
             "failed",
             observed_at,
+            true,
           );
           this.emit(open.journey_id, reserved.sequence, observed_at, {
             // State admission has already restricted this row to MEETING_STAGES.
@@ -188,16 +191,19 @@ class MeetingApprovalJourneyTelemetryV1
             attempt: open.attempt,
             elapsed_ms: 0,
             failure_class: "unknown",
+            recovered: true,
             retryable: true,
             ...(open.stage === "meeting_extraction"
               ? { llm_usage: this.extractionUsage(null, 0) }
               : {}),
           });
         } catch {
+      this.observationFailed();
           // Continue reconciling independent journeys if one sidecar row is bad.
         }
       }
     } catch {
+      this.observationFailed();
       // Recovery is telemetry-only and must never prevent service startup.
     }
   }
@@ -214,6 +220,7 @@ class MeetingApprovalJourneyTelemetryV1
       }
       return Object.freeze({ observed_at, monotonic_ms });
     } catch {
+      this.observationFailed();
       return Object.freeze({
         observed_at: new Date().toISOString(),
         monotonic_ms: performance.now(),
@@ -247,6 +254,7 @@ class MeetingApprovalJourneyTelemetryV1
         started,
       );
     } catch {
+      this.observationFailed();
       return null;
     }
   }
@@ -262,6 +270,7 @@ class MeetingApprovalJourneyTelemetryV1
         input.approval_id,
       );
     } catch {
+      this.observationFailed();
       // Correlation is optional and never weakens candidate persistence.
     }
   }
@@ -273,6 +282,7 @@ class MeetingApprovalJourneyTelemetryV1
         ? null
         : Object.freeze({ journey_id: stored.journey_id });
     } catch {
+      this.observationFailed();
       return null;
     }
   }
@@ -281,12 +291,14 @@ class MeetingApprovalJourneyTelemetryV1
     journey: MeetingApprovalJourneyRefV1,
     stage: MeetingApprovalJourneyStageV1,
     started: MeetingApprovalJourneyClockV1 = this.captureClock(),
+    observation_kind: "execution" | "recovery" = "execution",
   ): MeetingApprovalJourneyStageAttemptV1 | null {
     try {
       const reserved = this.state.reserveStageStart(
         journey.journey_id,
         stage,
         started.observed_at,
+        observation_kind,
       );
       this.emit(journey.journey_id, reserved.sequence, started.observed_at, {
         stage,
@@ -301,6 +313,7 @@ class MeetingApprovalJourneyTelemetryV1
         started,
       });
     } catch {
+      this.observationFailed();
       return null;
     }
   }
@@ -309,9 +322,10 @@ class MeetingApprovalJourneyTelemetryV1
     approval_id: string,
     stage: MeetingApprovalJourneyStageV1,
     started?: MeetingApprovalJourneyClockV1,
+    observation_kind?: "execution" | "recovery",
   ): MeetingApprovalJourneyStageAttemptV1 | null {
     const journey = this.readForApproval(approval_id);
-    return journey === null ? null : this.beginStage(journey, stage, started);
+    return journey === null ? null : this.beginStage(journey, stage, started, observation_kind);
   }
 
   succeedStage(
@@ -367,6 +381,7 @@ class MeetingApprovalJourneyTelemetryV1
           : { llm_usage: input.llm_usage }),
       });
     } catch {
+      this.observationFailed();
       // Telemetry closure is best effort.
     }
   }
@@ -425,6 +440,7 @@ class MeetingApprovalJourneyTelemetryV1
           : { llm_usage: input.llm_usage }),
       });
     } catch {
+      this.observationFailed();
       // Telemetry closure is best effort.
     }
   }
@@ -449,6 +465,7 @@ class MeetingApprovalJourneyTelemetryV1
         elapsed_ms: 0,
       });
     } catch {
+      this.observationFailed();
       // Telemetry skipping is best effort.
     }
   }
@@ -481,6 +498,7 @@ class MeetingApprovalJourneyTelemetryV1
           (latest.status === "closed" && latest.result === "succeeded"))
       );
     } catch {
+      this.observationFailed();
       return false;
     }
   }
@@ -537,6 +555,7 @@ class MeetingApprovalJourneyTelemetryV1
         );
       }
     } catch {
+      this.observationFailed();
       // Human-wait timing is optional telemetry state.
     }
   }
@@ -548,6 +567,7 @@ class MeetingApprovalJourneyTelemetryV1
       const age = Date.parse(observed_at) - Date.parse(journey.card_staged_at);
       return Number.isSafeInteger(age) && age >= 0 ? age : null;
     } catch {
+      this.observationFailed();
       return null;
     }
   }
@@ -563,6 +583,7 @@ class MeetingApprovalJourneyTelemetryV1
         this.observeApprovedSearchBacklog();
       }
     } catch {
+      this.observationFailed();
       // Search correlation is optional telemetry state.
     }
   }
@@ -588,6 +609,7 @@ class MeetingApprovalJourneyTelemetryV1
       );
       return batch;
     } catch {
+      this.observationFailed();
       // Global search reconciliation must never depend on run-detail telemetry.
       return Object.freeze([]);
     }
@@ -614,6 +636,7 @@ class MeetingApprovalJourneyTelemetryV1
       }
       this.awaitingSearchBatches.delete(attempts);
     } catch {
+      this.observationFailed();
       // Global search reconciliation must never depend on run-detail telemetry.
     } finally {
       this.observeApprovedSearchBacklog();
@@ -630,6 +653,7 @@ class MeetingApprovalJourneyTelemetryV1
       }
       this.awaitingSearchBatches.delete(attempts);
     } catch {
+      this.observationFailed();
       // Global search reconciliation must never depend on run-detail telemetry.
     } finally {
       this.observeApprovedSearchBacklog();
@@ -665,6 +689,7 @@ class MeetingApprovalJourneyTelemetryV1
       } satisfies MeetingApprovalSearchBacklogSnapshotV1);
       void Promise.resolve(observer(snapshot)).catch(() => undefined);
     } catch {
+      this.observationFailed();
       // Backlog health is telemetry-only and remains fail-open.
     }
   }
@@ -673,8 +698,13 @@ class MeetingApprovalJourneyTelemetryV1
     try {
       this.state.close();
     } catch {
+      this.observationFailed();
       // Closing telemetry cannot hide service shutdown completion.
     }
+  }
+
+  private observationFailed(): void {
+    try { this.config.on_observation_failure?.(); } catch { /* failure reporting is optional */ }
   }
 
   private emit(
@@ -691,8 +721,10 @@ class MeetingApprovalJourneyTelemetryV1
       readonly retryable?: boolean;
       readonly queue_age_ms?: number | null;
       readonly llm_usage?: JourneyLlmUsageInputV1;
+      readonly recovered?: boolean;
     },
   ): void {
+    const shared = event.stage === "meeting_search_publication" ? currentCoreRuntimeDetailV1() : null;
     const normalized = createJourneyTelemetryEventV1({
       journey_id,
       sequence,
@@ -703,7 +735,9 @@ class MeetingApprovalJourneyTelemetryV1
         release_sha: this.config.release_sha,
         build_number: this.config.build_number,
       },
-      event,
+      event: { ...event, ...(shared === null ? {} : { diagnostic: shared }), accounting: event.event === "skipped"
+        ? { kind: "skip", execution_attempt: 0, retry_count: 0 }
+        : { ...this.state.executionAccounting(journey_id, event.stage, event.attempt), ...(event.recovered ? { kind: "recovery" as const } : shared !== null ? { kind: "shared_reference" as const } : {}) } },
     });
     observeJourneyTelemetryBestEffortV1(this.config.observer, normalized);
   }

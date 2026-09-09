@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "qualification": false,
+  "measured_at": "2026-09-09T07:12:10.056Z",
+  "node": "v22.22.1",
+  "workload": "8 alternating batches per mode, 10 real zero-head search snapshot/build/validate/publication passes per batch, identical synthetic content supplied to the observation hook; no model/network calls",
+  "limitations": [
+    "Empty corpus is an instrumentation experiment, not a capacity or provider benchmark",
+    "RSS/heap are endpoint samples in one process; GC and warm caches affect differences",
+    "Transport writer counts bytes in memory; downstream CloudWatch ingestion cost is not measured"
+  ],
+  "fixture_content_bytes": 88000,
+  "median_batch_wall_ms": {
+    "off": 140.982,
+    "metadata": 143.764,
+    "content": 165.079
+  },
+  "sample": {
+    "off": [
+      {
+        "wall_ms": 152.64,
+        "events": 0,
+        "output_bytes": 0,
+        "rss_before_bytes": 62504960,
+        "rss_after_bytes": 65290240,
+        "heap_delta_bytes": 1263584
+      },
+      {
+        "wall_ms": 143.308,
+        "events": 0,
+        "output_bytes": 0,
+        "rss_before_bytes": 75628544,
+        "rss_after_bytes": 76496896,
+        "heap_delta_bytes": 2385664
+      },
+      {
+        "wall_ms": 136.89,
+        "events": 0,
+        "output_bytes": 0,
+        "rss_before_bytes": 76496896,
+        "rss_after_bytes": 80986112,
+        "heap_delta_bytes": -1705080
+      },
+      {
+        "wall_ms": 131.67,
+        "events": 0,
+        "output_bytes": 0,
+        "rss_before_bytes": 84852736,
+        "rss_after_bytes": 84852736,
+        "heap_delta_bytes": -1852976
+      },
+      {
+        "wall_ms": 132.816,
+        "events": 0,
+        "output_bytes": 0,
+        "rss_before_bytes": 84852736,
+        "rss_after_bytes": 84885504,
+        "heap_delta_bytes": 6347080
+      },
+      {
+        "wall_ms": 138.656,
+        "events": 0,
+        "output_bytes": 0,
+        "rss_before_bytes": 104628224,
+        "rss_after_bytes": 104628224,
+        "heap_delta_bytes": 6317392
+      },
+      {
+        "wall_ms": 169.075,
+        "events": 0,
+        "output_bytes": 0,
+        "rss_before_bytes": 104628224,
+        "rss_after_bytes": 105791488,
+        "heap_delta_bytes": 6311344
+      },
+      {
+        "wall_ms": 144.887,
+        "events": 0,
+        "output_bytes": 0,
+        "rss_before_bytes": 108216320,
+        "rss_after_bytes": 108216320,
+        "heap_delta_bytes": 6314488
+      }
+    ],
+    "metadata": [
+      {
+        "wall_ms": 145.23,
+        "events": 240,
+        "output_bytes": 173270,
+        "rss_before_bytes": 65421312,
+        "rss_after_bytes": 66584576,
+        "heap_delta_bytes": -159072
+      },
+      {
+        "wall_ms": 151.953,
+        "events": 240,
+        "output_bytes": 173327,
+        "rss_before_bytes": 75382784,
+        "rss_after_bytes": 75628544,
+        "heap_delta_bytes": 319256
+      },
+      {
+        "wall_ms": 142.298,
+        "events": 240,
+        "output_bytes": 173328,
+        "rss_before_bytes": 80986112,
+        "rss_after_bytes": 85573632,
+        "heap_delta_bytes": 4270400
+      },
+      {
+        "wall_ms": 138.911,
+        "events": 240,
+        "output_bytes": 173325,
+        "rss_before_bytes": 88915968,
+        "rss_after_bytes": 84852736,
+        "heap_delta_bytes": -8714728
+      },
+      {
+        "wall_ms": 139.347,
+        "events": 240,
+        "output_bytes": 173321,
+        "rss_before_bytes": 84885504,
+        "rss_after_bytes": 84885504,
+        "heap_delta_bytes": -4186328
+      },
+      {
+        "wall_ms": 141.595,
+        "events": 240,
+        "output_bytes": 173364,
+        "rss_before_bytes": 99336192,
+        "rss_after_bytes": 104628224,
+        "heap_delta_bytes": -7170304
+      },
+      {
+        "wall_ms": 166.03,
+        "events": 240,
+        "output_bytes": 173390,
+        "rss_before_bytes": 105791488,
+        "rss_after_bytes": 106381312,
+        "heap_delta_bytes": -4309112
+      },
+      {
+        "wall_ms": 160.235,
+        "events": 240,
+        "output_bytes": 173390,
+        "rss_before_bytes": 114065408,
+        "rss_after_bytes": 108216320,
+        "heap_delta_bytes": -10691712
+      }
+    ],
+    "content": [
+      {
+        "wall_ms": 163.975,
+        "events": 280,
+        "output_bytes": 1075913,
+        "rss_before_bytes": 66584576,
+        "rss_after_bytes": 74727424,
+        "heap_delta_bytes": 6724760
+      },
+      {
+        "wall_ms": 166.183,
+        "events": 280,
+        "output_bytes": 1075925,
+        "rss_before_bytes": 74727424,
+        "rss_after_bytes": 75382784,
+        "heap_delta_bytes": -2682624
+      },
+      {
+        "wall_ms": 169.132,
+        "events": 280,
+        "output_bytes": 1075922,
+        "rss_before_bytes": 85573632,
+        "rss_after_bytes": 86130688,
+        "heap_delta_bytes": 67048
+      },
+      {
+        "wall_ms": 155.904,
+        "events": 280,
+        "output_bytes": 1075925,
+        "rss_before_bytes": 86130688,
+        "rss_after_bytes": 88915968,
+        "heap_delta_bytes": 3078096
+      },
+      {
+        "wall_ms": 155.103,
+        "events": 280,
+        "output_bytes": 1075921,
+        "rss_before_bytes": 84885504,
+        "rss_after_bytes": 89391104,
+        "heap_delta_bytes": 6067688
+      },
+      {
+        "wall_ms": 162.853,
+        "events": 280,
+        "output_bytes": 1075932,
+        "rss_before_bytes": 89391104,
+        "rss_after_bytes": 99336192,
+        "heap_delta_bytes": 2004712
+      },
+      {
+        "wall_ms": 209.039,
+        "events": 280,
+        "output_bytes": 1075990,
+        "rss_before_bytes": 106381312,
+        "rss_after_bytes": 120225792,
+        "heap_delta_bytes": 20807736
+      },
+      {
+        "wall_ms": 278.329,
+        "events": 280,
+        "output_bytes": 1075990,
+        "rss_before_bytes": 120225792,
+        "rss_after_bytes": 114065408,
+        "heap_delta_bytes": -12547392
+      }
+    ]
+  }
+}
