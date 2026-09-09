@@ -119,7 +119,7 @@ usage:
   onboard-clean-v1.sh stage-rehearsal-inputs --operation-id <onboarding-id> --artifact-sha256 <sha256> --input-dir <absolute-private-nonsecret-input-directory> --staging-synthetic-meetings-dir <absolute-private-four-note-directory>
   onboard-clean-v1.sh prepare-rehearsal --operation-id <onboarding-id>
   onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
-  onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id>]
+  onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id> [--content-telemetry <true|false>]]
   onboard-clean-v1.sh resume
   onboard-clean-v1.sh status
 EOF
@@ -1413,13 +1413,17 @@ disarm_rehearsal_rollback() {
 }
 
 replace_rehearsal() {
-  local reuse_operation_id='' reuse_stage='' current_telemetry='' configured_telemetry=''
+  local reuse_operation_id='' reuse_stage='' current_telemetry='' configured_telemetry='' requested_telemetry='' staged_telemetry=''
   local -a marker_values=()
   if [[ $# -eq 1 && "$1" == --confirm-no-live-users ]]; then
     :
-  elif [[ $# -eq 3 && "$1" == --confirm-no-live-users && "$2" == --reuse-provider-inputs ]]; then
+  elif [[ $# -eq 3 || $# -eq 5 ]] && [[ "${1:-}" == --confirm-no-live-users && "${2:-}" == --reuse-provider-inputs ]]; then
     reuse_operation_id="$3"
     require_rehearsal_operation_id "$reuse_operation_id"
+    if [[ $# -eq 5 ]]; then
+      [[ "$4" == --content-telemetry && ( "$5" == true || "$5" == false ) ]] || usage
+      requested_telemetry="$5"
+    fi
   else
     usage
   fi
@@ -1464,6 +1468,7 @@ replace_rehearsal() {
     REHEARSAL_STAGE_DIRECTORY="$reuse_stage"
     REHEARSAL_OPERATION_ID="$reuse_operation_id"
     REHEARSAL_ARTIFACT_SHA256="${marker_values[2]}"
+    staged_telemetry="${marker_values[8]}"
     runtime_profile_supports_content_telemetry "$ACTIVE_RUNTIME_PROFILE_FILE" || \
       fail 'current runtime profile does not support content telemetry preservation'
     configured_telemetry="$(environment_content_telemetry_bool "$ACTIVE_RUNTIME_PROFILE_FILE")" || \
@@ -1472,7 +1477,13 @@ replace_rehearsal() {
       fail 'could not verify the running Authority content telemetry setting'
     [[ "$configured_telemetry" == "$current_telemetry" ]] || \
       fail 'running Authority content telemetry differs from the verified Compose setting; resolve the drift before replacing the rehearsal'
-    REHEARSAL_CONTENT_TELEMETRY="$configured_telemetry"
+    if [[ "$staged_telemetry" == true || "$staged_telemetry" == false ]]; then
+      [[ -z "$requested_telemetry" || "$requested_telemetry" == "$staged_telemetry" ]] || \
+        fail 'requested content telemetry does not match the staged rehearsal receipt'
+      REHEARSAL_CONTENT_TELEMETRY="$staged_telemetry"
+    else
+      REHEARSAL_CONTENT_TELEMETRY="${requested_telemetry:-$configured_telemetry}"
+    fi
     local required_source
     for required_source in \
       "$PRIVATE_DIR/oidc-config.json" "$PRIVATE_DIR/oidc-client-secret" \

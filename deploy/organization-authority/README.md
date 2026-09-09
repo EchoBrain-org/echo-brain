@@ -332,7 +332,8 @@ commands in Session Manager, using the operation ID from the receipt:
 
 ```sh
 ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users \
-  --reuse-provider-inputs onboarding-fresh-four-meetings-001
+  --reuse-provider-inputs onboarding-fresh-four-meetings-001 \
+  --content-telemetry true
 ./onboard-clean-v1.sh prepare-rehearsal \
   --operation-id onboarding-fresh-four-meetings-001
 ./onboard-clean-v1.sh resume
@@ -354,11 +355,15 @@ an interrupted operation's receipt and lock, and follow the shared recovery
 procedure instead of deleting them or starting a competing operation.
 
 The new environment is rendered from its release-matched profile. Region and
-host remain bound to the existing log group, and the current explicit staging
-journey content-telemetry setting is preserved. Duplicate or malformed settings,
-or a new profile unable to preserve that setting, stop replacement before data
-is reset. No old environment file is copied into the new rehearsal. Continue
-with the browser login, Slack link and four-card permission proof above.
+host remain bound to the existing log group. Without `--content-telemetry`, the
+current explicit staging journey content-telemetry setting is preserved. The
+provider-reuse command may explicitly select `true` or `false`; the selection is
+bound into its receipt before reset and is reused by every `prepare-rehearsal`
+retry. The wrapper still requires the running value to match the verified
+Compose setting. Duplicate or malformed settings, or a new profile unable to
+support content telemetry, stop replacement before data is reset. No old
+environment file is copied into the new rehearsal. Continue with the browser
+login, Slack link and four-card permission proof above.
 
 ## Resumable initial-owner onboarding
 

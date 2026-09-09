@@ -23,6 +23,7 @@
   "scripts": {
     "clean": "node tools/build.mjs --clean",
     "build:authority-image": "node tools/build-authority-image.mjs",
+    "build:staging-journey-explorer-template": "node tools/build-staging-journey-explorer-template.mjs",
     "bundle:authority-staging-host": "node tools/build-authority-staging-host-bundle.mjs",
     "authority:local": "node tools/authority-local.mjs",
     "authority:staging": "node tools/authority-staging.mjs",
@@ -65,6 +66,7 @@
     "@types/node": "22.15.3",
     "@typescript-eslint/eslint-plugin": "8.60.1",
     "@typescript-eslint/parser": "8.60.1",
+    "esbuild": "0.27.0",
     "eslint": "9.39.4",
     "typescript": "5.9.2",
     "vitest": "4.1.10"

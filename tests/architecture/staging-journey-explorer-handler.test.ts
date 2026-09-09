@@ -1,20 +1,40 @@
 import { observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "../../services/organization-authority/src/shared/core-runtime-observation-v1.js";
 import { createStagingJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
-const mod = require(
-  resolve(
-    import.meta.dirname,
-    "../../deploy/organization-authority/staging-journey-explorer-handler-v1.cjs",
+const template = JSON.parse(
+  readFileSync(
+    resolve(
+      import.meta.dirname,
+      "../../deploy/organization-authority/authority-staging-journey-explorer-v1.template.json",
+    ),
+    "utf8",
   ),
 ) as {
+  Resources: {
+    CustomWidgetJourneyExplorer: { Properties: { Code: { ZipFile: string } } };
+  };
+};
+const deployedDirectory = mkdtempSync(
+  join(tmpdir(), "echo-staging-journey-explorer-"),
+);
+const deployedHandler = join(deployedDirectory, "index.cjs");
+writeFileSync(
+  deployedHandler,
+  template.Resources.CustomWidgetJourneyExplorer.Properties.Code.ZipFile,
+);
+const mod = require(deployedHandler) as {
   createStagingJourneyExplorerHandlerV1(
     options: Record<string, unknown>,
   ): (event: unknown) => Promise<Record<string, unknown> | string>;
 };
+
+afterAll(() => rmSync(deployedDirectory, { recursive: true, force: true }));
 class Start {
   public constructor(public readonly input: Record<string, unknown>) {}
 }

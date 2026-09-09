@@ -954,6 +954,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       configureReusableProviderInputs(fixture);
       const drifted = fixture.run("replace-rehearsal", { ECHO_FAKE_CONTENT_TELEMETRY: "true" }, [
         "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+        "--content-telemetry", "false",
       ]);
       expect(drifted.status).toBe(1);
       expect(drifted.stderr).toContain("content telemetry differs");
@@ -981,6 +982,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       const replacement = fixture.run("replace-rehearsal", { ECHO_FAKE_CONTENT_TELEMETRY: "true" }, [
         "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+        "--content-telemetry", "false",
       ]);
       expect(replacement.status, replacement.stderr).toBe(0);
       const lock = join(fixture.deploy, "clean-data", ".authority-operation-lock");
@@ -994,8 +996,77 @@ describe("clean-v1 Organization Authority deployment profile", () => {
 
       const prepared = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
       expect(prepared.status, prepared.stderr).toBe(0);
+      expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":false');
+      expect(readFileSync(environment, "utf8")).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("binds an explicit provider-reuse telemetry selection across replacement and prepare retries", () => {
+    const fixture = preparedStatusFixture();
+    const operationId = "onboarding-rehearsal-explicit-telemetry";
+    try {
+      const { stage } = stageRehearsalInputs(fixture, operationId);
+      configureReusableProviderInputs(fixture);
+
+      const standalone = fixture.run("replace-rehearsal", {}, [
+        "--confirm-no-live-users", "--content-telemetry", "true",
+      ]);
+      expect(standalone.status).toBe(2);
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
+      expect(existsSync(join(stage, "input"))).toBe(false);
+
+      const invalid = fixture.run("replace-rehearsal", {}, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+        "--content-telemetry", "enabled",
+      ]);
+      expect(invalid.status).toBe(2);
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
+      expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"state":"staged"');
+
+      const interrupted = fixture.run("replace-rehearsal", {
+        ECHO_FAKE_FAIL_REHEARSAL_ARCHIVE: "true",
+      }, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+        "--content-telemetry", "true",
+      ]);
+      expect(interrupted.status).toBe(1);
+      expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"state":"staged"');
       expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":true');
-      expect(readFileSync(environment, "utf8")).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true");
+      expect(existsSync(join(stage, "input"))).toBe(false);
+
+      const callsBeforeMismatch = readFileSync(fixture.calls, "utf8");
+      const mismatch = fixture.run("replace-rehearsal", {}, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+        "--content-telemetry", "false",
+      ]);
+      expect(mismatch.status).toBe(1);
+      expect(mismatch.stderr).toContain("does not match the staged rehearsal receipt");
+      expect(readFileSync(fixture.calls, "utf8").split(" down --remove-orphans").length).toBe(
+        callsBeforeMismatch.split(" down --remove-orphans").length,
+      );
+      expect(existsSync(join(stage, "input"))).toBe(false);
+
+      const replacement = fixture.run("replace-rehearsal", {}, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+      ]);
+      expect(replacement.status, replacement.stderr).toBe(0);
+      expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":true');
+
+      const lock = join(fixture.deploy, "clean-data", ".authority-operation-lock");
+      mkdirSync(lock, { mode: 0o700 });
+      writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, { mode: 0o600 });
+      const held = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(held.status).toBe(1);
+      rmSync(lock, { recursive: true });
+
+      const retry = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(retry.status, retry.stderr).toBe(0);
+      expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":true');
+      expect(readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8")).toContain(
+        "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true",
+      );
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }

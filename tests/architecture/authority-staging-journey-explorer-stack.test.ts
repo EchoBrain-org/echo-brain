@@ -14,6 +14,7 @@ const HANDLER = resolve(
 );
 const STAGING_LOG_GROUP =
   "/echo-brain/authority/authority-staging.echobrain.org";
+const INLINE_TEMPLATE_LIMIT = 51_200;
 
 type Resource = {
   readonly Type: string;
@@ -72,6 +73,21 @@ describe("staging Journey Explorer backend stack", () => {
     );
     expect(serialized).not.toMatch(
       /AWS::ApiGateway|AWS::CloudFront|AWS::DynamoDB|AWS::S3::Bucket/,
+    );
+  });
+
+  it("is deterministically generated and fits CloudFormation's inline template limit", () => {
+    const generated = spawnSync(
+      process.execPath,
+      [
+        "tools/build-staging-journey-explorer-template.mjs",
+        "--check",
+      ],
+      { cwd: REPO, encoding: "utf8" },
+    );
+    expect(generated.status, generated.stderr).toBe(0);
+    expect(Buffer.byteLength(readFileSync(TEMPLATE))).toBeLessThan(
+      INLINE_TEMPLATE_LIMIT,
     );
   });
 
@@ -145,7 +161,7 @@ describe("staging Journey Explorer backend stack", () => {
     expect(serialized.match(/"Resource":"\*"/g)).toHaveLength(1);
   });
 
-  it("deploys the exact reviewed source as one bounded, non-public custom-widget Lambda", () => {
+  it("deploys the exact generated artifact as one bounded, non-public custom-widget Lambda", () => {
     const stack = template();
     const fn = resource(stack, "CustomWidgetJourneyExplorer");
     expect(fn.DependsOn).toBeUndefined();
@@ -179,12 +195,18 @@ describe("staging Journey Explorer backend stack", () => {
     expect(fn.Properties).not.toHaveProperty("VpcConfig");
     expect(fn.Properties).not.toHaveProperty("Layers");
     const code = fn.Properties?.Code as Record<string, unknown>;
-    expect(code).toEqual({ ZipFile: readFileSync(HANDLER, "utf8") });
+    expect(code).toEqual({ ZipFile: expect.any(String) });
 
     const syntax = spawnSync(process.execPath, ["--check", HANDLER], {
       encoding: "utf8",
     });
     expect(syntax.status, syntax.stderr).toBe(0);
+    const deployedSyntax = spawnSync(
+      process.execPath,
+      ["--check", "-"],
+      { encoding: "utf8", input: code.ZipFile as string },
+    );
+    expect(deployedSyntax.status, deployedSyntax.stderr).toBe(0);
     expect(code.ZipFile).not.toContain("SOURCE");
     expect(code.ZipFile).not.toMatch(
       /event\.(?:query|queryId)|@message|GetLogRecord|FilterLogEvents/,
