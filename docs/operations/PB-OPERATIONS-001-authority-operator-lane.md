@@ -45,6 +45,7 @@ every round. Fresh runtime and journey evidence is still required for each run.
 | Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling, stage, canary, human Slack approval, operator client checks, human final decision, promote. Execute reviewed merged tooling from a clean checkout. |
 | First onboarding | Follow [resumable onboarding](../../deploy/organization-authority/README.md#resumable-initial-owner-onboarding) and the actor table below. Host-local onboarding remains in the human Session Manager lane. |
 | Transfer initial inputs | Onboarding-transfer `preflight`, `plan`, review the named change set, then `execute`. Run `cleanup` only when execute retains the receipt and reports `cleanup_required`. |
+| Reset unreleased staging while reusing provider credentials | Follow [provider reuse](../../deploy/organization-authority/README.md#reuse-provider-credentials-for-a-fresh-staging-rehearsal): transfer the new nonsecret inputs, then human `replace-rehearsal --reuse-provider-inputs` and `prepare-rehearsal`. The transfer alone does not reset or prepare the host. |
 | Export the initial-owner invitation | Onboarding-transfer [`export-plan` / `export-execute`](../../deploy/organization-authority/README.md#private-invitation-export-to-the-initial-owner-mac). Review the exact target, accepted release and recipient; obtain private-handoff approval if that scope is not already authorized. |
 | Create or repair the retained boundary | `authority:staging slot-init`: plan, human change-set review, execute the unchanged operation. |
 | Create the first host | Reviewed `up --initialize-blank-data-volume` on a never-prepared volume only. |
@@ -80,6 +81,7 @@ Use the actor below; preserve the underlying identity, approval and health check
 | Valid-session checks, planning, receipt polling, artifact verification, kit installation, authenticated Person reads and telemetry inspection | Local operator within the authorized lane. |
 | Missing/expired login, MFA, provider secret entry, account switching/logout, Slack identity-link exchange and Interactivity setup | Human. The operator prepares the exact next action and resumes after completion. |
 | Initial host `resume`, `status`, and release-canary `./update-clean-v1.sh canary` | Human in Session Manager. The remote release CLI does not support host onboarding. Group consecutive host commands only when no intervening human action is needed. |
+| Unreleased rehearsal replacement and `prepare-rehearsal` using retained provider inputs | Human in Session Manager after the nonsecret transfer completes. Credentials stay on the host; use the exact operation ID from its receipt. |
 | Private Slack-card approval | Human, for each card. |
 | Infrastructure change set or private handoff not yet approved for its exact scope | Human reviews the prepared result once. |
 | Final decision on the exact candidate release | Human, after successful candidate-client checks. |

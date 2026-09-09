@@ -1,3 +1,4 @@
+import { observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "../../shared/core-runtime-observation-v1.js";
 import { AdapterError } from "../core/contracts/adapter.js";
 
 export const MEETING_PROCESSING_WORKER_PHASES_V1 = Object.freeze([
@@ -107,7 +108,8 @@ export class MeetingProcessingWorkerLifecycleV1
 
   constructor(
     private readonly emit: (event: MeetingProcessingWorkerTelemetryEventV1) => void,
-    private readonly now: () => number = Date.now,
+    private readonly now: () => number = () => performance.now(),
+    private readonly observation?: CoreRuntimeObservationScopeV1,
   ) {}
 
   startCycle(): void {
@@ -162,7 +164,7 @@ export class MeetingProcessingWorkerLifecycleV1
       elapsed_ms: 0,
     });
     try {
-      const value = await operation();
+      const value = await observeCoreRuntimeV1(phase, operation, this.observation);
       signal?.throwIfAborted();
       this.report({
         schema_version: 1,

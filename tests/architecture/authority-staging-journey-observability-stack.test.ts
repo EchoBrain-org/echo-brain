@@ -394,10 +394,11 @@ describe("staging journey observability overview stack", () => {
     if (rates === undefined) throw new Error("stage-rate query is required");
     expect(rates).toContain('filter event in ["succeeded", "failed"]');
     expect(rates).toContain('sum(if(event = "failed", 1, 0))');
-    expect(rates).toContain('sum(if(attempt > 1, 1, 0))');
+    expect(rates).toContain('accounting.kind = "execution" and ispresent(accounting.retry_of_attempt)');
+    expect(rates).not.toContain('attempt > 1');
     expect(rates).toContain("succeeded_attempts / closed_attempts");
     expect(rates).toContain("failed_attempts / closed_attempts");
-    expect(rates).toContain("retry_attempts / closed_attempts");
+    expect(rates).toContain("retry_attempts as measured_retry_attempts, unknown_retry_attempts");
     expect(rates).toContain(
       "display workflow, stage, closed_attempts, 100 * succeeded_attempts / closed_attempts",
     );

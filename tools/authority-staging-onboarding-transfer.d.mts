@@ -24,8 +24,19 @@ export type OnboardingTransferAws = Readonly<{
 
 export function createOnboardingInputArchive(input: Readonly<{
   sourceDir: string;
+  /** Optional exact four-file staging fixture directory. */
+  stagingSyntheticMeetingsDir?: string;
+  /** Rehearsal-only mode: archive just the three non-secret inputs. */
+  reuseCurrentProviderInputs?: true;
   output: string;
 }>): Readonly<{ path: string; sha256: string }>;
+
+export type OnboardingTransferPreflightFile = Readonly<{
+  name: string;
+  state: "ready" | "missing" | "empty" | "too_large" | "not_private_regular";
+  detail: string | null;
+  bytes?: number;
+}>;
 
 /**
  * The local AWS CLI boundary: fixed to echo-prod and stripped of inherited
@@ -46,24 +57,35 @@ export function preflightOnboardingInput(configPath: string): Readonly<{
   ready: boolean;
   operation_id: string;
   directory_private: boolean;
-  required_files: readonly Readonly<{
-    name: string;
-    state: "ready" | "missing" | "empty" | "too_large" | "not_private_regular";
-    detail: string | null;
-    bytes?: number;
-  }>[];
+  required_files: readonly OnboardingTransferPreflightFile[];
   /** Count only: preflight deliberately does not disclose unexpected names. */
   unexpected_file_count: number;
   total_bytes: number;
   total_bytes_limit: number;
   /** Exact number of bytes to remove from required inputs, zero when in limit. */
   bytes_over_limit: number;
+  /** Present only when the controller selected the fixed four-fixture source. */
+  staging_synthetic_meetings?: Readonly<{
+    directory_private: boolean;
+    required_files: readonly OnboardingTransferPreflightFile[];
+    /** Count only: extra fixture names are never disclosed. */
+    unexpected_file_count: number;
+    ready: boolean;
+  }>;
+  /** Present only for the bounded server-local provider-input rehearsal mode. */
+  reuse_current_provider_inputs?: true;
   next_action: string;
 }>;
 
 export function onboardingTransferSsmCommands(input: Readonly<{
   region: string;
   artifact: OnboardingTransferArtifact;
+  /** Receipt-bound selected source; omitted preserves the ordinary nine-file flow. */
+  stagingSyntheticMeetings?: boolean;
+  /** Rehearsal-only selected-source mode; requires stagingSyntheticMeetings. */
+  reuseCurrentProviderInputs?: boolean;
+  /** Required when reuseCurrentProviderInputs is true. */
+  operationId?: string;
 }>): readonly string[];
 
 export function planOnboardingTransfer(configPath: string, options?: Readonly<{
@@ -80,12 +102,22 @@ export function executeOnboardingTransfer(receiptPath: string, options?: Readonl
   aws?: OnboardingTransferAws;
   /** Test-only persistence seam; production always uses the private atomic replacer. */
   replaceReceipt?(path: string, receipt: Readonly<Record<string, unknown>>): void;
+  /** Test-only completion persistence seam. */
+  writeStageReceipt?(path: string, receipt: Readonly<Record<string, unknown>>): string;
+  /** Test-only completion replacement seam. */
+  replaceStageReceipt?(path: string, receipt: Readonly<Record<string, unknown>>): void;
 }>): Readonly<{
   action: "execute";
-  state: "prepared";
+  state: "prepared" | "staged_awaiting_human";
+  completion_path?: string;
+  host_stage_path?: string;
+  next_human_action?: string;
 }>;
 
 export function cleanupOnboardingTransfer(receiptPath: string, options?: Readonly<{ aws?: OnboardingTransferAws }>): Readonly<{
   action: "cleanup";
-  state: "cleaned" | "prepared_cleaned";
+  state: "cleaned" | "prepared_cleaned" | "staged_awaiting_human";
+  completion_path?: string;
+  host_stage_path?: string;
+  next_human_action?: string;
 }>;

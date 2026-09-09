@@ -239,7 +239,9 @@ build verifies both values against its OCI metadata before publishing it. The
 staging update verifier also rejects a telemetry-capable image or running
 container whose label and effective environment bindings disagree.
 
-This transport is content-free and best effort. At the service boundary,
+Stage metadata and heartbeat records are content-free and best effort. The
+separate opt-in development content records described below share this transport.
+At the service boundary,
 missing or malformed immutable image identity disables only the staging journey
 telemetry transport; it must not prevent Authority startup or request handling.
 A guarded staging update rejects inconsistent telemetry-capable image metadata
@@ -283,11 +285,12 @@ build number, and every business or person identifier are never dimensions.
 | Metric | Value and population rule | Dimensions |
 | --- | --- | --- |
 | `StageStarted`, `StageSucceeded`, `StageFailed`, `StageSkipped` | `1` for the corresponding canonical stage event | `workflow`, `stage` |
-| `StageClosedLatencyMs` | `elapsed_ms` only for succeeded or failed closed machine stages | `workflow`, `stage` |
-| `StageRetryAttempt` | `1` when a started stage has `attempt > 1` | `workflow`, `stage` |
+| `StageClosedLatencyMs` | `elapsed_ms` for succeeded or failed measured machine stages; recovery and shared references are excluded | `workflow`, `stage` |
+| `StageRetryAttempt` | `1` for a measured execution start with `accounting.retry_of_attempt`; skipped, recovered and historical ordinal observations are excluded | `workflow`, `stage` |
 | `TerminalOutcome` | `1` for a succeeded stage with a non-null bounded stage outcome | `workflow`, `stage`, `outcome` |
 | `StageFailure` | `1` for a failed stage | `workflow`, `stage`, `failure_class` |
 | `AskRetrievalFailure` | `1` for a failed `ask_retrieval` stage | none |
+| `CoreModelAttempt`, `CoreModelTotalTokens`, `CoreModelUsageReported` | actual terminal model call; non-null total tokens and total-usage coverage, across extraction, related projection, planner and answer | `workflow`, `stage` (purpose) |
 | `LlmAttempt`, `LlmUsageReported`, `LlmUsageUnavailable`, `LlmProviderLatencyMs` | one terminal LLM-attempt count, usage-status count, and provider RTT | `stage`, `provider`, `model` |
 | `LlmInputTokens`, `LlmOutputTokens`, `LlmTotalTokens`, `LlmCachedInputTokens`, `LlmReasoningTokens` | the respective non-null provider-reported value only | `stage`, `provider`, `model` |
 | `LlmTotalTokensAvailable` | `1` only when that attempt has a non-null total-token value | `stage`, `provider`, `model` |
@@ -366,7 +369,7 @@ signed-in console operator only
 invocation of the exact Lambda. It does not establish the scope of other
 policies in that session; review the effective permission set separately.
 
-The handler accepts only three fixed operations:
+The handler accepts six fixed operations:
 
 1. `describe` returns safe widget metadata.
 2. `list` runs a fixed query for recent redacted journeys. The default time
@@ -376,11 +379,20 @@ The handler accepts only three fixed operations:
 3. `detail` accepts one canonical lowercase UUID journey ID and runs a fixed
    correlated-event query over the bounded 14-day retained history, not the
    dashboard's selected list range. It requires the canonical sequence-one
-   `ask_validation` or `meeting_source_intake` started event; otherwise it
+   `ask_validation`, `meeting_source_intake`, or root `core_operation` started event; otherwise it
    returns `journey_history_incomplete` and does not report a clipped timeline
    or wall-clock.
 
-Both queries have a 2,500-record cap and return `result_limit_exceeded` if it
+4. `related` accepts the selected journey UUID and finds core operations that
+   explicitly link it. Follow a shared build once to inspect its model calls.
+5. `content` lists captures for a journey or operation, and accepts one optional
+   positive `capture_sequence` to load a capture on demand. It reassembles the
+   versioned chunks, checks count/byte consistency, and labels partial capture
+   or missing/conflicting chunks. Content is escaped text in the same widget.
+6. `health` reads the latest bounded transport heartbeat observations and their
+   cumulative delivery counters. Historical records without counters are unknown.
+
+Journey and content queries have a 2,500-record cap and return `result_limit_exceeded` if it
 is saturated instead of silently omitting a journey or showing a partial
 waterfall. Narrow the dashboard time range before retrying that safe error for
 `list`; a `detail` request already uses the full bounded retained history.
@@ -393,7 +405,8 @@ provider, model, finish reason, and usage status. Returned detail is an
 allowlisted projection only: schema version, journey UUID, sequence, attempt,
 release SHA/build number, event times and elapsed latency, provider latency,
 nullable token usage, retrieval counts, retry/failure metadata, and human
-wait. It does not return `@message` or source content.
+wait and the finite V2 core diagnostic projection. No operation returns
+`@message`. Only `content` returns opt-in sanitized development content.
 
 Interpret timing as follows: full wall-clock is first-to-terminal
 `observed_at`, service wall-clock subtracts the one `queue_age_ms` human-wait
@@ -447,11 +460,10 @@ positioned by validated observation time and sized by `elapsed_ms`, LLM token
 totals, retries, retrieval counts, redacted failure metadata, and human wait as
 a separate business interval and empty gap rather than machine work. A numeric
 token count of `0` means the provider reported zero; `null` means usage was
-unavailable and is never treated as zero. The content-free allowlist permits
-only correlation/schema provenance, timing, nullable usage, retrieval/retry
-metadata, and failure classification.
-It excludes raw events, prompts, answers, meeting material, provider payloads,
-stack traces, and other source content.
+unavailable and is never treated as zero. Metadata remains an allowlisted
+projection. Development input/output is available separately through the
+`content` action under the scoped switch below. Neither surface returns raw
+log messages or transport headers.
 
 The renderer inherits the query safety boundary. The selected range may not
 exceed the retained 14-day staging window; a fixed query that reaches its
@@ -460,6 +472,93 @@ detail; unknown/noncanonical events are rejected; and a renderer response that
 would exceed its bounded safe size returns fixed error markup rather than
 truncating data or exposing raw logs. Operators should narrow the range and
 retry a `result_limit_exceeded` response.
+
+#### Reading core runtime evidence (V2)
+
+V2 adds diagnostics and execution accounting to the existing event kind;
+V1 remains readable. Core events use `core_runtime` / `core_operation`,
+operation/span/parent UUIDs, and finite phase/purpose categories. The existing
+staging gate and immutable image identity enable metadata on the JSON-lines/EMF
+path. See the [implementation and acceptance record](../product/2026-09-08-core-runtime-observability-sprint-v1.md).
+
+Select a slow meeting or Ask, then use **Linked core operations**:
+
+| Evidence | Interpretation |
+| --- | --- |
+| Gate wait and child worker execution | Separates queue admission from execution. Queued work owns a trace after its scheduling HTTP request ends. |
+| Timer delay, lateness, reason and cancellation | Distinguishes the existing 30-second poll/failure timer from gate waits; coalesced approval wakes appear on the requesting operation. |
+| Search snapshot, enrichment, model, build, validation and publication | Heads/generation identify availability or supersession. Atom/record/byte/group and selected/excluded counts identify work. |
+| Changed/unchanged/new projection groups; `reused_count: 0` | Compares with the previous observed input in this process, not persisted history or a cache. Restart loses that comparison. |
+| Model calls, purpose, nullable usage and parse/schema/grounding spans | Distinguishes provider failures from validation and separates extraction, related projection, planner and answer work. Request IDs are hashed in metadata; sanitized content may retain them. |
+| HTTP finish/close and Slack `done`/`uncertain`/failure | Server/provider observations, separate from approval commit and searchable publication; they do not measure client receipt or a person's card-view time. |
+
+Shared search references identify one operation covering several approvals.
+Count that build once. `CoreModel*` and legacy `Llm*` metrics overlap; do not
+add them together. Only the new projection includes related-search model calls.
+
+The sidecar upgrades V1 rows to historical `legacy` observations. A skip consumes
+an event sequence, not an execution attempt. Measured retries link prior failed
+executions; interrupted work/durable-state reconstruction is `recovery`, with
+no measured failure duration or invented model retry. A competing click leaves
+the winning append/search intact. Historical retry counts remain unknown.
+
+Explorer uses UTC for correlation and monotonic elapsed durations for new work.
+Its union of machine intervals counts overlap once and exposes unaccounted time
+and sequence gaps. This is diagnostic coverage, not exclusive CPU accounting
+or a proven distributed critical path. CPU/RSS/heap, filesystem counters,
+active HTTP/model counts and event-loop delay can overlap other operations.
+Event-loop maximum is since transport startup. SQLite lock and disk-I/O latency
+are unavailable; filesystem counters are neither latency nor physical bytes.
+
+#### Opt-in development content and transport completeness
+
+`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true` extends Ask capture to meeting
+input, actual model requests/responses and validation evidence. It requires the
+existing staging metadata gate and deploy identity. Production defaults,
+retention, permissions and the deployment lane are unchanged.
+
+V2 records contain `json_chunks`, capture ID/sequence, span/time, chunk index/count,
+captured bytes and `truncated`. Chunks hold 24,000 Unicode characters. Sanitization
+is bounded to 32 levels and an 8 Mi character/node budget; overflow is partial.
+Credential/key/grant fields and recognized secrets in text are redacted.
+Producers submit bodies rather than transport headers/configuration or credential
+resolvers. Redacted content cannot be reconstructed.
+
+Successful HTTP bodies, including invalid JSON, are captured. Extraction HTTP
+rejections preserve immediate failure: `not_read_after_http_rejection` explicitly
+means the body was not read. Explorer checks chunk/byte consistency and rejects
+saturated queries or output above 1 MiB instead of silently truncating. Larger
+captures require the existing bounded log-inspection lane.
+
+Heartbeat `delivery` counts attempted/failed/pending/dropped writes, rejected
+observations, attempted bytes, serialization/writer microseconds and partial
+captures. Pending writes and active operations are bounded at 1,000. Counts are
+process-cumulative local evidence, not CloudWatch ingestion acknowledgement.
+A dropped tail may leave no gap; compare heartbeat health and durable results,
+and treat missing terminals as incomplete. A broken writer can report failure
+only after output recovers. Observation failures never control business outcomes.
+
+#### Runtime metric and alarm attribution
+
+Legacy `EchoBrain/AuthorityOperations` metrics have no dimensions and can mix
+source log groups. An alarm email cannot identify the host. The received recovery
+email concerned `echo-authority-observability-v1-authority-alerts`, a different
+topic from the earlier empty-subscription inspection; this is not evidence for
+replacing or deleting subscriptions.
+
+The runtime template preserves legacy filters/actions and adds matching filters
+under `EchoBrain/AuthorityOperations/${AuthorityHost}`. Both comparison alarms
+have `ActionsEnabled: false`. `RuntimeMonitoringAttribution` identifies the stack,
+host, log group, metric namespaces, alarms and ALARM/OK topic. Before changing
+alert routing, the operator must verify that chain through the confirmed
+subscription, compare both metrics, and record recovery delivery. Keep legacy
+actions effective until the reviewed transition. No live attribution or
+four-meeting candidate acceptance is established by offline proofs.
+
+Metric namespace/name/dimensions must match between filters and alarms. References:
+[metric concepts](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html),
+[metric transformations](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-logs-metricfilter-metrictransformation.html),
+[alarm actions](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudwatch-alarm.html).
 
 ##### Changing the staging journey stacks
 

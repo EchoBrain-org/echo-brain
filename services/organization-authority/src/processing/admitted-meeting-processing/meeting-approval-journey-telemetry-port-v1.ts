@@ -53,6 +53,7 @@ export interface MeetingApprovalJourneyStageAttemptV1
   readonly stage: MeetingApprovalJourneyStageV1;
   readonly attempt: number;
   readonly started: MeetingApprovalJourneyClockV1;
+  readonly observation_kind?: "execution" | "recovery";
 }
 
 export interface MeetingApprovalJourneyStageSuccessV1 {
@@ -82,6 +83,7 @@ export interface MeetingApprovalJourneyTelemetryPortV1 {
       readonly canonical_revision: string;
     },
     started?: MeetingApprovalJourneyClockV1,
+    observation_kind?: "execution" | "recovery",
   ): MeetingApprovalJourneyStageAttemptV1 | null;
 
   bindCandidate(
@@ -98,12 +100,14 @@ export interface MeetingApprovalJourneyTelemetryPortV1 {
     journey: MeetingApprovalJourneyRefV1,
     stage: MeetingApprovalJourneyStageV1,
     started?: MeetingApprovalJourneyClockV1,
+    observation_kind?: "execution" | "recovery",
   ): MeetingApprovalJourneyStageAttemptV1 | null;
 
   beginStageForApproval(
     approval_id: string,
     stage: MeetingApprovalJourneyStageV1,
     started?: MeetingApprovalJourneyClockV1,
+    observation_kind?: "execution" | "recovery",
   ): MeetingApprovalJourneyStageAttemptV1 | null;
 
   succeedStage(

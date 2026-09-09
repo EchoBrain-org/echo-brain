@@ -96,6 +96,26 @@ describe("meeting approval journey state v1", () => {
     restarted.close();
   });
 
+  it("migrates historical ordinal attempts without inventing execution retries", () => {
+    const path = databasePath();
+    const old = openMeetingApprovalJourneyStateV1(path, { create_uuid: () => JOURNEY_ID });
+    old.beginOrResumeSource(source());
+    old.reserveStageStart(JOURNEY_ID, "meeting_extraction", STARTED_AT);
+    old.reserveStageClose(JOURNEY_ID, "meeting_extraction", 1, "failed", CLOSED_AT);
+    old.close();
+    const fixture = new Database(path);
+    fixture.exec("ALTER TABLE meeting_approval_stage_attempts_v1 DROP COLUMN observation_kind; DROP TABLE meeting_approval_stage_skips_v2; PRAGMA user_version = 1;");
+    fixture.close();
+    const migrated = openMeetingApprovalJourneyStateV1(path);
+    const next = migrated.reserveStageStart(JOURNEY_ID, "meeting_extraction", CARD_STAGED_AT);
+    expect(next.attempt).toBe(2);
+    expect(migrated.executionAccounting(JOURNEY_ID, "meeting_extraction", 2)).toMatchObject({ kind: "legacy", execution_attempt: 1, retry_count: 0 });
+    migrated.close();
+    const reopened = new Database(path);
+    expect(reopened.pragma("user_version", { simple: true })).toBe(2);
+    reopened.close();
+  });
+
   it("uses only digest joins, supports idempotent candidate mapping, and preserves card queue time", () => {
     const path = databasePath();
     const state = openMeetingApprovalJourneyStateV1(path, {

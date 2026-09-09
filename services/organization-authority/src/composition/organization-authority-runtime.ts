@@ -1,3 +1,5 @@
+import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
+import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
@@ -55,6 +57,7 @@ import type {
 import { STAGING_AUTHORITY_ORIGIN_V1 } from "./staging-authority-environment-v1.js";
 
 export interface OrganizationAuthorityRuntimeConfig {
+  readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly state_directory: string;
   readonly host: "127.0.0.1" | "::1";
   readonly port: number;
@@ -218,6 +221,7 @@ class OrganizationAuthorityProcessingCoordinator
     }
 
     try {
+      annotateCoreRuntimeV1({ linked_journey_ids: attempts.map((attempt) => attempt.journey_id) });
       const result = await this.readableSearch.reconcile(signal);
       if (
         typeof result === "object" &&
@@ -277,6 +281,7 @@ export async function openOrganizationAuthorityRuntime(
   };
   const baseApiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
     ...dependencies.api,
+    ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
     ...(dependencies.api?.ask_journey_telemetry !== undefined ||
     config.ask_journey_telemetry === undefined
       ? {}
@@ -303,6 +308,7 @@ export async function openOrganizationAuthorityRuntime(
         api: baseApiDependencies,
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
+        ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
       },
     );
     return { ...runtime, processing: "idle_until_finalize" };
@@ -316,6 +322,7 @@ export async function openOrganizationAuthorityRuntime(
         api: baseApiDependencies,
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
+        ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
       },
     );
     return { ...runtime, processing: "active" };
@@ -342,6 +349,7 @@ export async function openOrganizationAuthorityRuntime(
         state_directory: config.state_directory,
       });
     } catch {
+      try { config.meeting_approval_journey_telemetry.on_observation_failure?.(); } catch { /* observation only */ }
       // Observability cannot prevent the Authority from starting.
     }
   }
@@ -469,6 +477,7 @@ export async function openOrganizationAuthorityRuntime(
         },
         on_worker_error: config.on_worker_error,
         on_worker_telemetry: config.on_worker_telemetry,
+        ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
       },
     );
     requestApprovalPublication = () => runtime.requestApprovalPublication();

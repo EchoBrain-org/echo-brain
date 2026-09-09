@@ -1,3 +1,4 @@
+import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "../../../shared/core-runtime-observation-v1.js";
 import {
   type StructuredGenerationJsonSchema,
   type StructuredGenerationInput,
@@ -236,6 +237,10 @@ function fail(
   message: "OpenRouter request failed" | "OpenRouter response is invalid",
   input: Parameters<typeof failureDiagnostic>[0],
 ): never {
+  annotateCoreRuntimeV1({ result: input.failure_class === "adapter_timeout" ? "timeout" :
+    input.response?.status === 429 ? "rate_limited" : input.failure_class === "adapter_json" ? "parse_failure" :
+    ["adapter_finish", "adapter_refusal", "adapter_response"].includes(input.failure_class) ? "invalid_output" : "provider_failure" });
+  captureCoreRuntimeContentV1("validation_error", { message, failure_class: input.failure_class });
   throw new OpenRouterStructuredGenerationError(
     message,
     failureDiagnostic(input),
@@ -255,9 +260,13 @@ export function createOpenRouterStructuredGenerationAdapter(
   const url = endpoint(options.endpoint);
   const fetchImpl = options.fetch_impl ?? fetch;
   const nowMs = options.now_ms ?? (() => performance.now());
-  async function generateWithObservation(
+  async function generateWithObservation(input: StructuredGenerationInput): Promise<StructuredGenerationObservedResultV1> {
+    return observeCoreRuntimeV1("model_call", async () => generateObserved(input));
+  }
+  async function generateObserved(
     input: StructuredGenerationInput,
   ): Promise<StructuredGenerationObservedResultV1> {
+    observeCoreModelMetadataV1({ provider: "openrouter", model: input.model });
     model(input.model);
     boundedInteger(
       input.timeout_ms,
@@ -314,6 +323,8 @@ export function createOpenRouterStructuredGenerationAdapter(
         },
       }),
     };
+    captureCoreRuntimeContentV1("model_request", request.body);
+    annotateCoreRuntimeV1({ counts: { input_bytes: Buffer.byteLength(request.body as string), input_tokens: null, output_tokens: null, total_tokens: null } });
     const providerStartedAt = safeNow(nowMs);
     let response: Response;
     try {
@@ -329,7 +340,10 @@ export function createOpenRouterStructuredGenerationAdapter(
     let providerLatency: number | null = null;
     let payloadText: string;
     try {
+      annotateCoreRuntimeV1({ counts: { http_status: response.status } });
       payloadText = await response.text();
+      captureCoreRuntimeContentV1("model_response", { request_id: response.headers.get("x-request-id"), body: payloadText });
+      annotateCoreRuntimeV1({ counts: { output_bytes: Buffer.byteLength(payloadText) } });
       providerLatency = elapsed(providerStartedAt, nowMs);
     } catch (error) {
       fail(
@@ -364,6 +378,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     }
     const root = object(payload);
     const generationUsage = successfulUsage(root?.usage);
+    annotateCoreRuntimeV1({ counts: { input_tokens: generationUsage?.input_tokens ?? null, output_tokens: generationUsage?.output_tokens ?? null, total_tokens: generationUsage?.total_tokens ?? null, provider_latency_ms: providerLatency } });
     const rootError = root === null ? null : object(root.error);
     if (!response.ok) {
       fail("OpenRouter request failed", {
@@ -407,6 +422,7 @@ export function createOpenRouterStructuredGenerationAdapter(
       });
     }
     const completed = finishReason(first.finish_reason);
+    observeCoreModelMetadataV1({ provider: "openrouter", model: input.model, ...(typeof root?.id === "string" ? { request_id: root.id } : {}), ...(completed === null ? {} : { finish_reason: completed }) });
     if (completed !== null && completed !== "stop") {
       fail("OpenRouter response is invalid", {
         failure_class: "adapter_finish",
@@ -448,7 +464,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     }
     try {
       return Object.freeze({
-        value: JSON.parse(content),
+        value: observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(content) as unknown),
         usage: generationUsage,
         finish_reason: completed,
         provider_latency_ms: providerLatency,

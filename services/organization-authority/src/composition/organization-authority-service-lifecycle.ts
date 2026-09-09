@@ -1,3 +1,5 @@
+import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
+import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
 import type { AddressInfo } from "node:net";
 import {
   SerializedMeetingProcessingWorker,
@@ -51,6 +53,7 @@ export interface OrganizationAuthorityServiceLifecycleConfig {
 }
 
 export interface OrganizationAuthorityServiceLifecycleDependencies {
+  readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly api?: OrganizationAuthorityApiRuntimeDependencies;
   readonly processing: OrganizationAuthorityProcessingCycleV1;
   readonly start_api_runtime?: (
@@ -168,6 +171,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
   const lifecycle = new MeetingProcessingWorkerLifecycleV1(
     dependencies.on_worker_telemetry ?? (() => undefined),
     dependencies.worker_telemetry_now,
+    dependencies.core_runtime_observation,
   );
   dependencies.processing.setWorkerLifecycle?.(lifecycle);
   let api: RunningOrganizationAuthorityApiRuntime | undefined;
@@ -194,6 +198,7 @@ export async function startOrganizationAuthorityServiceLifecycle(
     api = await startApi(config.api, dependencies.api ?? {});
     const startedApi = api;
     const worker = new SerializedMeetingProcessingWorker({
+      ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
       runCycle: async (signal) => {
         lifecycle.startCycle();
@@ -215,7 +220,8 @@ export async function startOrganizationAuthorityServiceLifecycle(
     let publicationPending = false;
     let publicationImmediate: ReturnType<typeof setImmediate> | undefined;
     const requestApprovalPublication = (): void => {
-      if (closing || publicationPending) return;
+      if (closing) return;
+      if (publicationPending) { annotateCoreRuntimeV1({ result: "coalesced" }); return; }
       publicationPending = true;
       // An idle runExclusive gate starts synchronously. Yield to the next
       // event-loop turn so the ingress can write its HTTP acknowledgement

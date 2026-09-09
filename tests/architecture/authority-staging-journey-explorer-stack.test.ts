@@ -151,7 +151,7 @@ describe("staging Journey Explorer backend stack", () => {
     expect(fn.DependsOn).toBeUndefined();
     expect(fn.Properties).toMatchObject({
       FunctionName: "customWidget-echo-staging-journey-explorer-v1",
-      Description: "Staging-only read-only content-free journey query backend.",
+      Description: "Staging-only read-only journey and opt-in development content query backend.",
       Runtime: "nodejs24.x",
       Handler: "index.handler",
       Architectures: ["arm64"],

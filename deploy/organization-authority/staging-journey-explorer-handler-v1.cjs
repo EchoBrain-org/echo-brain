@@ -16,8 +16,13 @@ const START_RECOVERY_TIMEOUT_MS = 1000;
 const MAX_RENDERED_BYTES = 1024 * 1024;
 const MAX_MACHINE_DURATION = 31 * 24 * HOUR;
 const MAX_ATTEMPT = 100;
-const WORKFLOWS = new Set(["ask", "meeting_approval"]);
+
+const CORE_PHASES = new Set(["worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor", "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery", "approval_observation", "record_append", "approval_action", "slack_terminal_update", "search_reconciliation", "search_snapshot", "search_enrichment", "search_build", "search_validation", "search_publication", "related_projection", "model_call", "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer"]);
+const CORE_COUNTS = ["event_loop_delay_max_us", "active_models", "gate_wait_ms", "pending_depth", "oldest_age_ms", "scheduled_delay_ms", "wake_lateness_ms", "unchanged_group_count", "changed_group_count", "newly_observed_group_count", "input_bytes", "output_bytes", "record_count", "atom_count", "visibility_groups", "included_count", "excluded_count", "recomputed_count", "reused_count", "captured_head", "current_head", "published_head", "http_status", "active_http", "input_tokens", "output_tokens", "total_tokens", "provider_latency_ms", "rss_bytes", "heap_used_bytes", "cpu_user_us", "cpu_system_us", "fs_read_count", "fs_write_count"];
+const CORE_RESULTS = new Set(["current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure"]);
+const WORKFLOWS = new Set(["ask", "meeting_approval", "core_runtime"]);
 const STAGES = new Set([
+  "core_operation",
   "ask_validation",
   "ask_authorization",
   "ask_planner",
@@ -89,6 +94,7 @@ const FINISH = new Set([
 ]);
 const USAGE = new Set(["reported", "unavailable"]);
 const STAGES_BY_WORKFLOW = {
+  core_runtime: new Set(["core_operation"]),
   ask: new Set([
     "ask_validation",
     "ask_authorization",
@@ -113,6 +119,7 @@ const STAGES_BY_WORKFLOW = {
   ]),
 };
 const CANONICAL_START_BY_WORKFLOW = {
+  core_runtime: "core_operation",
   ask: "ask_validation",
   meeting_approval: "meeting_source_intake",
 };
@@ -144,7 +151,7 @@ const RETRIEVAL_STAGES = new Set([
 const ENDPOINT_ARN =
   /^arn:(aws|aws-us-gov|aws-cn):lambda:([a-z0-9-]+):([0-9]{12}):function:customWidget-echo-staging-journey-explorer-v1$/;
 const BASE =
-  "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms";
+  "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms, accounting.kind as accounting_kind, accounting.execution_attempt as execution_attempt, accounting.retry_count as retry_count, accounting.retry_of_attempt as retry_of_attempt, jsonStringify(diagnostic) as diagnostic_json";
 const LIST_QUERY =
   "fields " +
   BASE +
@@ -166,6 +173,32 @@ function detailQuery(id) {
     DETAIL_LIMIT
   );
 }
+function contentCaptures(rows, id, includeContent) {
+  const captures = new Map();
+  const contentKinds = new Set(["question", "planner_prompt", "planner_output", "planner_validation_error", "context_atoms", "answer_prompt", "answer_output", "answer_validation_error", "meeting_input", "model_request", "model_response", "validation_error"]);
+  for (const fields of rows) {
+    const item = row(fields), sequence = uint(item.sequence, 1), version = uint(item.schema_version, 1);
+    if (item.journey_id !== id || sequence === null || ![1, 2].includes(version) || !contentKinds.has(item.content_kind)) throw error("content contract");
+    const entry = captures.get(sequence) || { sequence, version, span_id: version === 2 && uuid(item.span_id) !== null ? item.span_id : null, observed_at: iso(item.observed_at) === null ? null : item.observed_at, captured_bytes: version === 2 ? uint(item.captured_bytes) : null, content_kind: item.content_kind, chunks: new Map(), expected: version === 1 ? 1 : uint(item.chunk_count, 1, 1000), truncated: false, conflict: false };
+    const index = version === 1 ? 0 : uint(item.chunk_index, 0, 999);
+    const content = version === 1 ? item.content_json : item.content;
+    if (entry.expected === null || index === null || index >= entry.expected || typeof content !== "string") throw error("content contract");
+    if (entry.version !== version || entry.content_kind !== item.content_kind || (version === 2 && entry.captured_bytes !== uint(item.captured_bytes))) entry.conflict = true;
+    if (entry.chunks.has(index) && entry.chunks.get(index) !== content) entry.conflict = true;
+    if (version === 2 && (uint(item.chunk_count, 1) !== entry.expected || item.capture_id !== `${id}:${sequence}`)) entry.conflict = true;
+    entry.chunks.set(index, content);
+    entry.truncated ||= item.truncated === "true" || item.truncated === "1";
+    captures.set(sequence, entry);
+  }
+  return [...captures.values()].map((entry) => {
+    const content = [...entry.chunks].sort((a, b) => a[0] - b[0]).map(([, text]) => text).join("");
+    if (entry.version === 2 && Buffer.byteLength(content) !== entry.captured_bytes) entry.conflict = true;
+    return { sequence: entry.sequence, content_kind: entry.content_kind, span_id: entry.span_id, observed_at: entry.observed_at,
+    status: entry.conflict || entry.chunks.size !== entry.expected ? "incomplete: missing or conflicting chunks" : entry.truncated ? "partial: capture bound reached" : "complete sanitized capture",
+    chunk_count: entry.expected, observed_chunks: entry.chunks.size,
+    ...(includeContent ? { content } : {}) }; });
+}
+
 function sdk() {
   return require("@aws-sdk/client-cloudwatch-logs");
 }
@@ -267,7 +300,7 @@ function stage(raw) {
     journey_id === null ||
     observed_ms === null ||
     raw.environment !== "staging" ||
-    schema_version !== 1 ||
+    ![1, 2].includes(schema_version) ||
     sequence === null ||
     build_number === null ||
     typeof raw.release_sha !== "string" ||
@@ -304,7 +337,24 @@ function stage(raw) {
   if (queue_age_ms !== null && name !== "meeting_approval_action_verify")
     return null;
 
+  let accounting;
+  let diagnostic;
+  if (schema_version === 2) {
+    if (raw.accounting_kind !== undefined) {
+      const kind = enumValue(raw.accounting_kind, new Set(["execution", "skip", "recovery", "competing_action", "legacy", "shared_reference"]));
+      const execution_attempt = uint(raw.execution_attempt), retry_count = uint(raw.retry_count);
+      if (!kind || execution_attempt === null || retry_count === null || retry_count > Math.max(0, execution_attempt - 1)) return null;
+      accounting = { kind, execution_attempt, retry_count, retry_of_attempt: uint(raw.retry_of_attempt, 1) };
+    }
+    if (raw.diagnostic_json !== undefined) {
+      diagnostic = diagnosticDetail(raw.diagnostic_json);
+      if (!diagnostic) return null;
+    }
+    if (!accounting && !diagnostic) return null;
+  }
   return {
+    ...(accounting ? { accounting } : {}),
+    ...(diagnostic ? { diagnostic } : {}),
     journey_id,
     environment: "staging",
     schema_version,
@@ -324,6 +374,32 @@ function stage(raw) {
     queue_age_ms,
   };
 }
+function digestOrNull(value) { return typeof value === "string" && /^[0-9a-f]{64}$/.test(value) ? value : null; }
+function diagnosticDetail(value) {
+  try {
+    const input = JSON.parse(value);
+    if (!uuid(input.operation_id) || !uuid(input.span_id) || (input.parent_span_id !== null && !uuid(input.parent_span_id)) ||
+      !CORE_PHASES.has(input.phase) || !CORE_PHASES.has(input.purpose) || typeof input.root !== "boolean" ||
+      !Array.isArray(input.linked_journey_ids) || input.linked_journey_ids.length > 1000 || input.linked_journey_ids.some((id) => !uuid(id)) ||
+      (input.result !== null && !CORE_RESULTS.has(input.result)) || (input.generation !== null && !/^sha256:[0-9a-f]{64}$/.test(input.generation))) return null;
+    const counts = {};
+    for (const key of CORE_COUNTS) {
+      const value = input.counts[key];
+      if (value === undefined) continue;
+      if (value !== null && (!Number.isSafeInteger(value) || value < 0)) return null;
+      counts[key] = value;
+    }
+    return { operation_id: input.operation_id, span_id: input.span_id, parent_span_id: input.parent_span_id,
+      phase: input.phase, purpose: input.purpose, root: input.root, linked_journey_ids: input.linked_journey_ids, counts,
+      result: input.result, generation: input.generation,
+      source_revision: digestOrNull(input.source_revision), cursor: digestOrNull(input.cursor), action: digestOrNull(input.action), provider_request: digestOrNull(input.provider_request),
+      provider: input.provider === null || input.provider === undefined ? null : enumValue(input.provider, PROVIDERS),
+      model: input.model === "other" ? "other" : input.model === null || input.model === undefined ? null : enumValue(input.model, MODELS),
+      finish_reason: input.finish_reason === "other" ? "other" : input.finish_reason === null || input.finish_reason === undefined ? null : enumValue(input.finish_reason, FINISH), resource_scope: "process_overlap",
+      sqlite_lock_time: "unavailable", disk_io_latency: "unavailable", event_loop_delay: input.event_loop_delay === "process_sample" ? "process_sample" : "unavailable" };
+  } catch { return null; }
+}
+
 function nested(raw, item) {
   const retrievalKeys = [
       "retrieval_planned_query_count",
@@ -429,6 +505,9 @@ function nested(raw, item) {
   };
 }
 function terminal(item) {
+  if (item.accounting?.kind === "competing_action") return null;
+  if (item.workflow === "core_runtime") return item.diagnostic?.root && item.event !== "started"
+    ? { outcome: item.diagnostic.result || (item.event === "succeeded" ? "completed" : "failed"), failure_class: item.failure_class } : null;
   if (item.event === "failed" && item.retryable === false)
     return {
       outcome: "failed",
@@ -539,7 +618,8 @@ function timeline(rows, id) {
       first.stage === CANONICAL_START_BY_WORKFLOW[first.workflow] &&
       first.event === "started" &&
       first.sequence === 1 &&
-      first.attempt === 1,
+      first.attempt === 1 &&
+      (first.workflow !== "core_runtime" || first.diagnostic?.root === true),
     final = stages.reduce(
       (latest, item) =>
         terminal(item) !== null &&
@@ -568,8 +648,19 @@ function timeline(rows, id) {
     service_wall_clock_ms:
       full === null ? null : Math.max(0, full - (wait === null ? 0 : wait)),
     human_wait_ms: wait,
+    ...coverage(stages, full, wait),
     stages,
   };
+}
+function coverage(stages, full, wait) {
+  const intervals = stages.filter((item) => item.event !== "started" && item.event !== "skipped" && !item.diagnostic?.root)
+    .map((item) => [iso(item.observed_at) - item.elapsed_ms, iso(item.observed_at)]).sort((a, b) => a[0] - b[0]);
+  let covered = 0, end = -Infinity;
+  for (const [left, right] of intervals) { covered += Math.max(0, right - Math.max(left, end)); end = Math.max(end, right); }
+  const sequences = new Set(stages.map((item) => item.sequence));
+  const max = Math.max(0, ...sequences);
+  return { observed_interval_union_ms: covered, unaccounted_interval_ms: full === null ? null : Math.max(0, full - covered - (wait ?? 0)),
+    missing_sequence_count: Math.max(0, max - sequences.size), timing_basis: "monotonic durations positioned by UTC; overlaps counted once" };
 }
 function cursor(value) {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
@@ -651,6 +742,7 @@ function request(event, now) {
     "page_size",
     "cursor",
     "journey_id",
+    "capture_sequence",
     "widgetContext",
     "render",
   ]);
@@ -665,7 +757,8 @@ function request(event, now) {
   if (event.describe !== undefined && event.describe !== false)
     throw error("describe");
   const operation = event.operation === undefined ? "list" : event.operation;
-  if (operation !== "list" && operation !== "detail") throw error("operation");
+  if (!["list", "detail", "related", "content", "health"].includes(operation)) throw error("operation");
+  if (event.capture_sequence !== undefined && operation !== "content") throw error("capture");
   const range = context(event.widgetContext),
     saved = event.cursor === undefined ? null : decode(event.cursor);
   let start;
@@ -687,7 +780,7 @@ function request(event, now) {
   }
   if (start >= end || end - start > MAX_RANGE || end > now + 60_000)
     throw error("range");
-  if (operation === "detail") {
+  if (operation !== "list" && operation !== "health") {
     if (
       saved ||
       event.page_size !== undefined ||
@@ -699,10 +792,11 @@ function request(event, now) {
       start,
       end,
       journeyId: event.journey_id,
+      ...(operation === "content" && event.capture_sequence !== undefined ? { captureSequence: uint(event.capture_sequence, 1) ?? (() => { throw error("capture"); })() } : {}),
       render: event.render === true,
     };
   }
-  if (event.journey_id !== undefined) throw error("list");
+  if (event.journey_id !== undefined || event.capture_sequence !== undefined) throw error("list");
   const pageSize =
     event.page_size === undefined ? 20 : uint(event.page_size, 1);
   if (pageSize === null || pageSize > MAX_PAGE) throw error("page");
@@ -765,7 +859,7 @@ function action(endpointArn, label, payload) {
   return `<button type="button" class="journey-action">${escapeHtml(label)}</button><cwdb-action action="call" display="widget" endpoint="${endpointArn}">${JSON.stringify(payload)}</cwdb-action>`;
 }
 function frame(title, body) {
-  return `<style>.journey-explorer{font-family:Arial,sans-serif;color:#111}.journey-explorer table{border-collapse:collapse;width:100%}.journey-explorer th,.journey-explorer td{border-bottom:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}.journey-explorer .notice{color:#555}.journey-explorer .journey-action{margin:4px 0}.journey-explorer .waterfall-track{background:#eee;border-radius:3px;height:8px;min-width:180px;overflow:hidden;position:relative}.journey-explorer .waterfall-bar{background:#0972d3;display:block;height:100%;min-width:2px;position:absolute}.journey-explorer .failure-boundary{background:#fff1f0}.journey-explorer .human-wait{border-left:4px solid #8b5cf6;padding-left:8px}</style><section class="journey-explorer"><h2>${escapeHtml(title)}</h2><p class="notice">Content-free telemetry only. Prompts, answers, meeting content, identities, and raw provider data are intentionally excluded.</p>${body}</section>`;
+  return `<style>.journey-explorer{font-family:Arial,sans-serif;color:#111}.journey-explorer table{border-collapse:collapse;width:100%}.journey-explorer th,.journey-explorer td{border-bottom:1px solid #ddd;padding:6px;text-align:left;vertical-align:top}.journey-explorer .notice{color:#555}.journey-explorer .journey-action{margin:4px 0}.journey-explorer .waterfall-track{background:#eee;border-radius:3px;height:8px;min-width:180px;overflow:hidden;position:relative}.journey-explorer .waterfall-bar{background:#0972d3;display:block;height:100%;min-width:2px;position:absolute}.journey-explorer .failure-boundary{background:#fff1f0}.journey-explorer .human-wait{border-left:4px solid #8b5cf6;padding-left:8px}</style><section class="journey-explorer"><h2>${escapeHtml(title)}</h2><p class="notice">Stage metadata is content-free. Development content is available on demand only when captured under the staging content switch.</p>${body}</section>`;
 }
 function renderList(data, parsed, endpointArn) {
   const range = `<p class="notice">Selected range: ${escapeHtml(new Date(parsed.start).toISOString())} to ${escapeHtml(new Date(parsed.end).toISOString())}. Results may be partial; widen the dashboard range to find earlier or later stages.</p>`;
@@ -820,13 +914,16 @@ function renderDetail(data, parsed, endpointArn) {
       const retrieval = item.retrieval;
       const rowClass =
         item.event === "failed" ? ' class="failure-boundary"' : "";
-      return `<tr${rowClass}><td>${escapeHtml(item.sequence)}</td><td>${escapeHtml(item.stage)}</td><td>${escapeHtml(item.attempt)}</td><td>${escapeHtml(item.event)}</td><td>${escapeHtml(item.observed_at)}</td><td>${machineWaterfall(item, origin, span)}</td><td>${escapeHtml(Math.max(0, item.attempt - 1))}</td><td>${escapeHtml(item.outcome || "not reported")}</td><td>${escapeHtml(item.failure_class || "not reported")}</td><td>provider: ${reported(llm.provider)}<br>model: ${reported(llm.model)}<br>usage: ${reported(llm.usage_status)}<br>finish: ${reported(llm.finish_reason)}<br>provider latency: ${milliseconds(llm.provider_latency_ms)}<br>input tokens: ${reported(llm.input_tokens)}<br>output tokens: ${reported(llm.output_tokens)}<br>total tokens: ${reported(llm.total_tokens)}<br>cached input tokens: ${reported(llm.cached_input_tokens)}<br>reasoning tokens: ${reported(llm.reasoning_tokens)}</td><td>planned queries: ${reported(retrieval.planned_query_count)}<br>query hits: ${reported(retrieval.query_hit_count)}<br>released atoms: ${reported(retrieval.released_atom_count)}<br>context atoms: ${reported(retrieval.context_atom_count)}<br>citations: ${reported(retrieval.citation_count)}</td></tr>`;
+      return `<tr${rowClass}><td>${escapeHtml(item.sequence)}</td><td>${escapeHtml(item.diagnostic?.phase || item.stage)}</td><td>${escapeHtml(item.accounting?.execution_attempt ?? item.attempt)}</td><td>${escapeHtml(item.event)}</td><td>${escapeHtml(item.observed_at)}</td><td>${machineWaterfall(item, origin, span)}</td><td>${escapeHtml(item.accounting && !["legacy", "shared_reference"].includes(item.accounting.kind) ? item.accounting.retry_count : "unknown (legacy ordinal)")}</td><td>${escapeHtml(item.outcome || "not reported")}</td><td>${escapeHtml(item.failure_class || "not reported")}${item.diagnostic ? `<details><summary>Operation evidence</summary><pre>${escapeHtml(JSON.stringify(item.diagnostic, null, 2))}</pre></details>` : ""}</td><td>provider: ${reported(llm.provider)}<br>model: ${reported(llm.model)}<br>usage: ${reported(llm.usage_status)}<br>finish: ${reported(llm.finish_reason)}<br>provider latency: ${milliseconds(llm.provider_latency_ms)}<br>input tokens: ${reported(llm.input_tokens)}<br>output tokens: ${reported(llm.output_tokens)}<br>total tokens: ${reported(llm.total_tokens)}<br>cached input tokens: ${reported(llm.cached_input_tokens)}<br>reasoning tokens: ${reported(llm.reasoning_tokens)}</td><td>planned queries: ${reported(retrieval.planned_query_count)}<br>query hits: ${reported(retrieval.query_hit_count)}<br>released atoms: ${reported(retrieval.released_atom_count)}<br>context atoms: ${reported(retrieval.context_atom_count)}<br>citations: ${reported(retrieval.citation_count)}</td></tr>`;
     })
     .join("");
   const workflows = [...new Set(data.stages.map((item) => item.workflow))];
   const summary = `<dl><dt>Journey</dt><dd>${escapeHtml(data.journey_id)}</dd><dt>Workflow observed</dt><dd>${workflows.length === 0 ? "not reported" : workflows.map(escapeHtml).join(", ")}</dd><dt>Status</dt><dd>${escapeHtml(data.status)}</dd><dt>Outcome</dt><dd>${escapeHtml(data.terminal_outcome || "not reported")}</dd><dt>Failure class</dt><dd>${escapeHtml(data.terminal_failure_class || "not reported")}</dd><dt>Full wall-clock</dt><dd>${milliseconds(data.full_wall_clock_ms)}</dd><dt>Service wall-clock</dt><dd>${milliseconds(data.service_wall_clock_ms)}</dd></dl>`;
   const tokens = `<p><strong>LLM token total:</strong> ${tokenSummary(data.stages)}</p>`;
   const humanWait = `<p class="human-wait"><strong>Human approval wait:</strong> ${milliseconds(data.human_wait_ms)}. This business interval is separate from the machine-stage bars and excluded from service wall-clock.</p>`;
+  const diagnostics = action(endpointArn, "Transport health", { operation: "health", render: true }) + `<p>Observed interval union: ${milliseconds(data.observed_interval_union_ms)}; unaccounted interval: ${milliseconds(data.unaccounted_interval_ms)}; missing sequences: ${escapeHtml(data.missing_sequence_count)}. Overlapping spans count once. Legacy retry counts remain unknown.</p>` +
+    action(endpointArn, "Related core operations", { operation: "related", journey_id: data.journey_id, render: true }) +
+    action(endpointArn, "Captured development content", { operation: "content", journey_id: data.journey_id, render: true });
   const back = action(endpointArn, "Back to recent runs", {
     operation: "list",
     from: parsed.start,
@@ -835,7 +932,7 @@ function renderDetail(data, parsed, endpointArn) {
   });
   return frame(
     "Journey timeline",
-    `${range}${summary}${tokens}${humanWait}<p>${back}</p><p class="notice">The machine waterfall positions each event from its validated observed time and sizes its bar from elapsed_ms. Human wait and inter-stage gaps remain empty space; human wait is never drawn as machine work.</p><table><thead><tr><th>Sequence</th><th>Stage</th><th>Attempt</th><th>Event</th><th>Observed</th><th>Machine waterfall</th><th>Prior retries</th><th>Outcome</th><th>Failure boundary</th><th>LLM</th><th>Retrieval</th></tr></thead><tbody>${stages}</tbody></table>`,
+    `${range}${summary}${tokens}${humanWait}${diagnostics}<p>${back}</p><p class="notice">The machine waterfall positions each event from its validated observed time and sizes its bar from elapsed_ms. Human wait and inter-stage gaps remain empty space; human wait is never drawn as machine work.</p><table><thead><tr><th>Sequence</th><th>Stage</th><th>Attempt</th><th>Event</th><th>Observed</th><th>Machine waterfall</th><th>Prior retries</th><th>Outcome</th><th>Failure boundary</th><th>LLM</th><th>Retrieval</th></tr></thead><tbody>${stages}</tbody></table>`,
   );
 }
 function renderError(code, operation, reason) {
@@ -1021,7 +1118,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
       if (parsed.operation === "describe")
         return {
           markdown:
-            "# Staging Journey Explorer\n\nRead-only staging telemetry. Select a dashboard time range, list journeys, then request a canonical UUID detail timeline.\n\n## Parameters\n\n```yaml\noperation: list # list or detail\nrender: true # render the safe interactive view\npage_size: 20 # list only, 1-25\njourney_id: 00000000-0000-4000-8000-000000000000 # detail only\nfrom: 2026-09-02T00:00:00.000Z # optional bounded range\nto: 2026-09-02T08:00:00.000Z # optional bounded range\ncursor: opaque-cursor # list pagination only\n```",
+            "# Staging Journey Explorer\n\nRead-only staging telemetry. Select a dashboard time range, list journeys, then request a canonical UUID detail timeline.\n\n## Parameters\n\n```yaml\noperation: list # list, detail, related, content, or health\nrender: true # render the safe interactive view\npage_size: 20 # list only, 1-25\njourney_id: 00000000-0000-4000-8000-000000000000 # detail, related, content\nfrom: 2026-09-02T00:00:00.000Z # optional bounded range\nto: 2026-09-02T08:00:00.000Z # optional bounded range\ncursor: opaque-cursor # list pagination only\n```",
         };
       if (parsed.operation === "list") {
         const results = await run(
@@ -1052,6 +1149,32 @@ function createStagingJourneyExplorerHandlerV1(options) {
         return parsed.render
           ? rendered(renderList(data, parsed, endpointArn))
           : data;
+      }
+      if (parsed.operation === "health") {
+        const rows = await run('fields observed_at, release_sha, build_number, jsonStringify(delivery) as delivery_json | filter kind = "echo-authority-journey-telemetry-liveness-v1" and environment = "staging" | sort observed_at desc | limit 25', parsed.start, parsed.end, 25);
+        const health = rows.map((fields) => {
+          const raw = row(fields); if (iso(raw.observed_at) === null) return null;
+          let delivery; try { delivery = JSON.parse(raw.delivery_json); } catch { delivery = {}; }
+          const counters = {};
+          for (const key of ["writes_attempted", "writes_failed", "writes_pending", "writes_dropped", "rejected_events", "attempted_bytes", "observer_overhead_us", "partial_captures"]) counters[key] = uint(delivery[key]);
+          return { observed_at: raw.observed_at, release_sha: /^[0-9a-f]{40}$/.test(raw.release_sha) ? raw.release_sha : null, build_number: uint(raw.build_number, 1), delivery: counters };
+        }).filter(Boolean);
+        return parsed.render ? rendered(frame("Transport health", `<p>Cumulative per process. Unknown values were not measured in historical heartbeats. These counters cannot prove downstream log ingestion.</p><pre>${escapeHtml(JSON.stringify(health, null, 2))}</pre>`)) : { health };
+      }
+      if (parsed.operation === "related") {
+        const results = await run(`fields ${BASE} | filter kind = "${KIND}" and environment = "staging" and jsonStringify(diagnostic.linked_journey_ids) like /${parsed.journeyId}/ | sort observed_at asc | limit ${DETAIL_LIMIT}`, Math.max(0, current - MAX_RANGE), current, DETAIL_LIMIT);
+        if (results.length >= DETAIL_LIMIT) throw resultLimitError();
+        const operations = new Map();
+        for (const fields of results) { const item = stage(row(fields)); if (item?.diagnostic) operations.set(item.diagnostic.operation_id, item.diagnostic.phase); }
+        const data = { related_operations: [...operations].map(([journey_id, phase]) => ({ journey_id, phase })) };
+        return parsed.render ? rendered(frame("Related core operations", data.related_operations.map((item) => `<p>${escapeHtml(item.phase)} ${action(endpointArn, "View operation", { operation: "detail", journey_id: item.journey_id, render: true })}</p>`).join("") || "No linked observations in retained history; coverage is unknown.")) : data;
+      }
+      if (parsed.operation === "content") {
+        const query = `fields journey_id, sequence, schema_version, stage, content_kind, observed_at, span_id, capture_id, truncated, chunk_index, chunk_count, captured_bytes, content, jsonStringify(content) as content_json | filter kind = "echo-authority-journey-content-v1" and environment = "staging" and journey_id = "${parsed.journeyId}"${parsed.captureSequence ? ` and sequence = ${parsed.captureSequence}` : ""} | sort sequence asc, chunk_index asc | limit ${DETAIL_LIMIT}`;
+        const rows = await run(query, Math.max(0, current - MAX_RANGE), current, DETAIL_LIMIT);
+        if (rows.length >= DETAIL_LIMIT) throw resultLimitError();
+        const captures = contentCaptures(rows, parsed.journeyId, parsed.captureSequence !== undefined);
+        return parsed.render ? rendered(frame("Captured development content", captures.map((item) => `<p>${escapeHtml(item.content_kind)}: ${escapeHtml(item.status)} ${action(endpointArn, "Read capture", { operation: "content", journey_id: parsed.journeyId, capture_sequence: item.sequence, render: true })}</p>${item.content === undefined ? "" : `<pre>${escapeHtml(item.content)}</pre>`}`).join("") || "No captured content in retained history. Capture may be disabled, missing, or dropped.")) : { captures };
       }
       const results = await run(
         detailQuery(parsed.journeyId),

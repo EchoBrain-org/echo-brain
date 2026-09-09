@@ -75,6 +75,8 @@ const ALLOWED_LEAF_IMPORTS = new Set([
   "@echo-brain/organization-api",
   "@echo-brain/organization-protocol",
   "better-sqlite3",
+  "node:async_hooks",
+  "node:perf_hooks",
   "node:buffer",
   "node:crypto",
   "node:events",

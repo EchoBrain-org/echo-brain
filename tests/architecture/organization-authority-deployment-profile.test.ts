@@ -8,7 +8,9 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  linkSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -158,6 +160,7 @@ function preparedStatusFixture() {
     `ECHO_CLEAN_RELEASE_ID=${releaseId}`,
     `ECHO_CLEAN_RUNTIME_PROFILE_SHA256=${profile.digest}`,
     "ECHO_CLEAN_RUNTIME_PROFILE_VERSION=clean-v1-profile-1",
+    "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false",
   ].join("\n") + "\n";
   writeFileSync(
     join(deploy, ".env.clean-v1"),
@@ -238,6 +241,7 @@ if [[ "$1" == image && "$2" == inspect ]]; then
   exit 0
 fi
 if [[ "$1" == inspect ]]; then
+  if [[ "$*" == *ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1* ]]; then printf '%s\\n' "$ECHO_FAKE_CONTENT_TELEMETRY"; exit 0; fi
   if [[ "$*" == *io.echo-brain.release-id* ]]; then printf '%s\\n' "$ECHO_FAKE_RELEASE_ID"; exit 0; fi
   if [[ "$*" == *io.echo-brain.runtime-profile-sha256* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNTIME_PROFILE_SHA256"; exit 0; fi
   if [[ "$*" == *.State.Running* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNNING"; exit 0; fi
@@ -253,6 +257,22 @@ exit 1
     "#!/usr/bin/env bash\nexit 0\n",
   );
   chmodSync(join(bin, "mountpoint"), 0o755);
+  writeFileSync(
+    join(bin, "systemctl"),
+    "#!/usr/bin/env bash\n[[ \"$1 $2\" == 'is-active --quiet' ]]\n",
+  );
+  chmodSync(join(bin, "systemctl"), 0o755);
+  writeFileSync(
+    join(bin, "stat"),
+    `#!/usr/bin/env bash
+if [[ "$ECHO_FAKE_UNSAFE_SOURCE_OWNER" == true && "$1 $2" == '-c %u' && "$3" == *llm-credential-source ]]; then
+  printf '%s\\n' 999999
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+`,
+  );
+  chmodSync(join(bin, "stat"), 0o755);
   writeFileSync(
     join(bin, "cp"),
     `#!/usr/bin/env bash
@@ -276,12 +296,16 @@ exec /bin/cp "$@"
     ECHO_FAKE_FAIL_FIRST_UP: "false",
     ECHO_FAKE_FAIL_REHEARSAL_ARCHIVE: "false",
     ECHO_FAKE_WAIT_DURING_INSTALL: "false",
+    ECHO_FAKE_CONTENT_TELEMETRY: "false",
+    ECHO_FAKE_UNSAFE_SOURCE_OWNER: "false",
     ...overrides,
   });
   const run = (
     command:
       | "activate-provider-credentials"
       | "replace-rehearsal"
+      | "stage-rehearsal-inputs"
+      | "prepare-rehearsal"
       | "status"
       | "resume",
     overrides: Record<string, string> = {},
@@ -317,6 +341,76 @@ exec /bin/cp "$@"
     run,
     spawnRun,
   };
+}
+
+const REHEARSAL_MEETING_FILES = [
+  "01-revenue-signal-calibration.json",
+  "02-data-handling-review.json",
+  "03-implementation-capacity-triage.json",
+  "04-commercial-exception-review.json",
+] as const;
+
+function rehearsalInputs(
+  fixture: ReturnType<typeof preparedStatusFixture>,
+  operationId: string,
+) {
+  const nonsecret = join(fixture.root, `${operationId}-nonsecret`);
+  const meetings = join(fixture.root, `${operationId}-meetings`);
+  mkdirSync(nonsecret, { mode: 0o700 });
+  mkdirSync(meetings, { mode: 0o700 });
+  const manifest = {
+    authority_host: "authority-staging.echobrain.org",
+    aws_region: "us-west-2",
+    kind: "echo-clean-v1-onboarding-input-v1",
+    organization_name: "Test Org",
+    owner_display_name: "Founder",
+    owner_email: "founder@example.com",
+    runtime_user: execFileSync("id", ["-un"]).toString().trim(),
+    schema_version: 1,
+    slack_approval_channel_id: "C0123456789",
+  };
+  writeFileSync(join(nonsecret, "onboarding.clean-v1.json"), `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+  writeFileSync(join(nonsecret, "release.json"), readFileSync(join(fixture.releaseDir, "current.clean-v1.json")), { mode: 0o600 });
+  writeFileSync(join(nonsecret, "runtime-profile.json"), fixture.profile.bytes, { mode: 0o600 });
+  for (const name of REHEARSAL_MEETING_FILES) {
+    writeFileSync(join(meetings, name), readFileSync(resolve(REPO, "demo/meetings", name)), { mode: 0o600 });
+  }
+  return {
+    nonsecret,
+    meetings,
+    stage: join(fixture.deploy, "rehearsal-inputs", operationId),
+  };
+}
+
+function configureReusableProviderInputs(
+  fixture: ReturnType<typeof preparedStatusFixture>,
+) {
+  writeFileSync(
+    join(fixture.privateDir, "oidc-config.json"),
+    `${JSON.stringify({ redirect_uri: "https://authority-staging.echobrain.org/v2/session/oidc/callback" })}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(fixture.privateDir, "onboard-clean-v1.conf"),
+    readFileSync(join(fixture.privateDir, "onboard-clean-v1.conf"), "utf8") +
+      "owner_email=founder@example.com\nauthority_host=authority-staging.echobrain.org\naws_region=us-west-2\nslack_approval_channel_id=C0123456789\n",
+    { mode: 0o600 },
+  );
+}
+
+function stageRehearsalInputs(
+  fixture: ReturnType<typeof preparedStatusFixture>,
+  operationId: string,
+) {
+  const inputs = rehearsalInputs(fixture, operationId);
+  const result = fixture.run("stage-rehearsal-inputs", {}, [
+    "--operation-id", operationId,
+    "--artifact-sha256", "b".repeat(64),
+    "--input-dir", inputs.nonsecret,
+    "--staging-synthetic-meetings-dir", inputs.meetings,
+  ]);
+  expect(result.status, result.stderr).toBe(0);
+  return inputs;
 }
 
 describe("clean-v1 Organization Authority deployment profile", () => {
@@ -659,6 +753,249 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       const restarted = calls.indexOf(" up -d --no-build --wait --wait-timeout 90");
       expect(down).toBeGreaterThanOrEqual(0);
       expect(restarted).toBeGreaterThan(down);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("stages non-secret rehearsal inputs, preserves verified telemetry, and removes captured credentials only after prepare", () => {
+    const fixture = preparedStatusFixture();
+    const operationId = "onboarding-rehearsal-20260908";
+    const providerSentinel = "provider-secret-must-never-appear-in-output";
+    try {
+      const nonsecret = join(fixture.root, "rehearsal-nonsecret");
+      const meetings = join(fixture.root, "rehearsal-meetings");
+      mkdirSync(nonsecret, { mode: 0o700 });
+      mkdirSync(meetings, { mode: 0o700 });
+      const manifest = {
+        authority_host: "authority-staging.echobrain.org",
+        aws_region: "us-west-2",
+        kind: "echo-clean-v1-onboarding-input-v1",
+        organization_name: "Test Org",
+        owner_display_name: "Founder",
+        owner_email: "founder@example.com",
+        runtime_user: execFileSync("id", ["-un"]).toString().trim(),
+        schema_version: 1,
+        slack_approval_channel_id: "C0123456789",
+      };
+      writeFileSync(join(nonsecret, "onboarding.clean-v1.json"), `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+      writeFileSync(join(nonsecret, "release.json"), readFileSync(join(fixture.releaseDir, "current.clean-v1.json")), { mode: 0o600 });
+      writeFileSync(join(nonsecret, "runtime-profile.json"), fixture.profile.bytes, { mode: 0o600 });
+      for (const name of [
+        "01-revenue-signal-calibration.json",
+        "02-data-handling-review.json",
+        "03-implementation-capacity-triage.json",
+        "04-commercial-exception-review.json",
+      ]) {
+        writeFileSync(join(meetings, name), readFileSync(resolve(REPO, "demo/meetings", name)), { mode: 0o600 });
+      }
+      writeFileSync(join(fixture.privateDir, "llm-credential-source"), providerSentinel, { mode: 0o600 });
+      writeFileSync(
+        join(fixture.privateDir, "onboard-clean-v1.conf"),
+        readFileSync(join(fixture.privateDir, "onboard-clean-v1.conf"), "utf8") +
+          "owner_email=founder@example.com\nauthority_host=authority-staging.echobrain.org\naws_region=us-west-2\nslack_approval_channel_id=C0123456789\n",
+        { mode: 0o600 },
+      );
+
+      const staged = fixture.run("stage-rehearsal-inputs", {}, [
+        "--operation-id", operationId,
+        "--artifact-sha256", "b".repeat(64),
+        "--input-dir", nonsecret,
+        "--staging-synthetic-meetings-dir", meetings,
+      ]);
+      expect(staged.status).toBe(0);
+      expect(staged.stdout).toContain("rehearsal_inputs_staged=true");
+      expect(staged.stdout).not.toContain(providerSentinel);
+      const stage = join(fixture.deploy, "rehearsal-inputs", operationId);
+      expect(statSync(stage).mode & 0o777).toBe(0o700);
+
+      const rejected = fixture.run("replace-rehearsal", {}, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+      ]);
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain("could not securely capture the current provider inputs");
+      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe("durable-work-must-survive");
+      expect(existsSync(join(stage, "input"))).toBe(false);
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
+      writeFileSync(join(fixture.privateDir, "oidc-config.json"), `${JSON.stringify({ redirect_uri: "https://authority-staging.echobrain.org/v2/session/oidc/callback" })}\n`, { mode: 0o600 });
+
+      const replaced = fixture.run("replace-rehearsal", {}, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+      ]);
+      expect(replaced.status, replaced.stderr).toBe(0);
+      expect(replaced.stdout).toContain("rehearsal_replaced=true");
+      expect(replaced.stdout).not.toContain(providerSentinel);
+      expect(existsSync(join(stage, "input", "llm-credential"))).toBe(true);
+      expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":false');
+      const archive = readdirSync(join(fixture.deploy, "retired-rehearsals"))[0]!;
+      expect(existsSync(join(fixture.deploy, "retired-rehearsals", archive, "clean-data", "private", "llm-credential-source"))).toBe(true);
+
+      const prepared = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(prepared.status).toBe(0);
+      expect(prepared.stdout).toContain("rehearsal_prepared=true");
+      expect(prepared.stdout).not.toContain(providerSentinel);
+      expect(existsSync(join(stage, "input"))).toBe(false);
+      expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"state":"completed"');
+      expect(readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8")).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false");
+      const retry = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(retry.status).toBe(0);
+      expect(retry.stdout).toContain("rehearsal_prepared=true");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("binds all staged rehearsal material through reset and retains it for a safe retry", () => {
+    const fixture = preparedStatusFixture();
+    const operationId = "onboarding-rehearsal-tamper";
+    try {
+      const { stage } = stageRehearsalInputs(fixture, operationId);
+      configureReusableProviderInputs(fixture);
+      expect(fixture.run("replace-rehearsal", {}, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+      ]).status).toBe(0);
+
+      const marker = JSON.parse(readFileSync(join(stage, "stage.json"), "utf8")) as {
+        file_sha256: Record<string, string>;
+      };
+      expect(Object.keys(marker.file_sha256).sort()).toEqual([
+        "meetings/01-revenue-signal-calibration.json",
+        "meetings/02-data-handling-review.json",
+        "meetings/03-implementation-capacity-triage.json",
+        "meetings/04-commercial-exception-review.json",
+        "nonsecret/onboarding.clean-v1.json",
+        "nonsecret/release.json",
+        "nonsecret/runtime-profile.json",
+      ]);
+
+      const meeting = join(stage, "meetings", REHEARSAL_MEETING_FILES[0]);
+      const meetingBytes = readFileSync(meeting);
+      writeFileSync(meeting, Buffer.concat([meetingBytes, Buffer.from("\n")]), { mode: 0o600 });
+      const changedMeeting = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(changedMeeting.status).toBe(1);
+      expect(changedMeeting.stderr).toContain("staged rehearsal inputs no longer match the transfer receipt");
+      expect(existsSync(join(stage, "input", "llm-credential"))).toBe(true);
+      writeFileSync(meeting, meetingBytes, { mode: 0o600 });
+
+      const capturedManifest = join(stage, "input", "onboarding.clean-v1.json");
+      const capturedManifestBytes = readFileSync(capturedManifest);
+      writeFileSync(capturedManifest, Buffer.concat([capturedManifestBytes, Buffer.from("\n")]), { mode: 0o600 });
+      const changedCaptured = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(changedCaptured.status).toBe(1);
+      expect(changedCaptured.stderr).toContain("captured rehearsal non-secret inputs no longer match the staged transfer material");
+      expect(existsSync(join(stage, "input", "llm-credential"))).toBe(true);
+      writeFileSync(capturedManifest, capturedManifestBytes, { mode: 0o600 });
+
+      const stagedRelease = join(stage, "nonsecret", "release.json");
+      const capturedRelease = join(stage, "input", "release.json");
+      const releaseBytes = readFileSync(stagedRelease);
+      const changedRelease = Buffer.concat([releaseBytes, Buffer.from("\n")]);
+      writeFileSync(stagedRelease, changedRelease, { mode: 0o600 });
+      writeFileSync(capturedRelease, changedRelease, { mode: 0o600 });
+      const changedBoth = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(changedBoth.status).toBe(1);
+      expect(changedBoth.stderr).toContain("staged rehearsal inputs no longer match the transfer receipt");
+      writeFileSync(stagedRelease, releaseBytes, { mode: 0o600 });
+      writeFileSync(capturedRelease, releaseBytes, { mode: 0o600 });
+
+      const retry = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(retry.status, retry.stderr).toBe(0);
+      expect(retry.stdout).toContain("rehearsal_prepared=true");
+      const currentMeeting = join(fixture.deploy, "clean-data", "meetings", REHEARSAL_MEETING_FILES[0]);
+      const currentMeetingBytes = readFileSync(currentMeeting);
+      writeFileSync(currentMeeting, Buffer.concat([currentMeetingBytes, Buffer.from("\n")]), { mode: 0o600 });
+      const staleCompleted = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(staleCompleted.status).toBe(1);
+      expect(staleCompleted.stderr).toContain("completed rehearsal material does not match the prepared Authority");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects unsafe local provider sources before rehearsal shutdown", () => {
+    const cases = ["missing", "mode", "symlink", "hard-link", "owner"] as const;
+    for (const kind of cases) {
+      const fixture = preparedStatusFixture();
+      const operationId = `onboarding-rehearsal-${kind}`;
+      try {
+        stageRehearsalInputs(fixture, operationId);
+        configureReusableProviderInputs(fixture);
+        const source = join(fixture.privateDir, "llm-credential-source");
+        if (kind === "missing") rmSync(source);
+        if (kind === "mode") chmodSync(source, 0o644);
+        if (kind === "symlink") {
+          const target = join(fixture.root, "external-credential");
+          copyFileSync(source, target);
+          unlinkSync(source);
+          symlinkSync(target, source);
+        }
+        if (kind === "hard-link") linkSync(source, join(fixture.root, "credential-link"));
+
+        const result = fixture.run("replace-rehearsal", {
+          ECHO_FAKE_UNSAFE_SOURCE_OWNER: String(kind === "owner"),
+        }, [
+          "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+        ]);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(/(fixed private input|existing provider input)/);
+        expect(readFileSync(fixture.durableSentinel, "utf8")).toBe("durable-work-must-survive");
+        expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
+      } finally {
+        rmSync(fixture.root, { force: true, recursive: true });
+      }
+    }
+  });
+
+  it("fails closed for telemetry drift and a held lock without discarding a staged operation", () => {
+    const fixture = preparedStatusFixture();
+    const operationId = "onboarding-rehearsal-telemetry";
+    try {
+      const { stage } = stageRehearsalInputs(fixture, operationId);
+      configureReusableProviderInputs(fixture);
+      const drifted = fixture.run("replace-rehearsal", { ECHO_FAKE_CONTENT_TELEMETRY: "true" }, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+      ]);
+      expect(drifted.status).toBe(1);
+      expect(drifted.stderr).toContain("content telemetry differs");
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
+
+      const environment = join(fixture.deploy, ".env.clean-v1");
+      writeFileSync(
+        environment,
+        readFileSync(environment, "utf8").replace(
+          "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false",
+          "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true",
+        ),
+      );
+      const acceptedEnvironment = join(
+        fixture.releaseDir,
+        "runtime-environments",
+        `${fixture.releaseId}.env`,
+      );
+      writeFileSync(
+        acceptedEnvironment,
+        readFileSync(acceptedEnvironment, "utf8").replace(
+          "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false",
+          "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true",
+        ),
+      );
+      const replacement = fixture.run("replace-rehearsal", { ECHO_FAKE_CONTENT_TELEMETRY: "true" }, [
+        "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
+      ]);
+      expect(replacement.status, replacement.stderr).toBe(0);
+      const lock = join(fixture.deploy, "clean-data", ".authority-operation-lock");
+      mkdirSync(lock, { mode: 0o700 });
+      writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, { mode: 0o600 });
+      const held = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(held.status).toBe(1);
+      expect(held.stderr).toContain("another Authority activation or release operation is already in progress");
+      expect(existsSync(join(stage, "input", "llm-credential"))).toBe(true);
+      rmSync(lock, { recursive: true });
+
+      const prepared = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(prepared.status, prepared.stderr).toBe(0);
+      expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":true');
+      expect(readFileSync(environment, "utf8")).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true");
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }

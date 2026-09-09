@@ -120,7 +120,7 @@ rule exact_read_only_execution_role {
 rule bounded_staging_query_function {
     Resources.CustomWidgetJourneyExplorer.DependsOn not exists
     Resources.CustomWidgetJourneyExplorer.Properties.FunctionName == 'customWidget-echo-staging-journey-explorer-v1'
-    Resources.CustomWidgetJourneyExplorer.Properties.Description == 'Staging-only read-only content-free journey query backend.'
+    Resources.CustomWidgetJourneyExplorer.Properties.Description == 'Staging-only read-only journey and opt-in development content query backend.'
     Resources.CustomWidgetJourneyExplorer.Properties.Runtime == 'nodejs24.x'
     Resources.CustomWidgetJourneyExplorer.Properties.Handler == 'index.handler'
     Resources.CustomWidgetJourneyExplorer.Properties.Architectures == [ 'arm64' ]

@@ -43,6 +43,26 @@ afterEach(() => {
 });
 
 describe("readable-search generation reconciliation", () => {
+  it("observes each real build boundary under one shared operation identity", async () => {
+    const events: { stage: string; event: string; operation_id: string }[] = [];
+    const current = head(2);
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
+      authority: database(), organization_id: ORGANIZATION_ID,
+      retrieval_contract_sha256: CONTRACT, read_record_head: () => current,
+      capture_snapshot: () => ({ record_head: current }),
+      enrich_snapshot: async (snapshot) => snapshot,
+      build_generation: () => ({ generation_id: GENERATION, manifest_sha256: MANIFEST,
+        retrieval_contract_sha256: CONTRACT, record_head: current }),
+      prepare_generation: () => undefined,
+      observation: (event: { stage: string; event: string; operation_id: string }) => { events.push(event); },
+      now: () => NOW,
+    });
+    await expect(reconciler.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
+    expect(events.filter((event) => event.event === "succeeded").map((event) => event.stage))
+      .toEqual(["search_snapshot", "search_enrichment", "search_build", "search_validation", "search_publication", "search_reconciliation"]);
+    expect(new Set(events.map((event) => event.operation_id)).size).toBe(1);
+  });
+
   it("publishes a missing exact-head generation and then no-ops", async () => {
     const authority = database();
     const current = head(2);

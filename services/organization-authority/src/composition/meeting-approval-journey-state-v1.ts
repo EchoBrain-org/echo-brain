@@ -9,7 +9,7 @@ import {
 } from "../shared/journey-telemetry-v1.js";
 
 /** A disposable, separate file role. It is never an Authority state baseline. */
-export const MEETING_APPROVAL_JOURNEY_STATE_SCHEMA_VERSION_V1 = 1 as const;
+export const MEETING_APPROVAL_JOURNEY_STATE_SCHEMA_VERSION_V1 = 2 as const;
 export const MEETING_APPROVAL_JOURNEY_STATE_APPLICATION_ID_V1 = 0x454a5354; // "EJST"
 export const MEETING_APPROVAL_JOURNEY_STATE_MAX_ATTEMPTS_V1 = 100 as const;
 export const MEETING_APPROVAL_JOURNEY_STAGE_RESULTS_V1 = ["succeeded", "failed"] as const;
@@ -193,6 +193,17 @@ function initializeSchema(database: Database.Database): void {
     }
     return;
   }
+  if (userVersion === 1 && applicationId === MEETING_APPROVAL_JOURNEY_STATE_APPLICATION_ID_V1) {
+    database.transaction(() => {
+      database.exec(`ALTER TABLE meeting_approval_stage_attempts_v1 ADD COLUMN observation_kind TEXT NOT NULL DEFAULT 'legacy';
+      CREATE TABLE meeting_approval_stage_skips_v2 (
+        journey_id TEXT NOT NULL, stage TEXT NOT NULL, observed_at TEXT NOT NULL,
+        sequence INTEGER NOT NULL, PRIMARY KEY (journey_id, stage)
+      ) STRICT;`);
+      database.pragma("user_version = 2");
+    })();
+    return;
+  }
   if (userVersion !== 0 || applicationId !== 0) {
     throw new Error("meeting approval journey state has an unsupported schema version");
   }
@@ -209,6 +220,10 @@ function initializeSchema(database: Database.Database): void {
   }
   database.transaction(() => {
     database.exec(`
+      CREATE TABLE meeting_approval_stage_skips_v2 (
+        journey_id TEXT NOT NULL, stage TEXT NOT NULL, observed_at TEXT NOT NULL,
+        sequence INTEGER NOT NULL, PRIMARY KEY (journey_id, stage)
+      ) STRICT;
       CREATE TABLE meeting_approval_journeys_v1 (
         journey_id TEXT PRIMARY KEY NOT NULL,
         created_at TEXT NOT NULL,
@@ -232,6 +247,7 @@ function initializeSchema(database: Database.Database): void {
         stage TEXT NOT NULL,
         attempt INTEGER NOT NULL CHECK (attempt >= 1 AND attempt <= 100),
         status TEXT NOT NULL CHECK (status IN ('open', 'closed', 'skipped')),
+        observation_kind TEXT NOT NULL DEFAULT 'execution',
         result TEXT NULL CHECK (result IS NULL OR result IN ('succeeded', 'failed')),
         started_at TEXT NULL,
         closed_at TEXT NULL,
@@ -396,6 +412,7 @@ export class MeetingApprovalJourneyStateV1 {
     journeyIdValue: string,
     stageValue: JourneyStageV1,
     observedAtValue: string,
+    observationKind: "execution" | "recovery" = "execution",
   ): MeetingApprovalJourneyReservationV1 {
     const id = journeyId(journeyIdValue);
     const stage = meetingStage(stageValue);
@@ -409,12 +426,25 @@ export class MeetingApprovalJourneyStateV1 {
       this.database
         .prepare(
           `INSERT INTO meeting_approval_stage_attempts_v1
-             (journey_id, stage, attempt, status, started_at, start_sequence)
-           VALUES (?, ?, ?, 'open', ?, ?)`,
+             (journey_id, stage, attempt, status, started_at, start_sequence, observation_kind)
+           VALUES (?, ?, ?, 'open', ?, ?, ?)`,
         )
-        .run(id, stage, attempt, observedAt, sequence);
+        .run(id, stage, attempt, observedAt, sequence, observationKind);
       return Object.freeze({ sequence, attempt });
     })();
+  }
+
+  executionAccounting(journeyIdValue: string, stageValue: JourneyStageV1, attempt: number) {
+    const rows = this.database.prepare(`SELECT attempt, result, observation_kind FROM meeting_approval_stage_attempts_v1
+      WHERE journey_id = ? AND stage = ? AND status != 'skipped' AND attempt <= ? ORDER BY attempt`).all(journeyId(journeyIdValue), meetingStage(stageValue), attempt) as { attempt: number; result: string | null; observation_kind: string }[];
+    const current = rows.at(-1);
+    const executions = rows.filter((row) => row.observation_kind === "execution");
+    const prior = executions.filter((row) => row.attempt < attempt);
+    const previous = prior.at(-1);
+    const kind = current?.observation_kind === "recovery" ? "recovery" : rows.some((row) => row.observation_kind === "legacy") ? "legacy" : "execution";
+    return Object.freeze({ kind, execution_attempt: executions.length,
+      retry_count: executions.filter((_, index) => index > 0 && executions[index - 1]?.result === "failed").length,
+      retry_of_attempt: kind === "execution" && previous?.result === "failed" ? previous.attempt : null });
   }
 
   reserveStageClose(
@@ -423,6 +453,7 @@ export class MeetingApprovalJourneyStateV1 {
     attemptValue: number,
     resultValue: MeetingApprovalJourneyStageResultV1,
     observedAtValue: string,
+    recovered = false,
   ): { readonly sequence: number } {
     const id = journeyId(journeyIdValue);
     const stage = meetingStage(stageValue);
@@ -448,10 +479,11 @@ export class MeetingApprovalJourneyStateV1 {
       this.database
         .prepare(
           `UPDATE meeting_approval_stage_attempts_v1
-              SET status = 'closed', result = ?, closed_at = ?, close_sequence = ?
+              SET status = 'closed', result = ?, closed_at = ?, close_sequence = ?,
+                  observation_kind = CASE WHEN ? THEN 'recovery' ELSE observation_kind END
             WHERE journey_id = ? AND stage = ? AND attempt = ? AND status = 'open'`,
         )
-        .run(result, observedAt, sequence, id, stage, attempt);
+        .run(result, observedAt, sequence, recovered ? 1 : 0, id, stage, attempt);
       return Object.freeze({ sequence });
     })();
   }
@@ -468,15 +500,13 @@ export class MeetingApprovalJourneyStateV1 {
       this.requireJourney(id);
       const previous = this.latestStage(id, stage);
       if (previous?.status === "open") throw new Error("stage already has an open attempt");
-      const attempt = this.nextAttempt(previous?.attempt);
+      // A skipped observation consumes a sequence, never an execution reservation.
+      const attempt = previous?.attempt ?? 1;
       const sequence = this.nextSequence(id);
-      this.database
-        .prepare(
-          `INSERT INTO meeting_approval_stage_attempts_v1
-             (journey_id, stage, attempt, status, started_at, closed_at, close_sequence)
-           VALUES (?, ?, ?, 'skipped', ?, ?, ?)`,
-        )
-        .run(id, stage, attempt, observedAt, observedAt, sequence);
+      this.database.prepare(`INSERT INTO meeting_approval_stage_skips_v2
+        (journey_id, stage, observed_at, sequence) VALUES (?, ?, ?, ?)
+        ON CONFLICT(journey_id, stage) DO UPDATE SET observed_at = excluded.observed_at,
+          sequence = excluded.sequence`).run(id, stage, observedAt, sequence);
       return Object.freeze({ sequence, attempt });
     })();
   }
@@ -487,7 +517,10 @@ export class MeetingApprovalJourneyStateV1 {
   ): MeetingApprovalJourneyStageStatusV1 | null {
     const id = journeyId(journeyIdValue);
     const row = this.latestStage(id, meetingStage(stageValue));
-    if (row === undefined) return null;
+    if (row === undefined) {
+      const skipped = this.database.prepare("SELECT observed_at FROM meeting_approval_stage_skips_v2 WHERE journey_id = ? AND stage = ?").get(id, stageValue) as { observed_at: string } | undefined;
+      return skipped === undefined ? null : Object.freeze({ attempt: 1, status: "skipped", result: null, started_at: skipped.observed_at, closed_at: skipped.observed_at });
+    }
     return Object.freeze({
       attempt: assertSafeAttempt(row.attempt),
       status: row.status,

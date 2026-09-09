@@ -401,7 +401,7 @@
     "RepeatedWorkerFailureAlarm": {
       "Type": "AWS::CloudWatch::Alarm",
       "Properties": {
-        "AlarmDescription": "The Authority worker reported three failures in five minutes.",
+        "AlarmDescription": "Legacy shared WorkerFailure identity across contributing log groups in this account and Region. Host attribution requires source-log comparison.",
         "AlarmActions": [
           {
             "Ref": "AlertTopic"
@@ -426,7 +426,7 @@
     "RepeatedRuntimeReadyAlarm": {
       "Type": "AWS::CloudWatch::Alarm",
       "Properties": {
-        "AlarmDescription": "The Authority emitted three runtime-ready events in five minutes.",
+        "AlarmDescription": "Legacy shared RuntimeReady identity across contributing log groups in this account and Region. Host attribution requires source-log comparison.",
         "AlarmActions": [
           {
             "Ref": "AlertTopic"
@@ -473,6 +473,104 @@
           ]
         }
       }
+    },
+    "AttributedWorkerFailureMetricFilter": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "DockerRuntimeLogGroup"
+        },
+        "FilterPattern": "{ $.kind = \"echo-clean-live-worker-failed-v1\" }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {
+              "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}"
+            },
+            "MetricName": "WorkerFailure",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "AttributedWorkerFailureAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": {
+          "Fn::Sub": "Comparison only: WorkerFailure from ${DockerRuntimeLogGroup} for ${AuthorityHost} in ${AWS::StackName}. Actions disabled pending operator attribution verification."
+        },
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "Namespace": {
+          "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}"
+        },
+        "MetricName": "WorkerFailure",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Threshold": 3,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "ActionsEnabled": false
+      }
+    },
+    "AttributedRuntimeReadyMetricFilter": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "DockerRuntimeLogGroup"
+        },
+        "FilterPattern": "{ $.kind = \"echo-clean-live-runtime-ready-v1\" }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {
+              "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}"
+            },
+            "MetricName": "RuntimeReady",
+            "MetricValue": "1",
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "AttributedRuntimeReadyAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": {
+          "Fn::Sub": "Comparison only: RuntimeReady from ${DockerRuntimeLogGroup} for ${AuthorityHost} in ${AWS::StackName}. Actions disabled pending operator attribution verification."
+        },
+        "AlarmActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "AlertTopic"
+          }
+        ],
+        "Namespace": {
+          "Fn::Sub": "EchoBrain/AuthorityOperations/${AuthorityHost}"
+        },
+        "MetricName": "RuntimeReady",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Threshold": 3,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "ActionsEnabled": false
+      }
     }
   },
   "Outputs": {
@@ -510,6 +608,12 @@
       "Description": "Docker awslogs driver values for the Authority container.",
       "Value": {
         "Fn::Sub": "awslogs-group=${DockerRuntimeLogGroup};awslogs-region=${AWS::Region};awslogs-create-group=false"
+      }
+    },
+    "RuntimeMonitoringAttribution": {
+      "Description": "Inspect stack, host log source, legacy and attributed metric identity, and alarm topic together. Subscription confirmation requires operator verification.",
+      "Value": {
+        "Fn::Sub": "stack=${AWS::StackName};host=${AuthorityHost};log=${DockerRuntimeLogGroup};legacy=EchoBrain/AuthorityOperations;attributed=EchoBrain/AuthorityOperations/${AuthorityHost};worker_alarm=${RepeatedWorkerFailureAlarm};comparison_alarm=${AttributedWorkerFailureAlarm};alarm_and_ok_topic=${AlertTopic};comparison_actions=disabled"
       }
     }
   }

@@ -1,3 +1,4 @@
+import { observeCoreRuntimeSyncV1, observeCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
 import {
   canonicalJson,
   canonicalSha256,
@@ -955,14 +956,14 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           | undefined;
         let plannerProviderElapsed = 0;
         try {
-          plannerGeneration = await generateWithOptionalObservation(
+          plannerGeneration = await observeCoreRuntimeV1("ask_planner", () => generateWithOptionalObservation(
             options.planner,
             {
-              ...plannerRequest,
+              ...plannerRequest!,
               ...(input.signal === undefined ? {} : { signal: input.signal }),
             },
             options.on_stage !== undefined,
-          );
+          ));
           plannerProviderElapsed =
             options.on_stage === undefined
               ? 0
@@ -976,10 +977,10 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
               finish_reason: plannerGeneration.finish_reason,
             },
           });
-          plan = parsePlan(
-            plannerGeneration.value,
+          plan = observeCoreRuntimeSyncV1("model_schema", () => parsePlan(
+            plannerGeneration!.value,
             question,
-          );
+          ));
           const elapsed =
             options.on_stage === undefined
               ? 0
@@ -1181,14 +1182,14 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           | undefined;
         let answerProviderElapsed = 0;
         try {
-          answerGeneration = await generateWithOptionalObservation(
+          answerGeneration = await observeCoreRuntimeV1("ask_answer", () => generateWithOptionalObservation(
             options.answerer,
             {
               ...answerRequest,
               ...(input.signal === undefined ? {} : { signal: input.signal }),
             },
             options.on_stage !== undefined,
-          );
+          ));
           answerProviderElapsed =
             options.on_stage === undefined
               ? 0
@@ -1202,10 +1203,10 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
               finish_reason: answerGeneration.finish_reason,
             },
           });
-          parsed = parseAnswer(
-            answerGeneration.value,
+          parsed = observeCoreRuntimeSyncV1("model_grounding", () => parseAnswer(
+            answerGeneration!.value,
             context,
-          );
+          ));
           const elapsed =
             options.on_stage === undefined
               ? 0

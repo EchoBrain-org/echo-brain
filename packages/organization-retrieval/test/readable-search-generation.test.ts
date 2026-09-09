@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { canonicalJson, sha256Digest } from "@echo-brain/federation-protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildReadableSearchGenerationV1,
   expandReadableSearchRelatedAtomsV1,
@@ -160,6 +160,57 @@ function relatedPair(
 }
 
 describe("immutable readable-search generation v1", () => {
+  it("batches each segment's plane writes in one transaction", () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), "echo-readable-search-generation-"),
+    );
+    const transaction = vi.spyOn(Database.prototype, "transaction");
+    try {
+      buildReadableSearchGenerationV1(
+        input(directory, [
+          atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
+          atom("reviewer", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2),
+        ]),
+      );
+      expect(transaction).toHaveBeenCalledTimes(6);
+    } finally {
+      transaction.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a staged generation after a plane transaction rolls back", () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), "echo-readable-search-generation-"),
+    );
+    const originalTransaction = Database.prototype.transaction;
+    const transaction = vi
+      .spyOn(Database.prototype, "transaction")
+      .mockImplementationOnce(originalTransaction)
+      .mockImplementationOnce(function (this: Database.Database, callback) {
+        return originalTransaction.call(this, () => {
+          callback();
+          throw new Error("injected content transaction failure");
+        });
+      });
+    try {
+      expect(() =>
+        buildReadableSearchGenerationV1(
+          input(directory, [
+            atom("member", ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2),
+          ]),
+        ),
+      ).toThrow("injected content transaction failure");
+      expect(
+        readdirSync(join(directory, "record-retrieval", "generations")),
+      ).toEqual([]);
+      expect(transaction).toHaveBeenCalledTimes(2);
+    } finally {
+      transaction.mockRestore();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     [
       "maximum_atoms",
@@ -545,6 +596,7 @@ describe("immutable readable-search generation v1", () => {
       const second = buildReadableSearchGenerationV1(input(secondDirectory, atoms));
       expect(second.manifest.generation_id).toBe(first.manifest.generation_id);
       expect(second.manifest_sha256).toBe(first.manifest_sha256);
+      expect(second.manifest.roots).toEqual(first.manifest.roots);
       for (const [directory, built] of [[firstDirectory, first], [secondDirectory, second]] as const) {
         const active_generation = {
           generation_id: built.manifest.generation_id,
