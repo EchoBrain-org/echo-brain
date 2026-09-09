@@ -577,7 +577,10 @@ set, or permission-set scope is not clearly staging-only.
    ```
 
 2. Create and inspect a change set for
-   `authority-staging-journey-explorer-v1.template.json` first. Use
+   `authority-staging-journey-explorer-v1.template.json` first. After editing its
+   readable handler, run `npm run build:staging-journey-explorer-template` and
+   commit the generated template; the normal checks verify its contents,
+   deployed behavior, and CloudFormation inline size limit. Use
    `--profile echo-prod`, the staging Region, a fresh change-set name, and
    `CAPABILITY_NAMED_IAM`. Confirm that it creates or changes only the dedicated
    Explorer Lambda, its retained log group and execution role, and the fixed
