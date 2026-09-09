@@ -32,6 +32,7 @@ separately.
 | [ADR-0008](ADR-0008-echo-hosted-authority-by-default.md)                 | ECHO-hosted Authority by default                  | accepted   |
 | [ADR-0009](ADR-0009-retained-authority-data-volume-boundary.md)          | Retained Authority data-volume boundary          | accepted   |
 | [ADR-0010](ADR-0010-disposable-related-atom-projection-v1.md)           | Disposable related-atom projection V1            | accepted   |
+| [ADR-0011](ADR-0011-bm25-lexical-scoring-v1.md)                         | BM25 lexical scoring V1                          | proposed   |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

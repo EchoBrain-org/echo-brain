@@ -22,7 +22,7 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function compareCandidates(left, right) {
+export function compareCandidates(left, right) {
   if (left.score !== right.score) return right.score - left.score;
   if (left.log_position !== right.log_position) return right.log_position - left.log_position;
   if (left.atom_order !== right.atom_order) return left.atom_order - right.atom_order;
@@ -49,14 +49,61 @@ function itemForResult(atom) {
   });
 }
 
+/**
+ * Scoring contract "echo-bm25-fixed-point-v1", reimplemented here without
+ * importing the candidate: Okapi BM25 (k1 1.2, b 0.75), Robertson/Sparck-Jones
+ * IDF with the +1 floor, fixed-point integers at scale 1e6, corpus statistics
+ * taken over exactly the atoms this reader is authorized to read, and the
+ * closed decision family weighted as a constant unit instead of IDF.
+ */
+export const BM25_K1 = 1.2;
+export const BM25_B = 0.75;
+export const SCORE_SCALE = 1_000_000;
+const CONTROLLED_TERMS = new Set(["decision", "decisions", "decide", "decided", "deciding"]);
+
+export function inverseDocumentFrequency(documentFrequency, documentCount) {
+  if (documentFrequency <= 0 || documentCount <= 0) return 0;
+  return Math.round(Math.log(1 + (documentCount - documentFrequency + 0.5) / (documentFrequency + 0.5)) * SCORE_SCALE);
+}
+
+export function bm25Score(frequencies, documentLength, terms, statistics) {
+  const averageLength = statistics.document_count === 0 ? 0 : statistics.total_term_count / statistics.document_count;
+  let score = 0;
+  for (const term of terms) {
+    const frequency = frequencies.get(term) ?? 0;
+    if (frequency === 0) continue;
+    const normalized = averageLength === 0
+      ? 1
+      : (frequency * (BM25_K1 + 1)) / (frequency + BM25_K1 * (1 - BM25_B + (BM25_B * documentLength) / averageLength));
+    const weight = CONTROLLED_TERMS.has(term)
+      ? SCORE_SCALE
+      : inverseDocumentFrequency(statistics.document_frequency.get(term) ?? 0, statistics.document_count);
+    score += Math.round(weight * normalized);
+  }
+  return score;
+}
+
 export function searchAtHead({ corpus, exactHead, reader, query, limit = 10 }) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error("search limit must be 1 through 10");
   const terms = analyzeQuery(query);
-  const candidates = [];
+  const authorized = [];
+  const document_frequency = new Map();
+  let total_term_count = 0;
   for (const atom of atomsAtHead(corpus, exactHead)) {
     if (!isAuthorized(atom, reader)) continue;
     const frequencies = analyzeDocument(atom.text, atom.item_kind);
-    const score = terms.reduce((total, term) => total + (frequencies.get(term) ?? 0), 0);
+    let length = 0;
+    for (const [term, frequency] of frequencies) {
+      length += frequency;
+      document_frequency.set(term, (document_frequency.get(term) ?? 0) + 1);
+    }
+    total_term_count += length;
+    authorized.push({ atom, frequencies, length });
+  }
+  const statistics = { document_count: authorized.length, total_term_count, document_frequency };
+  const candidates = [];
+  for (const { atom, frequencies, length } of authorized) {
+    const score = bm25Score(frequencies, length, terms, statistics);
     if (score === 0) continue;
     candidates.push({ ...atom, score });
   }

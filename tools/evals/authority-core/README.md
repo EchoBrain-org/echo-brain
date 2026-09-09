@@ -2,14 +2,18 @@
 
 Optimize the shared runtime's latency and efficiency as active employees **N**
 and retained history grow. The
-[core metric contract](../../../docs/product/2026-09-06-authority-core-capacity-metrics-v3.md)
+[core metric contract](../../../docs/product/2026-09-09-authority-core-capacity-metrics-v4.md)
 defines the boundary and gates.
 
-V3 replaces the frozen, baseline-not-run V2 profile because V2 assigned its
-70/30 policy split per atom, while the canonical approval boundary assigns one
-policy to all facts in an approved meeting. V3 rounds the shared-policy count
-at the whole-meeting level and retains V2's definition/profile digests as
-historical evidence. No baseline or capacity result carries from V2 to V3.
+V4 replaces the frozen, baseline-not-run V3 profile because the ranking rule
+changed: [ADR-0011](../../../docs/decisions/ADR-0011-bm25-lexical-scoring-v1.md)
+moves Layer 2 from a term-frequency sum to fixed-point BM25 over the reader's
+authorized atoms, and the oracle pins that contract by name and analyzer
+digest. V3 had replaced V2 because V2 assigned its 70/30 policy split per
+atom, while the canonical approval boundary assigns one policy to all facts in
+an approved meeting. Each profile retains its predecessor's definition and
+profile digests as historical evidence. No baseline or capacity result carries
+forward across any of them.
 
 No provider clients, HTTP fixtures, simulated network waits, extraction-quality
 scores or nondeterministic model behavior run inside this benchmark. Canonical
@@ -21,9 +25,9 @@ The metric components are:
 
 | File | Purpose |
 | --- | --- |
-| `metrics.v3.json`, `verify-contract.mjs` | Pin the core-only contract and verify its formulas. |
+| `metrics.v4.json`, `verify-contract.mjs` | Pin the core-only contract and verify its formulas; `metrics.v2.json` and `metrics.v3.json` are frozen predecessors. |
 | `corpus-v1.mjs` | Generate provider-free history templates and logical postings. |
-| `oracle-v1.mjs` | Independently check ranking, observed heads, content, policy ownership and the complete index. |
+| `oracle-v1.mjs` | Independently check ranking (BM25 fixed-point, ADR-0011), observed heads, content, policy ownership and the complete index. |
 | `grading.mjs` | Score every offered operation for diagnostics; failed work is infinite latency. It cannot award a milestone. |
 
 ```sh

@@ -26,6 +26,10 @@ import {
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+  READABLE_SEARCH_BM25_B,
+  READABLE_SEARCH_BM25_K1,
+  READABLE_SEARCH_SCORE_SCALE,
+  READABLE_SEARCH_SCORER_ID,
   readableSearchPlaneBaselineSha256,
   readableSearchPlaneBaselineSha256V1,
   warmReadableSearchActiveGenerationV1,
@@ -97,10 +101,10 @@ export interface ReadableSearchRelatedAtomProjectorBindingV1 {
   readonly profile: ReadableSearchRelatedAtomProjectorProfileV1;
 }
 
-const READABLE_SEARCH_ANALYZER_RELEASE_V3 = Object.freeze({
-  schema_version: 3,
-  kind: "echo-clean-readable-search-analyzer-release-v3",
-  analyzer_id: "echo-unicode-alnum-decision-category-frequency-v3",
+const READABLE_SEARCH_ANALYZER_RELEASE_V4 = Object.freeze({
+  schema_version: 4,
+  kind: "echo-clean-readable-search-analyzer-release-v4",
+  analyzer_id: "echo-unicode-alnum-decision-category-bm25-v4",
   input_normalization: "NFC",
   tokenization: "maximal-ecmascript-unicode-letter-or-number-runs",
   case_mapping: "locale-independent-string-lowercase",
@@ -119,6 +123,20 @@ const READABLE_SEARCH_ANALYZER_RELEASE_V3 = Object.freeze({
     item_kind: "decision",
     term: "decision",
     term_frequency: 1,
+  },
+  scoring: {
+    scorer_id: READABLE_SEARCH_SCORER_ID,
+    formula: "okapi-bm25-fixed-point",
+    k1: READABLE_SEARCH_BM25_K1,
+    b: READABLE_SEARCH_BM25_B,
+    idf: "ln(1 + (N - df + 0.5) / (df + 0.5))",
+    score_scale: READABLE_SEARCH_SCORE_SCALE,
+    statistics_scope: "union-of-segments-admitted-to-the-reader",
+    controlled_terms: {
+      family: ["decision", "decisions", "decide", "decided", "deciding"],
+      weight: "constant-one-unit-no-idf",
+    },
+    tie_break: "score-desc,log_position-desc,atom_order-asc,atom_id-bytes",
   },
 });
 
@@ -157,7 +175,7 @@ export function readableSearchGenerationContractV1(input: Readonly<{
   const restrictedReviewerPolicy =
     restrictedReviewerPersonPolicyContractSha256();
   const analyzerSource = sha256Digest(
-    canonicalJson(READABLE_SEARCH_ANALYZER_RELEASE_V3),
+    canonicalJson(READABLE_SEARCH_ANALYZER_RELEASE_V4),
   );
   const analyzer = Object.freeze({
     analyzer_contract_sha256: canonicalSha256({
