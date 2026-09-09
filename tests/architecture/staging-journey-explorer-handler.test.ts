@@ -81,6 +81,30 @@ function event(
     ...values,
   });
 }
+function indexRow(
+  journeyId: string,
+  last: number,
+  eventCount = 1,
+  first = last,
+) {
+  return row({
+    journey_id: journeyId,
+    first_observed_ms: first,
+    last_observed_ms: last,
+    event_count: eventCount,
+  });
+}
+function listReplies(
+  index: ReturnType<typeof row>[],
+  page: ReturnType<typeof row>[],
+) {
+  return [
+    { queryId: "index" },
+    { status: "Complete", results: index },
+    { queryId: "page" },
+    { status: "Complete", results: page },
+  ];
+}
 class Client {
   public readonly sent: unknown[] = [];
   public readonly sendOptions: unknown[] = [];
@@ -172,11 +196,13 @@ describe("staging Journey Explorer custom widget", () => {
         observed_at: "2026-09-02T11:58:00.000Z",
       }),
     ];
+    const index = [
+      indexRow(id, now),
+      indexRow(secondId, now - 1_000),
+    ];
     const client = new Client([
-      { queryId: "q" },
-      { status: "Complete", results },
-      { queryId: "q-next" },
-      { status: "Complete", results },
+      ...listReplies(index, [results[0]!]),
+      ...listReplies(index, [results[1]!]),
     ]);
     const result = await handler(client)({
       operation: "list",
@@ -195,11 +221,10 @@ describe("staging Journey Explorer custom widget", () => {
       logGroupName: group,
       startTime: Math.floor((now - 60_000) / 1000),
       endTime: Math.ceil(now / 1000),
-      limit: 2500,
+      limit: 2,
     });
-    expect(String(start.input.queryString)).toContain(
-      'environment = "staging"',
-    );
+    expect(String(start.input.queryString)).toContain('environment = "staging"');
+    expect(String(start.input.queryString)).toContain("count(*) as event_count");
     expect(String(start.input.queryString)).not.toContain("SOURCE");
 
     await expect(
@@ -209,6 +234,101 @@ describe("staging Journey Explorer custom widget", () => {
       next_cursor: null,
     });
     expect(client.sent.some((command) => command instanceof Stop)).toBe(false);
+  });
+
+  it("lists a normal eight-hour range by unique journey, not its first 2,500 stage events", async () => {
+    const ids = Array.from({ length: 21 }, (_, index) =>
+      `${String(index + 2).padStart(8, "0")}-0000-4000-8000-${String(index + 2).padStart(12, "0")}`,
+    );
+    const index = ids.map((journeyId, position) =>
+      indexRow(journeyId, now - position * 1_000, position === 0 ? 2_499 : 1),
+    );
+    const firstPage = [
+      ...Array.from({ length: 2_499 }, (_, sequence) =>
+        event({ journey_id: ids[0], sequence: sequence + 1, observed_at: "2026-09-02T11:59:00.000Z" }),
+      ),
+    ];
+    const client = new Client(listReplies(index, firstPage));
+    const result = await handler(client)({ operation: "list", page_size: 20 });
+    expect(result).toMatchObject({
+      journeys: [expect.objectContaining({ journey_id: ids[0] })],
+      next_cursor: expect.any(String),
+    });
+    const queries = client.sent.filter((command) => command instanceof Start) as Start[];
+    expect(queries).toHaveLength(2);
+    expect(String(queries[0]!.input.queryString)).toContain("count(*) as event_count by journey_id");
+    expect(String(queries[1]!.input.queryString)).toContain(`journey_id in [\"${ids[0]}\"]`);
+    expect(queries[1]!.input.limit).toBe(2500);
+  });
+
+  it("preserves CloudWatch index order across tied pages and never builds a query from malformed IDs", async () => {
+    const firstId = "22222222-2222-4222-8222-222222222222";
+    const secondId = "33333333-3333-4333-8333-333333333333";
+    const thirdId = "44444444-4444-4444-8444-444444444444";
+    const index = [
+      indexRow(thirdId, now - 1_000),
+      indexRow(secondId, now - 1_000),
+      indexRow(firstId, now - 1_000),
+    ];
+    const pageOne = new Client(listReplies(index, [event({ journey_id: thirdId }), event({ journey_id: secondId })]));
+    const first = await handler(pageOne)({ operation: "list", page_size: 2 });
+    expect(first).toMatchObject({
+      journeys: [
+        expect.objectContaining({ journey_id: thirdId }),
+        expect.objectContaining({ journey_id: secondId }),
+      ],
+      next_cursor: expect.any(String),
+    });
+    if (typeof first === "string") throw new Error("expected list");
+    const pageTwo = new Client(listReplies(index, [event({ journey_id: firstId })]));
+    await expect(handler(pageTwo)({ operation: "list", cursor: first.next_cursor })).resolves.toMatchObject({
+      journeys: [expect.objectContaining({ journey_id: firstId })],
+      next_cursor: null,
+    });
+    const malformed = new Client([
+      { queryId: "malformed-index" },
+      { status: "Complete", results: [indexRow('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" | fields @message', now)] },
+    ]);
+    await expect(handler(malformed)({ operation: "list" })).resolves.toEqual({ error: "journey_explorer_unavailable" });
+    for (const command of pageOne.sent.concat(pageTwo.sent))
+      if (command instanceof Start)
+        expect(String(command.input.queryString)).not.toContain("fields @message");
+  });
+
+  it("renders oversized journeys conservatively and advances to a safe next page", async () => {
+    const oversized = "22222222-2222-4222-8222-222222222222";
+    const nextId = "33333333-3333-4333-8333-333333333333";
+    const index = [indexRow(oversized, now, 2_500), indexRow(nextId, now - 1_000)];
+    const client = new Client([
+      { queryId: "index" },
+      { status: "Complete", results: index },
+    ]);
+    const first = await handler(client)({ operation: "list", page_size: 1, render: true });
+    expect(String(first)).toContain("Timeline unavailable: this journey exceeds the safe event bound.");
+    expect(String(first)).toContain("Next page");
+    expect(String(first)).not.toContain("View timeline");
+    expect(client.sent.filter((command) => command instanceof Start)).toHaveLength(1);
+  });
+
+  it("fails closed when a selected page is incomplete or reaches the per-page event bound", async () => {
+    const secondId = "22222222-2222-4222-8222-222222222222";
+    const index = [indexRow(id, now), indexRow(secondId, now - 1_000)];
+    await expect(handler(new Client(listReplies(index, [event({ journey_id: id })])))({ operation: "list", page_size: 2 })).resolves.toEqual({ error: "journey_explorer_unavailable" });
+    await expect(handler(new Client(listReplies([indexRow(id, now, 2)], [event()])))({ operation: "list" })).resolves.toEqual({ error: "journey_explorer_unavailable" });
+    await expect(handler(new Client(listReplies([indexRow(id, now)], [event(), event({ sequence: 2 })])))({ operation: "list" })).resolves.toMatchObject({ journeys: [expect.objectContaining({ journey_id: id })] });
+    await expect(handler(new Client(listReplies([indexRow(id, now, 2_499)], Array.from({ length: 2_500 }, () => event()))))({ operation: "list" })).resolves.toEqual({ error: "result_limit_exceeded" });
+  });
+
+  it("shares one bounded query deadline across the index and selected-page queries", async () => {
+    const clock = [0, 0, 0, 12_000];
+    const client = new Client([
+      { queryId: "index" },
+      { status: "Complete", results: [indexRow(id, now)] },
+    ]);
+    await expect(handler(client, {
+      monotonicNow: () => clock.shift() ?? 12_000,
+    })({ operation: "list" })).resolves.toEqual({ error: "query_timeout" });
+    expect(client.sent.filter((command) => command instanceof Start)).toHaveLength(1);
   });
 
   it("uses an explicit @message map for nested v2 diagnostics", async () => {
@@ -241,16 +361,13 @@ describe("staging Journey Explorer custom widget", () => {
     });
     let query = "";
     const client = new Client([
+      { queryId: "index" },
+      { status: "Complete", results: [indexRow(id, now)] },
       (command: unknown) => {
         query = String((command as Start).input.queryString);
-        return { queryId: "q" };
+        return { queryId: "page" };
       },
-      () => ({
-        status: "Complete",
-        results: query.includes("jsonParse(@message)")
-          ? [explicitProjection]
-          : [discoveredMapProjection],
-      }),
+      () => ({ status: "Complete", results: query.includes("jsonParse(@message)") ? [explicitProjection] : [discoveredMapProjection] }),
     ]);
 
     await expect(handler(client)({ operation: "list" })).resolves.toMatchObject({
@@ -269,11 +386,7 @@ describe("staging Journey Explorer custom widget", () => {
       retry_count: 0,
       diagnostic_json: "",
     };
-    const client = new Client([
-      { queryId: "q" },
-      {
-        status: "Complete",
-        results: [
+    const stages = [
           event(accounting),
           event({
             ...accounting,
@@ -282,9 +395,8 @@ describe("staging Journey Explorer custom widget", () => {
             stage: "meeting_candidate_persist",
             outcome: "actionable",
           }),
-        ],
-      },
-    ]);
+        ];
+    const client = new Client(listReplies([indexRow(id, now), indexRow(secondId, now - 1_000)], stages));
 
     await expect(handler(client)({ operation: "list" })).resolves.toMatchObject({
       journeys: expect.arrayContaining([
@@ -669,11 +781,7 @@ describe("staging Journey Explorer custom widget", () => {
       terminal_outcome: "failed",
       terminal_failure_class: "unavailable",
     });
-    const pending = new Client([
-      { queryId: "q" },
-      {
-        status: "Complete",
-        results: [
+    const pendingStages = [
           event({
             workflow: "meeting_approval",
             stage: "meeting_record_append",
@@ -692,9 +800,8 @@ describe("staging Journey Explorer custom widget", () => {
             outcome: "superseded",
             observed_at: "2026-09-02T11:59:01.000Z",
           }),
-        ],
-      },
-    ]);
+        ];
+    const pending = new Client(listReplies([indexRow(id, now)], pendingStages));
     await expect(
       handler(pending)({ operation: "list" }),
     ).resolves.toMatchObject({
@@ -834,15 +941,14 @@ describe("staging Journey Explorer custom widget", () => {
     await expect(
       handler(full)({ operation: "detail", journey_id: id }),
     ).resolves.toEqual({ error: "result_limit_exceeded" });
-    const fullList = new Client([
-      { queryId: "q" },
-      {
-        status: "Complete",
-        results: Array.from({ length: 2500 }, () => event()),
-      },
-    ]);
-    await expect(handler(fullList)({ operation: "list" })).resolves.toEqual({
-      error: "result_limit_exceeded",
+    const fullListIndex = Array.from({ length: 2500 }, (_, index) => indexRow(`${String(index + 1).padStart(8, "0")}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, now - index));
+    const fullListStages = fullListIndex
+      .slice(2480, 2500)
+      .map((item) => event({ journey_id: String(item.find((field) => field.field === "journey_id")!.value) }));
+    const fullList = new Client(listReplies(fullListIndex, fullListStages));
+    const fullListCursor = Buffer.from(JSON.stringify({ v: 1, start: now - 8 * 60 * 60 * 1000, end: now, offset: 2480 }), "utf8").toString("base64url");
+    await expect(handler(fullList)({ operation: "list", cursor: fullListCursor, page_size: 20 })).resolves.toMatchObject({
+      journeys: expect.arrayContaining([expect.anything()]), next_cursor: null, browse_limit_reached: true,
     });
     const missing = new Client([
       { queryId: "q" },
@@ -1126,19 +1232,14 @@ describe("staging Journey Explorer custom widget", () => {
 
   it("renders only on strict render:true and places exact trusted custom-widget actions immediately after buttons", async () => {
     const secondId = "22222222-2222-4222-8222-222222222222";
-    const client = new Client([
-      { queryId: "q" },
-      {
-        status: "Complete",
-        results: [
+    const stages = [
           event({ secret: "<script>never</script>" }),
           event({
             journey_id: secondId,
             observed_at: "2026-09-02T11:58:00.000Z",
           }),
-        ],
-      },
-    ]);
+        ];
+    const client = new Client(listReplies([indexRow(id, now), indexRow(secondId, now - 1_000)], [stages[0]! ]));
     const html = await handler(client)({
       operation: "list",
       page_size: 1,
@@ -1196,19 +1297,15 @@ describe("staging Journey Explorer custom widget", () => {
 
   it("renders paginated list and timeline from the same validated results with safe retry, latency, and token semantics", async () => {
     const secondId = "22222222-2222-4222-8222-222222222222";
-    const firstPage = new Client([
-      { queryId: "q" },
-      {
-        status: "Complete",
-        results: [
+    const stages = [
           event(),
           event({
             journey_id: secondId,
             observed_at: "2026-09-02T11:58:00.000Z",
           }),
-        ],
-      },
-    ]);
+        ];
+    const index = [indexRow(id, now), indexRow(secondId, now - 1_000)];
+    const firstPage = new Client(listReplies(index, [stages[0]! ]));
     const pageOne = String(
       await handler(firstPage)({
         operation: "list",
@@ -1221,19 +1318,7 @@ describe("staging Journey Explorer custom widget", () => {
         /Next page<\/button><cwdb-action[^>]*>(.*?)<\/cwdb-action>/,
       )![1]!,
     );
-    const secondPage = new Client([
-      { queryId: "q-next" },
-      {
-        status: "Complete",
-        results: [
-          event(),
-          event({
-            journey_id: secondId,
-            observed_at: "2026-09-02T11:58:00.000Z",
-          }),
-        ],
-      },
-    ]);
+    const secondPage = new Client(listReplies(index, [stages[1]! ]));
     const pageTwo = String(await handler(secondPage)(nextPayload));
     expect(pageTwo).toContain(secondId);
     expect(pageTwo).not.toContain("Next page</button>");
@@ -1420,15 +1505,15 @@ describe("staging Journey Explorer custom widget", () => {
     expect(html).not.toContain("Narrow the range.");
     expect(html).not.toContain(id);
 
-    const list = new Client([
-      { queryId: "large-list" },
-      { status: "Complete", results: Array.from({ length: 2_500 }, event) },
-    ]);
+    const largeIndex = Array.from({ length: 2_500 }, (_, index) => indexRow(`${String(index + 1).padStart(8, "0")}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, now - index));
+    const largeStages = largeIndex.slice(2480).map((item) => event({ journey_id: String(item.find((field) => field.field === "journey_id")!.value) }));
+    const list = new Client(listReplies(largeIndex, largeStages));
+    const listCursor = Buffer.from(JSON.stringify({ v: 1, start: now - 8 * 60 * 60 * 1000, end: now, offset: 2480 }), "utf8").toString("base64url");
     const listHtml = String(
-      await handler(list)({ operation: "list", render: true }),
+      await handler(list)({ operation: "list", cursor: listCursor, page_size: 20, render: true }),
     );
-    expect(listHtml).toContain("selected range returned too many events");
-    expect(listHtml).toContain("Narrow the range.");
+    expect(listHtml).toContain("contains at least 2500 distinct journeys");
+    expect(listHtml).toContain("narrow the range to inspect older journeys");
     expect(listHtml).not.toContain("retained 14-day history");
 
     const detailTimeout = new Client([

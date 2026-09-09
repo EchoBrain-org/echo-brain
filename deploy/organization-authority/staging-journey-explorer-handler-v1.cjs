@@ -155,16 +155,31 @@ const BASE =
   "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms, accounting.kind as accounting_kind, accounting.execution_attempt as execution_attempt, accounting.retry_count as retry_count, accounting.retry_of_attempt as retry_of_attempt, jsonStringify(parsed.diagnostic) as diagnostic_json";
 const BASE_DISPLAY =
   "journey_id, environment, schema_version, sequence, release_sha, build_number, workflow, stage, event, outcome, retryable, observed_at, elapsed_ms, attempt, failure_class, queue_age_ms, accounting_kind, execution_attempt, retry_count, retry_of_attempt, diagnostic_json";
-const LIST_QUERY =
-  PARSED_EVENT +
-  ' | filter kind = "' +
-  KIND +
-  '" and environment = "staging" and ispresent(journey_id) | fields ' +
-  BASE +
-  " | display " +
-  BASE_DISPLAY +
-  " | sort observed_at desc | limit " +
-  LIST_LIMIT;
+function listIndexQuery(limit) {
+  return (
+    'filter kind = "' +
+    KIND +
+    '" and environment = "staging" and ispresent(journey_id) | stats min(toMillis(@timestamp)) as first_observed_ms, max(toMillis(@timestamp)) as last_observed_ms, count(*) as event_count by journey_id | sort last_observed_ms desc, journey_id asc | limit ' +
+    limit
+  );
+}
+function listPageQuery(ids) {
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_PAGE || ids.some((id) => uuid(id) === null))
+    throw new Error("list page ids");
+  return (
+    PARSED_EVENT +
+    ' | filter kind = "' +
+    KIND +
+    '" and environment = "staging" and journey_id in [' +
+    ids.map((id) => `"${id}"`).join(",") +
+    "] | fields " +
+    BASE +
+    " | display " +
+    BASE_DISPLAY +
+    " | sort observed_at desc | limit " +
+    DETAIL_LIMIT
+  );
+}
 let cached;
 
 function detailQuery(id) {
@@ -600,6 +615,48 @@ function summarize(rows) {
       pending_outcome: item.terminal ? null : item.pending_outcome,
     }));
 }
+function listIndex(rows) {
+  const seen = new Set(), items = [];
+  for (const fields of rows) {
+    const item = row(fields), journeyId = uuid(item.journey_id), first = uint(item.first_observed_ms, 0), last = uint(item.last_observed_ms, 0), count = uint(item.event_count, 1);
+    if (journeyId === null || first === null || last === null || count === null || first > last || seen.has(journeyId))
+      throw new Error("list index query result violated the telemetry contract");
+    seen.add(journeyId);
+    items.push({ journey_id: journeyId, first, last, event_count: count });
+  }
+  return items;
+}
+function selectListPage(items, offset, pageSize) {
+  const selected = [], page = [];
+  let next = offset, events = 0;
+  while (next < items.length && page.length < pageSize) {
+    const item = items[next];
+    if (item.event_count >= DETAIL_LIMIT) {
+      page.push({ item, oversized: true });
+      next += 1;
+      continue;
+    }
+    if (events + item.event_count >= DETAIL_LIMIT) break;
+    selected.push(item);
+    page.push({ item, oversized: false });
+    events += item.event_count;
+    next += 1;
+  }
+  return { selected, page, next };
+}
+function summarizeListPage(rows, selected) {
+  const expected = new Set(selected.map((item) => item.journey_id)), counts = new Map(selected.map((item) => [item.journey_id, 0]));
+  for (const fields of rows) {
+    const raw = row(fields), journeyId = uuid(raw.journey_id);
+    if (journeyId === null || !expected.has(journeyId) || stage(raw) === null)
+      throw new Error("list page query result violated the telemetry contract");
+    counts.set(journeyId, counts.get(journeyId) + 1);
+  }
+  const summaries = new Map(summarize(rows).map((item) => [item.journey_id, item]));
+  if (summaries.size !== expected.size || selected.some((item) => !summaries.has(item.journey_id) || counts.get(item.journey_id) < item.event_count))
+    throw new Error("list page query omitted a selected journey");
+  return selected.map((item) => summaries.get(item.journey_id));
+}
 function timeline(rows, id) {
   const stages = [];
   for (const fields of rows) {
@@ -874,17 +931,22 @@ function renderList(data, parsed, endpointArn) {
   const range = `<p class="notice">Selected range: ${escapeHtml(new Date(parsed.start).toISOString())} to ${escapeHtml(new Date(parsed.end).toISOString())}. Results may be partial; widen the dashboard range to find earlier or later stages.</p>`;
   const rows = data.journeys
     .map((item) => {
+      if (item.status === "oversized")
+        return `<tr><td>${escapeHtml(item.journey_id)}</td><td>unknown</td><td>oversized (${escapeHtml(item.event_count)} observed log events)</td><td>not evaluated</td><td>not reported</td><td>Log timestamp:<br>${escapeHtml(item.first_log_timestamp)}<br>to ${escapeHtml(item.last_log_timestamp)}</td><td>Timeline unavailable: this journey exceeds the safe event bound.</td></tr>`;
       const status =
         item.terminal_outcome || item.pending_outcome || "in progress";
       return `<tr><td>${escapeHtml(item.journey_id)}</td><td>${escapeHtml(item.workflow)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(status)}</td><td>${escapeHtml(item.closed_event_count)}</td><td>${escapeHtml(item.first_observed_at)}<br>to ${escapeHtml(item.last_observed_at)}</td><td>${action(endpointArn, "View timeline", { operation: "detail", journey_id: item.journey_id, from: parsed.start, to: parsed.end, render: true })}</td></tr>`;
     })
     .join("");
+  const browseBound = data.browse_limit_reached
+    ? `<p class="notice">This range contains at least ${escapeHtml(LIST_LIMIT)} distinct journeys. The Explorer can browse only the newest ${escapeHtml(LIST_LIMIT)}; narrow the range to inspect older journeys.</p>`
+    : "";
   const next = data.next_cursor
     ? `<p>${action(endpointArn, "Next page", { operation: "list", cursor: data.next_cursor, page_size: parsed.pageSize, render: true })}</p>`
     : "";
   return frame(
     "Staging Journey Explorer",
-    `${range}<table><thead><tr><th>Journey</th><th>Workflow</th><th>Status</th><th>Outcome</th><th>Closed events</th><th>Observed range</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No validated journeys in this selected range.</td></tr>'}</tbody></table>${next}`,
+    `${range}${browseBound}<table><thead><tr><th>Journey</th><th>Workflow</th><th>Status</th><th>Outcome</th><th>Closed events</th><th>Observed range</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No validated journeys in this selected range.</td></tr>'}</tbody></table>${next}`,
   );
 }
 function tokenSummary(stages) {
@@ -1069,8 +1131,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
     const lateQueryId = outcome && outcome.ok ? queryId(outcome.value) : null;
     if (lateQueryId !== null) await stopQuery(lateQueryId);
   }
-  async function run(queryString, start, end, limit) {
-    const deadline = clock() + deadlineMs;
+  async function run(queryString, start, end, limit, deadline = clock() + deadlineMs) {
     const startRemaining = deadline - clock();
     if (startRemaining <= 0) throw queryTimeoutError();
     const started = await sendBounded(
@@ -1130,23 +1191,49 @@ function createStagingJourneyExplorerHandlerV1(options) {
             "# Staging Journey Explorer\n\nRead-only staging telemetry. Select a dashboard time range, list journeys, then request a canonical UUID detail timeline.\n\n## Parameters\n\n```yaml\noperation: list # list, detail, related, content, or health\nrender: true # render the safe interactive view\npage_size: 20 # list only, 1-25\njourney_id: 00000000-0000-4000-8000-000000000000 # detail, related, content\nfrom: 2026-09-02T00:00:00.000Z # optional bounded range\nto: 2026-09-02T08:00:00.000Z # optional bounded range\ncursor: opaque-cursor # list pagination only\n```",
         };
       if (parsed.operation === "list") {
-        const results = await run(
-          LIST_QUERY,
+        const deadline = clock() + deadlineMs;
+        const indexLimit = Math.min(LIST_LIMIT, parsed.offset + parsed.pageSize + 1);
+        const indexRows = await run(
+          listIndexQuery(indexLimit),
           parsed.start,
           parsed.end,
-          LIST_LIMIT,
+          indexLimit,
+          deadline,
         );
-        if (results.length >= LIST_LIMIT) throw resultLimitError();
-        const items = summarize(results),
-          journeys = items.slice(
-            parsed.offset,
-            parsed.offset + parsed.pageSize,
-          ),
-          next = parsed.offset + journeys.length;
+        const items = listIndex(indexRows);
+        if (parsed.offset >= items.length) {
+          const data = { journeys: [], next_cursor: null, browse_limit_reached: indexRows.length >= LIST_LIMIT };
+          return parsed.render ? rendered(renderList(data, parsed, endpointArn)) : data;
+        }
+        const selection = selectListPage(items, parsed.offset, parsed.pageSize);
+        const pageRows = selection.selected.length === 0
+          ? []
+          : await run(listPageQuery(selection.selected.map((item) => item.journey_id)), parsed.start, parsed.end, DETAIL_LIMIT, deadline);
+        if (pageRows.length >= DETAIL_LIMIT) throw resultLimitError();
+        const summaries = new Map(
+          summarizeListPage(pageRows, selection.selected).map((item) => [item.journey_id, item]),
+        );
+        const journeys = selection.page.map(({ item, oversized }) =>
+          oversized
+            ? {
+            journey_id: item.journey_id,
+            workflow: "unknown",
+            first_log_timestamp: new Date(item.first).toISOString(),
+            last_log_timestamp: new Date(item.last).toISOString(),
+            closed_event_count: null,
+            status: "oversized",
+            terminal_outcome: null,
+            terminal_failure_class: null,
+            pending_outcome: null,
+            event_count: item.event_count,
+          }
+            : summaries.get(item.journey_id),
+        );
+        const next = selection.next;
         const data = {
           journeys,
           next_cursor:
-            next < items.length
+            next < items.length && next < MAX_OFFSET
               ? cursor({
                   v: 1,
                   start: parsed.start,
@@ -1154,6 +1241,7 @@ function createStagingJourneyExplorerHandlerV1(options) {
                   offset: next,
                 })
               : null,
+          browse_limit_reached: items.length >= LIST_LIMIT && next >= items.length,
         };
         return parsed.render
           ? rendered(renderList(data, parsed, endpointArn))

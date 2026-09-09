@@ -23,11 +23,14 @@ if (arguments_.length > 0 && (!check || arguments_.length !== 1)) {
 }
 
 const source = readFileSync(handlerPath, "utf8");
+// Keep the checked-in handler readable for review. CloudFormation transports
+// only the generated inline artifact, where identifier minification keeps the
+// fixed 51,200-byte TemplateBody below its API limit.
 const emitted = await transform(source, {
   format: "cjs",
   legalComments: "none",
-  minifyIdentifiers: false,
-  minifySyntax: false,
+  minifyIdentifiers: true,
+  minifySyntax: true,
   minifyWhitespace: true,
   target: "node24",
 });
