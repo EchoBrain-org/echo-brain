@@ -62,7 +62,11 @@ occupies the Node event loop. Report these limits instead of hiding them with UI
   await writer/search cleanup, then close database handles and clear the warmed
   handle. Include abort-ignoring delayed adapters in the shutdown reasoning.
 - Preserve PR #152's full telemetry and development content capture. Detached
-  search owns a valid trace; coalesced approvals link to its actual work. A
+  search owns an independent `observeCoreRuntimeRootV1` with the lifecycle's
+  explicit `core_runtime_observation` scope; retain the existing
+  `runPhase("search_reconciliation", ...)` reporting. Do not rely on a deferred
+  callback inheriting a valid worker trace: composition does not supply the
+  reconciler an observer of its own. Coalesced approvals link to actual work. A
   superseded build must leave its waiting journeys eligible for eventual success.
   Do not turn cancelled/superseded work into retries or count shared work twice.
   Phase failures and missing-search signals must remain observable even when the
