@@ -16,9 +16,14 @@ const PROFILES = Object.freeze({
     sha256: "63377b3809575957218bbecee34ea51f32e3d2f963976bf33ac949d5729857e5",
     hardwareId: "authority-core-capacity-reference-v3",
   }),
+  4: Object.freeze({
+    kind: "authority-core-capacity-metrics-v4",
+    sha256: "e650be1de46d9c9551f0432ad96a7a734f09e13012a4337a4eb425bdd7f81836",
+    hardwareId: "authority-core-capacity-reference-v4",
+  }),
 });
 const here = dirname(fileURLToPath(import.meta.url));
-const contractPath = resolve(process.argv[2] ?? resolve(here, "metrics.v3.json"));
+const contractPath = resolve(process.argv[2] ?? resolve(here, "metrics.v4.json"));
 const contract = JSON.parse(readFileSync(contractPath, "utf8"));
 const definitionPath = resolve(process.argv[3] ?? resolve(dirname(contractPath), contract.definition));
 const profile = PROFILES[contract.schema_version];
@@ -73,31 +78,53 @@ assert.equal(workload.atoms_per_approved_meeting, 5);
 fraction(workload.organization_member_policy_fraction, "organization member policy share");
 fraction(workload.restricted_reviewer_policy_fraction, "restricted reviewer policy share");
 assert.equal(workload.organization_member_policy_fraction + workload.restricted_reviewer_policy_fraction, 1);
-if (contract.schema_version === 3) {
-  assert.deepEqual(contract.predecessor_profile, {
+const PREDECESSORS = Object.freeze({
+  3: Object.freeze({
     schema_version: 2,
     definition_sha256: "07dab5141e4e4d3f609ec18a4c3f4bea0284ee9b591e5cb590a8350fd8c81db5",
     contract_sha256: "61ff8a837248037ee66dfc030a95cbbb1eb9f4f7bba51efe676f6fb492f2473e",
     profile_sha256: PROFILES[2].sha256,
     baseline: "not-run",
     replacement_reason: "V2 assigned the policy split per atom; V3 assigns one policy per approved meeting to match the canonical approval boundary.",
-  });
-  const predecessorPath = resolve(here, "metrics.v2.json");
+  }),
+  4: Object.freeze({
+    schema_version: 3,
+    definition_sha256: "df7cee016b4ed58251db5e6618daa79e3b250e781f128f3d3ea50562e30a382f",
+    contract_sha256: "33d0d0ccebaa27e4026bbbe5add9b1ea221c241d437d5734bbba755cb784bed5",
+    profile_sha256: PROFILES[3].sha256,
+    baseline: "not-run",
+    replacement_reason: "V3 pinned term-frequency-sum ranking by analyzer digest; V4 pins the ADR-0011 BM25 fixed-point scoring contract and its analyzer digest.",
+  }),
+});
+if (contract.schema_version >= 3) {
+  assert.deepEqual(contract.predecessor_profile, PREDECESSORS[contract.schema_version]);
+  const predecessorPath = resolve(here, `metrics.v${contract.schema_version - 1}.json`);
   const predecessorBytes = readFileSync(predecessorPath);
   const predecessor = JSON.parse(predecessorBytes);
   const predecessorDefinition = resolve(dirname(predecessorPath), predecessor.definition);
-  assert.equal(hash(predecessorBytes), contract.predecessor_profile.contract_sha256, "V2 contract bytes changed");
-  assert.equal(hash(readFileSync(predecessorDefinition)), contract.predecessor_profile.definition_sha256, "V2 definition bytes changed");
+  assert.equal(hash(predecessorBytes), contract.predecessor_profile.contract_sha256, `V${contract.schema_version - 1} contract bytes changed`);
+  assert.equal(hash(readFileSync(predecessorDefinition)), contract.predecessor_profile.definition_sha256, `V${contract.schema_version - 1} definition bytes changed`);
   const { profile_pin: predecessorPin, ...predecessorRules } = predecessor;
-  assert.ok(predecessorPin, "V2 profile pin is missing");
-  assert.equal(predecessorPin.definition_sha256, contract.predecessor_profile.definition_sha256, "V2 definition pin changed");
+  assert.ok(predecessorPin, `V${contract.schema_version - 1} profile pin is missing`);
+  assert.equal(predecessorPin.definition_sha256, contract.predecessor_profile.definition_sha256, `V${contract.schema_version - 1} definition pin changed`);
   assert.equal(
     hash(canonical({ rules: predecessorRules, definition_sha256: contract.predecessor_profile.definition_sha256 })),
     contract.predecessor_profile.profile_sha256,
-    "V2 profile rules changed",
+    `V${contract.schema_version - 1} profile rules changed`,
   );
   assert.equal(workload.policy_assignment_unit, "approved-meeting");
   assert.equal(workload.organization_member_policy_rounding, "floor(organization_member_policy_fraction * approved_meeting_count); every remaining approved meeting is restricted-reviewer");
+}
+if (contract.schema_version >= 4) {
+  const ranking = contract.retrieval_oracle.ranking;
+  assert.equal(ranking.scorer_id, "echo-bm25-fixed-point-v1");
+  assert.equal(ranking.decision, "ADR-0011");
+  assert.equal(ranking.k1, 1.2);
+  assert.equal(ranking.b, 0.75);
+  assert.equal(ranking.score_scale, 1_000_000);
+  assert.equal(ranking.statistics_scope, "exactly-the-atoms-the-reader-is-authorized-to-read");
+  assert.deepEqual(ranking.controlled_terms.family, ["decision", "decisions", "decide", "decided", "deciding"]);
+  assert.equal(ranking.analyzer_source_sha256, ANALYZER_SOURCE_SHA256, "V4 ranking pin must equal the oracle's analyzer pin");
 }
 const peakFactor = 1 + (workload.peak_multiplier - 1) * workload.peak_duration_ms / workload.run_duration_ms;
 for (const milestone of contract.milestones) {

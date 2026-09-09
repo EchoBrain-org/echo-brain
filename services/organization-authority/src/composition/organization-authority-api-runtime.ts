@@ -75,6 +75,8 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
 
 export interface RunningOrganizationAuthorityApiRuntime {
   readonly address: AddressInfo;
+  /** Stops ingress immediately while lifecycle-owned work retains its handles. */
+  stopAcceptingRequests?(): void;
   close(): Promise<void>;
 }
 
@@ -192,7 +194,9 @@ export async function startOrganizationAuthorityApiRuntime(
       audit: readAudit,
       expand_related_atoms: expandReadableSearchRelatedAtomsV1,
     });
+    let closing = false;
     const server = createOrganizationAuthorityHttpServer({
+      is_closing: () => closing,
       descriptor: metadata.descriptor,
       sessions,
       oidc_provider: provider,
@@ -251,14 +255,19 @@ export async function startOrganizationAuthorityApiRuntime(
     const address = server.address();
     if (address === null || typeof address === "string")
       throw new Error("Organization Authority API did not bind TCP");
+    let serverClosed: Promise<unknown> | undefined;
+    const stopAcceptingRequests = (): void => {
+      closing = true;
+      if (serverClosed !== undefined || !server.listening) return;
+      serverClosed = once(server, "close");
+      server.close();
+    };
     return {
       address,
+      stopAcceptingRequests,
       close: async () => {
-        if (server.listening) {
-          const closed = once(server, "close");
-          server.close();
-          await closed;
-        }
+        stopAcceptingRequests();
+        await serverClosed;
         externalIdentity?.close();
         recordDatabase?.close();
         database.close();

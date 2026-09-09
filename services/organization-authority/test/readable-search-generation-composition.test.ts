@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
@@ -15,6 +15,7 @@ import {
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   clearReadableSearchActiveGenerationV1,
+  READABLE_SEARCH_SCORER_ID,
   searchReadableSearchGenerationV1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
@@ -24,9 +25,17 @@ import {
   projectSnapshotRelatedAtomsV1,
   readableSearchGenerationContractV1,
 } from "../src/composition/readable-search-generation-composition.js";
-import type { Sha256Digest } from "@echo-brain/federation-protocol";
+import {
+  canonicalSha256,
+  type Sha256Digest,
+} from "@echo-brain/federation-protocol";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
+
+vi.mock("@echo-brain/federation-protocol", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@echo-brain/federation-protocol")>();
+  return { ...actual, canonicalSha256: vi.fn(actual.canonicalSha256) };
+});
 
 const roots: string[] = [];
 
@@ -45,6 +54,15 @@ afterEach(() => {
 });
 
 describe("readable-search generation composition", () => {
+  it("binds the query scoring contract to the runtime BM25 scorer", () => {
+    vi.mocked(canonicalSha256).mockClear();
+    readableSearchGenerationContractV1();
+    expect(canonicalSha256).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "echo-clean-permission-aware-readable-search-contract-v1",
+      query: expect.objectContaining({ score: READABLE_SEARCH_SCORER_ID }),
+    }));
+  });
+
   it("publishes the zero-head generation once and leaves a restart-verifiable pointer", async () => {
     const parent = root();
     const initialized = bootstrapOrganizationAuthorityState({

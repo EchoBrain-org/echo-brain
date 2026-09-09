@@ -134,8 +134,7 @@ async function command(message) {
     case "search": return reads.search.search({ access_token: identity[message.actor].access_token, query: message.query });
     case "answer": return reads.answer.ask({ access_token: identity[message.actor].access_token, question: message.question });
     case "drain":
-      await new Promise((resolve) => setImmediate(resolve));
-      await runtime.runExclusive(async () => {});
+      await runtime.drain(AbortSignal.timeout(30_000));
       if (workerError) throw new Error(`core worker failed: ${workerError.message}`);
       return { drained: true };
     case "close": await close(); return { closed: true };

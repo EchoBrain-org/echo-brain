@@ -1,0 +1,182 @@
+{
+  "kind": "approval-search-scheduling-offline-evidence",
+  "date": "2026-09-09",
+  "baseline_commit": "db5153e09c94c3132fbc8c856df9748af1107d9f",
+  "qualification": false,
+  "clock": "Vitest virtual Date and performance; elapsed values are scheduling ticks, not wall-clock latency",
+  "workload": "Existing private-approval runtime fixture, real SQLite and HTTP, synthetic extraction and terminal poster; hold first real enrichment model promise for 250 virtual ms after later actions enqueue, then release. One and four later Team approvals each also include Only me and Reject. Record, append, terminal and permission paths remain real except provider transports.",
+  "method": "Identical fixture run against an archived baseline and the candidate sources; measurements use existing journey and core-runtime observations. Disable only candidate-specific assertions for the baseline measurement. All committed candidate assertions pass separately.",
+  "timing_order": "First two entries are initial Team approvals, then later approved journeys. Rejections have no append or search-ready event.",
+  "scenarios": [
+    {
+      "burst_team_approvals": 1,
+      "initial_team_approvals": 2,
+      "additional_only_me_approvals": 1,
+      "additional_rejections": 1,
+      "before": [
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 252
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 252
+        },
+        {
+          "queue_wait_ms": 251,
+          "append_ms": 251,
+          "terminal_card_ms": 251,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 251,
+          "append_ms": 251,
+          "terminal_card_ms": 251,
+          "search_ready_ms": 251
+        }
+      ],
+      "after": [
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 252
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 252
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 251
+        }
+      ]
+    },
+    {
+      "burst_team_approvals": 4,
+      "initial_team_approvals": 2,
+      "additional_only_me_approvals": 1,
+      "additional_rejections": 1,
+      "before": [
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 252
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 252
+        },
+        {
+          "queue_wait_ms": 251,
+          "append_ms": 251,
+          "terminal_card_ms": 251,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 251,
+          "append_ms": 251,
+          "terminal_card_ms": 251,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 251,
+          "append_ms": 251,
+          "terminal_card_ms": 251,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 251,
+          "append_ms": 251,
+          "terminal_card_ms": 251,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 251,
+          "append_ms": 251,
+          "terminal_card_ms": 251,
+          "search_ready_ms": 251
+        }
+      ],
+      "after": [
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 252
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 252
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 251
+        },
+        {
+          "queue_wait_ms": 0,
+          "append_ms": 0,
+          "terminal_card_ms": 0,
+          "search_ready_ms": 251
+        }
+      ]
+    }
+  ],
+  "capacity_checkpoint": {
+    "result": "pass",
+    "qualification": false,
+    "scenarios": [
+      {
+        "policy": "Team",
+        "approval_to_durable_receipt_ms": 3,
+        "approval_to_search_ms": 119
+      },
+      {
+        "policy": "Only me",
+        "approval_to_durable_receipt_ms": 5,
+        "approval_to_search_ms": 203
+      }
+    ],
+    "note": "Wall-clock observations on this Mac while other checks ran, one meeting per policy. Not a throughput or load qualification."
+  },
+  "live_acceptance": "pending"
+}
