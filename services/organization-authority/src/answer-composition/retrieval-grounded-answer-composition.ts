@@ -600,7 +600,7 @@ function parseAnswer(value: unknown, context: readonly ContextAtom[]): {
     (status !== "answered" && status !== "insufficient_evidence") ||
     typeof answer !== "string" ||
     answer.trim() !== answer ||
-    answer.length === 0 ||
+    (status === "answered" && answer.length === 0) ||
     [...answer].length > ANSWER_COMPOSITION_MAX_ANSWER_CHARACTERS ||
     !Array.isArray(rawCitations)
   ) {

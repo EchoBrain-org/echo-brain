@@ -31,9 +31,9 @@ describe("fixed OpenRouter processor runtime commitments", () => {
     expect(OPENROUTER_DECISION_PROCESSOR_SCHEMA_VERSION_V1).toBe(
       LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
     );
-    expect(OPENROUTER_DECISION_PROCESSOR_ADAPTER_VERSION_V1).toBe("1.8.0");
+    expect(OPENROUTER_DECISION_PROCESSOR_ADAPTER_VERSION_V1).toBe("1.9.0");
     expect(OPENROUTER_DECISION_PROCESSOR_PROMPT_VERSION_V1).toBe(
-      "decision-extraction-v8",
+      "decision-extraction-v9",
     );
     expect(OPENROUTER_DECISION_PROCESSOR_SCHEMA_VERSION_V1).toBe(
       "decision-extraction-schema-v6",
