@@ -1131,6 +1131,8 @@ export interface ExpandReadableSearchRelatedAtomsV1Input {
   readonly active_generation: ReadableSearchActiveGenerationV1;
   readonly reader: ReadableSearchReaderV1;
   readonly anchor_atom_ids: readonly Sha256Digest[];
+  /** Layer 4 packet: include approved source-record siblings, balanced across anchors. */
+  readonly include_anchor_records?: true;
   /** Defaults to 16 and bounds the entire expansion, not each anchor. */
   readonly limit?: number;
 }
@@ -2095,13 +2097,40 @@ export function expandReadableSearchRelatedAtomsV1(
       if (anchors.has(fact.atom_id)) segmentsByAnchor.set(fact.atom_id, segment);
   const expanded = new Set<Sha256Digest>();
   const items: ReadableSearchResultItemV1[] = [];
+  type RelatedCandidate = {
+    readonly fact: ReadableSearchFactRow;
+    readonly content: ReadableSearchContentRow;
+  };
+  const groups: RelatedCandidate[][] = [];
+  // Source packets share the bound across anchors; direct-link callers keep
+  // their existing anchor-first ordering. Deduplicate at selection time so
+  // overlapping neighborhoods do not consume another anchor's share.
+  const select = (candidate: RelatedCandidate): void => {
+    if (items.length === limit || expanded.has(candidate.fact.atom_id)) return;
+    expanded.add(candidate.fact.atom_id);
+    items.push(
+      Object.freeze({
+        atom_id: candidate.fact.atom_id,
+        record_position: candidate.fact.log_position,
+        record_sha256: candidate.fact.record_hash,
+        envelope_sha256: candidate.fact.envelope_sha256,
+        item_kind: candidate.content.item_kind,
+        text: candidate.content.text,
+        policy_id: candidate.fact.policy_id,
+      }),
+    );
+  };
   for (const anchor of input.anchor_atom_ids) {
     const segment = segmentsByAnchor.get(anchor);
     if (segment === undefined) continue;
-    const candidates: Array<{
-      readonly fact: ReadableSearchFactRow;
-      readonly content: ReadableSearchContentRow;
-    }> = [];
+    const candidates: RelatedCandidate[] = [];
+    const candidateIds = new Set<Sha256Digest>();
+    if (input.include_anchor_records === true) {
+      const source = segment.facts_by_atom.get(anchor)!;
+      for (const fact of segment.facts) {
+        if (fact.record_hash === source.record_hash) candidateIds.add(fact.atom_id);
+      }
+    }
     for (const pair of segment.related_atom_pairs) {
       const atomId =
         pair.left_atom_id === anchor
@@ -2109,33 +2138,43 @@ export function expandReadableSearchRelatedAtomsV1(
           : pair.right_atom_id === anchor
             ? pair.left_atom_id
             : null;
-      if (atomId === null || anchors.has(atomId) || expanded.has(atomId)) continue;
+      if (atomId !== null) candidateIds.add(atomId);
+    }
+    for (const atomId of candidateIds) {
+      if (anchors.has(atomId)) continue;
       const fact = segment.facts_by_atom.get(atomId);
       const content = segment.content_by_atom.get(atomId);
       if (fact !== undefined && content !== undefined) candidates.push({ fact, content });
     }
+    const kindOrder = { decision: 0, action: 1, rationale: 2 };
     candidates.sort((left, right) =>
-      compareReadableSearchCandidates(
+      (input.include_anchor_records === true
+        ? Number(left.fact.record_hash !== segment.facts_by_atom.get(anchor)!.record_hash)
+          - Number(right.fact.record_hash !== segment.facts_by_atom.get(anchor)!.record_hash)
+          || kindOrder[left.content.item_kind] - kindOrder[right.content.item_kind]
+        : 0) || compareReadableSearchCandidates(
         { score: 1, log_position: left.fact.log_position, atom_order: left.fact.atom_order, atom_id: left.fact.atom_id },
         { score: 1, log_position: right.fact.log_position, atom_order: right.fact.atom_order, atom_id: right.fact.atom_id },
       ),
     );
-    for (const { fact, content } of candidates) {
+    if (input.include_anchor_records === true) {
+      groups.push(candidates);
+    } else {
+      for (const candidate of candidates) {
+        select(candidate);
+        if (items.length === limit) break;
+      }
       if (items.length === limit) break;
-      expanded.add(fact.atom_id);
-      items.push(
-        Object.freeze({
-          atom_id: fact.atom_id,
-          record_position: fact.log_position,
-          record_sha256: fact.record_hash,
-          envelope_sha256: fact.envelope_sha256,
-          item_kind: content.item_kind,
-          text: content.text,
-          policy_id: fact.policy_id,
-        }),
-      );
     }
-    if (items.length === limit) break;
+  }
+  if (input.include_anchor_records === true) {
+    const longestGroup = Math.max(0, ...groups.map((group) => group.length));
+    for (let index = 0; index < longestGroup && items.length < limit; index += 1)
+      for (const group of groups) {
+        const candidate = group[index];
+        if (candidate !== undefined) select(candidate);
+        if (items.length === limit) break;
+      }
   }
   return Object.freeze({
     generation_id: handle.manifest.generation_id,

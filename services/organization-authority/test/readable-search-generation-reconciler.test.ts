@@ -286,6 +286,34 @@ describe("readable-search generation reconciliation", () => {
     ).toBe(0);
   });
 
+  it("skips obsolete build work after held enrichment and publishes the newest head on retry", async () => {
+    const authority = database();
+    let current = head(2);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const build = vi.fn((snapshot: { record_head: ReadableSearchRecordHeadV1 }) => ({
+      generation_id: GENERATION, manifest_sha256: MANIFEST,
+      retrieval_contract_sha256: CONTRACT, record_head: snapshot.record_head,
+    }));
+    const reconciler = new ReadableSearchGenerationReconcilerV1({
+      authority, organization_id: ORGANIZATION_ID,
+      retrieval_contract_sha256: CONTRACT, read_record_head: () => current,
+      capture_snapshot: () => ({ record_head: current }),
+      enrich_snapshot: async (snapshot) => { await held; return snapshot; },
+      build_generation: build, now: () => NOW,
+    });
+    const pending = reconciler.reconcile(new AbortController().signal);
+    expect(build).not.toHaveBeenCalled();
+    expect(authority.prepare("SELECT count(*) FROM authority_readable_search_active_generation").pluck().get()).toBe(0);
+    current = head(4);
+    release();
+    await expect(pending).resolves.toEqual({ status: "superseded", captured_head: head(2), current_head: head(4) });
+    expect(build).not.toHaveBeenCalled();
+    await expect(reconciler.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published", record_head: head(4) });
+    expect(build).toHaveBeenCalledOnce();
+    expect(authority.prepare("SELECT record_head_position FROM authority_readable_search_active_generation").pluck().get()).toBe(4);
+  });
+
   it("rejects enrichment that changes the captured record head", async () => {
     const authority = database();
     const current = head(1);
@@ -316,7 +344,7 @@ describe("readable-search generation reconciliation", () => {
       authority,
       organization_id: ORGANIZATION_ID,
       retrieval_contract_sha256: CONTRACT,
-      read_record_head: () => (++reads === 1 ? captured : advanced),
+      read_record_head: () => (++reads < 3 ? captured : advanced),
       capture_snapshot: () => ({ record_head: captured }),
       build_generation: () => ({
         generation_id: GENERATION,

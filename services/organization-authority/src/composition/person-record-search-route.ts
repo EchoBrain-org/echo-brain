@@ -58,6 +58,7 @@ export interface ExpandReadableSearchRelatedAtomsV1Input {
   readonly active_generation: ReadableSearchActiveGenerationV1;
   readonly reader: ReadableSearchReaderV1;
   readonly anchor_atom_ids: readonly Sha256Digest[];
+  readonly include_anchor_records?: true;
   readonly limit: number;
 }
 
@@ -438,10 +439,35 @@ export function createPersonRecordSearchRouteV1(
       input.include_related_atom_packet === true &&
       options.expand_related_atoms !== undefined
     ) {
-      const anchors = lexicalItems.filter(
-        (item) => item.item_kind === "decision",
-      ).slice(0, 3);
+      // Cover distinct matching records, preferring a decision when available.
+      // An action can identify a source whose decision missed every top ten.
+      const decisions = lexicalItems.filter((item) => item.item_kind === "decision");
+      const support = new Map<Sha256Digest, number>();
+      for (const item of lexicalItems) {
+        support.set(item.record_sha256, (support.get(item.record_sha256) ?? 0) + 1);
+      }
+      const records = new Set<Sha256Digest>();
+      const recordAnchors = [...decisions, ...lexicalItems].filter((item) => {
+        if (records.has(item.record_sha256)) return false;
+        records.add(item.record_sha256);
+        return true;
+      });
+      // Prefer records supported by multiple distinct lexical hits over an
+      // isolated matching decision (for example, an unrelated dated launch),
+      // after retaining the best lexical decision/record as a packet anchor.
+      recordAnchors.sort((left, right) =>
+        support.get(right.record_sha256)! - support.get(left.record_sha256)!,
+      );
+      const primaryAnchor = decisions[0] ?? lexicalItems[0];
+      const anchors = [
+        ...new Set([
+          ...(primaryAnchor === undefined ? [] : [primaryAnchor]),
+          ...recordAnchors,
+          ...decisions,
+        ]),
+      ].slice(0, 3);
       if (anchors.length > 0) {
+        const relatedLimit = RELATED_ATOM_PACKET_MAX_ITEMS_V1 - anchors.length;
         let related: ReadableSearchResultV1;
         try {
           related = options.expand_related_atoms({
@@ -463,7 +489,8 @@ export function createPersonRecordSearchRouteV1(
               membership_id: authorization.membership_id,
             },
             anchor_atom_ids: anchors.map((item) => item.atom_id),
-            limit: 13,
+            limit: relatedLimit,
+            include_anchor_records: true,
           });
         } catch (error) {
           if (isUnavailableGenerationError(error))
@@ -484,7 +511,7 @@ export function createPersonRecordSearchRouteV1(
         const packet = new Map<Sha256Digest, ReadableSearchResultItemV1>();
         for (const item of [
           ...anchors,
-          ...related.items.slice(0, 13),
+          ...related.items.slice(0, relatedLimit),
           ...lexicalItems,
         ]) {
           if (!packet.has(item.atom_id)) packet.set(item.atom_id, item);
