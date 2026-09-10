@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { readdirSync, statSync } from "node:fs";
-import { currentCoreRuntimeDetailV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
+import { currentCoreRuntimeDetailV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
 import {
   canonicalJson,
   canonicalSha256,
@@ -63,6 +63,7 @@ import {
   RELATED_ATOM_PROJECTOR_CORE_RELEASE_SHA256_V1,
   RELATED_ATOM_PROJECTOR_MAX_OUTPUT_TOKENS_V1,
   projectRelatedAtomsV1,
+  type RelatedAtomPairV1,
   type RelatedAtomStructuredGenerationPortV1,
 } from "./related-atom-projector-v1.js";
 
@@ -264,6 +265,15 @@ interface ReconciliationSnapshotV1 {
 
 const observedSegmentInputs = new WeakMap<object, Map<string, string>>();
 
+// Process-local validated results, not observed fingerprints or pending work.
+// Each binding retains at most 32 digests and bounded endpoint-pair lists; no
+// source text is retained. Runtime composition gives each reconciler its own binding.
+const MAX_RETAINED_PROJECTIONS = 32;
+const projectionResults = new WeakMap<ReadableSearchRelatedAtomProjectorBindingV1, {
+  readonly port: RelatedAtomStructuredGenerationPortV1;
+  readonly entries: Map<Sha256Digest, readonly RelatedAtomPairV1[]>;
+}>();
+
 function visibilitySegmentKey(atom: RecordRetrievalSourceSnapshotV1["atoms"][number]): string {
   return canonicalJson({
     policy_id: atom.policy_id,
@@ -283,6 +293,12 @@ export async function projectSnapshotRelatedAtomsV1(input: {
   readonly projector: ReadableSearchRelatedAtomProjectorBindingV1;
   readonly signal: AbortSignal;
 }): Promise<ReconciliationSnapshotV1> {
+  input.signal.throwIfAborted();
+  let retained = projectionResults.get(input.projector);
+  if (retained === undefined || retained.port !== input.projector.structured_output) {
+    retained = { port: input.projector.structured_output, entries: new Map() };
+    projectionResults.set(input.projector, retained);
+  }
   const segments = new Map<
     string,
     RecordRetrievalSourceSnapshotV1["atoms"][number][]
@@ -295,7 +311,7 @@ export async function projectSnapshotRelatedAtomsV1(input: {
   }
   const observing = currentCoreRuntimeDetailV1() !== null;
   const previous = observing ? observedSegmentInputs.get(input.projector) ?? new Map<string, string>() : new Map<string, string>();
-  let recomputed = 0, unchanged = 0, changed = 0, newlyObserved = 0;
+  let recomputed = 0, reused = 0, unchanged = 0, changed = 0, newlyObserved = 0;
   annotateCoreRuntimeV1({ counts: { visibility_groups: segments.size, reused_count: 0 } });
   let included = 0;
   let excluded = 0;
@@ -327,7 +343,6 @@ export async function projectSnapshotRelatedAtomsV1(input: {
       selectedTextBytes += textBytes;
     }
     if (new Set(selected.map((atom) => atom.record_sha256)).size < 2) { excluded += atoms.length; continue; }
-    recomputed += 1;
     if (observing) {
       const fingerprint = coreRuntimeIdentityV1("projection_input", JSON.stringify(selected.map((atom) => atom.atom_id)));
       const prior = previous.get(segmentKey);
@@ -338,20 +353,49 @@ export async function projectSnapshotRelatedAtomsV1(input: {
     }
     included += selected.length;
     excluded += atoms.length - selected.length;
-    const projected = await projectRelatedAtomsV1({
-      atoms: selected.map((atom) =>
-        Object.freeze({
-          atom_id: atom.atom_id,
-          record_id: atom.record_sha256,
-          item_kind: atom.item_kind,
-          text: atom.text,
-        }),
-      ),
-      model: input.projector.profile.model,
-      structured_output: input.projector.structured_output,
-      timeout_ms: input.projector.profile.timeout_ms,
-      signal: input.signal,
+    // Include the complete visibility tuple, verified provenance and ordered
+    // selected input, plus every processor/prompt/profile contract. A newer
+    // global head alone does not change an otherwise identical segment.
+    const resultKey = canonicalSha256({
+      release: READABLE_SEARCH_RELATED_ATOM_PROJECTOR_RELEASE_V1,
+      profile: input.projector.profile,
+      segment: segmentKey,
+      atoms: selected,
     });
+    let projected = retained.entries.get(resultKey);
+    if (projected === undefined) {
+      recomputed += 1;
+      projected = await projectRelatedAtomsV1({
+        atoms: selected.map((atom) =>
+          Object.freeze({
+            atom_id: atom.atom_id,
+            record_id: atom.record_sha256,
+            item_kind: atom.item_kind,
+            text: atom.text,
+          }),
+        ),
+        model: input.projector.profile.model,
+        structured_output: input.projector.structured_output,
+        timeout_ms: input.projector.profile.timeout_ms,
+        signal: input.signal,
+      });
+      // An abort-ignoring provider must settle, but its cancelled work is never
+      // cached or reported as reusable success.
+      input.signal.throwIfAborted();
+      retained.entries.set(resultKey, projected);
+      if (retained.entries.size > MAX_RETAINED_PROJECTIONS) {
+        retained.entries.delete(retained.entries.keys().next().value!);
+      }
+    } else {
+      reused += 1;
+      retained.entries.delete(resultKey);
+      retained.entries.set(resultKey, projected);
+      const cached = projected;
+      await observeCoreRuntimeV1("related_projection", async () => {
+        annotateCoreRuntimeV1({ counts: { reused_count: 1, recomputed_count: 0, included_count: cached.length } });
+      });
+      input.signal.throwIfAborted();
+    }
     const admittedAtomIds = new Map<string, Sha256Digest>(
       selected.map((atom) => [atom.atom_id, atom.atom_id]),
     );
@@ -370,7 +414,7 @@ export async function projectSnapshotRelatedAtomsV1(input: {
     }
   }
   if (observing) observedSegmentInputs.set(input.projector, previous);
-  annotateCoreRuntimeV1({ counts: { included_count: included, excluded_count: excluded, recomputed_count: recomputed, unchanged_group_count: unchanged, changed_group_count: changed, newly_observed_group_count: newlyObserved } });
+  annotateCoreRuntimeV1({ counts: { included_count: included, excluded_count: excluded, recomputed_count: recomputed, reused_count: reused, unchanged_group_count: unchanged, changed_group_count: changed, newly_observed_group_count: newlyObserved } });
   return Object.freeze({
     ...input.snapshot,
     related_atom_pairs: Object.freeze(pairs),
@@ -477,6 +521,9 @@ export function createReadableSearchGenerationReconcilerV1(input: {
       readonly version: string;
     }
   ).version;
+  const relatedProjector = input.related_atom_projector === undefined
+    ? undefined
+    : Object.freeze({ ...input.related_atom_projector });
 
   return new ReadableSearchGenerationReconcilerV1({
     authority: input.authority,
@@ -515,7 +562,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
           enrich_snapshot: (snapshot: ReconciliationSnapshotV1, signal: AbortSignal) =>
             projectSnapshotRelatedAtomsV1({
               snapshot,
-              projector: input.related_atom_projector!,
+              projector: relatedProjector!,
               signal,
             }),
         }),

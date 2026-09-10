@@ -66,8 +66,10 @@ import type {
   ApprovalWorkflowBundleV1,
   ApprovalWorkflowContextV1,
 } from "../src/composition/approval-workflow-bundle-v1.js";
-import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
+import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2, createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { createReadableSearchGenerationReconcilerV1, readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
+import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
+import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
 import {
   OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
   OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
@@ -1219,7 +1221,7 @@ describe("Organization Authority runtime private approval lane", () => {
     }
   });
 
-  it.each([{ burst: 1, failModel: false }, { burst: 4, failModel: false }, { burst: 1, failModel: true }])("finalizes burst $burst during unresolved enrichment (projector failure: $failModel)", async ({ burst, failModel }) => {
+  it.each([{ burst: 0, failModel: false }, { burst: 1, failModel: false }, { burst: 4, failModel: false }, { burst: 1, failModel: true }])("finalizes burst $burst during unresolved enrichment (projector failure: $failModel)", async ({ burst, failModel }) => {
     const fixture = await admittedFixture({ seed_private_slack_connection: true });
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate", "setTimeout", "clearTimeout", "Date", "performance"] });
     let release!: () => void;
@@ -1230,6 +1232,15 @@ describe("Organization Authority runtime private approval lane", () => {
     const observations: CoreRuntimeObservationV1[] = [];
     const contents: CoreRuntimeContentV1[] = [];
     const journeys: JourneyTelemetryEventV1[] = [];
+    const projectionResponse = (input: { readonly user_prompt: string }) => {
+      const { atoms } = JSON.parse(input.user_prompt) as { atoms: { atom_id: string; record_id: string; text: string }[] };
+      const left = atoms[0]!;
+      const right = atoms.find((atom) => atom.record_id !== left.record_id)!;
+      return { relationships: burst === 0 ? [{
+        left_atom_id: left.atom_id, right_atom_id: right.atom_id,
+        left_supporting_excerpt: left.text, right_supporting_excerpt: right.text,
+      }] : [] };
+    };
     const runtime = await openOrganizationAuthorityService({ ...fixture.config, worker_interval_ms: 1_000,
       authority_url: "https://authority-staging.echobrain.org",
       oidc: { ...fixture.config.oidc, redirect_uri: "https://authority-staging.echobrain.org/v2/session/oidc/callback" },
@@ -1249,15 +1260,16 @@ describe("Organization Authority runtime private approval lane", () => {
         generation: { generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
           planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
           timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 },
-        structured_output: { generate: async () => observeCoreRuntimeV1("model_call", async () => {
+        structured_output: { generate: async (input) => observeCoreRuntimeV1("model_call", async () => {
           modelCalls++;
           activeModels++;
           maxActiveModels = Math.max(maxActiveModels, activeModels);
           try {
             captureCoreRuntimeContentV1("model_request", { fixture: "approval-search-scheduling" });
             if (modelCalls === 1) await blocked;
-            captureCoreRuntimeContentV1("model_response", { relationships: [] });
-            return modelCalls === 1 && failModel ? { relationships: "invalid" } : { relationships: [] };
+            const response = modelCalls === 1 && failModel ? { relationships: "invalid" } : projectionResponse(input);
+            captureCoreRuntimeContentV1("model_response", response);
+            return response;
           } finally { activeModels--; }
         }) },
       } },
@@ -1271,6 +1283,7 @@ describe("Organization Authority runtime private approval lane", () => {
       await vi.advanceTimersByTimeAsync((3 + burst) * 1_000 + 1);
       expect(fixture.errors.map((error) => error.message)).toEqual([]);
       expect(fixture.poster.published).toHaveLength(4 + burst);
+      const searchObservationStart = observations.length;
       for (const card of fixture.poster.published.slice(0, 2)) {
         const response = await clickCard({ fixture: { ...fixture, runtime }, card, action: "approve", policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID });
         expect(response.status).toBe(200);
@@ -1297,7 +1310,8 @@ describe("Organization Authority runtime private approval lane", () => {
       expect(journeys.filter((event) => event.stage === "meeting_search_publication" && event.event === "succeeded")).toEqual([]);
       release();
       await vi.advanceTimersByTimeAsync(2);
-      expect(modelCalls).toBe(2);
+      const expectedModelCalls = burst === 0 ? 1 : 2;
+      expect(modelCalls).toBe(expectedModelCalls);
       expect(maxActiveModels).toBe(1);
       expect(authority.prepare("SELECT record_head_position FROM authority_readable_search_active_generation").get()).toEqual({ record_head_position: 3 + burst });
       expect(fixture.errors).toHaveLength(failModel ? 1 : 0);
@@ -1308,12 +1322,20 @@ describe("Organization Authority runtime private approval lane", () => {
       expect(fixture.poster.terminal.find((card) => card.approval_id === fixture.poster.published.at(-1)?.approval_id)).toMatchObject({ outcome: "rejected" });
       expect(fixture.poster.terminal.find((card) => card.approval_id === fixture.poster.published.at(-2)?.approval_id)).toMatchObject({ outcome: "approved", policy_label: "Only me" });
       const modelOperations = new Set(observations.filter((event) => event.phase === "model_call").map((event) => event.operation_id));
-      expect(modelOperations.size).toBe(2);
-      const searchRoots = observations.filter((event) => modelOperations.has(event.operation_id) && event.root && event.event === "succeeded");
+      expect(modelOperations.size).toBe(expectedModelCalls);
+      const searchRoots = observations.slice(searchObservationStart).filter((event) => event.phase === "search_reconciliation" && event.root && event.event === "succeeded" && event.result !== "current");
       expect(searchRoots.map((event) => event.result)).toEqual(failModel ? ["published"] : ["superseded", "published"]);
       expect(searchRoots.every((event) => event.phase === "search_reconciliation" && event.parent_span_id === null)).toBe(true);
       expect(observations.filter((event) => modelOperations.has(event.operation_id) && event.phase === "worker_execution")).toEqual([]);
-      expect(contents.filter((event) => modelOperations.has(event.operation_id) && event.content_kind !== "validation_error").map((event) => event.content_kind)).toEqual(["model_request", "model_response", "model_request", "model_response"]);
+      expect(contents.filter((event) => modelOperations.has(event.operation_id) && event.content_kind !== "validation_error").map((event) => event.content_kind)).toEqual(Array.from({ length: expectedModelCalls }, () => ["model_request", "model_response"]).flat());
+      // Superseded enrichment completes truthfully, but only the final head is
+      // built and warmed. A private-only append reuses the unchanged public group.
+      const searchObservations = observations.slice(searchObservationStart);
+      expect(searchObservations.filter((event) => event.phase === "search_build" && event.event === "succeeded")).toHaveLength(1);
+      expect(searchObservations.filter((event) => event.phase === "search_enrichment" && event.event === "succeeded").at(-1)?.counts).toMatchObject({
+        recomputed_count: burst === 0 ? 0 : 1, reused_count: burst === 0 ? 1 : 0,
+        unchanged_group_count: burst === 0 ? 1 : 0, changed_group_count: burst > 0 ? 1 : 0,
+      });
       const searchSuccesses = journeys.filter((event) => event.stage === "meeting_search_publication" && event.event === "succeeded");
       expect(searchSuccesses.filter((event) => event.outcome === "superseded")).toHaveLength(failModel ? 0 : 2);
       expect(searchSuccesses.filter((event) => event.outcome === "published")).toHaveLength(3 + burst);
@@ -1322,6 +1344,34 @@ describe("Organization Authority runtime private approval lane", () => {
         expect(event.accounting?.kind).toBe("shared_reference");
         expect(event.accounting?.retry_count).toBe(failModel && event.attempt === 2 ? 1 : 0);
         expect(event.diagnostic?.operation_id).toBe(searchRoots.find((root) => root.result === event.outcome)?.operation_id);
+      }
+      if (burst === 0) {
+        expect(searchObservations.filter((event) => event.phase === "related_projection" && event.event === "succeeded").map((event) => event.counts.included_count)).toEqual([1, 1]);
+        const pointer = () => authority.prepare("SELECT generation_id, manifest_sha256, record_head_position FROM authority_readable_search_active_generation").get();
+        const reusedPointer = pointer();
+        const ownerResult = await route.search({ access_token: "owner", query: "migration" });
+        expect(ownerResult.items.some((atom) => atom.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID)).toBe(true);
+        // Rebuild the same verified final snapshot with a cold projector and
+        // compare actual immutable generation identity and permission release.
+        await runtime.runExclusive(async () => {
+          const root = verifyAuthorityStateLineage(fixture.initialized.state_directory).root;
+          const generate = vi.fn(async (input: { readonly user_prompt: string }) => projectionResponse(input));
+          const baseline = createReadableSearchGenerationReconcilerV1({
+            state_directory: fixture.initialized.state_directory, root, authority, record,
+            signer: FileOrganizationAuthoritySigner.openExisting({ directory: join(fixture.initialized.state_directory, "keys"), authority_id: root.authority_id, organization_id: root.organization_id }),
+            policy_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1()]),
+            related_atom_projector: {
+              profile: { generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 },
+              structured_output: { generate },
+            },
+          });
+          authority.prepare("DELETE FROM authority_readable_search_active_generation").run();
+          await expect(baseline.reconcile(new AbortController().signal)).resolves.toMatchObject({ status: "published" });
+          expect(generate).toHaveBeenCalledOnce();
+          expect(pointer()).toEqual(reusedPointer);
+          expect((await route.search({ access_token: "member", query: "migration" })).items).toEqual(memberResult.items);
+          expect((await route.search({ access_token: "owner", query: "migration" })).items).toEqual(ownerResult.items);
+        });
       }
     } finally {
       release();
