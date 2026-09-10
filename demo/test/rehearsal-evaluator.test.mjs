@@ -26,6 +26,8 @@ const cardFields = [
 
 // Handwritten synthetic spans exercise only the capture contract, not product quality.
 const spans = {
+  "capacity-duration": "The implementation pod must be reserved through September 16.",
+  "preferred-contact-deadline": "Send the preferred escalation details on August 26 (the source meeting's today).",
   "promise-limit": "Do not promise all 28 locations for September 16.",
   "conditional-window": "September 16 is a conditional onboarding window for the first 10 locations.",
   "signed-addendum": "Before production access, the revised data-processing addendum must be signed.",
@@ -37,7 +39,7 @@ const spans = {
   "location-list-deadline": "Confirm the first 10 locations by September 4.",
   "capacity-deadline": "Reserve the implementation pod and send capacity assumptions by September 4.",
   "addendum-deadline": "Send the revised addendum by September 5.",
-  "security-deadline": "Verify the named security contact by September 8.",
+  "security-deadline": "Verify the named security contact and escalation route by September 8.",
   "dashboard-deadline": "Publish the adoption dashboard by September 11 with workflow completion by location, consecutive-week counts and manual corrections.",
   "expansion-review": "Review expansion only after the four-week adoption evidence exists, not before the September 16 onboarding window.",
   "adoption-rationale": "Initial logins can reflect training or curiosity; repeated workflows demonstrate durable adoption before a broader commitment.",
@@ -112,7 +114,7 @@ test("passes a complete captured rehearsal", () => {
   const report = evaluateRehearsal(passingResult(), expectations, meetingDocuments, { expectedInputPaths });
   assert.equal(report.passed, true, JSON.stringify(report, null, 2));
   assert.equal(report.checks.length, 15);
-  assert.equal(report.repeatability.length, 19);
+  assert.equal(report.repeatability.length, 22);
   assert.ok(report.repeatability.every((run) => run.stable && run.unavailable_count === 0));
 });
 
@@ -573,4 +575,59 @@ test("a changed paraphrase group source fails even with unchanged answer-level c
   answer.claims[0].citation_meeting_ids = [expectations.meeting_expectations[0].meeting_id];
   syncTrials(result, answer.case_id);
   rejects(result, "09");
+});
+
+for (const text of [
+  "The implementation pod is reserved through September 16.",
+  "The implementation pod has been reserved through September 16.",
+  "The preferred escalation details were sent on August 26.",
+]) {
+  test(`rejects a completed-state claim unsupported by the assigned actions: ${text}`, () => {
+    const result = passingResult();
+    capture(result, "safe-commitment-question").answer_text += ` ${text}`;
+    syncTrials(result, "safe-commitment-question");
+    rejects(result, "09");
+  });
+}
+
+test("requires independent capacity duration and preferred-contact deadline groups", () => {
+  for (const id of [heroId, "remaining-work-question", "approved-commitments-question"]) {
+    const expected = expectations.retrieval_cases.find((item) => item.id === id);
+    assert.ok(expected, `${id} must have a captured case`);
+    for (const group of ["capacity-duration", "preferred-contact-deadline"]) {
+      assert.ok(expected.material_group_ids.includes(group), `${id} must include ${group}`);
+    }
+  }
+});
+
+test("does not map overlapping answer text to independent task/deadline groups", () => {
+  const result = passingResult();
+  const answer = capture(result);
+  const security = answer.claims.find((claim) => claim.group_id === "security-deadline");
+  const addendum = answer.claims.find((claim) => claim.group_id === "addendum-deadline");
+  addendum.observed_text += ` ${security.observed_text}`;
+  syncTrials(result, heroId);
+  rejects(result, "09");
+});
+
+test("rejects private retrieval for an owner who is not the exact private approver", () => {
+  const result = passingResult();
+  capture(result, "approved-commitments-question").retrieved_record_ids.push("v4-record-4");
+  rejects(result, "10");
+});
+
+test("rejects comprehensive-summary abstention and preferred-contact deadline conflation", () => {
+  const abstention = passingResult();
+  const summary = capture(abstention, "approved-commitments-question");
+  Object.assign(summary, { outcome: "insufficient_approved_information", answer_text: "Insufficient accessible evidence to answer this question.", claims: [], citation_meeting_ids: [] });
+  syncTrials(abstention, summary.case_id);
+  rejects(abstention, "09");
+  const conflated = passingResult();
+  const answer = capture(conflated, "remaining-work-question");
+  const claim = answer.claims.find((item) => item.group_id === "preferred-contact-deadline");
+  const text = "Send the preferred escalation details by September 8.";
+  answer.answer_text = answer.answer_text.replace(claim.observed_text, text);
+  claim.observed_text = text;
+  syncTrials(conflated, answer.case_id);
+  rejects(conflated, "09");
 });

@@ -67,6 +67,7 @@ function validateAnsweredClaims(require, answer, expected, groups, label) {
   require(answer?.claims?.length === expected.material_group_ids.length, `${label} requires exactly one mapping per material group`);
   const seen = new Set();
   const spans = new Set();
+  const ranges = [];
   for (const claim of answer?.claims ?? []) {
     const group = groups.find((item) => item.id === claim?.group_id);
     const mapped = group && expected.material_group_ids.includes(group.id);
@@ -79,6 +80,14 @@ function validateAnsweredClaims(require, answer, expected, groups, label) {
     require(typeof answer?.answer_text === "string" && nonempty(observed) && answer.answer_text.includes(observed), `${label} group ${group.id} span is absent from the answer`);
     require(!spans.has(observed), `${label} maps one span to multiple groups`);
     spans.add(observed);
+    // Independent material groups need separate evidence spans. A broad span
+    // containing another task's date must not stand in for that task's mapping.
+    if (typeof answer?.answer_text === "string" && nonempty(observed)) {
+      const start = answer.answer_text.indexOf(observed);
+      const end = start + observed.length;
+      require(start >= 0 && ranges.every(([left, right]) => end <= left || start >= right), `${label} group ${group.id} overlaps another material group`);
+      if (start >= 0) ranges.push([start, end]);
+    }
     if (claim?.outcome === "insufficient_approved_information") {
       require(group.allow_insufficient === true, `${label} group ${group.id} must be answered`);
       require(nonempty(group.insufficient_answer) && observed === group.insufficient_answer, `${label} group ${group.id} lacks its explicit insufficient-evidence statement`);
@@ -353,7 +362,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
       for (const recordId of answer?.retrieved_record_ids ?? []) require(records.has(recordId), `${answer?.case_id} used unapproved record ${recordId}`);
       const expected = expectations?.retrieval_cases?.find((item) => item.id === answer?.case_id);
       for (const meetingId of answer?.citation_meeting_ids ?? []) require(answer?.retrieved_record_ids?.some((id) => records.get(id)?.meeting_id === meetingId), "answer citation has no retrieved approved record");
-      if (expected?.principal === "normal_team_member") {
+      if (expected?.principal !== "exact_owner_approver") {
         for (const recordId of answer?.retrieved_record_ids ?? []) require(records.get(recordId)?.policy === "team", `${answer?.case_id} retrieved an Only-me record`);
       }
     }
