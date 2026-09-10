@@ -42,6 +42,7 @@ const OPTIONS = {
   "meeting-external-id": { type: "string" },
   "challenge-attempt": { type: "string" },
   "challenge-message-ts": { type: "string" },
+  "attempt-id": { type: "string" },
   name: { type: "string" },
   email: { type: "string" },
   out: { type: "string" },
@@ -89,6 +90,9 @@ const RULES: Readonly<
     accepts: ["challenge-attempt", "challenge-message-ts"],
     requires: ["challenge-attempt", "challenge-message-ts"],
   },
+  "slack-connect-begin": {},
+  "slack-connect-status": { accepts: ["attempt-id"], requires: ["attempt-id"] },
+  "slack-connect-cancel": { accepts: ["attempt-id"], requires: ["attempt-id"] },
   "employee-invite": {
     accepts: ["name", "email", "out"],
     requires: ["name", "email", "out"],
@@ -120,7 +124,8 @@ Commands:
   records     List records or search the current generation.
   employee    List, invite, reissue, or revoke an employee.
   tools       Read organization tools and your current link status.
-  slack-link  Link Slack with --slack-user <member-id> via private DM.
+  slack-connect-begin  Open Slack browser connection.
+  slack-link  Legacy private-DM Slack linking command.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -256,6 +261,43 @@ function openAuthorizationUrl(url: string): boolean {
     timeout: 10_000,
   });
   return opened.status === 0;
+}
+
+function slackAttemptReceipt(input: {
+  readonly attempt_id: string;
+  readonly expires_at?: string;
+  readonly phase?: "waiting-for-slack";
+}) {
+  return {
+    ok: true,
+    ...(input.phase === undefined ? {} : { phase: input.phase }),
+    attempt_id: input.attempt_id,
+    ...(input.expires_at === undefined ? {} : { expires_at: input.expires_at }),
+  };
+}
+
+async function beginSlackBrowserConnect(
+  client: PersonClient,
+  opener: (url: string) => boolean | Promise<boolean>,
+) {
+  const begun = await client.beginSlackBrowserLink();
+  let opened = false;
+  try {
+    opened = await opener(begun.authorization_url);
+  } catch {
+    opened = false;
+  }
+  if (!opened) {
+    // A browser connection that never opened is not useful and should not
+    // remain a pending authorization on the Authority.
+    try {
+      await client.cancelSlackBrowserLink(begun.attempt_id);
+    } catch {
+      // Preserve the browser-launch error. The Authority still bounds expiry.
+    }
+    throw new Error("Slack authorization browser could not be opened");
+  }
+  return begun;
 }
 
 /**
@@ -732,6 +774,34 @@ export async function runPersonClientCli(
           }),
         });
         break;
+      case "slack-connect-begin": {
+        const begun = await beginSlackBrowserConnect(
+          client,
+          dependencies.open_authorization_url ?? openAuthorizationUrl,
+        );
+        // The attempt ID is an opaque cancellation/polling handle. The
+        // authorization URL remains solely in the process that opened it.
+        print(stdout, slackAttemptReceipt({
+          phase: "waiting-for-slack",
+          attempt_id: begun.attempt_id,
+          expires_at: begun.expires_at,
+        }));
+        break;
+      }
+      case "slack-connect-status": {
+        const status = await client.slackBrowserLinkStatus(
+          requiredText(values, "attempt-id"),
+        );
+        print(stdout, { ok: true, ...status });
+        break;
+      }
+      case "slack-connect-cancel": {
+        const status = await client.cancelSlackBrowserLink(
+          requiredText(values, "attempt-id"),
+        );
+        print(stdout, { ok: true, ...status });
+        break;
+      }
       case "employee-invite":
         print(stdout, {
           ok: true,

@@ -166,10 +166,10 @@ function completionSha256(input: {
   });
 }
 
-function identityLinkId(challengeAttemptId: string): string {
-  if (!challengeAttemptId.startsWith("cat_"))
-    throw new Error("invalid challenge ID");
-  return `clm_${challengeAttemptId.slice(4)}`;
+function identityLinkId(verificationEventId: string): string {
+  if (!verificationEventId.startsWith("cat_") && !verificationEventId.startsWith("sbl_"))
+    throw new Error("invalid Slack verification event ID");
+  return `clm_${verificationEventId.slice(4)}`;
 }
 
 function sameTool(
@@ -184,7 +184,16 @@ function sameTool(
  * state in the frozen D2 baseline; authentication and token retrieval remain
  * Authority/runtime ports.
  */
-class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLinkRepositoryPort {
+export interface CompleteBrowserSlackIdentityLinkInputV1 {
+  readonly attempt_id: string;
+  readonly person_session: PersonSlackIdentityLinkSession;
+  readonly organization_tool: ActiveSlackOrganizationTool;
+  readonly provider_subject_id: string;
+  readonly verification_evidence_sha256: `sha256:${string}`;
+  readonly now: string;
+}
+
+export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLinkRepositoryPort {
   constructor(
     private readonly options: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input,
   ) {}
@@ -517,132 +526,21 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       const currentReplay =
         this.personSlackIdentityLinkChallengeCompletionReplay(input);
       if (currentReplay !== null) return currentReplay;
-      const active = this.requireSameActiveTool(input.organization_tool);
+      this.requireSameActiveTool(input.organization_tool);
       const row = this.challenge(input.challenge_attempt_id);
       if (row.status !== "pending") {
         throw new PersonSlackIdentityLinkConflictError(
           "Person Slack identity link challenge cannot be completed",
         );
       }
-      const member = this.options.database
-        .prepare(
-          `SELECT external_identity_link_id, principal_id, membership_id, provider_subject_id
-         FROM organization_external_human_link_current
-         WHERE membership_id = ? AND provider_issuer = 'https://slack.com'
-           AND provider_tenant_kind = 'workspace' AND provider_tenant_id = ?
-           AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '')
-           AND current_status = 'active'`,
-        )
-        .get(
-          input.person_session.membership_id,
-          active.connection.provider_tenant_id,
-          active.connection.provider_enterprise_id,
-        ) as
-        | {
-            external_identity_link_id: string;
-            principal_id: string;
-            membership_id: string;
-            provider_subject_id: string;
-          }
-        | undefined;
-      const subject = this.options.database
-        .prepare(
-          `SELECT external_identity_link_id, principal_id, membership_id, provider_subject_id
-         FROM organization_external_human_link_current
-         WHERE provider_issuer = 'https://slack.com' AND provider_tenant_kind = 'workspace'
-           AND provider_tenant_id = ? AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '')
-           AND provider_subject_id = ? AND current_status = 'active'`,
-        )
-        .get(
-          active.connection.provider_tenant_id,
-          active.connection.provider_enterprise_id,
-          input.observed.user_id,
-        ) as
-        | {
-            external_identity_link_id: string;
-            principal_id: string;
-            membership_id: string;
-            provider_subject_id: string;
-          }
-        | undefined;
-      if (
-        (member !== undefined &&
-          member.provider_subject_id !== input.observed.user_id) ||
-        (subject !== undefined &&
-          (subject.principal_id !== input.person_session.principal_id ||
-            subject.membership_id !== input.person_session.membership_id)) ||
-        (member !== undefined &&
-          subject !== undefined &&
-          member.external_identity_link_id !==
-            subject.external_identity_link_id)
-      ) {
-        throw new PersonSlackIdentityLinkConflictError(
-          "Slack identity is already linked to another active membership",
-        );
-      }
-      const existing = member ?? subject;
-      const externalIdentityLinkId =
-        existing?.external_identity_link_id ??
-        identityLinkId(input.challenge_attempt_id);
-      const contract = buildExternalHumanIdentityLinkContractV2({
-        authority_id: this.options.authority_id,
-        organization_id: this.options.organization_id,
-        state_lineage_id: this.options.state_lineage_id,
-        external_identity_link_id: externalIdentityLinkId,
-        provider_issuer: "https://slack.com",
-        provider_tenant_kind: "workspace",
-        provider_tenant_id: active.connection.provider_tenant_id,
-        provider_enterprise_id: active.connection.provider_enterprise_id,
-        provider_subject_id: input.observed.user_id,
-        principal_id: input.person_session.principal_id,
-        membership_id: input.person_session.membership_id,
-        membership_type: this.membershipType(input.person_session),
+      this.upsertExternalHumanLink({
         verification_event_id: input.challenge_attempt_id,
-        verification_evidence_sha256:
-          input.observed.verification_evidence_sha256,
-        verified_at: input.now,
+        person_session: input.person_session,
+        organization_tool: input.organization_tool,
+        provider_subject_id: input.observed.user_id,
+        verification_evidence_sha256: input.observed.verification_evidence_sha256,
+        now: input.now,
       });
-      const contractSha256 = canonicalSha256(contract);
-      this.options.database
-        .prepare(
-          `INSERT INTO organization_external_human_link_contracts
-         (external_identity_link_id, contract_sha256, contract_json, created_at)
-         VALUES (?, ?, ?, ?)`,
-        )
-        .run(
-          externalIdentityLinkId,
-          contractSha256,
-          canonicalJson(contract),
-          input.now,
-        );
-      if (existing === undefined) {
-        this.options.database
-          .prepare(
-            `INSERT INTO organization_external_human_link_current
-           (external_identity_link_id, contract_sha256, provider_issuer, provider_tenant_kind,
-            provider_tenant_id, provider_enterprise_id, provider_subject_id, principal_id,
-            membership_id, current_status, updated_at)
-           VALUES (?, ?, 'https://slack.com', 'workspace', ?, ?, ?, ?, ?, 'active', ?)`,
-          )
-          .run(
-            externalIdentityLinkId,
-            contractSha256,
-            active.connection.provider_tenant_id,
-            active.connection.provider_enterprise_id,
-            input.observed.user_id,
-            input.person_session.principal_id,
-            input.person_session.membership_id,
-            input.now,
-          );
-      } else {
-        this.options.database
-          .prepare(
-            `UPDATE organization_external_human_link_current
-           SET contract_sha256 = ?, updated_at = ?
-           WHERE external_identity_link_id = ?`,
-          )
-          .run(contractSha256, input.now, externalIdentityLinkId);
-      }
       const completed = this.options.database
         .prepare(
           `UPDATE organization_person_slack_link_challenges
@@ -681,6 +579,24 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
     });
   }
 
+  /** Browser OAuth proof is ephemeral; only this established durable link is stored. */
+  completeBrowserSlackIdentityLink(input: CompleteBrowserSlackIdentityLinkInputV1): void {
+    this.transaction(() => {
+      const active = this.requireSameActiveTool(input.organization_tool);
+      if (active.connection.provider_tenant_id !== input.organization_tool.team_id) {
+        throw new PersonSlackIdentityLinkConflictError("active Slack connection changed");
+      }
+      this.upsertExternalHumanLink({
+        verification_event_id: input.attempt_id,
+        person_session: input.person_session,
+        organization_tool: input.organization_tool,
+        provider_subject_id: input.provider_subject_id,
+        verification_evidence_sha256: input.verification_evidence_sha256,
+        now: input.now,
+      });
+    });
+  }
+
   readSlackToken(reference: OrganizationSecretReference): string {
     const active = this.activeConnection();
     if (
@@ -703,6 +619,61 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       principal_id: session.principal_id,
       membership_id: session.membership_id,
     });
+  }
+
+  private upsertExternalHumanLink(input: {
+    readonly verification_event_id: string;
+    readonly person_session: PersonSlackIdentityLinkSession;
+    readonly organization_tool: ActiveSlackOrganizationTool;
+    readonly provider_subject_id: string;
+    readonly verification_evidence_sha256: `sha256:${string}`;
+    readonly now: string;
+  }): void {
+    const active = this.requireSameActiveTool(input.organization_tool);
+    const member = this.options.database.prepare(`SELECT external_identity_link_id, principal_id, membership_id, provider_subject_id
+      FROM organization_external_human_link_current WHERE membership_id = ? AND provider_issuer = 'https://slack.com'
+      AND provider_tenant_kind = 'workspace' AND provider_tenant_id = ?
+      AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '') AND current_status = 'active'`).get(
+      input.person_session.membership_id, active.connection.provider_tenant_id, active.connection.provider_enterprise_id,
+    ) as { external_identity_link_id: string; principal_id: string; membership_id: string; provider_subject_id: string } | undefined;
+    const subject = this.options.database.prepare(`SELECT external_identity_link_id, principal_id, membership_id, provider_subject_id
+      FROM organization_external_human_link_current WHERE provider_issuer = 'https://slack.com' AND provider_tenant_kind = 'workspace'
+      AND provider_tenant_id = ? AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '') AND provider_subject_id = ?
+      AND current_status = 'active'`).get(
+      active.connection.provider_tenant_id, active.connection.provider_enterprise_id, input.provider_subject_id,
+    ) as { external_identity_link_id: string; principal_id: string; membership_id: string; provider_subject_id: string } | undefined;
+    if ((member !== undefined && member.provider_subject_id !== input.provider_subject_id) ||
+      (subject !== undefined && (subject.principal_id !== input.person_session.principal_id || subject.membership_id !== input.person_session.membership_id)) ||
+      (member !== undefined && subject !== undefined && member.external_identity_link_id !== subject.external_identity_link_id)) {
+      throw new PersonSlackIdentityLinkConflictError("Slack identity is already linked to another active membership");
+    }
+    const existing = member ?? subject;
+    const externalIdentityLinkId = existing?.external_identity_link_id ?? identityLinkId(input.verification_event_id);
+    const contract = buildExternalHumanIdentityLinkContractV2({
+      authority_id: this.options.authority_id, organization_id: this.options.organization_id, state_lineage_id: this.options.state_lineage_id,
+      external_identity_link_id: externalIdentityLinkId, provider_issuer: "https://slack.com", provider_tenant_kind: "workspace",
+      provider_tenant_id: active.connection.provider_tenant_id, provider_enterprise_id: active.connection.provider_enterprise_id,
+      provider_subject_id: input.provider_subject_id, principal_id: input.person_session.principal_id, membership_id: input.person_session.membership_id,
+      membership_type: this.membershipType(input.person_session), verification_event_id: input.verification_event_id,
+      verification_evidence_sha256: input.verification_evidence_sha256, verified_at: input.now,
+    });
+    const contractSha256 = canonicalSha256(contract);
+    this.options.database.prepare(`INSERT INTO organization_external_human_link_contracts
+      (external_identity_link_id, contract_sha256, contract_json, created_at) VALUES (?, ?, ?, ?)`).run(
+      externalIdentityLinkId, contractSha256, canonicalJson(contract), input.now,
+    );
+    if (existing === undefined) {
+      this.options.database.prepare(`INSERT INTO organization_external_human_link_current
+        (external_identity_link_id, contract_sha256, provider_issuer, provider_tenant_kind, provider_tenant_id,
+         provider_enterprise_id, provider_subject_id, principal_id, membership_id, current_status, updated_at)
+        VALUES (?, ?, 'https://slack.com', 'workspace', ?, ?, ?, ?, ?, 'active', ?)`).run(
+        externalIdentityLinkId, contractSha256, active.connection.provider_tenant_id, active.connection.provider_enterprise_id,
+        input.provider_subject_id, input.person_session.principal_id, input.person_session.membership_id, input.now,
+      );
+    } else {
+      this.options.database.prepare(`UPDATE organization_external_human_link_current SET contract_sha256 = ?, updated_at = ?
+        WHERE external_identity_link_id = ?`).run(contractSha256, input.now, externalIdentityLinkId);
+    }
   }
 
   private completedResult(
@@ -817,7 +788,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
     const destinationColumns = this.options.database.prepare(
       "SELECT name FROM pragma_table_info('organization_person_slack_link_challenges') WHERE name IN ('dm_channel_id', 'recipient_user_id')",
     ).all();
-    if (destinationColumns.length !== 2 || this.options.slack.openIdentityLinkDirectMessage === undefined) return null;
+    if (destinationColumns.length !== 2) return null;
     const row = this.options.database
       .prepare(
         `SELECT contract.contract_json, contract.contract_sha256, current_state.state_json, current_state.state_sha256
@@ -903,7 +874,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
 export function createSqliteSlackPersonIdentityLinkWorkflowV1(
   input: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input,
 ): SlackPersonIdentityLinkWorkflowV1 {
-  const repository = new SqliteSlackPersonIdentityLinkRepositoryV1(input);
+  const repository = createSqliteSlackPersonIdentityLinkRepositoryV1(input);
   const secrets: Pick<OrganizationSecretStore, "read"> = {
     read(reference) {
       return repository.readSlackToken(reference);
@@ -919,4 +890,11 @@ export function createSqliteSlackPersonIdentityLinkWorkflowV1(
     authorization_fence: input.authorization_fence,
     now: input.now,
   });
+}
+
+/** Shared durable-link repository for the legacy DM and browser proof flows. */
+export function createSqliteSlackPersonIdentityLinkRepositoryV1(
+  input: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input,
+): SqliteSlackPersonIdentityLinkRepositoryV1 {
+  return new SqliteSlackPersonIdentityLinkRepositoryV1(input);
 }

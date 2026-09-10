@@ -58,6 +58,17 @@ function readPrivateVisibleAsciiCredential(
   reference: string,
   minimumBytes: number,
 ): string {
+  const value = readPrivateCredentialFile(reference, minimumBytes);
+  if (!/^[\x21-\x7e]+$/.test(value)) {
+    fail('value must contain only bounded visible ASCII bytes');
+  }
+  return value;
+}
+
+function readPrivateCredentialFile(
+  reference: string,
+  minimumBytes: number,
+): string {
   const path = authorityCredentialPath(reference);
   const state = assertPrivateCredentialFile(path, minimumBytes);
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
@@ -70,10 +81,9 @@ function readPrivateVisibleAsciiCredential(
     const value = readFileSync(file, 'utf8');
     if (
       value.length < minimumBytes ||
-      value.length > MAXIMUM_CREDENTIAL_BYTES ||
-      !/^[\x21-\x7e]+$/.test(value)
+      value.length > MAXIMUM_CREDENTIAL_BYTES
     ) {
-      fail('value must contain only bounded visible ASCII bytes');
+      fail('file must contain a bounded credential value');
     }
     return value;
   } finally {
@@ -100,6 +110,60 @@ export function readPrivateAuthoritySlackSigningSecret(
     reference,
     MINIMUM_CREDENTIAL_BYTES,
   );
+}
+
+export interface SlackBrowserOauthConfigurationV1 {
+  readonly client_id: string;
+  readonly client_secret: string;
+}
+
+/** Keeps the optional Slack browser OAuth secret in process memory only. */
+export function readPrivateAuthoritySlackBrowserOauthConfiguration(
+  reference: string,
+): SlackBrowserOauthConfigurationV1 {
+  const value = readPrivateCredentialFile(reference, 1);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    fail('Slack browser OAuth configuration must be valid JSON');
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed) ||
+    Object.keys(parsed).sort().join(',') !== 'client_id,client_secret'
+  ) {
+    fail('Slack browser OAuth configuration has an unexpected shape');
+  }
+  const record = parsed as Record<string, unknown>;
+  const clientId = record.client_id;
+  const clientSecret = record.client_secret;
+  if (
+    typeof clientId !== 'string' ||
+    !/^[A-Za-z0-9._-]{1,255}$/.test(clientId) ||
+    typeof clientSecret !== 'string' ||
+    clientSecret.length === 0 ||
+    clientSecret.length > MAXIMUM_CREDENTIAL_BYTES ||
+    !/^[\x21-\x7e]+$/.test(clientSecret)
+  ) {
+    fail('Slack browser OAuth configuration is invalid');
+  }
+  return Object.freeze({ client_id: clientId, client_secret: clientSecret });
+}
+
+/** Missing configuration deliberately retains the existing Slack DM flow. */
+export function readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
+  reference: string,
+): SlackBrowserOauthConfigurationV1 | undefined {
+  const path = authorityCredentialPath(reference);
+  try {
+    lstatSync(path);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  return readPrivateAuthoritySlackBrowserOauthConfiguration(reference);
 }
 
 export function readPrivateAuthorityGranolaOrganizationCredential(

@@ -25,6 +25,14 @@ export const ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH =
   '/v2/integration-links/slack/challenges';
 export const ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH =
   '/v2/integration-links/slack/completions';
+export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH =
+  '/v2/person/external-identities/slack/browser/begin';
+export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH =
+  '/v2/person/external-identities/slack/browser/status';
+export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH =
+  '/v2/person/external-identities/slack/browser/cancel';
+export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH =
+  '/v2/person/external-identities/slack/browser/callback';
 export const ORGANIZATION_API_ADMIN_OVERVIEW_PATH = '/v1/admin/overview';
 export const ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH = '/v1/admin/memberships';
 export const ORGANIZATION_API_ADMIN_AUDIT_PATH = '/v1/admin/audit';

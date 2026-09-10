@@ -206,7 +206,7 @@ printf '%s\\n' "$*" >> ${JSON.stringify(calls)}
 if [[ "$1" == compose && "$2" == version ]]; then exit 0; fi
 if [[ "$1" == compose ]]; then
   case " $* " in
-    *" up -d --no-build --wait --wait-timeout 90 "*)
+    *" up -d --no-build --wait --wait-timeout 90 "*|*" up -d --no-build --force-recreate --wait --wait-timeout 90 "*)
       if [[ "$ECHO_FAKE_FAIL_FIRST_UP" == true && ! -f ${JSON.stringify(failedUpMarker)} ]]; then
         touch ${JSON.stringify(failedUpMarker)}
         exit 1
@@ -311,6 +311,7 @@ exec /usr/bin/install "$@"
   const run = (
     command:
       | "activate-provider-credentials"
+      | "configure-slack-browser"
       | "replace-rehearsal"
       | "stage-rehearsal-inputs"
       | "prepare-rehearsal"
@@ -433,6 +434,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain(
       "activate-provider-credentials) shift; activate_provider_credentials",
     );
+    expect(source).toContain(
+      "configure-slack-browser) shift; configure_slack_browser",
+    );
+    expect(source).toContain("SLACK_BROWSER_OAUTH_CONFIG_NAME='slack-browser-oidc.json'");
+    expect(source).toContain("validate_slack_browser_oauth_input");
+    expect(source).toContain("--force-recreate --wait --wait-timeout 90");
     expect(source).toContain('redirect: "error"');
     expect(source).toContain(".authority-operation-lock");
     expect(source).toContain("resume) [[ $# -eq 1 ]] || usage; resume");
@@ -727,6 +734,80 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
       );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("installs private Slack browser OAuth configuration and reloads the accepted runtime", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const input = join(fixture.root, "slack-browser-oidc.json");
+      const source = '{ "client_id": "1234567890.1234567890", "client_secret": "browser-secret" }';
+      writeFileSync(input, source, { mode: 0o600 });
+      chmodSync(input, 0o600);
+
+      const result = fixture.run("configure-slack-browser", {}, ["--input", input]);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("slack_browser_configured=true");
+      expect(result.stdout).toContain("authority_restarted=true");
+      const installed = join(fixture.privateDir, "slack-browser-oidc.json");
+      expect(readFileSync(installed, "utf8")).toBe(source);
+      expect(statSync(installed).mode & 0o777).toBe(0o600);
+      expect(result.stdout).not.toContain("browser-secret");
+      expect(result.stderr).not.toContain("browser-secret");
+      expect(readFileSync(fixture.calls, "utf8")).toContain(
+        "up -d --no-build --force-recreate --wait --wait-timeout 90",
+      );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses malformed Slack browser OAuth input before changing runtime state", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const input = join(fixture.root, "slack-browser-oidc.json");
+      writeFileSync(input, '{"client_id":"only"}', { mode: 0o600 });
+      chmodSync(input, 0o600);
+
+      const result = fixture.run("configure-slack-browser", {}, ["--input", input]);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Slack browser OAuth input must contain exactly");
+      expect(existsSync(join(fixture.privateDir, "slack-browser-oidc.json"))).toBe(false);
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain("force-recreate");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("restores the prior Slack browser OAuth configuration when reload fails", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const previous = '{"client_id":"123.456","client_secret":"previous-secret"}';
+      const installed = join(fixture.privateDir, "slack-browser-oidc.json");
+      writeFileSync(installed, previous, { mode: 0o600 });
+      chmodSync(installed, 0o600);
+      const input = join(fixture.root, "slack-browser-oidc.json");
+      writeFileSync(
+        input,
+        '{"client_id":"123.456","client_secret":"replacement-secret"}',
+        { mode: 0o600 },
+      );
+      chmodSync(input, 0o600);
+
+      const result = fixture.run(
+        "configure-slack-browser",
+        { ECHO_FAKE_FAIL_FIRST_UP: "true" },
+        ["--input", input],
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("prior configuration was restored and verified");
+      expect(readFileSync(installed, "utf8")).toBe(previous);
+      expect(readFileSync(fixture.calls, "utf8").match(/force-recreate/g)?.length).toBe(2);
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }

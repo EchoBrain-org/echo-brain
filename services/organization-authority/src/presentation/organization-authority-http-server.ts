@@ -481,7 +481,22 @@ export function createOrganizationAuthorityHttpServer(
           content_type: headers["content-type"],
           headers,
         });
-        json(response, result.status, result.body);
+        if (result.content_type === "text/html") {
+          if (typeof result.body !== "string" || Buffer.byteLength(result.body) > 16_384)
+            throw new Error("Invalid external identity callback page");
+          const page = Buffer.from(result.body, "utf8");
+          response.writeHead(result.status, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": String(page.byteLength),
+            "cache-control": "no-store",
+            "referrer-policy": "no-referrer",
+            "x-content-type-options": "nosniff",
+            "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+          });
+          response.end(page);
+        } else {
+          json(response, result.status, result.body);
+        }
         return;
       }
       if (

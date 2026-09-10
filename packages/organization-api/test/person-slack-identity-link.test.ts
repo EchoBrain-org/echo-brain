@@ -11,6 +11,10 @@ import {
   validateOrganizationPersonSlackIdentityLinkBeginResponse,
   validateOrganizationPersonSlackIdentityLinkCompleteRequest,
   validateOrganizationPersonSlackIdentityLinkResult,
+  validateOrganizationPersonSlackBrowserLinkAttemptRequest,
+  validateOrganizationPersonSlackBrowserLinkBeginRequest,
+  validateOrganizationPersonSlackBrowserLinkBeginResponse,
+  validateOrganizationPersonSlackBrowserLinkStatusResponse,
 } from '../src/index.js';
 
 const AUTHORITY_ID = 'oau_00000000-0000-4000-8000-000000000001';
@@ -168,5 +172,28 @@ describe('authenticated Person tools status', () => {
       expect(() => validateOrganizationPersonTools({ ...response, tools: [invalid] })).toThrow();
     }
     expect(() => validateOrganizationPersonTools({ ...response, tools: [tool, tool] })).toThrow();
+  });
+});
+
+describe('Person Slack browser link', () => {
+  const attempt_id = 'sbl_00000000-0000-4000-8000-000000000001';
+  it('admits only its compact begin, attempt, and safe status contracts', () => {
+    expect(validateOrganizationPersonSlackBrowserLinkBeginRequest({ request_id: BEGIN.request_id })).toEqual({ request_id: BEGIN.request_id });
+    expect(validateOrganizationPersonSlackBrowserLinkAttemptRequest({ attempt_id })).toEqual({ attempt_id });
+    expect(validateOrganizationPersonSlackBrowserLinkBeginResponse({ schema_version: 1, kind: 'echo-person-slack-browser-link-v1', attempt_id,
+      authorization_url: 'https://slack.com/openid/connect/authorize?opaque=1', expires_at: '2026-09-10T22:05:00.000Z' })).toMatchObject({ attempt_id });
+    expect(validateOrganizationPersonSlackBrowserLinkStatusResponse({ schema_version: 1, kind: 'echo-person-slack-browser-link-status-v1', attempt_id,
+      status: 'failed', failure_reason: 'identity_conflict' })).toMatchObject({ status: 'failed' });
+  });
+  it('rejects unsafe URLs, raw provider fields, and inconsistent failure state', () => {
+    const response = { schema_version: 1, kind: 'echo-person-slack-browser-link-v1', attempt_id,
+      authorization_url: 'https://slack.com/openid/connect/authorize', expires_at: '2026-09-10T22:05:00.000Z' };
+    for (const invalid of [
+      { ...response, authorization_url: 'http://slack.com/openid/connect/authorize' },
+      { ...response, authorization_url: 'https://user:secret@slack.com/openid/connect/authorize' },
+      { ...response, state: 'secret-state' },
+    ]) expect(() => validateOrganizationPersonSlackBrowserLinkBeginResponse(invalid)).toThrow();
+    expect(() => validateOrganizationPersonSlackBrowserLinkStatusResponse({ schema_version: 1, kind: 'echo-person-slack-browser-link-status-v1', attempt_id,
+      status: 'complete', failure_reason: 'provider_rejected' })).toThrow();
   });
 });

@@ -15,6 +15,8 @@ export interface PersonExternalIdentityHttpRequestV1 {
 export interface PersonExternalIdentityHttpResponseV1 {
   readonly status: 200 | 201;
   readonly body: unknown;
+  /** Only fixed, provider-owned callback pages; never reflect request fields. */
+  readonly content_type?: "text/html";
 }
 
 /** Provider-neutral raw HTTP ingress for an external-identity application. */

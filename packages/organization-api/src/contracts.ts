@@ -198,6 +198,38 @@ export interface OrganizationPersonSlackIdentityLinkResultV2 {
   identity_link_created: boolean;
 }
 
+/** Starts a browser-mediated Slack identity proof for the current Person. */
+export interface OrganizationPersonSlackBrowserLinkBeginRequestV1 {
+  request_id: string;
+}
+
+export interface OrganizationPersonSlackBrowserLinkBeginResponseV1 {
+  schema_version: 1;
+  kind: 'echo-person-slack-browser-link-v1';
+  attempt_id: string;
+  authorization_url: string;
+  expires_at: string;
+}
+
+export type OrganizationPersonSlackBrowserLinkFailureReasonV1 =
+  | 'provider_rejected'
+  | 'provider_unavailable'
+  | 'identity_conflict'
+  | 'tool_unavailable';
+
+/** A browser proof is committed only by a later authenticated status read. */
+export interface OrganizationPersonSlackBrowserLinkStatusResponseV1 {
+  schema_version: 1;
+  kind: 'echo-person-slack-browser-link-status-v1';
+  attempt_id: string;
+  status: 'pending' | 'complete' | 'cancelled' | 'expired' | 'failed';
+  failure_reason: OrganizationPersonSlackBrowserLinkFailureReasonV1 | null;
+}
+
+export interface OrganizationPersonSlackBrowserLinkAttemptRequestV1 {
+  attempt_id: string;
+}
+
 export interface OrganizationInstallationSlackIdentityLinkBeginRequestPayloadV1 {
   schema_version: 1;
   kind: 'echo-organization-slack-link-begin-request';

@@ -25,6 +25,11 @@ export type {
   OrganizationPersonSlackIdentityLinkBeginResponseV2,
   OrganizationPersonSlackIdentityLinkCompleteRequestV2,
   OrganizationPersonSlackIdentityLinkResultV2,
+  OrganizationPersonSlackBrowserLinkAttemptRequestV1,
+  OrganizationPersonSlackBrowserLinkBeginRequestV1,
+  OrganizationPersonSlackBrowserLinkBeginResponseV1,
+  OrganizationPersonSlackBrowserLinkFailureReasonV1,
+  OrganizationPersonSlackBrowserLinkStatusResponseV1,
   OrganizationInstallationSlackIdentityLinkBeginRequestPayloadV1,
   OrganizationInstallationSlackIdentityLinkBeginRequestV1,
   OrganizationInstallationSlackIdentityLinkBeginResponseV1,
@@ -70,6 +75,10 @@ export {
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
+  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH,
+  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH,
+  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH,
+  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
   TRUSTED_PROXY_CLIENT_ID_HEADER,
@@ -104,5 +113,11 @@ export {
   validateOrganizationPersonSlackIdentityLinkCompleteRequest,
   validateOrganizationPersonSlackIdentityLinkResult,
 } from './person-slack-identity-link.js';
+export {
+  validateOrganizationPersonSlackBrowserLinkAttemptRequest,
+  validateOrganizationPersonSlackBrowserLinkBeginRequest,
+  validateOrganizationPersonSlackBrowserLinkBeginResponse,
+  validateOrganizationPersonSlackBrowserLinkStatusResponse,
+} from './person-slack-browser-link.js';
 
 export * from './person-tools.js';

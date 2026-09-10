@@ -8,6 +8,16 @@ const repo = resolve(import.meta.dirname, "../..");
 const account = join(repo, "product/echo-overlay/account.swift");
 const builder = join(repo, "tools/build-echo-overlay.mjs");
 const roots: string[] = [];
+const overlaySource = readFileSync(join(repo, "product/echo-overlay/main.swift"), "utf8");
+const themeStart = overlaySource.indexOf("enum EchoTheme {");
+const themeEnd = overlaySource.indexOf("private let sha256Pattern", themeStart);
+const pillStart = overlaySource.indexOf("final class PillButton: NSButton {");
+const pillEnd = overlaySource.indexOf("@MainActor\nprivate final class SourceDocumentView", pillStart);
+if (themeStart < 0 || themeEnd < 0 || pillStart < 0 || pillEnd < 0) {
+  throw new Error("could not extract native Connected tools theme fixture");
+}
+const themeFixture = overlaySource.slice(themeStart, themeEnd);
+const pillButtonFixture = overlaySource.slice(pillStart, pillEnd);
 
 afterAll(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 
@@ -46,14 +56,22 @@ describe("native Person account controls", () => {
     const source = readFileSync(account, "utf8");
     expect(source).toContain('title: "Connected tools…"');
     expect(source).toContain('["person", "tools"]');
-    expect(source).toContain('"person", "slack-link-begin", "--slack-user", user');
-    expect(source).toContain('input: Data(challenge.challenge_code.utf8)');
+    expect(source).toContain('["person", "slack-connect-begin"]');
+    expect(source).toContain('["person", "slack-connect-status", "--attempt-id", attempt]');
+    expect(source).toContain('["person", "slack-connect-cancel", "--attempt-id", attempt]');
+    expect(source).toContain('"Connect Slack"');
+    expect(source).toContain('panel.appearance = NSAppearance(named: .darkAqua)');
+    expect(source).toContain('panel.backgroundColor = EchoTheme.ink');
+    expect(source).toContain('isSlackBrowserExpiry');
+    expect(source).toContain('cancelAttemptIfNeeded()');
+    expect(source).not.toContain('Slack member ID');
+    expect(source).not.toContain('challenge_code');
+    expect(source).not.toContain('I replied in Slack');
     expect(source).toContain('toolsController?.conceal(); onSessionWillChange()');
     expect(source).toContain('membershipID: response.membership_id');
     expect(source).toContain('self.gate.accepts(requestID)');
     expect(source).toContain('before == expectedIdentity');
     expect(source).toContain('after == expectedIdentity');
-    expect(source).toContain('challenge = nil; code.stringValue = ""; code.isHidden = true; recipient.stringValue = ""');
   });
 
   it.skipIf(process.platform !== "darwin")("renders tools fixtures and rejects failed reads and prior-account status", () => {
@@ -62,6 +80,8 @@ describe("native Person account controls", () => {
     const proof = join(root, "proof.swift");
     writeFileSync(proof, `import AppKit
 import Foundation
+${themeFixture}
+${pillButtonFixture}
 @main enum Proof { static func main() {
     let member = "mem_00000000-0000-4000-8000-000000000001"
     func fixture(_ tools: [[String: Any]]) -> Data {
@@ -79,6 +99,7 @@ import Foundation
     print(connectedToolsSummary(decodeConnectedTools(Data("failure".utf8), membershipID: member)))
     let gate = AccountRequestGate(); let stale = gate.replace(); let fresh = gate.replace()
     print("refresh: \\(gate.accepts(stale)) \\(gate.accepts(fresh))")
+    print("expires: \\(isSlackBrowserExpiry(\"2026-09-10T22:29:02.435Z\")) \\(isSlackBrowserExpiry(\"2026-09-10T22:29:02Z\"))")
     let observation = AccountObservation()
     let a = AccountIdentity(displayName: "Same name", role: "Employee", authority: "https://authority.example", version: "1", membershipID: member)
     var b = a; b.membershipID = "another-member"
@@ -96,9 +117,9 @@ import Foundation
       "Slack · Organization: enabled (T123ABC) / Your link: unlinked", "true",
       "Slack · Organization: enabled (T123ABC) / Your link: linked (U123ABC)", "true",
       "Slack · Organization: enabled (T123ABC) / Your link: revoked", "true",
-      "Slack · Organization: unavailable / Your link: unavailable",
+      "Slack is not enabled for this organization. Ask an owner to connect it.",
       "Status unknown. Could not read connected tools. Try Refresh.",
-      "refresh: false true", "switch: true",
+      "refresh: false true", "expires: true true", "switch: true",
     ]);
   });
 
@@ -106,7 +127,12 @@ import Foundation
     const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-account-compile-")));
     roots.push(root);
     const proof = join(root, "proof.swift");
-    writeFileSync(proof, "import AppKit\nimport Foundation\n@main enum Proof { static func main() {} }\n");
+    writeFileSync(proof, `import AppKit
+import Foundation
+${themeFixture}
+${pillButtonFixture}
+@main enum Proof { static func main() {} }
+`);
     execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", account, proof, "-o", join(root, "proof")], {
       stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
     });
@@ -118,6 +144,8 @@ import Foundation
     const proof = join(root, "proof.swift");
     writeFileSync(proof, `import AppKit
 import Foundation
+${themeFixture}
+${pillButtonFixture}
 @main enum Proof { static func main() {
   print(validateAuthorityOrigin("https://EXAMPLE.COM:443/") ?? "invalid")
   print(validateAuthorityOrigin("https://EXAMPLE.COM:444/") ?? "invalid")
@@ -187,6 +215,8 @@ if (args[1] === "status") {
     chmodSync(cli, 0o700);
     writeFileSync(join(root, "proof.swift"), `import AppKit
 import Foundation
+${themeFixture}
+${pillButtonFixture}
 @main enum Proof {
   static func main() {
     let observation = AccountObservation()
