@@ -454,6 +454,32 @@ describe("staging Journey Explorer custom widget", () => {
     expect(query).toContain("jsonStringify(parsed.delivery)");
   });
 
+  it.each([undefined, "null", "{}", JSON.stringify({
+    journey_observer: { invalid_journey_event: 1, private_reason: 99 },
+    content_capture: { invalid_content_record: 2, content_format_error: -1 },
+    meeting_approval_observer: { observation_callback_failure: "private-error" },
+    private_emitter: { private_reason: 99 },
+  })])("projects only fixed rejection counters and leaves historical/malformed values unknown (%s)", async (rejections) => {
+    let query = "";
+    const client = new Client([
+      (command: unknown) => { query = String((command as Start).input.queryString); return { queryId: "q" }; },
+      () => ({ status: "Complete", results: [row({
+        observed_at: "2026-09-02T11:59:00.000Z", release_sha: "a".repeat(40), build_number: 42,
+        delivery_json: "null", rejection_counts_json: rejections,
+      })] }),
+    ]);
+    const result = await handler(client)({ operation: "health" });
+    expect(query).toContain("jsonStringify(parsed.rejection_counts)");
+    const populated = rejections?.includes("private_reason") === true;
+    expect(result).toMatchObject({ health: [{ rejection_counts: {
+      journey_observer: { invalid_journey_event: populated ? 1 : null },
+      content_capture: { invalid_content_record: populated ? 2 : null, content_format_error: null },
+      meeting_approval_observer: { observation_callback_failure: null },
+    } }] });
+    expect(JSON.stringify(result)).not.toContain("private-");
+    expect(JSON.stringify(result)).not.toContain("private_");
+  });
+
   it("uses an explicit @message map to find related core operations", async () => {
     const operationId = "44444444-4444-4444-8444-444444444444";
     const spanId = "55555555-5555-4555-8555-555555555555";
