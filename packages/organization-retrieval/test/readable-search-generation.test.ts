@@ -477,6 +477,53 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
+  it("balances source-record packets without admitting restricted siblings or unknown anchors", () => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const first = atomWith("first-anchor");
+      const second = atomWith("second-anchor", { record_position: 2 });
+      const siblings = [first, second].flatMap((anchor, index) =>
+        Array.from({ length: 5 }, (_, order) => atomWith(`sibling-${index}-${order}`, {
+          record_position: anchor.record_position, record_sha256: anchor.record_sha256, envelope_sha256: anchor.envelope_sha256,
+          atom_order: order + 1, item_kind: order === 0 ? "rationale" : "action",
+        })),
+      );
+      const restricted = atomWith("private-sibling", {
+        ...atom("private-sibling", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2),
+        record_position: first.record_position, record_sha256: first.record_sha256,
+        atom_order: 6, text: "Private commercial terms",
+      });
+      const built = buildReadableSearchGenerationV1({
+        ...input(directory, [first, second, ...siblings, restricted]),
+        related_atom_pairs: [relatedPair(first, siblings[6]!)],
+      });
+      const request = {
+        state_directory: directory,
+        active_generation: {
+          generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256,
+          retrieval_contract_sha256: built.manifest.retrieval_contract_sha256, exact_head: built.manifest.exact_head,
+        },
+        reader: { principal_id: "prn_reader", membership_id: "mem_reader" },
+        anchor_atom_ids: [first.atom_id, second.atom_id], limit: 4,
+      };
+      warmReadableSearchActiveGenerationV1(request);
+      expect(expandReadableSearchRelatedAtomsV1(request).items.map(item => item.atom_id))
+        .toEqual([siblings[6]!.atom_id]);
+      const packet = expandReadableSearchRelatedAtomsV1({ ...request, include_anchor_records: true });
+      expect(packet.items.map(item => item.atom_id)).toEqual([
+        siblings[1]!.atom_id, siblings[6]!.atom_id, siblings[2]!.atom_id, siblings[7]!.atom_id,
+      ]);
+      expect(expandReadableSearchRelatedAtomsV1({ ...request, include_anchor_records: true, limit: 16 }).items)
+        .toHaveLength(10);
+      for (const anchor of [restricted.atom_id, digest("unapproved")]) {
+        expect(expandReadableSearchRelatedAtomsV1({ ...request, include_anchor_records: true,
+          anchor_atom_ids: [anchor] }).items).toEqual([]);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("stores a canonical segment-local pair and expands it from a warmed authorized anchor", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {

@@ -1131,6 +1131,8 @@ export interface ExpandReadableSearchRelatedAtomsV1Input {
   readonly active_generation: ReadableSearchActiveGenerationV1;
   readonly reader: ReadableSearchReaderV1;
   readonly anchor_atom_ids: readonly Sha256Digest[];
+  /** Layer 4 packet: include approved source-record siblings, balanced across anchors. */
+  readonly include_anchor_records?: true;
   /** Defaults to 16 and bounds the entire expansion, not each anchor. */
   readonly limit?: number;
 }
@@ -2095,6 +2097,7 @@ export function expandReadableSearchRelatedAtomsV1(
       if (anchors.has(fact.atom_id)) segmentsByAnchor.set(fact.atom_id, segment);
   const expanded = new Set<Sha256Digest>();
   const items: ReadableSearchResultItemV1[] = [];
+  const groups: ReadableSearchResultItemV1[][] = [];
   for (const anchor of input.anchor_atom_ids) {
     const segment = segmentsByAnchor.get(anchor);
     if (segment === undefined) continue;
@@ -2102,6 +2105,13 @@ export function expandReadableSearchRelatedAtomsV1(
       readonly fact: ReadableSearchFactRow;
       readonly content: ReadableSearchContentRow;
     }> = [];
+    const candidateIds = new Set<Sha256Digest>();
+    if (input.include_anchor_records === true) {
+      const source = segment.facts_by_atom.get(anchor)!;
+      for (const fact of segment.facts) {
+        if (fact.record_hash === source.record_hash) candidateIds.add(fact.atom_id);
+      }
+    }
     for (const pair of segment.related_atom_pairs) {
       const atomId =
         pair.left_atom_id === anchor
@@ -2109,21 +2119,28 @@ export function expandReadableSearchRelatedAtomsV1(
           : pair.right_atom_id === anchor
             ? pair.left_atom_id
             : null;
-      if (atomId === null || anchors.has(atomId) || expanded.has(atomId)) continue;
+      if (atomId !== null) candidateIds.add(atomId);
+    }
+    for (const atomId of candidateIds) {
+      if (anchors.has(atomId)) continue;
       const fact = segment.facts_by_atom.get(atomId);
       const content = segment.content_by_atom.get(atomId);
       if (fact !== undefined && content !== undefined) candidates.push({ fact, content });
     }
+    const kindOrder = { decision: 0, action: 1, rationale: 2 };
     candidates.sort((left, right) =>
-      compareReadableSearchCandidates(
+      (input.include_anchor_records === true
+        ? Number(left.fact.record_hash !== segment.facts_by_atom.get(anchor)!.record_hash)
+          - Number(right.fact.record_hash !== segment.facts_by_atom.get(anchor)!.record_hash)
+          || kindOrder[left.content.item_kind] - kindOrder[right.content.item_kind]
+        : 0) || compareReadableSearchCandidates(
         { score: 1, log_position: left.fact.log_position, atom_order: left.fact.atom_order, atom_id: left.fact.atom_id },
         { score: 1, log_position: right.fact.log_position, atom_order: right.fact.atom_order, atom_id: right.fact.atom_id },
       ),
     );
+    const group: ReadableSearchResultItemV1[] = [];
     for (const { fact, content } of candidates) {
-      if (items.length === limit) break;
-      expanded.add(fact.atom_id);
-      items.push(
+      group.push(
         Object.freeze({
           atom_id: fact.atom_id,
           record_position: fact.log_position,
@@ -2135,6 +2152,19 @@ export function expandReadableSearchRelatedAtomsV1(
         }),
       );
     }
+    groups.push(group);
+  }
+  // Source packets share the bound across anchors; direct-link callers keep
+  // their existing anchor-first ordering. Deduplicate at selection time so
+  // overlapping neighborhoods do not consume another anchor's share.
+  const ordered = input.include_anchor_records === true
+    ? Array.from({ length: Math.max(0, ...groups.map(group => group.length)) },
+        (_, index) => groups.flatMap(group => group[index] === undefined ? [] : [group[index]!])).flat()
+    : groups.flat();
+  for (const item of ordered) {
+    if (expanded.has(item.atom_id)) continue;
+    expanded.add(item.atom_id);
+    items.push(item);
     if (items.length === limit) break;
   }
   return Object.freeze({

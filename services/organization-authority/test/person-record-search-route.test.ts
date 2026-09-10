@@ -14,6 +14,8 @@ import {
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   buildReadableSearchGenerationV1,
+  searchReadableSearchGenerationV1,
+  expandReadableSearchRelatedAtomsV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_FACTS_BASELINE_V2,
@@ -25,6 +27,7 @@ import {
   warmReadableSearchActiveGenerationV1,
   type BuildReadableSearchGenerationV1Input,
   type ReadableSearchAtomV1,
+  type ReadableSearchResultItemV1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +37,8 @@ import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-a
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../src/domain/errors.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
+
+import { rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
 const roots: string[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -277,6 +282,102 @@ function setup(pointer = true) {
 }
 
 describe("Person Layer 2 route", () => {
+  it.each([false, true])("covers rollout conditions and deadlines from the frozen four-query plan (mixed corpus: %s)", (mixed) => {
+    const value = setup(false);
+    const record = new Database(":memory:");
+    record.exec("CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)");
+    const atoms = rolloutCoverageFixture.records.flatMap((source, index) =>
+      source.items.map((item, order): ReadableSearchAtomV1 => ({
+        ...policyAtom({ id: "member", policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 }),
+        record_position: 3 - index,
+        record_sha256: sha256Digest(source.title),
+        envelope_sha256: sha256Digest(`envelope-${source.title}`),
+        atom_id: sha256Digest(item.text),
+        atom_order: order,
+        signal_id_sha256: sha256Digest(`signal-${item.text}`),
+        item_kind: item.kind,
+        text: item.text,
+        text_sha256: sha256Digest(item.text),
+      })),
+    );
+    if (mixed) {
+      for (const [index, text] of [
+        "September 16 office renovation work remains on schedule; confirm furniture delivery first.",
+        "Echo training materials for operational workflows are ready for review.",
+        "The September newsletter launch needs an editorial review before publication.",
+      ].entries()) {
+        atoms.push({ ...atoms[0]!, record_position: 5 + index, record_sha256: sha256Digest(`distractor-${index}`),
+          atom_id: sha256Digest(text), atom_order: 0, item_kind: index === 2 ? "decision" : "action",
+          text, text_sha256: sha256Digest(text) });
+      }
+    }
+    const privateText = "Echo private commercial concession: 28 locations September 16 guaranteed at a secret discount.";
+    atoms.push({ ...policyAtom({ id: "restricted", policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 }),
+      record_position: 4, text: privateText, text_sha256: sha256Digest(privateText) });
+    const input = realGenerationInput(value.state_directory, atoms);
+    const headAtom = atoms.reduce((head, atom) => atom.record_position > head.record_position ? atom : head);
+    const exact_head = { ...input.exact_head, position: headAtom.record_position, record_sha256: headAtom.record_sha256 };
+    record.prepare("INSERT INTO organization_record_log VALUES (?, ?)").run(exact_head.position, exact_head.record_sha256);
+    try {
+      const built = buildReadableSearchGenerationV1({ ...input, exact_head });
+      const active_generation = {
+        generation_id: built.manifest.generation_id,
+        manifest_sha256: built.manifest_sha256,
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        exact_head,
+      };
+      warmReadableSearchActiveGenerationV1({ state_directory: value.state_directory, active_generation });
+      value.authority.prepare(`INSERT INTO authority_readable_search_active_generation
+        (singleton, organization_id, generation_id, manifest_sha256, retrieval_contract_sha256,
+         record_head_position, record_head_hash, published_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`)
+        .run("org_clean", active_generation.generation_id, active_generation.manifest_sha256,
+          RETRIEVAL_CONTRACT, exact_head.position, exact_head.record_sha256, "2026-09-09T00:00:00.000Z");
+      let authenticationCount = 0;
+      const search = vi.fn(searchReadableSearchGenerationV1);
+      const expand = vi.fn(expandReadableSearchRelatedAtomsV1);
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory, authority_id: "oau_clean", organization_id: "org_clean",
+        state_lineage_id: "lineage_clean", retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => ({ ...authorization(),
+          checked_at: new Date(Date.parse("2026-09-09T00:00:00.000Z") + authenticationCount++).toISOString(),
+        }) }, authority: value.authority, record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority), search_generation: search,
+        expand_related_atoms: expand,
+      });
+      const batch = route.searchBatch({ access_token: "fixture-reader", queries: rolloutCoverageFixture.queries,
+        limit: 10, include_related_atom_packet: true });
+      const required = ["at least 8", "without manual correction", "September 3", "September 5", "September 11"];
+      if (!mixed) {
+        // The adoption decision was found at ranks 10 and 9 but lost at the
+        // packet cap. The three deadline actions were absent from every top ten.
+        expect(search.mock.results.map(result => result.value.items.findIndex((item: ReadableSearchResultItemV1) => item.text.includes("at least 8"))))
+          .toEqual([-1, 9, 8, -1]);
+        for (const deadline of ["September 3", "September 5", "September 11"]) {
+          expect(search.mock.results.every(result => result.value.items.every((item: ReadableSearchResultItemV1) => !item.text.includes(deadline))))
+            .toBe(true);
+        }
+      }
+      expect(batch.query_hit_counts).toEqual([10, 10, 10, 10]);
+      expect(batch.response.items).toHaveLength(16);
+      const selected = batch.response.items.map(item => item.text).join("\n");
+      for (const fact of [...required, "conditional onboarding", "addendum is signed", "September 4", "September 8", "September 12"])
+        expect.soft(selected).toContain(fact);
+      expect(selected).not.toContain(privateText);
+      expect(batch.response.items.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
+      expect(batch.response.items.every(item => atoms.some(atom => atom.atom_id === item.atom_id && atom.text === item.text && atom.record_sha256 === item.record_sha256))).toBe(true);
+      expect(route.searchBatch({ access_token: "fixture-reader", queries: rolloutCoverageFixture.queries,
+        limit: 10, include_related_atom_packet: true }).response).toEqual(batch.response);
+      const factual = route.search({ access_token: "fixture-reader", query: "revised data-processing addendum Leah September 5" });
+      expect(factual.items[0]!.text).toContain("by September 5");
+      // This sentence exists only outside the approved generation.
+      expect(route.search({ access_token: "fixture-reader", query: "unapproved-windfall-claim" }).items).toEqual([]);
+    } finally {
+      record.close();
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
   it("uses only the bearer-derived reader tuple and writes one compact Layer 2 audit", () => {
     const value = setup();
     const search = vi.fn(() => ({
@@ -987,6 +1088,7 @@ describe("Person Layer 2 route", () => {
           digest("packet-third-decision"),
         ],
         limit: 13,
+        include_anchor_records: true,
       });
       expect(packet.response.items.map((value) => value.atom_id)).toEqual([
         digest("packet-first-decision"),
