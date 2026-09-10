@@ -48,6 +48,76 @@ private enum EchoOverlaySourceFixtureMain {
             let running = RunningAsk()
             running.cancel()
             passed = running.state().cancelled
+        case "source-failure-isolation":
+            guard let executable = fakeSourceCLI(
+                oversizedRecord: recordHash,
+                validRecord: otherRecordHash,
+                validResponse: sourceData(hash: otherRecordHash)
+            ) else { Darwin.exit(EXIT_FAILURE) }
+            defer { try? FileManager.default.removeItem(at: executable) }
+            let outcome = CliRunner.executeSources(
+                executable: executable,
+                sources: [source(), otherSource()],
+                running: RunningAsk()
+            )
+            if case .success(let records) = outcome {
+                passed = records.count == 1 && records[0].source.recordSha256 == otherRecordHash
+            } else { passed = false }
+        case "progressive-source-delivery":
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("echo-overlay-source-slow-read-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: marker) }
+            guard let executable = progressiveSourceCLI(
+                marker: marker,
+                firstRecord: recordHash,
+                firstResponse: sourceData(),
+                slowRecord: otherRecordHash,
+                slowResponse: sourceData(hash: otherRecordHash)
+            ) else { Darwin.exit(EXIT_FAILURE) }
+            defer { try? FileManager.default.removeItem(at: executable) }
+            var delivered: [String] = []
+            var firstDeliveredBeforeSlowRead = false
+            let outcome = CliRunner.executeSources(
+                executable: executable,
+                sources: [source(), otherSource()],
+                running: RunningAsk(),
+                onRecord: { record in
+                    delivered.append(record.source.recordSha256)
+                    if record.source.recordSha256 == recordHash {
+                        firstDeliveredBeforeSlowRead = !FileManager.default.fileExists(atPath: marker.path)
+                    }
+                }
+            )
+            if case .success(let records) = outcome {
+                passed = records.count == 2
+                    && delivered == [recordHash, otherRecordHash]
+                    && firstDeliveredBeforeSlowRead
+            } else { passed = false }
+        case "cancelled-source-batch":
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("echo-overlay-source-cancel-read-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: marker) }
+            guard let executable = slowSourceCLI(marker: marker, record: recordHash, response: sourceData()) else {
+                Darwin.exit(EXIT_FAILURE)
+            }
+            defer { try? FileManager.default.removeItem(at: executable) }
+            let running = RunningAsk()
+            let probe = SourceBatchProbe()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let outcome = CliRunner.executeSources(
+                    executable: executable,
+                    sources: [source()],
+                    running: running,
+                    onRecord: { probe.append($0) }
+                )
+                probe.finish(outcome)
+            }
+            guard waitForFile(marker) else { Darwin.exit(EXIT_FAILURE) }
+            running.cancel()
+            guard probe.wait(timeout: 2) else { Darwin.exit(EXIT_FAILURE) }
+            if case .cancelled = probe.outcome {
+                passed = probe.records.isEmpty
+            } else { passed = false }
         case "valid-source":
             passed = CliRunner.parseSourceRecord(sourceData(), source: source())?.title == "Quarterly planning"
         case "optional-source-metadata":
@@ -69,6 +139,12 @@ private enum EchoOverlaySourceFixtureMain {
                 record: CliRunner.parseSourceRecord(mode == "source-card-minimal" ? sourceData() : contextData(), source: source())!,
                 screenshot: ProcessInfo.processInfo.environment["ECHO_OVERLAY_FIXTURE_OUTPUT"].map { "\($0)/\(mode).png" },
                 narrow: mode == "source-card-narrow"
+            )
+        case "source-final-success":
+            _ = NSApplication.shared
+            NSApp.setActivationPolicy(.prohibited)
+            passed = OverlayController.proveFinalSourcePresentation(
+                record: CliRunner.parseSourceRecord(sourceData(), source: source())!
             )
         case "untitled-source":
             let detail = CliRunner.parseSourceRecord(sourceData(meeting: ["id": "meeting-fixture"]), source: source())
@@ -105,6 +181,79 @@ private enum EchoOverlaySourceFixtureMain {
 
     private static func source() -> DisplaySource {
         DisplaySource(label: "Source 1", recordSha256: recordHash, policyID: policy)
+    }
+
+    private static func otherSource() -> DisplaySource {
+        DisplaySource(label: "Source 2", recordSha256: otherRecordHash, policyID: policy)
+    }
+
+    private static func fakeSourceCLI(
+        oversizedRecord: String,
+        validRecord: String,
+        validResponse: Data
+    ) -> URL? {
+        guard let response = String(data: validResponse, encoding: .utf8) else { return nil }
+        return shellSourceCLI("""
+        if [ \"$4\" = \"\(oversizedRecord)\" ]; then
+          head -c 600000 /dev/zero | tr '\\0' x
+        elif [ \"$4\" = \"\(validRecord)\" ]; then
+          printf '%s' '\(response)'
+        fi
+        """)
+    }
+
+    private static func progressiveSourceCLI(
+        marker: URL,
+        firstRecord: String,
+        firstResponse: Data,
+        slowRecord: String,
+        slowResponse: Data
+    ) -> URL? {
+        guard let first = String(data: firstResponse, encoding: .utf8),
+              let slow = String(data: slowResponse, encoding: .utf8)
+        else { return nil }
+        return shellSourceCLI("""
+        if [ \"$4\" = \"\(firstRecord)\" ]; then
+          printf '%s' '\(first)'
+        elif [ \"$4\" = \"\(slowRecord)\" ]; then
+          touch '\(marker.path)'
+          sleep 1
+          printf '%s' '\(slow)'
+        fi
+        """)
+    }
+
+    private static func slowSourceCLI(marker: URL, record: String, response: Data) -> URL? {
+        guard let response = String(data: response, encoding: .utf8) else { return nil }
+        return shellSourceCLI("""
+        if [ \"$4\" = \"\(record)\" ]; then
+          touch '\(marker.path)'
+          sleep 5
+          printf '%s' '\(response)'
+        fi
+        """)
+    }
+
+    private static func shellSourceCLI(_ body: String) -> URL? {
+        let executable = FileManager.default.temporaryDirectory
+            .appendingPathComponent("echo-overlay-source-fixture-\(UUID().uuidString)")
+        let script = "#!/bin/sh\n\(body)\n"
+        do {
+            try script.data(using: .utf8)?.write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+            return executable
+        } catch {
+            return nil
+        }
+    }
+
+    private static func waitForFile(_ file: URL, timeout: TimeInterval = 1) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: file.path) { return true }
+            usleep(10_000)
+        }
+        return false
     }
 
     private static func answerData(
@@ -201,6 +350,42 @@ private enum EchoOverlaySourceFixtureMain {
     }
 }
 
+private final class SourceBatchProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let completed = DispatchSemaphore(value: 0)
+    private var completedOutcome: SourceOutcome?
+    private var deliveredRecords: [SourceRecord] = []
+
+    func append(_ record: SourceRecord) {
+        lock.lock()
+        deliveredRecords.append(record)
+        lock.unlock()
+    }
+
+    func finish(_ outcome: SourceOutcome) {
+        lock.lock()
+        completedOutcome = outcome
+        lock.unlock()
+        completed.signal()
+    }
+
+    func wait(timeout: TimeInterval) -> Bool {
+        completed.wait(timeout: .now() + timeout) == .success
+    }
+
+    var outcome: SourceOutcome? {
+        lock.lock()
+        defer { lock.unlock() }
+        return completedOutcome
+    }
+
+    var records: [SourceRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        return deliveredRecords
+    }
+}
+
 // Exercise the real panel delegate and its private presentation state without
 // showing a window, activating ECHO, reading a session, or launching a client.
 extension OverlayController {
@@ -263,6 +448,18 @@ extension OverlayController {
         let nextText = labels(controller.sourceDetails)
         guard nextText.contains("Follow-up review"), !nextText.contains("Record approved by"),
               !nextText.contains("Participants"), !controller.answerView.string.isEmpty else { return false }
+        let selectedDetails = controller.sourceDetails.arrangedSubviews.first
+        let laterSource = DisplaySource(label: "Source 3", recordSha256: "sha256:" + String(repeating: "1", count: 64), policyID: record.source.policyID)
+        controller.currentSources.append(laterSource)
+        let progressiveRequestID = UUID()
+        controller.sourceRequestIdentifier = progressiveRequestID
+        controller.activeSources = RunningAsk()
+        controller.handleSource(
+            SourceRecord(source: laterSource, title: "Later review", visibility: record.visibility, date: nil, shortDate: nil, approvedBy: nil, participants: [], decisions: [], actions: [], rationales: []),
+            identifier: progressiveRequestID
+        )
+        controller.handleSources(.success([]), identifier: progressiveRequestID)
+        guard controller.sourceDetails.arrangedSubviews.first === selectedDetails else { return false }
         controller.closeSourcePane()
         return !controller.sourcePaneOpen && controller.sourcePane.isHidden && controller.answerColumn?.isHidden == false
     }
@@ -286,6 +483,11 @@ extension OverlayController {
         controller.panel.delegate?.windowDidResignKey?(
             Notification(name: NSWindow.didResignKeyNotification, object: controller.panel)
         )
+        // A record delivered just before focus loss must remain withheld too.
+        controller.handleSource(
+            SourceRecord(source: source, title: "Private late source", visibility: "Only the approver", date: nil, shortDate: nil, approvedBy: nil, participants: [], decisions: [], actions: [], rationales: []),
+            identifier: requestID
+        )
         // A completed read from before focus loss must also remain withheld.
         controller.handleSources(.unavailable, identifier: requestID)
         let passed = !NSApp.isActive
@@ -301,6 +503,33 @@ extension OverlayController {
             && controller.activeSources == nil
             && controller.sourceRequestIdentifier == nil
             && pending.state().cancelled
+        controller.shutdown()
+        return passed
+    }
+
+    fileprivate static func proveFinalSourcePresentation(record: SourceRecord) -> Bool {
+        let controller = OverlayController()
+        controller.currentSources = [record.source]
+        controller.sourcePaneOpen = true
+        controller.sourcePane.isHidden = false
+        controller.sourceScrollView.isHidden = false
+        let requestID = UUID()
+        controller.sourceRequestIdentifier = requestID
+        controller.activeSources = RunningAsk()
+        controller.renderSelectedSource()
+        controller.handleSources(.success([record]), identifier: requestID)
+        let title = controller.sourceDetails.arrangedSubviews.compactMap { ($0 as? NSTextField)?.stringValue }
+        guard title.contains(record.title) else {
+            controller.shutdown()
+            return false
+        }
+        let renderedDetails = controller.sourceDetails.arrangedSubviews.first
+        controller.handleSource(
+            SourceRecord(source: record.source, title: "Stale replacement", visibility: record.visibility, date: nil, shortDate: nil, approvedBy: nil, participants: [], decisions: [], actions: [], rationales: []),
+            identifier: requestID
+        )
+        let passed = controller.sourceDetails.arrangedSubviews.first === renderedDetails
+            && controller.sourceRecords[record.source.recordSha256]?.title == record.title
         controller.shutdown()
         return passed
     }

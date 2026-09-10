@@ -90,8 +90,9 @@ their outcome is pending. Browser login can be cancelled from the Account menu.
 
 Ask retains validated citations, groups them by record digest, and loads source
 cards through `person records --record-sha256 <digest>` while the panel has focus.
-The **Based on** chips acquire meeting titles and available dates after those
-reads complete. Selecting a chip opens its approved record alongside the answer;
+Each readable card appears as its sequential read completes, so a missing or slow
+source does not delay the others. The **Based on** chips acquire meeting titles and
+available dates after their reads complete. Selecting a chip opens its approved record alongside the answer;
 on narrow displays the source pane occupies the panel until **Back to answer**.
 Escape closes the source pane before hiding the panel. A missing source does not
 prevent other readable cards from loading.

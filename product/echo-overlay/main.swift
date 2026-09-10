@@ -245,6 +245,7 @@ final class BoundedReader: @unchecked Sendable {
 final class RunningAsk: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
+    private var cancellationHandler: (@Sendable () -> Void)?
     private var cancelled = false
     private var timedOut = false
     private var outputExceeded = false
@@ -277,8 +278,24 @@ final class RunningAsk: @unchecked Sendable {
         lock.lock()
         cancelled = true
         let active = process
+        let handler = cancellationHandler
         lock.unlock()
         if active?.isRunning == true { active?.terminate() }
+        handler?()
+    }
+
+    func attachCancellationHandler(_ handler: @escaping @Sendable () -> Void) {
+        lock.lock()
+        let shouldCancel = cancelled
+        if !shouldCancel { cancellationHandler = handler }
+        lock.unlock()
+        if shouldCancel { handler() }
+    }
+
+    func removeCancellationHandler() {
+        lock.lock()
+        cancellationHandler = nil
+        lock.unlock()
     }
 
     func timeOut() {
@@ -343,12 +360,23 @@ private final class CliRunner: @unchecked Sendable {
 
     func sources(
         sources: [DisplaySource],
+        onRecord: @escaping @Sendable (SourceRecord) -> Void,
         completion: @escaping @Sendable (SourceOutcome) -> Void
     ) -> RunningAsk {
         let running = RunningAsk()
         let executable = self.executable
         DispatchQueue.global(qos: .userInitiated).async {
-            let outcome = Self.executeSources(executable: executable, sources: sources, running: running)
+            let outcome = Self.executeSources(
+                executable: executable,
+                sources: sources,
+                running: running,
+                onRecord: { record in
+                    DispatchQueue.main.async {
+                        guard !running.state().cancelled else { return }
+                        onRecord(record)
+                    }
+                }
+            )
             DispatchQueue.main.async { completion(outcome) }
         }
         return running
@@ -477,10 +505,11 @@ private final class CliRunner: @unchecked Sendable {
         return .success(DisplayAnswer(answer: envelope.result.answer, sources: sources))
     }
 
-    private static func executeSources(
+    fileprivate static func executeSources(
         executable: URL,
         sources: [DisplaySource],
-        running: RunningAsk
+        running: RunningAsk,
+        onRecord: @escaping (SourceRecord) -> Void = { _ in }
     ) -> SourceOutcome {
         guard executable.isFileURL,
               executable.path.hasPrefix("/"),
@@ -490,15 +519,21 @@ private final class CliRunner: @unchecked Sendable {
         var records: [SourceRecord] = []
         for source in sources {
             if running.state().cancelled { return .cancelled }
-            guard let record = executeSource(
+            let sourceRunning = RunningAsk()
+            running.attachCancellationHandler { sourceRunning.cancel() }
+            let record = executeSource(
                 executable: executable,
                 source: source,
-                running: running
-            ) else {
+                running: sourceRunning
+            )
+            running.removeCancellationHandler()
+            guard let record else {
                 if running.state().cancelled { return .cancelled }
                 continue
             }
+            if running.state().cancelled { return .cancelled }
             records.append(record)
+            onRecord(record)
         }
         return records.isEmpty ? .unavailable : .success(records)
     }
@@ -1173,7 +1208,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
-        if panel.isVisible, !currentSources.isEmpty, sourceRecords.isEmpty { loadSources() }
+        if panel.isVisible, !currentSources.isEmpty { loadSources() }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -1334,17 +1369,43 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         guard !currentSources.isEmpty else { return }
         openSourcePane()
         renderSelectedSource()
-        if sourceRecords.isEmpty { loadSources() }
+        loadSources()
     }
 
     private func loadSources() {
         guard activeSources == nil, !currentSources.isEmpty else { return }
+        let missingSources = currentSources.filter { sourceRecords[$0.recordSha256] == nil }
+        guard !missingSources.isEmpty else { return }
+        let selectedSource = currentSources.indices.contains(selectedSourceIndex)
+            ? currentSources[selectedSourceIndex]
+            : nil
+        let sourcesToLoad: [DisplaySource]
+        if !sourceRecords.isEmpty,
+           let selectedSource,
+           sourceRecords[selectedSource.recordSha256] == nil {
+            sourcesToLoad = [selectedSource]
+        } else if sourceRecords.isEmpty {
+            sourcesToLoad = missingSources
+        } else {
+            return
+        }
         let identifier = UUID()
         sourceRequestIdentifier = identifier
-        activeSources = runner.sources(sources: currentSources) { [weak self] outcome in
+        activeSources = runner.sources(sources: sourcesToLoad, onRecord: { [weak self] record in
+            Task { @MainActor in self?.handleSource(record, identifier: identifier) }
+        }) { [weak self] outcome in
             Task { @MainActor in self?.handleSources(outcome, identifier: identifier) }
         }
         if sourcePaneOpen { renderSelectedSource() }
+    }
+
+    private func handleSource(_ record: SourceRecord, identifier: UUID) {
+        guard sourceRequestIdentifier == identifier else { return }
+        let isSelected = currentSources.indices.contains(selectedSourceIndex)
+            && currentSources[selectedSourceIndex].recordSha256 == record.source.recordSha256
+        sourceRecords[record.source.recordSha256] = record
+        refreshSourceChips()
+        if sourcePaneOpen, isSelected { renderSelectedSource() }
     }
 
     private func handleSources(_ outcome: SourceOutcome, identifier: UUID) {
@@ -1355,9 +1416,14 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         sourcesButton.isEnabled = !currentSources.isEmpty
         switch outcome {
         case .success(let records):
-            sourceRecords = Dictionary(uniqueKeysWithValues: records.map { ($0.source.recordSha256, $0) })
+            let selectedRecordWasAvailable = currentSources.indices.contains(selectedSourceIndex)
+                && sourceRecords[currentSources[selectedSourceIndex].recordSha256] != nil
+            for record in records { sourceRecords[record.source.recordSha256] = record }
             refreshSourceChips()
-            if sourcePaneOpen { renderSelectedSource(); announce("Sources ready.") }
+            if sourcePaneOpen {
+                if !selectedRecordWasAvailable { renderSelectedSource() }
+                announce("Sources ready.")
+            }
         case .unavailable:
             if sourcePaneOpen { renderSelectedSource(); announce("Source details are unavailable.") }
         case .cancelled:
@@ -1401,7 +1467,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         openSourcePane()
         refreshSourceChips()
         renderSelectedSource()
-        if sourceRecords.isEmpty { loadSources() }
+        loadSources()
     }
 
     @objc private func closeSources() { showAnswer() }
