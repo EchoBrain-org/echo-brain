@@ -697,9 +697,13 @@ downloads and background jobs are left untouched. Unknown app or wrapper recover
 block release pruning because their dependencies cannot be established.
 
 A private installer lock prevents concurrent activation or pruning. Catchable
-HUP/INT/TERM during the pair transition are deferred until a coherent pair is
-installed or restored; cancellation skips pruning. Failed activation retains
-required recovery material. SIGKILL or power loss cannot run shell recovery:
+HUP/INT/TERM observed before retention cleanup begins are deferred until a
+coherent pair is installed or restored; those cancellations skip pruning. A
+signal observed only while already-committed retention cleanup runs is
+acknowledged after cleanup: the active pair and the retained previous distinct
+rollback pair, if any, remain, but the command may report interruption after
+cleanup. Failed activation retains required recovery material. SIGKILL or
+power loss cannot run shell recovery:
 a leftover lock deliberately blocks another install pending local operator
 inspection of the app, command and private backups. Do not remove that lock or
 recovery material while an installer may still be running. This change does not
