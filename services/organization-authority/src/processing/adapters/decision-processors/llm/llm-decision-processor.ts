@@ -33,9 +33,9 @@ import { OpenAiClient } from './openai-client.js';
 import { OpenRouterClient } from './openrouter-client.js';
 
 export const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
-export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '1.8.0';
+export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '1.9.0';
 /** Bump with the adapter version whenever prompt/output semantics change. */
-export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v8';
+export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v9';
 export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
   'decision-extraction-schema-v6';
 
@@ -98,6 +98,10 @@ const SYSTEM_PROMPT = [
   'Review all evidence blocks; emit each distinct signal once, preserving its material terms; never invent',
   'or combine separate signals.',
   'For each signal, cite every material block by evidence_id with an exact non-empty quote.',
+  'Each quote must be one contiguous verbatim span copied from that block\'s text, preserving wording',
+  'and punctuation. Never insert ellipses, omit words within the span, paraphrase, or stitch separate',
+  'passages together. If support spans multiple passages in one block, quote the intervening text too;',
+  'cite each block only once per signal. Check every quote against its source block before returning.',
   'Mark a decision decided only for an explicit completed choice; otherwise use proposed or unresolved.',
   'Actions are unassigned: state only the owner-neutral task. Resolve dates from',
   'meeting_time.date_reference_local_date: YYYY-MM-DD if no time is stated, ISO 8601 with an offset if a',

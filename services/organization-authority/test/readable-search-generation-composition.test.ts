@@ -24,6 +24,7 @@ import {
   createReadableSearchGenerationReconcilerV1,
   projectSnapshotRelatedAtomsV1,
   readableSearchGenerationContractV1,
+  type ReadableSearchRelatedAtomProjectorProfileV1,
 } from "../src/composition/readable-search-generation-composition.js";
 import {
   canonicalSha256,
@@ -31,6 +32,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../src/shared/core-runtime-observation-v1.js";
 
 vi.mock("@echo-brain/federation-protocol", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@echo-brain/federation-protocol")>();
@@ -193,10 +195,152 @@ describe("readable-search generation composition", () => {
 describe("related-atom snapshot projection", () => {
   const digest = (character: string) =>
     `sha256:${character.repeat(64)}` as Sha256Digest;
-  const profile = Object.freeze({
+  const profile: ReadableSearchRelatedAtomProjectorProfileV1 = Object.freeze({
     generation_adapter_id: "test-structured-output",
     model: "test-projector",
     timeout_ms: 1_000,
+  });
+
+  function projectionSnapshot() {
+    return {
+      record_head: { position: 2, record_sha256: digest("c") },
+      source_snapshot: {
+        atoms: [1, 2].map((position) => ({
+          authority_id: "authority", organization_id: "organization", state_lineage_id: "lineage",
+          atom_id: digest(String(position)), record_sha256: digest(position === 1 ? "b" : "c"),
+          record_position: position, atom_order: 0, item_kind: "decision",
+          text: `approved condition number ${position}`,
+          policy_id: "organization-member-readable-person-v2", policy_contract_sha256: digest("a"),
+          reviewer_principal_id: null, reviewer_membership_id: null,
+        })),
+      },
+    } as unknown as Parameters<typeof projectSnapshotRelatedAtomsV1>[0]["snapshot"];
+  }
+
+  function relatedResponse(input: { readonly user_prompt: string }) {
+    const { atoms } = JSON.parse(input.user_prompt) as { atoms: { atom_id: string; text: string }[] };
+    return { relationships: [{
+      left_atom_id: atoms[0]!.atom_id, right_atom_id: atoms[1]!.atom_id,
+      left_supporting_excerpt: atoms[0]!.text, right_supporting_excerpt: atoms[1]!.text,
+    }] };
+  }
+
+  it("reuses a held valid projection at a newer head when its complete inputs are unchanged", async () => {
+    const snapshot = projectionSnapshot();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const generate = vi.fn(async (input: { readonly user_prompt: string }) => {
+      await held;
+      return relatedResponse(input);
+    });
+    const projector = { profile, structured_output: { generate } };
+    let settled = false;
+    const pending = projectSnapshotRelatedAtomsV1({ snapshot, projector, signal: new AbortController().signal })
+      .then((value) => { settled = true; return value; });
+    expect(generate).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release();
+    const baseline = await pending;
+    const newest = { ...snapshot, record_head: { position: 4, record_sha256: digest("f") } };
+    const observations: CoreRuntimeObservationV1[] = [];
+    const result = await observeCoreRuntimeV1("search_enrichment", () =>
+      projectSnapshotRelatedAtomsV1({ snapshot: newest, projector, signal: new AbortController().signal }),
+    { observer: (event) => { observations.push(event); } });
+    expect(result.related_atom_pairs).toEqual(baseline.related_atom_pairs);
+    expect(result.related_atom_pairs).toEqual([{ left_atom_id: digest("1"), right_atom_id: digest("2") }]);
+    expect(result.source_snapshot).toBe(newest.source_snapshot);
+    expect(result.record_head).toEqual(newest.record_head);
+    expect(generate).toHaveBeenCalledOnce();
+    expect(observations.filter((event) => event.event === "succeeded")).toMatchObject([
+      { phase: "related_projection", counts: { reused_count: 1, recomputed_count: 0, included_count: 1 } },
+      { phase: "search_enrichment", counts: { reused_count: 1, recomputed_count: 0 } },
+    ]);
+  });
+
+  it.each([
+    { authority_id: "another-authority" }, { organization_id: "another-organization" },
+    { state_lineage_id: "another-lineage" }, { policy_id: "restricted-reviewer-person-v2" },
+    { policy_contract_sha256: digest("e") }, { reviewer_principal_id: "another-principal" },
+    { reviewer_membership_id: "another-tenure" }, { text: "a changed approved condition" },
+    { item_kind: "action" }, { atom_id: digest("9") }, { record_sha256: digest("e") },
+    { atom_order: 1 }, { record_position: 5 }, { authorization_proof_sha256: digest("e") },
+  ] as const)("does not reuse a result after selected input changes: %j", async (change) => {
+    const snapshot = projectionSnapshot();
+    const generate = vi.fn(async () => ({ relationships: [] }));
+    const projector = { profile, structured_output: { generate } };
+    const project = (value: typeof snapshot) => projectSnapshotRelatedAtomsV1({ snapshot: value, projector, signal: new AbortController().signal });
+    await project(snapshot);
+    // Change both atoms for segment identity fields, one for atom-local fields.
+    const segmentChange = Object.keys(change).some((key) => /authority|organization|lineage|policy|reviewer/.test(key));
+    await project({ ...snapshot, source_snapshot: { ...snapshot.source_snapshot,
+      atoms: snapshot.source_snapshot.atoms.map((atom, index) => segmentChange || index === 0 ? { ...atom, ...change } : atom),
+    } });
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { model: "another-model" }, { generation_adapter_id: "another-adapter" }, { timeout_ms: 2_000 },
+  ])("does not reuse across a projector profile change: %j", async (change) => {
+    const snapshot = projectionSnapshot();
+    const generate = vi.fn(async () => ({ relationships: [] }));
+    const projector = { profile: { ...profile }, structured_output: { generate } };
+    const project = () => projectSnapshotRelatedAtomsV1({ snapshot, projector, signal: new AbortController().signal });
+    await project();
+    projector.profile = { ...profile, ...change };
+    await project();
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates result retention by binding and provider instance", async () => {
+    const snapshot = projectionSnapshot();
+    const generate = vi.fn(async () => ({ relationships: [] }));
+    const projector = { profile, structured_output: { generate } };
+    const project = (binding = projector) => projectSnapshotRelatedAtomsV1({ snapshot, projector: binding, signal: new AbortController().signal });
+    await project();
+    await project({ ...projector });
+    projector.structured_output = { generate };
+    await project();
+    expect(generate).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["provider", "schema", "cancelled"])("does not retain %s failures, including an abort-ignoring provider", async (failure) => {
+    const snapshot = projectionSnapshot();
+    const controller = new AbortController();
+    const generate = vi.fn(async () => {
+      if (generate.mock.calls.length === 1) {
+        if (failure === "provider") throw new Error("provider unavailable");
+        if (failure === "schema") return { relationships: "invalid" };
+        controller.abort();
+      }
+      return { relationships: [] };
+    });
+    const projector = { profile, structured_output: { generate } };
+    await expect(projectSnapshotRelatedAtomsV1({ snapshot, projector, signal: controller.signal })).rejects.toThrow();
+    const result = await projectSnapshotRelatedAtomsV1({ snapshot, projector, signal: new AbortController().signal });
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(result.related_atom_pairs).toEqual([]);
+    // A legitimately successful empty projection is reusable.
+    await projectSnapshotRelatedAtomsV1({ snapshot, projector, signal: new AbortController().signal });
+    expect(generate).toHaveBeenCalledTimes(2);
+    await expect(projectSnapshotRelatedAtomsV1({ snapshot, projector, signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("evicts old projection results instead of retaining an unbounded history", async () => {
+    const snapshot = projectionSnapshot();
+    const generate = vi.fn(async () => ({ relationships: [] }));
+    const projector = { profile, structured_output: { generate } };
+    const project = (index: number) => projectSnapshotRelatedAtomsV1({ projector, signal: new AbortController().signal,
+      snapshot: { ...snapshot, source_snapshot: { ...snapshot.source_snapshot,
+        atoms: snapshot.source_snapshot.atoms.map((atom) => ({ ...atom, text: `${atom.text} revision ${index}` })),
+      } },
+    });
+    for (let index = 0; index < 33; index++) await project(index);
+    await project(32);
+    expect(generate).toHaveBeenCalledTimes(33);
+    await project(0);
+    expect(generate).toHaveBeenCalledTimes(34);
   });
 
   it("projects separately per complete visibility tuple and skips single-record segments", async () => {

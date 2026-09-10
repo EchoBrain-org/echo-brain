@@ -213,6 +213,22 @@ export class ReadableSearchGenerationReconcilerV1<
     }
     signal.throwIfAborted();
 
+    // Provider IO may outlive several approvals. Retain valid enrichment for
+    // an unchanged segment on retry, but do not build/warm obsolete files.
+    const afterEnrichmentHead = head(
+      this.options.read_record_head(),
+      "readable-search post-enrichment record head",
+    );
+    if (!sameHead(afterEnrichmentHead, capturedHead)) {
+      annotateCoreRuntimeV1({ result: "superseded", counts: { current_head: afterEnrichmentHead.position } });
+      this.options.invalidate_generation?.();
+      return Object.freeze({
+        status: "superseded",
+        captured_head: capturedHead,
+        current_head: afterEnrichmentHead,
+      });
+    }
+
     const built = observeCoreRuntimeSyncV1("search_build", () => this.options.build_generation(snapshot));
     const builtHead = head(
       built.record_head,
