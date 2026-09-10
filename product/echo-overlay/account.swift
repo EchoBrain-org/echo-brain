@@ -60,6 +60,7 @@ private struct AccountStatusResponse: Decodable {
     let membership_type: String?
     let connected_authority: String?
     let installed_version: String?
+    let membership_id: String?
 }
 
 struct AccountIdentity: Equatable {
@@ -67,6 +68,7 @@ struct AccountIdentity: Equatable {
     let role: String
     let authority: String
     let version: String
+    var membershipID: String? = nil
 }
 
 enum AccountStatus {
@@ -205,7 +207,7 @@ final class AccountClient: @unchecked Sendable {
         return accessFailure ? .accessDenied : .unavailable
     }
 
-    private func readStatus(_ running: AccountRunning) -> AccountStatus {
+    func readStatus(_ running: AccountRunning) -> AccountStatus {
         guard let output = runStatus(running) else { return .unavailable }
         guard let response = try? JSONDecoder().decode(AccountStatusResponse.self, from: output),
               response.schema_version == 1,
@@ -225,7 +227,8 @@ final class AccountClient: @unchecked Sendable {
             displayName: displayName,
             role: role.capitalized,
             authority: origin,
-            version: version
+            version: version,
+            membershipID: response.membership_id
         ))
     }
 
@@ -294,17 +297,22 @@ final class AccountClient: @unchecked Sendable {
         return process.terminationStatus == 0 && !state.cancelled && !state.timedOut
     }
 
-    private func runCaptured(_ arguments: [String], timeout: TimeInterval, running: AccountRunning) -> Data? {
+    func runCaptured(_ arguments: [String], timeout: TimeInterval, running: AccountRunning, input: Data? = nil) -> Data? {
         guard executable.isFileURL, FileManager.default.isExecutableFile(atPath: executable.path) else { return nil }
         let process = Process()
         let stdout = Pipe()
         process.executableURL = executable
         process.arguments = arguments
         process.environment = safeEnvironment()
-        process.standardInput = FileHandle.nullDevice
+        let stdin = Pipe()
+        process.standardInput = input == nil ? FileHandle.nullDevice : stdin
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
         do { guard try running.launch(process) else { return nil } } catch { return nil }
+        if let input {
+            try? stdin.fileHandleForWriting.write(contentsOf: input)
+            try? stdin.fileHandleForWriting.close()
+        }
         let reader = AccountOutputReader(limit: 128 * 1024)
         let readers = DispatchGroup()
         readers.enter()
@@ -395,6 +403,8 @@ final class AccountController: NSObject {
     private let onSessionWillChange: () -> Void
     private let mayChangeSession: () -> Bool
     private let changed: () -> Void
+    private let connectedTools = NSMenuItem(title: "Connected tools…", action: nil, keyEquivalent: "")
+    private var toolsController: ConnectedToolsController?
     private let account = NSMenuItem(title: "Account", action: nil, keyEquivalent: "")
     private let detail = NSMenuItem(title: "Checking account…", action: nil, keyEquivalent: "")
     private let organization = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -424,10 +434,11 @@ final class AccountController: NSObject {
         detail.isEnabled = false; organization.isEnabled = false; version.isEnabled = false
         menu.addItem(detail); menu.addItem(organization); menu.addItem(version)
         menu.addItem(.separator())
-        for item in [signIn, invitation, switchAccount, signOut, cancelSignIn] {
+        for item in [connectedTools, signIn, invitation, switchAccount, signOut, cancelSignIn] {
             item.target = self
             menu.addItem(item)
         }
+        connectedTools.action = #selector(showConnectedTools)
         signIn.action = #selector(signInWithGoogle)
         invitation.action = #selector(openInvitation)
         switchAccount.action = #selector(switchPerson)
@@ -440,6 +451,7 @@ final class AccountController: NSObject {
     var menuItem: NSMenuItem { account }
 
     func shutdown() {
+        toolsController?.conceal()
         _ = statusGate.replace()
         _ = operationGate.replace()
         activeStatus?.cancel()
@@ -461,7 +473,7 @@ final class AccountController: NSObject {
     }
 
     private func receivedStableStatus(_ status: AccountStatus) {
-        if observation.accept(status) { onSessionWillChange() }
+        if observation.accept(status) { toolsController?.conceal(); onSessionWillChange() }
         switch status {
         case .signedIn(let identity):
             self.identity = identity
@@ -491,6 +503,8 @@ final class AccountController: NSObject {
         }
         organization.isHidden = !signedIn
         version.isHidden = !signedIn
+        connectedTools.isHidden = !signedIn
+        connectedTools.isEnabled = signedIn && !active
         signIn.isHidden = signedIn
         invitation.isHidden = signedIn
         switchAccount.isHidden = !signedIn
@@ -501,6 +515,12 @@ final class AccountController: NSObject {
         let signedInEnabled = !active && signedIn
         signIn.isEnabled = signInEnabled; invitation.isEnabled = signInEnabled
         switchAccount.isEnabled = signedInEnabled; signOut.isEnabled = signedInEnabled
+    }
+
+    @objc private func showConnectedTools() {
+        guard !active, let identity else { return }
+        if toolsController == nil { toolsController = ConnectedToolsController(client: client) }
+        toolsController?.show(identity: identity)
     }
 
     private func allowSessionChange() -> Bool {
@@ -547,6 +567,7 @@ final class AccountController: NSObject {
         _ = statusGate.replace()
         activeStatus?.cancel()
         activeStatus = nil
+        toolsController?.conceal()
         onSessionWillChange()
         active = true
         identity = nil
@@ -633,5 +654,191 @@ final class AccountController: NSObject {
         alert.messageText = title; alert.informativeText = detail
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+}
+
+// This screen receives only the bounded installed-client tools contract.
+struct ConnectedTool: Decodable {
+    let provider: String
+    let availability: String
+    let personal_status: String
+    let workspace_id: String?
+    let account_id: String?
+}
+struct ConnectedToolsResult: Decodable {
+    let schema_version: Int
+    let kind: String
+    let organization_id: String
+    let membership_id: String
+    let tools: [ConnectedTool]
+}
+struct ConnectedToolsEnvelope: Decodable { let ok: Bool; let result: ConnectedToolsResult }
+
+func decodeConnectedTools(_ data: Data, membershipID: String?) -> ConnectedToolsResult? {
+    guard data.count <= 4096,
+          let value = try? JSONDecoder().decode(ConnectedToolsEnvelope.self, from: data), value.ok,
+          value.result.schema_version == 2, value.result.kind == "echo-organization-person-tools",
+          membershipID == value.result.membership_id, value.result.tools.count <= 1
+    else { return nil }
+    for tool in value.result.tools {
+        guard tool.provider == "slack" else { return nil }
+        if tool.availability == "unavailable" {
+            guard tool.personal_status == "unavailable", tool.workspace_id == nil, tool.account_id == nil else { return nil }
+        } else {
+            guard tool.availability == "enabled", let workspace = tool.workspace_id,
+                  workspace.range(of: "^T[A-Z0-9]{2,127}$", options: .regularExpression) != nil,
+                  ["linked", "unlinked", "revoked"].contains(tool.personal_status) else { return nil }
+            if tool.personal_status == "linked" {
+                guard let account = tool.account_id, account.range(of: "^[UW][A-Z0-9]{2,127}$", options: .regularExpression) != nil else { return nil }
+            } else if tool.account_id != nil { return nil }
+        }
+    }
+    return value.result
+}
+
+func connectedToolsSummary(_ result: ConnectedToolsResult?) -> String {
+    guard let result else { return "Status unknown. Could not read connected tools. Try Refresh." }
+    guard let tool = result.tools.first else { return "Your organization has no supported tools enabled." }
+    guard tool.availability == "enabled" else { return "Slack · Organization: unavailable\nYour link: unavailable" }
+    return "Slack · Organization: enabled (\(tool.workspace_id ?? ""))\nYour link: \(tool.personal_status)" + (tool.account_id.map { " (\($0))" } ?? "")
+}
+
+struct SlackLinkChallenge: Decodable {
+    let challenge_attempt_id: String
+    let challenge_message_ts: String
+    let challenge_code: String
+    let channel_id: String
+    let expires_at: String
+}
+
+@MainActor
+final class ConnectedToolsController: NSObject {
+    private let client: AccountClient
+    private let gate = AccountRequestGate()
+    private var running: AccountRunning?
+    private var identity: AccountIdentity?
+    private var challenge: SlackLinkChallenge?
+    private var window: NSWindow?
+    private let context = NSTextField(wrappingLabelWithString: "")
+    private let state = NSTextField(wrappingLabelWithString: "")
+    private let recipient = NSTextField(string: "")
+    private let code = NSTextField(string: "")
+    private let refreshButton = NSButton(title: "Refresh", target: nil, action: nil)
+    private let linkButton = NSButton(title: "Send private Slack DM", target: nil, action: nil)
+    private let completeButton = NSButton(title: "I replied in Slack", target: nil, action: nil)
+
+    init(client: AccountClient) { self.client = client; super.init() }
+
+    func show(identity: AccountIdentity) {
+        conceal()
+        self.identity = identity
+        if window == nil {
+            let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 490, height: 370), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            panel.title = "Connected tools"; panel.isReleasedWhenClosed = false
+            recipient.placeholderString = "Slack member ID (U… or W…)"
+            code.isEditable = false; code.isSelectable = true
+            let optional = NSTextField(wrappingLabelWithString: "Linking Slack is optional. Ask and Sources use your existing organization access.")
+            let stack = NSStackView(views: [context, state, recipient, linkButton, code, completeButton, refreshButton, optional])
+            stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            panel.contentView?.addSubview(stack)
+            if let content = panel.contentView {
+                NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24)])
+            }
+            for button in [linkButton, completeButton, refreshButton] { button.target = self }
+            refreshButton.action = #selector(refresh)
+            linkButton.action = #selector(beginLink)
+            completeButton.action = #selector(completeLink)
+            window = panel
+        }
+        context.stringValue = "\(identity.displayName) · \(identity.authority)"
+        window?.center(); window?.makeKeyAndOrderFront(nil)
+        refresh()
+    }
+
+    func conceal() {
+        _ = gate.replace(); running?.cancel(); running = nil; identity = nil
+        challenge = nil; code.stringValue = ""; code.isHidden = true; recipient.stringValue = ""
+        context.stringValue = ""; state.stringValue = "Status unknown"
+        linkButton.isHidden = true; completeButton.isHidden = true
+        window?.orderOut(nil)
+    }
+
+    private func request(_ arguments: [String], input: Data? = nil, completion: @escaping (Data?) -> Void) {
+        running?.cancel()
+        let requestID = gate.replace(); let operation = AccountRunning(); running = operation
+        refreshButton.isEnabled = false; linkButton.isEnabled = false; completeButton.isEnabled = false
+        let client = self.client
+        let expectedIdentity = self.identity
+        DispatchQueue.global(qos: .userInitiated).async {
+            var output: Data? = nil
+            if case .signedIn(let before) = client.readStatus(operation), before == expectedIdentity {
+                output = client.runCaptured(arguments, timeout: 80, running: operation, input: input)
+                if case .signedIn(let after) = client.readStatus(operation), after == expectedIdentity {} else { output = nil }
+            }
+            let result = output
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.gate.accepts(requestID), self.identity != nil else { return }
+                self.running = nil; self.refreshButton.isEnabled = true; self.linkButton.isEnabled = true; self.completeButton.isEnabled = true
+                completion(result)
+            }
+        }
+    }
+
+    @objc func refresh() {
+        challenge = nil; code.stringValue = ""; code.isHidden = true; completeButton.isHidden = true
+        recipient.isHidden = true; linkButton.isHidden = true; state.stringValue = "Checking organization tools…"
+        request(["person", "tools"]) { [weak self] data in
+            guard let self else { return }
+            guard let data, let result = decodeConnectedTools(data, membershipID: self.identity?.membershipID) else {
+                self.state.stringValue = connectedToolsSummary(nil)
+                return
+            }
+            guard let slack = result.tools.first else {
+                self.state.stringValue = connectedToolsSummary(result)
+                return
+            }
+            if slack.availability == "unavailable" {
+                self.state.stringValue = connectedToolsSummary(result)
+                return
+            }
+            self.state.stringValue = connectedToolsSummary(result)
+            self.recipient.isHidden = slack.personal_status == "linked"
+            self.linkButton.isHidden = slack.personal_status == "linked"
+        }
+    }
+
+    @objc private func beginLink() {
+        let user = recipient.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard user.range(of: "^[UW][A-Z0-9]{2,127}$", options: .regularExpression) != nil else {
+            state.stringValue = "Enter your Slack member ID from your Slack profile, then try again."
+            return
+        }
+        challenge = nil; code.stringValue = ""; code.isHidden = true; completeButton.isHidden = true
+        state.stringValue = "Opening your private Slack DM…"
+        request(["person", "slack-link-begin", "--slack-user", user]) { [weak self] data in
+            guard let self else { return }
+            guard let data, let value = try? JSONDecoder().decode(SlackLinkChallenge.self, from: data),
+                  value.channel_id.hasPrefix("D"), value.challenge_code.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+                  value.challenge_attempt_id.range(of: "^cat_[A-Za-z0-9_-]{1,96}$", options: .regularExpression) != nil,
+                  value.challenge_message_ts.range(of: "^[0-9]{1,16}\\.[0-9]{1,16}$", options: .regularExpression) != nil
+            else {
+                self.state.stringValue = "Could not deliver a private DM. Check your Slack member ID and connection, then retry or Refresh."
+                return
+            }
+            self.challenge = value; self.code.isHidden = false; self.code.stringValue = value.challenge_code
+            self.completeButton.isHidden = false; self.linkButton.isHidden = true
+            self.state.stringValue = "Reply with this code in the ECHO bot’s private DM thread, then choose ‘I replied in Slack’. The code expires in 15 minutes."
+        }
+    }
+
+    @objc private func completeLink() {
+        guard let challenge else { return }
+        state.stringValue = "Verifying your Slack reply…"
+        request(["person", "slack-link-complete", "--challenge-attempt", challenge.challenge_attempt_id, "--challenge-message-ts", challenge.challenge_message_ts], input: Data(challenge.challenge_code.utf8)) { [weak self] data in
+            guard let self else { return }
+            if data != nil { self.refresh() }
+            else { self.state.stringValue = "The reply was not verified. Check the exact DM thread and retry, or Refresh to start again if the code expired." }
+        }
     }
 }

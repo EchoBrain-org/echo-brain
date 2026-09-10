@@ -67,8 +67,9 @@ export function validateOrganizationPersonSlackIdentityLinkBeginRequest(
 ): OrganizationPersonSlackIdentityLinkBeginRequestV2 {
   const label = 'Person Slack identity link begin request';
   const record = asRecord(value, label);
-  assertExactKeys(record, ['request_id', 'challenge_code_sha256'], label);
+  assertExactKeys(record, ['request_id', 'challenge_code_sha256', 'recipient_user_id'], label);
   assertId(record.request_id, 'psb', `${label} request_id`);
+  assertPatternString(record.recipient_user_id, 'recipient_user_id', 128, /^[UW][A-Z0-9]{2,}$/);
   assertDigest(record.challenge_code_sha256, `${label} challenge_code_sha256`);
   return record as unknown as OrganizationPersonSlackIdentityLinkBeginRequestV2;
 }
@@ -130,7 +131,7 @@ export function validateOrganizationPersonSlackIdentityLinkBeginResponse(
   }
   assertId(record.challenge_attempt_id, 'cat', `${label} challenge_attempt_id`);
   assertPatternString(record.provider_tenant_id, `${label} provider_tenant_id`, 128, /^T[A-Z0-9]{2,}$/);
-  assertPatternString(record.channel_id, `${label} channel_id`, 128, /^C[A-Z0-9]{2,}$/);
+  assertPatternString(record.channel_id, `${label} channel_id`, 128, /^D[A-Z0-9]{2,}$/);
   assertPatternString(record.challenge_message_ts, `${label} challenge_message_ts`, 64, /^\d{1,16}\.\d{1,16}$/);
   assertTimestamp(record.expires_at, `${label} expires_at`);
   return record as unknown as OrganizationPersonSlackIdentityLinkBeginResponseV2;
@@ -174,7 +175,7 @@ export function validateOrganizationPersonSlackIdentityLinkResult(
   assertId(record.membership_id, 'mem', `${label} membership_id`);
   assertPatternString(record.provider_tenant_id, `${label} provider_tenant_id`, 128, /^T[A-Z0-9]{2,}$/);
   assertPatternString(record.provider_subject_id, `${label} provider_subject_id`, 128, /^[UW][A-Z0-9]{2,}$/);
-  assertPatternString(record.channel_id, `${label} channel_id`, 128, /^C[A-Z0-9]{2,}$/);
+  assertPatternString(record.channel_id, `${label} channel_id`, 128, /^D[A-Z0-9]{2,}$/);
   assertTimestamp(record.linked_at, `${label} linked_at`);
   if (typeof record.identity_link_created !== 'boolean') {
     fail(`${label} identity_link_created must be a boolean`);

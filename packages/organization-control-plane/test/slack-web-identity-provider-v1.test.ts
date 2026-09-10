@@ -37,7 +37,8 @@ const CHALLENGE = {
   expected_bot_id: CONNECTION.bot_id,
   expected_app_id: CONNECTION.app_id,
   challenge_attempt_id: "cat_12345678-1234-4123-8123-123456789abc",
-  channel_id: CHANNEL.id,
+  channel_id: "D123PRIVATE",
+  recipient_user_id: "U123HUMAN",
   issued_at: "2025-07-29T20:59:00.000Z",
   expires_at: "2025-07-29T21:04:00.000Z",
 } as const;
@@ -153,11 +154,12 @@ describe("SlackWebIdentityProviderV1", () => {
 
   it("posts a code-free challenge bound to its attempt marker", async () => {
     const fetch = slackFetch(
+      observedHuman(), { ok: true, channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" } },
       CONNECTION,
       { ok: true, bot: BOT },
       {
         ok: true,
-        channel: CHANNEL.id,
+        channel: CHALLENGE.channel_id,
         ts: CHALLENGE_MESSAGE_TS,
         message: challengeParent(),
       },
@@ -168,10 +170,10 @@ describe("SlackWebIdentityProviderV1", () => {
       provider.postIdentityLinkChallenge(TOKEN, CHALLENGE),
     ).resolves.toMatchObject({
       team_id: CONNECTION.team_id,
-      channel_id: CHANNEL.id,
+      channel_id: CHALLENGE.channel_id,
       challenge_message_ts: CHALLENGE_MESSAGE_TS,
     });
-    const body = fetch.mock.calls[2]?.[1]?.body as URLSearchParams;
+    const body = fetch.mock.calls[4]?.[1]?.body as URLSearchParams;
     expect(body.get("blocks")).toBe(
       JSON.stringify([
         {
@@ -182,11 +184,16 @@ describe("SlackWebIdentityProviderV1", () => {
       ]),
     );
     expect(String(body)).not.toContain(CHALLENGE_CODE);
+    expect(body.get("channel")).toBe("D123PRIVATE");
+    const open = fetch.mock.calls[1]?.[1]?.body as URLSearchParams;
+    expect(open.get("users")).toBe("U123HUMAN");
+    expect(open.get("return_im")).toBe("true");
   });
 
   it("observes exactly one human reply in the bound challenge thread", async () => {
     const provider = new SlackWebIdentityProviderV1({
       fetch: slackFetch(
+      observedHuman(), { ok: true, channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" } },
         CONNECTION,
         { ok: true, bot: BOT },
         observedThread(challengeReply()),
@@ -199,7 +206,7 @@ describe("SlackWebIdentityProviderV1", () => {
     ).resolves.toMatchObject({
       team_id: CONNECTION.team_id,
       user_id: "U123HUMAN",
-      channel_id: CHANNEL.id,
+      channel_id: CHALLENGE.channel_id,
       challenge_message_ts: CHALLENGE_MESSAGE_TS,
       reply_message_ts: "1753822860.000002",
       verification_evidence_sha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
@@ -217,7 +224,7 @@ describe("SlackWebIdentityProviderV1", () => {
     ],
   ])("rejects %s", async (_label, thread) => {
     const provider = new SlackWebIdentityProviderV1({
-      fetch: slackFetch(CONNECTION, { ok: true, bot: BOT }, thread),
+      fetch: slackFetch(observedHuman(), { ok: true, channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" } }, CONNECTION, { ok: true, bot: BOT }, thread),
     });
 
     await expect(
@@ -228,6 +235,7 @@ describe("SlackWebIdentityProviderV1", () => {
   it("rejects a challenge when its expected connection has changed", async () => {
     const provider = new SlackWebIdentityProviderV1({
       fetch: slackFetch(
+      observedHuman(), { ok: true, channel: { id: CHALLENGE.channel_id, is_im: true, user: "U123HUMAN" } },
         { ...CONNECTION, team_id: "T999OTHER" },
         { ok: true, bot: BOT },
       ),
@@ -237,4 +245,16 @@ describe("SlackWebIdentityProviderV1", () => {
       provider.observeIdentityLinkChallenge(TOKEN, OBSERVATION),
     ).rejects.toMatchObject({ code: "unauthorized" });
   });
+  it.each([
+    { id: "C123PUBLIC", is_im: false, user: "U123HUMAN" },
+    { id: "D123PRIVATE", is_im: true, user: "UOTHER" },
+    { id: "D123PRIVATE", is_im: true },
+    { id: "D123PRIVATE", is_im: true, user: "U123HUMAN", context_team_id: "TOTHER" },
+  ])("never posts when Slack cannot prove the private recipient: %j", async channel => {
+    const fetch = slackFetch(observedHuman(), { ok: true, channel });
+    const provider = new SlackWebIdentityProviderV1({ fetch });
+    await expect(provider.postIdentityLinkChallenge(TOKEN, CHALLENGE)).rejects.toThrow();
+    expect(fetch.mock.calls.some(([url]) => String(url).includes("chat.postMessage"))).toBe(false);
+  });
+
 });

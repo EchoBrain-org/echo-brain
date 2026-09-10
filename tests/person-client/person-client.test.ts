@@ -813,6 +813,48 @@ describe("Person client", () => {
     });
   });
 
+  it("reads authenticated tools without making Slack a prerequisite for employee records", async () => {
+    await withHome(async home => {
+      let tools: unknown = [];
+      const calls: string[] = [];
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
+        calls.push(path);
+        if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
+        if (path === "/v1/person/ask") return json({ schema_version: 1, kind: "echo-clean-person-answer-v1", generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 0, record_sha256: null }, answer: "No approved records.", citations: [] });
+        expect(path).toBe("/v2/person/tools");
+        if (tools === "failure") return new Response("provider raw body", { status: 503 });
+        return json({ schema_version: 2, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
+      } });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      expect((await client.tools()).tools).toEqual([]);
+      expect(await client.records(1)).toMatchObject({ records: [] });
+      expect((await client.ask("What is approved?")).answer).toBe("No approved records.");
+      tools = [{ provider: "slack", availability: "enabled", personal_status: "linked", workspace_id: "T123ABC", account_id: "U123PERSON" }];
+      expect((await client.tools()).tools[0]?.personal_status).toBe("linked");
+      expect(await client.records(1)).toMatchObject({ records: [] });
+      expect((await client.ask("What is approved?")).answer).toBe("No approved records.");
+      tools = "failure";
+      await expect(client.tools()).rejects.toThrow();
+      expect(calls).not.toContain("/v2/integration-links/slack/challenges");
+    });
+  });
+
+  it("discards tools status when the account changes during the read", async () => {
+    await withHome(async home => {
+      const descriptor = authorityDescriptor();
+      const client: PersonClient = new PersonClient({ home_directory: home, now: () => NOW, fetch: async input => {
+        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
+        await client.installSession("https://authority.example", { ...ROTATED_SESSION, membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2) });
+        return json({ schema_version: 2, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools: [] });
+      } });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(client.tools()).rejects.toThrow("current account");
+    });
+  });
+
   it("sends Slack identity-link replay input without caller or route assertions", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
@@ -847,7 +889,7 @@ describe("Person client", () => {
                 challenge_attempt_id: challengeAttemptId,
                 provider: "slack",
                 provider_tenant_id: "T123ABC",
-                channel_id: "C123ABC",
+                channel_id: "D123ABC",
                 challenge_message_ts: challengeMessageTs,
                 expires_at: "2026-08-18T00:17:00.000Z",
               },
@@ -866,7 +908,7 @@ describe("Person client", () => {
             provider: "slack",
             provider_tenant_id: "T123ABC",
             provider_subject_id: "U123PERSON",
-            channel_id: "C123ABC",
+            channel_id: "D123ABC",
             linked_at: NOW,
             identity_link_created: true,
           });
@@ -874,7 +916,7 @@ describe("Person client", () => {
       });
 
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      const begun = await client.beginSlackIdentityLink();
+      const begun = await client.beginSlackIdentityLink("U123PERSON");
       expect(begun.challenge_code).toBe(challengeCode);
       await client.completeSlackIdentityLink({
         challenge_attempt_id: begun.challenge_attempt_id,
@@ -889,6 +931,7 @@ describe("Person client", () => {
             challenge_code_sha256:
               organizationPersonSlackIdentityLinkChallengeCodeSha256(challengeCode),
             request_id: "psb_00000000-0000-4000-8000-000000000113",
+            recipient_user_id: "U123PERSON",
           },
         },
         {
@@ -2500,7 +2543,7 @@ describe("Person client", () => {
         now: () => NOW,
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
-      const linked = await runPersonClientCli(["slack-link"], {
+      const linked = await runPersonClientCli(["slack-link", "--slack-user", "U123PERSON"], {
         stdout: { write: (value) => ((stdout += String(value)), true) },
         stderr: { write: (value) => ((stderr += String(value)), true) },
         home_directory: home,
@@ -2518,7 +2561,7 @@ describe("Person client", () => {
                 challenge_attempt_id: challengeAttemptId,
                 provider: "slack",
                 provider_tenant_id: "T123ABC",
-                channel_id: "C123ABC",
+                channel_id: "D123ABC",
                 challenge_message_ts: challengeMessageTs,
                 expires_at: "2026-08-18T00:17:00.000Z",
               },
@@ -2541,7 +2584,7 @@ describe("Person client", () => {
               provider: "slack",
               provider_tenant_id: "T123ABC",
               provider_subject_id: "U123PERSON",
-              channel_id: "C123ABC",
+              channel_id: "D123ABC",
               linked_at: NOW,
               identity_link_created: true,
             });

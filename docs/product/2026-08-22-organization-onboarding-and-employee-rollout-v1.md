@@ -196,7 +196,7 @@ echo-brain person employee list
 The employee receives the invitation through a private out-of-band channel and
 the owner transfers the matching macOS arm64 onboarding kit separately. The
 [graphical setup app](../../deploy/release/README.md#first-cohort-employee-onboarding-kit)
-is the preferred first-cohort interface: open ECHO.app, install, select the
+is the preferred first-cohort interface: open ECHO Setup.app, install, select the
 invitation, and complete Google sign-in. It verifies organization access before
 opening Ask ECHO. The `.command` flow below remains the operator fallback. The kit
 contains the exact Person-client artifact and its bundled Node runtime, so the

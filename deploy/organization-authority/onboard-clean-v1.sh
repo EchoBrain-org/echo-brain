@@ -1173,7 +1173,7 @@ elif step == "ready_to_start" and all(status.get(field) is True for field in ("a
     if status.get("owner_layer2_read_after_generation") is False:
         reads.append("search approved records after the current generation")
     if reads:
-        action = "On the designated owner Mac, use the release-installed authenticated owner client to " + "; ".join(reads) + ". Human host operator: rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status and complete any remaining proofs before retrying provider reuse."
+        action = "Complete any remaining private approvals before the designated owner Mac uses the release-installed authenticated owner client to " + "; ".join(reads) + ". Human host operator: rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status and complete any remaining proofs before retrying provider reuse."
 print("onboard-clean-v1: provider-input reuse refused")
 print("unmet_preconditions=" + ",".join(unmet or ["terminal_green_not_confirmed"]))
 print("next_action=" + action)

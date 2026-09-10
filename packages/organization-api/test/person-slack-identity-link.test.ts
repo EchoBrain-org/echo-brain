@@ -3,6 +3,7 @@ import { canonicalJson } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import {
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
+  validateOrganizationPersonTools,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
   canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes,
   canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes,
@@ -17,6 +18,7 @@ const ORGANIZATION_ID = 'org_00000000-0000-4000-8000-000000000001';
 const PRINCIPAL_ID = 'prn_00000000-0000-4000-8000-000000000001';
 
 const BEGIN = {
+  recipient_user_id: "U12345679",
   request_id: 'psb_00000000-0000-4000-8000-000000000001',
   challenge_code_sha256:
     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -118,7 +120,7 @@ describe('organization Person Slack identity link', () => {
       challenge_attempt_id: COMPLETE.challenge_attempt_id,
       provider: 'slack',
       provider_tenant_id: 'T12345678',
-      channel_id: 'C12345678',
+      channel_id: 'D12345678',
       challenge_message_ts: COMPLETE.challenge_message_ts,
       expires_at: '2026-08-18T12:15:00.000Z',
     } as const;
@@ -135,7 +137,7 @@ describe('organization Person Slack identity link', () => {
       provider: 'slack',
       provider_tenant_id: 'T12345678',
       provider_subject_id: 'U12345678',
-      channel_id: 'C12345678',
+      channel_id: 'D12345678',
       linked_at: '2026-08-18T12:02:00.000Z',
       identity_link_created: true,
     } as const;
@@ -146,5 +148,25 @@ describe('organization Person Slack identity link', () => {
         adapter_binding_id: 'bnd_00000000-0000-4000-8000-000000000001',
       }),
     ).toThrow('unexpected shape');
+  });
+});
+
+describe('authenticated Person tools status', () => {
+  const response = { schema_version: 2, kind: 'echo-organization-person-tools', organization_id: ORGANIZATION_ID,
+    membership_id: 'mem_00000000-0000-4000-8000-000000000001', tools: [] };
+  it('accepts absent and enabled tools with separate personal state', () => {
+    expect(validateOrganizationPersonTools(response)).toEqual(response);
+    for (const personal_status of ['unlinked', 'linked', 'revoked']) {
+      expect(() => validateOrganizationPersonTools({ ...response, tools: [{ provider: 'slack', availability: 'enabled', personal_status,
+        workspace_id: 'T123ABC', account_id: personal_status === 'linked' ? 'U123ABC' : null }] })).not.toThrow();
+    }
+  });
+  it('rejects stale identities, unexpected provider data, and oversized lists', () => {
+    const tool = { provider: 'slack', availability: 'enabled', personal_status: 'linked', workspace_id: 'T123ABC', account_id: 'U123ABC' };
+    for (const invalid of [{ ...tool, availability: 'unavailable' }, { ...tool, personal_status: 'unlinked' },
+      { ...tool, personal_status: 'unknown' }, { ...tool, token: 'synthetic' }, { ...tool, account_id: 'raw response' }]) {
+      expect(() => validateOrganizationPersonTools({ ...response, tools: [invalid] })).toThrow();
+    }
+    expect(() => validateOrganizationPersonTools({ ...response, tools: [tool, tool] })).toThrow();
   });
 });

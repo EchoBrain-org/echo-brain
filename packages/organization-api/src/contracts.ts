@@ -152,6 +152,8 @@ export interface OrganizationPersonSessionRefreshRequestV2 {
  * Identity and route context come from the bearer credential and matched route.
  */
 export interface OrganizationPersonSlackIdentityLinkBeginRequestV2 {
+  /** Delivery hint only; exact Slack reply remains the identity proof. */
+  recipient_user_id: string;
   request_id: string;
   challenge_code_sha256: OrganizationApiSha256Digest;
 }

@@ -92,6 +92,8 @@ const TABLE_COLUMNS = {
     "created_at",
   ],
   organization_person_slack_link_challenges: [
+    "dm_channel_id",
+    "recipient_user_id",
     "challenge_attempt_id",
     "connection_id",
     "principal_id",
@@ -293,7 +295,7 @@ describe("organization control state baseline v1", () => {
     expect(RETIRED_IDENTITY.test(sql)).toBe(false);
     expect(sql).not.toContain("organization_schema_migrations");
     expect(organizationControlBaselineSha256V1()).toBe(
-      "sha256:5b6c81fa40a37afc41066cf72a3e7e51106f2b897957dbd64bdccd5184d60d80",
+      "sha256:90eb0939f930d3dbd8abc51b98d2af42eb3d75471ff244f026fd52aff7d8d030",
     );
 
     const database = openOrganizationControlDatabase(databasePath());
@@ -312,7 +314,7 @@ describe("organization control state baseline v1", () => {
         ),
       ).toEqual(TABLE_COLUMNS);
       expect(digest(JSON.stringify(schemaObjects(database)))).toBe(
-        "sha256:c86180c876c85efe6c246887516359ca8ad6e64cad5e6db7b02095ee2f11ba29",
+        "sha256:253fa0119544bf28bc56e7de330d3ace2e7aebbe00a023e6ea0e73ccc6c6ca5c",
       );
       expect(database.pragma("application_id", { simple: true })).toBe(
         ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID,

@@ -1162,6 +1162,11 @@ describe("Organization Authority API runtime", () => {
       expect(expiredPage).not.toContain("refresh_token");
       expect(expiredPage).not.toContain('name="session"');
 
+      const noTools = await fetch(`${origin}/v2/person/tools`, { headers: { authorization: `Bearer ${session.access_token as string}` } });
+      expect(noTools.status).toBe(200);
+      expect(await json(noTools)).toMatchObject({ tools: [], organization_id: initialized.organization_id });
+      expect((await fetch(`${origin}/v2/person/tools`)).status).toBe(401);
+
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,
         {

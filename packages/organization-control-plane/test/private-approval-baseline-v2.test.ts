@@ -8,7 +8,7 @@ import {
 import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 
 const ORGANIZATION_CONTROL_BASELINE_SHA256_V2 =
-  "sha256:477d32c5ffacc8207661498770965e6800bf46990d06ba55518c7c608b267d9d";
+  "sha256:9670b8e5518cb8d3014a473ba062851ca0d3abb25f8757b8577eb6bb10db9927";
 
 function openedV2Database() {
   const database = openOrganizationControlDatabase(":memory:");

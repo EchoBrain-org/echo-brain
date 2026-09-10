@@ -2,6 +2,8 @@ import { Buffer } from "node:buffer";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
+  ORGANIZATION_API_PERSON_TOOLS_PATH,
+  validateOrganizationPersonTools,
   ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
   ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
@@ -1029,6 +1031,11 @@ export class PersonAuthorityClient {
       access_token: accessToken,
       require_canonical_response: true,
     });
+  }
+
+  tools(accessToken: string) {
+    return this.getJson({ path: ORGANIZATION_API_PERSON_TOOLS_PATH, access_token: accessToken,
+      validate_response: validateOrganizationPersonTools, maximum_response_bytes: 4096 });
   }
 
   beginSlackIdentityLink(

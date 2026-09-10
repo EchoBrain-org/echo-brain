@@ -1,9 +1,9 @@
+import { observeCoreRuntimeV1 } from "../../../../shared/core-runtime-observation-v1.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_PERSON_TOOLS_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
-  validateOrganizationPersonSlackIdentityLinkBeginRequest,
-  validateOrganizationPersonSlackIdentityLinkCompleteRequest,
 } from "@echo-brain/organization-api";
 import {
   FileOrganizationSecretStore,
@@ -25,6 +25,7 @@ import type {
 } from "../../../person-external-identity-runtime.js";
 
 const SLACK_IDENTITY_ROUTES_V1 = Object.freeze([
+  Object.freeze({ route_id: "tools", method: "GET" as const, path: ORGANIZATION_API_PERSON_TOOLS_PATH }),
   Object.freeze({
     route_id: "slack-begin",
     method: "POST" as const,
@@ -55,6 +56,7 @@ function accessToken(headers: Readonly<Record<string, string | undefined>>): str
 
 export function createSlackExternalIdentityHttpApplicationV1(input: {
   readonly service: {
+    tools(accessToken: string): Promise<unknown>;
     begin(input: unknown, accessToken: string): Promise<unknown>;
     complete(input: unknown, accessToken: string): Promise<unknown>;
   };
@@ -62,13 +64,14 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
   return Object.freeze({
     routes: SLACK_IDENTITY_ROUTES_V1,
     async accept(request: PersonExternalIdentityHttpRequestV1) {
-      const body = parseBody(request.raw_body);
       const token = accessToken(request.headers);
+      if (request.route_id === "tools") return { status: 200 as const, body: await input.service.tools(token) };
+      const body = parseBody(request.raw_body);
       if (request.route_id === "slack-begin") {
         return Object.freeze({
           status: 201 as const,
           body: await input.service.begin(
-            validateOrganizationPersonSlackIdentityLinkBeginRequest(body),
+            body,
             token,
           ),
         });
@@ -77,7 +80,7 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
         return Object.freeze({
           status: 200 as const,
           body: await input.service.complete(
-            validateOrganizationPersonSlackIdentityLinkCompleteRequest(body),
+            body,
             token,
           ),
         });
@@ -87,10 +90,17 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
   });
 }
 
-function unavailableSlackIdentityApplication(): PersonExternalIdentityLinkHttpApplicationV1 {
+function unavailableSlackIdentityApplication(runtime: PersonExternalIdentityRuntimeInputV1): PersonExternalIdentityLinkHttpApplicationV1 {
   return Object.freeze({
     routes: SLACK_IDENTITY_ROUTES_V1,
-    async accept() {
+    async accept(request: PersonExternalIdentityHttpRequestV1) {
+      if (request.route_id === "tools") {
+        return observeCoreRuntimeV1("person_tools_status", async () => {
+          const auth = runtime.authentication.authenticateAccess({ access_token: accessToken(request.headers) });
+          if (auth.organization_id !== runtime.organization_id) throw new AuthorityOperationError("unauthorized", "person authentication failed");
+          return { status: 200 as const, body: { schema_version: 2, kind: "echo-organization-person-tools", organization_id: auth.organization_id, membership_id: auth.membership_id, tools: [] } };
+        });
+      }
       throw new AuthorityOperationError("unavailable", "external identity is unavailable");
     },
   });
@@ -111,7 +121,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
     ): OpenedPersonExternalIdentityRuntimeV1 {
       if (input.identity_link_channel_id === undefined) {
         return Object.freeze({
-          application: unavailableSlackIdentityApplication(),
+          application: unavailableSlackIdentityApplication(runtime),
           close: () => undefined,
         });
       }

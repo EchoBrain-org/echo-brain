@@ -114,6 +114,7 @@ class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
 }
 
 const fakeSlack: SlackIdentityProviderV1 = {
+  openIdentityLinkDirectMessage: async () => ({ team_id: "T12345678", channel_id: "D12345678", recipient_user_id: "U12345679" }),
   verifyConnection: async () => ({
     team_id: "T12345678",
     enterprise_id: null,
@@ -508,7 +509,7 @@ describe("Organization Authority command rehearsal", () => {
 
       const linked = commandOutput();
       await expect(
-        runPersonClientCli(["slack-link"], {
+        runPersonClientCli(["slack-link", "--slack-user", "U12345679"], {
           stdout: { write: linked.write },
           stderr: { write: linked.write },
           home_directory: homeDirectory,
