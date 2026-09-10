@@ -1133,6 +1133,55 @@ terminal_green() {
   running_authority && healthy_authority && authority_uses_accepted_image && runtime_uses_accepted_runtime_profile
 }
 
+refuse_provider_reuse() {
+  local status_json="$1"
+  local -a unmet=()
+  # This only explains a failed terminal_green gate. Probe every runtime check
+  # despite short-circuiting in that gate; never authorize a reset from this data.
+  running_authority || unmet+=(authority_running)
+  healthy_authority || unmet+=(authority_healthy)
+  authority_uses_accepted_image || unmet+=(authority_exact_accepted_image)
+  runtime_uses_accepted_runtime_profile || unmet+=(runtime_exact_accepted_profile)
+  python3 -c '
+import json, sys
+unmet = sys.argv[1:]
+runtime_failed = bool(unmet)
+try:
+    status = json.load(sys.stdin)
+    if not isinstance(status, dict) or not isinstance(status.get("next_step"), str):
+        raise ValueError()
+except (ValueError, TypeError):
+    status = {}
+    unmet.append("setup_status_unavailable")
+step = status.get("next_step")
+if step != "complete":
+    unmet.append("onboarding_complete")
+    # Only explicit booleans from the existing status contract are evidence.
+    # next_step remains authoritative, including fixture approval requirements
+    # that cannot be reconstructed from the exported booleans alone.
+    for field in ("approved_record_present", "active_generation_current",
+                  "owner_layer1_read_after_head", "owner_layer2_read_after_generation"):
+        if status.get(field) is False:
+            unmet.append(field)
+action = "Human host operator: run ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status; complete the indicated onboarding and approval/read proofs before retrying provider reuse."
+if runtime_failed:
+    action = "Human host operator: inspect ./onboard-clean-v1.sh status and restore the accepted runtime using PB-OPERATIONS-001; complete onboarding and approval/read proofs before retrying provider reuse."
+elif step == "ready_to_start" and all(status.get(field) is True for field in ("approved_record_present", "active_generation_current")):
+    reads = []
+    if status.get("owner_layer1_read_after_head") is False:
+        reads.append("list approved records after the current head")
+    if status.get("owner_layer2_read_after_generation") is False:
+        reads.append("search approved records after the current generation")
+    if reads:
+        action = "On the designated owner Mac, use the release-installed authenticated owner client to " + "; ".join(reads) + ". Human host operator: rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status and complete any remaining proofs before retrying provider reuse."
+print("onboard-clean-v1: provider-input reuse refused")
+print("unmet_preconditions=" + ",".join(unmet or ["terminal_green_not_confirmed"]))
+print("next_action=" + action)
+' ${unmet[@]+"${unmet[@]}"} <<<"$status_json" >&2 || \
+    fail 'provider-input reuse refused; setup diagnostics unavailable; human host operator must inspect onboard-clean-v1.sh status before retrying'
+  exit 1
+}
+
 print_status() {
   local status_json="$1"
   if running_authority; then
@@ -1448,8 +1497,7 @@ replace_rehearsal() {
     require_image_present
     local status_json
     status_json="$(setup_status)"
-    terminal_green "$status_json" || \
-      fail 'provider-input reuse requires a complete, healthy Authority using the accepted image'
+    terminal_green "$status_json" || refuse_provider_reuse "$status_json"
     reuse_stage="$(rehearsal_stage_dir "$reuse_operation_id")"
     require_safe_rehearsal_stage "$reuse_stage" || fail 'rehearsal input stage is missing or unsafe'
     input_dir="$reuse_stage/nonsecret"

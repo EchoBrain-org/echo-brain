@@ -508,10 +508,26 @@ export function createPersonRecordSearchRouteV1(
         ) {
           unavailable();
         }
+        // Expansion is bounded to three anchors, not three relevant records.
+        // Give independent lexical evidence a turn before related facts fill
+        // the packet. Reuse the multiple-hit support preference above so an
+        // isolated incidental match does not reserve space for every record.
+        const anchorRecords = new Set(anchors.map((item) => item.record_sha256));
+        const independent = lexicalItems.filter((item) =>
+          !anchorRecords.has(item.record_sha256) && support.get(item.record_sha256)! > 1,
+        );
+        const supplements: ReadableSearchResultItemV1[] = [];
+        const relatedItems = related.items.slice(0, relatedLimit);
+        for (let index = 0; index < Math.max(relatedItems.length, independent.length); index += 1) {
+          const relatedItem = relatedItems[index];
+          const lexicalItem = independent[index];
+          if (relatedItem !== undefined) supplements.push(relatedItem);
+          if (lexicalItem !== undefined) supplements.push(lexicalItem);
+        }
         const packet = new Map<Sha256Digest, ReadableSearchResultItemV1>();
         for (const item of [
           ...anchors,
-          ...related.items.slice(0, relatedLimit),
+          ...supplements,
           ...lexicalItems,
         ]) {
           if (!packet.has(item.atom_id)) packet.set(item.atom_id, item);

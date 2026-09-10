@@ -283,6 +283,14 @@ exec /bin/cp "$@"
 `,
   );
   chmodSync(join(bin, "cp"), 0o755);
+  writeFileSync(
+    join(bin, "install"),
+    `#!/usr/bin/env bash
+printf 'install %s\\n' "$*" >> ${JSON.stringify(calls)}
+exec /usr/bin/install "$@"
+`,
+  );
+  chmodSync(join(bin, "install"), 0o755);
   const environment = (overrides: Record<string, string>) => ({
     ...process.env,
     PATH: `${bin}:${process.env.PATH}`,
@@ -753,6 +761,140 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       const restarted = calls.indexOf(" up -d --no-build --wait --wait-timeout 90");
       expect(down).toBeGreaterThanOrEqual(0);
       expect(restarted).toBeGreaterThan(down);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it.each<{
+    name: string;
+    environment?: Record<string, string>;
+    evidence?: Record<string, boolean>;
+    step?: string;
+    missing: string[];
+    action?: string;
+  }>([
+    { name: "stopped runtime", environment: { ECHO_FAKE_RUNNING: "false" }, missing: ["authority_running"] },
+    { name: "unhealthy runtime", environment: { ECHO_FAKE_HEALTH: "unhealthy" }, missing: ["authority_healthy"] },
+    { name: "wrong image", environment: { ECHO_FAKE_REPO_DIGEST: "wrong-image" }, missing: ["authority_exact_accepted_image"] },
+    { name: "wrong profile", environment: { ECHO_FAKE_RUNTIME_PROFILE_SHA256: "wrong-profile" }, missing: ["runtime_exact_accepted_profile"] },
+    {
+      name: "all runtime checks",
+      environment: { ECHO_FAKE_RUNNING: "false", ECHO_FAKE_HEALTH: "unhealthy", ECHO_FAKE_REPO_DIGEST: "wrong-image", ECHO_FAKE_RUNTIME_PROFILE_SHA256: "wrong-profile" },
+      missing: ["authority_running", "authority_healthy", "authority_exact_accepted_image", "runtime_exact_accepted_profile"],
+    },
+    { name: "owner Layer 1", evidence: { owner_layer1_read_after_head: false }, missing: ["onboarding_complete", "owner_layer1_read_after_head"], action: "list approved records after the current head" },
+    { name: "owner Layer 2", evidence: { owner_layer2_read_after_generation: false }, missing: ["onboarding_complete", "owner_layer2_read_after_generation"], action: "search approved records after the current generation" },
+    {
+      name: "both owner reads",
+      evidence: { owner_layer1_read_after_head: false, owner_layer2_read_after_generation: false },
+      missing: ["onboarding_complete", "owner_layer1_read_after_head", "owner_layer2_read_after_generation"],
+      action: "list approved records after the current head; search approved records after the current generation",
+    },
+    { name: "approved record", evidence: { approved_record_present: false }, missing: ["onboarding_complete", "approved_record_present"] },
+    { name: "current generation", evidence: { active_generation_current: false }, missing: ["onboarding_complete", "active_generation_current"] },
+    { name: "remaining source or fixture approval evidence", evidence: { source_progress_observed: false, synthetic_staging_canary_observed: false }, missing: ["onboarding_complete"] },
+    {
+      name: "owner reads without inferring source prerequisites",
+      evidence: { source_progress_observed: false, synthetic_staging_canary_observed: false, owner_layer1_read_after_head: false, owner_layer2_read_after_generation: false },
+      missing: ["onboarding_complete", "owner_layer1_read_after_head", "owner_layer2_read_after_generation"],
+    },
+    { name: "earlier onboarding", step: "complete_founder_browser_login", missing: ["onboarding_complete"] },
+    {
+      name: "runtime and owner reads",
+      environment: { ECHO_FAKE_HEALTH: "unhealthy" },
+      evidence: { owner_layer1_read_after_head: false, owner_layer2_read_after_generation: false },
+      missing: ["authority_healthy", "onboarding_complete", "owner_layer1_read_after_head", "owner_layer2_read_after_generation"],
+    },
+  ])("diagnoses provider-reuse refusal before reset side effects: $name", ({ environment, evidence, step, missing, action }) => {
+    const fixture = preparedStatusFixture();
+    const operationId = "onboarding-rehearsal-diagnostics";
+    const contentSentinel = "private-status-content-must-not-be-printed";
+    try {
+      const { stage } = stageRehearsalInputs(fixture, operationId);
+      configureReusableProviderInputs(fixture);
+      const stageBefore = readFileSync(join(stage, "stage.json"));
+      const environmentBefore = readFileSync(join(fixture.deploy, ".env.clean-v1"));
+      const result = fixture.run("replace-rehearsal", {
+        ...environment,
+        ECHO_FAKE_SETUP_STATUS: JSON.stringify({
+          next_step: step ?? (evidence ? "ready_to_start" : "complete"),
+          source_progress_observed: true,
+          synthetic_staging_canary_observed: false,
+          approved_record_present: true,
+          active_generation_current: true,
+          owner_layer1_read_after_head: true,
+          owner_layer2_read_after_generation: true,
+          ...evidence,
+          organization_id: contentSentinel,
+          invitation: contentSentinel,
+          meeting: contentSentinel.repeat(1000),
+        }),
+      }, ["--confirm-no-live-users", "--reuse-provider-inputs", operationId]);
+
+      expect(result.status).toBe(1);
+      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe("durable-work-must-survive");
+      expect(readFileSync(join(fixture.deploy, ".env.clean-v1"))).toEqual(environmentBefore);
+      expect(readFileSync(join(stage, "stage.json"))).toEqual(stageBefore);
+      expect(existsSync(join(stage, "input"))).toBe(false);
+      expect(existsSync(join(fixture.deploy, "retired-rehearsals"))).toBe(false);
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down | credentials-install | up /);
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(`${stage}/input`);
+      const output = result.stdout + result.stderr;
+      expect(output).not.toContain(contentSentinel);
+      expect(output).not.toContain(fixture.root);
+      expect(output).not.toContain("C0123456789");
+      expect(output.length).toBeLessThan(1600);
+      expect(result.stderr).toContain(`unmet_preconditions=${missing.join(",")}\n`);
+      expect(result.stderr).toContain("next_action=");
+      expect(result.stderr).toContain(action ?? "Human host operator");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { guard: "candidate", message: "a candidate release is staged" },
+    { guard: "lock", message: "another Authority activation or release operation is already in progress" },
+    { guard: "volume", message: "not the retained data mount" },
+    { guard: "input", message: "staged rehearsal inputs are invalid or incomplete" },
+    { guard: "telemetry", message: "content telemetry differs" },
+  ])("keeps provider-reuse $guard refusal bounded and before capture", ({ guard, message }) => {
+    const fixture = preparedStatusFixture();
+    const operationId = "onboarding-rehearsal-guards";
+    const providerSentinel = "provider-fixture-must-not-appear-in-output";
+    try {
+      const { stage } = stageRehearsalInputs(fixture, operationId);
+      configureReusableProviderInputs(fixture);
+      writeFileSync(join(fixture.privateDir, "llm-credential-source"), providerSentinel);
+      if (guard === "candidate") {
+        copyFileSync(join(fixture.releaseDir, "current.clean-v1.json"), join(fixture.releaseDir, "candidate.clean-v1.json"));
+      }
+      if (guard === "lock") {
+        const lock = join(fixture.deploy, "clean-data", ".authority-operation-lock");
+        mkdirSync(lock, { mode: 0o700 });
+        writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, { mode: 0o600 });
+      }
+      if (guard === "volume") writeFileSync(join(fixture.root, "bin", "mountpoint"), "#!/usr/bin/env bash\nexit 1\n");
+      if (guard === "input") unlinkSync(join(stage, "nonsecret", "onboarding.clean-v1.json"));
+      const markerBefore = readFileSync(join(stage, "stage.json"));
+      const environmentBefore = readFileSync(join(fixture.deploy, ".env.clean-v1"));
+      const result = fixture.run("replace-rehearsal", {
+        ECHO_FAKE_CONTENT_TELEMETRY: String(guard === "telemetry"),
+      }, ["--confirm-no-live-users", "--reuse-provider-inputs", operationId]);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect((result.stdout + result.stderr).length).toBeLessThan(1600);
+      expect(result.stdout + result.stderr).not.toContain(providerSentinel);
+      expect(result.stdout + result.stderr).not.toContain(fixture.root);
+      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe("durable-work-must-survive");
+      expect(readFileSync(join(fixture.deploy, ".env.clean-v1"))).toEqual(environmentBefore);
+      expect(readFileSync(join(stage, "stage.json"))).toEqual(markerBefore);
+      expect(existsSync(join(stage, "input"))).toBe(false);
+      expect(existsSync(join(fixture.deploy, "retired-rehearsals"))).toBe(false);
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(`${stage}/input`);
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
