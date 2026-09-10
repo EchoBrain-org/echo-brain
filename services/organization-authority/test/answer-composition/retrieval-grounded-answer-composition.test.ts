@@ -370,7 +370,8 @@ describe("retrieval-grounded answer composition", () => {
     { name: "citations on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: ["a1"] } },
     { name: "an unreleased citation on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: ["a99"] } },
     { name: "a non-string citation on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: [1] } },
-    { name: "missing citations on an answered response", response: { status: "answered", answer: "Tuesday.", citations: [] } },
+    { name: "empty citations on an answered response", response: { status: "answered", answer: "Tuesday.", citations: [] } },
+    { name: "missing citations on an answered response", response: { status: "answered", answer: "Tuesday." } },
     {
       name: "duplicate citations",
       response: {
