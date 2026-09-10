@@ -1,4 +1,4 @@
-import { observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "../../services/organization-authority/src/shared/core-runtime-observation-v1.js";
+import { CORE_RUNTIME_PHASES_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "../../services/organization-authority/src/shared/core-runtime-observation-v1.js";
 import { createStagingJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
@@ -1552,6 +1552,46 @@ describe("staging Journey Explorer custom widget", () => {
 
 
 describe("core observation Explorer round trip", () => {
+  it.each(CORE_RUNTIME_PHASES_V1)("reads the %s core-runtime diagnostic phase", async (phase) => {
+    const coreSpanId = "22222222-2222-4222-8222-222222222222";
+    const diagnostic = JSON.stringify({
+      operation_id: id,
+      span_id: coreSpanId,
+      parent_span_id: null,
+      phase,
+      purpose: phase,
+      root: true,
+      linked_journey_ids: [],
+      counts: {},
+      result: null,
+      generation: null,
+    });
+    const stageEvent = event({
+      schema_version: 2,
+      workflow: "core_runtime",
+      stage: "core_operation",
+      event: "started",
+      outcome: null,
+      elapsed_ms: 0,
+      diagnostic_json: diagnostic,
+    });
+    const list = new Client(listReplies([indexRow(id, now)], [stageEvent]));
+    await expect(handler(list)({ operation: "list" })).resolves.toMatchObject({
+      journeys: [expect.objectContaining({ journey_id: id, status: "pending" })],
+    });
+
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: [stageEvent] }]);
+    await expect(handler(client)({ operation: "detail", journey_id: id }))
+      .resolves.toMatchObject({
+        history_complete: true,
+        stages: [
+          expect.objectContaining({
+            diagnostic: expect.objectContaining({ phase, purpose: phase }),
+          }),
+        ],
+      });
+  });
+
   it("reads real emitted V2 spans, preserves diagnostic fields, and renders escaped content", async () => {
     const lines: string[] = [];
     const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 42 }, { write: (line) => { lines.push(line); } }, { content_enabled: true });

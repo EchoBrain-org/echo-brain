@@ -169,10 +169,13 @@ checksum fixtures cover this named milestone. Existing legacy rows can retain
 null coordinates but cannot complete through the private-DM protocol.
 
 Compatibility: this changes the fresh baseline checksum and the Person begin
-contract. This PR does not migrate or restage a deployed database. Existing
-lineages report Slack linking as unavailable until a separately reviewed schema
-upgrade adds the private destination columns; do not reset a prepared volume to obtain the new columns.
-Live exact-artifact qualification is deferred to the local operator release lane.
+contract. The Authority verifies the control-plane schema digest before it
+constructs this repository, so a prepared lineage with the previous checksum
+refuses this artifact before it can report Slack as unavailable. Re-onboard
+disposable staging against this artifact; a future in-place upgrade requires a
+separately reviewed migration and state-lineage qualification. Do not rewrite a
+prepared lineage manifest merely to bypass that guard. Live exact-artifact
+qualification is deferred to the local operator release lane.
 
 The existing core runtime observer records `person_tools_status`,
 `person_tool_delivery`, and `person_tool_completion` with bounded failure

@@ -779,8 +779,10 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
   }
 
   private activeConnection(): ActiveSlackConnection | null {
-    // Old lineages stay readable, but cannot offer a private link until their
-    // schema has been explicitly upgraded. Never reinterpret a public proof.
+    // This is an adapter-level guard only. The Authority pre-open lineage guard
+    // rejects a prepared state with the prior baseline digest before this
+    // repository is constructed. Fresh onboarding or an approved future
+    // migration is required; never reinterpret a public proof.
     const destinationColumns = this.options.database.prepare(
       "SELECT name FROM pragma_table_info('organization_person_slack_link_challenges') WHERE name IN ('dm_channel_id', 'recipient_user_id')",
     ).all();

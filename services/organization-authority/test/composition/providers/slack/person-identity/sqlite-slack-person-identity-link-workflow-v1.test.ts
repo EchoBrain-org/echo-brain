@@ -228,7 +228,7 @@ describe("Person Slack identity-link workflow", () => {
     for (const secret of ["provider-private-body", PRINCIPAL_ID, MEMBERSHIP_ID, "U12345679", CODE, TOKEN]) expect(output).not.toContain(secret);
   });
 
-  it("reports an old challenge schema as unavailable without migrating it", async () => {
+  it("reports an old challenge schema as unavailable when constructed directly", async () => {
     const context = await setup();
     context.database.exec("DROP TRIGGER organization_person_slack_link_challenges_terminal_update; ALTER TABLE organization_person_slack_link_challenges DROP COLUMN dm_channel_id; ALTER TABLE organization_person_slack_link_challenges DROP COLUMN recipient_user_id");
     expect((await context.application.tools("bearer")).tools[0]).toMatchObject({ availability: "unavailable", personal_status: "unavailable" });
