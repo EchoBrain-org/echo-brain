@@ -612,8 +612,17 @@ test("does not map overlapping answer text to independent task/deadline groups",
 
 test("rejects private retrieval for an owner who is not the exact private approver", () => {
   const result = passingResult();
+  // This is a synthetic authorization mutation, not an extra live persona in
+  // the documented team-member rehearsal.
+  const oracle = structuredClone(expectations);
+  for (const expected of oracle.retrieval_cases.filter((item) => item.primary_case_id === "approved-commitments-question")) {
+    expected.principal = "organization_owner_without_private_approval";
+    capture(result, expected.id).principal = expected.principal;
+    syncTrials(result, expected.id);
+  }
+  assert.equal(evaluate(result, oracle).passed, true);
   capture(result, "approved-commitments-question").retrieved_record_ids.push("v4-record-4");
-  rejects(result, "10");
+  rejects(result, "10", oracle);
 });
 
 test("rejects comprehensive-summary abstention and preferred-contact deadline conflation", () => {
@@ -630,4 +639,104 @@ test("rejects comprehensive-summary abstention and preferred-contact deadline co
   claim.observed_text = text;
   syncTrials(conflated, answer.case_id);
   rejects(conflated, "09");
+});
+
+for (const contextCount of [undefined, 0, 1]) {
+  test(`unsupported control accepts irrelevant Team retrieval with context count ${contextCount}`, () => {
+    const result = passingResult();
+    const answer = capture(result, "unsupported-question");
+    answer.retrieved_record_ids = ["v4-record-1"];
+    if (contextCount !== undefined) answer.retrieval = { released_atom_count: 1, context_atom_count: contextCount };
+    const report = evaluate(result);
+    assert.equal(report.passed, true, JSON.stringify(report));
+    assert.deepEqual(report.coverage.find((item) => item.case_id === answer.case_id), {
+      case_id: answer.case_id,
+      context_state: contextCount === undefined ? "not_captured" : contextCount === 0 ? "empty" : "nonempty",
+      missing_group_ids: [],
+    });
+  });
+}
+
+test("summary captures follow the documented team-member rehearsal persona", () => {
+  const queries = readFileSync(resolve(demo, "QUERIES.md"), "utf8");
+  assert.match(queries, /Queries 1-4 are asked by Audrey\s+Ortiz, the team-member persona/);
+  const result = passingResult();
+  const cases = expectations.retrieval_cases.filter((item) => item.primary_case_id === "approved-commitments-question");
+  assert.equal(cases.length, 3);
+  const documentedQuestion = queries.slice(queries.indexOf("### 4."), queries.indexOf("### 5.")).replace(/^> /gm, "").replace(/\s+/g, " ");
+  assert.ok(documentedQuestion.includes(cases[0].question));
+  for (const expected of cases) {
+    capture(result, expected.id).principal = "normal_team_member";
+    syncTrials(result, expected.id);
+  }
+  const report = evaluate(result);
+  assert.equal(report.passed, true, JSON.stringify(report));
+});
+
+test("unsupported control permits each declared Team meeting without answer facts or citations", () => {
+  const result = passingResult();
+  const answer = capture(result, "unsupported-question");
+  answer.retrieved_record_ids = ["v4-record-1", "v4-record-2", "v4-record-3"];
+  answer.retrieval = { released_atom_count: 3, context_atom_count: 3 };
+  assert.equal(evaluate(result).passed, true);
+});
+
+for (const mutation of ["private record", "unapproved record", "undeclared Team record", "citation", "claim", "disclosure", "nonneutral text", "missing record provenance", "zero count", "capture allowance"]) {
+  test(`unsupported control still rejects ${mutation}`, () => {
+    const result = passingResult();
+    const oracle = structuredClone(expectations);
+    const expected = oracle.retrieval_cases.find((item) => item.id === "unsupported-question");
+    const answer = capture(result, expected.id);
+    answer.retrieved_record_ids = ["v4-record-1"];
+    answer.retrieval = { released_atom_count: 1, context_atom_count: 1 };
+    let check = "09";
+    if (mutation === "private record" || mutation === "capture allowance") {
+      answer.retrieved_record_ids = ["v4-record-4"];
+      check = "10";
+      if (mutation === "capture allowance") answer.neutral_retrieval_meeting_ids = [expectations.meeting_expectations[3].meeting_id];
+    }
+    if (mutation === "unapproved record") { answer.retrieved_record_ids = ["unknown-record"]; check = "10"; }
+    if (mutation === "undeclared Team record") { expected.neutral_retrieval_meeting_ids = [expectations.meeting_expectations[1].meeting_id]; check = "10"; }
+    if (mutation === "citation") answer.citation_meeting_ids = [expectations.meeting_expectations[0].meeting_id];
+    if (mutation === "claim") answer.claims = [structuredClone(capture(result).claims[0])];
+    if (mutation === "disclosure") answer.answer_text += " A private price exists.";
+    if (mutation === "nonneutral text") answer.answer_text = "No schedule was agreed.";
+    if (mutation === "missing record provenance") answer.retrieved_record_ids = [];
+    if (mutation === "zero count") answer.retrieval = { released_atom_count: 0, context_atom_count: 0 };
+    rejects(result, check, oracle);
+  });
+}
+
+for (const id of ["before-approval-rollout-question", "team-member-private-price-question"]) {
+  test(`${id} retains its strict empty-retrieval expectation`, () => {
+    const result = passingResult();
+    const answer = capture(result, id);
+    answer.retrieved_record_ids = ["v4-record-1"];
+    answer.retrieval = { released_atom_count: 1, context_atom_count: 1 };
+    rejects(result, "09");
+  });
+}
+
+for (const allowance of [null, "any", ["unknown"], [expectations.meeting_expectations[3].meeting_id], [expectations.meeting_expectations[0].meeting_id, expectations.meeting_expectations[0].meeting_id]]) {
+  test(`rejects a malformed or non-Team neutral retrieval allowance: ${JSON.stringify(allowance)}`, () => {
+    const oracle = structuredClone(expectations);
+    oracle.retrieval_cases.find((item) => item.id === "unsupported-question").neutral_retrieval_meeting_ids = allowance;
+    rejects(passingResult(), "15", oracle);
+  });
+}
+
+test("rejects a neutral retrieval allowance on an answered case", () => {
+  const oracle = structuredClone(expectations);
+  oracle.retrieval_cases.find((item) => item.id === heroId).neutral_retrieval_meeting_ids = [expectations.meeting_expectations[0].meeting_id];
+  rejects(passingResult(), "15", oracle);
+});
+
+test("a neutral paraphrase cannot change the primary retrieval allowance", () => {
+  const result = passingResult();
+  const oracle = structuredClone(expectations);
+  const primary = oracle.retrieval_cases.find((item) => item.id === "unsupported-question");
+  const id = "unsupported-question-paraphrase";
+  oracle.retrieval_cases.push({ ...structuredClone(primary), id, question: "When is the unrelated customer's rollout?", neutral_retrieval_meeting_ids: [] });
+  result.answers.push({ ...structuredClone(capture(result, primary.id)), case_id: id });
+  rejects(result, "15", oracle);
 });
