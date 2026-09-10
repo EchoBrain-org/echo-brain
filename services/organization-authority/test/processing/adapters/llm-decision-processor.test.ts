@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AdapterError,
   assertCanonicalDecisionSet,
@@ -506,6 +506,105 @@ describe('llm decision processor extraction', () => {
       code: 'temporarily_unavailable',
       message:
         'LLM output contained invalid or unsupported signal grounding at stage: evidence_duplicate',
+    });
+  });
+
+  describe('meeting e5 quote regression', () => {
+    // Sanitized synthetic staging case: the model omitted a material clause.
+    const sourceText =
+      'The signed data agreement and security-contact check are not complete yet, and the adoption threshold only tells us when we can expand later. We should not make the customer think those are formalities.';
+    const elidedQuote =
+      'The signed data agreement and security-contact check are not complete yet… We should not make the customer think those are formalities.';
+    const quoteMeeting: MeetingDocument = {
+      ...meeting,
+      title: 'Implementation capacity triage',
+      content: [
+        ...meeting.content,
+        { id: 'transcript-02', kind: 'transcript', text: 'Review capacity.' },
+        { id: 'transcript-03', kind: 'transcript', text: 'Review prerequisites.' },
+        { id: 'transcript-04', kind: 'transcript', text: sourceText },
+      ],
+    };
+    const output = (quote: string) =>
+      modelOutput([
+        modelSignal({
+          text: 'Customer prerequisites remain incomplete',
+          evidence: [{ evidence_id: 'e5', quote }],
+        }),
+      ]);
+
+    it('exposes the captured grounding failure and accepts only a corrected caller retry', async () => {
+      const client = new FakeLlmClient(output(sourceText));
+      const generate = vi.spyOn(client, 'generateStructured');
+      generate.mockResolvedValueOnce({ content: output(elidedQuote) });
+      const instance = processor(client);
+      const context = extractionContext(instance);
+
+      const attempt = instance.extract(quoteMeeting, context);
+      await expect(attempt).rejects.toMatchObject({
+        name: 'AdapterError',
+        code: 'temporarily_unavailable',
+        retryable: true,
+        message:
+          'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote',
+      });
+      const failure = await attempt.catch((error: unknown) => error);
+      expect(extractionGroundingFailureStage(failure)).toBe('evidence_quote');
+      expect(generate).toHaveBeenCalledTimes(1);
+
+      const retried = await instance.extract(quoteMeeting, context);
+      expect(generate).toHaveBeenCalledTimes(2);
+      expect(retried.signals).toHaveLength(1);
+      expect(retried.signals[0]!.evidence).toEqual([
+        {
+          meeting_id: quoteMeeting.id,
+          block_id: 'transcript-04',
+          quote: sourceText,
+        },
+      ]);
+      assertCanonicalDecisionSet(retried, quoteMeeting, instance.identity);
+    });
+
+    it.each([
+      ['ASCII ellipsis', elidedQuote.replace('…', '...')],
+      ['stitched spans without an ellipsis', elidedQuote.replace('…', '.')],
+    ])('rejects %s on every attempt', async (_label, quote) => {
+      const client = new FakeLlmClient(output(quote));
+      const instance = processor(client);
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(
+          instance.extract(quoteMeeting, extractionContext(instance)),
+        ).rejects.toMatchObject({
+          retryable: true,
+          message:
+            'LLM output contained invalid or unsupported signal grounding at stage: evidence_quote',
+        });
+      }
+      expect(client.requests).toHaveLength(2);
+    });
+
+    it.each([
+      ['whole block', sourceText],
+      [
+        'short contiguous span',
+        'We should not make the customer think those are formalities.',
+      ],
+    ])('accepts a verbatim %s and requests contiguous evidence', async (_label, quote) => {
+      const client = new FakeLlmClient(output(quote));
+      const instance = processor(client);
+      const result = await instance.extract(
+        quoteMeeting,
+        extractionContext(instance),
+      );
+      expect(result.signals[0]!.evidence).toEqual([
+        { meeting_id: quoteMeeting.id, block_id: 'transcript-04', quote },
+      ]);
+      const request = client.requests[0]!;
+      expect(JSON.parse(request.userPrompt).content[4]).toMatchObject({
+        evidence_id: 'e5',
+        text: sourceText,
+      });
+      expect(request.systemPrompt).toMatch(/contiguous verbatim span/);
     });
   });
 
