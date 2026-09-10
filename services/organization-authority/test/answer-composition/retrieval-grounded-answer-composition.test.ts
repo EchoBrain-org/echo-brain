@@ -359,6 +359,18 @@ describe("retrieval-grounded answer composition", () => {
   });
 
   it.each([
+    { name: "an empty answered response", response: { status: "answered", answer: "", citations: ["a1"] } },
+    { name: "whitespace-only answered text", response: { status: "answered", answer: " \n", citations: ["a1"] } },
+    { name: "whitespace-only insufficient-evidence text", response: { status: "insufficient_evidence", answer: " \n", citations: [] } },
+    { name: "a non-string insufficient-evidence answer", response: { status: "insufficient_evidence", answer: null, citations: [] } },
+    { name: "an invalid status", response: { status: "unknown", answer: "", citations: [] } },
+    { name: "missing answer text", response: { status: "insufficient_evidence", citations: [] } },
+    { name: "an extra field on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: [], unexpected: true } },
+    { name: "non-array citations", response: { status: "insufficient_evidence", answer: "", citations: null } },
+    { name: "citations on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: ["a1"] } },
+    { name: "an unreleased citation on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: ["a99"] } },
+    { name: "a non-string citation on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: [1] } },
+    { name: "missing citations on an answered response", response: { status: "answered", answer: "Tuesday.", citations: [] } },
     {
       name: "duplicate citations",
       response: {
@@ -488,6 +500,81 @@ describe("retrieval-grounded answer composition", () => {
     await expect(answer.answer({ question: "What did I decide?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
     expect(planner.generate).not.toHaveBeenCalled();
     expect(answerer.generate).not.toHaveBeenCalled();
+  });
+
+  it("normalizes an empty insufficient-evidence answer while preserving revalidation, audit, and observations", async () => {
+    const modelOutput = { status: "insufficient_evidence", answer: "", citations: [] };
+    const usage = { input_tokens: 30, output_tokens: 10, total_tokens: 40, cached_input_tokens: 5, reasoning_tokens: 2 };
+    const answerer = {
+      generate: vi.fn(),
+      generate_with_observation: vi.fn(async () => ({
+        value: modelOutput,
+        usage,
+        finish_reason: "stop" as const,
+        provider_latency_ms: 3298,
+      })),
+    };
+    // Accessible launch facts do not answer the recorded pricing question.
+    const released = release();
+    const releasedRetrieval = {
+      retrieve: vi.fn(async () => released),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const audit = { append: vi.fn() };
+    const stages: AnswerCompositionStageObservationV1[] = [];
+    const content: AnswerCompositionContentObservationV1[] = [];
+    const onModelFailure = vi.fn();
+    const answer = createRetrievalGroundedAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer,
+      released_retrieval: releasedRetrieval,
+      audit,
+      generation_adapter_id: "openrouter",
+      planner_model: "test",
+      answer_model: "test",
+      on_stage: (event) => stages.push(event),
+      on_content: (event) => content.push(event),
+      on_failure: onModelFailure,
+    });
+
+    const result = await answer.answer({ question: "What special price did Echo receive?" });
+
+    expect(answerer.generate_with_observation).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      schema_version: 1,
+      kind: "echo-clean-person-answer-v1",
+      generation_id: released.generation_id,
+      record_head: released.record_head,
+      answer: "Insufficient accessible evidence to answer this question.",
+      citations: [],
+    });
+    expect(releasedRetrieval.revalidate).toHaveBeenCalledExactlyOnceWith({ release: released });
+    expect(audit.append).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      answer_sha256: canonicalSha256({
+        status: "insufficient_evidence",
+        outcome: "insufficient_evidence",
+        answer: result.answer,
+        citations: [],
+      }),
+      response_sha256: canonicalSha256(result),
+      outcome: "insufficient_evidence",
+      citation_count: 0,
+      checked_at: "2026-08-23T00:00:01.000Z",
+    }));
+    expect(stages.map(({ stage, event, failure_class }) => ({ stage, event, failure_class }))).toEqual(
+      ["planner", "context", "answer", "audit"].map((stage) => ({ stage, event: "succeeded", failure_class: null })),
+    );
+    expect(stages[2]).toMatchObject({
+      generation_usage: { ...usage, finish_reason: "stop", provider_latency_ms: 3298 },
+      retrieval: { context_atom_count: 2, citation_count: 0 },
+    });
+    expect(content).toContainEqual(expect.objectContaining({
+      stage: "answer",
+      content_kind: "answer_output",
+      content: { value: modelOutput, usage, finish_reason: "stop" },
+    }));
+    expect(content.some((event) => event.content_kind === "answer_validation_error")).toBe(false);
+    expect(onModelFailure).not.toHaveBeenCalled();
   });
 
   it("replaces a model-authored insufficient-evidence answer before it is released or audited", async () => {
