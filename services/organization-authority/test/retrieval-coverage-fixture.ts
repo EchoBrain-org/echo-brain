@@ -125,3 +125,28 @@ export const rolloutCoverageFixture = {
     }
   ]
 } as const;
+
+// Synthetic fourth-record pressure for #169, not a replay of unobserved live ranks.
+export const independentRecordCoverageFixture = {
+  queries: [
+    rolloutCoverageFixture.queries[0],
+    "promise Echo 28 locations live September 16",
+    "commit safely Echo locations live September",
+    "work remains locations live September 16",
+  ],
+  records: [
+    ...rolloutCoverageFixture.records,
+    {
+      title: "Private commercial evaluation",
+      items: [
+        { kind: "decision", text: "Approve an evaluation rate for the initial 10 Echo locations through September 16; no commitment to all 28 locations is approved." },
+        { kind: "decision", text: "Decline the commercial exception for all 28 Echo locations to be live on September 16." },
+        { kind: "decision", text: "Do not promise a rollout discount for Echo; the evaluation rate applies to the first 10 locations only." },
+        { kind: "action", text: "Draft the order form for 10 locations and a 30-day evaluation term before the September 16 window." },
+        { kind: "action", text: "Reset Echo expectations using the revised customer wording before confirming when locations can go live." },
+        { kind: "action", text: "Route the evaluation order form for commercial review before sending it to the customer." },
+        { kind: "rationale", text: "Expansion requires another commercial approval after evaluation; standard pricing otherwise resumes." },
+      ],
+    },
+  ],
+} as const;
