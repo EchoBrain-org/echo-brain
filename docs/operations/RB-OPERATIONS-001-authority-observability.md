@@ -392,10 +392,16 @@ The handler accepts six fixed operations:
 6. `health` reads the latest bounded transport heartbeat observations and their
    cumulative delivery counters. Historical records without counters are unknown.
 
-Journey and content queries have a 2,500-record cap and return `result_limit_exceeded` if it
-is saturated instead of silently omitting a journey or showing a partial
-waterfall. Narrow the dashboard time range before retrying that safe error for
-`list`; a `detail` request already uses the full bounded retained history.
+`list` paginates journey IDs first, with a default page size of 20 (maximum
+25), then fetches events only for that page. A page's selected journeys must
+use fewer than 2,500 raw events. A journey with 2,500 or more events is shown
+as a non-clickable oversized placeholder and does not block browsing other
+journeys.
+The cursor fixes the selected time range and offset. The newest 2,500 distinct
+journeys are browsable; when that boundary is reached, the Explorer says so and
+asks the operator to narrow the range for older journeys. `detail` and
+`content` retain their separate 2,500-record cap and return
+`result_limit_exceeded` rather than a partial response when it is saturated.
 
 The client cannot supply Logs Insights text, a query ID, `SOURCE`, a raw log
 message, prompt, answer, source content, or other event content. Every query
@@ -466,12 +472,12 @@ projection. Development input/output is available separately through the
 log messages or transport headers.
 
 The renderer inherits the query safety boundary. The selected range may not
-exceed the retained 14-day staging window; a fixed query that reaches its
-2,500-event cap returns `result_limit_exceeded` instead of partial list or
-detail; unknown/noncanonical events are rejected; and a renderer response that
+exceed the retained 14-day staging window. It preserves the list pagination and
+oversized-placeholder behavior above. `detail` and `content` still return
+`result_limit_exceeded` at their separate 2,500-record cap instead of partial
+data. Unknown/noncanonical events are rejected, and a renderer response that
 would exceed its bounded safe size returns fixed error markup rather than
-truncating data or exposing raw logs. Operators should narrow the range and
-retry a `result_limit_exceeded` response.
+truncating data or exposing raw logs.
 
 #### Reading core runtime evidence (V2)
 

@@ -320,20 +320,25 @@ custom-widget events, not an API Gateway request, and exposes fixed
 Gateway, browser CloudWatch access, user-supplied Logs Insights query,
 `queryId`, `SOURCE`, raw message, prompt, answer, or other content field.
 
-`list` uses only a fixed CloudWatch Logs Insights query shape over the exact
-staging Authority source log group. Its default lookback is eight hours, its
-maximum lookback is 14 days (the retained-log bound), and a page contains at
-most 25 journeys. `detail` accepts only a canonical lowercase UUID journey ID
-and uses a second fixed query shape over the bounded 14-day retained history,
+`list` uses only fixed CloudWatch Logs Insights query shapes over the exact
+staging Authority source log group. It indexes distinct journey IDs before
+fetching page events, defaults to 20 journeys per page (maximum 25), and keeps
+each selected page below 2,500 raw events. A journey with 2,500 or more events
+is a non-clickable oversized placeholder and does not block browsing other
+journeys. The opaque cursor fixes the selected time range and offset. The
+newest 2,500 distinct journeys form the browsable prefix, and the UI explicitly
+tells the operator to narrow the range when that boundary is reached. Its
+default lookback is eight hours and its maximum lookback is the 14-day
+retained-log bound. `detail` accepts only a canonical lowercase UUID journey ID
+and uses a separate fixed query shape over the bounded 14-day retained history,
 not the selected list range. It requires the canonical sequence-one
 `ask_validation` or `meeting_source_intake` started event and otherwise returns
 the content-free `journey_history_incomplete` error rather than reporting a
-clipped timeline or wall-clock. Both operations return a bounded
-`result_limit_exceeded` error rather than silently omitting a journey or
-returning partial detail when the 2,500-record result cap is saturated. All
+clipped timeline or wall-clock. `detail` retains its separate 2,500-record cap
+and returns `result_limit_exceeded` rather than partial detail when saturated. All
 workflow, stage, event, outcome, failure-class, provider, model, finish-reason,
 and usage-status values are finite contract allowlists; arbitrary strings are
-rejected. Both query shapes require `environment=staging` and return only the
+rejected. All query shapes require `environment=staging` and return only the
 redacted event fields needed for operation diagnosis.
 For pending meeting summaries, the latest approved or superseded milestone is
 retained independently of a later non-terminal event.
@@ -404,11 +409,12 @@ Logs permission, public dashboard sharing, function URL, API Gateway,
 application-managed credential, end-user credential, or production target.
 
 The UI preserves the backend's fail-closed boundary: its selected range is
-bounded by the retained 14-day staging log window; fixed list and detail queries
-fail with `result_limit_exceeded` at the 2,500-event cap rather than returning
-partial data; unknown or noncanonical events are rejected; and a bounded
-renderer response fails with safe fixed error markup rather than exposing raw
-events or truncating a waterfall. It displays only the content-free allowlisted
+bounded by the retained 14-day staging log window. It preserves the list
+pagination and oversized-placeholder behavior above. `detail` retains its
+2,500-record `result_limit_exceeded` boundary rather than returning partial
+data. Unknown or noncanonical events are rejected, and a bounded renderer
+response fails with safe fixed error markup rather than exposing raw events or
+truncating a waterfall. It displays only the content-free allowlisted
 projection: correlation and schema provenance, timing, nullable token usage,
 retrieval/retry counts, and failure metadata. It never displays prompts,
 answers, meeting material, raw log messages, provider payloads, or stack traces.
