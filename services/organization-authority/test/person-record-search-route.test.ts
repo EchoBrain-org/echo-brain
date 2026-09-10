@@ -32,13 +32,20 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
+import {
+  ANSWER_COMPOSITION_MAX_CONTEXT_ATOMS,
+  ANSWER_COMPOSITION_MAX_CONTEXT_UTF8_BYTES,
+  type StructuredGenerationInput,
+} from "../src/answer-composition/retrieval-grounded-answer-composition.js";
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import { AuthorityOperationError } from "../src/domain/errors.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
+import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 
-import { rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
+import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
 const roots: string[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -283,6 +290,135 @@ function setup(pointer = true) {
 }
 
 describe("Person Layer 2 route", () => {
+  it.each(["owner", "employee", "other-owner"] as const)("preserves independent lexical facts through a full expansion packet for %s", async (actor) => {
+    const value = setup(false);
+    const record = new Database(":memory:");
+    record.exec("CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)");
+    const atoms = independentRecordCoverageFixture.records.flatMap((source, index) =>
+      source.items.map((item, order): ReadableSearchAtomV1 => ({
+        ...policyAtom({ id: index === 3 ? "restricted" : "member", policy_id: index === 3
+          ? RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 : ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 }),
+        record_position: index + 1,
+        record_sha256: sha256Digest(source.title),
+        envelope_sha256: sha256Digest(`envelope-${source.title}`),
+        atom_id: sha256Digest(item.text),
+        atom_order: order,
+        signal_id_sha256: sha256Digest(`signal-${item.text}`),
+        item_kind: item.kind,
+        text: item.text,
+        text_sha256: sha256Digest(item.text),
+      })),
+    );
+    const input = realGenerationInput(value.state_directory, atoms);
+    const exact_head = { ...input.exact_head, position: 4, record_sha256: atoms.at(-1)!.record_sha256 };
+    record.prepare("INSERT INTO organization_record_log VALUES (?, ?)").run(exact_head.position, exact_head.record_sha256);
+    try {
+      const built = buildReadableSearchGenerationV1({ ...input, exact_head });
+      const active_generation = { generation_id: built.manifest.generation_id,
+        manifest_sha256: built.manifest_sha256, retrieval_contract_sha256: RETRIEVAL_CONTRACT, exact_head };
+      warmReadableSearchActiveGenerationV1({ state_directory: value.state_directory, active_generation });
+      value.authority.prepare(`INSERT INTO authority_readable_search_active_generation
+        (singleton, organization_id, generation_id, manifest_sha256, retrieval_contract_sha256,
+         record_head_position, record_head_hash, published_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`)
+        .run("org_clean", active_generation.generation_id, active_generation.manifest_sha256,
+          RETRIEVAL_CONTRACT, exact_head.position, exact_head.record_sha256, "2026-09-10T00:00:00.000Z");
+      const reader = readerAuthorization({ principal_id: `principal_${actor}`,
+        membership_id: `membership_${actor}`, membership_type: actor === "employee" ? "employee" : "owner" });
+      let authenticationCount = 0;
+      const search = vi.fn(searchReadableSearchGenerationV1);
+      const expand = vi.fn(expandReadableSearchRelatedAtomsV1);
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory, authority_id: "oau_clean", organization_id: "org_clean",
+        state_lineage_id: "lineage_clean", retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => ({ ...reader,
+          checked_at: new Date(Date.parse(reader.checked_at) + authenticationCount++).toISOString(),
+        }) }, authority: value.authority, record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority), search_generation: search,
+        expand_related_atoms: expand,
+      });
+      const request = { access_token: "fixture-reader", queries: independentRecordCoverageFixture.queries,
+        limit: 10 } as const;
+      const lexical = route.searchBatch(request);
+      const packet = route.searchBatch({ ...request, include_related_atom_packet: true });
+      const revenue = sha256Digest("Revenue signal calibration");
+      const perQuery = search.mock.results.slice(0, 4).map(result => result.value.items as readonly ReadableSearchResultItemV1[]);
+      const anchors = expand.mock.calls[0]![0].anchor_atom_ids;
+      const required = atoms.filter(atom => atom.record_sha256 === revenue &&
+        (atom.text.includes("at least 8") || atom.text.includes("confirmed list")));
+      expect(required).toHaveLength(2);
+      expect(lexical.query_hit_counts).toEqual([10, 10, 10, 10]);
+      expect(new Set(lexical.response.items.map(item => item.atom_id))).toEqual(
+        new Set(perQuery.flat().map(item => item.atom_id)),
+      );
+      if (actor === "owner") {
+        // Real lexical ranks (one-based, zero means absent), not captured live
+        // scores: neither per-query limits nor merge/dedup lose these facts.
+        expect(perQuery.map(items => items.findIndex(item => item.atom_id === required[0]!.atom_id) + 1))
+          .toEqual([0, 0, 9, 0]);
+        expect(perQuery.map(items => items.findIndex(item => item.atom_id === required[1]!.atom_id) + 1))
+          .toEqual([10, 7, 4, 9]);
+        // The fourth record is independent: expansion has no link to it and
+        // fills thirteen slots from the other three records. Before #169 the
+        // final packet cap then discarded both surviving lexical facts.
+        expect(anchors.map(id => atoms.find(atom => atom.atom_id === id)!.record_sha256))
+          .toEqual([atoms.at(-1)!.record_sha256, sha256Digest("Implementation capacity triage"), sha256Digest("Data handling review")]);
+        expect(expand.mock.results[0]!.value.items).toHaveLength(13);
+        expect(expand.mock.results[0]!.value.items.every((item: ReadableSearchResultItemV1) => item.record_sha256 !== revenue)).toBe(true);
+      }
+      for (const fact of required) {
+        expect(lexical.response.items.map(item => item.atom_id)).toContain(fact.atom_id);
+        expect(packet.response.items.map(item => item.atom_id)).toContain(fact.atom_id);
+      }
+      expect(packet.response.items).toHaveLength(RELATED_ATOM_PACKET_MAX_ITEMS_V1);
+      expect(new Set(packet.response.items.map(item => item.atom_id)).size).toBe(16);
+      expect(packet.response.items.length).toBeLessThanOrEqual(ANSWER_COMPOSITION_MAX_CONTEXT_ATOMS);
+      const contextBytes = packet.response.items.reduce((bytes, { atom_id, record_sha256, policy_id, text }) =>
+        bytes + Buffer.byteLength(canonicalJson({ atom_id, record_sha256, policy_id, text }), "utf8"), 0);
+      expect(contextBytes).toBeLessThanOrEqual(ANSWER_COMPOSITION_MAX_CONTEXT_UTF8_BYTES);
+      expect(packet.response.generation_id).toBe(active_generation.generation_id);
+      expect(packet.response.record_head).toEqual({ position: exact_head.position, record_sha256: exact_head.record_sha256 });
+      expect(route.searchBatch({ ...request, include_related_atom_packet: true }).response).toEqual(packet.response);
+
+      // Exercise the actual Layer 4 adapter/context bound with an in-process
+      // model stub. Retrieval success is measured in the prompt, not citations.
+      const modelInputs: StructuredGenerationInput[] = [];
+      const answerRoute = createPersonAnswerRouteV1({
+        authority_id: "oau_clean", organization_id: "org_clean", state_lineage_id: "lineage_clean",
+        search: route,
+        model: { generate: async input => {
+          modelInputs.push(input);
+          return modelInputs.length === 1 ? { queries: request.queries.slice(1) }
+            : { status: "insufficient_evidence", answer: "", citations: [] };
+        } },
+        generation: { generation_adapter_id: "test-structured-output", planner_model: "test-planner", answer_model: "test-answer", timeout_ms: 60_000 },
+        audit: new SqlitePersonAnswerCompositionAuditV1(value.authority),
+      });
+      await answerRoute.ask({ access_token: request.access_token, question: request.queries[0] });
+      expect(modelInputs).toHaveLength(2);
+      const prompt = JSON.parse(modelInputs[1]!.user_prompt) as { sources: { citation_id: string; text: string }[] };
+      expect(prompt.sources.map(source => source.text)).toEqual(packet.response.items.map(item => item.text));
+      for (const fact of required) expect(prompt.sources.map(source => source.text)).toContain(fact.text);
+      expect(search.mock.calls.map(([call]) => call.query)).toEqual(Array.from({ length: 4 }, () => [...request.queries]).flat());
+      for (const [call] of [...search.mock.calls, ...expand.mock.calls]) {
+        expect(call.reader).toEqual({ principal_id: reader.principal_id, membership_id: reader.membership_id });
+        expect(call.active_generation).toEqual(active_generation);
+      }
+      const privateAtoms = atoms.filter(atom => atom.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
+      if (actor === "owner") {
+        expect(packet.response.items.some(item => item.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)).toBe(true);
+      } else {
+        // Owner role alone also cannot grant the exact reviewer's private scope.
+        const observed = [...perQuery.flat(), ...expand.mock.results.flatMap(result => result.value.items), ...packet.response.items];
+        expect(observed.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
+        for (const atom of privateAtoms) expect(modelInputs[1]!.user_prompt).not.toContain(atom.text);
+      }
+    } finally {
+      record.close();
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
   it.each([false, true])("covers rollout conditions and deadlines from the frozen four-query plan (mixed corpus: %s)", (mixed) => {
     const value = setup(false);
     const record = new Database(":memory:");
@@ -1183,7 +1319,7 @@ describe("Person Layer 2 route", () => {
     }
   });
 
-  it("keeps the highest-ranked lexical decision in a full related-atom packet", () => {
+  it("keeps the primary decision and independent multi-hit evidence without reserving space for incidental matches", () => {
     const value = setup();
     const item = (
       name: string,
@@ -1207,6 +1343,7 @@ describe("Person Layer 2 route", () => {
       item("weak-two-b", "weak-two"),
       item("weak-three-a", "weak-three"),
       item("weak-three-b", "weak-three"),
+      item("incidental", "incidental"),
     ];
     const related = Array.from({ length: 13 }, (_, index) =>
       item(`related-${String(index)}`, `related-${String(index)}`),
@@ -1249,7 +1386,9 @@ describe("Person Layer 2 route", () => {
       });
       const packet = route.searchBatch({
         access_token: "bearer-only",
-        queries: ["coverage"],
+        // Seeing the same incidental atom in two query lists must not turn it
+        // into multiple distinct hits supporting that record.
+        queries: ["coverage", "coverage schedule"],
         include_related_atom_packet: true,
       });
 
@@ -1257,6 +1396,9 @@ describe("Person Layer 2 route", () => {
       expect(packet.response.items.map((item) => item.atom_id)).toContain(
         precise.atom_id,
       );
+      expect(packet.response.items.map((item) => item.atom_id)).toContain(digest("coverage-weak-three-a"));
+      expect(packet.response.items.map((item) => item.atom_id)).toContain(digest("coverage-weak-three-b"));
+      expect(packet.response.items.map((item) => item.atom_id)).not.toContain(digest("coverage-incidental"));
     } finally {
       value.record.close();
       value.authority.close();
