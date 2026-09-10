@@ -146,6 +146,24 @@ private enum EchoOverlaySourceFixtureMain {
             passed = OverlayController.proveFinalSourcePresentation(
                 record: CliRunner.parseSourceRecord(sourceData(), source: source())!
             )
+        case "selected-source-priority":
+            _ = NSApplication.shared
+            NSApp.setActivationPolicy(.prohibited)
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("echo-overlay-source-priority-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: marker) }
+            guard let executable = selectedPrioritySourceCLI(marker: marker) else { Darwin.exit(EXIT_FAILURE) }
+            defer { try? FileManager.default.removeItem(at: executable) }
+            passed = OverlayController.proveSelectedSourcePriority(
+                executable: executable,
+                marker: marker,
+                stalledSource: source(),
+                selectedSource: otherSource()
+            )
+        case "uncited-answer-layout":
+            _ = NSApplication.shared
+            NSApp.setActivationPolicy(.prohibited)
+            passed = OverlayController.proveUncitedAnswerLayout()
         case "untitled-source":
             let detail = CliRunner.parseSourceRecord(sourceData(meeting: ["id": "meeting-fixture"]), source: source())
             passed = detail?.title == "Untitled meeting"
@@ -230,6 +248,21 @@ private enum EchoOverlaySourceFixtureMain {
           touch '\(marker.path)'
           sleep 5
           printf '%s' '\(response)'
+        fi
+        """)
+    }
+
+    private static func selectedPrioritySourceCLI(marker: URL) -> URL? {
+        guard let stalled = String(data: sourceData(meeting: ["id": "stalled", "title": "Stalled review"]), encoding: .utf8),
+              let selected = String(data: sourceData(hash: otherRecordHash, meeting: ["id": "selected", "title": "Selected fast review"]), encoding: .utf8)
+        else { return nil }
+        return shellSourceCLI("""
+        if [ \"$4\" = \"\(recordHash)\" ]; then
+          touch '\(marker.path)'
+          sleep 5
+          printf '%s' '\(stalled)'
+        elif [ \"$4\" = \"\(otherRecordHash)\" ]; then
+          printf '%s' '\(selected)'
         fi
         """)
     }
@@ -532,5 +565,59 @@ extension OverlayController {
             && controller.sourceRecords[record.source.recordSha256]?.title == record.title
         controller.shutdown()
         return passed
+    }
+
+    fileprivate static func proveSelectedSourcePriority(
+        executable: URL,
+        marker: URL,
+        stalledSource: DisplaySource,
+        selectedSource: DisplaySource
+    ) -> Bool {
+        let controller = OverlayController()
+        controller.runner = CliRunner(executable: executable)
+        controller.currentSources = [stalledSource, selectedSource]
+        controller.sourcePaneOpen = true
+        controller.sourcePane.isHidden = false
+        controller.sourceScrollView.isHidden = false
+        controller.loadSources()
+        guard waitUntil({ FileManager.default.fileExists(atPath: marker.path) }) else {
+            controller.shutdown()
+            return false
+        }
+        let button = NSButton()
+        button.tag = 1
+        controller.selectSource(button)
+        let loaded = waitUntil { controller.sourceRecords[selectedSource.recordSha256]?.title == "Selected fast review" }
+        let titles = controller.sourceDetails.arrangedSubviews.compactMap { ($0 as? NSTextField)?.stringValue }
+        let passed = loaded && titles.contains("Selected fast review")
+            && controller.sourceRecords[stalledSource.recordSha256] == nil
+        controller.shutdown()
+        return passed
+    }
+
+    fileprivate static func proveUncitedAnswerLayout() -> Bool {
+        let controller = OverlayController()
+        controller.panel.setFrame(NSRect(x: 0, y: 0, width: 960, height: 720), display: false)
+        controller.answerHeader.isHidden = false
+        controller.answerScrollView.isHidden = false
+        controller.emptyAnswerLabel.isHidden = true
+        controller.currentSources = []
+        controller.refreshSourceChips()
+        controller.panel.contentView?.layoutSubtreeIfNeeded()
+        let passed = controller.basedOn.isHidden
+            && controller.answerScrollBottomWithSourcesConstraint?.isActive == false
+            && controller.answerScrollBottomWithoutSourcesConstraint?.isActive == true
+            && controller.answerScrollView.frame.height > 400
+        controller.shutdown()
+        return passed
+    }
+
+    private static func waitUntil(_ condition: @escaping () -> Bool, timeout: TimeInterval = 2) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        return condition()
     }
 }

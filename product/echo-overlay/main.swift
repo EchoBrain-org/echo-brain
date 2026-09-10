@@ -328,8 +328,8 @@ final class RunningAsk: @unchecked Sendable {
 private final class CliRunner: @unchecked Sendable {
     private let executable: URL
 
-    init() {
-        executable = FileManager.default.homeDirectoryForCurrentUser
+    init(executable: URL? = nil) {
+        self.executable = executable ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/ECHO/bin/echo-brain")
     }
 
@@ -1041,7 +1041,7 @@ private final class SourceDocumentView: NSView {
 
 @MainActor
 private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDelegate {
-    private let runner = CliRunner()
+    private var runner = CliRunner()
     private let panel: EchoPanel
     private let composer = QuestionTextView()
     private let composerScrollView = NSScrollView()
@@ -1063,6 +1063,8 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     private let sourceTabs = NSScrollView()
     private let sourceChips = NSScrollView()
     private let basedOn = NSStackView()
+    private var answerScrollBottomWithSourcesConstraint: NSLayoutConstraint?
+    private var answerScrollBottomWithoutSourcesConstraint: NSLayoutConstraint?
     private var answerColumn: NSView?
     private var answerColumnTrailing: NSLayoutConstraint?
     private var sourcePaneWidth: NSLayoutConstraint?
@@ -1372,7 +1374,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         loadSources()
     }
 
-    private func loadSources() {
+    private func loadSources(prioritizingSelected: Bool = false) {
         guard activeSources == nil, !currentSources.isEmpty else { return }
         let missingSources = currentSources.filter { sourceRecords[$0.recordSha256] == nil }
         guard !missingSources.isEmpty else { return }
@@ -1380,7 +1382,13 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             ? currentSources[selectedSourceIndex]
             : nil
         let sourcesToLoad: [DisplaySource]
-        if !sourceRecords.isEmpty,
+        if prioritizingSelected,
+           let selectedSource,
+           sourceRecords[selectedSource.recordSha256] == nil {
+            sourcesToLoad = [selectedSource] + missingSources.filter {
+                $0.recordSha256 != selectedSource.recordSha256
+            }
+        } else if !sourceRecords.isEmpty,
            let selectedSource,
            sourceRecords[selectedSource.recordSha256] == nil {
             sourcesToLoad = [selectedSource]
@@ -1397,6 +1405,17 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             Task { @MainActor in self?.handleSources(outcome, identifier: identifier) }
         }
         if sourcePaneOpen { renderSelectedSource() }
+    }
+
+    private func prioritizeSelectedSourceLoad() {
+        guard activeSources != nil,
+              currentSources.indices.contains(selectedSourceIndex),
+              sourceRecords[currentSources[selectedSourceIndex].recordSha256] == nil
+        else { return }
+        sourceRequestIdentifier = nil
+        activeSources?.cancel()
+        activeSources = nil
+        loadSources(prioritizingSelected: true)
     }
 
     private func handleSource(_ record: SourceRecord, identifier: UUID) {
@@ -1467,7 +1486,11 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         openSourcePane()
         refreshSourceChips()
         renderSelectedSource()
-        loadSources()
+        if activeSources != nil {
+            prioritizeSelectedSourceLoad()
+        } else {
+            loadSources()
+        }
     }
 
     @objc private func closeSources() { showAnswer() }
@@ -1519,7 +1542,12 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     private func refreshSourceChips() {
-        basedOn.isHidden = currentSources.isEmpty
+        let hasSources = !currentSources.isEmpty
+        basedOn.isHidden = !hasSources
+        let activeBottom = hasSources ? answerScrollBottomWithSourcesConstraint : answerScrollBottomWithoutSourcesConstraint
+        let inactiveBottom = hasSources ? answerScrollBottomWithoutSourcesConstraint : answerScrollBottomWithSourcesConstraint
+        inactiveBottom?.isActive = false
+        activeBottom?.isActive = true
         for (scroll, isTab) in [(sourceChips, false), (sourceTabs, true)] {
             let row = NSStackView()
             row.orientation = .horizontal
@@ -2082,7 +2110,6 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             answerScrollView.topAnchor.constraint(equalTo: answerHeader.bottomAnchor, constant: 8),
             answerScrollView.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 12),
             answerScrollView.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -12),
-            answerScrollView.bottomAnchor.constraint(equalTo: basedOn.topAnchor, constant: -8),
             basedOn.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 16),
             basedOn.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -16),
             basedOn.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor, constant: -10),
@@ -2096,6 +2123,11 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             hintLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -25),
             hintLabel.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
         ])
+        let answerScrollBottomWithSources = answerScrollView.bottomAnchor.constraint(equalTo: basedOn.topAnchor, constant: -8)
+        answerScrollBottomWithSourcesConstraint = answerScrollBottomWithSources
+        let answerScrollBottomWithoutSources = answerScrollView.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor, constant: -10)
+        answerScrollBottomWithoutSources.isActive = true
+        answerScrollBottomWithoutSourcesConstraint = answerScrollBottomWithoutSources
         let composerHeight = composerCard.heightAnchor.constraint(equalToConstant: 46)
         composerHeight.isActive = true
         composerHeightConstraint = composerHeight

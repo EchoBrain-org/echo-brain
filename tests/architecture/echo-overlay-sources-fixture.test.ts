@@ -68,6 +68,8 @@ afterAll(() => rmSync(temporaryRoot, { recursive: true, force: true }));
     "source-card-minimal",
     "source-card-narrow",
     "source-final-success",
+    "selected-source-priority",
+    "uncited-answer-layout",
     "untitled-source",
     "panel-resigns-key",
     "large-source",
