@@ -65,6 +65,30 @@ previous pointer is left untouched. Exact-head and contract fences keep serving
 fail-closed until a retry builds a new complete generation rather than mutating
 the published one.
 
+Within one running reconciler, up to 32 successful validated segment projections
+may be reused with least-recently-used eviction. The key includes the complete
+selected verified atoms and their provenance, the full visibility tuple, and the
+projector release (including prompt and validation), adapter, model, and timeout
+profile. Results never cross reconciler or provider instances. Only input
+digests and bounded endpoint pairs are retained; failed or cancelled projections
+are not cached. A successfully validated empty result is reusable. Eviction or
+restart recomputes normally; the cache is disposable and changes no persisted
+generation contract or schema.
+
+An unchanged segment therefore keeps its accepted pairs when another segment
+advances the global record head. This deliberately reuses the prior valid model
+result instead of resampling an unchanged input. The newest complete snapshot
+still supplies every lexical atom and its authorization provenance. After
+enrichment, an exact-head check skips obsolete build and warming work; the final
+publication check remains in place. Observations retain enrichment and projection
+spans with explicit reuse/recompute counts, and emit model spans only for actual
+calls. Superseded attempts retain their superseded outcome and queued retry.
+
+This optimization does not shorten an individual changed-input provider call
+or cancel an already-running obsolete call. A head advance that changes the
+selected segment still needs another full projection. It does not publish a
+lexical-only generation or relax any projection failure or validation fence.
+
 ## Migration, rollback, and evidence
 
 The facts plane moves to a fresh baseline V2. Rollout therefore requires a
