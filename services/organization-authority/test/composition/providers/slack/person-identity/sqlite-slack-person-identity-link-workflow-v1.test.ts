@@ -179,6 +179,95 @@ describe("Person Slack identity-link workflow", () => {
     );
   });
 
+  it("admits only one delivery per membership during the cooldown before contacting Slack", async () => {
+    let current = authorization;
+    const context = await setup(() => current);
+    const begun = await context.application.begin(beginRequest(), "bearer");
+
+    await expect(context.application.begin(beginRequest(), "bearer")).resolves.toEqual(begun);
+
+    await expect(context.application.begin({
+      ...beginRequest("psb_00000000-0000-4000-8000-000000000002"),
+      challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(OTHER_CODE),
+      recipient_user_id: "UOTHER",
+    }, "bearer")).rejects.toMatchObject({ code: "conflict" });
+
+    expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledOnce();
+    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledOnce();
+
+    current = { ...authorization, checked_at: "2026-08-22T00:00:59.000Z" };
+    await expect(context.application.begin({
+      ...beginRequest("psb_00000000-0000-4000-8000-000000000003"),
+      challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(OTHER_CODE),
+      recipient_user_id: "UOTHER",
+    }, "bearer")).rejects.toMatchObject({ code: "conflict" });
+    expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledOnce();
+    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledOnce();
+
+    current = { ...authorization, checked_at: "2026-08-22T00:01:00.000Z" };
+    await expect(context.application.begin({
+      ...beginRequest("psb_00000000-0000-4000-8000-000000000004"),
+      challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(OTHER_CODE),
+    }, "bearer")).resolves.toMatchObject({ provider: "slack" });
+    expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledTimes(2);
+    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies the delivery cooldown after completion across a restarted Person session", async () => {
+    let current = authorization;
+    const context = await setup(() => current);
+    const begun = await context.application.begin(beginRequest(), "bearer");
+    await context.application.complete({
+      request_id: "psc_00000000-0000-4000-8000-000000000001",
+      challenge_attempt_id: begun.challenge_attempt_id,
+      challenge_message_ts: begun.challenge_message_ts,
+      challenge_code: CODE,
+    }, "bearer");
+    expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledTimes(2);
+
+    current = {
+      ...authorization,
+      session_family_id: "psf_00000000-0000-4000-8000-000000000002",
+      session_state_sha256: canonicalSha256("restarted-session"),
+    };
+    await expect(context.application.begin({
+      ...beginRequest("psb_00000000-0000-4000-8000-000000000003"),
+      challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(OTHER_CODE),
+      recipient_user_id: "UOTHER",
+    }, "bearer")).rejects.toMatchObject({ code: "conflict" });
+    expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledTimes(2);
+    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledOnce();
+  });
+
+  it("allows only one racing fresh request to reach Slack posting", async () => {
+    const context = await setup();
+    let releaseFirstOpen: (() => void) | undefined;
+    const firstOpen = new Promise<void>(resolve => { releaseFirstOpen = resolve; });
+    let opens = 0;
+    vi.mocked(context.slack.openIdentityLinkDirectMessage!).mockImplementation(async () => {
+      opens += 1;
+      if (opens === 1) await firstOpen;
+      return { team_id: "T12345678", channel_id: "D12345678", recipient_user_id: "U12345679" };
+    });
+
+    const first = context.application.begin(beginRequest(), "bearer");
+    await vi.waitFor(() => expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledOnce());
+    const second = context.application.begin({
+      ...beginRequest("psb_00000000-0000-4000-8000-000000000002"),
+      challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(OTHER_CODE),
+    }, "bearer");
+    await vi.waitFor(() => expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledTimes(2));
+    releaseFirstOpen!();
+
+    const results = await Promise.allSettled([first, second]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
+    expect(results.find(result => result.status === "rejected")).toMatchObject({
+      reason: { code: "conflict" },
+    });
+    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["workspace mismatch", { team_id: "TOTHER", channel_id: "D12345678", recipient_user_id: "U12345679" }],
     ["recipient mismatch", { team_id: "T12345678", channel_id: "D12345678", recipient_user_id: "UOTHER" }],
@@ -210,13 +299,15 @@ describe("Person Slack identity-link workflow", () => {
   });
 
   it("observes status, delivery and completion without identity, code or provider content", async () => {
-    const context = await setup();
+    let current = authorization;
+    const context = await setup(() => current);
     const events: CoreRuntimeObservationV1[] = [];
     const content: unknown[] = [];
     await observeCoreRuntimeV1("http_request", async () => {
       await context.application.tools("bearer");
       const begun = await context.application.begin(beginRequest(), "bearer");
       await context.application.complete({ request_id: "psc_00000000-0000-4000-8000-000000000001", challenge_attempt_id: begun.challenge_attempt_id, challenge_message_ts: begun.challenge_message_ts, challenge_code: CODE }, "bearer");
+      current = { ...authorization, checked_at: "2026-08-22T00:01:00.000Z" };
       vi.mocked(context.slack.openIdentityLinkDirectMessage!).mockRejectedValue(new Error("provider-private-body"));
       await expect(context.application.begin({ ...beginRequest("psb_00000000-0000-4000-8000-000000000002"), challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(OTHER_CODE) }, "bearer")).rejects.toMatchObject({ code: "unavailable" });
     }, { observer: event => { events.push(event); }, content_observer: event => { content.push(event); } });

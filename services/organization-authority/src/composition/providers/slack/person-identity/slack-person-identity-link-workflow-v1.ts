@@ -54,6 +54,11 @@ export interface SlackPersonIdentityLinkRepositoryPort {
         readonly challenge_message_ts: string;
       })
     | null;
+  admitPersonSlackIdentityLinkDelivery(input: {
+    readonly person_session: BeginPersonSlackIdentityLinkChallengeInput["person_session"];
+    readonly organization_tool: ActiveSlackOrganizationTool;
+    readonly now: string;
+  }): void;
   beginPersonSlackIdentityLinkChallenge(
     input: BeginPersonSlackIdentityLinkChallengeInput,
   ): BegunSlackIdentityLinkChallenge & {
@@ -310,7 +315,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
           "Person state changed while replaying the identity link",
         );
       }
-      return repositoryOperation(
+      const replay = repositoryOperation(
         () =>
           this.options.repository.personSlackIdentityLinkBeginReplay?.({
             request_id: request.request_id,
@@ -323,6 +328,16 @@ export class SlackPersonIdentityLinkWorkflowV1 {
             organization_tool: activeTool,
           }) ?? null,
       );
+      if (replay === null) {
+        repositoryOperation(() =>
+          this.options.repository.admitPersonSlackIdentityLinkDelivery({
+            person_session: personSession(current, this.options.authority_id),
+            organization_tool: activeTool,
+            now: current.checked_at,
+          }),
+        );
+      }
+      return replay;
     });
     if (earlyReplay !== null) {
       return validateOrganizationPersonSlackIdentityLinkBeginResponse({

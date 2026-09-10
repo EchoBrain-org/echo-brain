@@ -34,6 +34,7 @@ import {
 } from "./slack-person-identity-link-workflow-v1.js";
 
 const CHALLENGE_LIFETIME_MS = 15 * 60 * 1000;
+const DELIVERY_ADMISSION_COOLDOWN_MS = 60 * 1000;
 
 /** Avoid loading the legacy integration repository for its error class. */
 class PersonSlackIdentityLinkConflictError extends Error {
@@ -105,6 +106,12 @@ function addChallengeLifetime(now: string): string {
   const milliseconds = Date.parse(now);
   if (!Number.isFinite(milliseconds)) throw new Error("invalid current time");
   return new Date(milliseconds + CHALLENGE_LIFETIME_MS).toISOString();
+}
+
+function deliveryAdmissionCutoff(now: string): string {
+  const milliseconds = Date.parse(now);
+  if (!Number.isFinite(milliseconds)) throw new Error("invalid current time");
+  return new Date(milliseconds - DELIVERY_ADMISSION_COOLDOWN_MS).toISOString();
 }
 
 function personSessionSha256(
@@ -276,6 +283,15 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
     });
   }
 
+  admitPersonSlackIdentityLinkDelivery(input: {
+    person_session: PersonSlackIdentityLinkSession;
+    organization_tool: ActiveSlackOrganizationTool;
+    now: string;
+  }): void {
+    this.requireSameActiveTool(input.organization_tool);
+    this.admitDeliveryCooldown(input.person_session.membership_id, input.now);
+  }
+
   beginPersonSlackIdentityLinkChallenge(
     input: BeginPersonSlackIdentityLinkChallengeInput,
   ): BegunSlackIdentityLinkChallenge & {
@@ -301,6 +317,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
         return replay;
       }
       const active = this.requireSameActiveTool(input.organization_tool);
+      this.admitDeliveryCooldown(input.person_session.membership_id, input.now);
       const challengeAttemptId = `cat_${randomUUID()}`;
       const expiresAt = addChallengeLifetime(input.now);
       this.options.database
@@ -776,6 +793,20 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       );
     }
     return active;
+  }
+
+  private admitDeliveryCooldown(membershipId: string, now: string): void {
+    const recent = this.options.database
+      .prepare(
+        `SELECT 1 FROM organization_person_slack_link_challenges
+         WHERE membership_id = ? AND created_at > ? LIMIT 1`,
+      )
+      .get(membershipId, deliveryAdmissionCutoff(now));
+    if (recent !== undefined) {
+      throw new PersonSlackIdentityLinkConflictError(
+        "A Slack identity-link challenge was requested recently; try again shortly",
+      );
+    }
   }
 
   private activeConnection(): ActiveSlackConnection | null {
