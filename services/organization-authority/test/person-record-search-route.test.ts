@@ -1108,6 +1108,86 @@ describe("Person Layer 2 route", () => {
     }
   });
 
+  it("keeps the highest-ranked lexical decision in a full related-atom packet", () => {
+    const value = setup();
+    const item = (
+      name: string,
+      record: string,
+      item_kind: "decision" | "action" = "action",
+    ) => ({
+      atom_id: digest(`coverage-${name}`),
+      record_position: 1,
+      record_sha256: digest(`coverage-record-${record}`),
+      envelope_sha256: digest(`coverage-envelope-${record}`),
+      item_kind,
+      text: `coverage ${name}`,
+      policy_id: "organization-member-readable-person-v2" as const,
+    });
+    const precise = item("precise", "precise", "decision");
+    const lexical = [
+      precise,
+      item("weak-one-a", "weak-one"),
+      item("weak-one-b", "weak-one"),
+      item("weak-two-a", "weak-two"),
+      item("weak-two-b", "weak-two"),
+      item("weak-three-a", "weak-three"),
+      item("weak-three-b", "weak-three"),
+    ];
+    const related = Array.from({ length: 13 }, (_, index) =>
+      item(`related-${String(index)}`, `related-${String(index)}`),
+    );
+    const search = vi.fn(() => ({
+      generation_id: digest("generation"),
+      exact_head: {
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        position: 0,
+        record_sha256: null,
+      },
+      items: lexical,
+    }));
+    const expand = vi.fn(() => ({
+      generation_id: digest("generation"),
+      exact_head: {
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        position: 0,
+        record_sha256: null,
+      },
+      items: related,
+    }));
+    try {
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => authorization() },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
+        search_generation: search,
+        expand_related_atoms: expand,
+      });
+      const packet = route.searchBatch({
+        access_token: "bearer-only",
+        queries: ["coverage"],
+        include_related_atom_packet: true,
+      });
+
+      expect(packet.response.items).toHaveLength(16);
+      expect(packet.response.items.map((item) => item.atom_id)).toContain(
+        precise.atom_id,
+      );
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
   it.each([
     ["returns a mismatched generation", digest("other-generation"), 0],
     ["returns a mismatched head", digest("generation"), 1],

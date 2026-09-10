@@ -524,6 +524,50 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
+  it("keeps direct related expansion anchor-first at its shared cap", () => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const first = atomWith("direct-first");
+      const second = atomWith("direct-second", { record_position: 2 });
+      const firstRelated = atomWith("direct-first-related", {
+        record_position: second.record_position,
+        record_sha256: second.record_sha256,
+        envelope_sha256: second.envelope_sha256,
+        atom_order: 1,
+      });
+      const secondRelated = atomWith("direct-second-related", {
+        record_position: first.record_position,
+        record_sha256: first.record_sha256,
+        envelope_sha256: first.envelope_sha256,
+        atom_order: 1,
+      });
+      const built = buildReadableSearchGenerationV1({
+        ...input(directory, [first, second, firstRelated, secondRelated]),
+        related_atom_pairs: [
+          relatedPair(first, firstRelated),
+          relatedPair(second, secondRelated),
+        ],
+      });
+      const request = {
+        state_directory: directory,
+        active_generation: {
+          generation_id: built.manifest.generation_id,
+          manifest_sha256: built.manifest_sha256,
+          retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
+          exact_head: built.manifest.exact_head,
+        },
+        reader: { principal_id: "prn_reader", membership_id: "mem_reader" },
+        anchor_atom_ids: [first.atom_id, second.atom_id],
+        limit: 1,
+      };
+      warmReadableSearchActiveGenerationV1(request);
+      expect(expandReadableSearchRelatedAtomsV1(request).items.map((item) => item.atom_id))
+        .toEqual([firstRelated.atom_id]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("stores a canonical segment-local pair and expands it from a warmed authorized anchor", () => {
     const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
     try {

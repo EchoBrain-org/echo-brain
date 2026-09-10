@@ -453,11 +453,19 @@ export function createPersonRecordSearchRouteV1(
         return true;
       });
       // Prefer records supported by multiple distinct lexical hits over an
-      // isolated matching decision (for example, an unrelated dated launch).
+      // isolated matching decision (for example, an unrelated dated launch),
+      // after retaining the best lexical decision/record as a packet anchor.
       recordAnchors.sort((left, right) =>
         support.get(right.record_sha256)! - support.get(left.record_sha256)!,
       );
-      const anchors = [...new Set([...recordAnchors, ...decisions])].slice(0, 3);
+      const primaryAnchor = decisions[0] ?? lexicalItems[0];
+      const anchors = [
+        ...new Set([
+          ...(primaryAnchor === undefined ? [] : [primaryAnchor]),
+          ...recordAnchors,
+          ...decisions,
+        ]),
+      ].slice(0, 3);
       if (anchors.length > 0) {
         let related: ReadableSearchResultV1;
         try {

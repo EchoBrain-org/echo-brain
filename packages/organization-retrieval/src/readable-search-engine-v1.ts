@@ -2097,14 +2097,33 @@ export function expandReadableSearchRelatedAtomsV1(
       if (anchors.has(fact.atom_id)) segmentsByAnchor.set(fact.atom_id, segment);
   const expanded = new Set<Sha256Digest>();
   const items: ReadableSearchResultItemV1[] = [];
-  const groups: ReadableSearchResultItemV1[][] = [];
+  type RelatedCandidate = {
+    readonly fact: ReadableSearchFactRow;
+    readonly content: ReadableSearchContentRow;
+  };
+  const groups: RelatedCandidate[][] = [];
+  // Source packets share the bound across anchors; direct-link callers keep
+  // their existing anchor-first ordering. Deduplicate at selection time so
+  // overlapping neighborhoods do not consume another anchor's share.
+  const select = (candidate: RelatedCandidate): void => {
+    if (items.length === limit || expanded.has(candidate.fact.atom_id)) return;
+    expanded.add(candidate.fact.atom_id);
+    items.push(
+      Object.freeze({
+        atom_id: candidate.fact.atom_id,
+        record_position: candidate.fact.log_position,
+        record_sha256: candidate.fact.record_hash,
+        envelope_sha256: candidate.fact.envelope_sha256,
+        item_kind: candidate.content.item_kind,
+        text: candidate.content.text,
+        policy_id: candidate.fact.policy_id,
+      }),
+    );
+  };
   for (const anchor of input.anchor_atom_ids) {
     const segment = segmentsByAnchor.get(anchor);
     if (segment === undefined) continue;
-    const candidates: Array<{
-      readonly fact: ReadableSearchFactRow;
-      readonly content: ReadableSearchContentRow;
-    }> = [];
+    const candidates: RelatedCandidate[] = [];
     const candidateIds = new Set<Sha256Digest>();
     if (input.include_anchor_records === true) {
       const source = segment.facts_by_atom.get(anchor)!;
@@ -2138,34 +2157,24 @@ export function expandReadableSearchRelatedAtomsV1(
         { score: 1, log_position: right.fact.log_position, atom_order: right.fact.atom_order, atom_id: right.fact.atom_id },
       ),
     );
-    const group: ReadableSearchResultItemV1[] = [];
-    for (const { fact, content } of candidates) {
-      group.push(
-        Object.freeze({
-          atom_id: fact.atom_id,
-          record_position: fact.log_position,
-          record_sha256: fact.record_hash,
-          envelope_sha256: fact.envelope_sha256,
-          item_kind: content.item_kind,
-          text: content.text,
-          policy_id: fact.policy_id,
-        }),
-      );
+    if (input.include_anchor_records === true) {
+      groups.push(candidates);
+    } else {
+      for (const candidate of candidates) {
+        select(candidate);
+        if (items.length === limit) break;
+      }
+      if (items.length === limit) break;
     }
-    groups.push(group);
   }
-  // Source packets share the bound across anchors; direct-link callers keep
-  // their existing anchor-first ordering. Deduplicate at selection time so
-  // overlapping neighborhoods do not consume another anchor's share.
-  const ordered = input.include_anchor_records === true
-    ? Array.from({ length: Math.max(0, ...groups.map(group => group.length)) },
-        (_, index) => groups.flatMap(group => group[index] === undefined ? [] : [group[index]!])).flat()
-    : groups.flat();
-  for (const item of ordered) {
-    if (expanded.has(item.atom_id)) continue;
-    expanded.add(item.atom_id);
-    items.push(item);
-    if (items.length === limit) break;
+  if (input.include_anchor_records === true) {
+    const longestGroup = Math.max(0, ...groups.map((group) => group.length));
+    for (let index = 0; index < longestGroup && items.length < limit; index += 1)
+      for (const group of groups) {
+        const candidate = group[index];
+        if (candidate !== undefined) select(candidate);
+        if (items.length === limit) break;
+      }
   }
   return Object.freeze({
     generation_id: handle.manifest.generation_id,
