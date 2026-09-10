@@ -168,8 +168,8 @@ jobs:
           graphical_extract="$RUNNER_TEMP/echo-person-graphical-kit"
           mkdir -p "$graphical_extract"
           ditto -x -k "$graphical_kit" "$graphical_extract"
-          codesign --verify --deep --strict "$graphical_extract/ECHO.app"
-          graphical_resources="$graphical_extract/ECHO.app/Contents/Resources/kit"
+          codesign --verify --deep --strict "$graphical_extract/ECHO Setup.app"
+          graphical_resources="$graphical_extract/ECHO Setup.app/Contents/Resources/kit"
           "$graphical_resources/node" "$graphical_resources/verify-person-onboarding-kit.mjs" "$graphical_resources"
           HOME="$person_home" "$graphical_resources/node" \
             "$graphical_resources/person-onboarding-ui.mjs" prepare > "$stdout_file"

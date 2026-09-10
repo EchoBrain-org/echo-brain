@@ -579,7 +579,7 @@ does not stage a candidate or require inventing a future release.
 ## First-cohort employee onboarding kit
 
 The graphical first-cohort download is a versioned `.zip` containing one
-`ECHO.app` setup application. Build it once per accepted release, from the same
+`ECHO Setup.app` setup application. Build it once per accepted release, from the same
 clean committed source as the release record, client, and overlay:
 
 ```sh
@@ -680,7 +680,36 @@ The command verifies the kit, installs the versioned client under
 `~/Library/Application Support/ECHO`, and validates then installs the matching
 overlay at `~/Applications/ECHO.app`. A different valid prior ECHO app is moved
 to a private backup before the new bundle is atomically switched into place;
-an invalid or non-ECHO bundle is left untouched. The command never launches or
+an invalid or non-ECHO bundle is left untouched. The installer requires a
+recognized matched prior app/command when either is already installed.
+
+After successful pair activation and retirement of the prior running overlay,
+the installer archives the exact prior app and wrapper together as private
+`overlay-backups/previous.*/pair.tar.gz` with a digest-bound ownership record.
+Archives cannot be discovered as extra launchable app bundles. It retains one
+previous distinct pair and its release root alongside the current release;
+same-release reinstall keeps that rollback pair and removes its temporary
+wrapper backup. Both directories are mode `0700`, archives and records `0600`.
+Only release roots bearing this installer's ownership marker and verified
+archive slots are eligible for pruning. Unmarked legacy releases/backups,
+modified recovery slots, symlinks, foreign-owned files, other applications,
+downloads and background jobs are left untouched. Unknown app or wrapper recovery slots also
+block release pruning because their dependencies cannot be established.
+
+A private installer lock prevents concurrent activation or pruning. Catchable
+HUP/INT/TERM observed before retention cleanup begins are deferred until a
+coherent pair is installed or restored; those cancellations skip pruning. A
+signal observed only while already-committed retention cleanup runs is
+acknowledged after cleanup: the active pair and the retained previous distinct
+rollback pair, if any, remain, but the command may report interruption after
+cleanup. Failed activation retains required recovery material. SIGKILL or
+power loss cannot run shell recovery:
+a leftover lock deliberately blocks another install pending local operator
+inspection of the app, command and private backups. Do not remove that lock or
+recovery material while an installer may still be running. This change does not
+add automatic crash recovery or sweep artifacts created by older installers.
+
+The command never launches or
 foregrounds the overlay. It copies the selected invitation into a temporary
 private file, completes the existing loopback login, and makes one bounded
 permission-aware record request. It prints `phase: "ready"` only after that

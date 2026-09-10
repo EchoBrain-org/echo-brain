@@ -344,7 +344,7 @@ export async function openOrganizationAuthorityRuntime(
         state_directory: config.state_directory,
       });
     } catch {
-      try { config.meeting_approval_journey_telemetry.on_observation_failure?.(); } catch { /* observation only */ }
+      try { config.meeting_approval_journey_telemetry.on_observation_failure?.({ emitter: "meeting_approval_observer", reason: "observation_callback_failure" }); } catch { /* observation only */ }
       // Observability cannot prevent the Authority from starting.
     }
   }
