@@ -1248,15 +1248,27 @@ function createStagingJourneyExplorerHandlerV1(options) {
           : data;
       }
       if (parsed.operation === "health") {
-        const rows = await run(`${PARSED_EVENT} | filter kind = "echo-authority-journey-telemetry-liveness-v1" and environment = "staging" | fields observed_at, release_sha, build_number, jsonStringify(parsed.delivery) as delivery_json | display observed_at, release_sha, build_number, delivery_json | sort observed_at desc | limit 25`, parsed.start, parsed.end, 25);
+        const rows = await run(`${PARSED_EVENT} | filter kind = "echo-authority-journey-telemetry-liveness-v1" and environment = "staging" | fields observed_at, release_sha, build_number, jsonStringify(parsed.delivery) as delivery_json, jsonStringify(parsed.rejection_counts) as rejection_counts_json | display observed_at, release_sha, build_number, delivery_json, rejection_counts_json | sort observed_at desc | limit 25`, parsed.start, parsed.end, 25);
         const health = rows.map((fields) => {
           const raw = row(fields); if (iso(raw.observed_at) === null) return null;
           let delivery; try { delivery = JSON.parse(raw.delivery_json); } catch { delivery = {}; }
           const counters = {};
-          for (const key of ["writes_attempted", "writes_failed", "writes_pending", "writes_dropped", "rejected_events", "attempted_bytes", "observer_overhead_us", "partial_captures"]) counters[key] = uint(delivery[key]);
-          return { observed_at: raw.observed_at, release_sha: /^[0-9a-f]{40}$/.test(raw.release_sha) ? raw.release_sha : null, build_number: uint(raw.build_number, 1), delivery: counters };
+          for (const key of ["writes_attempted", "writes_failed", "writes_pending", "writes_dropped", "rejected_events", "attempted_bytes", "observer_overhead_us", "partial_captures"]) counters[key] = uint(delivery?.[key]);
+          let rejections; try { rejections = JSON.parse(raw.rejection_counts_json); } catch { rejections = null; }
+          // Rebuild only the finite source-owned pairs. Missing history is unknown,
+          // and injected emitters, reasons, or content never reach the response.
+          const rejection_counts = {};
+          for (const [emitter, reasons] of Object.entries({
+            journey_observer: ["invalid_journey_event"],
+            content_capture: ["invalid_content_record", "content_format_error"],
+            meeting_approval_observer: ["observation_callback_failure"],
+          })) {
+            rejection_counts[emitter] = {};
+            for (const reason of reasons) rejection_counts[emitter][reason] = uint(rejections?.[emitter]?.[reason]);
+          }
+          return { observed_at: raw.observed_at, release_sha: /^[0-9a-f]{40}$/.test(raw.release_sha) ? raw.release_sha : null, build_number: uint(raw.build_number, 1), delivery: counters, rejection_counts };
         }).filter(Boolean);
-        return parsed.render ? rendered(frame("Transport health", `<p>Cumulative per process. Unknown values were not measured in historical heartbeats. These counters cannot prove downstream log ingestion.</p><pre>${escapeHtml(JSON.stringify(health, null, 2))}</pre>`)) : { health };
+        return parsed.render ? rendered(frame("Transport health", `<p>Cumulative per process. Rejection counts describe local observation rejection, separately from writes_failed, writes_dropped, and writes_pending. Null means unknown or unavailable in historical heartbeats. These counters cannot prove downstream log ingestion.</p><pre>${escapeHtml(JSON.stringify(health, null, 2))}</pre>`)) : { health };
       }
       if (parsed.operation === "related") {
         const results = await run(`${PARSED_EVENT} | filter kind = "${KIND}" and environment = "staging" and jsonStringify(parsed.diagnostic.linked_journey_ids) like /${parsed.journeyId}/ | fields ${BASE} | display ${BASE_DISPLAY} | sort observed_at asc | limit ${DETAIL_LIMIT}`, Math.max(0, current - MAX_RANGE), current, DETAIL_LIMIT);

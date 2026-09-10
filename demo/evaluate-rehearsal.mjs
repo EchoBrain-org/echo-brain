@@ -67,6 +67,7 @@ function validateAnsweredClaims(require, answer, expected, groups, label) {
   require(answer?.claims?.length === expected.material_group_ids.length, `${label} requires exactly one mapping per material group`);
   const seen = new Set();
   const spans = new Set();
+  const ranges = [];
   for (const claim of answer?.claims ?? []) {
     const group = groups.find((item) => item.id === claim?.group_id);
     const mapped = group && expected.material_group_ids.includes(group.id);
@@ -79,6 +80,14 @@ function validateAnsweredClaims(require, answer, expected, groups, label) {
     require(typeof answer?.answer_text === "string" && nonempty(observed) && answer.answer_text.includes(observed), `${label} group ${group.id} span is absent from the answer`);
     require(!spans.has(observed), `${label} maps one span to multiple groups`);
     spans.add(observed);
+    // Independent material groups need separate evidence spans. A broad span
+    // containing another task's date must not stand in for that task's mapping.
+    if (typeof answer?.answer_text === "string" && nonempty(observed)) {
+      const start = answer.answer_text.indexOf(observed);
+      const end = start + observed.length;
+      require(start >= 0 && ranges.every(([left, right]) => end <= left || start >= right), `${label} group ${group.id} overlaps another material group`);
+      if (start >= 0) ranges.push([start, end]);
+    }
     if (claim?.outcome === "insufficient_approved_information") {
       require(group.allow_insufficient === true, `${label} group ${group.id} must be answered`);
       require(nonempty(group.insufficient_answer) && observed === group.insufficient_answer, `${label} group ${group.id} lacks its explicit insufficient-evidence statement`);
@@ -112,7 +121,9 @@ function validateAnswer(require, answer, expected, groups) {
     validateAnsweredClaims(require, answer, expected, groups, label);
   } else {
     require(answer?.answer_text?.trim() === INSUFFICIENT_ANSWER, `${label} is not the required non-disclosing response`);
-    require(sameStringSet(answer?.retrieved_record_ids, []), `${label} retrieved inaccessible records`);
+    if (!(expected.neutral_retrieval_meeting_ids?.length > 0)) {
+      require(sameStringSet(answer?.retrieved_record_ids, []), `${label} retrieved inaccessible records`);
+    }
     require(Array.isArray(answer?.claims) && answer.claims.length === 0, `${label} neutral answer has group mappings`);
   }
 }
@@ -286,6 +297,12 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
       require(nonempty(expected.question) && nonempty(expected.principal) && nonempty(expected.approval_state), "oracle case question or access context is missing");
       require(["answered", "insufficient_approved_information"].includes(expected.expected_outcome), "oracle case outcome is invalid");
       require(strings(expected.must_not_reveal), "oracle case forbidden-text checks are missing");
+      // An unsupported answer can still retrieve irrelevant, approved Team
+      // records. Declare that visibility separately from the answer outcome.
+      if (expected.neutral_retrieval_meeting_ids !== undefined) {
+        require(expected.expected_outcome === "insufficient_approved_information", "oracle neutral retrieval allowance requires a neutral outcome");
+        require(uniqueStrings(expected.neutral_retrieval_meeting_ids) && expected.neutral_retrieval_meeting_ids.every((id) => expectedById.get(id)?.approval_policy === "team"), "oracle neutral retrieval meetings must be approved Team sources");
+      }
       require(uniqueStrings(expected.material_group_ids), "oracle case has duplicate or invalid group mappings");
       const mapped = expected.material_group_ids.map((id) => groups.find((group) => group.id === id));
       require(mapped.every(Boolean), "oracle case maps an unknown group");
@@ -293,7 +310,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
       require(sameStringSet(expected.required_citation_meeting_ids, [...new Set(mapped.flatMap((group) => group?.allowed_source_meeting_ids ?? []))]), "oracle citations do not match mapped groups");
       const primary = cases.find((item) => item.id === expected.primary_case_id);
       require(primary?.primary_case_id === primary?.id && isObject(primary), "case has no direct primary mapping");
-      for (const field of ["principal", "approval_state", "expected_outcome", "material_group_ids", "required_citation_meeting_ids", "must_not_reveal"]) {
+      for (const field of ["principal", "approval_state", "expected_outcome", "material_group_ids", "required_citation_meeting_ids", "must_not_reveal", "neutral_retrieval_meeting_ids"]) {
         require(JSON.stringify(expected[field]) === JSON.stringify(primary?.[field]), `paraphrase differs from primary in ${field}`);
       }
     }
@@ -330,7 +347,15 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
         context_state: contextState,
         missing_group_ids: expected.material_group_ids.filter((id) => !Array.isArray(answer?.claims) || !answer.claims.some((claim) => claim?.group_id === id))
       });
-      if (validCounts) require(expected.expected_outcome === "answered" ? retrieval.context_atom_count > 0 : retrieval.released_atom_count === 0, `${expected.id} captured retrieval counts contradict its expected outcome`);
+      if (validCounts) {
+        if (expected.expected_outcome === "answered") {
+          require(retrieval.context_atom_count > 0, `${expected.id} captured retrieval counts contradict its expected outcome`);
+        } else if (expected.neutral_retrieval_meeting_ids?.length > 0) {
+          require((retrieval.released_atom_count > 0) === (answer?.retrieved_record_ids?.length > 0), `${expected.id} captured retrieval counts contradict its retrieved records`);
+        } else {
+          require(retrieval.released_atom_count === 0, `${expected.id} captured retrieval counts contradict its expected outcome`);
+        }
+      }
       validateAnswer(require, answer, expected, groups);
     }
   });
@@ -353,7 +378,10 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
       for (const recordId of answer?.retrieved_record_ids ?? []) require(records.has(recordId), `${answer?.case_id} used unapproved record ${recordId}`);
       const expected = expectations?.retrieval_cases?.find((item) => item.id === answer?.case_id);
       for (const meetingId of answer?.citation_meeting_ids ?? []) require(answer?.retrieved_record_ids?.some((id) => records.get(id)?.meeting_id === meetingId), "answer citation has no retrieved approved record");
-      if (expected?.principal === "normal_team_member") {
+      if (expected?.expected_outcome === "insufficient_approved_information") {
+        for (const recordId of answer?.retrieved_record_ids ?? []) require((expected.neutral_retrieval_meeting_ids ?? []).includes(records.get(recordId)?.meeting_id), `${answer?.case_id} retrieved a record outside its neutral retrieval allowance`);
+      }
+      if (expected?.principal !== "exact_owner_approver") {
         for (const recordId of answer?.retrieved_record_ids ?? []) require(records.get(recordId)?.policy === "team", `${answer?.case_id} retrieved an Only-me record`);
       }
     }

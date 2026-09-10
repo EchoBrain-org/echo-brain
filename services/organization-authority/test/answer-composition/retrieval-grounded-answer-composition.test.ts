@@ -482,7 +482,7 @@ describe("retrieval-grounded answer composition", () => {
 
   it("treats possessive first-person decision questions as unsupported without overmatching readable-decision questions", async () => {
     const planner = { generate: vi.fn(async () => ({ queries: [] })) };
-    const answerer = { generate: vi.fn(async () => ({ status: "insufficient_evidence", answer: "No evidence.", citations: [] })) };
+    const answerer = { generate: vi.fn(async () => ({ status: "insufficient_evidence", answer: "Insufficient accessible evidence to answer this question.", citations: [] })) };
     const retrieval = { retrieve: vi.fn(async (input) => release(true, input.queries.length)), revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })) };
     const answer = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
     await expect(answer.answer({ question: "What are my decisions?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
@@ -578,7 +578,7 @@ describe("retrieval-grounded answer composition", () => {
     expect(onModelFailure).not.toHaveBeenCalled();
   });
 
-  it("replaces a model-authored insufficient-evidence answer before it is released or audited", async () => {
+  it("rejects a model-authored substantive insufficient-evidence answer before release or audit", async () => {
     const modelAnswer = "The acquisition closes Tuesday.";
     const releasedRetrieval = {
       retrieve: vi.fn(async () => release()),
@@ -601,25 +601,11 @@ describe("retrieval-grounded answer composition", () => {
       answer_model: "openai/gpt-4.1-mini",
     });
 
-    const result = await answer.answer({ question: "When does the acquisition close?" });
-
-    expect(result).toMatchObject({
-      answer: "Insufficient accessible evidence to answer this question.",
-      citations: [],
-    });
-    expect(JSON.stringify({ result, audit: audit.append.mock.calls })).not.toContain(modelAnswer);
-    expect(audit.append).toHaveBeenCalledWith(
-      expect.objectContaining({
-        answer_sha256: canonicalSha256({
-          status: "insufficient_evidence",
-          outcome: "insufficient_evidence",
-          answer: "Insufficient accessible evidence to answer this question.",
-          citations: [],
-        }),
-        citation_count: 0,
-      }),
+    await expect(answer.answer({ question: "When does the acquisition close?" })).rejects.toThrow(
+      "answer response has invalid insufficient-evidence text",
     );
-    expect(releasedRetrieval.revalidate).toHaveBeenCalledTimes(1);
+    expect(audit.append).not.toHaveBeenCalled();
+    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
   });
 
   it("fails closed when an insufficient-evidence response includes citations", async () => {
@@ -1143,5 +1129,87 @@ describe("retrieval-grounded answer composition content seam", () => {
         throw new Error("content observer down");
       }).answer({ question: "when is the launch" }),
     ).resolves.toMatchObject({ answer: "Tuesday." });
+  });
+});
+
+// Synthetic released context isolates composition from candidate selection.
+describe("answer reliability with already released facts", () => {
+  const neutral = "Insufficient accessible evidence to answer this question.";
+  const facts = [
+    "September 16 is a conditional onboarding window for the initial 10 locations, not all 28.",
+    "Reserve the implementation pod through September 16 and send capacity assumptions by September 4.",
+    "Production access requires a signed revised agreement and a verified named security contact.",
+    "Verify the escalation route by September 8.",
+    "Send the preferred escalation details today, August 26.",
+    "Publish the adoption dashboard by September 11. Expansion requires eight of ten locations to complete four consecutive weekly workflows without manual correction.",
+  ];
+  function fixture(response: unknown) {
+    const released = {
+      ...release(),
+      released_atoms: facts.map((text, index) => ({
+        ...release().released_atoms[0]!,
+        atom_id: digest(`reliability-${index}`),
+        text,
+      })),
+      query_hit_counts: [facts.length],
+    };
+    const planner = { generate: vi.fn(async () => ({ queries: [] })) };
+    const answerer = { generate: vi.fn(async (_input: StructuredGenerationInput) => response) };
+    const retrieval = {
+      retrieve: vi.fn(async () => released),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const audit = { append: vi.fn() };
+    const failures: AnswerCompositionFailureDiagnosticV1[] = [];
+    const composition = createRetrievalGroundedAnswerComposition({
+      planner, answerer, released_retrieval: retrieval, audit,
+      generation_adapter_id: "test", planner_model: "test", answer_model: "test",
+      on_failure: (event) => failures.push(event),
+    });
+    return { composition, released, planner, answerer, retrieval, audit, failures };
+  }
+
+  it.each([
+    ["Can we promise all 28 locations for September 16?", "No. September 16 is conditional for the first 10 locations, subject to the agreement and security prerequisites."],
+    ["List the approved commitments and deadlines.", "No single definitive list is provided. The sources contain individual deadlines and conditions."],
+  ])("rejects substantive text mislabeled as insufficient: %s", async (question, answer) => {
+    const f = fixture({ status: "insufficient_evidence", answer, citations: [] });
+    await expect(f.composition.answer({ question })).rejects.toThrow("answer response has invalid insufficient-evidence text");
+    expect(f.planner.generate).toHaveBeenCalledOnce();
+    expect(f.retrieval.retrieve).toHaveBeenCalledOnce();
+    expect(f.answerer.generate).toHaveBeenCalledOnce();
+    expect(f.retrieval.revalidate).not.toHaveBeenCalled();
+    expect(f.audit.append).not.toHaveBeenCalled();
+    expect(f.failures).toEqual([expect.objectContaining({ stage: "answer", failure_class: "core_validation" })]);
+    expect(JSON.stringify(f.failures)).not.toContain(answer);
+  });
+
+  it.each([
+    "No. September 16 is conditional for the first 10 locations, not all 28; production access requires the signed agreement and verified contact.",
+    "Reserve the pod through September 16; send assumptions by September 4. Verify the route by September 8. Send preferred details on August 26. Publish the dashboard by September 11.",
+    "The first 10 have a conditional September 16 window. There is insufficient accessible evidence for the second customer's schedule.",
+  ])("releases a cited supported negative, synthesis, or partial answer: %s", async (answer) => {
+    const f = fixture({ status: "answered", answer, citations: ["a1", "a2", "a3", "a4", "a5", "a6"] });
+    const result = await f.composition.answer({ question: "Summarize the commitments and deadlines." });
+    expect(result.answer).toBe(answer);
+    expect(result.citations).toEqual(f.released.released_atoms.map(({ text: _text, ...citation }) => citation));
+    expect(f.retrieval.revalidate).toHaveBeenCalledExactlyOnceWith({ release: f.released });
+    expect(f.audit.append).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: "answered", citation_count: 6 }));
+    const request = f.answerer.generate.mock.calls[0]![0];
+    expect(JSON.parse(request.user_prompt).sources.map((source: { text: string }) => source.text)).toEqual(facts);
+    // Contract assertions are not a live-model quality proof.
+    expect(request.system_prompt).toContain("A supported negative conclusion is an answered result");
+    expect(request.system_prompt).toContain("each requested part");
+    expect(request.system_prompt).toContain("do not require a pre-existing summary");
+    expect(request.system_prompt).toContain("does not prove completion");
+    expect(request.system_prompt).toContain("Keep each task paired with its own deadline");
+  });
+
+  it.each(["What special price did the customer receive?", "What is the second customer's schedule?"])("keeps unsupported or private-only questions neutral: %s", async (question) => {
+    const f = fixture({ status: "insufficient_evidence", answer: neutral, citations: [] });
+    const result = await f.composition.answer({ question });
+    expect(result).toMatchObject({ answer: neutral, citations: [] });
+    expect(f.retrieval.revalidate).toHaveBeenCalledOnce();
+    expect(f.audit.append).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: "insufficient_evidence", citation_count: 0 }));
   });
 });
