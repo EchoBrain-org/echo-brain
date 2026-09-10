@@ -584,3 +584,133 @@ describe("staging journey content telemetry switch", () => {
     ).toBe(false);
   });
 });
+
+
+describe("bounded rejection accounting", () => {
+  it("rejects malformed metric/observer inputs and still delivers the next valid event", () => {
+    const lines: string[] = [];
+    const transport = createStagingJourneyTelemetryTransportV1(
+      { release_sha: RELEASE_SHA, build_number: 42 }, {
+        write: (line) => { lines.push(line); }, now: () => STARTED_AT,
+        scheduler: { set_interval: () => 1, clear_interval: () => {} },
+      },
+    );
+    const valid = createJourneyTelemetryEventV1({
+      journey_id: JOURNEY_ID, sequence: 1, observed_at: STARTED_AT,
+      context: { environment: "staging", workflow: "ask", release_sha: RELEASE_SHA, build_number: 42 },
+      event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
+    });
+    for (const invalid of [null, new Proxy({}, { get() { throw new Error("private-getter"); } }),
+      { ...valid, llm_usage: { provider: "private-provider", model: "private-model", input_tokens: -1 } },
+    ]) expect(() => transport.observer(invalid as never)).not.toThrow();
+    expect(lines).toEqual([]);
+    transport.observer(valid);
+    expect(JSON.parse(lines[0]!)).toEqual(valid);
+    expect(JSON.parse(lines[1]!)).toMatchObject({ StageSucceeded: 1 });
+    transport.start();
+    transport.close();
+    expect(JSON.parse(lines[2]!)).toMatchObject({
+      delivery: { rejected_events: 3, writes_failed: 0, writes_dropped: 0, writes_pending: 0 },
+      rejection_counts: { journey_observer: { invalid_journey_event: 3 } },
+    });
+    expect(lines.join("")).not.toContain("private-");
+  });
+
+  it("keeps pending and dropped writes separate from rejection attribution", async () => {
+    const lines: string[] = [];
+    let heartbeat = () => {};
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let block = true;
+    const transport = createStagingJourneyTelemetryTransportV1(
+      { release_sha: RELEASE_SHA, build_number: 42 }, {
+        write: (line) => { lines.push(line); return block ? pending : undefined; }, now: () => STARTED_AT,
+        scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
+      },
+    );
+    transport.start();
+    for (let i = 0; i < 500; i += 1) heartbeat();
+    expect(JSON.parse(lines[998]!)).toMatchObject({ delivery: { writes_pending: 998, rejected_events: 0 } });
+    transport.observer(null as never);
+    release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    block = false;
+    heartbeat();
+    transport.close();
+    expect(JSON.parse(lines[1000]!)).toMatchObject({
+      delivery: { writes_pending: 0, writes_dropped: 2, writes_failed: 0, rejected_events: 1 },
+      rejection_counts: { journey_observer: { invalid_journey_event: 1 } },
+    });
+  });
+
+  it.each([false, true])("attributes all four origins without logging inputs (content enabled: %s)", (content_enabled) => {
+    const lines: string[] = [];
+    let heartbeat = () => {};
+    const transport = createStagingJourneyTelemetryTransportV1(
+      { release_sha: RELEASE_SHA, build_number: 42 },
+      {
+        write: (line) => { lines.push(line); }, now: () => STARTED_AT,
+        scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
+      }, { content_enabled },
+    );
+    const malformed = { environment: "staging", release_sha: RELEASE_SHA, build_number: 42, journey_id: "private-invalid-input" };
+    expect(() => transport.observer(malformed as never)).not.toThrow();
+    expect(() => transport.content_observer(malformed as never)).not.toThrow();
+    expect(() => transport.content_observer({
+      ...malformed, journey_id: JOURNEY_ID, sequence: 1, observed_at: STARTED_AT,
+      stage: "ask_answer", content_kind: "answer_output",
+      content: new Proxy({}, { ownKeys() { throw new Error("private-format-error"); } }),
+    })).not.toThrow();
+    expect(() => transport.observation_failure({ emitter: "meeting_approval_observer", reason: "observation_callback_failure" })).not.toThrow();
+    // Even forged callback arguments cannot create dimensions or recursively reject.
+    expect(() => transport.observation_failure(new Proxy({} as never, { get() { throw new Error("private-callback-error"); } }))).not.toThrow();
+    expect(lines).toEqual([]);
+    transport.start();
+    heartbeat();
+    transport.close();
+    const expected = {
+      journey_observer: { invalid_journey_event: 1 },
+      content_capture: { invalid_content_record: content_enabled ? 1 : 0, content_format_error: content_enabled ? 1 : 0 },
+      meeting_approval_observer: { observation_callback_failure: 2 },
+    };
+    for (const event of lines.map((line) => JSON.parse(line)).filter((event) => event.kind === STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1)) {
+      expect(event.rejection_counts).toEqual(expected);
+      expect(event.delivery).toMatchObject({ rejected_events: content_enabled ? 5 : 3, writes_failed: 0, writes_pending: 0, writes_dropped: 0 });
+      expect(Object.values(event.rejection_counts).flatMap((counts) => Object.values(counts as Record<string, number>)).reduce((a, b) => a + b, 0)).toBe(event.delivery.rejected_events);
+    }
+    expect(lines).toHaveLength(4); // Existing liveness + EMF only, no per-rejection writes.
+    expect(lines.join("")).not.toContain("private-");
+    for (const metric of lines.map((line) => JSON.parse(line)).filter((event) => event._aws)) {
+      expect(metric).not.toHaveProperty("rejection_counts");
+      expect(metric._aws.CloudWatchMetrics[0].Dimensions).toEqual([[]]);
+    }
+  });
+
+  it.each(["synchronous", "asynchronous"])("keeps %s write failures separate from rejections", async (mode) => {
+    const lines: string[] = [];
+    let fail = true;
+    let heartbeat = () => {};
+    const transport = createStagingJourneyTelemetryTransportV1(
+      { release_sha: RELEASE_SHA, build_number: 42 }, {
+        now: () => STARTED_AT,
+        write: (line) => {
+          if (!fail) { lines.push(line); return; }
+          if (mode === "synchronous") throw new Error("private-writer-error");
+          return Promise.reject(new Error("private-writer-error"));
+        },
+        scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
+      },
+    );
+    transport.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    fail = false;
+    heartbeat();
+    transport.close();
+    expect(JSON.parse(lines[0]!).delivery).toMatchObject({ writes_failed: 2, writes_pending: 0, writes_dropped: 0, rejected_events: 0 });
+    expect(JSON.parse(lines[0]!).rejection_counts).toEqual({
+      journey_observer: { invalid_journey_event: 0 },
+      content_capture: { invalid_content_record: 0, content_format_error: 0 },
+      meeting_approval_observer: { observation_callback_failure: 0 },
+    });
+  });
+});

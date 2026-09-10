@@ -390,7 +390,27 @@ The handler accepts six fixed operations:
    versioned chunks, checks count/byte consistency, and labels partial capture
    or missing/conflicting chunks. Content is escaped text in the same widget.
 6. `health` reads the latest bounded transport heartbeat observations and their
-   cumulative delivery counters. Historical records without counters are unknown.
+   cumulative delivery counters and `rejection_counts`. Set `operation: health`
+   in the existing Journey Explorer widget (or select **Transport health** from a
+   detail view). Compare heartbeats from the same process lifetime: the four
+   fixed emitter/reason counters sum to `delivery.rejected_events`:
+
+   | Emitter | Reason | Local boundary |
+   | --- | --- | --- |
+   | `journey_observer` | `invalid_journey_event` | Journey event validation/formatting threw |
+   | `content_capture` | `invalid_content_record` | Enabled content formatter returned no records |
+   | `content_capture` | `content_format_error` | Enabled content observation/formatting threw |
+   | `meeting_approval_observer` | `observation_callback_failure` | Meeting approval observation or sidecar startup reported failure |
+
+   These are local rejection counts, separate from `writes_failed`,
+   `writes_dropped`, and `writes_pending`; they do not establish downstream
+   CloudWatch ingestion loss or an Ask failure. Missing or malformed historical
+   counters appear as `null` (unknown), never zero. Counters reset on process
+   restart, including restarts of the same release. Reason totals are emitted
+   only in liveness records, not as cumulative EMF count metrics or per-reject
+   log events. Content-disabled observations remain inert. The September 10
+   retained aggregate (14 to 190 rejections with zero failed/dropped/pending
+   writes) cannot identify the live emitter or reason retrospectively.
 
 `list` paginates journey IDs first, with a default page size of 20 (maximum
 25), then fetches events only for that page. A page's selected journeys must
