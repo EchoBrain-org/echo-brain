@@ -1,3 +1,4 @@
+import type { MeetingApprovalObservationFailureV1 } from "../../meeting-approval-journey-telemetry-v1.js";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { CoreRuntimeObservationScopeV1 } from "../../../shared/core-runtime-observation-v1.js";
 import { canonicalJson } from "@echo-brain/federation-protocol";
@@ -30,6 +31,16 @@ export interface StagingJourneyTelemetryIdentityV1 {
   readonly build_number: number;
 }
 
+/** Exhaustive local rejection origins. No caller-controlled keys or error values. */
+export interface StagingTelemetryRejectionCountsV1 {
+  readonly journey_observer: { readonly invalid_journey_event: number };
+  readonly content_capture: {
+    readonly invalid_content_record: number;
+    readonly content_format_error: number;
+  };
+  readonly meeting_approval_observer: { readonly observation_callback_failure: number };
+}
+
 export interface StagingJourneyTelemetryLivenessEventV1 {
   readonly schema_version: typeof STAGING_JOURNEY_TELEMETRY_LIVENESS_SCHEMA_VERSION_V1;
   readonly kind: typeof STAGING_JOURNEY_TELEMETRY_LIVENESS_KIND_V1;
@@ -39,6 +50,8 @@ export interface StagingJourneyTelemetryLivenessEventV1 {
   readonly build_number: number;
   readonly event: "startup" | "heartbeat";
   readonly delivery?: Readonly<Record<string, number>>;
+  /** Process-cumulative local accounting, separate from writes and downstream ingestion. */
+  readonly rejection_counts?: StagingTelemetryRejectionCountsV1;
 }
 
 export interface StagingApprovedSearchBacklogEventV1 {
@@ -77,7 +90,7 @@ export interface StagingJourneyTelemetryTransportV1 {
   /** False only when the deploy identity is unsafe to emit. */
   readonly enabled: boolean;
   readonly core_runtime: CoreRuntimeObservationScopeV1;
-  readonly observation_failure: () => void;
+  readonly observation_failure: (failure: MeetingApprovalObservationFailureV1) => void;
   /** Immutable deploy identity for future staging journey emitters. */
   readonly identity: StagingJourneyTelemetryIdentityV1 | null;
   /**
@@ -164,6 +177,23 @@ export function createStagingJourneyTelemetryTransportV1(
   let intervalId: unknown | undefined;
   let intervalScheduled = false;
   const delivery = { writes_attempted: 0, writes_failed: 0, writes_pending: 0, writes_dropped: 0, rejected_events: 0, attempted_bytes: 0, observer_overhead_us: 0, partial_captures: 0 };
+  const rejectionCounts = {
+    journey_observer: { invalid_journey_event: 0 },
+    content_capture: { invalid_content_record: 0, content_format_error: 0 },
+    meeting_approval_observer: { observation_callback_failure: 0 },
+  } satisfies StagingTelemetryRejectionCountsV1;
+
+  function reject<E extends keyof StagingTelemetryRejectionCountsV1>(
+    emitter: E,
+    reason: keyof StagingTelemetryRejectionCountsV1[E],
+  ): void {
+    // Only source-owned literal pairs reach this helper. No formatting, callbacks,
+    // or writes here: reporting a rejection cannot recursively reject telemetry.
+    const counters = rejectionCounts[emitter] as Record<typeof reason, number>;
+    counters[reason] += 1;
+    delivery.rejected_events += 1;
+  }
+
   let eventLoop: ReturnType<typeof monitorEventLoopDelay> | undefined;
 
 
@@ -198,6 +228,11 @@ export function createStagingJourneyTelemetryTransportV1(
         build_number: immutableIdentity.build_number,
         event,
         delivery: { ...delivery },
+        rejection_counts: {
+          journey_observer: { ...rejectionCounts.journey_observer },
+          content_capture: { ...rejectionCounts.content_capture },
+          meeting_approval_observer: { ...rejectionCounts.meeting_approval_observer },
+        },
       } satisfies StagingJourneyTelemetryLivenessEventV1;
       write(liveness);
       write(formatStagingJourneyLivenessMetricV1(observedAt));
@@ -223,7 +258,7 @@ export function createStagingJourneyTelemetryTransportV1(
         write(metric);
       }
     } catch {
-      delivery.rejected_events += 1;
+      reject("journey_observer", "invalid_journey_event");
       // An invalid observer input is omitted rather than surfacing to callers.
     }
   };
@@ -238,11 +273,11 @@ export function createStagingJourneyTelemetryTransportV1(
         return;
       }
       const records = formatStagingJourneyContentRecordsV2(record);
-      if (records.length === 0) delivery.rejected_events += 1;
+      if (records.length === 0) reject("content_capture", "invalid_content_record");
       if (records[0]?.truncated === true) delivery.partial_captures += 1;
       for (const formatted of records) write(formatted);
     } catch {
-      delivery.rejected_events += 1;
+      reject("content_capture", "content_format_error");
       // Content telemetry is strictly outside answer control flow.
     }
   };
@@ -296,7 +331,9 @@ export function createStagingJourneyTelemetryTransportV1(
   return Object.freeze({
     enabled: true,
     core_runtime: coreRuntime,
-    observation_failure: () => { delivery.rejected_events += 1; },
+    // This seam has one fixed origin. Never inspect or copy a runtime argument,
+    // even if an untyped caller supplies injected fields or throwing getters.
+    observation_failure: () => { reject("meeting_approval_observer", "observation_callback_failure"); },
     identity: immutableIdentity,
     start(): void {
       if (closed || started) return;
