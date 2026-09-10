@@ -397,6 +397,52 @@ describe("Person client", () => {
     });
   });
 
+  it.each([
+    { record_approved_by: { display_name: "Maya Chen" } },
+    {},
+    undefined,
+  ])("negotiates optional source metadata and accepts older Authorities: %j", async (metadata) => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const recordSha256 = `sha256:${"d".repeat(64)}` as const;
+      const fetchImpl: typeof fetch = async (input, init) => {
+        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: authority });
+        expect(new Headers(init?.headers).get("x-echo-person-record-version")).toBe("2");
+        return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{
+          position: 1, approval_id: fixtureId("apr", 1), record_sha256: recordSha256,
+          envelope: { approved: true }, ...(metadata === undefined ? {} : { source_metadata: metadata }),
+        }] });
+      };
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: fetchImpl });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const result = await client.records(undefined, undefined, recordSha256);
+      expect(result).toMatchObject({ records: [{ envelope: { approved: true } }] });
+      if (result.kind !== "echo-clean-person-record-list-v1") throw new Error("unexpected search result");
+      expect(result.records[0]?.source_metadata).toEqual(metadata);
+    });
+  });
+
+  it.each([
+    { record_approved_by: { display_name: "Maya", email: "private@example.test" } },
+    { record_approved_by: { display_name: "spoof\u202ename" } },
+    { record_approved_by: { display_name: "" } },
+    { participants: [] },
+  ])("rejects malformed source metadata: %j", async (metadata) => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const fetchImpl: typeof fetch = async (input) => {
+        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: authority });
+        return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [{
+          position: 1, approval_id: fixtureId("apr", 1), record_sha256: `sha256:${"d".repeat(64)}`,
+          envelope: {}, source_metadata: metadata,
+        }] });
+      };
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: fetchImpl });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(client.records()).rejects.toThrow();
+    });
+  });
+
   it("rejects invalid and combined exact-record options before network access", async () => {
     for (const argv of [
       ["records", "--record-sha256", "sha256:nope"],

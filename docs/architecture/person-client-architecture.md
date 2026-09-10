@@ -88,15 +88,39 @@ Account changes cancel pending answer/source reads and clear the displayed
 conversation. People mutations block a simultaneous account transition while
 their outcome is pending. Browser login can be cancelled from the Account menu.
 
-Ask retains validated citations and offers **Sources** for the cited approved
-records, grouped by record digest. Opening Sources invokes
-`person records --record-sha256 <digest>` for each record, using the existing
-authenticated record-read route. Current membership and visibility policy are
-checked again, and the existing read audit is retained. Missing and inaccessible
-records both produce an empty result. The view shows readable meeting titles,
-visibility, decisions, actions, and rationales; **Back to answer** restores the
-answer. Source details are cleared when the app loses focus or the conversation
-changes. Runtime processing and telemetry remain unchanged.
+Ask retains validated citations, groups them by record digest, and loads source
+cards through `person records --record-sha256 <digest>` while the panel has focus.
+Each readable card appears as its sequential read completes; a failed read does
+not discard other readable cards. The **Based on** chips acquire meeting titles and
+available dates after their reads complete. Selecting a chip opens its approved record alongside the answer;
+when another source read is still pending, a selected unread chip restarts the
+remaining sequence with that record first. On narrow displays the source pane
+occupies the panel until **Back to answer**.
+Escape closes the source pane before hiding the panel. A missing source does not
+prevent other readable cards from loading.
+
+Cards show decisions, actions, rationale, and approved evidence excerpts beside
+the statement each excerpt supports. Meeting dates, excerpt timestamps,
+participant display names, and the record approver's display name are optional;
+absent metadata is omitted. Participants are source observations, not confirmed
+attendance. No email or opaque participant ID substitutes for a missing name.
+An ECHO record approval does not establish who authorized its business decision.
+
+The client requests optional source metadata with
+`X-Echo-Person-Record-Version: 2`. Each readable record may then include
+`source_metadata.record_approved_by.display_name`, resolved from the private
+Slack approval's exact organization, principal, and membership tuple. The lookup
+uses the current directory display name, including historical revoked tenures
+when they remain available; it supplies no job title, email, or authorization.
+Participants continue to come from the approved brief. The signed envelope and
+record schema are unchanged. Older clients receive the original response shape,
+and newer clients accept older servers that omit the optional metadata.
+
+Current membership and record visibility are checked again before releasing
+the enriched response, whose digest is included in the existing read audit.
+Missing and inaccessible records both produce an empty result. Source details,
+including names in chips, are cleared when the app loses focus or the conversation
+changes and reloaded on return. Runtime processing and telemetry are unchanged.
 
 ## Artifact boundary
 

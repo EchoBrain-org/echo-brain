@@ -6,7 +6,7 @@ import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlit
 import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
 import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
-import { createPersonRecordReadRouteV1 } from "../src/composition/person-record-read-route.js";
+import { createPersonRecordReadRouteV1, type CreatePersonRecordReadRouteV1Options } from "../src/composition/person-record-read-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonRecordReadHttpApplicationV1 } from "../src/presentation/person-record-read-http-application.js";
 
@@ -37,6 +37,7 @@ function setup(
     authorization(),
     authorization(),
   ],
+  overrides: Partial<CreatePersonRecordReadRouteV1Options> = {},
 ) {
   const authority = openAuthorityDatabase(":memory:");
   applyAuthorityBaselineV1(authority);
@@ -68,6 +69,7 @@ function setup(
       },
     },
     audit: new SqlitePersonRecordReadAuditV1(authority),
+    ...overrides,
   });
   return {
     authority,
@@ -78,6 +80,72 @@ function setup(
 }
 
 describe("Person V4 record read route", () => {
+  const approver = {
+    organization_id: "org_clean", principal_id: "principal_approver",
+    membership_id: "membership_approver", display_name: "Maya Chen",
+  };
+  function metadataRecord() {
+    return {
+      position: 7, approval_id: "approval_7", record_sha256: digest("record-7"),
+      envelope: { body: {
+        authority_id: "authority_clean", organization_id: "org_clean", state_lineage_id: "lineage_clean",
+        event: { kind: "approved" },
+        human_act_resolution_ref: {
+          kind: "echo-private-slack-block-approval-resolution-ref-v1", action: "approve",
+          organization_id: "org_clean", approval_id: "approval_7",
+          final_approver: { principal_id: approver.principal_id, membership_id: approver.membership_id },
+        },
+      } },
+    };
+  }
+
+  it("optionally resolves the exact record approver without changing the signed envelope or legacy response", () => {
+    const membership = vi.fn(() => approver);
+    const record = metadataRecord();
+    const value = setup([authorization(), authorization(), authorization(), authorization()], {
+      records: { list: () => [record] }, memberships: { membership },
+    });
+    try {
+      const legacy = value.route.list({ access_token: "bearer-only" });
+      expect(legacy.records[0]).not.toHaveProperty("source_metadata");
+      expect(membership).not.toHaveBeenCalled();
+      const enriched = value.route.list({ access_token: "bearer-only", include_source_metadata: true });
+      expect(membership).toHaveBeenCalledExactlyOnceWith("membership_approver");
+      expect(enriched.records[0]?.source_metadata).toEqual({ record_approved_by: { display_name: "Maya Chen" } });
+      expect(enriched.records[0]?.envelope).toBe(record.envelope);
+      expect(JSON.stringify(enriched.records[0]?.source_metadata)).not.toContain("principal_");
+    } finally { value.authority.close(); }
+  });
+
+  it.each([
+    undefined,
+    { ...approver, organization_id: "another_org" },
+    { ...approver, principal_id: "another_person" },
+    { ...approver, membership_id: "another_tenure" },
+    { ...approver, display_name: "" },
+    { ...approver, display_name: "spoof\u202ename" },
+  ])("omits unavailable or mismatched approver metadata: %j", (resolved) => {
+    const value = setup(undefined, { records: { list: () => [metadataRecord()] }, memberships: { membership: () => resolved } });
+    try {
+      expect(value.route.list({ access_token: "bearer-only", include_source_metadata: true }).records[0]?.source_metadata).toEqual({});
+    } finally { value.authority.close(); }
+  });
+
+  it("does not look up names for inaccessible records and withholds metadata when caller membership changes", () => {
+    const membership = vi.fn(() => approver);
+    const empty = setup(undefined, { records: { list: () => [] }, memberships: { membership } });
+    try {
+      expect(empty.route.list({ access_token: "bearer-only", include_source_metadata: true }).records).toEqual([]);
+      expect(membership).not.toHaveBeenCalled();
+    } finally { empty.authority.close(); }
+    const changed = setup([authorization(), authorization({ membership_id: "changed" })], {
+      records: { list: () => [metadataRecord()] }, memberships: { membership },
+    });
+    try {
+      expect(() => changed.route.list({ access_token: "bearer-only", include_source_metadata: true })).toThrow("person authentication failed");
+    } finally { changed.authority.close(); }
+  });
+
   it("derives the V4 reader tuple from the bearer, rechecks it at release, and commits one minimized audit", () => {
     const value = setup();
     try {
@@ -234,6 +302,11 @@ describe("Person exact record HTTP query", () => {
         expect(response.status).toBe(400);
       }
       expect(list).toHaveBeenCalledTimes(1);
+      const enriched = await fetch(`${server.url}/v1/person/records?record_sha256=${record_sha256}`, {
+        headers: { ...headers, "x-echo-person-record-version": "2" },
+      });
+      expect(enriched.status).toBe(200);
+      expect(list).toHaveBeenLastCalledWith({ access_token: "bearer-only", record_sha256, include_source_metadata: true });
     } finally {
       await server.close();
     }

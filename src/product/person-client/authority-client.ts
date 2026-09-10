@@ -76,6 +76,9 @@ export interface PersonRecordListItemV1 {
   readonly approval_id: string;
   readonly record_sha256: `sha256:${string}`;
   readonly envelope: Readonly<Record<string, unknown>>;
+  readonly source_metadata?: {
+    readonly record_approved_by?: { readonly display_name: string };
+  };
 }
 
 export interface PersonRecordSearchV1 {
@@ -279,7 +282,8 @@ function validatePersonRecordList(
     const record = asPlainRecord(value, "record list item is invalid");
     exactKeys(
       record,
-      ["position", "approval_id", "record_sha256", "envelope"],
+      ["position", "approval_id", "record_sha256", "envelope",
+        ...(record.source_metadata === undefined ? [] : ["source_metadata"])],
       "record list item is invalid",
     );
     if (
@@ -305,6 +309,9 @@ function validatePersonRecordList(
       approval_id: record.approval_id,
       record_sha256: record.record_sha256 as `sha256:${string}`,
       envelope,
+      ...(record.source_metadata === undefined ? {} : {
+        source_metadata: validateSourceMetadata(record.source_metadata),
+      }),
     });
   });
   return Object.freeze({
@@ -312,6 +319,19 @@ function validatePersonRecordList(
     kind: "echo-clean-person-record-list-v1",
     records: Object.freeze(records),
   });
+}
+
+function validateSourceMetadata(value: unknown): NonNullable<PersonRecordListItemV1["source_metadata"]> {
+  const metadata = asPlainRecord(value, "source metadata is invalid");
+  exactKeys(metadata, metadata.record_approved_by === undefined ? [] : ["record_approved_by"], "source metadata is invalid");
+  if (metadata.record_approved_by === undefined) return Object.freeze({});
+  const approver = asPlainRecord(metadata.record_approved_by, "source approver is invalid");
+  exactKeys(approver, ["display_name"], "source approver is invalid");
+  if (typeof approver.display_name !== "string" || approver.display_name.trim().length === 0 ||
+    approver.display_name.length > 200 || /[\p{Cc}\p{Cf}]/u.test(approver.display_name)) {
+    throw new Error("source approver is invalid");
+  }
+  return Object.freeze({ record_approved_by: Object.freeze({ display_name: approver.display_name }) });
 }
 
 function validatePersonRecordSearchRequest(value: unknown): {
@@ -748,10 +768,12 @@ export class PersonAuthorityClient {
     readonly access_token: string;
     readonly validate_response: (value: unknown) => T;
     readonly maximum_response_bytes: number;
+    readonly headers?: Readonly<Record<string, string>>;
   }): Promise<T> {
     const response = await this.send(input.path, {
       method: "GET",
       headers: {
+        ...input.headers,
         accept: "application/json",
         authorization: `Bearer ${input.access_token}`,
       },
@@ -947,6 +969,7 @@ export class PersonAuthorityClient {
           : `${PERSON_RECORDS_PATH_V1}?limit=${limit}`,
       access_token: accessToken,
       validate_response: validatePersonRecordList,
+      headers: { "x-echo-person-record-version": "2" },
       maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }
