@@ -208,6 +208,9 @@ export async function startOrganizationAuthorityApiRuntime(
         state_lineage_id: lineage.root.state_lineage_id,
         sessions,
         records: new PersonRecordReaderV1(recordDatabase),
+        memberships: {
+          membership: (id) => repository.read((transaction) => transaction.membership(id)),
+        },
         audit: readAudit,
       }),
       person_record_search: recordSearch,

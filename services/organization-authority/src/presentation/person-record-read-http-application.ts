@@ -4,6 +4,11 @@ export const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 export type PersonRecordDigestV1 = `sha256:${string}`;
 export type PersonRecordEnvelopeV1 = Readonly<Record<string, unknown>>;
 
+/** Optional presentation metadata, resolved now; not part of the signed record. */
+export interface PersonRecordSourceMetadataV1 {
+  readonly record_approved_by?: { readonly display_name: string };
+}
+
 export interface PersonRecordReadResponseV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-record-list-v1";
@@ -12,6 +17,7 @@ export interface PersonRecordReadResponseV1 {
     readonly approval_id: string;
     readonly record_sha256: PersonRecordDigestV1;
     readonly envelope: PersonRecordEnvelopeV1;
+    readonly source_metadata?: PersonRecordSourceMetadataV1;
   }[];
 }
 
@@ -21,5 +27,6 @@ export interface PersonRecordReadHttpApplicationV1 {
     readonly access_token: string;
     readonly limit?: number;
     readonly record_sha256?: PersonRecordDigestV1;
+    readonly include_source_metadata?: boolean;
   }): PersonRecordReadResponseV1;
 }

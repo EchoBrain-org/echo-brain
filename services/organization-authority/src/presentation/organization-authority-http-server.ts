@@ -705,6 +705,8 @@ export function createOrganizationAuthorityHttpServer(
           200,
           options.person_record_read.list({
             access_token: accessToken(request.headers.authorization),
+            ...(request.headers["x-echo-person-record-version"] === "2"
+              ? { include_source_metadata: true } : {}),
             ...(limit === undefined ? {} : { limit }),
             ...(exactRecord === undefined
               ? {}

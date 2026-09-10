@@ -266,7 +266,7 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("composerScrollView.hasVerticalScroller = contentHeight > 132");
   });
 
-  it("keeps the result surface simple while readable sources are deferred until requested", () => {
+  it("keeps the answer visible while loading permission-checked source cards", () => {
     const source = readFileSync(SOURCE, "utf8");
 
     expect(source).toContain('PillButton(title: "Copy answer"');
@@ -355,7 +355,7 @@ describe("native ECHO hotkey overlay", () => {
       "func windowShouldClose(_ sender: NSWindow) -> Bool {\n        hidePanel()\n        return false",
     );
     expect(source).toContain(
-      "panel.onCancel = { [weak self] in self?.hidePanel() }",
+      "if self.sourcePaneOpen { self.showAnswer() } else { self.hidePanel() }",
     );
     expect(source).toContain("func shutdown()");
     expect(shutdown).toContain("cancelActiveAsk()");

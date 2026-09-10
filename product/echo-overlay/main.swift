@@ -159,9 +159,24 @@ private struct SourceRecord: Sendable {
     let source: DisplaySource
     let title: String
     let visibility: String
-    let decisions: [String]
-    let actions: [String]
-    let rationales: [String]
+    let date: String?
+    let shortDate: String?
+    let approvedBy: String?
+    let participants: [String]
+    let decisions: [SourceSignal]
+    let actions: [SourceSignal]
+    let rationales: [SourceSignal]
+}
+
+private struct SourceSignal: Sendable {
+    let text: String
+    let status: String?
+    let evidence: [SourceEvidence]
+}
+
+private struct SourceEvidence: Sendable {
+    let quote: String
+    let timestamp: String?
 }
 
 private enum AskOutcome: Sendable {
@@ -480,11 +495,12 @@ private final class CliRunner: @unchecked Sendable {
                 source: source,
                 running: running
             ) else {
-                return running.state().cancelled ? .cancelled : .unavailable
+                if running.state().cancelled { return .cancelled }
+                continue
             }
             records.append(record)
         }
-        return .success(records)
+        return records.isEmpty ? .unavailable : .success(records)
     }
 
     private static func executeSource(
@@ -558,7 +574,8 @@ private final class CliRunner: @unchecked Sendable {
               result["kind"] as? String == "echo-clean-person-record-list-v1",
               let records = result["records"] as? [[String: Any]], records.count == 1,
               let record = records.first,
-              hasExactKeys(record, ["position", "approval_id", "record_sha256", "envelope"]),
+              (hasExactKeys(record, ["position", "approval_id", "record_sha256", "envelope"]) ||
+               hasExactKeys(record, ["position", "approval_id", "record_sha256", "envelope", "source_metadata"])),
               record["position"] as? Int ?? 0 > 0,
               let recordSha256 = record["record_sha256"] as? String,
               recordSha256 == source.recordSha256,
@@ -581,10 +598,27 @@ private final class CliRunner: @unchecked Sendable {
         let visibility = source.policyID == "organization-member-readable-person-v2"
             ? "Visible to active organization members"
             : "Only the approver"
+        let metadata = record["source_metadata"] as? [String: Any]
+        let approver = metadata?["record_approved_by"] as? [String: Any]
+        var participants: [String] = []
+        for participant in (meeting["participants"] as? [[String: Any]] ?? []).prefix(10_000) {
+            guard let name = safeSourceText(participant["display_name"] as? String),
+                  !participants.contains(name) else { continue }
+            if participants.count == 32 { participants.append("Additional participants not shown"); break }
+            participants.append(name)
+        }
+        let time = meeting["time"] as? [String: Any]
+        let startedAt = (time?["actual_start_at"] as? String) ?? (time?["scheduled_start_at"] as? String)
+        let timezone = (time?["timezone"] as? String).flatMap(TimeZone.init(identifier:))
+        let meetingDate = sourceDate(startedAt)
         return SourceRecord(
             source: source,
             title: title,
             visibility: visibility,
+            date: meetingDate.map { formatSourceDate($0, timezone: timezone, includeTime: time?["all_day"] as? Bool != true) },
+            shortDate: meetingDate.map { formatSourceDate($0, timezone: timezone, includeTime: false) },
+            approvedBy: safeSourceText(approver?["display_name"] as? String),
+            participants: participants,
             decisions: decisions,
             actions: actions,
             rationales: rationales
@@ -598,7 +632,7 @@ private final class CliRunner: @unchecked Sendable {
     private static func safeSourceText(_ value: String?) -> String? {
         guard let value else { return nil }
         let cleaned = value.unicodeScalars.map { scalar -> String in
-            CharacterSet.controlCharacters.contains(scalar) ? " " : String(scalar)
+            CharacterSet.controlCharacters.contains(scalar) || scalar.properties.generalCategory == .format ? " " : String(scalar)
         }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
         guard cleaned.unicodeScalars.count > maximumDisplayedSourceScalars else { return cleaned }
@@ -606,10 +640,28 @@ private final class CliRunner: @unchecked Sendable {
         return String(cleaned.unicodeScalars[..<ending]) + "… (truncated)"
     }
 
-    private static func safeSourceSignals(_ value: Any?, kind: String) -> [String]? {
+    private static func sourceDate(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = parser.date(from: value) { return date }
+        parser.formatOptions = [.withInternetDateTime]
+        return parser.date(from: value)
+    }
+
+    private static func formatSourceDate(_ value: Date, timezone: TimeZone?, includeTime: Bool) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = includeTime ? .short : .none
+        formatter.timeZone = timezone ?? .current
+        let result = formatter.string(from: value)
+        return includeTime ? "\(result) \(formatter.timeZone.abbreviation(for: value) ?? "")" : result
+    }
+
+    private static func safeSourceSignals(_ value: Any?, kind: String) -> [SourceSignal]? {
         guard let signals = value as? [[String: Any]] else { return nil }
         var ids = Set<String>()
-        var result: [String] = []
+        var result: [SourceSignal] = []
         for signal in signals {
             guard signal["kind"] as? String == kind,
                   let id = signal["id"] as? String,
@@ -617,10 +669,23 @@ private final class CliRunner: @unchecked Sendable {
                   ids.insert(id).inserted,
                   let text = safeSourceText(signal["text"] as? String)
             else { return nil }
-            if result.count < maximumDisplayedSourceSignals { result.append(text) }
+            if result.count < maximumDisplayedSourceSignals {
+                var evidence: [SourceEvidence] = []
+                for span in (signal["evidence"] as? [[String: Any]] ?? []).prefix(32) {
+                    guard let quote = safeSourceText(span["quote"] as? String),
+                          !evidence.contains(where: { $0.quote == quote }) else { continue }
+                    let timestamp = sourceDate(span["started_at"] as? String).map {
+                        formatSourceDate($0, timezone: nil, includeTime: true)
+                    }
+                    evidence.append(SourceEvidence(quote: quote, timestamp: timestamp))
+                    if evidence.count == 3 { break }
+                }
+                let status = kind == "decision" ? signal["status"] as? String : nil
+                result.append(SourceSignal(text: text, status: status, evidence: evidence))
+            }
         }
         if signals.count > maximumDisplayedSourceSignals {
-            result.append("Additional approved \(kind) items are not shown.")
+            result.append(SourceSignal(text: "Additional approved \(kind) items are not shown.", status: nil, evidence: []))
         }
         return result
     }
@@ -935,6 +1000,11 @@ private final class PillButton: NSButton {
 }
 
 @MainActor
+private final class SourceDocumentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+@MainActor
 private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private let runner = CliRunner()
     private let panel: EchoPanel
@@ -952,8 +1022,19 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     private let emptyAnswerLabel = NSTextField(wrappingLabelWithString: "Ask a focused question and ECHO will synthesize the approved context you can access.")
     private let answerView = NSTextView()
     private let answerScrollView = NSScrollView()
-    private let sourceView = NSTextView()
     private let sourceScrollView = NSScrollView()
+    private let sourcePane = NSView()
+    private let sourceDetails = NSStackView()
+    private let sourceTabs = NSScrollView()
+    private let sourceChips = NSScrollView()
+    private let basedOn = NSStackView()
+    private var answerColumn: NSView?
+    private var answerColumnTrailing: NSLayoutConstraint?
+    private var sourcePaneWidth: NSLayoutConstraint?
+    private var sourceExpansion: CGFloat = 0
+    private var sourcePaneOpen = false
+    private var sourceRecords: [String: SourceRecord] = [:]
+    private var selectedSourceIndex = 0
     private let answerHeader = NSStackView()
     private var composerHeightConstraint: NSLayoutConstraint?
     private var activeAsk: RunningAsk?
@@ -968,7 +1049,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
 
     override init() {
         panel = EchoPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
             // Non-activating: the panel takes keyboard focus without making ECHO the
             // active app, the way Spotlight does. Plain NSApp.activate() is declined
             // by cooperative activation whenever the last click was in another app.
@@ -1091,12 +1172,19 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         clearFetchedSources()
     }
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        if panel.isVisible, !currentSources.isEmpty, sourceRecords.isEmpty { loadSources() }
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         hidePanel()
         return false
     }
 
     func windowDidResize(_ notification: Notification) {
+        if sourcePaneOpen, answerColumn?.isHidden == true {
+            sourcePaneWidth?.constant = panel.contentView?.bounds.width ?? panel.frame.width
+        }
         updateComposerHeight()
     }
 
@@ -1202,6 +1290,8 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             currentSources = answer.sources
             sourcesButton.isEnabled = !answer.sources.isEmpty
             sourcesButton.title = "Sources (\(answer.sources.count))"
+            refreshSourceChips()
+            if panel.isVisible, panel.isKeyWindow { loadSources() }
             announce("ECHO answer ready.")
         case .failure(let message):
             statusLabel.stringValue = "Couldn’t answer"
@@ -1237,43 +1327,39 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     @objc private func showSources() {
-        if !sourceScrollView.isHidden {
+        if sourcePaneOpen {
             showAnswer()
             return
         }
+        guard !currentSources.isEmpty else { return }
+        openSourcePane()
+        renderSelectedSource()
+        if sourceRecords.isEmpty { loadSources() }
+    }
+
+    private func loadSources() {
         guard activeSources == nil, !currentSources.isEmpty else { return }
         let identifier = UUID()
         sourceRequestIdentifier = identifier
-        answerScrollView.isHidden = true
-        sourceScrollView.isHidden = false
-        sourceView.textStorage?.setAttributedString(
-            NSAttributedString(string: "Loading sources…", attributes: Self.sourceAttributes)
-        )
-        sourcesButton.title = "Loading…"
-        sourcesButton.isEnabled = false
         activeSources = runner.sources(sources: currentSources) { [weak self] outcome in
             Task { @MainActor in self?.handleSources(outcome, identifier: identifier) }
         }
+        if sourcePaneOpen { renderSelectedSource() }
     }
 
     private func handleSources(_ outcome: SourceOutcome, identifier: UUID) {
         guard sourceRequestIdentifier == identifier else { return }
         activeSources = nil
         sourceRequestIdentifier = nil
-        sourcesButton.title = "Back to answer"
+        sourcesButton.title = sourcePaneOpen ? "Back to answer" : "Sources (\(currentSources.count))"
         sourcesButton.isEnabled = !currentSources.isEmpty
         switch outcome {
         case .success(let records):
-            sourceView.textStorage?.setAttributedString(
-                NSAttributedString(string: formatSourceRecords(records), attributes: Self.sourceAttributes)
-            )
-            sourceView.scrollRangeToVisible(NSRange(location: 0, length: 0))
-            announce("Sources ready.")
+            sourceRecords = Dictionary(uniqueKeysWithValues: records.map { ($0.source.recordSha256, $0) })
+            refreshSourceChips()
+            if sourcePaneOpen { renderSelectedSource(); announce("Sources ready.") }
         case .unavailable:
-            sourceView.textStorage?.setAttributedString(
-                NSAttributedString(string: "Source details are unavailable.", attributes: Self.sourceAttributes)
-            )
-            announce("Source details are unavailable.")
+            if sourcePaneOpen { renderSelectedSource(); announce("Source details are unavailable.") }
         case .cancelled:
             break
         }
@@ -1282,6 +1368,8 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     private func clearSources() {
         clearFetchedSources()
         currentSources = []
+        selectedSourceIndex = 0
+        refreshSourceChips()
         sourcesButton.title = "Sources (0)"
         sourcesButton.isEnabled = false
     }
@@ -1290,7 +1378,10 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         sourceRequestIdentifier = nil
         activeSources?.cancel()
         activeSources = nil
-        sourceView.string = ""
+        sourceRecords = [:]
+        clearSourceDetails()
+        closeSourcePane()
+        refreshSourceChips()
         sourceScrollView.isHidden = true
         if !answerView.string.isEmpty { answerScrollView.isHidden = false }
         sourcesButton.title = "Sources (\(currentSources.count))"
@@ -1298,27 +1389,192 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
     }
 
     private func showAnswer() {
-        guard !answerView.string.isEmpty else { return }
-        sourceScrollView.isHidden = true
+        closeSourcePane()
         answerScrollView.isHidden = false
         sourcesButton.title = "Sources (\(currentSources.count))"
         sourcesButton.isEnabled = !currentSources.isEmpty
     }
 
-    private func formatSourceRecords(_ records: [SourceRecord]) -> String {
-        records.map { record in
-            var sections = ["\(record.source.label) · \(record.title)", record.visibility]
-            appendSourceSection("Decisions", values: record.decisions, to: &sections)
-            appendSourceSection("Actions", values: record.actions, to: &sections)
-            appendSourceSection("Rationales", values: record.rationales, to: &sections)
-            return sections.joined(separator: "\n")
-        }.joined(separator: "\n\n")
+    @objc private func selectSource(_ sender: NSButton) {
+        guard currentSources.indices.contains(sender.tag) else { return }
+        selectedSourceIndex = sender.tag
+        openSourcePane()
+        refreshSourceChips()
+        renderSelectedSource()
+        if sourceRecords.isEmpty { loadSources() }
     }
 
-    private func appendSourceSection(_ title: String, values: [String], to sections: inout [String]) {
-        guard !values.isEmpty else { return }
-        sections.append("\(title)\n" + values.map { "• \($0)" }.joined(separator: "\n"))
+    @objc private func closeSources() { showAnswer() }
+
+    private func openSourcePane() {
+        guard !sourcePaneOpen else { return }
+        sourcePaneOpen = true
+        let area = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
+        // On a narrow display the source card replaces the column until Back;
+        // on a wide display it sits alongside the unchanged answer.
+        if area.width >= 1000 {
+            let targetWidth = min(panel.frame.width + 420, area.width)
+            sourceExpansion = targetWidth - panel.frame.width
+            let paneWidth = min(420, targetWidth - 600)
+            sourcePaneWidth?.constant = paneWidth
+            answerColumnTrailing?.constant = -paneWidth
+            var frame = panel.frame
+            frame.size.width = targetWidth
+            frame.origin.x = max(area.minX, min(frame.minX, area.maxX - targetWidth))
+            panel.setFrame(frame, display: true)
+            panel.minSize.width = 600 + paneWidth
+        } else {
+            sourceExpansion = 0
+            sourcePaneWidth?.constant = panel.contentView?.bounds.width ?? panel.frame.width
+            answerColumn?.isHidden = true
+        }
+        sourcePane.isHidden = false
+        sourceScrollView.isHidden = false
+        sourcesButton.title = "Back to answer"
+        refreshSourceChips()
     }
+
+    private func closeSourcePane() {
+        guard sourcePaneOpen else { return }
+        sourcePaneOpen = false
+        sourcePane.isHidden = true
+        answerColumn?.isHidden = false
+        answerColumnTrailing?.constant = 0
+        sourcePaneWidth?.constant = 420
+        panel.minSize.width = 600
+        if sourceExpansion > 0 {
+            var frame = panel.frame
+            frame.size.width = max(600, frame.width - sourceExpansion)
+            panel.setFrame(frame, display: true)
+        }
+        sourceExpansion = 0
+        sourcesButton.title = "Sources (\(currentSources.count))"
+        refreshSourceChips()
+    }
+
+    private func refreshSourceChips() {
+        basedOn.isHidden = currentSources.isEmpty
+        for (scroll, isTab) in [(sourceChips, false), (sourceTabs, true)] {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.spacing = 6
+            row.edgeInsets = NSEdgeInsets(top: 3, left: 0, bottom: 3, right: 0)
+            for (index, source) in currentSources.enumerated() {
+                let record = sourceRecords[source.recordSha256]
+                let title = record?.title ?? source.label
+                let maximum = isTab ? 24 : 52
+                let shortened = title.count > maximum ? String(title.prefix(maximum)) + "…" : title
+                let date = !isTab ? record?.shortDate.map { " · \($0)" } ?? "" : ""
+                let button = PillButton(title: "\(index + 1)  \(shortened)\(date)", target: self, action: #selector(selectSource(_:)))
+                button.style = sourcePaneOpen && selectedSourceIndex == index ? .primary : .quiet
+                button.tag = index
+                button.toolTip = title
+                button.setAccessibilityLabel("Source \(index + 1): \(title)\(date)")
+                button.setAccessibilityHelp("Show the approved record and supporting excerpts")
+                button.translatesAutoresizingMaskIntoConstraints = false
+                button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+                row.addArrangedSubview(button)
+            }
+            scroll.documentView = row
+            row.setFrameSize(row.fittingSize)
+        }
+    }
+
+    private func clearSourceDetails() {
+        for view in sourceDetails.arrangedSubviews {
+            sourceDetails.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+    }
+
+    private func sourceLabel(_ text: String, size: CGFloat = 13, color: NSColor = EchoTheme.text, weight: NSFont.Weight = .regular) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: size, weight: weight)
+        label.textColor = color
+        label.maximumNumberOfLines = 0
+        label.isSelectable = true
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        label.setContentCompressionResistancePriority(.required, for: .vertical)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }
+
+    private func appendDetail(_ view: NSView) {
+        sourceDetails.addArrangedSubview(view)
+        view.widthAnchor.constraint(equalTo: sourceDetails.widthAnchor).isActive = true
+    }
+
+    private func renderSelectedSource() {
+        clearSourceDetails()
+        guard currentSources.indices.contains(selectedSourceIndex) else { return }
+        let source = currentSources[selectedSourceIndex]
+        guard let record = sourceRecords[source.recordSha256] else {
+            appendDetail(sourceLabel(activeSources == nil ? "Source details are unavailable." : "Loading sources…", color: EchoTheme.mutedText))
+            return
+        }
+        appendDetail(sourceLabel("MEETING · APPROVED RECORD", size: 10.5, color: EchoTheme.goldBright, weight: .semibold))
+        appendDetail(sourceLabel(record.title, size: 18, weight: .semibold))
+        if let date = record.date { appendDetail(sourceLabel(date, size: 12, color: EchoTheme.mutedText)) }
+
+        let metadata = NSStackView()
+        metadata.orientation = .vertical
+        metadata.alignment = .leading
+        metadata.spacing = 10
+        func field(_ name: String, _ value: String) {
+            let entry = NSStackView(views: [sourceLabel(name, size: 11, color: EchoTheme.faintText), sourceLabel(value)])
+            entry.orientation = .vertical
+            entry.alignment = .leading
+            entry.spacing = 3
+            metadata.addArrangedSubview(entry)
+            entry.widthAnchor.constraint(equalTo: metadata.widthAnchor).isActive = true
+            for child in entry.arrangedSubviews { child.widthAnchor.constraint(equalTo: entry.widthAnchor).isActive = true }
+        }
+        if let name = record.approvedBy { field("Record approved by", name) }
+        if !record.participants.isEmpty { field("Participants", record.participants.joined(separator: ", ")) }
+        field("Visibility", record.visibility)
+        appendDetail(metadata)
+        for (title, signals) in [("DECISIONS", record.decisions), ("ACTIONS", record.actions), ("RATIONALE", record.rationales)] {
+            guard !signals.isEmpty else { continue }
+            appendDetail(sourceLabel(title, size: 10.5, color: EchoTheme.faintText, weight: .semibold))
+            for signal in signals { appendDetail(sourceSignalCard(signal)) }
+        }
+        sourceScrollView.contentView.scroll(to: .zero)
+        sourceScrollView.reflectScrolledClipView(sourceScrollView.contentView)
+    }
+
+    private func sourceSignalCard(_ signal: SourceSignal) -> NSView {
+        let card = NSView()
+        card.wantsLayer = true
+        card.layer?.backgroundColor = EchoTheme.text.withAlphaComponent(0.04).cgColor
+        card.layer?.cornerRadius = 8
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = EchoTheme.quietBorder.cgColor
+        let content = NSStackView()
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 8
+        content.translatesAutoresizingMaskIntoConstraints = false
+        if let status = signal.status, ["proposed", "unresolved"].contains(status) {
+            content.addArrangedSubview(sourceLabel(status.capitalized, size: 11, color: EchoTheme.goldBright, weight: .semibold))
+        }
+        content.addArrangedSubview(sourceLabel(signal.text, size: 13.5))
+        for excerpt in signal.evidence {
+            content.addArrangedSubview(sourceLabel("“\(excerpt.quote)”", size: 12.5, color: EchoTheme.goldBright))
+            if let timestamp = excerpt.timestamp {
+                content.addArrangedSubview(sourceLabel(timestamp, size: 11, color: EchoTheme.faintText))
+            }
+        }
+        card.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+            content.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
+            content.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10),
+        ])
+        for view in content.arrangedSubviews { view.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true }
+        return card
+    }
+
 
     @objc private func copyAnswer() {
         let answer = answerView.string
@@ -1398,14 +1654,97 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = true
         panel.delegate = self
-        panel.onCancel = { [weak self] in self?.hidePanel() }
+        panel.onCancel = { [weak self] in
+            guard let self else { return }
+            if self.sourcePaneOpen { self.showAnswer() } else { self.hidePanel() }
+        }
+    }
+
+    private func configureChipScroll(_ scroll: NSScrollView) {
+        scroll.drawsBackground = false
+        scroll.hasHorizontalScroller = true
+        scroll.hasVerticalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.heightAnchor.constraint(equalToConstant: 38).isActive = true
+    }
+
+    private func configureSourcePane(in container: NSView) {
+        sourcePane.wantsLayer = true
+        sourcePane.layer?.backgroundColor = EchoTheme.inkDeep.cgColor
+        sourcePane.translatesAutoresizingMaskIntoConstraints = false
+        sourcePane.isHidden = true
+        container.addSubview(sourcePane)
+        let width = sourcePane.widthAnchor.constraint(equalToConstant: 420)
+        sourcePaneWidth = width
+        let close = PillButton(title: "Back to answer", target: self, action: #selector(closeSources))
+        close.style = .quiet
+        close.translatesAutoresizingMaskIntoConstraints = false
+        close.setAccessibilityLabel("Back to answer")
+        let heading = sourceLabel("SOURCES", size: 11, color: EchoTheme.faintText, weight: .semibold)
+        sourcePane.addSubview(close)
+        sourcePane.addSubview(heading)
+        configureChipScroll(sourceTabs)
+        sourcePane.addSubview(sourceTabs)
+
+        sourceScrollView.drawsBackground = false
+        sourceScrollView.hasVerticalScroller = true
+        sourceScrollView.autohidesScrollers = true
+        sourceScrollView.translatesAutoresizingMaskIntoConstraints = false
+        sourceScrollView.isHidden = true
+        sourcePane.addSubview(sourceScrollView)
+        let document = SourceDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        sourceScrollView.documentView = document
+        sourceDetails.orientation = .vertical
+        sourceDetails.alignment = .leading
+        sourceDetails.spacing = 14
+        sourceDetails.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(sourceDetails)
+        NSLayoutConstraint.activate([
+            width,
+            sourcePane.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            sourcePane.topAnchor.constraint(equalTo: container.topAnchor),
+            sourcePane.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            close.topAnchor.constraint(equalTo: sourcePane.topAnchor, constant: 12),
+            close.trailingAnchor.constraint(equalTo: sourcePane.trailingAnchor, constant: -18),
+            close.heightAnchor.constraint(equalToConstant: 26),
+            heading.leadingAnchor.constraint(equalTo: sourcePane.leadingAnchor, constant: 18),
+            heading.centerYAnchor.constraint(equalTo: close.centerYAnchor),
+            sourceTabs.topAnchor.constraint(equalTo: close.bottomAnchor, constant: 10),
+            sourceTabs.leadingAnchor.constraint(equalTo: sourcePane.leadingAnchor, constant: 18),
+            sourceTabs.trailingAnchor.constraint(equalTo: sourcePane.trailingAnchor, constant: -18),
+            sourceScrollView.topAnchor.constraint(equalTo: sourceTabs.bottomAnchor, constant: 8),
+            sourceScrollView.leadingAnchor.constraint(equalTo: sourcePane.leadingAnchor),
+            sourceScrollView.trailingAnchor.constraint(equalTo: sourcePane.trailingAnchor),
+            sourceScrollView.bottomAnchor.constraint(equalTo: sourcePane.bottomAnchor),
+            document.widthAnchor.constraint(equalTo: sourceScrollView.contentView.widthAnchor),
+            sourceDetails.topAnchor.constraint(equalTo: document.topAnchor, constant: 8),
+            sourceDetails.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -20),
+            sourceDetails.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 18),
+            sourceDetails.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -18),
+        ])
     }
 
     private func configureContent() {
         let root = NSView()
         root.wantsLayer = true
         root.layer?.backgroundColor = EchoTheme.ink.cgColor
-        panel.contentView = root
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = EchoTheme.ink.cgColor
+        panel.contentView = container
+        root.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(root)
+        answerColumn = root
+        let trailing = root.trailingAnchor.constraint(equalTo: container.trailingAnchor)
+        answerColumnTrailing = trailing
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            root.topAnchor.constraint(equalTo: container.topAnchor),
+            root.bottomAnchor.constraint(equalTo: container.bottomAnchor), trailing,
+        ])
+        configureSourcePane(in: container)
 
         let titleLabel = NSTextField(labelWithString: "ECHO")
         titleLabel.attributedStringValue = NSAttributedString(
@@ -1556,35 +1895,15 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         answerScrollView.documentView = answerView
         answerScrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        sourceView.isEditable = false
-        sourceView.isSelectable = true
-        sourceView.drawsBackground = false
-        sourceView.font = NSFont.systemFont(ofSize: 13.5)
-        sourceView.textColor = EchoTheme.text
-        sourceView.selectedTextAttributes = [
-            .backgroundColor: EchoTheme.selection,
-            .foregroundColor: EchoTheme.text,
-        ]
-        sourceView.textContainerInset = NSSize(width: 4, height: 6)
-        sourceView.autoresizingMask = [.width]
-        sourceView.setAccessibilityLabel("Answer sources")
-
-        sourceScrollView.hasVerticalScroller = true
-        sourceScrollView.autohidesScrollers = true
-        sourceScrollView.borderType = .noBorder
-        sourceScrollView.drawsBackground = false
-        sourceView.frame = sourceScrollView.contentView.bounds
-        sourceView.minSize = .zero
-        sourceView.maxSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        sourceView.isVerticallyResizable = true
-        sourceView.isHorizontallyResizable = false
-        sourceView.textContainer?.widthTracksTextView = true
-        sourceScrollView.documentView = sourceView
-        sourceScrollView.isHidden = true
-        sourceScrollView.translatesAutoresizingMaskIntoConstraints = false
+        basedOn.orientation = .vertical
+        basedOn.alignment = .leading
+        basedOn.spacing = 2
+        basedOn.translatesAutoresizingMaskIntoConstraints = false
+        basedOn.addArrangedSubview(sourceLabel("BASED ON", size: 10.5, color: EchoTheme.faintText, weight: .semibold))
+        configureChipScroll(sourceChips)
+        basedOn.addArrangedSubview(sourceChips)
+        sourceChips.widthAnchor.constraint(equalTo: basedOn.widthAnchor).isActive = true
+        basedOn.isHidden = true
 
         let answerTitle = NSTextField(labelWithString: "Answer")
         answerTitle.attributedStringValue = NSAttributedString(
@@ -1643,7 +1962,7 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         answerArea.translatesAutoresizingMaskIntoConstraints = false
         answerArea.addSubview(answerHeader)
         answerArea.addSubview(answerScrollView)
-        answerArea.addSubview(sourceScrollView)
+        answerArea.addSubview(basedOn)
         answerArea.addSubview(emptyAnswerLabel)
 
         let hintLabel = NSTextField(labelWithString: "Return to ask · Shift-Return for a new line · Esc to close")
@@ -1697,11 +2016,10 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
             answerScrollView.topAnchor.constraint(equalTo: answerHeader.bottomAnchor, constant: 8),
             answerScrollView.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 12),
             answerScrollView.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -12),
-            answerScrollView.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor, constant: -12),
-            sourceScrollView.topAnchor.constraint(equalTo: answerHeader.bottomAnchor, constant: 8),
-            sourceScrollView.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 12),
-            sourceScrollView.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -12),
-            sourceScrollView.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor, constant: -12),
+            answerScrollView.bottomAnchor.constraint(equalTo: basedOn.topAnchor, constant: -8),
+            basedOn.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 16),
+            basedOn.trailingAnchor.constraint(equalTo: answerArea.trailingAnchor, constant: -16),
+            basedOn.bottomAnchor.constraint(equalTo: answerArea.bottomAnchor, constant: -10),
             emptyAnswerLabel.centerYAnchor.constraint(equalTo: answerArea.centerYAnchor),
             emptyAnswerLabel.topAnchor.constraint(greaterThanOrEqualTo: answerArea.topAnchor, constant: 16),
             emptyAnswerLabel.leadingAnchor.constraint(equalTo: answerArea.leadingAnchor, constant: 38),
@@ -1749,17 +2067,6 @@ private final class OverlayController: NSObject, NSWindowDelegate, NSTextViewDel
         paragraph.paragraphSpacing = 6
         return [
             .font: NSFont.systemFont(ofSize: 14.5),
-            .foregroundColor: EchoTheme.text,
-            .paragraphStyle: paragraph,
-        ]
-    }()
-
-    private static let sourceAttributes: [NSAttributedString.Key: Any] = {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        paragraph.paragraphSpacing = 8
-        return [
-            .font: NSFont.systemFont(ofSize: 13.5),
             .foregroundColor: EchoTheme.text,
             .paragraphStyle: paragraph,
         ]
