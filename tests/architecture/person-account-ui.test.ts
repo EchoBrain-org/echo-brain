@@ -42,6 +42,66 @@ describe("native Person account controls", () => {
     expect(source).toContain("people?.hasOutstandingMutation");
   });
 
+  it("routes Connected tools through bounded client calls and clears account state", () => {
+    const source = readFileSync(account, "utf8");
+    expect(source).toContain('title: "Connected tools…"');
+    expect(source).toContain('["person", "tools"]');
+    expect(source).toContain('"person", "slack-link-begin", "--slack-user", user');
+    expect(source).toContain('input: Data(challenge.challenge_code.utf8)');
+    expect(source).toContain('toolsController?.conceal(); onSessionWillChange()');
+    expect(source).toContain('membershipID: response.membership_id');
+    expect(source).toContain('self.gate.accepts(requestID)');
+    expect(source).toContain('before == expectedIdentity');
+    expect(source).toContain('after == expectedIdentity');
+    expect(source).toContain('challenge = nil; code.stringValue = ""; code.isHidden = true; recipient.stringValue = ""');
+  });
+
+  it.skipIf(process.platform !== "darwin")("renders tools fixtures and rejects failed reads and prior-account status", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-tools-proof-")));
+    roots.push(root);
+    const proof = join(root, "proof.swift");
+    writeFileSync(proof, `import AppKit
+import Foundation
+@main enum Proof { static func main() {
+    let member = "mem_00000000-0000-4000-8000-000000000001"
+    func fixture(_ tools: [[String: Any]]) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["ok": true, "result": ["schema_version": 2, "kind": "echo-organization-person-tools", "organization_id": "org_00000000-0000-4000-8000-000000000001", "membership_id": member, "tools": tools]])
+    }
+    print(connectedToolsSummary(decodeConnectedTools(fixture([]), membershipID: member)))
+    for status in ["unlinked", "linked", "revoked"] {
+        let row: [String: Any] = ["provider": "slack", "availability": "enabled", "personal_status": status, "workspace_id": "T123ABC", "account_id": status == "linked" ? "U123ABC" : NSNull()]
+        let data = fixture([row])
+        print(connectedToolsSummary(decodeConnectedTools(data, membershipID: member)).replacingOccurrences(of: "\\n", with: " / "))
+        print(decodeConnectedTools(data, membershipID: "different-account") == nil)
+    }
+    let unavailable: [String: Any] = ["provider": "slack", "availability": "unavailable", "personal_status": "unavailable", "workspace_id": NSNull(), "account_id": NSNull()]
+    print(connectedToolsSummary(decodeConnectedTools(fixture([unavailable]), membershipID: member)).replacingOccurrences(of: "\\n", with: " / "))
+    print(connectedToolsSummary(decodeConnectedTools(Data("failure".utf8), membershipID: member)))
+    let gate = AccountRequestGate(); let stale = gate.replace(); let fresh = gate.replace()
+    print("refresh: \\(gate.accepts(stale)) \\(gate.accepts(fresh))")
+    let observation = AccountObservation()
+    let a = AccountIdentity(displayName: "Same name", role: "Employee", authority: "https://authority.example", version: "1", membershipID: member)
+    var b = a; b.membershipID = "another-member"
+    _ = observation.accept(.signedIn(a)); print("switch: \\(observation.accept(.signedIn(b)))")
+} }
+`);
+    const binary = join(root, "proof");
+    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", account, proof, "-o", binary], {
+      stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
+    });
+    const result = spawnSync(binary, { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "Your organization has no supported tools enabled.",
+      "Slack · Organization: enabled (T123ABC) / Your link: unlinked", "true",
+      "Slack · Organization: enabled (T123ABC) / Your link: linked (U123ABC)", "true",
+      "Slack · Organization: enabled (T123ABC) / Your link: revoked", "true",
+      "Slack · Organization: unavailable / Your link: unavailable",
+      "Status unknown. Could not read connected tools. Try Refresh.",
+      "refresh: false true", "switch: true",
+    ]);
+  });
+
   it.skipIf(process.platform !== "darwin")("strictly compiles the account interface without a real session", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-account-compile-")));
     roots.push(root);

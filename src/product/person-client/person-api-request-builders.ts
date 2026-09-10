@@ -73,9 +73,11 @@ export function createPersonMeetingIngestionExclusionListRequest(
 export function createPersonSlackIdentityLinkBeginRequest(
   requestId: string,
   challengeCode: string,
+  recipientUserId: string,
 ): OrganizationPersonSlackIdentityLinkBeginRequestV2 {
   return validateOrganizationPersonSlackIdentityLinkBeginRequest({
     request_id: requestId,
+    recipient_user_id: recipientUserId,
     challenge_code_sha256:
       organizationPersonSlackIdentityLinkChallengeCodeSha256(challengeCode),
   });

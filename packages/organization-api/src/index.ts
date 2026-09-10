@@ -104,3 +104,5 @@ export {
   validateOrganizationPersonSlackIdentityLinkCompleteRequest,
   validateOrganizationPersonSlackIdentityLinkResult,
 } from './person-slack-identity-link.js';
+
+export * from './person-tools.js';

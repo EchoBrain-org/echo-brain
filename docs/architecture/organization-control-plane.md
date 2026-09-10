@@ -69,11 +69,10 @@ organization Slack connection is active
 
 The required Slack scopes are `channels:history`, `channels:read`,
 `chat:write`, `im:history`, `im:write`, `reactions:read`, and `users:read`.
-The public-channel scopes remain for the current Person identity-link contract;
+The public-channel scopes remain for the retained organization onboarding contract;
 `im:write` opens the verified meeting owner's private DM and `im:history`
-reconciles a retry without duplicating that DM card. The public channel is
-identity-link-only: it receives no approval card and creates no approval
-binding. Provider verification first
+reconciles a retry without duplicating that DM card. The configured public channel receives neither Person identity challenges nor
+approval cards and creates no approval binding. Provider verification first
 uses Slack `auth.test` for the token-bound workspace, bot user, bot ID, and
 granted scopes. It then uses `bots.info` for that exact bot ID and requires the
 returned bot ID and user ID to agree, the bot not to be deleted, and a canonical
@@ -96,7 +95,7 @@ database never receives the token.
 The `slack-organization-tool-v1` ready state is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
 startup. A signed-in Person can then start a manual Slack link: the Person
-client keeps a one-time code, the Authority posts a code-free challenge through
+client keeps a one-time code, the Authority posts a code-free challenge in a verified private DM through
 the organization bot, and Slack identifies the one human who replies with that
 code in the exact thread. Completion creates or reuses that membership's
 external identity link. It creates no adapter binding or permission grant.
@@ -106,8 +105,7 @@ Private approval V1 needs the same app's Interactivity Request URL at
 need Event Subscriptions, Socket Mode, or a Slack OAuth redirect flow.
 
 No installation-signed challenge or adapter-binding activation remains. A
-profileless active connection is compatibility-only. Automatic multi-provider
-tool discovery and Person-bound approval configuration remain later work.
+profileless active connection is compatibility-only. Additional providers and Person-bound approval configuration remain later work.
 
 The database migration preserves one active organization-owned Slack
 connection. Migration `0002_organization_tool_public_configuration.sql` is an
@@ -143,6 +141,44 @@ remain unchanged; a new owner-attributed audit entry records the
 re-verification. Any other tool or binding shape, provider mismatch, missing
 app proof, or concurrent change fails closed. This is identity repair, not
 credential rotation, channel rotation, or a general lifecycle operation.
+
+### Employee Connected tools (#166)
+
+`GET /v2/person/tools` is a bearer-authenticated read of the current organization
+connection and the current member's external identity link. No configured tool
+returns an empty list; an unavailable connection returns an unavailable row.
+An active Slack tool reports its workspace separately from the member's
+unlinked, linked, or revoked status. Failed reads return an error, never an
+inferred link status. The native Account > Connected tools screen clears state
+when the membership changes, including two employees with the same display name.
+Ask and Sources retain their existing Authority permissions without a Slack link.
+
+The Person begin request now requires `recipient_user_id` as a routing hint.
+The provider verifies the human and workspace, opens a one-to-one DM with
+`conversations.open` and `return_im=true`, and verifies its recipient before
+posting. Completion still verifies the exact bot-authored thread and one human
+code reply, then rechecks the current session, connection, DM, and recipient.
+No shared-channel fallback is supported. Organization bot installation and the
+retained public connection configuration remain administrative concerns.
+
+The two immutable `dm_channel_id` and `recipient_user_id` challenge columns
+implement private delivery that survives process restart. The previous challenge
+table held only the organization configuration digest and message timestamp,
+which cannot recover a per-person DM destination. The exact schema and baseline
+checksum fixtures cover this named milestone. Existing legacy rows can retain
+null coordinates but cannot complete through the private-DM protocol.
+
+Compatibility: this changes the fresh baseline checksum and the Person begin
+contract. This PR does not migrate or restage a deployed database. Existing
+lineages report Slack linking as unavailable until a separately reviewed schema
+upgrade adds the private destination columns; do not reset a prepared volume to obtain the new columns.
+Live exact-artifact qualification is deferred to the local operator release lane.
+
+The existing core runtime observer records `person_tools_status`,
+`person_tool_delivery`, and `person_tool_completion` with bounded failure
+attribution. These events contain no provider identities, challenge codes,
+credentials, or provider response bodies. Identity proof contracts and command
+replay evidence remain durable; linking creates no approval capability or role.
 
 ### Retained V1 action-time permission path
 

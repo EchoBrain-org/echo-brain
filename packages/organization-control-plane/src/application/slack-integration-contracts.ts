@@ -42,6 +42,7 @@ export interface VerifiedSlackChannel {
 }
 
 export interface PostSlackIdentityLinkChallengeInput {
+  recipient_user_id?: string;
   expected_team_id: string;
   expected_enterprise_id: string | null;
   expected_bot_user_id: string;
@@ -75,6 +76,10 @@ export interface ObservedSlackIdentityLinkChallenge {
 }
 
 export interface SlackIntegrationProvider {
+  openIdentityLinkDirectMessage?(
+    token: string, recipientUserId: string, expectedTeamId: string, signal?: AbortSignal,
+  ): Promise<{ team_id: string; channel_id: string; recipient_user_id: string }>;
+
   verifyConnection(
     token: string,
     signal?: AbortSignal,
@@ -130,6 +135,8 @@ export interface ActiveSlackOrganizationTool {
 }
 
 export interface BegunSlackIdentityLinkChallenge {
+  channel_id: string;
+  recipient_user_id: string;
   challenge_attempt_id: string;
   created_at: string;
   expires_at: string;
@@ -150,6 +157,8 @@ export interface PersonSlackIdentityLinkSession {
 }
 
 export interface BeginPersonSlackIdentityLinkChallengeInput {
+  channel_id: string;
+  recipient_user_id: string;
   request_sha256: `sha256:${string}`;
   challenge_code_sha256: `sha256:${string}`;
   person_session: PersonSlackIdentityLinkSession;

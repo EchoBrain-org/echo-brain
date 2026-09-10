@@ -417,7 +417,19 @@ export class PersonClient {
     );
   }
 
-  async beginSlackIdentityLink() {
+  async tools() {
+    const stored = await this.accessSession();
+    const result = await this.authority(stored.authority_origin).tools(stored.session.access_token);
+    const current = this.store.read();
+    if (result.organization_id !== stored.session.organization_id || result.membership_id !== stored.session.membership_id ||
+        current.authority_origin !== stored.authority_origin || current.session.membership_id !== stored.session.membership_id ||
+        current.session.session_family_id !== stored.session.session_family_id) {
+      throw new Error("Connected tools did not match the current account");
+    }
+    return result;
+  }
+
+  async beginSlackIdentityLink(recipientUserId: string) {
     const stored = await this.accessSession();
     const challengeBytes = this.randomBytes(32);
     if (challengeBytes.byteLength !== 32) {
@@ -430,7 +442,7 @@ export class PersonClient {
       const response = await this.authority(
         stored.authority_origin,
       ).beginSlackIdentityLink(
-        createPersonSlackIdentityLinkBeginRequest(this.requestId("psb"), challengeCode),
+        createPersonSlackIdentityLinkBeginRequest(this.requestId("psb"), challengeCode, recipientUserId),
         stored.session.access_token,
       );
       return { ...response, challenge_code: challengeCode };

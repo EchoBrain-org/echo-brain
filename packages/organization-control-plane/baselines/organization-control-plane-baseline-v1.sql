@@ -260,6 +260,9 @@ END;
 -- The challenge stores only server-derived hashes and coordinates. It never
 -- stores the one-time code, a session credential, or provider token bytes.
 CREATE TABLE organization_person_slack_link_challenges (
+  -- #166: exact private delivery coordinates, never a public-channel fallback.
+  dm_channel_id TEXT CHECK (dm_channel_id IS NULL OR (dm_channel_id GLOB 'D*' AND length(dm_channel_id) BETWEEN 3 AND 128)),
+  recipient_user_id TEXT CHECK (recipient_user_id IS NULL OR (substr(recipient_user_id, 1, 1) IN ('U', 'W') AND length(recipient_user_id) BETWEEN 3 AND 128)),
   challenge_attempt_id TEXT PRIMARY KEY CHECK (challenge_attempt_id GLOB 'cat_*'),
   connection_id TEXT NOT NULL
     REFERENCES organization_tool_connection_contracts(connection_id),
@@ -298,6 +301,8 @@ BEFORE UPDATE ON organization_person_slack_link_challenges
 BEGIN
   SELECT CASE WHEN NOT (
     OLD.status = 'pending' AND
+    NEW.dm_channel_id IS OLD.dm_channel_id AND
+    NEW.recipient_user_id IS OLD.recipient_user_id AND
     NEW.challenge_attempt_id = OLD.challenge_attempt_id AND
     NEW.connection_id = OLD.connection_id AND
     NEW.principal_id = OLD.principal_id AND

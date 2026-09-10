@@ -1,7 +1,7 @@
 /** An exact external-identity route selected by its provider-owned bundle. */
 export interface PersonExternalIdentityHttpRouteV1 {
   readonly route_id: string;
-  readonly method: "POST";
+  readonly method: "POST" | "GET";
   readonly path: string;
 }
 

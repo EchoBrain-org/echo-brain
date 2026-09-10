@@ -1,3 +1,4 @@
+import type { OrganizationPersonToolV2 } from "@echo-brain/organization-api";
 import { randomUUID } from "node:crypto";
 import {
   canonicalJson,
@@ -75,6 +76,8 @@ interface ActiveSlackConnection {
 }
 
 interface ChallengeRow {
+  readonly dm_channel_id: string;
+  readonly recipient_user_id: string;
   readonly challenge_attempt_id: string;
   readonly connection_id: string;
   readonly principal_id: string;
@@ -183,6 +186,23 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
     return this.activeConnection()?.tool ?? null;
   }
 
+  personTools(session: PersonSlackIdentityLinkSession): readonly OrganizationPersonToolV2[] {
+    const active = this.activeConnection();
+    if (active === null) {
+      const configured = this.options.database.prepare("SELECT 1 FROM organization_tool_connection_current_state LIMIT 1").get();
+      return configured === undefined ? [] : [{ provider: "slack", availability: "unavailable", personal_status: "unavailable", workspace_id: null, account_id: null }];
+    }
+    const row = this.options.database.prepare(`SELECT current_status, provider_subject_id
+      FROM organization_external_human_link_current WHERE principal_id = ? AND membership_id = ?
+      AND provider_issuer = 'https://slack.com' AND provider_tenant_kind = 'workspace'
+      AND provider_tenant_id = ? AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '')
+      ORDER BY (current_status = 'active') DESC LIMIT 1`).get(session.principal_id, session.membership_id,
+        active.tool.team_id, active.tool.enterprise_id) as { current_status: string; provider_subject_id: string } | undefined;
+    const status = row === undefined ? "unlinked" : row.current_status === "active" ? "linked" : "revoked";
+    return [{ provider: "slack", availability: "enabled", personal_status: status,
+      workspace_id: active.tool.team_id, account_id: status === "linked" ? row!.provider_subject_id : null }];
+  }
+
   personSlackIdentityLinkBeginReplay(input: {
     request_id: string;
     request_sha256: `sha256:${string}`;
@@ -206,7 +226,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
         `SELECT command.command_semantic_sha256, challenge.challenge_attempt_id,
                 challenge.connection_id, challenge.person_session_sha256,
                 challenge.organization_tool_sha256, challenge.created_at,
-                challenge.expires_at, challenge.challenge_message_ts
+                challenge.expires_at, challenge.challenge_message_ts, challenge.dm_channel_id, challenge.recipient_user_id
          FROM organization_person_slack_link_commands AS command
          JOIN organization_person_slack_link_challenges AS challenge
            ON challenge.challenge_attempt_id = command.challenge_attempt_id
@@ -214,6 +234,8 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       )
       .get(input.request_id) as
       | {
+          dm_channel_id: string;
+          recipient_user_id: string;
           command_semantic_sha256: `sha256:${string}`;
           challenge_attempt_id: string;
           connection_id: string;
@@ -247,6 +269,8 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       challenge_attempt_id: row.challenge_attempt_id,
       created_at: row.created_at,
       expires_at: row.expires_at,
+      channel_id: row.dm_channel_id,
+      recipient_user_id: row.recipient_user_id,
       replayed: true,
       challenge_message_ts: row.challenge_message_ts,
     });
@@ -289,13 +313,15 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       this.options.database
         .prepare(
           `INSERT INTO organization_person_slack_link_challenges (
-           challenge_attempt_id, connection_id, principal_id, membership_id,
+           dm_channel_id, recipient_user_id, challenge_attempt_id, connection_id, principal_id, membership_id,
            challenge_code_sha256, person_session_sha256, organization_tool_sha256,
            status, completion_sha256, challenge_message_ts, reply_message_ts,
            created_at, expires_at, completed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, ?, ?, NULL)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, ?, ?, NULL)`,
         )
         .run(
+          input.channel_id,
+          input.recipient_user_id,
           challengeAttemptId,
           active.connection.connection_id,
           input.person_session.principal_id,
@@ -315,6 +341,8 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
         .run(requestId, input.request_sha256, challengeAttemptId, input.now);
       return Object.freeze({
         challenge_attempt_id: challengeAttemptId,
+        channel_id: input.channel_id,
+        recipient_user_id: input.recipient_user_id,
         created_at: input.now,
         expires_at: expiresAt,
       });
@@ -376,6 +404,8 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
     }
     return Object.freeze({
       challenge_attempt_id: row.challenge_attempt_id,
+      channel_id: row.dm_channel_id,
+      recipient_user_id: row.recipient_user_id,
       principal_id: row.principal_id,
       membership_id: row.membership_id,
       created_at: row.created_at,
@@ -450,9 +480,12 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
   completePersonSlackIdentityLinkChallenge(
     input: CompletePersonSlackIdentityLinkChallengeInput,
   ): CompletedPersonSlackIdentityLink {
+    const destination = this.challenge(input.challenge_attempt_id);
     if (
       input.observed.team_id !== input.organization_tool.team_id ||
-      input.observed.channel_id !== input.organization_tool.channel_id ||
+      input.observed.channel_id !== destination.dm_channel_id ||
+      input.observed.user_id !== destination.recipient_user_id ||
+      input.challenge_message_ts !== destination.challenge_message_ts ||
       input.observed.challenge_message_ts !== input.challenge_message_ts
     ) {
       throw new PersonSlackIdentityLinkConflictError(
@@ -678,6 +711,11 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
     const contract = validateExternalHumanIdentityLinkContractV2(
       JSON.parse(row.contract_json),
     );
+    const current = this.options.database.prepare(`SELECT 1 FROM organization_external_human_link_current
+      WHERE external_identity_link_id = ? AND principal_id = ? AND membership_id = ?
+      AND provider_subject_id = ? AND current_status = 'active'`).get(contract.external_identity_link_id,
+        contract.principal_id, contract.membership_id, contract.provider_subject_id);
+    if (current === undefined) throw new PersonSlackIdentityLinkConflictError("The Slack identity link is no longer active");
     return Object.freeze({
       schema_version: 2,
       kind: "echo-organization-person-slack-link-result",
@@ -689,7 +727,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
       provider: "slack",
       provider_tenant_id: contract.provider_tenant_id,
       provider_subject_id: contract.provider_subject_id,
-      channel_id: tool.channel_id,
+      channel_id: challenge.dm_channel_id,
       linked_at: contract.verified_at,
       identity_link_created:
         contract.external_identity_link_id ===
@@ -700,7 +738,7 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
   private challenge(challengeAttemptId: string): ChallengeRow {
     const row = this.options.database
       .prepare(
-        `SELECT challenge_attempt_id, connection_id, principal_id, membership_id,
+        `SELECT dm_channel_id, recipient_user_id, challenge_attempt_id, connection_id, principal_id, membership_id,
               challenge_code_sha256, person_session_sha256, organization_tool_sha256,
               status, completion_sha256, challenge_message_ts, reply_message_ts,
               created_at, expires_at
@@ -741,6 +779,12 @@ class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIdentityLi
   }
 
   private activeConnection(): ActiveSlackConnection | null {
+    // Old lineages stay readable, but cannot offer a private link until their
+    // schema has been explicitly upgraded. Never reinterpret a public proof.
+    const destinationColumns = this.options.database.prepare(
+      "SELECT name FROM pragma_table_info('organization_person_slack_link_challenges') WHERE name IN ('dm_channel_id', 'recipient_user_id')",
+    ).all();
+    if (destinationColumns.length !== 2 || this.options.slack.openIdentityLinkDirectMessage === undefined) return null;
     const row = this.options.database
       .prepare(
         `SELECT contract.contract_json, contract.contract_sha256, current_state.state_json, current_state.state_sha256

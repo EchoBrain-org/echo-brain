@@ -22,6 +22,7 @@ const MAXIMUM_CHALLENGE_THREAD_MESSAGES = 100;
 
 export type SlackIdentityProviderV1 = Pick<
   SlackIntegrationProvider,
+  | "openIdentityLinkDirectMessage"
   | "verifyConnection"
   | "verifyHuman"
   | "verifyChannel"
@@ -146,7 +147,8 @@ function validateIdentityLinkChallenge(
       "invalid_response",
     );
   }
-  requiredId(input.channel_id, "challenge channel_id", "C");
+  requiredId(input.channel_id, "challenge channel_id", "D");
+  requiredSlackUserId(input.recipient_user_id, "DM recipient");
   if (!CONNECTION_ATTEMPT_ID.test(input.challenge_attempt_id)) {
     throw new SlackIdentityProviderErrorV1(
       "Slack identity-link challenge attempt is invalid",
@@ -607,7 +609,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
         "invalid_response",
       );
     }
-    if (observedUserId !== userId || deleted || isBot) {
+    if (observedUserId !== userId || deleted || isBot || isAppUser) {
       throw new SlackIdentityProviderErrorV1(
         "Slack reviewer is unavailable or is not a human user",
         "unauthorized",
@@ -627,12 +629,38 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
     });
   }
 
+  async openIdentityLinkDirectMessage(
+    token: string, recipientUserId: string, expectedTeamId: string, signal?: AbortSignal,
+  ): Promise<{ team_id: string; channel_id: string; recipient_user_id: string }> {
+    const human = await this.verifyHuman(token, recipientUserId, signal);
+    if (human.team_id !== expectedTeamId) {
+      throw new SlackIdentityProviderErrorV1("Slack recipient workspace does not match", "unauthorized");
+    }
+    const response = await this.call(token, "conversations.open", { users: recipientUserId, return_im: "true" }, signal);
+    const channel = record(response.value.channel, "identity-link DM");
+    const channelId = requiredId(channel.id, "DM channel", "D");
+    if (channel.is_im !== true || channel.user !== recipientUserId || channel.is_mpim === true ||
+        channel.is_ext_shared === true || channel.is_org_shared === true ||
+        (channel.context_team_id !== undefined && channel.context_team_id !== expectedTeamId)) {
+      throw new SlackIdentityProviderErrorV1("Slack did not verify the intended private recipient", "unauthorized");
+    }
+    return { team_id: human.team_id, channel_id: channelId, recipient_user_id: human.user_id };
+  }
+
+  private async verifyChallengeDestination(token: string, input: PostSlackIdentityLinkChallengeInput, signal?: AbortSignal): Promise<void> {
+    const destination = await this.openIdentityLinkDirectMessage(token, input.recipient_user_id!, input.expected_team_id, signal);
+    if (destination.channel_id !== input.channel_id) {
+      throw new SlackIdentityProviderErrorV1("Slack identity-link destination changed", "unauthorized");
+    }
+  }
+
   async postIdentityLinkChallenge(
     token: string,
     input: PostSlackIdentityLinkChallengeInput,
     signal?: AbortSignal,
   ): Promise<PostedSlackIdentityLinkChallenge> {
     const challenge = validateIdentityLinkChallenge(input);
+    await this.verifyChallengeDestination(token, input, signal);
     const connection = await this.verifyExpectedConnection(
       token,
       input,
@@ -653,7 +681,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
     const channelId = requiredId(
       response.value.channel,
       "chat.postMessage channel",
-      "C",
+      "D",
     );
     const messageTs = response.value.ts;
     slackTimestampMicroseconds(messageTs, "challenge message timestamp");
@@ -689,6 +717,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
     signal?: AbortSignal,
   ): Promise<ObservedSlackIdentityLinkChallenge> {
     const challenge = validateIdentityLinkChallenge(input);
+    await this.verifyChallengeDestination(token, input, signal);
     if (!CHALLENGE_CODE.test(input.challenge_code)) {
       throw new SlackIdentityProviderErrorV1(
         "Slack identity-link challenge code is invalid",
@@ -821,7 +850,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
     }
     const match = matchingReplies[0];
     const human = await this.verifyHuman(token, match.userId, signal);
-    if (human.team_id !== input.expected_team_id) {
+    if (human.team_id !== input.expected_team_id || human.user_id !== input.recipient_user_id) {
       throw new SlackIdentityProviderErrorV1(
         "Slack identity-link reply came from another workspace",
         "unauthorized",

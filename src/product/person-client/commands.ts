@@ -32,6 +32,7 @@ export interface PersonClientCliDependencies {
 }
 
 const OPTIONS = {
+  "slack-user": { type: "string" },
   "authority-url": { type: "string" },
   invitation: { type: "string" },
   question: { type: "string" },
@@ -81,8 +82,9 @@ const RULES: Readonly<
     accepts: ["source-adapter-id", "source-instance-id", "meeting-external-id"],
     requires: ["source-adapter-id", "source-instance-id"],
   },
-  "slack-link-begin": {},
-  "slack-link": {},
+  "tools": {},
+  "slack-link-begin": { accepts: ["slack-user"], requires: ["slack-user"] },
+  "slack-link": { accepts: ["slack-user"], requires: ["slack-user"] },
   "slack-link-complete": {
     accepts: ["challenge-attempt", "challenge-message-ts"],
     requires: ["challenge-attempt", "challenge-message-ts"],
@@ -117,7 +119,8 @@ Commands:
   ask         Ask a question over records you may read.
   records     List records or search the current generation.
   employee    List, invite, reissue, or revoke an employee.
-  slack-link  Link the signed-in person to Slack.
+  tools       Read organization tools and your current link status.
+  slack-link  Link Slack with --slack-user <member-id> via private DM.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -591,6 +594,7 @@ export async function runPersonClientCli(
             installed_version: identity.product_version,
             signed_in: true,
             display_name: session.display_name,
+            membership_id: session.membership_id,
             membership_type: session.membership_type,
             connected_authority: session.authority_origin,
           });
@@ -683,11 +687,14 @@ export async function runPersonClientCli(
         print(stdout, { ok: true, excluded: action === "exclude" });
         break;
       }
+      case "tools":
+        print(stdout, { ok: true, result: await client.tools() });
+        break;
       case "slack-link-begin":
-        print(stdout, { ok: true, ...(await client.beginSlackIdentityLink()) });
+        print(stdout, { ok: true, ...(await client.beginSlackIdentityLink(requiredText(values, "slack-user"))) });
         break;
       case "slack-link": {
-        const begun = await client.beginSlackIdentityLink();
+        const begun = await client.beginSlackIdentityLink(requiredText(values, "slack-user"));
         // Retain the code and opaque challenge handles in memory. The person
         // copies the code into Slack, then confirms with one empty line.
         print(stdout, {

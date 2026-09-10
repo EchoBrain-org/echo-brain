@@ -1,9 +1,12 @@
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimePhaseV1 } from "../../../../shared/core-runtime-observation-v1.js";
 import {
   canonicalJson,
   canonicalSha256,
 } from "@echo-brain/federation-protocol";
 import {
   organizationPersonSlackIdentityLinkChallengeCodeSha256,
+  validateOrganizationPersonTools,
+  type OrganizationPersonToolV2,
   validateOrganizationPersonSlackIdentityLinkBeginRequest,
   validateOrganizationPersonSlackIdentityLinkBeginResponse,
   validateOrganizationPersonSlackIdentityLinkCompleteRequest,
@@ -38,6 +41,7 @@ export interface SlackPersonIdentityLinkAuthenticationPort {
 }
 
 export interface SlackPersonIdentityLinkRepositoryPort {
+  personTools(session: ReturnType<typeof personSession>): readonly OrganizationPersonToolV2[];
   activeSlackOrganizationTool(): ActiveSlackOrganizationTool | null;
   personSlackIdentityLinkBeginReplay?(input: {
     readonly request_id: string;
@@ -208,7 +212,7 @@ function providerFailure(error: unknown): never {
       "Slack could not verify the identity-link evidence",
     );
   }
-  throw error;
+  throw new AuthorityOperationError("unavailable", "Slack identity verification is temporarily unavailable");
 }
 
 function repositoryOperation<T>(operation: () => T): T {
@@ -239,7 +243,50 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     private readonly options: SlackPersonIdentityLinkWorkflowOptionsV1,
   ) {}
 
-  async begin(
+  async tools(accessToken: string) {
+    return this.observe("person_tools_status", () => this.readTools(accessToken));
+  }
+
+  async begin(input: unknown, accessToken: string, signal?: AbortSignal) {
+    return this.observe("person_tool_delivery", () => this.beginInternal(input, accessToken, signal));
+  }
+
+  async complete(input: unknown, accessToken: string, signal?: AbortSignal) {
+    return this.observe("person_tool_completion", () => this.completeInternal(input, accessToken, signal));
+  }
+
+  private observe<T>(phase: CoreRuntimePhaseV1, operation: () => Promise<T>): Promise<T> {
+    return observeCoreRuntimeV1(phase, async () => {
+      try {
+        const value = await operation();
+        annotateCoreRuntimeV1({ result: "completed" });
+        return value;
+      }
+      catch (error) {
+        if (error instanceof AuthorityOperationError) {
+          annotateCoreRuntimeV1({ result: error.code === "unauthorized" ? "authorization" : error.code === "conflict" ? "competing_action" : error.code === "invalid_request" ? "invalid_output" : "unavailable" });
+          throw error;
+        }
+        annotateCoreRuntimeV1({ result: "unavailable" });
+        throw new AuthorityOperationError("unavailable", "Connected tools operation is unavailable; try again");
+      }
+    });
+  }
+
+  private async readTools(accessToken: string) {
+    return this.options.authorization_fence.withRead(() => {
+      const current = this.authenticate(accessToken);
+      try {
+        return validateOrganizationPersonTools({ schema_version: 2, kind: "echo-organization-person-tools",
+          organization_id: current.organization_id, membership_id: current.membership_id,
+          tools: this.options.repository.personTools(personSession(current, this.options.authority_id)) });
+      } catch {
+        throw new AuthorityOperationError("unavailable", "Connected tools status is unavailable; try refreshing");
+      }
+    });
+  }
+
+  private async beginInternal(
     input: unknown,
     accessToken: string,
     signal?: AbortSignal,
@@ -284,13 +331,23 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         challenge_attempt_id: earlyReplay.challenge_attempt_id,
         provider: "slack",
         provider_tenant_id: activeTool.team_id,
-        channel_id: activeTool.channel_id,
+        channel_id: earlyReplay.channel_id,
         challenge_message_ts: earlyReplay.challenge_message_ts,
         expires_at: earlyReplay.expires_at,
       });
     }
     const token = this.readToolSecret(activeTool);
     const verified = await this.verifyTool(token, activeTool, signal);
+    let destination: { team_id: string; channel_id: string; recipient_user_id: string };
+    try {
+      if (this.options.slack.openIdentityLinkDirectMessage === undefined) throw new Error("DM delivery unavailable");
+      destination = await this.options.slack.openIdentityLinkDirectMessage(token, request.recipient_user_id, activeTool.team_id, signal);
+      if (destination.team_id !== activeTool.team_id || destination.recipient_user_id !== request.recipient_user_id || !/^D[A-Z0-9]{2,}$/.test(destination.channel_id)) {
+        throw new Error("DM recipient mismatch");
+      }
+    } catch {
+      throw new AuthorityOperationError("unavailable", "Could not open a private Slack DM; check your Slack member ID and try again");
+    }
     const begun = await this.options.authorization_fence.withRead(() => {
       const current = this.authenticate(accessToken);
       if (
@@ -315,6 +372,8 @@ export class SlackPersonIdentityLinkWorkflowV1 {
             currentSession,
             request,
           ),
+          channel_id: destination.channel_id,
+          recipient_user_id: destination.recipient_user_id,
           challenge_code_sha256: request.challenge_code_sha256,
           person_session: currentSession,
           organization_tool: activeTool,
@@ -332,7 +391,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         challenge_attempt_id: begun.challenge_attempt_id,
         provider: "slack",
         provider_tenant_id: activeTool.team_id,
-        channel_id: activeTool.channel_id,
+        channel_id: begun.channel_id,
         challenge_message_ts: begun.challenge_message_ts,
         expires_at: begun.expires_at,
       });
@@ -351,7 +410,8 @@ export class SlackPersonIdentityLinkWorkflowV1 {
           expected_bot_id: activeTool.bot_id,
           expected_app_id: activeTool.app_id,
           challenge_attempt_id: begun.challenge_attempt_id,
-          channel_id: activeTool.channel_id,
+          channel_id: begun.channel_id,
+          recipient_user_id: begun.recipient_user_id,
           issued_at: begun.created_at,
           expires_at: begun.expires_at,
         },
@@ -376,7 +436,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         ) ||
         current.checked_at >= begun.expires_at ||
         posted.team_id !== activeTool.team_id ||
-        posted.channel_id !== activeTool.channel_id
+        posted.channel_id !== begun.channel_id
       ) {
         this.options.repository.failSlackIdentityLinkChallenge(
           begun.challenge_attempt_id,
@@ -409,13 +469,13 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       challenge_attempt_id: begun.challenge_attempt_id,
       provider: "slack",
       provider_tenant_id: activeTool.team_id,
-      channel_id: activeTool.channel_id,
+      channel_id: begun.channel_id,
       challenge_message_ts: posted.challenge_message_ts,
       expires_at: begun.expires_at,
     });
   }
 
-  async complete(
+  private async completeInternal(
     input: unknown,
     accessToken: string,
     signal?: AbortSignal,
@@ -488,7 +548,8 @@ export class SlackPersonIdentityLinkWorkflowV1 {
           expected_bot_id: activeTool.bot_id,
           expected_app_id: activeTool.app_id,
           challenge_attempt_id: request.challenge_attempt_id,
-          channel_id: activeTool.channel_id,
+          channel_id: challenge.channel_id,
+          recipient_user_id: challenge.recipient_user_id,
           challenge_message_ts: request.challenge_message_ts,
           challenge_code: request.challenge_code,
           issued_at: challenge.created_at,
@@ -500,18 +561,12 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       providerFailure(error);
     }
 
-    let currentChannel: Awaited<
-      ReturnType<SlackIdentityProviderV1["verifyChannel"]>
-    >;
+    let currentDestination: { team_id: string; channel_id: string; recipient_user_id: string };
     try {
-      currentChannel = await this.options.slack.verifyChannel(
-        token,
-        activeTool.channel_id,
-        activeTool.team_id,
-        signal,
-      );
-    } catch (error) {
-      providerFailure(error);
+      if (this.options.slack.openIdentityLinkDirectMessage === undefined) throw new Error("DM unavailable");
+      currentDestination = await this.options.slack.openIdentityLinkDirectMessage(token, challenge.recipient_user_id, activeTool.team_id, signal);
+    } catch {
+      throw new AuthorityOperationError("unavailable", "Could not revalidate the private Slack DM; try again");
     }
 
     return await this.options.authorization_fence.withRead(() => {
@@ -520,8 +575,10 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       if (
         !samePersonSession(before, current) ||
         !sameTool(activeTool, currentTool) ||
-        currentChannel.team_id !== activeTool.team_id ||
-        currentChannel.channel_id !== activeTool.channel_id
+        currentDestination.team_id !== activeTool.team_id ||
+        currentDestination.channel_id !== challenge.channel_id ||
+        currentDestination.recipient_user_id !== challenge.recipient_user_id ||
+        observed.user_id !== challenge.recipient_user_id
       ) {
         throw new AuthorityOperationError(
           "conflict",

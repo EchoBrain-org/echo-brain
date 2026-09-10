@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 /** Fixed core-runtime boundaries carried by the existing journey transport. */
 export const CORE_RUNTIME_PHASES_V1 = [
+  "person_tools_status", "person_tool_delivery", "person_tool_completion",
   "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor",
   "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery",
   "approval_observation", "record_append", "approval_action", "slack_terminal_update",
