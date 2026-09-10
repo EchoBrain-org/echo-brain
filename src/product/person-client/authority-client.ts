@@ -12,6 +12,9 @@ import {
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
+  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH,
+  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH,
+  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH,
   isCanonicalPersonEmail,
   isExpectedPersonEmail,
   isOrganizationApiValidationError,
@@ -28,6 +31,10 @@ import {
   validateOrganizationPersonSlackIdentityLinkBeginResponse,
   validateOrganizationPersonSlackIdentityLinkCompleteRequest,
   validateOrganizationPersonSlackIdentityLinkResult,
+  validateOrganizationPersonSlackBrowserLinkAttemptRequest,
+  validateOrganizationPersonSlackBrowserLinkBeginRequest,
+  validateOrganizationPersonSlackBrowserLinkBeginResponse,
+  validateOrganizationPersonSlackBrowserLinkStatusResponse,
   type OrganizationPersonMeetingIngestionExclusionChangeRequestV2,
   type OrganizationMeetingIngestionExclusionListResponseV2,
   type OrganizationPersonMeetingIngestionExclusionListRequestV2,
@@ -39,6 +46,10 @@ import {
   type OrganizationPersonSlackIdentityLinkBeginResponseV2,
   type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
   type OrganizationPersonSlackIdentityLinkResultV2,
+  type OrganizationPersonSlackBrowserLinkAttemptRequestV1,
+  type OrganizationPersonSlackBrowserLinkBeginRequestV1,
+  type OrganizationPersonSlackBrowserLinkBeginResponseV1,
+  type OrganizationPersonSlackBrowserLinkStatusResponseV1,
 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -49,6 +60,8 @@ const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
 const PERSON_ANSWER_PATH_V1 = "/v1/person/ask";
+export type PersonSlackBrowserLinkBeginV1 = OrganizationPersonSlackBrowserLinkBeginResponseV1;
+export type PersonSlackBrowserLinkStatusV1 = OrganizationPersonSlackBrowserLinkStatusResponseV1;
 export interface EmployeeInvitationV1 {
   readonly login_grant: string;
   readonly expires_at: string;
@@ -634,6 +647,39 @@ function validateEmployeeRoster(value: unknown): EmployeeRosterV1 {
   });
 }
 
+function validateSlackAuthorizationUrl(value: unknown): string {
+  if (typeof value !== "string" || value.length > 4_096) {
+    throw new Error("Slack browser authorization URL is invalid");
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Slack browser authorization URL is invalid");
+  }
+  // The Authority is the only party that should select a browser destination.
+  // Reject credentials, fragments, and arbitrary HTTPS origins before calling
+  // the host browser. Slack's production OpenID path is deliberately exact.
+  if (
+    url.origin !== "https://slack.com" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== "" ||
+    url.pathname !== "/openid/connect/authorize"
+  ) {
+    throw new Error("Slack browser authorization URL is invalid");
+  }
+  return url.toString();
+}
+
+function validateSlackBrowserBegin(value: unknown): PersonSlackBrowserLinkBeginV1 {
+  const response = validateOrganizationPersonSlackBrowserLinkBeginResponse(value);
+  return Object.freeze({
+    ...response,
+    authorization_url: validateSlackAuthorizationUrl(response.authorization_url),
+  });
+}
+
 function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<Record<string, string>> {
   const request = asPlainRecord(value, "employee request is invalid");
   exactKeys(request, includeName ? ["name", "email"] : ["email"], "employee request is invalid");
@@ -1061,6 +1107,48 @@ export class PersonAuthorityClient {
       body: request,
       validate_request: validateOrganizationPersonSlackIdentityLinkCompleteRequest,
       validate_response: validateOrganizationPersonSlackIdentityLinkResult,
+      access_token: accessToken,
+      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
+    });
+  }
+
+  beginSlackBrowserLink(
+    request: OrganizationPersonSlackBrowserLinkBeginRequestV1,
+    accessToken: string,
+  ): Promise<PersonSlackBrowserLinkBeginV1> {
+    return this.json({
+      path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH,
+      body: request,
+      validate_request: validateOrganizationPersonSlackBrowserLinkBeginRequest,
+      validate_response: validateSlackBrowserBegin,
+      access_token: accessToken,
+      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
+    });
+  }
+
+  slackBrowserLinkStatus(
+    request: OrganizationPersonSlackBrowserLinkAttemptRequestV1,
+    accessToken: string,
+  ): Promise<PersonSlackBrowserLinkStatusV1> {
+    return this.json({
+      path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH,
+      body: request,
+      validate_request: validateOrganizationPersonSlackBrowserLinkAttemptRequest,
+      validate_response: validateOrganizationPersonSlackBrowserLinkStatusResponse,
+      access_token: accessToken,
+      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
+    });
+  }
+
+  cancelSlackBrowserLink(
+    request: OrganizationPersonSlackBrowserLinkAttemptRequestV1,
+    accessToken: string,
+  ): Promise<PersonSlackBrowserLinkStatusV1> {
+    return this.json({
+      path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH,
+      body: request,
+      validate_request: validateOrganizationPersonSlackBrowserLinkAttemptRequest,
+      validate_response: validateOrganizationPersonSlackBrowserLinkStatusResponse,
       access_token: accessToken,
       timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
     });

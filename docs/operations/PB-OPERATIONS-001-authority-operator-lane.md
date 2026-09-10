@@ -81,6 +81,7 @@ Use the actor below; preserve the underlying identity, approval and health check
 | Valid-session checks, planning, receipt polling, artifact verification, kit installation, authenticated Person reads and telemetry inspection | Local operator within the authorized lane. |
 | Missing/expired login, MFA, provider secret entry, account switching/logout, Slack identity-link exchange and Interactivity setup | Human. The operator prepares the exact next action and resumes after completion. |
 | Initial host `resume`, `status`, and release-canary `./update-clean-v1.sh canary` | Human in Session Manager. The remote release CLI does not support host onboarding. Group consecutive host commands only when no intervening human action is needed. |
+| Optional Slack browser-identity configuration | Human in Session Manager runs the reviewed `./onboard-clean-v1.sh configure-slack-browser --input <private-json>` action after Slack's OAuth redirect is configured. It validates a human-owned `0600` two-field file, restarts only the accepted runtime, and verifies rollback on failure. |
 | Unreleased rehearsal replacement and `prepare-rehearsal` using retained provider inputs | Human in Session Manager after the nonsecret transfer completes. Credentials stay on the host; use the exact operation ID from its receipt. |
 | Private Slack-card approval | Human, for each card. |
 | Infrastructure change set or private handoff not yet approved for its exact scope | Human reviews the prepared result once. |

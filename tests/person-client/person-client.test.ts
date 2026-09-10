@@ -855,6 +855,159 @@ describe("Person client", () => {
     });
   });
 
+  it("opens a bounded Slack browser connection without printing authorization state", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const attempt = fixtureId("sbl", 7);
+      const authorizationUrl = "https://slack.com/openid/connect/authorize?client_id=client&state=private-state";
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      let stdout = "";
+      let opened = "";
+      const status = await runPersonClientCli(["slack-connect-begin"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: () => true },
+        home_directory: home,
+        now: () => NOW,
+        random_uuid: () => "00000000-0000-4000-8000-000000000007",
+        open_authorization_url: (url) => { opened = url; return true; },
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v2/person/external-identities/slack/browser/begin") {
+            expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
+            expect(JSON.parse(String(init?.body))).toEqual({ request_id: "psb_00000000-0000-4000-8000-000000000007" });
+            return json({
+              schema_version: 1,
+              kind: "echo-person-slack-browser-link-v1",
+              attempt_id: attempt,
+              authorization_url: authorizationUrl,
+              expires_at: "2026-08-18T00:17:00.000Z",
+            }, 201);
+          }
+          throw new Error(`unexpected request ${path}`);
+        },
+      });
+      expect(status).toBe(0);
+      expect(opened).toBe(authorizationUrl);
+      expect(JSON.parse(stdout)).toEqual({
+        ok: true,
+        phase: "waiting-for-slack",
+        attempt_id: attempt,
+        expires_at: "2026-08-18T00:17:00.000Z",
+      });
+      expect(stdout).not.toContain(authorizationUrl);
+      expect(stdout).not.toContain("private-state");
+    });
+  });
+
+  it("refuses untrusted or malformed Slack browser authorization URLs before opening them", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      for (const authorization_url of [
+        "https://evil.example/openid/connect/authorize",
+        "https://slack.com:444/openid/connect/authorize",
+        "https://slack.com/oauth/v2/authorize",
+      ]) {
+        let opened = false;
+        let stderr = "";
+        const status = await runPersonClientCli(["slack-connect-begin"], {
+          stdout: { write: () => true },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          open_authorization_url: () => { opened = true; return true; },
+          fetch: async (input) => {
+            const path = new URL(String(input)).pathname;
+            if (path === "/v2/person/external-identities/slack/browser/begin") return json({
+              schema_version: 1,
+              kind: "echo-person-slack-browser-link-v1",
+              attempt_id: fixtureId("sbl", 8),
+              authorization_url,
+              expires_at: "2026-08-18T00:17:00.123Z",
+            }, 201);
+            throw new Error(`unexpected request ${path}`);
+          },
+        });
+        expect(status).toBe(1);
+        expect(opened).toBe(false);
+        expect(stderr).toContain("Slack browser authorization URL is invalid");
+      }
+    });
+  });
+
+  it("rejects a completed Slack browser link when the local account changes", async () => {
+    await withHome(async (home) => {
+      const descriptor = authorityDescriptor();
+      const client: PersonClient = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
+          await client.installSession("https://authority.example", {
+            ...ROTATED_SESSION,
+            membership_id: fixtureId("mem", 9), principal_id: fixtureId("prn", 9), session_family_id: fixtureId("psf", 9),
+          });
+          return json({
+            schema_version: 1,
+            kind: "echo-person-slack-browser-link-status-v1",
+            attempt_id: fixtureId("sbl", 9),
+            status: "complete",
+            failure_reason: null,
+          });
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(client.slackBrowserLinkStatus(fixtureId("sbl", 9))).rejects.toThrow("current account");
+    });
+  });
+
+  it("cancels a pending Slack browser attempt without exposing its authorization URL", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const attempt = fixtureId("sbl", 10);
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      let stdout = "";
+      const status = await runPersonClientCli(
+        ["slack-connect-cancel", "--attempt-id", attempt],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: () => true },
+          home_directory: home,
+          now: () => NOW,
+          fetch: async (input, init) => {
+            expect(new URL(String(input)).pathname).toBe(
+              "/v2/person/external-identities/slack/browser/cancel",
+            );
+            expect(JSON.parse(String(init?.body))).toEqual({ attempt_id: attempt });
+            return json({
+              schema_version: 1,
+              kind: "echo-person-slack-browser-link-status-v1",
+              attempt_id: attempt,
+              status: "cancelled",
+              failure_reason: null,
+            });
+          },
+        },
+      );
+      expect(status).toBe(0);
+      expect(JSON.parse(stdout)).toMatchObject({ ok: true, attempt_id: attempt, status: "cancelled" });
+      expect(stdout).not.toContain("authorization_url");
+    });
+  });
+
   it("sends Slack identity-link replay input without caller or route assertions", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();

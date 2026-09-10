@@ -15,6 +15,7 @@ import { createOpenRouterDecisionProcessorBundleV1 } from "./providers/openroute
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
 import { createPrivateSlackApprovalWorkflowBundleV1 } from "./providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
+import { createSlackBrowserIdentityProvider } from "../adapters/oidc/slack-browser-identity-provider.js";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.js";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
@@ -38,6 +39,12 @@ export interface OrganizationAuthorityServiceConfig
   readonly slack_signing_secret_file: string;
   readonly slack_connection_id: string;
   readonly slack_identity_link_channel_id: string;
+  /** Optional browser OAuth configuration. It stays in process memory only. */
+  readonly slack_browser_oauth?: {
+    readonly client_id: string;
+    readonly client_secret: string;
+    readonly redirect_uri: string;
+  };
   readonly on_private_approval_slack_rejection?: (event: {
     readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
   }) => void;
@@ -79,6 +86,7 @@ export async function openOrganizationAuthorityService(
     slack_signing_secret_file,
     slack_connection_id,
     slack_identity_link_channel_id,
+    slack_browser_oauth,
     on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
@@ -124,6 +132,12 @@ export async function openOrganizationAuthorityService(
       dependencies.api?.external_identity_runtime_bundle ??
       createSlackPersonExternalIdentityRuntimeBundleV1({
         identity_link_channel_id: slack_identity_link_channel_id,
+        ...(slack_browser_oauth === undefined
+          ? {}
+          : {
+              browser_provider:
+                createSlackBrowserIdentityProvider(slack_browser_oauth),
+            }),
       }),
   };
   return openOrganizationAuthorityRuntime(

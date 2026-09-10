@@ -8,7 +8,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readPrivateAuthoritySlackSigningSecret } from "../../src/adapters/security/private-file-credentials.js";
+import {
+  readOptionalPrivateAuthoritySlackBrowserOauthConfiguration,
+  readPrivateAuthoritySlackSigningSecret,
+} from "../../src/adapters/security/private-file-credentials.js";
 
 const roots: string[] = [];
 
@@ -57,5 +60,45 @@ describe("private Slack signing-secret file reader", () => {
     expect(() =>
       readPrivateAuthoritySlackSigningSecret(`file:${link}`),
     ).toThrow(/authority credential/);
+  });
+});
+
+describe("private Slack browser OAuth configuration reader", () => {
+  it("accepts formatted exact-shape JSON from a private file", () => {
+    const path = privateFile(
+      '{ "client_id": "1234567890.1234567890", "client_secret": "secret-value" }',
+    );
+    expect(readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(`file:${path}`)).toEqual({
+      client_id: "1234567890.1234567890",
+      client_secret: "secret-value",
+    });
+  });
+
+  it("keeps a missing optional file on the legacy connection path", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-slack-browser-oauth-"));
+    roots.push(root);
+    expect(readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
+      `file:${join(root, "missing")}`,
+    )).toBeUndefined();
+  });
+
+  it("rejects malformed, public, and symlinked browser OAuth configuration", () => {
+    const malformed = privateFile('{"client_id":"only"}');
+    expect(() => readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
+      `file:${malformed}`,
+    )).toThrow(/authority credential/);
+
+    const publicPath = privateFile('{"client_id":"123.456","client_secret":"secret"}');
+    chmodSync(publicPath, 0o644);
+    expect(() => readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
+      `file:${publicPath}`,
+    )).toThrow(/authority credential/);
+
+    const target = privateFile('{"client_id":"123.456","client_secret":"secret"}');
+    const link = join(roots[roots.length - 1]!, "browser-oauth-link");
+    symlinkSync(target, link);
+    expect(() => readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
+      `file:${link}`,
+    )).toThrow(/authority credential/);
   });
 });

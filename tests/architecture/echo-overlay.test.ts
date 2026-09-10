@@ -469,7 +469,7 @@ describe("native ECHO hotkey overlay", () => {
     const source = readFileSync(SOURCE, "utf8");
 
     expect(source).toContain('PillButton(title: "Copy answer"');
-    expect(source).toContain("private final class PillButton: NSButton");
+    expect(source).toContain("final class PillButton: NSButton");
     expect(source).toContain("override func drawFocusRingMask()");
     expect(source).not.toContain("bezelColor");
     expect(source).toContain("NSPasteboard.general.setString(answer, forType: .string)");

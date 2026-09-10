@@ -4,6 +4,8 @@ import {
   isCanonicalPersonEmail,
   isExpectedPersonEmail,
   validateOrganizationPersonSession,
+  validateOrganizationPersonSlackBrowserLinkAttemptRequest,
+  validateOrganizationPersonSlackBrowserLinkBeginRequest,
   type OrganizationPersonMeetingIngestionExclusionSelectorV2,
   type OrganizationPersonSessionV2,
 } from "@echo-brain/organization-api";
@@ -314,6 +316,20 @@ export class PersonClient {
     return this.store.read();
   }
 
+  private assertCurrentSession(stored: StoredPersonClientSessionV1): void {
+    const current = this.store.read();
+    if (
+      current.authority_origin !== stored.authority_origin ||
+      current.authority_id !== stored.authority_id ||
+      current.session.organization_id !== stored.session.organization_id ||
+      current.session.principal_id !== stored.session.principal_id ||
+      current.session.membership_id !== stored.session.membership_id ||
+      current.session.session_family_id !== stored.session.session_family_id
+    ) {
+      throw new Error("Slack browser link did not match the current account");
+    }
+  }
+
   private async employeeManagementSession(): Promise<StoredPersonClientSessionV1> {
     let stored: StoredPersonClientSessionV1;
     try {
@@ -461,6 +477,38 @@ export class PersonClient {
       createPersonSlackIdentityLinkCompleteRequest(this.requestId("psc"), input),
       stored.session.access_token,
     );
+  }
+
+  async beginSlackBrowserLink() {
+    const stored = await this.accessSession();
+    const response = await this.authority(stored.authority_origin).beginSlackBrowserLink(
+      validateOrganizationPersonSlackBrowserLinkBeginRequest({
+        request_id: this.requestId("psb"),
+      }),
+      stored.session.access_token,
+    );
+    this.assertCurrentSession(stored);
+    return response;
+  }
+
+  async slackBrowserLinkStatus(attemptId: string) {
+    const stored = await this.accessSession();
+    const response = await this.authority(stored.authority_origin).slackBrowserLinkStatus(
+      validateOrganizationPersonSlackBrowserLinkAttemptRequest({ attempt_id: attemptId }),
+      stored.session.access_token,
+    );
+    this.assertCurrentSession(stored);
+    return response;
+  }
+
+  async cancelSlackBrowserLink(attemptId: string) {
+    const stored = await this.accessSession();
+    const response = await this.authority(stored.authority_origin).cancelSlackBrowserLink(
+      validateOrganizationPersonSlackBrowserLinkAttemptRequest({ attempt_id: attemptId }),
+      stored.session.access_token,
+    );
+    this.assertCurrentSession(stored);
+    return response;
   }
 
   async employees(): Promise<EmployeeRosterV1> {

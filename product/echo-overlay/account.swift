@@ -699,56 +699,88 @@ func decodeConnectedTools(_ data: Data, membershipID: String?) -> ConnectedTools
 func connectedToolsSummary(_ result: ConnectedToolsResult?) -> String {
     guard let result else { return "Status unknown. Could not read connected tools. Try Refresh." }
     guard let tool = result.tools.first else { return "Your organization has no supported tools enabled." }
-    guard tool.availability == "enabled" else { return "Slack · Organization: unavailable\nYour link: unavailable" }
+    guard tool.availability == "enabled" else { return "Slack is not enabled for this organization. Ask an owner to connect it." }
     return "Slack · Organization: enabled (\(tool.workspace_id ?? ""))\nYour link: \(tool.personal_status)" + (tool.account_id.map { " (\($0))" } ?? "")
 }
 
-struct SlackLinkChallenge: Decodable {
-    let challenge_attempt_id: String
-    let challenge_message_ts: String
-    let challenge_code: String
-    let channel_id: String
+func isSlackBrowserExpiry(_ value: String) -> Bool {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if fractional.date(from: value) != nil { return true }
+    return ISO8601DateFormatter().date(from: value) != nil
+}
+
+private struct SlackBrowserBegin: Decodable {
+    let ok: Bool
+    let phase: String
+    let attempt_id: String
     let expires_at: String
 }
 
+private struct SlackBrowserStatus: Decodable {
+    let ok: Bool
+    let schema_version: Int
+    let kind: String
+    let attempt_id: String
+    let status: String
+    let failure_reason: String?
+
+    var isValid: Bool {
+        ok && schema_version == 1 && kind == "echo-person-slack-browser-link-status-v1" &&
+        attempt_id.range(of: "^sbl_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil &&
+        ["pending", "complete", "cancelled", "expired", "failed"].contains(status) &&
+        (failure_reason == nil || ["provider_rejected", "provider_unavailable", "identity_conflict", "tool_unavailable"].contains(failure_reason!)) &&
+        ((status == "failed") == (failure_reason != nil))
+    }
+}
+
 @MainActor
-final class ConnectedToolsController: NSObject {
+final class ConnectedToolsController: NSObject, NSWindowDelegate {
     private let client: AccountClient
     private let gate = AccountRequestGate()
     private var running: AccountRunning?
     private var identity: AccountIdentity?
-    private var challenge: SlackLinkChallenge?
+    private var slackAttemptID: String?
+    private var pollWork: DispatchWorkItem?
+    private var lastSlackOperationMessage: String?
     private var window: NSWindow?
     private let context = NSTextField(wrappingLabelWithString: "")
     private let state = NSTextField(wrappingLabelWithString: "")
-    private let recipient = NSTextField(string: "")
-    private let code = NSTextField(string: "")
     private let refreshButton = NSButton(title: "Refresh", target: nil, action: nil)
-    private let linkButton = NSButton(title: "Send private Slack DM", target: nil, action: nil)
-    private let completeButton = NSButton(title: "I replied in Slack", target: nil, action: nil)
+    private let linkButton = PillButton(title: "Connect Slack", target: nil, action: nil)
+    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
     init(client: AccountClient) { self.client = client; super.init() }
 
     func show(identity: AccountIdentity) {
         conceal()
         self.identity = identity
+        lastSlackOperationMessage = nil
         if window == nil {
-            let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 490, height: 370), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 320), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             panel.title = "Connected tools"; panel.isReleasedWhenClosed = false
-            recipient.placeholderString = "Slack member ID (U… or W…)"
-            code.isEditable = false; code.isSelectable = true
-            let optional = NSTextField(wrappingLabelWithString: "Linking Slack is optional. Ask and Sources use your existing organization access.")
-            let stack = NSStackView(views: [context, state, recipient, linkButton, code, completeButton, refreshButton, optional])
+            panel.appearance = NSAppearance(named: .darkAqua); panel.backgroundColor = EchoTheme.ink; panel.delegate = self
+            let title = NSTextField(labelWithString: "Connected tools")
+            title.font = .systemFont(ofSize: 20, weight: .semibold); title.textColor = EchoTheme.text
+            let optional = NSTextField(wrappingLabelWithString: "Connect the tools your organization supports. Slack linking is optional; Ask and Sources already use your ECHO access.")
+            optional.font = .systemFont(ofSize: 13); optional.textColor = EchoTheme.mutedText; optional.maximumNumberOfLines = 0
+            let buttons = NSStackView(views: [linkButton, cancelButton, refreshButton])
+            buttons.orientation = .horizontal; buttons.spacing = 8
+            let stack = NSStackView(views: [title, context, state, buttons, optional])
             stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
             stack.translatesAutoresizingMaskIntoConstraints = false
             panel.contentView?.addSubview(stack)
             if let content = panel.contentView {
-                NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24)])
+                content.wantsLayer = true; content.layer?.backgroundColor = EchoTheme.ink.cgColor
+                NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24), stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24)])
             }
-            for button in [linkButton, completeButton, refreshButton] { button.target = self }
+            context.font = .systemFont(ofSize: 12); context.textColor = EchoTheme.mutedText; context.maximumNumberOfLines = 0
+            state.font = .systemFont(ofSize: 14); state.textColor = EchoTheme.text; state.maximumNumberOfLines = 0
+            for button in [linkButton, cancelButton, refreshButton] { button.target = self; button.bezelStyle = .rounded }
+            linkButton.style = .primary; linkButton.isBordered = false
             refreshButton.action = #selector(refresh)
             linkButton.action = #selector(beginLink)
-            completeButton.action = #selector(completeLink)
+            cancelButton.action = #selector(cancelLink); cancelButton.isHidden = true
             window = panel
         }
         context.stringValue = "\(identity.displayName) · \(identity.authority)"
@@ -757,88 +789,143 @@ final class ConnectedToolsController: NSObject {
     }
 
     func conceal() {
+        cancelAttemptIfNeeded()
         _ = gate.replace(); running?.cancel(); running = nil; identity = nil
-        challenge = nil; code.stringValue = ""; code.isHidden = true; recipient.stringValue = ""
         context.stringValue = ""; state.stringValue = "Status unknown"
-        linkButton.isHidden = true; completeButton.isHidden = true
+        linkButton.isHidden = true; cancelButton.isHidden = true
         window?.orderOut(nil)
     }
 
-    private func request(_ arguments: [String], input: Data? = nil, completion: @escaping (Data?) -> Void) {
+    func windowWillClose(_ notification: Notification) { conceal() }
+
+    private func request(_ arguments: [String], completion: @escaping (Data?) -> Void) {
         running?.cancel()
         let requestID = gate.replace(); let operation = AccountRunning(); running = operation
-        refreshButton.isEnabled = false; linkButton.isEnabled = false; completeButton.isEnabled = false
+        refreshButton.isEnabled = false; linkButton.isEnabled = false
+        cancelButton.isEnabled = slackAttemptID != nil
         let client = self.client
         let expectedIdentity = self.identity
         DispatchQueue.global(qos: .userInitiated).async {
             var output: Data? = nil
             if case .signedIn(let before) = client.readStatus(operation), before == expectedIdentity {
-                output = client.runCaptured(arguments, timeout: 80, running: operation, input: input)
+                output = client.runCaptured(arguments, timeout: 80, running: operation)
                 if case .signedIn(let after) = client.readStatus(operation), after == expectedIdentity {} else { output = nil }
             }
             let result = output
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.gate.accepts(requestID), self.identity != nil else { return }
-                self.running = nil; self.refreshButton.isEnabled = true; self.linkButton.isEnabled = true; self.completeButton.isEnabled = true
+                self.running = nil; self.refreshButton.isEnabled = true; self.linkButton.isEnabled = true; self.cancelButton.isEnabled = self.slackAttemptID != nil
                 completion(result)
             }
         }
     }
 
     @objc func refresh() {
-        challenge = nil; code.stringValue = ""; code.isHidden = true; completeButton.isHidden = true
-        recipient.isHidden = true; linkButton.isHidden = true; state.stringValue = "Checking organization tools…"
+        guard slackAttemptID == nil else { return }
+        linkButton.isHidden = true; cancelButton.isHidden = true; state.stringValue = "Checking organization tools…"
         request(["person", "tools"]) { [weak self] data in
             guard let self else { return }
             guard let data, let result = decodeConnectedTools(data, membershipID: self.identity?.membershipID) else {
-                self.state.stringValue = connectedToolsSummary(nil)
+                self.showToolsSummary(connectedToolsSummary(nil))
                 return
             }
             guard let slack = result.tools.first else {
-                self.state.stringValue = connectedToolsSummary(result)
+                self.showToolsSummary(connectedToolsSummary(result))
                 return
             }
             if slack.availability == "unavailable" {
-                self.state.stringValue = connectedToolsSummary(result)
+                self.showToolsSummary(connectedToolsSummary(result))
                 return
             }
-            self.state.stringValue = connectedToolsSummary(result)
-            self.recipient.isHidden = slack.personal_status == "linked"
+            self.showToolsSummary(connectedToolsSummary(result))
             self.linkButton.isHidden = slack.personal_status == "linked"
         }
     }
 
     @objc private func beginLink() {
-        let user = recipient.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard user.range(of: "^[UW][A-Z0-9]{2,127}$", options: .regularExpression) != nil else {
-            state.stringValue = "Enter your Slack member ID from your Slack profile, then try again."
-            return
-        }
-        challenge = nil; code.stringValue = ""; code.isHidden = true; completeButton.isHidden = true
-        state.stringValue = "Opening your private Slack DM…"
-        request(["person", "slack-link-begin", "--slack-user", user]) { [weak self] data in
+        lastSlackOperationMessage = nil
+        state.stringValue = "Opening Slack in your browser…"
+        request(["person", "slack-connect-begin"]) { [weak self] data in
             guard let self else { return }
-            guard let data, let value = try? JSONDecoder().decode(SlackLinkChallenge.self, from: data),
-                  value.channel_id.hasPrefix("D"), value.challenge_code.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
-                  value.challenge_attempt_id.range(of: "^cat_[A-Za-z0-9_-]{1,96}$", options: .regularExpression) != nil,
-                  value.challenge_message_ts.range(of: "^[0-9]{1,16}\\.[0-9]{1,16}$", options: .regularExpression) != nil
+            guard let data, let value = try? JSONDecoder().decode(SlackBrowserBegin.self, from: data),
+                  value.ok, value.phase == "waiting-for-slack",
+                  value.attempt_id.range(of: "^sbl_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil,
+                  isSlackBrowserExpiry(value.expires_at)
             else {
-                self.state.stringValue = "Could not deliver a private DM. Check your Slack member ID and connection, then retry or Refresh."
+                self.state.stringValue = "Slack browser connection could not start. It may not be enabled for this organization. Ask an owner to enable it or try again."
                 return
             }
-            self.challenge = value; self.code.isHidden = false; self.code.stringValue = value.challenge_code
-            self.completeButton.isHidden = false; self.linkButton.isHidden = true
-            self.state.stringValue = "Reply with this code in the ECHO bot’s private DM thread, then choose ‘I replied in Slack’. The code expires in 15 minutes."
+            self.slackAttemptID = value.attempt_id; self.linkButton.isHidden = true; self.cancelButton.isHidden = false
+            self.state.stringValue = "Continue in Slack. ECHO will finish connecting automatically."
+            self.pollSlackLink(after: 0.8)
         }
     }
 
-    @objc private func completeLink() {
-        guard let challenge else { return }
-        state.stringValue = "Verifying your Slack reply…"
-        request(["person", "slack-link-complete", "--challenge-attempt", challenge.challenge_attempt_id, "--challenge-message-ts", challenge.challenge_message_ts], input: Data(challenge.challenge_code.utf8)) { [weak self] data in
+    private func pollSlackLink(after seconds: TimeInterval) {
+        pollWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.pollSlackLinkNow() }
+        pollWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    private func pollSlackLinkNow() {
+        guard let attempt = slackAttemptID else { return }
+        request(["person", "slack-connect-status", "--attempt-id", attempt]) { [weak self] data in
             guard let self else { return }
-            if data != nil { self.refresh() }
-            else { self.state.stringValue = "The reply was not verified. Check the exact DM thread and retry, or Refresh to start again if the code expired." }
+            guard let data, let status = try? JSONDecoder().decode(SlackBrowserStatus.self, from: data), status.isValid,
+                  status.attempt_id == self.slackAttemptID
+            else {
+                self.cancelAttemptIfNeeded(message: "Slack connection status could not be read. Try connecting again.")
+                return
+            }
+            switch status.status {
+            case "pending": self.pollSlackLink(after: 1.5)
+            case "complete": self.finishSlackLink("Slack connected.", refresh: true)
+            case "cancelled": self.finishSlackLink("Slack connection cancelled.", refresh: true)
+            case "expired": self.finishSlackLink("Slack connection expired. Try again.", refresh: true)
+            case "failed": self.finishSlackLink(self.failureMessage(status.failure_reason), refresh: true)
+            default: self.finishSlackLink("Slack connection could not be completed.", refresh: true)
+            }
+        }
+    }
+
+    @objc private func cancelLink() { cancelAttemptIfNeeded(message: "Slack connection cancelled.") }
+
+    private func cancelAttemptIfNeeded(message: String? = nil) {
+        pollWork?.cancel(); pollWork = nil
+        guard let attempt = slackAttemptID else { return }
+        _ = gate.replace(); running?.cancel(); running = nil
+        slackAttemptID = nil
+        // This best-effort request invalidates the in-memory attempt on the
+        // Authority before its short expiry, including when the window closes.
+        let cancellation = AccountRunning()
+        DispatchQueue.global(qos: .utility).async { [client] in
+            _ = client.runCaptured(["person", "slack-connect-cancel", "--attempt-id", attempt], timeout: 15, running: cancellation)
+        }
+        if let message { finishSlackLink(message, refresh: true) }
+    }
+
+    private func finishSlackLink(_ message: String, refresh: Bool = false) {
+        pollWork?.cancel(); pollWork = nil; slackAttemptID = nil
+        lastSlackOperationMessage = message; state.stringValue = message; cancelButton.isHidden = true
+        if refresh { self.refresh() } else { linkButton.isHidden = false }
+    }
+
+    private func showToolsSummary(_ summary: String) {
+        if let message = lastSlackOperationMessage {
+            state.stringValue = "\(message)\n\n\(summary)"
+        } else {
+            state.stringValue = summary
+        }
+    }
+
+    private func failureMessage(_ reason: String?) -> String {
+        switch reason {
+        case "provider_rejected": return "Slack declined the connection. Try again and approve the request in Slack."
+        case "provider_unavailable": return "Slack is temporarily unavailable. Try again shortly."
+        case "identity_conflict": return "That Slack account is already linked to another ECHO account."
+        case "tool_unavailable": return "Slack is no longer enabled for this organization."
+        default: return "Slack connection could not be completed."
         }
     }
 }

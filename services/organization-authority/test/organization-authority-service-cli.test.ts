@@ -1,4 +1,7 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdapterError } from "../src/processing/core/contracts/adapter.js";
 import { MeetingProcessingWorkerLifecycleV1 } from "../src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
@@ -32,6 +35,11 @@ const runtimeState = vi.hoisted(() => ({
   staging_meeting_approval_journey_telemetry_enabled: undefined as
     | true
     | undefined,
+  slack_browser_oauth: undefined as {
+    readonly client_id: string;
+    readonly client_secret: string;
+    readonly redirect_uri: string;
+  } | undefined,
   authority_url: "https://authority.example",
   processing: "active" as "active" | "idle_until_finalize",
   shutdown_events: [] as string[],
@@ -77,6 +85,11 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly openrouter_credential_file: string;
     readonly staging_synthetic_meetings_directory?: string;
     readonly staging_synthetic_owner_email?: string;
+    readonly slack_browser_oauth?: {
+      readonly client_id: string;
+      readonly client_secret: string;
+      readonly redirect_uri: string;
+    };
   }) => {
     if (runtimeState.open_gate !== undefined) await runtimeState.open_gate;
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
@@ -99,6 +112,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
       config.staging_synthetic_meetings_directory;
     runtimeState.staging_synthetic_owner_email =
       config.staging_synthetic_owner_email;
+    runtimeState.slack_browser_oauth = config.slack_browser_oauth;
     return {
       address: { address: "127.0.0.1", port: 43179 },
       processing: runtimeState.processing,
@@ -166,18 +180,27 @@ afterEach(() => {
   runtimeState.ask_journey_telemetry = undefined;
   runtimeState.meeting_approval_journey_telemetry = undefined;
   runtimeState.staging_meeting_approval_journey_telemetry_enabled = undefined;
+  runtimeState.slack_browser_oauth = undefined;
   runtimeState.authority_url = "https://authority.example";
   runtimeState.processing = "active";
   runtimeState.shutdown_events = [];
   runtimeState.runtime_close_gate = undefined;
+  for (const root of temporaryRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-function start(io: { readonly stderr: (value: string) => void }) {
+const temporaryRoots: string[] = [];
+
+function start(
+  io: { readonly stderr: (value: string) => void },
+  stateDirectory = "/private/state",
+) {
   return runOrganizationAuthorityServiceCli(
     [
       "serve",
       "--state-dir",
-      "/private/state",
+      stateDirectory,
       "--host",
       "127.0.0.1",
       "--port",
@@ -438,6 +461,35 @@ describe("admitted runtime CLI events", () => {
     expect(runtimeState.openrouter_credential_file).toBe(
       "/private/llm.credential",
     );
+    expect(runtimeState.slack_browser_oauth).toBeUndefined();
+  });
+
+  it("loads an optional private Slack browser OAuth configuration", async () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-slack-browser-oauth-"));
+    temporaryRoots.push(root);
+    const privateDirectory = join(root, "private");
+    mkdirSync(privateDirectory, { mode: 0o700 });
+    const config = join(privateDirectory, "slack-browser-oidc.json");
+    writeFileSync(
+      config,
+      '{ "client_id": "1234567890.1234567890", "client_secret": "browser-secret" }',
+      { mode: 0o600 },
+    );
+    chmodSync(config, 0o600);
+    const stderr: string[] = [];
+    const running = start(
+      { stderr: (value) => stderr.push(value) },
+      join(root, "state"),
+    );
+    await vi.waitFor(() => expect(runtimeState.slack_browser_oauth).toEqual({
+      client_id: "1234567890.1234567890",
+      client_secret: "browser-secret",
+      redirect_uri:
+        "https://authority.example/v2/person/external-identities/slack/browser/callback",
+    }));
+    process.emit("SIGTERM");
+    await expect(running).resolves.toBe(0);
+    expect(stderr.join("")).not.toContain("browser-secret");
   });
 
   it("selects the staging fixture source from the deployment environment", async () => {

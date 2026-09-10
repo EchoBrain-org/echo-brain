@@ -52,6 +52,37 @@ async function start(
 }
 
 describe("private Slack approval interactions HTTP mount V1", () => {
+  it("serves a fixed identity callback page with no-store and restrictive browser headers", async () => {
+    const path = "/v2/integrations/example/identity/callback";
+    const page = "<!doctype html><title>ECHO</title><p>Return to ECHO to finish connecting.</p>";
+    const server = createOrganizationAuthorityHttpServer(serverOptions({
+      external_identity: {
+        routes: [{ route_id: "callback", method: "POST", path }],
+        accept: async () => ({ status: 200, body: page, content_type: "text/html" }),
+      },
+    }));
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("missing test address");
+    try {
+      const response = await fetch(`http://127.0.0.1:${String(address.port)}${path}`, {
+        method: "POST", body: "code=must-not-appear&state=must-not-appear",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      });
+      expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+      expect(await response.text()).toBe(page);
+    } finally {
+      const closed = once(server, "close");
+      server.close();
+      await closed;
+    }
+  });
+
   it("allows a retry-heavy login flow, then limits OIDC begins without blocking another client", async () => {
     const beginOidcLogin = vi.fn(() => ({
       login_attempt_id: "ola_00000000-0000-4000-8000-000000000001",

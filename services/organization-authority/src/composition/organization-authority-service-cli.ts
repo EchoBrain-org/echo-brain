@@ -1,5 +1,9 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
+import { resolve } from "node:path";
+import {
+  readOptionalPrivateAuthoritySlackBrowserOauthConfiguration,
+  readPrivateAuthorityOidcClientSecret,
+} from "../adapters/security/private-file-credentials.js";
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
 import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
@@ -106,6 +110,26 @@ function positiveInteger(value: string, label: string): number {
   return parsed;
 }
 
+function readSlackBrowserOauthConfiguration(input: {
+  readonly state_directory: string;
+  readonly authority_url: string;
+}): { readonly client_id: string; readonly client_secret: string; readonly redirect_uri: string } | undefined {
+  const path = resolve(
+    input.state_directory,
+    "..",
+    "private",
+    "slack-browser-oidc.json",
+  );
+  const configured = readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
+    `file:${path}`,
+  );
+  if (configured === undefined) return undefined;
+  return Object.freeze({
+    ...configured,
+    redirect_uri: `${input.authority_url}/v2/person/external-identities/slack/browser/callback`,
+  });
+}
+
 function stagingCanaryReleaseId(argv: readonly string[]): string {
   if (
     argv.length !== 2 ||
@@ -160,6 +184,10 @@ export async function runOrganizationAuthorityServiceCli(
         "organization authority service OIDC client-secret flags do not match config",
       );
     }
+    const slackBrowserOauth = readSlackBrowserOauthConfiguration({
+      state_directory: stateDirectory,
+      authority_url: manifest.authority_url,
+    });
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
     const environmentSyntheticMeetingsDirectory =
@@ -247,6 +275,9 @@ export async function runOrganizationAuthorityServiceCli(
       slack_connection_id: manifest.slack_connection_id,
       // The V1 manifest keeps its compatibility-bound legacy field name.
       slack_identity_link_channel_id: manifest.slack_approval_channel_id,
+      ...(slackBrowserOauth === undefined
+        ? {}
+        : { slack_browser_oauth: slackBrowserOauth }),
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
       // The V1 manifest retains its serialized compatibility field.

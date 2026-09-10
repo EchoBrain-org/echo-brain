@@ -119,6 +119,7 @@ usage:
   onboard-clean-v1.sh stage-rehearsal-inputs --operation-id <onboarding-id> --artifact-sha256 <sha256> --input-dir <absolute-private-nonsecret-input-directory> --staging-synthetic-meetings-dir <absolute-private-four-note-directory>
   onboard-clean-v1.sh prepare-rehearsal --operation-id <onboarding-id>
   onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
+  onboard-clean-v1.sh configure-slack-browser --input <absolute-private-json-file>
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id> [--content-telemetry <true|false>]]
   onboard-clean-v1.sh resume
   onboard-clean-v1.sh status
@@ -135,6 +136,7 @@ INPUT_SLACK_TOKEN_NAME='slack-bot-token'
 INPUT_SLACK_SIGNING_SECRET_NAME='slack-signing-secret'
 INPUT_GRANOLA_CREDENTIAL_NAME='granola-credential'
 INPUT_LLM_CREDENTIAL_NAME='llm-credential'
+SLACK_BROWSER_OAUTH_CONFIG_NAME='slack-browser-oidc.json'
 
 input_dir=''
 input_release=''
@@ -1691,6 +1693,113 @@ require_runtime_private_file() {
     fail "$label destination must not be hard-linked"
 }
 
+validate_slack_browser_oauth_input() {
+  local path="$1" expected_uid
+  [[ "$path" = /* ]] || return 1
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  expected_uid="${SUDO_UID:-$(id -u)}"
+  [[ "$expected_uid" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  [[ "$(portable_stat_uid "$path")" == "$expected_uid" ]] || return 1
+  [[ "$(portable_stat_mode "$path")" == 600 ]] || return 1
+  [[ "$(portable_stat_nlink "$path")" == 1 ]] || return 1
+  python3 - "$path" "$expected_uid" <<'PY'
+import json, os, re, stat, sys
+
+path, expected_uid = sys.argv[1:]
+try:
+    state = os.lstat(path)
+    if (not stat.S_ISREG(state.st_mode) or state.st_uid != int(expected_uid) or
+            stat.S_IMODE(state.st_mode) != 0o600 or state.st_nlink != 1 or
+            state.st_size < 1 or state.st_size > 4096):
+        raise ValueError()
+    with open(path, encoding="utf-8") as source:
+        raw = source.read()
+    value = json.loads(raw)
+    if (not isinstance(value, dict) or set(value) != {"client_id", "client_secret"} or
+            not isinstance(value["client_id"], str) or
+            not re.fullmatch(r"[A-Za-z0-9._-]{1,255}", value["client_id"]) or
+            not isinstance(value["client_secret"], str) or
+            not 0 < len(value["client_secret"]) <= 4096 or
+            not re.fullmatch(r"[\x21-\x7e]+", value["client_secret"])):
+        raise ValueError()
+except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    raise SystemExit(1)
+PY
+}
+
+configure_slack_browser_rollback() {
+  local destination="$1" backup="$2" existed="$3" was_running="$4"
+  if [[ "$existed" == true ]]; then
+    replace_runtime_private "$backup" "$destination" 'Slack browser OAuth configuration' || return 1
+  else
+    rm -f -- "$destination" || return 1
+  fi
+  if [[ "$was_running" == true ]]; then
+    activation_compose_quiet up -d --no-build --force-recreate --wait --wait-timeout 90 && \
+      running_authority && healthy_authority && authority_uses_accepted_image && \
+      runtime_uses_accepted_runtime_profile && wait_for_public_descriptor || return 1
+  fi
+}
+
+configure_slack_browser() {
+  [[ $# -eq 2 && "$1" == --input ]] || usage
+  local source="$2" destination backup='' existed=false restarted=false was_running=false
+  require_host_prerequisites
+  require_prepared
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  staged_candidate_present && \
+    fail 'a candidate release is staged; finish its promotion or rollback before configuring Slack browser identity'
+  select_runtime_identity "$(setup_value runtime_user)"
+  validate_slack_browser_oauth_input "$source" || \
+    fail 'Slack browser OAuth input must contain exactly client_id and client_secret in a Session Manager-user-owned mode-0600 regular file'
+  if running_authority; then
+    was_running=true
+    healthy_authority && authority_uses_accepted_image && runtime_uses_accepted_runtime_profile && \
+      wait_for_public_descriptor || \
+      fail 'Slack browser OAuth configuration requires a healthy Authority using the accepted image and runtime profile'
+  fi
+  destination="$PRIVATE_DIR/$SLACK_BROWSER_OAUTH_CONFIG_NAME"
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    require_runtime_private_file "$destination" 'Slack browser OAuth configuration'
+    backup="$(mktemp "$PRIVATE_DIR/.slack-browser-oauth.previous.XXXXXX" 2>/dev/null)" || \
+      fail 'could not prepare Slack browser OAuth rollback copy'
+    chmod 0600 "$backup"
+    backup_runtime_private "$destination" "$backup" || {
+      rm -f -- "$backup"
+      fail 'could not prepare Slack browser OAuth rollback copy'
+    }
+    existed=true
+  fi
+  replace_runtime_private "$source" "$destination" 'Slack browser OAuth configuration' || {
+    rm -f -- "$backup"
+    fail 'could not install Slack browser OAuth configuration'
+  }
+  require_runtime_private_file "$destination" 'Slack browser OAuth configuration'
+  if [[ "$was_running" == true ]]; then
+    restarted=true
+    if ! activation_compose_quiet up -d --no-build --force-recreate --wait --wait-timeout 90 || \
+      ! running_authority || ! healthy_authority || ! authority_uses_accepted_image || \
+      ! runtime_uses_accepted_runtime_profile || ! wait_for_public_descriptor; then
+      if ! configure_slack_browser_rollback "$destination" "$backup" "$existed" "$was_running"; then
+        rm -f -- "$backup"
+        fail 'Slack browser OAuth configuration failed and rollback could not be verified'
+      fi
+      rm -f -- "$backup"
+      fail 'Slack browser OAuth configuration failed; the prior configuration was restored and verified'
+    fi
+  fi
+  rm -f -- "$backup"
+  printf 'slack_browser_configured=true\n'
+  printf 'authority_restarted=%s\n' "$restarted"
+  if [[ "$restarted" == false ]]; then
+    printf 'next_action=Run onboard-clean-v1.sh resume to load the Slack browser configuration.\n'
+  fi
+}
+
 replace_runtime_private() {
   local source="$1" destination="$2" label="$3" temporary
   local destination_directory="${destination%/*}"
@@ -2059,6 +2168,7 @@ case "${1:-}" in
   stage-rehearsal-inputs) shift; stage_rehearsal_inputs "$@" ;;
   prepare-rehearsal) shift; prepare_rehearsal "$@" ;;
   activate-provider-credentials) shift; activate_provider_credentials "$@" ;;
+  configure-slack-browser) shift; configure_slack_browser "$@" ;;
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
   resume) [[ $# -eq 1 ]] || usage; resume ;;
   status) [[ $# -eq 1 ]] || usage; status ;;

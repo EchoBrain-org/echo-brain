@@ -153,6 +153,37 @@ created from it. Run the re-onboarding only with a wholly fresh provider-
 neutral V4 staging lineage; do not reuse an older V3 or shared-channel rehearsal
 state directory, database, or approval binding.
 
+### Optional Slack browser identity connection
+
+The compatibility DM challenge remains available by default. To enable the
+browser connection, first add this Redirect URL in the Slack app's **OAuth &
+Permissions** settings and save it:
+
+```text
+https://<staging-authority-host>/v2/person/external-identities/slack/browser/callback
+```
+
+Create a JSON file owned by the Session Manager user with mode `0600`:
+
+```json
+{ "client_id": "…", "client_secret": "…" }
+```
+
+On the staging host, install it through the reviewed wrapper:
+
+```sh
+sudo ./onboard-clean-v1.sh configure-slack-browser \
+  --input /absolute/private/slack-browser-oidc.json
+```
+
+The wrapper validates and copies only those two fields to its fixed private
+path, then recreates the Authority using the same accepted image and runtime
+profile. It restores the prior configuration if that restart fails. The secret
+is never written to SQLite, a release record, the onboarding courier, logs, or
+the command line. Without this file, browser connection is unavailable and the
+existing Slack DM challenge remains usable. A `replace-rehearsal` starts with
+fresh private state, so configure browser connection again after it is prepared.
+
 After that setup, the ordinary release updater only replaces artifacts within
 this same lineage: Authority V4, private-approval control-plane V2, and
 record-log V2. It refuses older or mixed persisted state before runtime,

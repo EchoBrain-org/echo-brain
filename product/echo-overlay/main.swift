@@ -962,7 +962,7 @@ private final class QuestionTextView: NSTextView {
 
 // A self-drawn pill so the two controls look identical on every macOS release
 // instead of inheriting whichever bezel the system is shipping this year.
-private final class PillButton: NSButton {
+final class PillButton: NSButton {
     enum Style {
         case primary
         case quiet
