@@ -613,7 +613,7 @@ or automatic delivery service is required.
 
 On an Apple-silicon Mac running macOS 14 or later:
 
-1. Extract the download and open `ECHO.app`.
+1. Extract the download and open `ECHO Setup.app`.
 2. Choose **Install ECHO**. Setup verifies and installs the matched client/app.
 3. For a new membership, choose the private invitation and complete Google
    sign-in. Existing members can choose **Sign in with existing account** and enter their
