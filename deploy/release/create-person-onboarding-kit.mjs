@@ -199,7 +199,7 @@ function graphicalSource(release) {
 
 function buildGraphicalKit({ kitRoot, stagingParent, pendingKit, release, sourceBytes }) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') fail('graphical kit build requires macOS arm64');
-  const app = join(stagingParent, 'ECHO.app');
+  const app = join(stagingParent, 'ECHO Setup.app');
   const contents = join(app, 'Contents');
   const resources = join(contents, 'Resources');
   const executable = join(contents, 'MacOS', 'ECHO');
@@ -354,7 +354,7 @@ function main(argv) {
       architecture: runtime.architecture,
       node_version: runtime.version,
       ...(graphical ? { signing: 'adhoc-hardened-runtime', distribution: 'private-cohort' } : {}),
-      contents: graphical ? ['ECHO.app'] : [
+      contents: graphical ? ['ECHO Setup.app'] : [
         `${kitName}/Start ECHO.command`,
         `${kitName}/person-onboarding-ui.mjs`,
         `${kitName}/release.json`,

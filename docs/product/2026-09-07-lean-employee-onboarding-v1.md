@@ -5,7 +5,7 @@ Status: source implemented; no new employee release or live qualification.
 ## Outcome
 
 An owner approves each employee's work email using the existing invitation
-operation. The employee downloads one approved macOS archive, opens ECHO.app,
+operation. The employee downloads one approved macOS archive, opens ECHO Setup.app,
 chooses the private invitation, completes Google sign-in, and reaches Ask ECHO.
 No terminal, package manager, repository, or provider credentials are needed.
 
@@ -17,7 +17,7 @@ updates are later work.
 ## First implementation
 
 - Add a graphical `.zip` output to the existing Person onboarding kit builder.
-  The zip contains one ECHO.app setup application with the complete verified
+  The zip contains one ECHO Setup.app setup application with the complete verified
   offline kit embedded in its resources. The existing `.tar.gz` output remains
   available for the operator lane.
 - Reuse the current installer for app/client verification and atomic pair
