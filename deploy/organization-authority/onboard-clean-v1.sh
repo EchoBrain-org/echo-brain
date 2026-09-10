@@ -1159,8 +1159,6 @@ if step != "complete":
     # Only explicit booleans from the existing status contract are evidence.
     # next_step remains authoritative, including fixture approval requirements
     # that cannot be reconstructed from the exported booleans alone.
-    if status.get("source_progress_observed") is False and status.get("synthetic_staging_canary_observed") is False:
-        unmet.append("source_or_canary_evidence")
     for field in ("approved_record_present", "active_generation_current",
                   "owner_layer1_read_after_head", "owner_layer2_read_after_generation"):
         if status.get(field) is False:

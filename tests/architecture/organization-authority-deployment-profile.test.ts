@@ -793,7 +793,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     },
     { name: "approved record", evidence: { approved_record_present: false }, missing: ["onboarding_complete", "approved_record_present"] },
     { name: "current generation", evidence: { active_generation_current: false }, missing: ["onboarding_complete", "active_generation_current"] },
-    { name: "source or canary", evidence: { source_progress_observed: false, synthetic_staging_canary_observed: false }, missing: ["onboarding_complete", "source_or_canary_evidence"] },
+    { name: "remaining source or fixture approval evidence", evidence: { source_progress_observed: false, synthetic_staging_canary_observed: false }, missing: ["onboarding_complete"] },
+    {
+      name: "owner reads without inferring source prerequisites",
+      evidence: { source_progress_observed: false, synthetic_staging_canary_observed: false, owner_layer1_read_after_head: false, owner_layer2_read_after_generation: false },
+      missing: ["onboarding_complete", "owner_layer1_read_after_head", "owner_layer2_read_after_generation"],
+    },
     { name: "earlier onboarding", step: "complete_founder_browser_login", missing: ["onboarding_complete"] },
     {
       name: "runtime and owner reads",
