@@ -467,6 +467,7 @@ export function createPersonRecordSearchRouteV1(
         ]),
       ].slice(0, 3);
       if (anchors.length > 0) {
+        const relatedLimit = RELATED_ATOM_PACKET_MAX_ITEMS_V1 - anchors.length;
         let related: ReadableSearchResultV1;
         try {
           related = options.expand_related_atoms({
@@ -488,7 +489,7 @@ export function createPersonRecordSearchRouteV1(
               membership_id: authorization.membership_id,
             },
             anchor_atom_ids: anchors.map((item) => item.atom_id),
-            limit: 13,
+            limit: relatedLimit,
             include_anchor_records: true,
           });
         } catch (error) {
@@ -510,7 +511,7 @@ export function createPersonRecordSearchRouteV1(
         const packet = new Map<Sha256Digest, ReadableSearchResultItemV1>();
         for (const item of [
           ...anchors,
-          ...related.items.slice(0, 13),
+          ...related.items.slice(0, relatedLimit),
           ...lexicalItems,
         ]) {
           if (!packet.has(item.atom_id)) packet.set(item.atom_id, item);

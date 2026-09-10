@@ -43,6 +43,7 @@ import { rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 const roots: string[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const RETRIEVAL_CONTRACT = digest("clean-retrieval-contract");
+const RELATED_ATOM_PACKET_MAX_ITEMS_V1 = 16;
 
 function root(): string {
   const created = mkdtempSync(join(tmpdir(), "echo-clean-search-route-"));
@@ -1102,6 +1103,80 @@ describe("Person Layer 2 route", () => {
         digest("packet-action"),
       ]);
       expect(packet.response.items).toHaveLength(16);
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
+  it.each([1, 2])("fills a related-atom packet with %i lexical anchor(s)", (anchorCount) => {
+    const value = setup();
+    const item = (name: string) => ({
+      atom_id: digest(`capacity-${name}`),
+      record_position: 1,
+      record_sha256: digest(`capacity-record-${name}`),
+      envelope_sha256: digest(`capacity-envelope-${name}`),
+      item_kind: "decision" as const,
+      text: `capacity ${name}`,
+      policy_id: "organization-member-readable-person-v2" as const,
+    });
+    const lexical = Array.from({ length: anchorCount }, (_, index) =>
+      item(`anchor-${String(index)}`),
+    );
+    const related = Array.from(
+      { length: RELATED_ATOM_PACKET_MAX_ITEMS_V1 - anchorCount },
+      (_, index) => item(`related-${String(index)}`),
+    );
+    const search = vi.fn(() => ({
+      generation_id: digest("generation"),
+      exact_head: {
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        position: 0,
+        record_sha256: null,
+      },
+      items: lexical,
+    }));
+    const expand = vi.fn(() => ({
+      generation_id: digest("generation"),
+      exact_head: {
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        position: 0,
+        record_sha256: null,
+      },
+      items: related,
+    }));
+    try {
+      const route = createPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => authorization() },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqlitePersonRecordReadAuditV1(value.authority),
+        search_generation: search,
+        expand_related_atoms: expand,
+      });
+      const packet = route.searchBatch({
+        access_token: "bearer-only",
+        queries: ["capacity"],
+        include_related_atom_packet: true,
+      });
+
+      expect(packet.response.items).toHaveLength(
+        RELATED_ATOM_PACKET_MAX_ITEMS_V1,
+      );
+      expect(expand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          limit: RELATED_ATOM_PACKET_MAX_ITEMS_V1 - anchorCount,
+        }),
+      );
     } finally {
       value.record.close();
       value.authority.close();
