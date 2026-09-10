@@ -93,6 +93,27 @@ afterEach(() => {
 });
 
 describe("meeting approval journey telemetry v1", () => {
+  it("reports a fixed failure pair and contains failure-reporting exceptions", () => {
+    const failures: unknown[] = [];
+    const recorder = openMeetingApprovalJourneyTelemetryV1({
+      state_directory: "/unused-with-injected-state",
+      observer: () => {},
+      on_observation_failure: (failure) => {
+        failures.push(failure);
+        throw new Error("private-reporting-error");
+      },
+      release_sha: RELEASE_SHA, build_number: 42,
+      extraction_provider: "openrouter", extraction_model: "deepseek/deepseek-v3.2",
+    }, {
+      state: openState(stateFile()),
+      now: () => { throw new Error("private-clock-error"); }, now_ms: () => 17,
+    });
+    failures.length = 0;
+    expect(() => recorder.captureClock()).not.toThrow();
+    expect(failures).toEqual([{ emitter: "meeting_approval_observer", reason: "observation_callback_failure" }]);
+    recorder.close();
+  });
+
   it("does not count a skip before execution as a retry, including after restart", async () => {
     const path = stateFile();
     const events: JourneyTelemetryEventV1[] = [];

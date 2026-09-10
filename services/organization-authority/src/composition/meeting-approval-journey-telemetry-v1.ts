@@ -46,10 +46,16 @@ export type MeetingApprovalSearchBacklogObserverV1 = (
   snapshot: MeetingApprovalSearchBacklogSnapshotV1,
 ) => void | Promise<void>;
 
+/** Fixed content-free attribution; never carry the caught exception through this seam. */
+export interface MeetingApprovalObservationFailureV1 {
+  readonly emitter: "meeting_approval_observer";
+  readonly reason: "observation_callback_failure";
+}
+
 export interface MeetingApprovalJourneyTelemetryConfigV1 {
   readonly state_directory: string;
   readonly observer: JourneyTelemetryObserverV1;
-  readonly on_observation_failure?: () => void;
+  readonly on_observation_failure?: (failure: MeetingApprovalObservationFailureV1) => void;
   readonly release_sha: string;
   readonly build_number: number;
   readonly extraction_provider: JourneyLlmProviderV1;
@@ -707,7 +713,7 @@ class MeetingApprovalJourneyTelemetryV1
   }
 
   private observationFailed(): void {
-    try { this.config.on_observation_failure?.(); } catch { /* failure reporting is optional */ }
+    try { this.config.on_observation_failure?.({ emitter: "meeting_approval_observer", reason: "observation_callback_failure" }); } catch { /* failure reporting is optional */ }
   }
 
   private emit(
