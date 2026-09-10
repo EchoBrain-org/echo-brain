@@ -125,6 +125,17 @@ describe('bounded staging release operator', () => {
     expect(f.calls.every(args => !['s3api', 'iam', 'secretsmanager'].includes(args[0]))).toBe(true);
   });
 
+  it('rebuilds the same bounded compression wire across repeated local renders', () => {
+    const f = fixture();
+    planStagingRelease(f.options, f.dependencies);
+    const request = f.request();
+    const rendered = Array.from(
+      { length: 20 },
+      () => JSON.stringify(releaseSsmParameters(request, f.dependencies.readSource)),
+    );
+    expect(new Set(rendered)).toEqual(new Set([rendered[0]]));
+  });
+
   it('uses a new request version only for the exact named install migration', () => {
     const f = fixture();
     // @ts-expect-error Untrusted JS/CLI callers still require action validation.
