@@ -32,13 +32,10 @@ interface BrowserAttempt {
   readonly state: string;
   readonly nonce: string;
   readonly code_verifier: string;
-  authorization_url: string;
-  authorization_promise: Promise<string> | null;
+  readonly authorization_url: string;
   readonly created_at: string;
   readonly expires_at: string;
   status: BrowserAttemptStatus;
-  initializing: boolean;
-  callback_started: boolean;
   failure_reason: FailureReason | null;
   proof: {
     readonly user_id: string;
@@ -121,26 +118,13 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       const session = personSession(current, this.options.authority_id);
       const existing = this.attemptForMembership(session.membership_id);
       if (existing !== null) {
-        if (existing.request_id === request.request_id && sameSession(existing.session, session)) {
-          if (existing.initializing) {
-            try { await existing.authorization_promise; } catch {
-              throw new AuthorityOperationError("unavailable", "Slack connection is temporarily unavailable");
-            }
-          }
-          if (existing.status === "pending" && !existing.initializing &&
-            this.attemptByMembership.get(session.membership_id) === existing.attempt_id) {
-            return this.beginResponse(existing);
-          }
-          throw new AuthorityOperationError("conflict", "Slack connection was superseded by a newer request");
-        }
+        if (existing.request_id === request.request_id && sameSession(existing.session, session)) return this.beginResponse(existing);
         if (!sameLinkOwner(existing.session, session)) {
           throw new AuthorityOperationError("unauthorized", "Person session does not own this Slack connection");
         }
         // A client can lose the begin response before it opens the browser. A
         // fresh request safely replaces only that same Person's pending proof.
-        existing.status = "cancelled";
-        this.attemptByState.delete(existing.state);
-        this.releaseMembership(existing);
+        this.settle(existing, "cancelled");
       }
       if (this.attempts.size >= MAX_ATTEMPTS) throw new AuthorityOperationError("unavailable", "Slack connection is temporarily unavailable");
       const tool = this.options.repository.activeSlackOrganizationTool();
@@ -150,27 +134,15 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       const nonce = randomSecret();
       const codeVerifier = randomSecret();
       const expiresAt = new Date(Date.parse(this.now()) + ATTEMPT_LIFETIME_MS).toISOString();
+      let authorizationUrl: string;
+      try { authorizationUrl = this.options.browser_provider.authorizationUrl({ state, nonce, workspace_id: tool.team_id, code_verifier: codeVerifier }); }
+      catch { throw new AuthorityOperationError("unavailable", "Slack connection is temporarily unavailable"); }
       const attempt: BrowserAttempt = { attempt_id: attemptId, request_id: request.request_id, session, organization_tool: tool,
-        state, nonce, code_verifier: codeVerifier, authorization_url: "", expires_at: expiresAt,
-        authorization_promise: null, created_at: this.now(), status: "pending", initializing: true, callback_started: false, failure_reason: null, proof: null };
+        state, nonce, code_verifier: codeVerifier, authorization_url: authorizationUrl, expires_at: expiresAt,
+        created_at: this.now(), status: "pending", failure_reason: null, proof: null };
       this.attempts.set(attemptId, attempt);
       this.attemptByState.set(state, attemptId);
       this.attemptByMembership.set(session.membership_id, attemptId);
-      try {
-        attempt.authorization_promise = this.options.browser_provider.authorizationUrl({ state, nonce, workspace_id: tool.team_id, code_verifier: codeVerifier });
-        attempt.authorization_url = await attempt.authorization_promise;
-        if (attempt.status !== "pending" ||
-          this.attemptByMembership.get(session.membership_id) !== attempt.attempt_id ||
-          this.attemptByState.get(state) !== attempt.attempt_id) {
-          throw new AuthorityOperationError("conflict", "Slack connection was superseded by a newer request");
-        }
-        attempt.initializing = false;
-        attempt.authorization_promise = null;
-      } catch (error) {
-        if (error instanceof AuthorityOperationError) throw error;
-        this.discardAttempt(attempt);
-        throw new AuthorityOperationError("unavailable", "Slack connection is temporarily unavailable");
-      }
       return this.beginResponse(attempt);
     });
   }
@@ -187,9 +159,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       if (attempt.status !== "pending" || attempt.proof === null) return statusResponse(attempt);
       const activeTool = this.options.repository.activeSlackOrganizationTool();
       if (!sameTool(attempt.organization_tool, activeTool)) {
-        attempt.status = "failed";
-        attempt.failure_reason = "tool_unavailable";
-        this.releaseMembership(attempt);
+        this.settle(attempt, "failed", "tool_unavailable");
         return statusResponse(attempt);
       }
       try {
@@ -199,14 +169,12 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
           now: current.checked_at,
         };
         this.options.repository.completeBrowserSlackIdentityLink(commit);
-        attempt.status = "complete";
+        this.settle(attempt, "complete");
       } catch (error) {
-        attempt.status = "failed";
-        attempt.failure_reason = error instanceof Error &&
+        this.settle(attempt, "failed", error instanceof Error &&
           (error.name === "OrganizationIntegrationConflictError" || error.name === "PersonSlackIdentityLinkConflictError")
-          ? "identity_conflict" : "provider_unavailable";
+          ? "identity_conflict" : "provider_unavailable");
       }
-      this.releaseMembership(attempt);
       return statusResponse(attempt);
     });
   }
@@ -219,10 +187,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       if (attempt === undefined) return this.restartedStatus(request.attempt_id);
       this.expireAttempt(attempt, this.now());
       if (!sameSession(attempt.session, session)) throw new AuthorityOperationError("unauthorized", "Person session does not own this Slack connection");
-      if (attempt.status === "pending") {
-        attempt.status = "cancelled";
-        this.releaseMembership(attempt);
-      }
+      if (attempt.status === "pending") this.settle(attempt, "cancelled");
       return statusResponse(attempt);
     });
   }
@@ -235,34 +200,28 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       const attemptId = this.attemptByState.get(state);
       if (attemptId === undefined) return { callback_result: "completed" as const };
       const attempt = this.attempts.get(attemptId);
-      if (attempt === undefined || attempt.status !== "pending" || attempt.initializing) return { callback_result: "completed" as const };
+      if (attempt === undefined || attempt.status !== "pending") return { callback_result: "completed" as const };
       this.expireAttempt(attempt, this.now());
       if (attempt.status !== "pending") return { callback_result: "completed" as const };
       // State is one-shot before token exchange, so racing callbacks cannot each
       // exchange an authorization code or overwrite the proof.
       this.attemptByState.delete(state);
-      attempt.callback_started = true;
       try {
         const proof = await this.options.browser_provider.verifyCallback({ body, expectedState: attempt.state, expectedNonce: attempt.nonce,
           workspace_id: attempt.organization_tool.team_id, code_verifier: attempt.code_verifier });
-        if (attempt.status !== "pending" || attempt.callback_started !== true ||
-          attempt.attempt_id !== attemptId || this.now() >= attempt.expires_at) {
+        if (attempt.status !== "pending" || this.now() >= attempt.expires_at) {
           this.expireAttempt(attempt, this.now());
           return { callback_result: "completed" as const };
         }
         if (proof.team_id !== attempt.organization_tool.team_id || !/^[UW][A-Z0-9]{2,}$/.test(proof.user_id)) {
-          attempt.status = "failed";
-          attempt.failure_reason = "provider_rejected";
-          this.releaseMembership(attempt);
+          this.settle(attempt, "failed", "provider_rejected");
           return { callback_result: "invalid_output" as const };
         }
         attempt.proof = Object.freeze(proof);
         return { callback_result: "completed" as const };
       } catch {
         if (attempt.status === "pending") {
-          attempt.status = "failed";
-          attempt.failure_reason = "provider_rejected";
-          this.releaseMembership(attempt);
+          this.settle(attempt, "failed", "provider_rejected");
           return { callback_result: "invalid_output" as const };
         }
         return { callback_result: "completed" as const };
@@ -299,8 +258,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
 
   private expireAttempt(attempt: BrowserAttempt, now: string): void {
     if (attempt.status === "pending" && now >= attempt.expires_at) {
-      attempt.status = "expired";
-      this.releaseMembership(attempt);
+      this.settle(attempt, "expired");
     }
   }
 
@@ -310,8 +268,13 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
     }
   }
 
-  private discardAttempt(attempt: BrowserAttempt): void {
-    this.attempts.delete(attempt.attempt_id);
+  private settle(
+    attempt: BrowserAttempt,
+    status: Exclude<BrowserAttemptStatus, "pending">,
+    failure_reason: FailureReason | null = null,
+  ): void {
+    attempt.status = status;
+    attempt.failure_reason = failure_reason;
     this.attemptByState.delete(attempt.state);
     this.releaseMembership(attempt);
   }
@@ -322,7 +285,8 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       .sort((left, right) => left.created_at.localeCompare(right.created_at));
     while (this.attempts.size >= MAX_ATTEMPTS && terminals.length > 0) {
       const attempt = terminals.shift()!;
-      this.discardAttempt(attempt);
+      this.attempts.delete(attempt.attempt_id);
+      this.attemptByState.delete(attempt.state);
     }
   }
 

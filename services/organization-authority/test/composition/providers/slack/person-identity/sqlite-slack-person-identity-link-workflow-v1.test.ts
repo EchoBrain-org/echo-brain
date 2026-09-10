@@ -491,7 +491,7 @@ describe("Person Slack identity-link workflow", () => {
         authorization_fence: new ReadableSearchAuthorizationFence(), now: () => NOW,
       }),
       browser_provider: {
-        authorizationUrl: async (input) => { state = input.state; return "https://slack.com/openid/connect/authorize?opaque=yes"; },
+        authorizationUrl: (input) => { state = input.state; return "https://slack.com/openid/connect/authorize?opaque=yes"; },
         verifyCallback: async () => ({ team_id: "T12345678", user_id: "U12345679", verification_evidence_sha256: canonicalSha256("browser-proof") }),
       },
       now: () => NOW,

@@ -42,7 +42,7 @@ function setup(overrides: Record<string, unknown> = {}, invalidSignature = false
 describe('Slack browser identity provider', () => {
   it('uses the fixed Slack authorize endpoint with workspace, nonce and S256 PKCE', async () => {
     const { provider, calls } = setup();
-    const url = new URL(await provider.authorizationUrl({ state, nonce, workspace_id: workspace, code_verifier: verifier }));
+    const url = new URL(provider.authorizationUrl({ state, nonce, workspace_id: workspace, code_verifier: verifier }));
     expect(url.origin + url.pathname).toBe('https://slack.com/openid/connect/authorize');
     expect(Object.fromEntries(url.searchParams)).toMatchObject({ client_id: clientId, redirect_uri: redirectUri,
       scope: 'openid profile', response_type: 'code', response_mode: 'form_post', team: workspace, state, nonce,

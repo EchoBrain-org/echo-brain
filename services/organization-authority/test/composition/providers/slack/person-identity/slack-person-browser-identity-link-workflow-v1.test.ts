@@ -26,7 +26,7 @@ function setup(input: { now?: () => string; authorization?: () => PersonAccessAu
   const commit = vi.fn();
   const activeSlackOrganizationTool = vi.fn<() => ActiveSlackOrganizationTool | null>(() => tool);
   const repository = { activeSlackOrganizationTool, completeBrowserSlackIdentityLink: commit };
-  const authorizationUrl = vi.fn<SlackBrowserIdentityProvider["authorizationUrl"]>(async () => "https://slack.com/openid/connect/authorize?opaque=yes");
+  const authorizationUrl = vi.fn<SlackBrowserIdentityProvider["authorizationUrl"]>(() => "https://slack.com/openid/connect/authorize?opaque=yes");
   const verifyCallback = vi.fn<SlackBrowserIdentityProvider["verifyCallback"]>(async () => ({ user_id: input.proof?.user_id ?? "U123", team_id: input.proof?.team_id ?? "T123", verification_evidence_sha256: canonicalSha256("proof") }));
   const provider: SlackBrowserIdentityProvider = {
     authorizationUrl,
@@ -102,31 +102,26 @@ describe("Slack browser identity link workflow", () => {
     await expect(workflow.status({ attempt_id: "sbl_00000000-0000-4000-8000-000000000099" }, "bearer")).resolves.toMatchObject({ status: "expired" });
   });
 
-  it("supersedes a slow lost begin response without returning its stale authorization URL", async () => {
-    let release: (() => void) | undefined;
-    const held = new Promise<void>((resolve) => { release = resolve; });
+  it("replays exact concurrent begins and supersedes a fresh same-owner request", async () => {
     const { workflow, authorizationUrl } = setup();
-    authorizationUrl.mockImplementationOnce(async () => { await held; return "https://slack.com/openid/connect/authorize?opaque=yes"; });
-    const first = workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
-    await vi.waitFor(() => expect(authorizationUrl).toHaveBeenCalledOnce());
-    const second = workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000002" }, "bearer");
-    release!();
-    await expect(first).rejects.toMatchObject({ code: "conflict" });
-    await expect(second).resolves.toMatchObject({ kind: "echo-person-slack-browser-link-v1" });
+    const input = { request_id: "psb_00000000-0000-4000-8000-000000000003" };
+    const [first, replay] = await Promise.all([workflow.begin(input, "bearer"), workflow.begin(input, "bearer")]);
+    expect(replay).toEqual(first);
+    expect(authorizationUrl).toHaveBeenCalledOnce();
+    const replacement = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000004" }, "bearer");
+    expect(replacement.attempt_id).not.toBe(first.attempt_id);
+    expect(authorizationUrl).toHaveBeenCalledTimes(2);
+    await expect(workflow.status({ attempt_id: first.attempt_id }, "bearer")).resolves.toMatchObject({ status: "cancelled" });
   });
 
-  it("replays the exact request while its authorization URL is still being built", async () => {
-    let release: (() => void) | undefined;
-    const held = new Promise<void>((resolve) => { release = resolve; });
+  it("allows retry after local URL construction fails without retaining a partial attempt", async () => {
     const { workflow, authorizationUrl } = setup();
-    authorizationUrl.mockImplementationOnce(async () => { await held; return "https://slack.com/openid/connect/authorize?opaque=yes"; });
     const input = { request_id: "psb_00000000-0000-4000-8000-000000000003" };
-    const first = workflow.begin(input, "bearer");
-    await vi.waitFor(() => expect(authorizationUrl).toHaveBeenCalledOnce());
-    const replay = workflow.begin(input, "bearer");
-    release!();
-    await expect(replay).resolves.toEqual(await first);
-    expect(authorizationUrl).toHaveBeenCalledOnce();
+    authorizationUrl.mockImplementationOnce(() => { throw new Error("internal provider configuration"); });
+    await expect(workflow.begin(input, "bearer")).rejects.toMatchObject({ code: "unavailable", message: "Slack connection is temporarily unavailable" });
+    const retried = await workflow.begin(input, "bearer");
+    expect(authorizationUrl).toHaveBeenCalledTimes(2);
+    await expect(workflow.status({ attempt_id: retried.attempt_id }, "bearer")).resolves.toMatchObject({ status: "pending" });
   });
 
   it("lets the same Person retry after a session-family restart while old status remains fenced", async () => {

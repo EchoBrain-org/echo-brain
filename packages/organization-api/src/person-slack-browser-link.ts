@@ -19,16 +19,6 @@ const FAILURE_REASONS = new Set([
   'tool_unavailable',
 ]);
 
-function attemptRequest(
-  value: unknown,
-  label: string,
-): OrganizationPersonSlackBrowserLinkAttemptRequestV1 {
-  const record = asRecord(value, label);
-  assertExactKeys(record, ['attempt_id'], label);
-  assertId(record.attempt_id, 'sbl', `${label} attempt_id`);
-  return record as unknown as OrganizationPersonSlackBrowserLinkAttemptRequestV1;
-}
-
 export function validateOrganizationPersonSlackBrowserLinkBeginRequest(
   value: unknown,
 ): OrganizationPersonSlackBrowserLinkBeginRequestV1 {
@@ -42,7 +32,11 @@ export function validateOrganizationPersonSlackBrowserLinkBeginRequest(
 export function validateOrganizationPersonSlackBrowserLinkAttemptRequest(
   value: unknown,
 ): OrganizationPersonSlackBrowserLinkAttemptRequestV1 {
-  return attemptRequest(value, 'Person Slack browser link attempt request');
+  const label = 'Person Slack browser link attempt request';
+  const record = asRecord(value, label);
+  assertExactKeys(record, ['attempt_id'], label);
+  assertId(record.attempt_id, 'sbl', `${label} attempt_id`);
+  return record as unknown as OrganizationPersonSlackBrowserLinkAttemptRequestV1;
 }
 
 export function validateOrganizationPersonSlackBrowserLinkBeginResponse(

@@ -676,13 +676,8 @@ function validateSlackBrowserBegin(value: unknown): PersonSlackBrowserLinkBeginV
   const response = validateOrganizationPersonSlackBrowserLinkBeginResponse(value);
   return Object.freeze({
     ...response,
-    attempt_id: response.attempt_id,
     authorization_url: validateSlackAuthorizationUrl(response.authorization_url),
   });
-}
-
-function validateSlackBrowserStatus(value: unknown): PersonSlackBrowserLinkStatusV1 {
-  return validateOrganizationPersonSlackBrowserLinkStatusResponse(value);
 }
 
 function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<Record<string, string>> {
@@ -1139,7 +1134,7 @@ export class PersonAuthorityClient {
       path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH,
       body: request,
       validate_request: validateOrganizationPersonSlackBrowserLinkAttemptRequest,
-      validate_response: validateSlackBrowserStatus,
+      validate_response: validateOrganizationPersonSlackBrowserLinkStatusResponse,
       access_token: accessToken,
       timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
     });
@@ -1153,7 +1148,7 @@ export class PersonAuthorityClient {
       path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH,
       body: request,
       validate_request: validateOrganizationPersonSlackBrowserLinkAttemptRequest,
-      validate_response: validateSlackBrowserStatus,
+      validate_response: validateOrganizationPersonSlackBrowserLinkStatusResponse,
       access_token: accessToken,
       timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
     });

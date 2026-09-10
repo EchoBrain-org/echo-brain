@@ -263,19 +263,6 @@ function openAuthorizationUrl(url: string): boolean {
   return opened.status === 0;
 }
 
-function slackAttemptReceipt(input: {
-  readonly attempt_id: string;
-  readonly expires_at?: string;
-  readonly phase?: "waiting-for-slack";
-}) {
-  return {
-    ok: true,
-    ...(input.phase === undefined ? {} : { phase: input.phase }),
-    attempt_id: input.attempt_id,
-    ...(input.expires_at === undefined ? {} : { expires_at: input.expires_at }),
-  };
-}
-
 async function beginSlackBrowserConnect(
   client: PersonClient,
   opener: (url: string) => boolean | Promise<boolean>,
@@ -781,11 +768,12 @@ export async function runPersonClientCli(
         );
         // The attempt ID is an opaque cancellation/polling handle. The
         // authorization URL remains solely in the process that opened it.
-        print(stdout, slackAttemptReceipt({
+        print(stdout, {
+          ok: true,
           phase: "waiting-for-slack",
           attempt_id: begun.attempt_id,
           expires_at: begun.expires_at,
-        }));
+        });
         break;
       }
       case "slack-connect-status": {

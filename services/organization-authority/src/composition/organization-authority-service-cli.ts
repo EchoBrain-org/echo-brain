@@ -25,7 +25,7 @@ const USAGE =
   "usage: echo-organization-authority-serve serve " +
   "--state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> " +
   "--slack-signing-secret-file <absolute-path> " +
-  "[--client-secret-file <absolute-path>] [--slack-browser-config <absolute-path>] [--worker-interval-ms <positive-integer>] " +
+  "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>] " +
   "[--staging-synthetic-meetings-dir <absolute-path>]";
 const STAGING_CANARY_USAGE =
   "usage: echo-organization-authority-serve staging-private-dm-canary " +
@@ -65,7 +65,6 @@ function flags(
     "--port",
     "--client-secret-file",
     "--slack-signing-secret-file",
-    "--slack-browser-config",
     "--worker-interval-ms",
     "--staging-synthetic-meetings-dir",
   ]);
@@ -114,10 +113,13 @@ function positiveInteger(value: string, label: string): number {
 function readSlackBrowserOauthConfiguration(input: {
   readonly state_directory: string;
   readonly authority_url: string;
-  readonly configured_path: string | undefined;
 }): { readonly client_id: string; readonly client_secret: string; readonly redirect_uri: string } | undefined {
-  const path = input.configured_path ??
-    resolve(input.state_directory, "..", "private", "slack-browser-oidc.json");
+  const path = resolve(
+    input.state_directory,
+    "..",
+    "private",
+    "slack-browser-oidc.json",
+  );
   const configured = readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
     `file:${path}`,
   );
@@ -185,7 +187,6 @@ export async function runOrganizationAuthorityServiceCli(
     const slackBrowserOauth = readSlackBrowserOauthConfiguration({
       state_directory: stateDirectory,
       authority_url: manifest.authority_url,
-      configured_path: parsed["--slack-browser-config"],
     });
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);

@@ -1,5 +1,5 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -194,20 +194,19 @@ const temporaryRoots: string[] = [];
 
 function start(
   io: { readonly stderr: (value: string) => void },
-  extraFlags: readonly string[] = [],
+  stateDirectory = "/private/state",
 ) {
   return runOrganizationAuthorityServiceCli(
     [
       "serve",
       "--state-dir",
-      "/private/state",
+      stateDirectory,
       "--host",
       "127.0.0.1",
       "--port",
       "43179",
       "--slack-signing-secret-file",
       "/private/slack-signing-secret",
-      ...extraFlags,
     ],
     { stdout: () => undefined, ...io },
   );
@@ -468,7 +467,9 @@ describe("admitted runtime CLI events", () => {
   it("loads an optional private Slack browser OAuth configuration", async () => {
     const root = mkdtempSync(join(tmpdir(), "echo-slack-browser-oauth-"));
     temporaryRoots.push(root);
-    const config = join(root, "slack-browser-oidc.json");
+    const privateDirectory = join(root, "private");
+    mkdirSync(privateDirectory, { mode: 0o700 });
+    const config = join(privateDirectory, "slack-browser-oidc.json");
     writeFileSync(
       config,
       '{ "client_id": "1234567890.1234567890", "client_secret": "browser-secret" }',
@@ -478,7 +479,7 @@ describe("admitted runtime CLI events", () => {
     const stderr: string[] = [];
     const running = start(
       { stderr: (value) => stderr.push(value) },
-      ["--slack-browser-config", config],
+      join(root, "state"),
     );
     await vi.waitFor(() => expect(runtimeState.slack_browser_oauth).toEqual({
       client_id: "1234567890.1234567890",

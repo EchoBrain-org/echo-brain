@@ -8,7 +8,7 @@ export interface SlackBrowserIdentityProvider {
     nonce: string;
     workspace_id: string;
     code_verifier: string;
-  }): Promise<string>;
+  }): string;
   verifyCallback(input: {
     body: URLSearchParams;
     expectedState: string;
@@ -49,7 +49,7 @@ export function createSlackBrowserIdentityProvider(options: {
   oidc.enableNonRepudiationChecks(config);
 
   return {
-    async authorizationUrl(input) {
+    authorizationUrl(input) {
       return oidc.buildAuthorizationUrl(config, {
         redirect_uri: redirect.href,
         scope: "openid profile",
@@ -59,7 +59,7 @@ export function createSlackBrowserIdentityProvider(options: {
         state: input.state,
         nonce: input.nonce,
         code_challenge_method: "S256",
-        code_challenge: await oidc.calculatePKCECodeChallenge(input.code_verifier),
+        code_challenge: createHash("sha256").update(input.code_verifier).digest("base64url"),
       }).href;
     },
     async verifyCallback(input) {
