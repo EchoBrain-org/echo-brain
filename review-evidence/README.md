@@ -8,6 +8,8 @@ Evidence for [the diagnosis](../REVIEW.md), pinned to landed main `3b663a74ec5d6
 - `provider-probes.jsonl`: actual offline validator and telemetry-parser results.
 - `boundary-probe.jsonl`: baseline checker success and the eight violations exposed by classifying existing shared files as neutral.
 - `dead-references.txt`: reference search for the unused V1 writer and installation-era API types.
+- `dead-export-scan.mjs.txt` and `dead-export-scan.txt`: the remediation pass's repository-wide scan, taken before its edits, of exported values (`const`, `function`, `class`, `enum`) in every workspace `src` tree that no other file references, with in-file use counts. Type-only exports were scanned separately and are not listed; unexporting a type used only by its own module is churn, not cleanup.
+- `remediation-validation.txt`: local gate outcome after the remediation commits.
 
 The probe source files have `.txt` suffixes so they do not join the product's runtime or test suite. To repeat them, install dependencies and build in this worktree, then run:
 

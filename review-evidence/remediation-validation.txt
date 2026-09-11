@@ -1,0 +1,18 @@
+Source: review/contracts-20260911 remediation commits on top of 47b73fe (landed main 3b663a74ec5d64e2f99b80ca590429df1415e02d)
+Node: v22.22.1
+Local macOS validation inside the review worktree.
+
+Focused gates during the pass:
+  npm run typecheck ................ passed
+  eslint on every changed .ts file . passed
+  vitest, 24 touched files ......... 250 passed (includes tests/architecture/workspace-boundaries.test.ts)
+
+Full gate (npm run check): see the summary appended below.
+
+Full gate (npm run check) after all remediation edits:
+  Exit code: 0
+  Architecture boundaries, documentation, ESLint, workspace build, TypeScript: passed
+   Test Files  161 passed (161)
+        Tests  1986 passed | 1 skipped (1987)
+     Duration  256.26s (transform 1.61s, setup 0ms, import 4.61s, tests 478.58s, environment 5ms)
+  Count check against the pinned baseline (1989 passed): minus the four V1 writer-only tests, plus one new Ollama usage test.

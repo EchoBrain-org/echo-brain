@@ -152,3 +152,39 @@ Release checks for immutable artifacts, current-host reuse, retained-volume owne
 5. Qualify one genuinely different provider through the existing seams before strengthening the product's portability claim. The test should preserve policy, canonical records and processing behavior, not merely compile a second adapter.
 
 The full local `npm run check` passed on the pinned source: architecture, documentation, lint, build, types, and all 161 test files; 1,989 tests passed and one was skipped. Vitest took 280.99s. The test process emitted a non-failing SIGINT listener warning, recorded without attributing an uninvestigated cause. Validation results and reproducible probe outputs are retained in [review-evidence](review-evidence/), including `scope.json` and `validation.txt`.
+
+## Remediation pass — 2026-09-11
+
+This section records what the same-day cleanup pass changed in this review worktree, what it deliberately left alone, and the additional dead surface an independent export scan found beyond F5. Every removal below was verified by reference search before deletion and by the full local gate afterwards; see [remediation-validation.txt](review-evidence/remediation-validation.txt).
+
+**Own pass: additional findings**
+
+The [dead-export scan](review-evidence/dead-export-scan.txt) listed 103 exported values that no other file references. Most are constants or helpers still used inside their own module and were left alone. The scan also exposed a stale port that the diagnosis above did not reach:
+
+- **The Authority repository port was two-thirds fiction.** [authority-repository.ts](services/organization-authority/src/application/ports/authority-repository.ts) declared `AuthorityReadTransaction`, `AuthorityWriteTransaction`, and `OrganizationAuthorityRepository` with eleven methods that had no implementation and no caller, plus the complete reviewer-query, readable-search-query, Person-read-decision, and meeting-ingestion-exclusion audit vocabularies, three unenforced 180-day retention constants, and a never-emitted `permission.readable_search_generation_published` action. The only repository is the Person session store, which implements the separate `PersonSessionRepository` port. The session application reached the stale type only through `as unknown as AuthorityWriteTransaction` casts inside `withAuthenticatedWrite` and `createPersonReadAuthorizationPort`, both of which threw unconditionally for that store and were called by nothing except a test asserting the throw. The port now carries only the entity types the session store actually reads and writes.
+- **A no-op legacy audit hook.** `PersonSessionWriteTransaction.appendAudit?` existed "for the legacy repository only"; no repository implemented it, so the login-grant audit call in the session application never executed. Removed with the hook and its `supports_full_person_authorization_transactions` flag.
+- **Smaller leftovers.** The retired `runCleanSlackConnectCli` aliases the control-plane README already said were gone, an `Echo-Enrollment` auth scheme, an unserved `/v2/admin/memberships` path constant, two thin V1 wrappers over the generic retrieval baseline installer, an unused delivery-envelope validator, two unused protocol validators with their private regexes, an unused credential-scope reader, and an unused OpenRouter default timeout.
+
+**What changed**
+
+1. F5: deleted `formatStagingJourneyContentRecordV1`, its private bounding and serialization helpers, the V1 record type and bounds, and the four writer-only tests. The V2 chunked writer, its identity validation, and the Explorer's reading of historical records are unchanged. Removed the six `OrganizationInstallationSlackIdentityLink*V1` types and their public re-exports.
+2. F3: `observeCoreModelUsageV1` no longer exists in shared telemetry. The provider-to-usage mapping now lives in [llm-provider.ts](services/organization-authority/src/processing/adapters/decision-processors/llm/llm-provider.ts) inside the declared `llm` adapter root, and it reads Ollama's `prompt_eval_count`/`eval_count` shape as well as the chat-completions shape. A new test proves a rejected Ollama body still carries its token counts on the failed `model_call` observation, which was the failure-path gap the probe exposed.
+3. F6: ADR-0011 is `accepted` with `reviewed_ref` set to the PR #154 merge commit, which carried an approved review; the decision index agrees. The control-plane architecture document was rewritten around the current path: five entry points, the three current behaviors, the browser-link and disconnect flows, the composed frozen baseline with no migration runner, the eight live tables against the nine retired-but-frozen ones, and a short retired-paths section so older design documents stay explainable. The stale component-map row was corrected to match.
+4. The dead surfaces listed under the own pass above.
+
+Net: 24 files, +304/−1632 lines before the evidence files.
+
+**Deliberately not changed, with the reason**
+
+- **F1 (Slack semantics in the private approval resolver).** The pending, authorization, and resolution contracts are frozen, digested commitments. Separating provider-neutral policy from Slack proof validation changes persisted bytes or requires a parallel contract version, which is a design change with a versioning procedure, not a cleanup edit. The architecture document now states the coupling and the constraint explicitly.
+- **F2 (single-Slack Person tools contract).** Under the lean governance rule, the honest fix today is to document it as a Slack-specific inventory rather than to generalize a closed public response contract for a provider that does not exist. Documented; code unchanged.
+- **F4 (opt-in gate coverage).** Widening `provider_neutral_paths` to cover shared directories by default surfaces the F1–F3 leaks as eight checker failures. With F3 fixed, the shared observation module can be added to the neutral list once the fixed provider/model category vocabularies are also moved behind the adapter edge; F1 and F2 still block the other two files. Do this together with F1.
+- **F7 (source-string assertions).** Roughly 100 `toContain` assertions across the deployment-profile and release-record suites each need mapping to a behavioral test before removal. That mapping is real work with real risk to release safety and was not attempted here.
+- **The retired V1 control-plane tables and the `federation-protocol` package name.** The tables are protected by the frozen baseline digest and exact-schema tests; the package name is stale but 160 files import its canonical-JSON and digest helpers, so a rename is churn without lean-down value.
+- **Exports used only inside their own module.** Unexporting them changes nothing at runtime and touches many files for no maintenance gain.
+
+**Next in order**
+
+1. Fix F1 and F4 together, then add the shared observation module and the Person tools API to the neutral-path list.
+2. Profile the three expensive architecture suites; the snapshot copies in the coherent-worktree fixture dominate, not assertion count.
+3. Only after a representative staging rehearsal, decide whether the telemetry vocabulary duplication between producer and Explorer is worth consolidating.

@@ -1,0 +1,19 @@
+// Value exports (const/function/class/enum) from workspace src that no other file references.
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+const root = process.cwd();
+const skip = new Set(["node_modules", "dist", ".worktrees", "review-evidence", ".git"]);
+function walk(dir, out) { for (const e of readdirSync(dir)) { if (skip.has(e)) continue; const p = join(dir, e); const st = statSync(p); if (st.isDirectory()) walk(p, out); else if (/\.(ts|mts|mjs|js|tsx|json|md|yaml|yml|sh|py|swift|sql)$/.test(e)) out.push(p); } return out; }
+const all = walk(root, []); const texts = new Map(all.map((p) => [p, readFileSync(p, "utf8")]));
+const srcFiles = all.filter((p) => /\/(packages|services|src)\/[^/]+(\/[^/]+)?\/src\/.*\.ts$/.test(p) && !p.endsWith(".d.ts"));
+const exportRe = /^export\s+(?:async\s+)?(const|let|var|function\*?|class|enum|abstract\s+class)\s+([A-Za-z_$][\w$]*)/gm;
+for (const file of srcFiles) {
+  const text = texts.get(file); let m;
+  while ((m = exportRe.exec(text))) {
+    const kind = m[1], name = m[2];
+    const re = new RegExp(`(?<![\\w$])${name.replace(/\$/g, "\\$")}(?![\\w$])`, "g");
+    const users = []; for (const [other, t] of texts) { if (other !== file && re.test(t)) users.push(relative(root, other)); }
+    const inFile = (text.match(re) || []).length - 1; // minus the declaration
+    if (users.length === 0) console.log(`${kind}\t${relative(root, file)}\t${name}\tin-file-uses=${inFile}`);
+  }
+}
