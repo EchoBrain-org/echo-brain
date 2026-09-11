@@ -8,7 +8,7 @@ import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../src/application/slac
 import {
   PRIVATE_APPROVAL_PENDING_KIND,
   type PendingPrivateApprovalV1,
-} from "../src/application/private-approval-policy-resolution-v1.js";
+} from "../src/application/slack/private-approval-policy-resolution-v1.js";
 import { canonicalJson, canonicalSha256 } from "../src/canonical/canonical-json.js";
 import {
   PrivateApprovalFinalizationConflictError,

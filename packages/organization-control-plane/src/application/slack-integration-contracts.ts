@@ -1,4 +1,9 @@
-export const AUTHORITY_FILE_SECRET_BACKEND = "authority-file-v1";
+import type { OrganizationSecretReference } from "./organization-secret-store-contracts.js";
+export {
+  AUTHORITY_FILE_SECRET_BACKEND,
+  type OrganizationSecretReference,
+  type OrganizationSecretStore,
+} from "./organization-secret-store-contracts.js";
 export const SLACK_DEFAULT_APPROVE_REACTION = "white_check_mark";
 export const SLACK_DEFAULT_REJECT_REACTION = "x";
 export const SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES = Object.freeze([
@@ -105,18 +110,6 @@ export interface SlackIntegrationProvider {
     input: ObserveSlackIdentityLinkChallengeInput,
     signal?: AbortSignal,
   ): Promise<ObservedSlackIdentityLinkChallenge>;
-}
-
-export interface OrganizationSecretReference {
-  secret_backend_id: typeof AUTHORITY_FILE_SECRET_BACKEND;
-  secret_handle_id: string;
-}
-
-export interface OrganizationSecretStore {
-  create(secret: string): OrganizationSecretReference;
-  read(reference: OrganizationSecretReference): string;
-  listReferences(): readonly OrganizationSecretReference[];
-  remove(reference: OrganizationSecretReference): void;
 }
 
 export interface ActiveSlackOrganizationTool {

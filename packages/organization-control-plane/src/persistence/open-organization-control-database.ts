@@ -9,7 +9,7 @@ import {
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 
-// Slack requires interaction acknowledgements within three seconds. Terminal
+// Interactive providers require acknowledgements within seconds. Terminal
 // actions synchronously enqueue into this database before their HTTP 200, so
 // leave a small fixed margin for signature verification and serialization.
 const INTERACTION_SAFE_BUSY_TIMEOUT_MS = 2_000;

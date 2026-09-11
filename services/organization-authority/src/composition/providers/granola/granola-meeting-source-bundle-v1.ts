@@ -2,7 +2,7 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   readPrivateAuthorityGranolaOrganizationCredential,
   readPrivateAuthorityGranolaOwnerEmail,
-} from "../../../adapters/security/private-file-credentials.js";
+} from "./granola-private-credentials-v1.js";
 import { personLoginGrantExpectedEmailSha256 } from "../../../domain/person-email-binding.js";
 import { createGranolaMeetingSourceAdapter } from "../../../processing/adapters/meeting-sources/granola/index.js";
 import type { AdapterConfig } from "../../../processing/core/contracts/adapter.js";

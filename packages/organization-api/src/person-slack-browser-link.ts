@@ -1,9 +1,3 @@
-import type {
-  OrganizationPersonSlackBrowserLinkAttemptRequestV1,
-  OrganizationPersonSlackBrowserLinkBeginRequestV1,
-  OrganizationPersonSlackBrowserLinkBeginResponseV1,
-  OrganizationPersonSlackBrowserLinkStatusResponseV1,
-} from './contracts.js';
 import {
   asRecord,
   assertExactKeys,
@@ -11,6 +5,47 @@ import {
   assertTimestamp,
   fail,
 } from './validation.js';
+
+export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH =
+  '/v2/person/external-identities/slack/browser/begin';
+export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH =
+  '/v2/person/external-identities/slack/browser/status';
+export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH =
+  '/v2/person/external-identities/slack/browser/cancel';
+export const ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH =
+  '/v2/person/external-identities/slack/browser/callback';
+
+/** Starts a browser-mediated Slack identity proof for the current Person. */
+export interface OrganizationPersonSlackBrowserLinkBeginRequestV1 {
+  request_id: string;
+}
+
+export interface OrganizationPersonSlackBrowserLinkBeginResponseV1 {
+  schema_version: 1;
+  kind: 'echo-person-slack-browser-link-v1';
+  attempt_id: string;
+  authorization_url: string;
+  expires_at: string;
+}
+
+export type OrganizationPersonSlackBrowserLinkFailureReasonV1 =
+  | 'provider_rejected'
+  | 'provider_unavailable'
+  | 'identity_conflict'
+  | 'tool_unavailable';
+
+/** A browser proof is committed only by a later authenticated status read. */
+export interface OrganizationPersonSlackBrowserLinkStatusResponseV1 {
+  schema_version: 1;
+  kind: 'echo-person-slack-browser-link-status-v1';
+  attempt_id: string;
+  status: 'pending' | 'complete' | 'cancelled' | 'expired' | 'failed';
+  failure_reason: OrganizationPersonSlackBrowserLinkFailureReasonV1 | null;
+}
+
+export interface OrganizationPersonSlackBrowserLinkAttemptRequestV1 {
+  attempt_id: string;
+}
 
 const FAILURE_REASONS = new Set([
   'provider_rejected',

@@ -165,12 +165,16 @@ final approver exclusively from that revalidated authorization.
 [INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md)
 governs the identity chain.
 
-The policy resolver's contracts embed the assigned owner's Slack link
-(`provider: "slack"`, canonical `U`/`W` subject). They are frozen, digested
-commitments; a second provider cannot reuse this resolver without an explicit
-versioned contract change. Separating provider-neutral policy resolution from
-Slack proof validation is later work and must not rename persisted
-commitments in place.
+Policy resolution is split along the provider boundary. The neutral core
+(`application/private-approval-policy-resolution-core-v1`) owns the durable
+command shape, verified assignees, the shared commitment identity, policy
+binding, and exact replay matching. The Slack-owned module
+(`application/slack/private-approval-policy-resolution-v1`) binds that core
+to one exact Slack human and validates the link proof (`provider: "slack"`,
+canonical `U`/`W` subject). The persisted field names
+`assigned_owner_slack_identity_link` and `current_slack_identity_link` are
+frozen, digested commitments; a second provider composes the core with its own
+proof module and its own versioned contract rather than renaming these.
 
 ## Storage
 

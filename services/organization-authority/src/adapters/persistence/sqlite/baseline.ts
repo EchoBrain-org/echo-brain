@@ -81,7 +81,7 @@ export function authorityMeetingProcessingSqlV3(): string {
 
 /**
  * Complete fresh Authority V3 schema. The V3 companion removes the V1
- * Granola-only objects during fresh construction, then installs generic
+ * provider-specific objects during fresh construction, then installs generic
  * source/approval state and its dependent private-approval tables.
  */
 export function authorityBaselineSqlV3(): string {

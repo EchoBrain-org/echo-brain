@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   readOptionalPrivateAuthoritySlackBrowserOauthConfiguration,
   readPrivateAuthoritySlackSigningSecret,
-} from "../../src/adapters/security/private-file-credentials.js";
+} from "../../src/composition/providers/slack/slack-private-credentials-v1.js";
 
 const roots: string[] = [];
 

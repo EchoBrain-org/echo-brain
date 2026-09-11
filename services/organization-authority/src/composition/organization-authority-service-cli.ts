@@ -1,9 +1,7 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { resolve } from "node:path";
-import {
-  readOptionalPrivateAuthoritySlackBrowserOauthConfiguration,
-  readPrivateAuthorityOidcClientSecret,
-} from "../adapters/security/private-file-credentials.js";
+import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
+import { readOptionalPrivateAuthoritySlackBrowserOauthConfiguration } from "./providers/slack/slack-private-credentials-v1.js";
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
 import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";

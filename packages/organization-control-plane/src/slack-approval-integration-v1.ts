@@ -32,7 +32,7 @@ export {
   type PrivateApprovalResolutionV1,
   type PrivateApprovalSlackIdentityLinkV1,
   type ResolvePrivateApprovalPolicyInputV1,
-} from "./application/private-approval-policy-resolution-v1.js";
+} from "./application/slack/private-approval-policy-resolution-v1.js";
 export {
   SLACK_DM_APPROVAL_REQUIRED_SCOPES,
   resolveCurrentSlackDmApprovalReviewerTargetV1,
