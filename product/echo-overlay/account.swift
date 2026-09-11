@@ -528,6 +528,10 @@ final class AccountController: NSObject {
             showMessage("Finish the People change first", detail: "Wait for the pending People update to finish before changing accounts.")
             return false
         }
+        guard !(toolsController?.hasOutstandingMutation ?? false) else {
+            showMessage("Finish disconnecting Slack first", detail: "Wait for the pending Slack disconnect to finish before changing accounts.")
+            return false
+        }
         return true
     }
 
@@ -700,7 +704,19 @@ func connectedToolsSummary(_ result: ConnectedToolsResult?) -> String {
     guard let result else { return "Status unknown. Could not read connected tools. Try Refresh." }
     guard let tool = result.tools.first else { return "Your organization has no supported tools enabled." }
     guard tool.availability == "enabled" else { return "Slack is not enabled for this organization. Ask an owner to connect it." }
-    return "Slack · Organization: enabled (\(tool.workspace_id ?? ""))\nYour link: \(tool.personal_status)" + (tool.account_id.map { " (\($0))" } ?? "")
+    let status = ["unlinked", "revoked"].contains(tool.personal_status) ? "Not connected" : tool.personal_status
+    return "Slack · Organization: enabled (\(tool.workspace_id ?? ""))\nYour link: \(status)" + (tool.account_id.map { " (\($0))" } ?? "")
+}
+
+enum ConnectedToolsSlackAction: String {
+    case none
+    case connect
+    case disconnect
+}
+
+func connectedToolsSlackAction(_ result: ConnectedToolsResult) -> ConnectedToolsSlackAction {
+    guard let slack = result.tools.first, slack.availability == "enabled" else { return .none }
+    return slack.personal_status == "linked" ? .disconnect : .connect
 }
 
 func isSlackBrowserExpiry(_ value: String) -> Bool {
@@ -743,14 +759,18 @@ final class ConnectedToolsController: NSObject, NSWindowDelegate {
     private var slackAttemptID: String?
     private var pollWork: DispatchWorkItem?
     private var lastSlackOperationMessage: String?
+    private var slackDisconnecting = false
     private var window: NSWindow?
     private let context = NSTextField(wrappingLabelWithString: "")
     private let state = NSTextField(wrappingLabelWithString: "")
     private let refreshButton = NSButton(title: "Refresh", target: nil, action: nil)
     private let linkButton = PillButton(title: "Connect Slack", target: nil, action: nil)
+    private let disconnectButton = PillButton(title: "Disconnect Slack", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
     init(client: AccountClient) { self.client = client; super.init() }
+
+    var hasOutstandingMutation: Bool { slackDisconnecting }
 
     func show(identity: AccountIdentity) {
         conceal()
@@ -764,7 +784,7 @@ final class ConnectedToolsController: NSObject, NSWindowDelegate {
             title.font = .systemFont(ofSize: 20, weight: .semibold); title.textColor = EchoTheme.text
             let optional = NSTextField(wrappingLabelWithString: "Connect the tools your organization supports. Slack linking is optional; Ask and Sources already use your ECHO access.")
             optional.font = .systemFont(ofSize: 13); optional.textColor = EchoTheme.mutedText; optional.maximumNumberOfLines = 0
-            let buttons = NSStackView(views: [linkButton, cancelButton, refreshButton])
+            let buttons = NSStackView(views: [linkButton, disconnectButton, cancelButton, refreshButton])
             buttons.orientation = .horizontal; buttons.spacing = 8
             let stack = NSStackView(views: [title, context, state, buttons, optional])
             stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
@@ -776,10 +796,12 @@ final class ConnectedToolsController: NSObject, NSWindowDelegate {
             }
             context.font = .systemFont(ofSize: 12); context.textColor = EchoTheme.mutedText; context.maximumNumberOfLines = 0
             state.font = .systemFont(ofSize: 14); state.textColor = EchoTheme.text; state.maximumNumberOfLines = 0
-            for button in [linkButton, cancelButton, refreshButton] { button.target = self; button.bezelStyle = .rounded }
+            for button in [linkButton, disconnectButton, cancelButton, refreshButton] { button.target = self; button.bezelStyle = .rounded }
             linkButton.style = .primary; linkButton.isBordered = false
+            disconnectButton.style = .quiet; disconnectButton.isBordered = false
             refreshButton.action = #selector(refresh)
             linkButton.action = #selector(beginLink)
+            disconnectButton.action = #selector(disconnectSlack)
             cancelButton.action = #selector(cancelLink); cancelButton.isHidden = true
             window = panel
         }
@@ -792,16 +814,16 @@ final class ConnectedToolsController: NSObject, NSWindowDelegate {
         cancelAttemptIfNeeded()
         _ = gate.replace(); running?.cancel(); running = nil; identity = nil
         context.stringValue = ""; state.stringValue = "Status unknown"
-        linkButton.isHidden = true; cancelButton.isHidden = true
+        linkButton.isHidden = true; disconnectButton.isHidden = true; cancelButton.isHidden = true
         window?.orderOut(nil)
     }
 
     func windowWillClose(_ notification: Notification) { conceal() }
 
-    private func request(_ arguments: [String], completion: @escaping (Data?) -> Void) {
+    private func request(_ arguments: [String], disconnectMutation: Bool = false, completion: @escaping (Data?) -> Void) {
         running?.cancel()
         let requestID = gate.replace(); let operation = AccountRunning(); running = operation
-        refreshButton.isEnabled = false; linkButton.isEnabled = false
+        refreshButton.isEnabled = false; linkButton.isEnabled = false; disconnectButton.isEnabled = false
         cancelButton.isEnabled = slackAttemptID != nil
         let client = self.client
         let expectedIdentity = self.identity
@@ -813,8 +835,10 @@ final class ConnectedToolsController: NSObject, NSWindowDelegate {
             }
             let result = output
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.gate.accepts(requestID), self.identity != nil else { return }
-                self.running = nil; self.refreshButton.isEnabled = true; self.linkButton.isEnabled = true; self.cancelButton.isEnabled = self.slackAttemptID != nil
+                guard let self else { return }
+                if disconnectMutation { self.slackDisconnecting = false }
+                guard self.gate.accepts(requestID), self.identity != nil else { return }
+                self.running = nil; self.refreshButton.isEnabled = true; self.linkButton.isEnabled = true; self.disconnectButton.isEnabled = true; self.cancelButton.isEnabled = self.slackAttemptID != nil
                 completion(result)
             }
         }
@@ -822,23 +846,23 @@ final class ConnectedToolsController: NSObject, NSWindowDelegate {
 
     @objc func refresh() {
         guard slackAttemptID == nil else { return }
-        linkButton.isHidden = true; cancelButton.isHidden = true; state.stringValue = "Checking organization tools…"
+        linkButton.isHidden = true; disconnectButton.isHidden = true; cancelButton.isHidden = true; state.stringValue = "Checking organization tools…"
         request(["person", "tools"]) { [weak self] data in
             guard let self else { return }
             guard let data, let result = decodeConnectedTools(data, membershipID: self.identity?.membershipID) else {
                 self.showToolsSummary(connectedToolsSummary(nil))
                 return
             }
-            guard let slack = result.tools.first else {
-                self.showToolsSummary(connectedToolsSummary(result))
-                return
-            }
-            if slack.availability == "unavailable" {
+            guard result.tools.first != nil else {
                 self.showToolsSummary(connectedToolsSummary(result))
                 return
             }
             self.showToolsSummary(connectedToolsSummary(result))
-            self.linkButton.isHidden = slack.personal_status == "linked"
+            switch connectedToolsSlackAction(result) {
+            case .connect: self.linkButton.isHidden = false
+            case .disconnect: self.disconnectButton.isHidden = false
+            case .none: break
+            }
         }
     }
 
@@ -890,6 +914,34 @@ final class ConnectedToolsController: NSObject, NSWindowDelegate {
     }
 
     @objc private func cancelLink() { cancelAttemptIfNeeded(message: "Slack connection cancelled.") }
+
+    @objc private func disconnectSlack() {
+        guard slackAttemptID == nil, confirmSlackDisconnect() else { return }
+        lastSlackOperationMessage = nil
+        state.stringValue = "Disconnecting Slack…"
+        slackDisconnecting = true
+        request(["person", "slack-disconnect"], disconnectMutation: true) { [weak self] data in
+            guard let self else { return }
+            guard let data, let result = decodeConnectedTools(data, membershipID: self.identity?.membershipID),
+                  let slack = result.tools.first, slack.personal_status != "linked"
+            else {
+                self.lastSlackOperationMessage = "Slack disconnect outcome could not be confirmed. Checking current status…"
+                self.refresh()
+                return
+            }
+            self.lastSlackOperationMessage = "Slack disconnected."
+            self.refresh()
+        }
+    }
+
+    private func confirmSlackDisconnect() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Disconnect Slack?"
+        alert.informativeText = "This disconnects your personal Slack account from ECHO. Your ECHO membership and approved records remain. You can connect again later."
+        alert.addButton(withTitle: "Disconnect Slack")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
 
     private func cancelAttemptIfNeeded(message: String? = nil) {
         pollWork?.cancel(); pollWork = nil

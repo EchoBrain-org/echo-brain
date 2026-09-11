@@ -122,6 +122,22 @@ Missing and inaccessible records both produce an empty result. Source details,
 including names in chips, are cleared when the app loses focus or the conversation
 changes and reloaded on return. Runtime processing and telemetry are unchanged.
 
+## Connected tools
+
+**Account → Connected tools** reads the organization's supported tools and the
+signed-in person's connection status from the Authority. Slack is supported
+today. Each connected tool offers **Disconnect**; an unconnected tool offers
+**Connect**. Slack connection opens the browser, and the app checks completion
+automatically through the installed Person client.
+
+**Disconnect Slack** removes only the current person's Slack identity link.
+It keeps the organization's Slack installation, Person membership, and approved
+records. Ask and Sources continue to use the Person session. The server resolves
+the caller rather than accepting a target membership, revokes the current link,
+and invalidates pending linking attempts so they cannot restore it later.
+The app refreshes server state after the operation; connecting again requires
+a new browser sign-in.
+
 ## Artifact boundary
 
 `tools/pack-person-client.mjs` builds the Person client and only its protocol

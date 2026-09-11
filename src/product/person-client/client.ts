@@ -445,6 +445,21 @@ export class PersonClient {
     return result;
   }
 
+  async disconnectSlack() {
+    const stored = await this.accessSession();
+    const result = await this.authority(stored.authority_origin).disconnectSlack(
+      stored.session.access_token,
+    );
+    this.assertCurrentSession(stored);
+    if (
+      result.organization_id !== stored.session.organization_id ||
+      result.membership_id !== stored.session.membership_id
+    ) {
+      throw new Error("Connected tools did not match the current account");
+    }
+    return result;
+  }
+
   async beginSlackIdentityLink(recipientUserId: string) {
     const stored = await this.accessSession();
     const challengeBytes = this.randomBytes(32);

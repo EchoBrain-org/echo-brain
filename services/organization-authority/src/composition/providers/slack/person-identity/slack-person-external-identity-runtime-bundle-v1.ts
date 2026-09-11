@@ -8,6 +8,7 @@ import {
   ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH,
   ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH,
   ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH,
+  ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH,
 } from "@echo-brain/organization-api";
 import {
   FileOrganizationSecretStore,
@@ -36,6 +37,7 @@ import type {
 
 const SLACK_IDENTITY_ROUTES_V1 = Object.freeze([
   Object.freeze({ route_id: "tools", method: "GET" as const, path: ORGANIZATION_API_PERSON_TOOLS_PATH }),
+  Object.freeze({ route_id: "slack-disconnect", method: "POST" as const, path: ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH }),
   Object.freeze({
     route_id: "slack-begin",
     method: "POST" as const,
@@ -81,6 +83,7 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
     tools(accessToken: string): Promise<unknown>;
     begin(input: unknown, accessToken: string): Promise<unknown>;
     complete(input: unknown, accessToken: string): Promise<unknown>;
+    disconnect(input: unknown, accessToken: string): Promise<unknown>;
   };
   readonly browser?: SlackPersonBrowserIdentityLinkWorkflowV1;
 }): PersonExternalIdentityLinkHttpApplicationV1 {
@@ -95,6 +98,9 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
       const token = accessToken(request.headers);
       if (request.route_id === "tools") return { status: 200 as const, body: await input.service.tools(token) };
       const body = parseBody(request.raw_body);
+      if (request.route_id === "slack-disconnect") {
+        return Object.freeze({ status: 200 as const, body: await input.service.disconnect(body, token) });
+      }
       if (request.route_id === "slack-browser-begin") {
         if (input.browser === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
         return Object.freeze({ status: 201 as const, body: await input.browser.begin(body, token) });
@@ -201,13 +207,19 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           },
           authorization_fence: new ReadableSearchAuthorizationFence(),
         } satisfies CreateSqliteSlackPersonIdentityLinkWorkflowV1Input;
-        const application = createSqliteSlackPersonIdentityLinkWorkflowV1(workflowInput);
+        const repository = createSqliteSlackPersonIdentityLinkRepositoryV1(workflowInput);
         const browser = input.browser_provider === undefined ? undefined : new SlackPersonBrowserIdentityLinkWorkflowV1({
           authority_id: runtime.authority_id,
           organization_id: runtime.organization_id,
           authentication: runtime.authentication,
-          repository: createSqliteSlackPersonIdentityLinkRepositoryV1(workflowInput),
+          repository,
           browser_provider: input.browser_provider,
+        });
+        const application = createSqliteSlackPersonIdentityLinkWorkflowV1({
+          ...workflowInput,
+          invalidate_browser_attempts: browser === undefined
+            ? undefined
+            : (membershipId) => browser.invalidateMembership(membershipId),
         });
         return Object.freeze({
           application: createSlackExternalIdentityHttpApplicationV1({

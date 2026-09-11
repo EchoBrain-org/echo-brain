@@ -59,7 +59,10 @@ describe("native Person account controls", () => {
     expect(source).toContain('["person", "slack-connect-begin"]');
     expect(source).toContain('["person", "slack-connect-status", "--attempt-id", attempt]');
     expect(source).toContain('["person", "slack-connect-cancel", "--attempt-id", attempt]');
+    expect(source).toContain('["person", "slack-disconnect"]');
     expect(source).toContain('"Connect Slack"');
+    expect(source).toContain('"Disconnect Slack"');
+    expect(source).toContain('This disconnects your personal Slack account from ECHO.');
     expect(source).toContain('panel.appearance = NSAppearance(named: .darkAqua)');
     expect(source).toContain('panel.backgroundColor = EchoTheme.ink');
     expect(source).toContain('isSlackBrowserExpiry');
@@ -72,6 +75,7 @@ describe("native Person account controls", () => {
     expect(source).toContain('self.gate.accepts(requestID)');
     expect(source).toContain('before == expectedIdentity');
     expect(source).toContain('after == expectedIdentity');
+    expect(source).toContain('toolsController?.hasOutstandingMutation');
   });
 
   it.skipIf(process.platform !== "darwin")("renders tools fixtures and rejects failed reads and prior-account status", () => {
@@ -87,11 +91,14 @@ ${pillButtonFixture}
     func fixture(_ tools: [[String: Any]]) -> Data {
         try! JSONSerialization.data(withJSONObject: ["ok": true, "result": ["schema_version": 2, "kind": "echo-organization-person-tools", "organization_id": "org_00000000-0000-4000-8000-000000000001", "membership_id": member, "tools": tools]])
     }
-    print(connectedToolsSummary(decodeConnectedTools(fixture([]), membershipID: member)))
+    let noTools = decodeConnectedTools(fixture([]), membershipID: member)!
+    print(connectedToolsSummary(noTools))
+    print(connectedToolsSlackAction(noTools).rawValue)
     for status in ["unlinked", "linked", "revoked"] {
         let row: [String: Any] = ["provider": "slack", "availability": "enabled", "personal_status": status, "workspace_id": "T123ABC", "account_id": status == "linked" ? "U123ABC" : NSNull()]
         let data = fixture([row])
         print(connectedToolsSummary(decodeConnectedTools(data, membershipID: member)).replacingOccurrences(of: "\\n", with: " / "))
+        print(connectedToolsSlackAction(decodeConnectedTools(data, membershipID: member)!).rawValue)
         print(decodeConnectedTools(data, membershipID: "different-account") == nil)
     }
     let unavailable: [String: Any] = ["provider": "slack", "availability": "unavailable", "personal_status": "unavailable", "workspace_id": NSNull(), "account_id": NSNull()]
@@ -114,9 +121,10 @@ ${pillButtonFixture}
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim().split("\n")).toEqual([
       "Your organization has no supported tools enabled.",
-      "Slack · Organization: enabled (T123ABC) / Your link: unlinked", "true",
-      "Slack · Organization: enabled (T123ABC) / Your link: linked (U123ABC)", "true",
-      "Slack · Organization: enabled (T123ABC) / Your link: revoked", "true",
+      "none",
+      "Slack · Organization: enabled (T123ABC) / Your link: Not connected", "connect", "true",
+      "Slack · Organization: enabled (T123ABC) / Your link: linked (U123ABC)", "disconnect", "true",
+      "Slack · Organization: enabled (T123ABC) / Your link: Not connected", "connect", "true",
       "Slack is not enabled for this organization. Ask an owner to connect it.",
       "Status unknown. Could not read connected tools. Try Refresh.",
       "refresh: false true", "expires: true true", "switch: true",

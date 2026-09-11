@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
   validateOrganizationPersonTools,
+  validateOrganizationPersonSlackDisconnectRequest,
   ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
   canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes,
   canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes,
@@ -156,6 +157,14 @@ describe('organization Person Slack identity link', () => {
 });
 
 describe('authenticated Person tools status', () => {
+  it('disconnects only the authenticated person and refuses supplied identities', () => {
+    expect(validateOrganizationPersonSlackDisconnectRequest({})).toEqual({});
+    for (const input of [null, [], 'slack', { membership_id: 'another-person' },
+      { account_id: 'U123ABC' }, { provider: 'slack' }, { all: true }]) {
+      expect(() => validateOrganizationPersonSlackDisconnectRequest(input)).toThrow();
+    }
+  });
+
   const response = { schema_version: 2, kind: 'echo-organization-person-tools', organization_id: ORGANIZATION_ID,
     membership_id: 'mem_00000000-0000-4000-8000-000000000001', tools: [] };
   it('accepts absent and enabled tools with separate personal state', () => {

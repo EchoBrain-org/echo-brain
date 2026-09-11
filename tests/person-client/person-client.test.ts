@@ -1008,6 +1008,109 @@ describe("Person client", () => {
     });
   });
 
+  it("disconnects the current person's Slack link without accepting an identity argument", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      let stdout = "";
+      let requests = 0;
+      const status = await runPersonClientCli(["slack-disconnect"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: () => true },
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input, init) => {
+          requests += 1;
+          expect(new URL(String(input)).pathname).toBe(
+            "/v2/person/external-identities/slack/disconnect",
+          );
+          expect(init?.method).toBe("POST");
+          expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
+          expect(JSON.parse(String(init?.body))).toEqual({});
+          return json({
+            schema_version: 2,
+            kind: "echo-organization-person-tools",
+            organization_id: SESSION.organization_id,
+            membership_id: SESSION.membership_id,
+            tools: [{ provider: "slack", availability: "enabled", personal_status: "unlinked", workspace_id: "T123ABC", account_id: null }],
+          });
+        },
+      });
+      expect(status).toBe(0);
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok: true,
+        result: { tools: [{ provider: "slack", personal_status: "unlinked" }] },
+      });
+
+      let stderr = "";
+      const invalid = await runPersonClientCli(["slack-disconnect", "--slack-user", "U123"], {
+        stdout: { write: () => true },
+        stderr: { write: (value) => ((stderr += String(value)), true) },
+        home_directory: home,
+      });
+      expect(invalid).toBe(2);
+      expect(stderr).toContain("--slack-user is not valid");
+      expect(requests).toBe(1);
+    });
+  });
+
+  it("rejects a malformed disconnect response and a session switch during disconnect", async () => {
+    await withHome(async (home) => {
+      const descriptor = authorityDescriptor();
+      const client: PersonClient = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
+          if (path !== "/v2/person/external-identities/slack/disconnect") throw new Error(`unexpected request ${path}`);
+          await client.installSession("https://authority.example", {
+            ...ROTATED_SESSION,
+            membership_id: fixtureId("mem", 11), principal_id: fixtureId("prn", 11), session_family_id: fixtureId("psf", 11),
+          });
+          return json({
+            schema_version: 2,
+            kind: "echo-organization-person-tools",
+            organization_id: SESSION.organization_id,
+            membership_id: SESSION.membership_id,
+            tools: [{ provider: "slack", availability: "enabled", personal_status: "unlinked", workspace_id: "T123ABC", account_id: "U123PERSON" }],
+          });
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(client.disconnectSlack()).rejects.toThrow("malformed response");
+    });
+
+    await withHome(async (home) => {
+      const descriptor = authorityDescriptor();
+      const client: PersonClient = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
+          await client.installSession("https://authority.example", {
+            ...ROTATED_SESSION,
+            membership_id: fixtureId("mem", 12), principal_id: fixtureId("prn", 12), session_family_id: fixtureId("psf", 12),
+          });
+          return json({
+            schema_version: 2,
+            kind: "echo-organization-person-tools",
+            organization_id: SESSION.organization_id,
+            membership_id: SESSION.membership_id,
+            tools: [{ provider: "slack", availability: "enabled", personal_status: "unlinked", workspace_id: "T123ABC", account_id: null }],
+          });
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(client.disconnectSlack()).rejects.toThrow("current account");
+    });
+  });
+
   it("sends Slack identity-link replay input without caller or route assertions", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();

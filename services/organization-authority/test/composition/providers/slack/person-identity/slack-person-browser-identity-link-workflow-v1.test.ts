@@ -180,4 +180,27 @@ describe("Slack browser identity link workflow", () => {
     await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "cancelled" });
     expect(commit).not.toHaveBeenCalled();
   });
+
+  it("invalidates an in-flight callback for its membership across session families", async () => {
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let current = authorization;
+    const { workflow, authorizationUrl, verifyCallback, commit } = setup({ authorization: () => current });
+    verifyCallback.mockImplementationOnce(async () => {
+      await held;
+      return { user_id: "U123", team_id: "T123", verification_evidence_sha256: canonicalSha256("proof") };
+    });
+    const begun = await workflow.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
+    const callback = workflow.callback(new URLSearchParams({ state: authorizationUrl.mock.calls[0]![0].state, code: "code" }));
+    await vi.waitFor(() => expect(verifyCallback).toHaveBeenCalledOnce());
+    current = { ...authorization, session_family_id: "psf_00000000-0000-4000-8000-000000000002" };
+    workflow.invalidateMembership(authorization.membership_id);
+    release!();
+    await callback;
+
+    await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).rejects.toMatchObject({ code: "unauthorized" });
+    current = authorization;
+    await expect(workflow.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "cancelled" });
+    expect(commit).not.toHaveBeenCalled();
+  });
 });

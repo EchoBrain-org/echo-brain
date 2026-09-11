@@ -11,6 +11,7 @@ import {
   validateOrganizationPersonSlackIdentityLinkBeginResponse,
   validateOrganizationPersonSlackIdentityLinkCompleteRequest,
   validateOrganizationPersonSlackIdentityLinkResult,
+  validateOrganizationPersonSlackDisconnectRequest,
   type OrganizationPersonSlackIdentityLinkBeginRequestV2,
   type OrganizationPersonSlackIdentityLinkBeginResponseV2,
   type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
@@ -95,6 +96,10 @@ export interface SlackPersonIdentityLinkRepositoryPort {
   completePersonSlackIdentityLinkChallenge(
     input: CompletePersonSlackIdentityLinkChallengeInput,
   ): CompletedPersonSlackIdentityLink;
+  disconnectPersonSlackIdentity(input: {
+    readonly person_session: BeginPersonSlackIdentityLinkChallengeInput["person_session"];
+    readonly now: string;
+  }): readonly OrganizationPersonToolV2[];
 }
 
 export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
@@ -105,6 +110,8 @@ export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
   readonly secrets: OrganizationSecretStore;
   readonly slack: SlackIdentityProviderV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
+  /** Synchronous invalidation of ephemeral provider proof held by this runtime. */
+  readonly invalidate_browser_attempts?: (membershipId: string) => void;
   readonly now?: () => string;
 }
 
@@ -244,6 +251,9 @@ function repositoryOperation<T>(operation: () => T): T {
  * `application/` would weaken the Authority's inward dependency boundary.
  */
 export class SlackPersonIdentityLinkWorkflowV1 {
+  /** Fences legacy provider work that started before a local disconnect. */
+  private readonly disconnect_generation_by_membership = new Map<string, number>();
+
   constructor(
     private readonly options: SlackPersonIdentityLinkWorkflowOptionsV1,
   ) {}
@@ -258,6 +268,10 @@ export class SlackPersonIdentityLinkWorkflowV1 {
 
   async complete(input: unknown, accessToken: string, signal?: AbortSignal) {
     return this.observe("person_tool_completion", () => this.completeInternal(input, accessToken, signal));
+  }
+
+  async disconnect(input: unknown, accessToken: string) {
+    return this.observe("person_tool_completion", () => this.disconnectInternal(input, accessToken));
   }
 
   private observe<T>(phase: CoreRuntimePhaseV1, operation: () => Promise<T>): Promise<T> {
@@ -306,9 +320,11 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       );
     }
     const before = this.authenticate(accessToken);
+    const disconnectGeneration = this.disconnectGeneration(before.membership_id);
     const activeTool = this.requireActiveTool();
     const earlyReplay = await this.options.authorization_fence.withRead(() => {
       const current = this.authenticate(accessToken);
+      this.assertDisconnectGeneration(current.membership_id, disconnectGeneration);
       if (!samePersonSession(before, current)) {
         throw new AuthorityOperationError(
           "conflict",
@@ -367,6 +383,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       const current = this.authenticate(accessToken);
       if (
         !samePersonSession(before, current) ||
+        !this.isDisconnectGenerationCurrent(current.membership_id, disconnectGeneration) ||
         !sameTool(
           activeTool,
           this.options.repository.activeSlackOrganizationTool(),
@@ -445,6 +462,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       const current = this.authenticate(accessToken);
       if (
         !samePersonSession(before, current) ||
+        !this.isDisconnectGenerationCurrent(current.membership_id, disconnectGeneration) ||
         !sameTool(
           activeTool,
           this.options.repository.activeSlackOrganizationTool(),
@@ -505,6 +523,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       );
     }
     const before = this.authenticate(accessToken);
+    const disconnectGeneration = this.disconnectGeneration(before.membership_id);
     const session = personSession(before, this.options.authority_id);
     const commandSha256 = personSlackIdentityLinkRequestSha256(
       "echo-person-slack-link-complete-request-binding-v1",
@@ -589,6 +608,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       const currentTool = this.options.repository.activeSlackOrganizationTool();
       if (
         !samePersonSession(before, current) ||
+        !this.isDisconnectGenerationCurrent(current.membership_id, disconnectGeneration) ||
         !sameTool(activeTool, currentTool) ||
         currentDestination.team_id !== activeTool.team_id ||
         currentDestination.channel_id !== challenge.channel_id ||
@@ -617,6 +637,53 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         ),
       );
     });
+  }
+
+  private async disconnectInternal(input: unknown, accessToken: string) {
+    try {
+      validateOrganizationPersonSlackDisconnectRequest(input);
+    } catch {
+      throw new AuthorityOperationError("invalid_request", "Person Slack disconnect request is invalid");
+    }
+    return await this.options.authorization_fence.withWrite(() => {
+      const current = this.authenticate(accessToken);
+      const session = personSession(current, this.options.authority_id);
+      const tools = repositoryOperation(() =>
+        this.options.repository.disconnectPersonSlackIdentity({
+          person_session: session,
+          now: current.checked_at,
+        }),
+      );
+      this.disconnect_generation_by_membership.set(
+        session.membership_id,
+        this.disconnectGeneration(session.membership_id) + 1,
+      );
+      this.options.invalidate_browser_attempts?.(session.membership_id);
+      return validateOrganizationPersonTools({
+        schema_version: 2,
+        kind: "echo-organization-person-tools",
+        organization_id: current.organization_id,
+        membership_id: current.membership_id,
+        tools,
+      });
+    });
+  }
+
+  private disconnectGeneration(membershipId: string): number {
+    return this.disconnect_generation_by_membership.get(membershipId) ?? 0;
+  }
+
+  private isDisconnectGenerationCurrent(membershipId: string, generation: number): boolean {
+    return this.disconnectGeneration(membershipId) === generation;
+  }
+
+  private assertDisconnectGeneration(membershipId: string, generation: number): void {
+    if (!this.isDisconnectGenerationCurrent(membershipId, generation)) {
+      throw new AuthorityOperationError(
+        "conflict",
+        "Slack identity link was disconnected while the proof was in progress",
+      );
+    }
   }
 
   private authenticate(accessToken: string): PersonAccessAuthorization {
