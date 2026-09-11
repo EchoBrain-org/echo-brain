@@ -652,13 +652,14 @@ function reachableProviderAdapterRoot(tree, start, providerAdapterRoots, stopAt,
     const path = work.pop();
     if (path === undefined || seen.has(path)) continue;
     seen.add(path);
-    const targets = new Set(symbolTargets(path));
+    const targets = new Set();
     for (const reference of moduleReferences(path, textFile(tree, path))) {
       if (reference.specifier === null || !reference.specifier.startsWith('.')) continue;
       const resolved = resolveRelative(tree, path, reference.specifier);
       if (resolved === null) continue;
       targets.add(resolved);
     }
+    for (const target of symbolTargets(path)) targets.add(target);
     for (const resolved of targets) {
       const root = providerAdapterRoots.find((entry) => matchesGlob(resolved, entry.root));
       if (root !== undefined) return { root, path: resolved };
