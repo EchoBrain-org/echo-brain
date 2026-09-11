@@ -11,7 +11,7 @@ reviewed_at: 2026-09-07
 reviewed_ref: 52652d26dab3d753333ce489f866e1e7d0d1f4aa
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Every source file under the Authority service and workspace package source roots is provider-neutral unless a declared provider root, selecting entrypoint, or reasoned exception owns it
+enforcement_scope: Every source file under services/organization-authority/src and packages/*/src is provider-neutral unless a declared provider root, selecting entrypoint, or reasoned exception owns it
 failure_pattern_ids:
   - FP-ADAPTERS-005
 ---
@@ -76,7 +76,11 @@ set; provider-client declarations not represented there fail, while the
 separately registered `deepseek` model namespace remains lexical evidence for
 the fixed OpenRouter answer-composition model selection. Stale evidence and
 identifier leaks also fail the gate. Architecture tests include a bland
-three-hop composition bridge.
+three-hop composition bridge. Workspace imports and re-exports are resolved
+to their declaring source with TypeScript, including aliases, type imports,
+namespace exports, and literal dynamic imports. A coupled exception may own
+its implementation but cannot hide a provider declaration it re-exports.
+Checks use the source worktree rather than potentially stale build output.
 The source path stores generic source identity and opaque cursors,
 and the shared runtime receives explicit source, processor, Layer 4, approval,
 and external-identity bundles instead of selecting a provider.

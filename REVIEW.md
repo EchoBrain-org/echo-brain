@@ -200,3 +200,72 @@ Running that rule against the tree found 38 unowned files that named a provider.
 - **Reasoned exceptions.** The two shared telemetry modules and the Ask journey mapper carry finite provider and model allowlists that bound metric cardinality; the current-only V4 record envelope validates the frozen Slack record input. Each entry names its follow-up. Importers of an exception are not counted as a second leak; the exception owns its coupling.
 
 Two regression cases were added to the boundary suite: an ordinary new shared file and a new package file are rejected without any registration, and a stale exception or a missing entrypoint fails the gate. F2 stays as decided: the Person tools API is a Slack-owned module, not a generic inventory.
+
+
+## Merge validation and boundary enforcement research — 2026-09-11
+
+The cleanup candidate includes main through #184. Generated evidence is archived
+at the linked historical commit, leaving #185 at +497/−1,633 lines. The resolver
+split in #186 preserves the current persisted contracts; it does not require
+renaming frozen Slack fields to create the neutral policy module. The original
+F1 remediation note above overstated that constraint.
+
+**Why leaks recur.** The old gate covered an opt-in list, not all new shared
+files. The manifest permits multiple roots and individual files for a provider,
+so declaring ownership is not physical consolidation. Public package barrels
+mix neutral and provider exports. Finally, the only qualified approval surface
+is Slack, so shared-looking contracts can inherit its assumptions without a
+second implementation challenging them.
+
+**Two reproduced gate defects fixed during review.** At #186's original head
+`022f104`, a new neutral module re-exporting
+`validateOrganizationPersonSlackBrowserLinkBeginRequest` from the public API
+passed the gate. A telemetry exception could also re-export a Slack module to
+neutral callers and still pass. The relative-path walk skipped workspace
+imports, and the exception stopped traversal. The correction resolves imported
+and re-exported symbols to their source declarations with the already-installed
+TypeScript compiler. A focused behavioral test covers aliases, type imports,
+namespace/star exports, dynamic imports, exception re-exports, and a neutral
+export from the same API. Ordinary neutral imports still pass. No new package
+or runtime framework is introduced.
+
+**Research and recommended enforcement.**
+
+- Keep one mandatory CI dependency gate over source ownership. The direction is
+  provider implementation → neutral contract; composition chooses an
+  implementation and passes it inward. This follows the original
+  [ports-and-adapters design](https://alistair.cockburn.us/hexagonal-architecture),
+  where replaceable real and test adapters exercise the same application port.
+- Resolve dependency edges, including aliases and re-exports; use vendor-word
+  scanning as a supplement. [Nx dependency constraints](https://nx.dev/docs/kb/enforce-module-boundaries)
+  and [dependency-cruiser's reachability rules](https://github.com/sverweij/dependency-cruiser/blob/main/doc/rules-reference.md)
+  provide established graph-based approaches. ECHO already has a TypeScript
+  graph checker, so adding another build system or overlapping gate is not
+  justified by these two defects.
+- Move provider public exports toward explicit provider subpaths as a separate
+  compatibility change. [Node package exports](https://nodejs.org/api/packages.html#package-entry-points)
+  constrain supported package entry points, but are not strong isolation against
+  absolute filesystem imports. The source gate remains necessary.
+  [ESLint import restrictions](https://eslint.org/docs/latest/rules/no-restricted-imports)
+  can give quick editor feedback, but static import-name rules alone do not
+  replace transitive resolution or semantic review.
+- Require boundary review for changes to the manifest, gate, shared contracts,
+  and exception list. Exceptions should have an accountable owner and a
+  concrete removal condition; a nonempty reason is not a limit on their growth.
+  [GitHub code-owner review](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
+  can enforce that review when paired with branch protection. No repository
+  protection settings were changed as part of this review.
+- Qualify one materially different provider using the same policy, replay,
+  record-byte, authorization, and processing tests. Passing fake-bundle tests
+  proves a seam, not that the domain model is free of Slack assumptions.
+
+**Explicit limits.** The current neutral roots are the Authority source and
+`packages/*/src`. They exclude the Person client under `src/product/person-client`,
+Swift UI, and deployment tooling. The Person client still mixes Slack tooling
+with its generic client modules; extending coverage there requires a scoped
+split. Four backend exceptions remain, including the frozen V4 record envelope.
+There is no enforced one-directory-per-provider rule. If that physical rule is
+required, migrate to one provider package per provider with explicit exports;
+merely adding more declared roots cannot satisfy it. Do not claim complete
+provider neutrality until these limits and real-provider qualification are
+resolved.

@@ -15,6 +15,7 @@ import process from 'node:process';
 import ts from 'typescript';
 import { collectModuleReferences } from './lib/module-references.mjs';
 import { repositoryWorktree, textFile } from './lib/repository-files.mjs';
+import { providerModuleGraph } from './lib/provider-module-graph.mjs';
 
 const REPO = process.cwd();
 
@@ -644,21 +645,25 @@ function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) 
   };
 }
 
-function reachableProviderAdapterRoot(tree, start, providerAdapterRoots, stopAt = new Set()) {
+function reachableProviderAdapterRoot(tree, start, providerAdapterRoots, stopAt, symbolTargets) {
   const seen = new Set();
   const work = [start];
   while (work.length > 0) {
     const path = work.pop();
     if (path === undefined || seen.has(path)) continue;
     seen.add(path);
+    const targets = new Set(symbolTargets(path));
     for (const reference of moduleReferences(path, textFile(tree, path))) {
       if (reference.specifier === null || !reference.specifier.startsWith('.')) continue;
       const resolved = resolveRelative(tree, path, reference.specifier);
       if (resolved === null) continue;
+      targets.add(resolved);
+    }
+    for (const resolved of targets) {
       const root = providerAdapterRoots.find((entry) => matchesGlob(resolved, entry.root));
       if (root !== undefined) return { root, path: resolved };
-      // A reasoned exception already owns its coupling; its importers are not
-      // a second leak. The walk still crosses every other neutral module.
+      // An exception owns its implementation, but alias resolution above still
+      // exposes any provider declarations that it re-exports to its callers.
       if (stopAt.has(resolved)) continue;
       work.push(resolved);
     }
@@ -1235,6 +1240,7 @@ function main() {
       }
     }
     if (isStringArray(neutralRoots) && isStringArray(selectingEntrypoints)) {
+      const symbolTargets = providerModuleGraph(tree, resolveRelative, errors);
       const forbiddenProviderIdentifiers = new Set([
         ...registeredProviderIdentifiers,
         ...declaredProviderNameIdentifiers,
@@ -1258,6 +1264,7 @@ function main() {
           path,
           declaredProviderAdapterRoots,
           new Set(exceptionReasons.keys()),
+          symbolTargets,
         );
         if (exceptionReasons.has(path)) {
           if (leaked.length === 0 && reachable === undefined) {
