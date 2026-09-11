@@ -13,11 +13,14 @@ import type { Stats } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 
 const MINIMUM_CREDENTIAL_BYTES = 32;
-const MAXIMUM_CREDENTIAL_BYTES = 4096;
+export const MAXIMUM_CREDENTIAL_BYTES = 4096;
 
-function fail(message: string): never {
+/** Every private credential failure carries the same prefix and no value bytes. */
+export function privateAuthorityCredentialFailure(message: string): never {
   throw new Error(`authority credential: ${message}`);
 }
+
+const fail = privateAuthorityCredentialFailure;
 
 export function authorityCredentialPath(reference: string): string {
   if (!reference.startsWith('file:')) {
@@ -54,18 +57,20 @@ function assertPrivateCredentialFile(
   return state;
 }
 
-function readPrivateVisibleAsciiCredential(
+/** A bounded visible-ASCII credential file; provider readers add their own format rules. */
+export function readPrivateAuthorityVisibleAsciiCredential(
   reference: string,
   minimumBytes: number,
 ): string {
-  const value = readPrivateCredentialFile(reference, minimumBytes);
+  const value = readPrivateAuthorityCredentialFile(reference, minimumBytes);
   if (!/^[\x21-\x7e]+$/.test(value)) {
     fail('value must contain only bounded visible ASCII bytes');
   }
   return value;
 }
 
-function readPrivateCredentialFile(
+/** The raw private credential file; callers own any structured parsing. */
+export function readPrivateAuthorityCredentialFile(
   reference: string,
   minimumBytes: number,
 ): string {
@@ -92,118 +97,17 @@ function readPrivateCredentialFile(
 }
 
 export function readPrivateAuthorityCredential(reference: string): string {
-  return readPrivateVisibleAsciiCredential(
+  return readPrivateAuthorityVisibleAsciiCredential(
     reference,
     MINIMUM_CREDENTIAL_BYTES,
   );
-}
-
-/**
- * Slack signing secrets are provider credentials, not configuration values.
- * Keep their filesystem validation identical to other Authority secrets while
- * accepting Slack's visible-ASCII secret representation without logging it.
- */
-export function readPrivateAuthoritySlackSigningSecret(
-  reference: string,
-): string {
-  return readPrivateVisibleAsciiCredential(
-    reference,
-    MINIMUM_CREDENTIAL_BYTES,
-  );
-}
-
-export interface SlackBrowserOauthConfigurationV1 {
-  readonly client_id: string;
-  readonly client_secret: string;
-}
-
-/** Keeps the optional Slack browser OAuth secret in process memory only. */
-export function readPrivateAuthoritySlackBrowserOauthConfiguration(
-  reference: string,
-): SlackBrowserOauthConfigurationV1 {
-  const value = readPrivateCredentialFile(reference, 1);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value) as unknown;
-  } catch {
-    fail('Slack browser OAuth configuration must be valid JSON');
-  }
-  if (
-    parsed === null ||
-    typeof parsed !== 'object' ||
-    Array.isArray(parsed) ||
-    Object.keys(parsed).sort().join(',') !== 'client_id,client_secret'
-  ) {
-    fail('Slack browser OAuth configuration has an unexpected shape');
-  }
-  const record = parsed as Record<string, unknown>;
-  const clientId = record.client_id;
-  const clientSecret = record.client_secret;
-  if (
-    typeof clientId !== 'string' ||
-    !/^[A-Za-z0-9._-]{1,255}$/.test(clientId) ||
-    typeof clientSecret !== 'string' ||
-    clientSecret.length === 0 ||
-    clientSecret.length > MAXIMUM_CREDENTIAL_BYTES ||
-    !/^[\x21-\x7e]+$/.test(clientSecret)
-  ) {
-    fail('Slack browser OAuth configuration is invalid');
-  }
-  return Object.freeze({ client_id: clientId, client_secret: clientSecret });
-}
-
-/** Missing configuration deliberately retains the existing Slack DM flow. */
-export function readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
-  reference: string,
-): SlackBrowserOauthConfigurationV1 | undefined {
-  const path = authorityCredentialPath(reference);
-  try {
-    lstatSync(path);
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw error;
-  }
-  return readPrivateAuthoritySlackBrowserOauthConfiguration(reference);
-}
-
-export function readPrivateAuthorityGranolaOrganizationCredential(
-  reference: string,
-): string {
-  const value = readPrivateVisibleAsciiCredential(
-    reference,
-    MINIMUM_CREDENTIAL_BYTES,
-  );
-  if (!/^grn_[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value)) {
-    fail('Granola organization credential has an invalid format');
-  }
-  return value;
-}
-
-export function readPrivateAuthorityGranolaOwnerEmail(
-  reference: string,
-): string {
-  const value = readPrivateVisibleAsciiCredential(reference, 3);
-  const [local, domain, extra] = value.split('@');
-  if (
-    value !== value.trim().toLowerCase() ||
-    value.length > 254 ||
-    /\s/u.test(value) ||
-    local === undefined ||
-    local.length === 0 ||
-    domain === undefined ||
-    domain.length === 0 ||
-    extra !== undefined
-  ) {
-    fail('Granola owner email must be canonical lowercase email');
-  }
-  return value;
 }
 
 /** Reads the exact 32-byte Person-session PKCE key from canonical base64url. */
 export function readPrivateAuthorityPersonSessionPkceKey(
   reference: string,
 ): Uint8Array {
-  const encoded = readPrivateVisibleAsciiCredential(reference, 43);
+  const encoded = readPrivateAuthorityVisibleAsciiCredential(reference, 43);
   if (!/^[A-Za-z0-9_-]{43}$/.test(encoded)) {
     fail('Person-session PKCE key must be canonical base64url');
   }
@@ -218,7 +122,7 @@ export function readPrivateAuthorityPersonSessionPkceKey(
 export function readPrivateAuthorityOidcClientSecret(
   reference: string,
 ): string {
-  return readPrivateVisibleAsciiCredential(reference, 1);
+  return readPrivateAuthorityVisibleAsciiCredential(reference, 1);
 }
 
 export function createPrivateAuthorityCredential(path: string): string {

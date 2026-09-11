@@ -4,7 +4,7 @@ import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   readPrivateAuthorityGranolaOrganizationCredential,
   readPrivateAuthorityGranolaOwnerEmail,
-} from "../../../adapters/security/private-file-credentials.js";
+} from "./granola-private-credentials-v1.js";
 import { personLoginGrantExpectedEmailSha256 } from "../../../domain/person-email-binding.js";
 import { openAuthorityDatabase } from "../../../adapters/persistence/sqlite/open-authority-database.js";
 import {

@@ -35,11 +35,11 @@ import {
   isExpectedPersonEmail,
 } from "../domain/person-session-rules.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
+import { readPrivateAuthorityCredential } from "../adapters/security/private-file-credentials.js";
 import {
-  readPrivateAuthorityCredential,
   readPrivateAuthorityGranolaOrganizationCredential,
   readPrivateAuthorityGranolaOwnerEmail,
-} from "../adapters/security/private-file-credentials.js";
+} from "./providers/granola/granola-private-credentials-v1.js";
 import {
   bootstrapOrganizationAuthorityState,
   type AuthorityStateSeedV1,

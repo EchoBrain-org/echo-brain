@@ -63,7 +63,7 @@ function sourceMetadata(
     body.organization_id !== options.organization_id ||
     body.state_lineage_id !== options.state_lineage_id ||
     object(body.event)?.kind !== "approved" ||
-    ref?.kind !== "echo-private-slack-block-approval-resolution-ref-v1" ||
+    typeof ref?.kind !== "string" ||
     ref.action !== "approve" ||
     ref.approval_id !== record.approval_id ||
     ref.organization_id !== options.organization_id ||
