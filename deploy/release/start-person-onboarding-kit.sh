@@ -75,6 +75,26 @@ validate_overlay_identity() {
     fail 'the ECHO application identity does not match this release'
 }
 
+validate_thin_arm64_executable() {
+  "$NODE" -e '
+    const { closeSync, constants, openSync, readSync } = require("node:fs");
+    let descriptor;
+    try {
+      descriptor = openSync(process.argv[1], constants.O_RDONLY | constants.O_NOFOLLOW);
+      // Mach-O 64-bit, arm64 (all), MH_EXECUTE; FAT and arm64e are not this release.
+      const header = Buffer.alloc(16);
+      if (readSync(descriptor, header, 0, header.length, 0) !== header.length ||
+          header.readUInt32LE(0) !== 0xfeedfacf ||
+          header.readUInt32LE(4) !== 0x0100000c ||
+          header.readUInt32LE(8) !== 0 || header.readUInt32LE(12) !== 2) process.exitCode = 1;
+    } catch {
+      process.exitCode = 1;
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
+  ' "$1"
+}
+
 [[ $# -le 1 ]] || fail 'open Start ECHO.command or pass one invitation file path'
 install_only=0
 if [[ "${1:-}" == --install-only ]]; then install_only=1; shift; fi
@@ -192,7 +212,7 @@ staged_app="$overlay_staging/ECHO.app"
    'org.echobrain.echo-overlay' ]] || fail 'the ECHO application bundle identifier is invalid'
 /usr/bin/codesign --verify --deep --strict "$staged_app" || \
   fail 'the ECHO application signature is invalid'
-[[ "$(/usr/bin/lipo -archs "$staged_app/Contents/MacOS/ECHO")" == arm64 ]] || \
+validate_thin_arm64_executable "$staged_app/Contents/MacOS/ECHO" || \
   fail 'the ECHO application executable is not arm64-only'
 validate_overlay_identity "$staged_app" "$expected_source_sha" "$expected_version"
 

@@ -652,8 +652,8 @@ The `.tar.gz` kit below remains the operator fallback.
 The supported first-cohort employee path is one private macOS Apple-silicon
 kit plus that employee's one-use invitation. The kit carries the exact Person
 client, the matching `ECHO.app` hotkey overlay, and a pinned Node 22.22.1
-runtime. The employee does not install Node, npm, Homebrew, or a repository
-checkout and does not edit `PATH`.
+runtime. The employee does not install Node, npm, Homebrew, Xcode, Apple's
+Command Line Tools, or a repository checkout and does not edit `PATH`.
 
 From the accepted release record and exact Person-client artifact, create the
 kit on a reviewed macOS arm64 build machine running Node 22.22.1:

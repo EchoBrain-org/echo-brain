@@ -28,6 +28,15 @@ const INSTALLER = resolve(
 );
 const temporaryRoots: string[] = [];
 
+function machOExecutable(cpuType = 0x0100000c, subtype = 0, fileType = 2) {
+  const header = Buffer.alloc(16);
+  header.writeUInt32LE(0xfeedfacf, 0);
+  header.writeUInt32LE(cpuType, 4);
+  header.writeUInt32LE(subtype, 8);
+  header.writeUInt32LE(fileType, 12);
+  return header;
+}
+
 function overlayFixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-overlay-builder-")));
   temporaryRoots.push(root);
@@ -145,7 +154,8 @@ function installerFixture() {
   };
   tool("uname", 'if [[ "$1" == -s ]]; then echo Darwin; else echo arm64; fi');
   tool("codesign", 'exit 0');
-  tool("lipo", 'echo arm64');
+  tool("lipo", '[[ "${REFUSE_LIPO:-}" != yes ]] && echo arm64');
+  tool("retire-overlay", 'exit "${REFUSE_RETIREMENT:-0}"');
   tool("PlistBuddy", 'echo org.echobrain.echo-overlay');
   tool("ditto", 'unzip -q "$3" -d "$4"');
   tool("stat", `exec "${process.execPath}" -e 'const s=require("node:fs").statSync(process.argv[2]); console.log(process.argv[1]==="%u"?s.uid:(s.mode&511).toString(8))' "$2" "$3"`);
@@ -160,6 +170,11 @@ exec /bin/mv "$@"`);
   for (const name of ["ditto", "codesign", "lipo"])
     installer = installer.replaceAll(`/usr/bin/${name}`, join(fake, name));
   installer = installer.replaceAll("/usr/libexec/PlistBuddy", join(fake, "PlistBuddy"));
+  // Keep the checked Mach-O bytes intact; simulate only the running app retirement.
+  installer = installer.replaceAll(
+    '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
+    `"${join(fake, "retire-overlay")}"`,
+  );
   writeFileSync(join(kit, "Start ECHO.command"), installer);
   writeFileSync(join(kit, "node"), `#!/usr/bin/env bash\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
   writeFileSync(join(kit, "verify-person-onboarding-kit.mjs"), 'if (process.env.REJECT_KIT) process.exit(1);\n');
@@ -170,7 +185,7 @@ if(process.argv[2] === 'field') console.log(JSON.parse(readFileSync(process.argv
   mkdirSync(support, { recursive: true, mode: 0o700 });
   const session = join(support, "synthetic-session.json");
   writeFileSync(session, 'synthetic compatible session', { mode: 0o600 });
-  function prepare(release: number) {
+  function prepare(release: number, executable: Buffer = machOExecutable()) {
     const version = `0.1.${release}`;
     const sha = String(release).repeat(40);
     writeFileSync(join(kit, "release.json"), JSON.stringify({ "release-id": `release-${release}`, "client-version": version, "source-sha": sha }));
@@ -178,7 +193,7 @@ if(process.argv[2] === 'field') console.log(JSON.parse(readFileSync(process.argv
     mkdirSync(join(contents, "MacOS"), { recursive: true });
     mkdirSync(join(contents, "Resources"), { recursive: true });
     writeFileSync(join(contents, "Info.plist"), "synthetic ECHO plist");
-    writeFileSync(join(contents, "MacOS/ECHO"), `#!/usr/bin/env bash\n# ${sha}\nexit \${REFUSE_RETIREMENT:-0}\n`, { mode: 0o755 });
+    writeFileSync(join(contents, "MacOS/ECHO"), executable, { mode: 0o755 });
     writeFileSync(join(contents, "Resources/build-identity.v1.json"), JSON.stringify({ schema_version: 1, kind: "echo-overlay-build-identity-v1", product_version: version, source_sha: sha, platform: "darwin", architecture: "arm64" }));
     rmSync(join(kit, "ECHO.app.zip"), { force: true });
     execFileSync("zip", ["-qr", join(kit, "ECHO.app.zip"), "ECHO.app"], { cwd: root });
@@ -186,8 +201,8 @@ if(process.argv[2] === 'field') console.log(JSON.parse(readFileSync(process.argv
     writeFileSync(join(root, "package/dist/main.js"), `console.log('${version}');\n`);
     execFileSync("tar", ["-czf", join(kit, "person-client.tgz"), "-C", root, "package"]);
   }
-  function install(release: number, env: Record<string, string> = {}) {
-    prepare(release);
+  function install(release: number, env: Record<string, string> = {}, executable?: Buffer) {
+    prepare(release, executable);
     return spawnSync("bash", [join(kit, "Start ECHO.command"), "--install-only"], { encoding: "utf8", env: { ...process.env, HOME: home, PATH: `${fake}:${process.env.PATH}`, ...env } });
   }
   function pair(release: number) {
@@ -206,6 +221,30 @@ afterEach(() => {
 });
 
 describe("native ECHO hotkey overlay", () => {
+  it("uses the bundled Node runtime to require a thin arm64 executable", () => {
+    const valid = installerFixture();
+    const installed = valid.install(1, { REFUSE_LIPO: "yes" });
+    expect(installed.status, installed.stderr).toBe(0);
+    valid.pair(1);
+
+    const fat = Buffer.alloc(16);
+    fat.writeUInt32BE(0xcafebabe, 0);
+    const invalidExecutables = [
+      ["an invalid Mach-O header", Buffer.alloc(16)],
+      ["an x86_64 executable", machOExecutable(0x01000007)],
+      ["an arm64e subtype", machOExecutable(0x0100000c, 2)],
+      ["a non-executable Mach-O file", machOExecutable(0x0100000c, 0, 6)],
+      ["a universal Mach-O header", fat],
+      ["a truncated executable", Buffer.alloc(8)],
+    ] as const;
+    for (const [description, executable] of invalidExecutables) {
+      const subject = installerFixture();
+      const result = subject.install(1, { REFUSE_LIPO: "yes" }, executable);
+      expect(result.status, description).toBe(1);
+      expect(result.stderr, description).toContain("ECHO application executable is not arm64-only");
+    }
+  });
+
   it("bounds retained installer releases and keeps rollback apps out of discovery", () => {
     const subject = installerFixture();
     let previousSlots: string[] = [];

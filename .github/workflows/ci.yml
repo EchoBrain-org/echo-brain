@@ -171,6 +171,8 @@ jobs:
           codesign --verify --deep --strict "$graphical_extract/ECHO Setup.app"
           graphical_resources="$graphical_extract/ECHO Setup.app/Contents/Resources/kit"
           "$graphical_resources/node" "$graphical_resources/verify-person-onboarding-kit.mjs" "$graphical_resources"
+          # The CI runner has Xcode, but employee installation must not need it.
+          DEVELOPER_DIR="$RUNNER_TEMP/echo-unavailable-developer-tools" \
           HOME="$person_home" "$graphical_resources/node" \
             "$graphical_resources/person-onboarding-ui.mjs" prepare > "$stdout_file"
           node -e '
