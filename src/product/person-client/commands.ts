@@ -93,6 +93,7 @@ const RULES: Readonly<
   "slack-connect-begin": {},
   "slack-connect-status": { accepts: ["attempt-id"], requires: ["attempt-id"] },
   "slack-connect-cancel": { accepts: ["attempt-id"], requires: ["attempt-id"] },
+  "slack-disconnect": {},
   "employee-invite": {
     accepts: ["name", "email", "out"],
     requires: ["name", "email", "out"],
@@ -125,6 +126,7 @@ Commands:
   employee    List, invite, reissue, or revoke an employee.
   tools       Read organization tools and your current link status.
   slack-connect-begin  Open Slack browser connection.
+  slack-disconnect  Remove your personal Slack link.
   slack-link  Legacy private-DM Slack linking command.
 
 Run \`echo-brain person <command> --help\` for command options.
@@ -790,6 +792,9 @@ export async function runPersonClientCli(
         print(stdout, { ok: true, ...status });
         break;
       }
+      case "slack-disconnect":
+        print(stdout, { ok: true, result: await client.disconnectSlack() });
+        break;
       case "employee-invite":
         print(stdout, {
           ok: true,

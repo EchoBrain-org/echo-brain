@@ -627,6 +627,13 @@ sign-in, sign-out, and switching accounts. **Sources** on an answer opens its
 cited records through a fresh permission-aware read; **Back to answer** returns
 to the answer. These controls use the release-installed Person client.
 
+**Account → Connected tools…** shows tools enabled by the organization. Choose
+**Connect Slack**, complete Slack sign-in in the browser, and keep the panel
+open while it finishes automatically. Once linked, **Disconnect Slack** removes
+your personal Slack association after confirmation. Your ECHO membership,
+approved records, and access to Ask and Sources remain. You can then connect
+Slack again from the same panel.
+
 The setup application has its own process identity. Installing a new overlay
 can stop the old Ask ECHO process without stopping setup. Installation and
 sign-in are separate; an install-only success or locally stored session is

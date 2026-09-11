@@ -67,6 +67,8 @@ export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
   readonly slack: SlackIdentityProviderV1;
   readonly slack_token_access: SlackBotTokenAccessV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
+  /** Synchronously clears short-lived browser proof after a durable revoke. */
+  readonly invalidate_browser_attempts?: (membershipId: string) => void;
   readonly now?: () => string;
 }
 
@@ -597,6 +599,43 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
     });
   }
 
+  /** Revokes only this Person's active Slack association and pending DM proofs. */
+  disconnectPersonSlackIdentity(input: {
+    readonly person_session: PersonSlackIdentityLinkSession;
+    readonly now: string;
+  }): readonly OrganizationPersonToolV2[] {
+    return this.transaction(() => {
+      const active = this.activeConnection();
+      if (active === null) return this.personTools(input.person_session);
+      this.options.database
+        .prepare(
+          `UPDATE organization_external_human_link_current
+           SET current_status = 'revoked', updated_at = ?
+           WHERE principal_id = ? AND membership_id = ?
+             AND provider_issuer = 'https://slack.com'
+             AND provider_tenant_kind = 'workspace'
+             AND provider_tenant_id = ?
+             AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '')
+             AND current_status = 'active'`,
+        )
+        .run(
+          input.now,
+          input.person_session.principal_id,
+          input.person_session.membership_id,
+          active.tool.team_id,
+          active.tool.enterprise_id,
+        );
+      this.options.database
+        .prepare(
+          `UPDATE organization_person_slack_link_challenges
+           SET status = 'expired', completed_at = ?
+           WHERE membership_id = ? AND connection_id = ? AND status = 'pending'`,
+        )
+        .run(input.now, input.person_session.membership_id, active.connection.connection_id);
+      return this.personTools(input.person_session);
+    });
+  }
+
   readSlackToken(reference: OrganizationSecretReference): string {
     const active = this.activeConnection();
     if (
@@ -888,6 +927,7 @@ export function createSqliteSlackPersonIdentityLinkWorkflowV1(
     secrets: secrets as OrganizationSecretStore,
     slack: input.slack,
     authorization_fence: input.authorization_fence,
+    invalidate_browser_attempts: input.invalidate_browser_attempts,
     now: input.now,
   });
 }

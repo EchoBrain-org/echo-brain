@@ -399,6 +399,214 @@ describe("Person Slack identity-link workflow", () => {
     expect((await context.application.tools("bearer")).tools[0]).toMatchObject({ personal_status: "revoked", account_id: null });
   });
 
+  it("disconnects only the current Person's Slack association, preserves history, and is idempotent", async () => {
+    const context = await setup();
+    const begun = await context.application.begin(beginRequest(), "bearer");
+    await context.application.complete({
+      request_id: "psc_00000000-0000-4000-8000-000000000001",
+      challenge_attempt_id: begun.challenge_attempt_id,
+      challenge_message_ts: begun.challenge_message_ts,
+      challenge_code: CODE,
+    }, "bearer");
+
+    await expect(context.application.disconnect({}, "bearer")).resolves.toMatchObject({
+      organization_id: ORGANIZATION_ID,
+      membership_id: MEMBERSHIP_ID,
+      tools: [{ provider: "slack", availability: "enabled", personal_status: "revoked", account_id: null }],
+    });
+    await expect(context.application.disconnect({}, "bearer")).resolves.toMatchObject({
+      tools: [{ personal_status: "revoked", account_id: null }],
+    });
+    expect(context.database.prepare("SELECT current_status FROM organization_external_human_link_current").get()).toEqual({ current_status: "revoked" });
+    expect(context.database.prepare("SELECT COUNT(*) AS count FROM organization_external_human_link_contracts").get()).toEqual({ count: 1 });
+    expect(context.database.prepare("SELECT current_status FROM organization_tool_connection_current_state").get()).toEqual({ current_status: "active" });
+  });
+
+  it("allows an owner to disconnect their own Slack association", async () => {
+    const owner = { ...authorization, membership_type: "owner" as const };
+    const context = await setup(() => owner);
+    const begun = await context.application.begin(beginRequest(), "bearer");
+    await context.application.complete({
+      request_id: "psc_00000000-0000-4000-8000-000000000001",
+      challenge_attempt_id: begun.challenge_attempt_id,
+      challenge_message_ts: begun.challenge_message_ts,
+      challenge_code: CODE,
+    }, "bearer");
+    await expect(context.application.disconnect({}, "bearer")).resolves.toMatchObject({
+      membership_id: MEMBERSHIP_ID,
+      tools: [{ personal_status: "revoked" }],
+    });
+  });
+
+  it("uses the current Person session and leaves another member's Slack link active", async () => {
+    let current = authorization;
+    const context = await setup(() => current);
+    const first = await context.application.begin(beginRequest(), "bearer");
+    await context.application.complete({
+      request_id: "psc_00000000-0000-4000-8000-000000000001",
+      challenge_attempt_id: first.challenge_attempt_id,
+      challenge_message_ts: first.challenge_message_ts,
+      challenge_code: CODE,
+    }, "bearer");
+    current = {
+      ...authorization,
+      principal_id: "prn_00000000-0000-4000-8000-000000000002",
+      membership_id: "mem_00000000-0000-4000-8000-000000000002",
+      identity_binding_id: "oib_00000000-0000-4000-8000-000000000002",
+      session_family_id: "psf_00000000-0000-4000-8000-000000000002",
+      checked_at: "2026-08-22T00:01:00.000Z",
+    };
+    vi.mocked(context.slack.openIdentityLinkDirectMessage!).mockImplementation(async (_token, recipient) => ({
+      team_id: "T12345678", channel_id: "D12345678", recipient_user_id: recipient,
+    }));
+    vi.mocked(context.slack.observeIdentityLinkChallenge).mockResolvedValueOnce({
+      team_id: "T12345678", user_id: "U98765432", channel_id: "D12345678",
+      challenge_message_ts: "100.000001", reply_message_ts: "100.000002",
+      verification_evidence_sha256: canonicalSha256("other-member"),
+    });
+    const second = await context.application.begin({
+      ...beginRequest("psb_00000000-0000-4000-8000-000000000002"),
+      challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(OTHER_CODE),
+      recipient_user_id: "U98765432",
+    }, "bearer");
+    await context.application.complete({
+      request_id: "psc_00000000-0000-4000-8000-000000000002",
+      challenge_attempt_id: second.challenge_attempt_id,
+      challenge_message_ts: second.challenge_message_ts,
+      challenge_code: OTHER_CODE,
+    }, "bearer");
+
+    await context.application.disconnect({}, "bearer");
+    expect(context.database.prepare("SELECT current_status FROM organization_external_human_link_current WHERE membership_id = ?").get(MEMBERSHIP_ID)).toEqual({ current_status: "active" });
+    expect(context.database.prepare("SELECT current_status FROM organization_external_human_link_current WHERE membership_id = ?").get(current.membership_id)).toEqual({ current_status: "revoked" });
+  });
+
+  it("allows an explicit legacy reconnect after the existing delivery cooldown", async () => {
+    let current = authorization;
+    const context = await setup(() => current);
+    const first = await context.application.begin(beginRequest(), "bearer");
+    await context.application.complete({
+      request_id: "psc_00000000-0000-4000-8000-000000000001",
+      challenge_attempt_id: first.challenge_attempt_id,
+      challenge_message_ts: first.challenge_message_ts,
+      challenge_code: CODE,
+    }, "bearer");
+    await context.application.disconnect({}, "bearer");
+    current = { ...authorization, checked_at: "2026-08-22T00:01:00.000Z" };
+
+    const second = await context.application.begin({
+      ...beginRequest("psb_00000000-0000-4000-8000-000000000002"),
+      challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(OTHER_CODE),
+    }, "bearer");
+    await context.application.complete({
+      request_id: "psc_00000000-0000-4000-8000-000000000002",
+      challenge_attempt_id: second.challenge_attempt_id,
+      challenge_message_ts: second.challenge_message_ts,
+      challenge_code: OTHER_CODE,
+    }, "bearer");
+    expect((await context.application.tools("bearer")).tools).toMatchObject([{ personal_status: "linked", account_id: "U12345679" }]);
+  });
+
+  it("invalidates a legacy begin that crosses a disconnect before it can persist", async () => {
+    const context = await setup();
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(context.slack.openIdentityLinkDirectMessage!).mockImplementationOnce(async () => {
+      await held;
+      return { team_id: "T12345678", channel_id: "D12345678", recipient_user_id: "U12345679" };
+    });
+
+    const begin = context.application.begin(beginRequest(), "bearer");
+    await vi.waitFor(() => expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledOnce());
+    await context.application.disconnect({}, "bearer");
+    release!();
+
+    await expect(begin).rejects.toMatchObject({ code: "conflict" });
+    expect(context.database.prepare("SELECT COUNT(*) AS count FROM organization_person_slack_link_challenges").get()).toEqual({ count: 0 });
+  });
+
+  it("invalidates a legacy completion that crosses a disconnect", async () => {
+    const context = await setup();
+    const begun = await context.application.begin(beginRequest(), "bearer");
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(context.slack.observeIdentityLinkChallenge).mockImplementationOnce(async (_token, input) => {
+      await held;
+      return {
+        team_id: "T12345678", user_id: "U12345679", channel_id: input.channel_id,
+        challenge_message_ts: input.challenge_message_ts, reply_message_ts: "100.000002",
+        verification_evidence_sha256: canonicalSha256("observed"),
+      };
+    });
+    const completion = context.application.complete({
+      request_id: "psc_00000000-0000-4000-8000-000000000001",
+      challenge_attempt_id: begun.challenge_attempt_id,
+      challenge_message_ts: begun.challenge_message_ts,
+      challenge_code: CODE,
+    }, "bearer");
+    await vi.waitFor(() => expect(context.slack.observeIdentityLinkChallenge).toHaveBeenCalledOnce());
+    await context.application.disconnect({}, "bearer");
+    release!();
+
+    await expect(completion).rejects.toMatchObject({ code: "conflict" });
+    expect((await context.application.tools("bearer")).tools).toMatchObject([{ personal_status: "unlinked" }]);
+  });
+
+  it("wires disconnect to cancel an in-flight browser callback before it can link", async () => {
+    const context = await setup();
+    let browser: SlackPersonBrowserIdentityLinkWorkflowV1;
+    const configuration = {
+      database: context.database,
+      authority_id: AUTHORITY_ID,
+      organization_id: ORGANIZATION_ID,
+      state_lineage_id: LINEAGE_ID,
+      approval_channel_id: "C12345678",
+      authentication: { authenticateAccess: () => authorization },
+      membership_type: () => "employee" as const,
+      slack: context.slack,
+      slack_token_access: { readActiveSlackBotToken: () => TOKEN },
+      authorization_fence: new ReadableSearchAuthorizationFence(),
+      now: () => NOW,
+    };
+    const application = createSqliteSlackPersonIdentityLinkWorkflowV1({
+      ...configuration,
+      invalidate_browser_attempts: (membershipId) => browser.invalidateMembership(membershipId),
+    });
+    let state = "";
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let markCallbackStarted: (() => void) | undefined;
+    const callbackStarted = new Promise<void>((resolve) => { markCallbackStarted = resolve; });
+    browser = new SlackPersonBrowserIdentityLinkWorkflowV1({
+      authority_id: AUTHORITY_ID,
+      organization_id: ORGANIZATION_ID,
+      authentication: configuration.authentication,
+      repository: createSqliteSlackPersonIdentityLinkRepositoryV1(configuration),
+      browser_provider: {
+        authorizationUrl: (input) => { state = input.state; return "https://slack.com/openid/connect/authorize?opaque=yes"; },
+        verifyCallback: async () => {
+          markCallbackStarted!();
+          await held;
+          return { team_id: "T12345678", user_id: "U12345679", verification_evidence_sha256: canonicalSha256("browser-proof") };
+        },
+      },
+      now: () => NOW,
+    });
+    const begun = await browser.begin({ request_id: "psb_00000000-0000-4000-8000-000000000099" }, "bearer");
+    const callback = browser.callback(new URLSearchParams({ state, code: "provider-code" }));
+    await callbackStarted;
+    await application.disconnect({}, "bearer");
+    release!();
+    await callback;
+
+    await expect(browser.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "cancelled" });
+    expect(context.database.prepare("SELECT COUNT(*) AS count FROM organization_external_human_link_current").get()).toEqual({ count: 0 });
+    const reconnect = await browser.begin({ request_id: "psb_00000000-0000-4000-8000-000000000100" }, "bearer");
+    await browser.callback(new URLSearchParams({ state, code: "fresh-provider-code" }));
+    await expect(browser.status({ attempt_id: reconnect.attempt_id }, "bearer")).resolves.toMatchObject({ status: "complete" });
+    expect((await application.tools("bearer")).tools).toMatchObject([{ personal_status: "linked", account_id: "U12345679" }]);
+  });
+
   it("denies a wrong code and a different authenticated Person session", async () => {
     let current = authorization;
     const context = await setup(() => current);
@@ -469,6 +677,19 @@ describe("Person Slack identity-link workflow", () => {
       expect(malformed.status).toBe(400);
       const denied = await fetch(`http://127.0.0.1:${String(address.port)}/v2/person/tools`);
       expect(denied.status).toBe(401);
+      const disconnected = await fetch(`http://127.0.0.1:${String(address.port)}/v2/person/external-identities/slack/disconnect`, {
+        method: "POST", headers: { authorization: "Bearer bearer", "content-type": "application/json" }, body: "{}",
+      });
+      expect(disconnected.status).toBe(200);
+      expect(await disconnected.json()).toMatchObject({ membership_id: MEMBERSHIP_ID, tools: [{ personal_status: "unlinked" }] });
+      const foreignTarget = await fetch(`http://127.0.0.1:${String(address.port)}/v2/person/external-identities/slack/disconnect`, {
+        method: "POST", headers: { authorization: "Bearer bearer", "content-type": "application/json" }, body: JSON.stringify({ membership_id: "mem_00000000-0000-4000-8000-000000000002" }),
+      });
+      expect(foreignTarget.status).toBe(400);
+      const unauthenticatedDisconnect = await fetch(`http://127.0.0.1:${String(address.port)}/v2/person/external-identities/slack/disconnect`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+      });
+      expect(unauthenticatedDisconnect.status).toBe(401);
     } finally {
       const closed = once(server, "close");
       server.close();

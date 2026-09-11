@@ -3,7 +3,9 @@ import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_PERSON_TOOLS_PATH,
+  ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH,
   validateOrganizationPersonTools,
+  validateOrganizationPersonSlackDisconnectRequest,
   ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
   ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
@@ -42,6 +44,7 @@ import {
   type OrganizationPersonOidcBeginRequestV2,
   type OrganizationPersonOidcBeginResponseV2,
   type OrganizationPersonSessionV2,
+  type OrganizationPersonToolsV2,
   type OrganizationPersonSlackIdentityLinkBeginRequestV2,
   type OrganizationPersonSlackIdentityLinkBeginResponseV2,
   type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
@@ -1082,6 +1085,18 @@ export class PersonAuthorityClient {
   tools(accessToken: string) {
     return this.getJson({ path: ORGANIZATION_API_PERSON_TOOLS_PATH, access_token: accessToken,
       validate_response: validateOrganizationPersonTools, maximum_response_bytes: 4096 });
+  }
+
+  disconnectSlack(accessToken: string): Promise<OrganizationPersonToolsV2> {
+    return this.json({
+      path: ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH,
+      body: {},
+      validate_request: validateOrganizationPersonSlackDisconnectRequest,
+      validate_response: validateOrganizationPersonTools,
+      access_token: accessToken,
+      maximum_response_bytes: 4096,
+      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
+    });
   }
 
   beginSlackIdentityLink(

@@ -192,6 +192,15 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
     });
   }
 
+  /** Called synchronously under the legacy workflow's disconnect write fence. */
+  invalidateMembership(membershipId: string): void {
+    for (const attempt of this.attempts.values()) {
+      if (attempt.session.membership_id === membershipId && attempt.status === "pending") {
+        this.settle(attempt, "cancelled");
+      }
+    }
+  }
+
   /** Called by the unauthenticated provider callback route. It never commits a link. */
   async callback(parameters: URLSearchParams): Promise<void> {
     await this.observe("person_tool_completion", async () => {
