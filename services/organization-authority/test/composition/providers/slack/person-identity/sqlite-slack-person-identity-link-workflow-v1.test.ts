@@ -476,7 +476,7 @@ describe("Person Slack identity-link workflow", () => {
     }
   });
 
-  it("commits a browser proof only after authenticated status, without any DM challenge", async () => {
+  it("accepts Slack's query callback through the HTTP server and commits only after authenticated status", async () => {
     const context = await setup();
     let state = "";
     const browser = new SlackPersonBrowserIdentityLinkWorkflowV1({
@@ -492,23 +492,88 @@ describe("Person Slack identity-link workflow", () => {
       }),
       browser_provider: {
         authorizationUrl: (input) => { state = input.state; return "https://slack.com/openid/connect/authorize?opaque=yes"; },
-        verifyCallback: async () => ({ team_id: "T12345678", user_id: "U12345679", verification_evidence_sha256: canonicalSha256("browser-proof") }),
+        verifyCallback: async (input) => {
+          expect(input.parameters.getAll("state")).toEqual([state]);
+          expect(input.parameters.getAll("code")).toEqual(["provider-code"]);
+          return {
+            team_id: "T12345678",
+            user_id: "U12345679",
+            verification_evidence_sha256: canonicalSha256("browser-proof"),
+          };
+        },
       },
       now: () => NOW,
     });
     const http = createSlackExternalIdentityHttpApplicationV1({ service: context.application, browser });
+    const server = createOrganizationAuthorityHttpServer({
+      descriptor: {} as never,
+      sessions: {} as never,
+      oidc_provider: {} as never,
+      expected_issuer: "https://issuer.example",
+      person_external_identity_link: http,
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      server.close();
+      throw new Error("test HTTP server did not bind TCP");
+    }
+    const baseUrl = `http://127.0.0.1:${String(address.port)}`;
     const headers = { authorization: "Bearer bearer", "content-type": "application/json" };
-    const begun = await http.accept({ route_id: "slack-browser-begin", raw_body: Buffer.from(JSON.stringify({ request_id: "psb_00000000-0000-4000-8000-000000000091" })), content_type: headers["content-type"], headers });
-    const attemptId = (begun.body as { attempt_id: string }).attempt_id;
-    const callback = await http.accept({ route_id: "slack-browser-callback", raw_body: Buffer.from(new URLSearchParams({ state, code: "provider-code" }).toString()), content_type: "application/x-www-form-urlencoded", headers: {} });
-    expect(callback).toMatchObject({ status: 200, content_type: "text/html" });
-    expect(context.database.prepare("SELECT count(*) AS count FROM organization_external_human_link_current").get()).toEqual({ count: 0 });
-    expect(context.slack.openIdentityLinkDirectMessage).not.toHaveBeenCalled();
-    expect(context.slack.postIdentityLinkChallenge).not.toHaveBeenCalled();
-    const completed = await http.accept({ route_id: "slack-browser-status", raw_body: Buffer.from(JSON.stringify({ attempt_id: attemptId })), content_type: headers["content-type"], headers });
-    expect(completed.body).toMatchObject({ status: "complete", failure_reason: null });
-    expect(context.database.prepare("SELECT count(*) AS count FROM organization_external_human_link_current").get()).toEqual({ count: 1 });
-    const tools = await http.accept({ route_id: "tools", raw_body: Buffer.alloc(0), content_type: undefined, headers });
-    expect(tools.body).toMatchObject({ tools: [{ provider: "slack", personal_status: "linked", account_id: "U12345679" }] });
+    try {
+      for (const [method, path] of [
+        ["GET", "/v2/person/tools"],
+        ["POST", "/v2/person/external-identities/slack/browser/begin"],
+        ["POST", "/v2/person/external-identities/slack/browser/status"],
+        ["POST", "/v2/person/external-identities/slack/browser/cancel"],
+      ] as const) {
+        const response = await fetch(`${baseUrl}${path}?unexpected=query`, {
+          method,
+          headers: method === "POST" ? headers : undefined,
+          body: method === "POST" ? "{}" : undefined,
+        });
+        expect(response.status).toBe(404);
+      }
+      const begin = await fetch(`${baseUrl}/v2/person/external-identities/slack/browser/begin`, {
+        method: "POST", headers,
+        body: JSON.stringify({ request_id: "psb_00000000-0000-4000-8000-000000000091" }),
+      });
+      expect(begin.status).toBe(201);
+      const { attempt_id: attemptId } = await begin.json() as { attempt_id: string };
+
+      const callback = await fetch(`${baseUrl}/v2/person/external-identities/slack/browser/callback?${new URLSearchParams({ state, code: "provider-code" })}`);
+      expect(callback.status).toBe(200);
+      const postCallback = await fetch(`${baseUrl}/v2/person/external-identities/slack/browser/callback`, {
+        method: "POST", headers, body: "{}",
+      });
+      expect(postCallback.status).toBe(404);
+      expect(callback.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      expect(callback.headers.get("cache-control")).toBe("no-store");
+      expect(callback.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(callback.headers.get("content-security-policy")).toBe("default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+      const callbackPage = await callback.text();
+      expect(callbackPage).not.toContain("provider-code");
+      expect(callbackPage).not.toContain(state);
+      expect(context.database.prepare("SELECT count(*) AS count FROM organization_external_human_link_current").get()).toEqual({ count: 0 });
+      expect(context.slack.openIdentityLinkDirectMessage).not.toHaveBeenCalled();
+      expect(context.slack.postIdentityLinkChallenge).not.toHaveBeenCalled();
+
+      const status = await fetch(`${baseUrl}/v2/person/external-identities/slack/browser/status`, {
+        method: "POST", headers, body: JSON.stringify({ attempt_id: attemptId }),
+      });
+      expect(status.status).toBe(200);
+      expect(await status.json()).toMatchObject({ status: "complete", failure_reason: null });
+      expect(context.database.prepare("SELECT count(*) AS count FROM organization_external_human_link_current").get()).toEqual({ count: 1 });
+      const tools = await fetch(`${baseUrl}/v2/person/tools`, { headers: { authorization: "Bearer bearer" } });
+      expect(tools.status).toBe(200);
+      expect(await tools.json()).toMatchObject({
+        tools: [{ provider: "slack", personal_status: "linked", account_id: "U12345679" }],
+      });
+    } finally {
+      const closed = once(server, "close");
+      server.close();
+      await closed;
+    }
   });
 });

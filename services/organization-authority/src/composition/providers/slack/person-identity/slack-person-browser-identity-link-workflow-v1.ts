@@ -193,9 +193,9 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
   }
 
   /** Called by the unauthenticated provider callback route. It never commits a link. */
-  async callback(body: URLSearchParams): Promise<void> {
+  async callback(parameters: URLSearchParams): Promise<void> {
     await this.observe("person_tool_completion", async () => {
-      const state = body.get("state");
+      const state = parameters.get("state");
       if (state === null) return { callback_result: "completed" as const };
       const attemptId = this.attemptByState.get(state);
       if (attemptId === undefined) return { callback_result: "completed" as const };
@@ -207,7 +207,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       // exchange an authorization code or overwrite the proof.
       this.attemptByState.delete(state);
       try {
-        const proof = await this.options.browser_provider.verifyCallback({ body, expectedState: attempt.state, expectedNonce: attempt.nonce,
+        const proof = await this.options.browser_provider.verifyCallback({ parameters, expectedState: attempt.state, expectedNonce: attempt.nonce,
           workspace_id: attempt.organization_tool.team_id, code_verifier: attempt.code_verifier });
         if (attempt.status !== "pending" || this.now() >= attempt.expires_at) {
           this.expireAttempt(attempt, this.now());

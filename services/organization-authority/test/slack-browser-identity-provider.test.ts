@@ -34,7 +34,7 @@ function setup(overrides: Record<string, unknown> = {}, invalidSignature = false
       throw new Error('unexpected endpoint');
     },
   });
-  const input = { body: new URLSearchParams({ state, code: 'test-authorization-code' }),
+  const input = { parameters: new URLSearchParams({ state, code: 'test-authorization-code' }),
     expectedState: state, expectedNonce: nonce, workspace_id: workspace, code_verifier: verifier };
   return { provider, input, calls };
 }
@@ -45,7 +45,7 @@ describe('Slack browser identity provider', () => {
     const url = new URL(provider.authorizationUrl({ state, nonce, workspace_id: workspace, code_verifier: verifier }));
     expect(url.origin + url.pathname).toBe('https://slack.com/openid/connect/authorize');
     expect(Object.fromEntries(url.searchParams)).toMatchObject({ client_id: clientId, redirect_uri: redirectUri,
-      scope: 'openid profile', response_type: 'code', response_mode: 'form_post', team: workspace, state, nonce,
+      scope: 'openid profile', response_type: 'code', response_mode: 'query', team: workspace, state, nonce,
       code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url') });
     expect(url.searchParams.has('client_secret')).toBe(false);
     expect(calls).toHaveLength(0);
@@ -81,18 +81,20 @@ describe('Slack browser identity provider', () => {
     await expect(provider.verifyCallback(input)).rejects.toThrow(/^Slack identity verification failed$/);
   });
 
-  it.each(['wrong-state', 'duplicate-state', 'duplicate-code'])('rejects %s before contacting Slack', async (variant) => {
+  it.each(['wrong-state', 'duplicate-state', 'duplicate-code', 'missing-state', 'missing-code'])('rejects %s before contacting Slack', async (variant) => {
     const { provider, input, calls } = setup();
-    if (variant === 'wrong-state') input.body.set('state', 'wrong');
-    else input.body.append(variant === 'duplicate-state' ? 'state' : 'code', 'other');
+    if (variant === 'wrong-state') input.parameters.set('state', 'wrong');
+    else if (variant === 'missing-state') input.parameters.delete('state');
+    else if (variant === 'missing-code') input.parameters.delete('code');
+    else input.parameters.append(variant === 'duplicate-state' ? 'state' : 'code', 'other');
     await expect(provider.verifyCallback(input)).rejects.toThrow(/^Slack identity verification failed$/);
     expect(calls).toHaveLength(0);
   });
 
   it('does not expose a provider error description or authorization code', async () => {
     const { provider, input, calls } = setup();
-    input.body.delete('code'); input.body.set('error', 'access_denied');
-    input.body.set('error_description', 'sensitive-provider-detail');
+    input.parameters.delete('code'); input.parameters.set('error', 'access_denied');
+    input.parameters.set('error_description', 'sensitive-provider-detail');
     await expect(provider.verifyCallback(input)).rejects.toThrow(/^Slack identity verification failed$/);
     expect(calls).toHaveLength(0);
   });

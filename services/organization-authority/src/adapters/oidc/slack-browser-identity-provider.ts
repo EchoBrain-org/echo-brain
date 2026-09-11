@@ -10,7 +10,7 @@ export interface SlackBrowserIdentityProvider {
     code_verifier: string;
   }): string;
   verifyCallback(input: {
-    body: URLSearchParams;
+    parameters: URLSearchParams;
     expectedState: string;
     expectedNonce: string;
     workspace_id: string;
@@ -54,7 +54,7 @@ export function createSlackBrowserIdentityProvider(options: {
         redirect_uri: redirect.href,
         scope: "openid profile",
         response_type: "code",
-        response_mode: "form_post",
+        response_mode: "query",
         team: input.workspace_id,
         state: input.state,
         nonce: input.nonce,
@@ -64,16 +64,14 @@ export function createSlackBrowserIdentityProvider(options: {
     },
     async verifyCallback(input) {
       try {
-        if (input.body.getAll("state").length !== 1 ||
-            input.body.get("state") !== input.expectedState ||
-            input.body.getAll("code").length !== 1 ||
-            !input.body.get("code") || input.body.get("code")!.length > 4096 ||
-            input.body.has("error")) throw new Error();
-        const tokens = await oidc.authorizationCodeGrant(config, new Request(redirect, {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body: input.body,
-        }), {
+        if (input.parameters.getAll("state").length !== 1 ||
+            input.parameters.get("state") !== input.expectedState ||
+            input.parameters.getAll("code").length !== 1 ||
+            !input.parameters.get("code") || input.parameters.get("code")!.length > 4096 ||
+            input.parameters.has("error")) throw new Error();
+        const callback = new URL(redirect);
+        callback.search = input.parameters.toString();
+        const tokens = await oidc.authorizationCodeGrant(config, new Request(callback), {
           expectedState: input.expectedState,
           expectedNonce: input.expectedNonce,
           pkceCodeVerifier: input.code_verifier,

@@ -3,6 +3,8 @@ export interface PersonExternalIdentityHttpRouteV1 {
   readonly route_id: string;
   readonly method: "POST" | "GET";
   readonly path: string;
+  /** Explicitly permits provider callback parameters in the URL query. */
+  readonly accepts_query?: true;
 }
 
 export interface PersonExternalIdentityHttpRequestV1 {
@@ -10,6 +12,8 @@ export interface PersonExternalIdentityHttpRequestV1 {
   readonly raw_body: Uint8Array;
   readonly content_type: string | undefined;
   readonly headers: Readonly<Record<string, string | undefined>>;
+  /** Parsed URL query, supplied only for a route that explicitly accepts it. */
+  readonly query?: URLSearchParams;
 }
 
 export interface PersonExternalIdentityHttpResponseV1 {
