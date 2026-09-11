@@ -9,7 +9,7 @@ function spawnResult(input: Partial<ReturnType<typeof spawnSync>>): ReturnType<t
 }
 
 describe("Person browser opener", () => {
-  it("uses the native macOS opener and Linux xdg-open without a shell", () => {
+  it("uses trusted native macOS and Linux openers without a shell", () => {
     const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
     const spawn = ((command: string, args: readonly string[], options: unknown) => {
       calls.push({ command, args, options });
@@ -20,7 +20,7 @@ describe("Person browser opener", () => {
     expect(openAuthorizationUrl(authorizationUrl, { platform: "linux", spawn_sync: spawn })).toBe(true);
     expect(calls).toEqual([
       { command: "/usr/bin/open", args: [authorizationUrl], options: { stdio: "ignore", timeout: 10_000, shell: false } },
-      { command: "xdg-open", args: [authorizationUrl], options: { stdio: "ignore", timeout: 10_000, shell: false } },
+      { command: "/usr/bin/xdg-open", args: [authorizationUrl], options: { stdio: "ignore", timeout: 10_000, shell: false } },
     ]);
   });
 

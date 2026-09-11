@@ -270,7 +270,7 @@ export function openAuthorizationUrl(
   const command = platform === "darwin"
     ? "/usr/bin/open"
     : platform === "linux"
-      ? "xdg-open"
+      ? "/usr/bin/xdg-open"
       : undefined;
   if (command === undefined) return false;
   try {
