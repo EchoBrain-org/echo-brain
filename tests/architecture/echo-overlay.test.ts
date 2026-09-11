@@ -369,7 +369,7 @@ describe("native ECHO hotkey overlay", () => {
     expect(plist).toContain('<key>CFBundleDisplayName</key><string>ECHO Setup</string>');
     const builder = readFileSync(join(REPO, "deploy/release/create-person-onboarding-kit.mjs"), "utf8");
     expect(builder).toContain("join(stagingParent, 'ECHO Setup.app')");
-    expect(builder).toContain("contents: graphical ? ['ECHO Setup.app']");
+    expect(builder).toContain("graphical ? ['ECHO Setup.app']");
   });
 
   it("binds the requested source SHA to a clean committed build before and after fake native tooling", () => {

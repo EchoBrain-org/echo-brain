@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-/** Build one macOS-arm64 employee kit with an exact client and Node runtime. */
+/** Build one exact macOS-arm64 or Linux-x64 employee kit with a pinned client and Node runtime. */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -25,6 +26,7 @@ const repository = resolve(releaseDirectory, '..', '..');
 const releaseValidator = join(repository, 'tools', 'clean-v1-release.mjs');
 const verifier = join(releaseDirectory, 'verify-person-onboarding-kit.mjs');
 const starter = join(releaseDirectory, 'start-person-onboarding-kit.sh');
+const linuxStarter = join(releaseDirectory, 'start-person-onboarding-kit-linux.sh');
 const uiBridge = join(releaseDirectory, 'person-onboarding-ui.mjs');
 const overlayIdentityPath = 'ECHO.app/Contents/Resources/build-identity.v1.json';
 
@@ -95,9 +97,9 @@ function publishNoReplace(source, destination, description) {
   }
 }
 
-function run(command, args, description) {
+function run(command, args, description, cwd = repository) {
   const result = spawnSync(command, args, {
-    cwd: repository,
+    cwd,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
   });
@@ -151,36 +153,65 @@ function verifyOverlayIdentity(appArchive, release) {
   ) fail('desktop app identity does not match the release record');
 }
 
-function runtimeIdentity(runtimeNode) {
+function assertLinuxX64Elf(runtimeNode) {
+  const header = readFileSync(runtimeNode).subarray(0, 20);
+  // ELF64, little-endian, e_machine = EM_X86_64 (62).
+  if (
+    header.length < 20 ||
+    !header.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
+    header[4] !== 2 ||
+    header[5] !== 1 ||
+    header.readUInt16LE(18) !== 62
+  ) fail('Node runtime must be a Linux x86_64 ELF executable');
+}
+
+function runtimeIdentity(runtimeNode, target) {
+  if (target === 'linux-x64') assertLinuxX64Elf(runtimeNode);
   let value;
   try {
     value = JSON.parse(
       run(
         runtimeNode,
-        ['-p', 'JSON.stringify({version:process.version,platform:process.platform,architecture:process.arch})'],
+        ['-p', 'JSON.stringify({version:process.version,platform:process.platform,architecture:process.arch,glibc:process.report?.getReport()?.header?.glibcVersionRuntime})'],
         'Node runtime identity cannot be read',
       ),
     );
   } catch {
     fail('Node runtime identity is invalid');
   }
-  if (
+  if (target === 'darwin-arm64') {
+    if (
+      value.version !== 'v22.22.1' ||
+      value.platform !== 'darwin' ||
+      value.architecture !== 'arm64'
+    ) fail('Node runtime must be v22.22.1 for macOS arm64');
+  } else if (
     value.version !== 'v22.22.1' ||
-    value.platform !== 'darwin' ||
-    value.architecture !== 'arm64'
-  ) fail('Node runtime must be v22.22.1 for macOS arm64');
+    value.platform !== 'linux' ||
+    value.architecture !== 'x64' ||
+    typeof value.glibc !== 'string' ||
+    !/^\d+\.\d+/.test(value.glibc)
+  ) fail('Node runtime must be v22.22.1 for Linux x86_64 with glibc');
   return value;
 }
 
 function usage() {
-  return 'usage: create-person-onboarding-kit.mjs --release <canonical-release.json> --artifact <exact-client.tgz> --app <ECHO.app.zip> [--runtime-node <node>] --output <new-kit.tar.gz|new-ECHO.zip>';
+  return 'usage: create-person-onboarding-kit.mjs [--target darwin-arm64|linux-x64] --release <canonical-release.json> --artifact <exact-client.tgz> [--app <ECHO.app.zip>] [--runtime-node <node>] --output <new-kit.tar.gz|new-ECHO.zip>';
+}
+
+function committedSource(release, paths, description) {
+  const head = run('git', ['rev-parse', 'HEAD'], 'source identity is unavailable').trim();
+  const dirty = run('git', ['status', '--porcelain=v1', '--untracked-files=all'], 'source status is unavailable');
+  if (dirty || head !== release.source_sha) fail(`${description} requires clean committed source matching the release`);
+  return Object.fromEntries(paths.map(path => {
+    const bytes = Buffer.from(run('git', ['show', `${head}:${path}`], 'committed setup source is unavailable'));
+    if (!bytes.equals(readFileSync(join(repository, path)))) fail('setup source does not match its committed source');
+    return [path, bytes];
+  }));
 }
 
 function graphicalSource(release) {
-  const head = run('git', ['rev-parse', 'HEAD'], 'source identity is unavailable').trim();
-  const dirty = run('git', ['status', '--porcelain=v1', '--untracked-files=all'], 'source status is unavailable');
-  if (dirty || head !== release.source_sha) fail('graphical kit requires clean committed source matching the release');
-  const paths = [
+  return committedSource(release, [
     'product/echo-onboarding/main.swift',
     'product/echo-onboarding/Info.plist',
     'deploy/release/person-onboarding-ui.mjs',
@@ -189,12 +220,17 @@ function graphicalSource(release) {
     'deploy/release/verify-person-onboarding-kit.mjs',
     'deploy/release/release-artifact-validation.mjs',
     'tools/clean-v1-release.mjs',
-  ];
-  return Object.fromEntries(paths.map(path => {
-    const bytes = Buffer.from(run('git', ['show', `${head}:${path}`], 'committed setup source is unavailable'));
-    if (!bytes.equals(readFileSync(join(repository, path)))) fail('setup source does not match its committed source');
-    return [path, bytes];
-  }));
+  ], 'graphical kit');
+}
+
+function linuxSource(release) {
+  return committedSource(release, [
+    'deploy/release/start-person-onboarding-kit-linux.sh',
+    'deploy/release/create-person-onboarding-kit.mjs',
+    'deploy/release/verify-person-onboarding-kit.mjs',
+    'deploy/release/release-artifact-validation.mjs',
+    'tools/clean-v1-release.mjs',
+  ], 'Linux kit');
 }
 
 function buildGraphicalKit({ kitRoot, stagingParent, pendingKit, release, sourceBytes }) {
@@ -236,6 +272,7 @@ function main(argv) {
   let appPath = '';
   let runtimeNode = process.execPath;
   let outputPath = '';
+  let target = 'darwin-arm64';
   while (argv.length > 0) {
     const option = argv.shift();
     const value = argv.shift();
@@ -245,18 +282,27 @@ function main(argv) {
     else if (option === '--app') appPath = resolve(value);
     else if (option === '--runtime-node') runtimeNode = resolve(value);
     else if (option === '--output') outputPath = resolve(value);
+    else if (option === '--target') target = value;
     else fail(usage());
   }
-  const graphical = outputPath.endsWith('.zip');
-  if (!releasePath || !artifactPath || !appPath || !outputPath || (!graphical && !outputPath.endsWith('.tar.gz'))) fail(usage());
+  if (target !== 'darwin-arm64' && target !== 'linux-x64') fail(usage());
+  const linux = target === 'linux-x64';
+  const zipOutput = outputPath.endsWith('.zip');
+  const graphical = !linux && zipOutput;
+  if (
+    !releasePath ||
+    !artifactPath ||
+    !outputPath ||
+    (linux ? (Boolean(appPath) || !zipOutput) : (!appPath || (!graphical && !outputPath.endsWith('.tar.gz'))))
+  ) fail(usage());
   regularFile(releasePath, 'release record');
   regularFile(artifactPath, 'client artifact');
-  regularFile(appPath, 'desktop app archive');
+  if (!linux) regularFile(appPath, 'desktop app archive');
   regularFile(runtimeNode, 'Node runtime', true);
   regularFile(releaseValidator, 'release validator');
   regularFile(verifier, 'kit verifier');
-  regularFile(starter, 'kit starter');
-  regularFile(uiBridge, 'setup bridge');
+  regularFile(linux ? linuxStarter : starter, 'kit starter');
+  if (!linux) regularFile(uiBridge, 'setup bridge');
   const outputParent = privateCanonicalOutputDirectory(dirname(outputPath));
   const digestPath = `${outputPath}.sha256`;
   absentPath(outputPath, 'output kit');
@@ -270,17 +316,29 @@ function main(argv) {
     run,
     fail,
   });
-  verifyOverlayIdentity(appPath, release);
-  const runtime = runtimeIdentity(runtimeNode);
-  const sourceBytes = graphical ? graphicalSource(release) : undefined;
-  const manifest = {
+  if (!linux) verifyOverlayIdentity(appPath, release);
+  const runtime = runtimeIdentity(runtimeNode, target);
+  const sourceBytes = linux ? linuxSource(release) : (graphical ? graphicalSource(release) : undefined);
+  const buildIdentity = linux ? {
     schema_version: 1,
-    kind: 'echo-person-onboarding-kit-v1',
+    kind: 'echo-person-onboarding-kit-identity-v1',
+    platform: 'linux',
+    architecture: 'x64',
+    product_version: release.person_client.version,
+    release_id: release.release_id,
+    source_sha: release.source_sha,
+  } : undefined;
+  const buildIdentityBytes = buildIdentity ? Buffer.from(`${canonicalJson(buildIdentity)}\n`) : undefined;
+  const manifest = {
+    schema_version: linux ? 2 : 1,
+    kind: linux ? 'echo-person-onboarding-kit-v2' : 'echo-person-onboarding-kit-v1',
     release_id: release.release_id,
     source_sha: release.source_sha,
     release_record_sha256: sha256File(releasePath),
     person_client_artifact_sha256: sha256File(artifactPath),
-    desktop_app_archive_sha256: sha256File(appPath),
+    ...(linux
+      ? { build_identity_sha256: createHash('sha256').update(buildIdentityBytes).digest('hex') }
+      : { desktop_app_archive_sha256: sha256File(appPath) }),
     runtime: {
       version: runtime.version,
       platform: runtime.platform,
@@ -291,36 +349,65 @@ function main(argv) {
 
   const stagingParent = mkdtempSync(join(outputParent, '.echo-person-onboarding-kit-'));
   chmodSync(stagingParent, 0o700);
-  const kitName = `echo-person-onboarding-${release.release_id}`;
+  const kitName = linux ? 'echo-person-onboarding-kit' : `echo-person-onboarding-${release.release_id}`;
   const kitRoot = join(stagingParent, kitName);
-  const pendingKit = join(stagingParent, graphical ? 'ECHO.zip' : 'kit.tar.gz');
-  const pendingDigest = join(stagingParent, 'kit.tar.gz.sha256');
+  const pendingKit = join(stagingParent, linux || graphical ? 'ECHO.zip' : 'kit.tar.gz');
+  const pendingDigest = join(stagingParent, 'kit.sha256');
   try {
     mkdirSync(kitRoot, { mode: 0o700 });
-    copyFileSync(starter, join(kitRoot, 'Start ECHO.command'));
-    copyFileSync(uiBridge, join(kitRoot, 'person-onboarding-ui.mjs'));
+    if (linux) {
+      writeFileSync(join(kitRoot, 'Start-ECHO.sh'), sourceBytes['deploy/release/start-person-onboarding-kit-linux.sh'], { mode: 0o700, flag: 'wx' });
+    } else {
+      copyFileSync(starter, join(kitRoot, 'Start ECHO.command'));
+      copyFileSync(uiBridge, join(kitRoot, 'person-onboarding-ui.mjs'));
+    }
     copyFileSync(releasePath, join(kitRoot, 'release.json'));
     copyFileSync(artifactPath, join(kitRoot, 'person-client.tgz'));
-    copyFileSync(appPath, join(kitRoot, 'ECHO.app.zip'));
+    if (!linux) copyFileSync(appPath, join(kitRoot, 'ECHO.app.zip'));
     copyFileSync(runtimeNode, join(kitRoot, 'node'));
-    copyFileSync(releaseValidator, join(kitRoot, 'clean-v1-release.mjs'));
-    copyFileSync(verifier, join(kitRoot, 'verify-person-onboarding-kit.mjs'));
+    if (linux) {
+      writeFileSync(join(kitRoot, 'clean-v1-release.mjs'), sourceBytes['tools/clean-v1-release.mjs'], { mode: 0o700, flag: 'wx' });
+      writeFileSync(join(kitRoot, 'verify-person-onboarding-kit.mjs'), sourceBytes['deploy/release/verify-person-onboarding-kit.mjs'], { mode: 0o700, flag: 'wx' });
+      writeFileSync(join(kitRoot, 'build-identity.v1.json'), buildIdentityBytes, { mode: 0o600, flag: 'wx' });
+    } else {
+      copyFileSync(releaseValidator, join(kitRoot, 'clean-v1-release.mjs'));
+      copyFileSync(verifier, join(kitRoot, 'verify-person-onboarding-kit.mjs'));
+    }
     writeFileSync(join(kitRoot, 'kit-manifest.v1.json'), `${canonicalJson(manifest)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
       flag: 'wx',
     });
     for (const executable of [
-      'Start ECHO.command',
-      'person-onboarding-ui.mjs',
+      linux ? 'Start-ECHO.sh' : 'Start ECHO.command',
+      ...(!linux ? ['person-onboarding-ui.mjs'] : []),
       'node',
       'clean-v1-release.mjs',
       'verify-person-onboarding-kit.mjs',
     ]) chmodSync(join(kitRoot, executable), 0o755);
-    for (const privateFile of ['release.json', 'person-client.tgz', 'ECHO.app.zip', 'kit-manifest.v1.json']) {
+    for (const privateFile of [
+      'release.json',
+      'person-client.tgz',
+      ...(!linux ? ['ECHO.app.zip'] : ['build-identity.v1.json']),
+      'kit-manifest.v1.json',
+    ]) {
       chmodSync(join(kitRoot, privateFile), 0o600);
     }
-    if (graphical) {
+    if (linux) {
+      const copiedSources = {
+        'Start-ECHO.sh': 'deploy/release/start-person-onboarding-kit-linux.sh',
+        'verify-person-onboarding-kit.mjs': 'deploy/release/verify-person-onboarding-kit.mjs',
+        'clean-v1-release.mjs': 'tools/clean-v1-release.mjs',
+      };
+      for (const [name, path] of Object.entries(copiedSources)) {
+        if (!readFileSync(join(kitRoot, name)).equals(sourceBytes[path])) fail('embedded setup source does not match the committed source');
+      }
+      const after = linuxSource(release);
+      for (const [path, bytes] of Object.entries(sourceBytes)) {
+        if (!bytes.equals(after[path])) fail('setup source changed while building');
+      }
+      run('zip', ['-qr', pendingKit, kitName], 'could not create Linux onboarding kit', stagingParent);
+    } else if (graphical) {
       const copiedSources = {
         'Start ECHO.command': 'deploy/release/start-person-onboarding-kit.sh',
         'person-onboarding-ui.mjs': 'deploy/release/person-onboarding-ui.mjs',
@@ -354,7 +441,16 @@ function main(argv) {
       architecture: runtime.architecture,
       node_version: runtime.version,
       ...(graphical ? { signing: 'adhoc-hardened-runtime', distribution: 'private-cohort' } : {}),
-      contents: graphical ? ['ECHO Setup.app'] : [
+      contents: linux ? [
+        `${kitName}/Start-ECHO.sh`,
+        `${kitName}/node`,
+        `${kitName}/kit-manifest.v1.json`,
+        `${kitName}/release.json`,
+        `${kitName}/person-client.tgz`,
+        `${kitName}/verify-person-onboarding-kit.mjs`,
+        `${kitName}/clean-v1-release.mjs`,
+        `${kitName}/build-identity.v1.json`,
+      ] : (graphical ? ['ECHO Setup.app'] : [
         `${kitName}/Start ECHO.command`,
         `${kitName}/person-onboarding-ui.mjs`,
         `${kitName}/release.json`,
@@ -364,7 +460,7 @@ function main(argv) {
         `${kitName}/node`,
         `${kitName}/clean-v1-release.mjs`,
         `${kitName}/verify-person-onboarding-kit.mjs`,
-      ],
+      ]),
     })}\n`);
   } finally {
     rmSync(stagingParent, { recursive: true, force: true });
