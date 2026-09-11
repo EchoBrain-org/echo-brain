@@ -8,8 +8,8 @@ component_ids:
   - CMP-PERMISSIONS
 created_at: 2026-09-09
 reviewed_at: 2026-09-09
-reviewed_ref: 9f186bc2d045d4dfe4737959bed19058fa56a2e3
-status: proposed
+reviewed_ref: 5d7116e08beb668a4c7dfd832a0cd62113236ca4
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
