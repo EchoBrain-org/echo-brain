@@ -1,4 +1,4 @@
-import { observeCoreRuntimeSyncV1, observeCoreModelUsageV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1 } from "../../../../shared/core-runtime-observation-v1.js";
+import { observeCoreRuntimeSyncV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1 } from "../../../../shared/core-runtime-observation-v1.js";
 import {
   AdapterError,
   type AdapterErrorCode,
@@ -266,7 +266,7 @@ export async function requestProviderJson(
     const body = await response.text();
     captureCoreRuntimeContentV1("model_response", { provider, request_id: response.headers.get("x-request-id"), body });
     const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(body) as unknown);
-    observeCoreModelUsageV1(payload);
+    observeProviderUsage(provider, payload);
     return { payload, response };
   } catch {
     throw new AdapterError(
@@ -274,6 +274,52 @@ export async function requestProviderJson(
       `${providerLabel(provider)} returned a non-JSON response body`,
       true,
     );
+  }
+}
+
+/**
+ * Nullable token usage, read before adapter validation can reject the body so
+ * a failed generation still carries its cost. Each provider's response shape
+ * is mapped here, inside the adapter root; shared telemetry only receives the
+ * normalized counts.
+ */
+function observeProviderUsage(provider: LlmProviderId, payload: unknown): void {
+  try {
+    if (typeof payload !== 'object' || payload === null) return;
+    const record = payload as Record<string, unknown>;
+    const count = (value: unknown): number | null =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ? value
+        : null;
+    if (provider === 'ollama') {
+      const inputTokens = count(record['prompt_eval_count']);
+      const outputTokens = count(record['eval_count']);
+      annotateCoreRuntimeV1({
+        counts: {
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          total_tokens:
+            inputTokens !== null && outputTokens !== null
+              ? inputTokens + outputTokens
+              : null,
+        },
+      });
+      return;
+    }
+    const usage = record['usage'];
+    if (typeof usage !== 'object' || usage === null) return;
+    const fields = usage as Record<string, unknown>;
+    annotateCoreRuntimeV1({
+      counts: {
+        input_tokens: count(fields['prompt_tokens'] ?? fields['input_tokens']),
+        output_tokens: count(
+          fields['completion_tokens'] ?? fields['output_tokens'],
+        ),
+        total_tokens: count(fields['total_tokens']),
+      },
+    });
+  } catch {
+    /* provider usage is not a business input */
   }
 }
 

@@ -192,14 +192,3 @@ export function currentCoreRuntimeDetailV1(): CoreRuntimeDetailV1 | null {
   try { const value = context.getStore()?.detail; return value ? normalizeCoreRuntimeDetailV1({ ...value, root: false }) : null; }
   catch { return null; }
 }
-
-/** Nullable provider usage, observed before adapter validation can reject output. */
-export function observeCoreModelUsageV1(payload: unknown): void {
-  try {
-    if (typeof payload !== "object" || payload === null) return;
-    const usage = (payload as { usage?: Record<string, unknown> }).usage;
-    if (typeof usage !== "object" || usage === null) return;
-    const count = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-    annotateCoreRuntimeV1({ counts: { input_tokens: count(usage.prompt_tokens ?? usage.input_tokens), output_tokens: count(usage.completion_tokens ?? usage.output_tokens), total_tokens: count(usage.total_tokens) } });
-  } catch { /* provider usage is not a business input */ }
-}
