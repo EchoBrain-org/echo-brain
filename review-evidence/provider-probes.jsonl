@@ -1,0 +1,6 @@
+{"probe":"generic-tools","provider":"slack","accepted":true}
+{"probe":"policy","provider":"slack","accepted":true}
+{"probe":"generic-tools","provider":"fixture-provider","accepted":false,"error":"organization API: Person tool state is invalid"}
+{"probe":"policy","provider":"fixture-provider","accepted":false,"error":"private approval policy resolution pending approval assigned_owner_slack_identity_link.provider must be slack"}
+{"probe":"shared-usage-parser","shape":"chat-completions","tokens":{"input_tokens":12,"output_tokens":5,"total_tokens":17}}
+{"probe":"shared-usage-parser","shape":"ollama","tokens":{}}

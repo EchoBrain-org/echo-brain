@@ -1,0 +1,719 @@
+M	.github/CODEOWNERS
+M	.github/workflows/ci.yml
+M	.gitignore
+M	AGENTS.md
+A	CLAUDE.md
+M	README.md
+A	demo/QUERIES.md
+A	demo/README.md
+A	demo/RUNBOOK.md
+A	demo/SCHEMA.md
+A	demo/evaluate-pre-slack.mjs
+A	demo/evaluate-rehearsal.mjs
+A	demo/expectations.json
+A	demo/meetings/01-revenue-signal-calibration.json
+A	demo/meetings/02-data-handling-review.json
+A	demo/meetings/03-implementation-capacity-triage.json
+A	demo/meetings/04-commercial-exception-review.json
+A	demo/staging/Caddyfile.synthetic-demo-v1
+A	demo/staging/STAGING.md
+A	demo/staging/compose.synthetic-demo-v1.yaml
+A	demo/staging/prepare-fixtures.mjs
+A	demo/staging/replay-slack-card-preview.mjs
+A	demo/staging/switch-synthetic-demo-v1.sh
+A	demo/test/prepare-fixtures.test.mjs
+A	demo/test/rehearsal-evaluator.test.mjs
+A	demo/test/replay-slack-card-preview.test.mjs
+A	demo/test/staging-lane.test.mjs
+M	deploy/organization-authority/Caddyfile.clean-v1
+M	deploy/organization-authority/Caddyfile.clean-v1.ec2
+M	deploy/organization-authority/Dockerfile
+M	deploy/organization-authority/README.md
+M	deploy/organization-authority/authority-observability-v1.template.json
+M	deploy/organization-authority/authority-recovery-helper-v1.template.json
+M	deploy/organization-authority/authority-staging-host-v1.template.json
+A	deploy/organization-authority/authority-staging-journey-explorer-v1.guard
+A	deploy/organization-authority/authority-staging-journey-explorer-v1.template.json
+A	deploy/organization-authority/authority-staging-journey-observability-v1.guard
+A	deploy/organization-authority/authority-staging-journey-observability-v1.template.json
+M	deploy/organization-authority/backup-authority-maintenance.sh
+M	deploy/organization-authority/bootstrap-ubuntu-arm64.sh
+M	deploy/organization-authority/compose.clean-v1.yaml
+M	deploy/organization-authority/onboard-clean-v1.sh
+M	deploy/organization-authority/onboarding.clean-v1.example.json
+M	deploy/organization-authority/restore-clean-v1-host.sh
+A	deploy/organization-authority/staging-journey-explorer-handler-v1.cjs
+M	deploy/organization-authority/update-clean-v1.sh
+M	deploy/release/README.md
+M	deploy/release/create-offline-person-client-bundle.mjs
+M	deploy/release/create-person-onboarding-kit.mjs
+A	deploy/release/person-onboarding-ui.d.mts
+A	deploy/release/person-onboarding-ui.mjs
+A	deploy/release/release-artifact-validation.mjs
+A	deploy/release/start-person-onboarding-kit-linux.sh
+M	deploy/release/start-person-onboarding-kit.sh
+M	deploy/release/verify-person-onboarding-kit.mjs
+M	docs/README.md
+A	docs/architecture/component-naming-taxonomy.md
+M	docs/architecture/identity-and-onboarding.md
+R056	docs/architecture/core-and-adapters.md	docs/architecture/meeting-processing-core-and-adapters.md
+M	docs/architecture/organization-control-plane.md
+M	docs/architecture/organization-workspace-boundaries.md
+A	docs/architecture/person-client-architecture.md
+D	docs/architecture/product-runtime.md
+M	docs/components/README.md
+M	docs/components/identity-access.md
+R072	docs/components/core-pipeline.md	docs/components/meeting-processing-core.md
+M	docs/components/operations-release.md
+R073	docs/components/central-organization.md	docs/components/organization-authority.md
+M	docs/components/permissions.md
+R051	docs/components/local-runtime.md	docs/components/person-client.md
+R067	docs/components/adapters.md	docs/components/processing-adapters.md
+M	docs/components/protocols-crypto.md
+M	docs/contributing.md
+M	docs/decisions/ADR-0001-organization-operated-server-core.md
+M	docs/decisions/ADR-0002-external-oidc-person-sessions.md
+M	docs/decisions/ADR-0003-server-core-lean-authority-contracts.md
+M	docs/decisions/ADR-0004-founder-authority-clean-state-reset.md
+M	docs/decisions/ADR-0006-permission-aware-clean-v1-completion.md
+M	docs/decisions/ADR-0007-lean-layer-4-answer-composition-v1.md
+M	docs/decisions/ADR-0008-echo-hosted-authority-by-default.md
+A	docs/decisions/ADR-0010-disposable-related-atom-projection-v1.md
+A	docs/decisions/ADR-0011-bm25-lexical-scoring-v1.md
+M	docs/decisions/README.md
+M	docs/failure-patterns/FP-ADAPTERS-001-provider-transport-fidelity.md
+M	docs/failure-patterns/FP-ADAPTERS-002-acknowledgement-not-stored-state.md
+M	docs/failure-patterns/FP-ADAPTERS-003-model-execution-channel.md
+M	docs/failure-patterns/FP-ADAPTERS-004-model-authors-evidence.md
+A	docs/failure-patterns/FP-ADAPTERS-005-first-provider-becomes-architecture.md
+M	docs/failure-patterns/FP-IDENTITY-001-asymmetric-provider-proof.md
+M	docs/failure-patterns/FP-IDENTITY-002-unversioned-lease-change.md
+M	docs/failure-patterns/FP-IDENTITY-003-revocation-window-overclaim.md
+M	docs/failure-patterns/FP-IDENTITY-004-blind-identity-backfill.md
+M	docs/failure-patterns/FP-OPERATIONS-001-stale-shared-namespace.md
+M	docs/failure-patterns/FP-PERMISSIONS-001-current-config-reinterprets-pending-work.md
+M	docs/failure-patterns/FP-RUNTIME-001-followup-outlives-cycle.md
+M	docs/failure-patterns/README.md
+M	docs/invariants/INV-ADAPTERS-001-provider-transport.md
+M	docs/invariants/INV-ADAPTERS-002-durable-external-reference.md
+M	docs/invariants/INV-ADAPTERS-003-model-execution-controls.md
+M	docs/invariants/INV-ADAPTERS-004-source-owned-grounding.md
+A	docs/invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md
+M	docs/invariants/INV-IDENTITY-001-symmetric-provider-proof.md
+M	docs/invariants/INV-IDENTITY-002-versioned-lease-duration.md
+M	docs/invariants/INV-IDENTITY-003-revocation-windows.md
+M	docs/invariants/INV-IDENTITY-004-provider-identity-migration.md
+M	docs/invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md
+M	docs/invariants/INV-OPERATIONS-001-shared-namespace-lifecycle.md
+M	docs/invariants/INV-PERMISSIONS-013-frozen-pending-contract.md
+M	docs/invariants/INV-PERMISSIONS-014-actor-not-source-owner.md
+M	docs/invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md
+M	docs/invariants/INV-RELEASE-001-worktree-bound-artifact.md
+M	docs/invariants/INV-RUNTIME-001-lifecycle-owned-side-effects.md
+M	docs/invariants/README.md
+A	docs/operations/PB-OPERATIONS-001-authority-operator-lane.md
+M	docs/operations/RB-OPERATIONS-001-authority-observability.md
+M	docs/operations/RB-OPERATIONS-002-authority-recovery-floor.md
+M	docs/operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md
+M	docs/operations/README.md
+M	docs/product/2026-08-11-architecture-invariant-registry.md
+M	docs/product/2026-08-11-trusted-permission-aware-searchable-layer-2-design.md
+M	docs/product/2026-08-17-overnight-execution-plan-relocate-retire.md
+M	docs/product/2026-08-20-server-core-migration-phase-0-test-contract-inventory.md
+M	docs/product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md
+M	docs/product/2026-08-26-disposable-authority-staging-sprint-v1.md
+A	docs/product/2026-08-28-private-meeting-owner-approval-v1.md
+A	docs/product/2026-09-02-staging-journey-observability-sprint-v1.md
+A	docs/product/2026-09-05-authority-core-capacity-metrics-v2.md
+A	docs/product/2026-09-06-authority-core-capacity-metrics-v3.md
+A	docs/product/2026-09-07-lean-employee-onboarding-v1.md
+A	docs/product/2026-09-07-person-product-completion-v1.md
+A	docs/product/2026-09-08-core-runtime-observability-baseline.json
+A	docs/product/2026-09-08-core-runtime-observability-overhead.json
+A	docs/product/2026-09-08-core-runtime-observability-sprint-v1.md
+A	docs/product/2026-09-09-answer-coverage-evaluation-sprint-v1.md
+A	docs/product/2026-09-09-approval-search-scheduling-offline-evidence.json
+A	docs/product/2026-09-09-approval-search-scheduling-sprint-v1.md
+A	docs/product/2026-09-09-authority-core-capacity-metrics-v4.md
+M	docs/qualification/QUAL-20260813-174902-001-job-a-stopped.md
+M	docs/qualification/QUAL-20260814-050326-001-job-b-active-member.md
+M	docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md
+M	docs/qualification/adapter-matrix-v1.md
+M	docs/qualification/evidence-index.md
+M	docs/qualification/job-a-stopped-matrix-v1.md
+M	docs/qualification/job-b-active-member-matrix-v1.md
+M	docs/qualification/readable-search-minimum-v1-source-readiness-matrix.md
+M	docs/rfcs/RFC-0001-server-core-lean-authority-contracts.md
+M	eslint.config.js
+M	npm-shrinkwrap.json
+M	package.json
+M	packages/federation-protocol/README.md
+M	packages/federation-protocol/fixtures/README.md
+M	packages/federation-protocol/source-boundary.v1.json
+M	packages/federation-protocol/src/index.ts
+M	packages/federation-protocol/src/protocol-types.ts
+D	packages/federation-protocol/src/signed-document.ts
+M	packages/federation-protocol/test/golden-fixture.test.ts
+M	packages/organization-api/README.md
+M	packages/organization-api/source-boundary.v1.json
+M	packages/organization-api/src/contracts.ts
+M	packages/organization-api/src/http.ts
+M	packages/organization-api/src/index.ts
+R078	packages/organization-api/src/person-member-exclusion-change.ts	packages/organization-api/src/person-meeting-ingestion-exclusion-change.ts
+R072	packages/organization-api/src/person-member-exclusion-read.ts	packages/organization-api/src/person-meeting-ingestion-exclusion-read.ts
+M	packages/organization-api/src/person-session.ts
+A	packages/organization-api/src/person-slack-browser-link.ts
+R068	packages/organization-api/src/person-slack-link.ts	packages/organization-api/src/person-slack-identity-link.ts
+A	packages/organization-api/src/person-tools.ts
+M	packages/organization-api/src/validation.ts
+M	packages/organization-api/test/README.md
+M	packages/organization-api/test/admin-contracts.test.ts
+R075	packages/organization-api/test/person-member-exclusion-change.test.ts	packages/organization-api/test/person-meeting-ingestion-exclusion-change.test.ts
+R066	packages/organization-api/test/person-member-exclusion-read.test.ts	packages/organization-api/test/person-meeting-ingestion-exclusion-read.test.ts
+M	packages/organization-api/test/person-session.test.ts
+A	packages/organization-api/test/person-slack-identity-link.test.ts
+D	packages/organization-api/test/person-slack-link.test.ts
+R100	services/organization-control-plane/AGENTS.md	packages/organization-control-plane/AGENTS.md
+A	packages/organization-control-plane/README.md
+R098	services/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql	packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql
+A	packages/organization-control-plane/baselines/organization-control-plane-private-approval-v2.sql
+A	packages/organization-control-plane/package.json
+A	packages/organization-control-plane/source-boundary.v1.json
+R084	services/organization-control-plane/src/adapters/slack/clean-slack-web-identity-provider-v1.ts	packages/organization-control-plane/src/adapters/slack/slack-web-identity-provider-v1.ts
+A	packages/organization-control-plane/src/application/organization-tool-connection-contracts-v2.ts
+A	packages/organization-control-plane/src/application/private-approval-policy-resolution-v1.ts
+A	packages/organization-control-plane/src/application/record-visibility-policy-contracts-v1.ts
+A	packages/organization-control-plane/src/application/slack-integration-contracts.ts
+R100	services/organization-control-plane/src/canonical/canonical-json.ts	packages/organization-control-plane/src/canonical/canonical-json.ts
+A	packages/organization-control-plane/src/clean-slack-connect-main.ts
+R076	services/organization-control-plane/src/composition/clean-slack-connect-cli.ts	packages/organization-control-plane/src/composition/slack-connection-setup-cli.ts
+R053	services/organization-control-plane/src/new-lineage-genesis-v1.ts	packages/organization-control-plane/src/organization-control-database-v1.ts
+A	packages/organization-control-plane/src/persistence/baseline.ts
+R087	services/organization-control-plane/src/persistence/open-unmigrated-database.ts	packages/organization-control-plane/src/persistence/open-organization-control-database.ts
+R068	services/organization-control-plane/src/persistence/clean-slack-approval-token-reader-v1.ts	packages/organization-control-plane/src/persistence/sqlite-slack-bot-token-reader-v1.ts
+R086	services/organization-control-plane/src/persistence/sqlite-clean-slack-connection-v1.ts	packages/organization-control-plane/src/persistence/sqlite-slack-connection-coordinator-v1.ts
+A	packages/organization-control-plane/src/persistence/sqlite-slack-dm-approval-persistence-v1.ts
+A	packages/organization-control-plane/src/persistence/sqlite-slack-dm-approval-reviewer-target-v1.ts
+R075	services/organization-control-plane/src/persistence/verified-clean-control-plane-state-v1.ts	packages/organization-control-plane/src/persistence/verified-organization-control-state-v1.ts
+A	packages/organization-control-plane/src/record-visibility-policy-contracts-v1.ts
+R099	services/organization-control-plane/src/security/file-secret-store.ts	packages/organization-control-plane/src/security/file-secret-store.ts
+A	packages/organization-control-plane/src/slack-approval-integration-v1.ts
+A	packages/organization-control-plane/src/slack-connection-setup-v1.ts
+R071	services/organization-control-plane/src/clean-slack-identity-v1.ts	packages/organization-control-plane/src/slack-external-identity-integration-v1.ts
+R100	services/organization-control-plane/test/canonical-json.test.ts	packages/organization-control-plane/test/canonical-json.test.ts
+R098	services/organization-control-plane/test/control-plane-baseline.test.ts	packages/organization-control-plane/test/control-plane-baseline.test.ts
+A	packages/organization-control-plane/test/private-approval-baseline-v2.test.ts
+A	packages/organization-control-plane/test/private-approval-policy-resolution-v1.test.ts
+R079	services/organization-control-plane/test/clean-slack-connect-cli.test.ts	packages/organization-control-plane/test/slack-connection-setup-cli.test.ts
+R074	services/organization-control-plane/test/clean-slack-web-identity-provider-v1.test.ts	packages/organization-control-plane/test/slack-web-identity-provider-v1.test.ts
+A	packages/organization-control-plane/test/sqlite-private-approval-denied-receipt-v1.test.ts
+A	packages/organization-control-plane/test/sqlite-private-approval-provider-identity-v1.test.ts
+R080	services/organization-control-plane/test/sqlite-clean-slack-connection-v1.test.ts	packages/organization-control-plane/test/sqlite-slack-connection-coordinator-v1.test.ts
+A	packages/organization-control-plane/test/sqlite-slack-dm-approval-reviewer-target-v1.test.ts
+R100	services/organization-control-plane/tsconfig.json	packages/organization-control-plane/tsconfig.json
+R100	services/organization-control-plane/vitest.config.ts	packages/organization-control-plane/vitest.config.ts
+M	packages/organization-protocol/README.md
+M	packages/organization-protocol/fixtures/README.md
+M	packages/organization-protocol/schemas/README.md
+M	packages/organization-protocol/source-boundary.v1.json
+M	packages/organization-protocol/src/index.ts
+D	packages/organization-protocol/src/organization-member-approval-presentation.ts
+D	packages/organization-protocol/src/organization-member-readable-policy.ts
+D	packages/organization-protocol/src/organization-member-release-draft.ts
+A	packages/organization-protocol/src/private-slack-block-approval-record-input-v1.ts
+M	packages/organization-protocol/src/record-envelope-v4.ts
+D	packages/organization-protocol/src/reviewer-approval-presentation.ts
+D	packages/organization-protocol/src/reviewer-release-draft.ts
+D	packages/organization-protocol/src/reviewer-restricted-policy.ts
+M	packages/organization-protocol/test/README.md
+D	packages/organization-protocol/test/organization-member-readable-protocol.test.ts
+M	packages/organization-protocol/test/person-content-policy-v2.test.ts
+A	packages/organization-protocol/test/private-slack-block-approval-record-input-v1.test.ts
+M	packages/organization-protocol/test/record-envelope-v4.test.ts
+D	packages/organization-protocol/test/reviewer-restricted-protocol.test.ts
+A	packages/organization-record/AGENTS.md
+R056	services/organization-record/README.md	packages/organization-record/README.md
+R100	services/organization-record/baselines/organization-record-derived-baseline-v1.sql	packages/organization-record/baselines/organization-record-derived-baseline-v1.sql
+R100	services/organization-record/baselines/organization-record-log-baseline-v1.sql	packages/organization-record/baselines/organization-record-log-baseline-v1.sql
+A	packages/organization-record/baselines/organization-record-log-baseline-v2.sql
+R080	services/organization-record/package.json	packages/organization-record/package.json
+A	packages/organization-record/source-boundary.v1.json
+A	packages/organization-record/src/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts
+R091	services/organization-record/src/application/atom-identity.ts	packages/organization-record/src/application/atom-identity.ts
+R083	services/organization-record/src/application/person-policy-facts-v2.ts	packages/organization-record/src/application/person-policy-facts-v2.ts
+A	packages/organization-record/src/application/record-policy-fact-projection-v1.ts
+R080	services/organization-record/src/log/record-log-v4-append.ts	packages/organization-record/src/log/record-log-v4-append.ts
+A	packages/organization-record/src/organization-record-api-v1.ts
+R080	services/organization-record/src/persistence/baseline.ts	packages/organization-record/src/persistence/baseline.ts
+R100	services/organization-record/src/persistence/database-definition.ts	packages/organization-record/src/persistence/database-definition.ts
+R100	services/organization-record/src/persistence/open-unmigrated-database.ts	packages/organization-record/src/persistence/open-organization-record-database.ts
+A	packages/organization-record/src/persistence/record-log-baseline.ts
+R073	services/organization-record/src/retrieve/clean-person-record-reader-v1.ts	packages/organization-record/src/retrieve/person-record-reader-v1.ts
+R088	services/organization-record/src/retrieve/clean-v4-layer1-snapshot.ts	packages/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.ts
+A	packages/organization-record/test/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.test.ts
+R099	services/organization-record/test/person-policy-facts-v2.test.ts	packages/organization-record/test/person-policy-facts-v2.test.ts
+A	packages/organization-record/test/record-log-baseline-v2.test.ts
+R060	services/organization-record/test/record-log-v4-append.test.ts	packages/organization-record/test/record-log-v4-append.test.ts
+R100	services/organization-record/tsconfig.json	packages/organization-record/tsconfig.json
+R100	services/organization-record/vitest.config.ts	packages/organization-record/vitest.config.ts
+R058	services/organization-retrieval/README.md	packages/organization-retrieval/README.md
+R087	services/organization-retrieval/baselines/readable-search-content-baseline-v1.sql	packages/organization-retrieval/baselines/readable-search-content-baseline-v1.sql
+R090	services/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql	packages/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql
+A	packages/organization-retrieval/baselines/readable-search-facts-baseline-v2.sql
+R089	services/organization-retrieval/baselines/readable-search-lexical-baseline-v1.sql	packages/organization-retrieval/baselines/readable-search-lexical-baseline-v1.sql
+R080	services/organization-retrieval/package.json	packages/organization-retrieval/package.json
+A	packages/organization-retrieval/source-boundary.v1.json
+A	packages/organization-retrieval/src/application/analyzer.ts
+R098	services/organization-retrieval/src/application/contracts.ts	packages/organization-retrieval/src/application/readable-search-contracts.ts
+R061	services/organization-retrieval/src/persistence/baseline.ts	packages/organization-retrieval/src/persistence/baseline.ts
+R085	services/organization-retrieval/src/persistence/database-definition.ts	packages/organization-retrieval/src/persistence/database-definition.ts
+R100	services/organization-retrieval/src/persistence/open-readable-search-plane.ts	packages/organization-retrieval/src/persistence/open-readable-search-plane.ts
+R065	services/organization-retrieval/src/new-lineage-v1.ts	packages/organization-retrieval/src/readable-search-engine-v1.ts
+A	packages/organization-retrieval/test/analyzer.test.ts
+A	packages/organization-retrieval/test/readable-search-generation.test.ts
+R092	services/organization-retrieval/test/source-boundary.test.ts	packages/organization-retrieval/test/source-boundary.test.ts
+R099	services/organization-retrieval/test/support/generation-fixture.ts	packages/organization-retrieval/test/support/generation-fixture.ts
+R100	services/organization-retrieval/tsconfig.json	packages/organization-retrieval/tsconfig.json
+R100	services/organization-retrieval/vitest.config.ts	packages/organization-retrieval/vitest.config.ts
+A	product/echo-onboarding/Info.plist
+A	product/echo-onboarding/main.swift
+A	product/echo-overlay/Info.plist
+A	product/echo-overlay/account.swift
+A	product/echo-overlay/main.swift
+A	product/echo-overlay/people.swift
+M	product/source-boundary.v1.json
+M	schemas/meeting-context.v1.schema.json
+M	services/organization-authority/README.md
+A	services/organization-authority/baselines/authority-approval-delivery-quarantine-v4.sql
+A	services/organization-authority/baselines/authority-meeting-processing-v3.sql
+A	services/organization-authority/baselines/authority-private-approval-v2.sql
+M	services/organization-authority/package.json
+M	services/organization-authority/source-boundary.v1.json
+M	services/organization-authority/src/adapters/README.md
+A	services/organization-authority/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.ts
+M	services/organization-authority/src/adapters/files/private-person-onboarding-invitation.ts
+M	services/organization-authority/src/adapters/oidc/openid-client-person-session-provider.ts
+A	services/organization-authority/src/adapters/oidc/slack-browser-identity-provider.ts
+M	services/organization-authority/src/adapters/persistence/sqlite/baseline.ts
+R096	services/organization-authority/src/adapters/persistence/sqlite/open-unmigrated-database.ts	services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.ts
+R059	services/organization-authority/src/adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.ts	services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts
+R086	services/organization-authority/src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.ts	services/organization-authority/src/adapters/persistence/sqlite/person-record-read-audit-v1.ts
+R080	services/organization-authority/src/adapters/persistence/sqlite/clean-person-session-repository.ts	services/organization-authority/src/adapters/persistence/sqlite/sqlite-person-session-repository.ts
+D	services/organization-authority/src/adapters/runtime/system-runtime-ports.ts
+R087	services/organization-authority/src/adapters/security/development-file-authority-signer.ts	services/organization-authority/src/adapters/security/file-organization-authority-signer.ts
+M	services/organization-authority/src/adapters/security/node-person-session-crypto.ts
+M	services/organization-authority/src/adapters/security/private-file-credentials.ts
+A	services/organization-authority/src/adapters/system/system-authority-clock.ts
+A	services/organization-authority/src/answer-composition/canonical-release-id.ts
+D	services/organization-authority/src/answer-composition/lean-answer-composition.ts
+D	services/organization-authority/src/answer-composition/openrouter-structured-output.ts
+A	services/organization-authority/src/answer-composition/retrieval-grounded-answer-composition.ts
+R075	services/organization-authority/src/application/clean-person-employee-lifecycle.ts	services/organization-authority/src/application/person-employee-lifecycle.ts
+M	services/organization-authority/src/application/person-identity-sessions.ts
+A	services/organization-authority/src/application/ports/authority-clock.ts
+M	services/organization-authority/src/application/ports/authority-repository.ts
+R071	services/organization-authority/src/application/ports/runtime-ports.ts	services/organization-authority/src/application/ports/organization-authority-signer.ts
+R076	services/organization-authority/src/application/ports/clean-person-membership-write.ts	services/organization-authority/src/application/ports/person-membership-write.ts
+R094	services/organization-authority/src/application/ports/person-session-runtime.ts	services/organization-authority/src/application/ports/person-session-dependencies.ts
+M	services/organization-authority/src/application/ports/person-session-repository.ts
+M	services/organization-authority/src/clean-founder-main.ts
+M	services/organization-authority/src/clean-granola-source-main.ts
+M	services/organization-authority/src/clean-live-main.ts
+M	services/organization-authority/src/clean-person-main.ts
+M	services/organization-authority/src/clean-reset-main.ts
+M	services/organization-authority/src/composition/README.md
+A	services/organization-authority/src/composition/answer-composition-generation-bundle-v1.ts
+A	services/organization-authority/src/composition/approval-workflow-bundle-v1.ts
+A	services/organization-authority/src/composition/ask-journey-telemetry-v1.ts
+D	services/organization-authority/src/composition/clean-live-cli.ts
+D	services/organization-authority/src/composition/clean-live-runtime.ts
+D	services/organization-authority/src/composition/clean-person-answer-route.ts
+D	services/organization-authority/src/composition/clean-person-onboarding.ts
+D	services/organization-authority/src/composition/clean-person-runtime.ts
+D	services/organization-authority/src/composition/clean-readable-search-runtime.ts
+A	services/organization-authority/src/composition/decision-processor-bundle-v1.ts
+M	services/organization-authority/src/composition/lazy-person-session-oidc-provider.ts
+A	services/organization-authority/src/composition/meeting-approval-journey-state-v1.ts
+A	services/organization-authority/src/composition/meeting-approval-journey-telemetry-v1.ts
+A	services/organization-authority/src/composition/meeting-source-bundle-v1.ts
+D	services/organization-authority/src/composition/open-clean-live-runtime.ts
+A	services/organization-authority/src/composition/organization-authority-api-runtime.ts
+A	services/organization-authority/src/composition/organization-authority-composition-root.ts
+R073	services/organization-authority/src/composition/clean-person-cli.ts	services/organization-authority/src/composition/organization-authority-person-administration-cli.ts
+R076	services/organization-authority/src/composition/clean-reset-cli.ts	services/organization-authority/src/composition/organization-authority-reset-cli.ts
+A	services/organization-authority/src/composition/organization-authority-runtime.ts
+A	services/organization-authority/src/composition/organization-authority-service-cli.ts
+A	services/organization-authority/src/composition/organization-authority-service-lifecycle.ts
+R063	services/organization-authority/src/composition/clean-founder-cli.ts	services/organization-authority/src/composition/organization-authority-setup-cli.ts
+R074	services/organization-authority/src/composition/clean-reset-state.ts	services/organization-authority/src/composition/organization-authority-state-bootstrap.ts
+A	services/organization-authority/src/composition/person-answer-route.ts
+A	services/organization-authority/src/composition/person-external-identity-runtime.ts
+A	services/organization-authority/src/composition/person-onboarding-service.ts
+R052	services/organization-authority/src/composition/clean-person-record-read-route.ts	services/organization-authority/src/composition/person-record-read-route.ts
+R053	services/organization-authority/src/composition/clean-person-record-search-route.ts	services/organization-authority/src/composition/person-record-search-route.ts
+A	services/organization-authority/src/composition/providers/granola/granola-admitted-meeting-source-cursor-policy-v1.ts
+R069	services/organization-authority/src/composition/clean-granola-source-cli.ts	services/organization-authority/src/composition/providers/granola/granola-meeting-source-admission-cli.ts
+R057	services/organization-authority/src/composition/clean-granola-source-admission.ts	services/organization-authority/src/composition/providers/granola/granola-meeting-source-admission.ts
+A	services/organization-authority/src/composition/providers/granola/granola-meeting-source-bundle-v1.ts
+A	services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts
+A	services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-admission-commitment.ts
+A	services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.ts
+A	services/organization-authority/src/composition/providers/openrouter/openrouter-decision-processor-config-v1.ts
+A	services/organization-authority/src/composition/providers/openrouter/verify-openrouter-decision-processor-admission-v1.ts
+A	services/organization-authority/src/composition/providers/slack/person-identity/slack-person-browser-identity-link-workflow-v1.ts
+A	services/organization-authority/src/composition/providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.ts
+R060	services/organization-authority/src/composition/person-slack-identity-link.ts	services/organization-authority/src/composition/providers/slack/person-identity/slack-person-identity-link-workflow-v1.ts
+R060	services/organization-authority/src/composition/clean-person-slack-identity-link.ts	services/organization-authority/src/composition/providers/slack/person-identity/sqlite-slack-person-identity-link-repository-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-block-kit-card-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-http-adapter-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-handler-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-terminal-coordinator-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/private-slack-dm-approval-stager-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/resolve-current-private-slack-connection-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/resolve-meeting-owner-private-slack-approval-reviewer-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/resolve-private-slack-approval-reviewer-target-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/sqlite-private-slack-approval-assignment-state-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/sqlite-private-slack-approval-terminal-authority-v1.ts
+A	services/organization-authority/src/composition/providers/slack/private-approval/sqlite-stable-private-approval-authority-fence-v1.ts
+A	services/organization-authority/src/composition/providers/synthetic-demo/synthetic-demo-admitted-meeting-source-cursor-policy-v1.ts
+A	services/organization-authority/src/composition/providers/synthetic-demo/synthetic-demo-meeting-source-admission.ts
+A	services/organization-authority/src/composition/providers/synthetic-demo/synthetic-demo-meeting-source-bundle-v1.ts
+A	services/organization-authority/src/composition/providers/synthetic-demo/synthetic-demo-pre-slack-evaluator-v1.ts
+A	services/organization-authority/src/composition/readable-search-generation-composition.ts
+R053	services/organization-authority/src/composition/clean-readable-search-generation-reconciler.ts	services/organization-authority/src/composition/readable-search-generation-reconciler.ts
+A	services/organization-authority/src/composition/readable-search-reconciliation-task.ts
+A	services/organization-authority/src/composition/related-atom-projector-v1.ts
+A	services/organization-authority/src/composition/staging-authority-environment-v1.ts
+A	services/organization-authority/src/composition/staging/observability/staging-journey-content-telemetry-v1.ts
+A	services/organization-authority/src/composition/staging/observability/staging-journey-metrics-v1.ts
+A	services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.ts
+A	services/organization-authority/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.ts
+A	services/organization-authority/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.ts
+A	services/organization-authority/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.ts
+A	services/organization-authority/src/composition/staging/staging-synthetic-meeting-source-selection-v1.ts
+A	services/organization-authority/src/composition/synthetic-demo-organization-authority-cli.ts
+A	services/organization-authority/src/composition/synthetic-demo-organization-authority-composition-root-v1.ts
+R062	services/organization-authority/src/composition/verify-clean-state-lineage.ts	services/organization-authority/src/composition/verify-authority-state-lineage.ts
+M	services/organization-authority/src/domain/errors.ts
+M	services/organization-authority/src/domain/person-session-rules.ts
+M	services/organization-authority/src/presentation/README.md
+D	services/organization-authority/src/presentation/clean-person-answer-http-application.ts
+D	services/organization-authority/src/presentation/clean-person-record-read-http-application.ts
+D	services/organization-authority/src/presentation/clean-person-record-search-http-application.ts
+R053	services/organization-authority/src/presentation/clean-person-http-server.ts	services/organization-authority/src/presentation/organization-authority-http-server.ts
+A	services/organization-authority/src/presentation/person-answer-http-application.ts
+R084	services/organization-authority/src/presentation/clean-person-employee-http-application.ts	services/organization-authority/src/presentation/person-employee-http-application.ts
+A	services/organization-authority/src/presentation/person-external-identity-link-http-application.ts
+A	services/organization-authority/src/presentation/person-record-read-http-application.ts
+A	services/organization-authority/src/presentation/person-record-search-http-application.ts
+D	services/organization-authority/src/presentation/person-slack-identity-link-http-application.ts
+A	services/organization-authority/src/presentation/private-approval-interaction-http-application-v1.ts
+A	services/organization-authority/src/presentation/private-slack-approval-interaction-http-port-v1.ts
+A	services/organization-authority/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts
+A	services/organization-authority/src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.ts
+M	services/organization-authority/src/processing/adapters/decision-processors/llm/llm-decision-processor.ts
+M	services/organization-authority/src/processing/adapters/decision-processors/llm/llm-provider.ts
+M	services/organization-authority/src/processing/adapters/decision-processors/llm/openrouter-client.ts
+M	services/organization-authority/src/processing/adapters/meeting-sources/granola/meeting-source-adapter.ts
+M	services/organization-authority/src/processing/adapters/meeting-sources/granola/record-owner-observation.ts
+A	services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/synthetic-demo-meeting-source-v1.ts
+M	services/organization-authority/src/processing/adapters/shared/slack/slack-web-api-client.ts
+A	services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-processing-commitments.ts
+A	services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.ts
+A	services/organization-authority/src/processing/admitted-meeting-processing/decision-processor-admission-commitment.ts
+A	services/organization-authority/src/processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.ts
+A	services/organization-authority/src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.ts
+R077	services/organization-authority/src/processing/clean-v1/clean-live-worker-lifecycle.ts	services/organization-authority/src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.ts
+R056	services/organization-authority/src/processing/clean-v1/review-lineage-semantics.ts	services/organization-authority/src/processing/admitted-meeting-processing/review-lineage-semantics.ts
+A	services/organization-authority/src/processing/admitted-meeting-processing/serialized-meeting-processing-worker.ts
+R060	services/organization-authority/src/processing/clean-v1/sqlite-live-only-source-state.ts	services/organization-authority/src/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.ts
+A	services/organization-authority/src/processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.ts
+D	services/organization-authority/src/processing/clean-v1-d2-d3/clean-d2-d3-processing-coordinator.ts
+D	services/organization-authority/src/processing/clean-v1-record/clean-v4-record-writer.ts
+D	services/organization-authority/src/processing/clean-v1/clean-slack-approval-stager.ts
+D	services/organization-authority/src/processing/clean-v1/granola-person-content-policy.ts
+D	services/organization-authority/src/processing/clean-v1/live-only-source-cycle.ts
+M	services/organization-authority/src/processing/core/contracts/decision.ts
+M	services/organization-authority/src/processing/core/contracts/meeting.ts
+M	services/organization-authority/src/processing/core/contracts/validation.ts
+M	services/organization-authority/src/processing/core/index.ts
+R097	services/organization-authority/src/processing/core/storage/core-state-store.ts	services/organization-authority/src/processing/core/storage/meeting-processing-state-store.ts
+D	services/organization-authority/src/processing/live/serialized-authority-meeting-worker.ts
+R087	services/organization-authority/src/processing/core/processing/run-core-cycle.ts	services/organization-authority/src/processing/reference/reference-meeting-processing-cycle.ts
+A	services/organization-authority/src/shared/core-runtime-observation-v1.ts
+A	services/organization-authority/src/shared/journey-telemetry-v1.ts
+A	services/organization-authority/src/shared/person-email-rules.ts
+A	services/organization-authority/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts
+R084	services/organization-authority/src/state-lineage/new-lineage-genesis-v1.ts	services/organization-authority/src/state-lineage/authority-state-lineage-initializer.ts
+M	services/organization-authority/src/state-lineage/state-lineage-manifest-v1.ts
+M	services/organization-authority/src/state-lineage/state-lineage-preopen-guard.ts
+A	services/organization-authority/src/synthetic-demo-main.ts
+M	services/organization-authority/test/README.md
+A	services/organization-authority/test/adapters/openrouter-structured-generation-adapter.test.ts
+A	services/organization-authority/test/adapters/private-file-credentials.test.ts
+M	services/organization-authority/test/adapters/private-person-onboarding-invitation.test.ts
+A	services/organization-authority/test/admitted-meeting-source-baseline-v3.test.ts
+D	services/organization-authority/test/answer-composition/lean-answer-composition.test.ts
+D	services/organization-authority/test/answer-composition/openrouter-structured-output.test.ts
+R079	services/organization-authority/test/answer-composition/clean-person-answer-composition-audit.test.ts	services/organization-authority/test/answer-composition/person-answer-composition-audit.test.ts
+A	services/organization-authority/test/answer-composition/retrieval-grounded-answer-composition.test.ts
+A	services/organization-authority/test/approval-delivery-quarantine-baseline-v4.test.ts
+M	services/organization-authority/test/authority-baseline-v1.test.ts
+A	services/organization-authority/test/authority-private-approval-baseline-v2.test.ts
+R087	services/organization-authority/test/new-lineage-genesis-v1.test.ts	services/organization-authority/test/authority-state-lineage-initializer.test.ts
+D	services/organization-authority/test/clean-d2-d3-processing-coordinator.test.ts
+D	services/organization-authority/test/clean-founder-cli.test.ts
+D	services/organization-authority/test/clean-live-cli.test.ts
+D	services/organization-authority/test/clean-live-runtime.test.ts
+D	services/organization-authority/test/clean-person-answer-route.test.ts
+D	services/organization-authority/test/clean-person-record-read-route.test.ts
+D	services/organization-authority/test/clean-person-record-search-route.test.ts
+D	services/organization-authority/test/clean-person-runtime.test.ts
+D	services/organization-authority/test/clean-person-slack-identity-link.test.ts
+D	services/organization-authority/test/clean-readable-search-generation-reconciler.test.ts
+D	services/organization-authority/test/clean-readable-search-runtime.test.ts
+D	services/organization-authority/test/clean-slack-approval-card.test.ts
+A	services/organization-authority/test/composition/ask-journey-telemetry-v1.test.ts
+A	services/organization-authority/test/composition/meeting-approval-journey-state-v1.test.ts
+A	services/organization-authority/test/composition/meeting-approval-journey-telemetry-v1.test.ts
+A	services/organization-authority/test/composition/organization-authority-staging-canary-cli.test.ts
+R068	services/organization-authority/test/clean-granola-source-admission.test.ts	services/organization-authority/test/composition/providers/granola/granola-meeting-source-admission.test.ts
+A	services/organization-authority/test/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.test.ts
+A	services/organization-authority/test/composition/providers/openrouter/openrouter-decision-processor-bundle-v1.test.ts
+A	services/organization-authority/test/composition/providers/openrouter/openrouter-decision-processor-config-v1.test.ts
+A	services/organization-authority/test/composition/providers/openrouter/verify-openrouter-decision-processor-admission-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/person-identity/slack-person-browser-identity-link-workflow-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/person-identity/sqlite-slack-person-identity-link-workflow-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/private-slack-approval-block-kit-card-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/private-slack-approval-interaction-handler-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/private-slack-approval-terminal-coordinator-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/private-slack-dm-approval-stager-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/resolve-current-private-slack-connection-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/sqlite-private-slack-approval-assignment-state-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/sqlite-private-slack-approval-terminal-authority-v1.test.ts
+A	services/organization-authority/test/composition/providers/slack/private-approval/sqlite-stable-private-approval-authority-fence-v1.test.ts
+A	services/organization-authority/test/composition/providers/synthetic-demo/synthetic-demo-meeting-source-admission.test.ts
+A	services/organization-authority/test/composition/providers/synthetic-demo/synthetic-demo-meeting-source-bundle-v1.test.ts
+A	services/organization-authority/test/composition/providers/synthetic-demo/synthetic-demo-organization-authority-runtime.test.ts
+A	services/organization-authority/test/composition/providers/synthetic-demo/synthetic-demo-pre-slack-evaluator-v1.test.ts
+A	services/organization-authority/test/composition/related-atom-projector-v1.test.ts
+A	services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts
+A	services/organization-authority/test/composition/staging/observability/staging-journey-metrics-v1.test.ts
+A	services/organization-authority/test/composition/staging/observability/staging-journey-telemetry-transport-v1.test.ts
+A	services/organization-authority/test/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.test.ts
+A	services/organization-authority/test/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.test.ts
+A	services/organization-authority/test/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.test.ts
+A	services/organization-authority/test/composition/staging/staging-synthetic-meeting-source-selection-v1.test.ts
+D	services/organization-authority/test/granola-person-content-policy.test.ts
+M	services/organization-authority/test/lazy-person-session-oidc-provider.test.ts
+A	services/organization-authority/test/observability/core-runtime-observation-v1.test.ts
+A	services/organization-authority/test/observability/journey-telemetry-v1.test.ts
+D	services/organization-authority/test/open-clean-live-runtime.test.ts
+M	services/organization-authority/test/openid-client-person-session-provider.test.ts
+A	services/organization-authority/test/organization-authority-api-runtime.test.ts
+A	services/organization-authority/test/organization-authority-private-approval-runtime.test.ts
+A	services/organization-authority/test/organization-authority-service-cli.test.ts
+A	services/organization-authority/test/organization-authority-service-lifecycle.test.ts
+A	services/organization-authority/test/organization-authority-setup-cli.test.ts
+R054	services/organization-authority/test/clean-reset-state.test.ts	services/organization-authority/test/organization-authority-state-bootstrap.test.ts
+A	services/organization-authority/test/person-answer-route.test.ts
+R066	services/organization-authority/test/clean-person-employee-lifecycle.test.ts	services/organization-authority/test/person-employee-lifecycle.test.ts
+A	services/organization-authority/test/person-record-read-route.test.ts
+A	services/organization-authority/test/person-record-search-route.test.ts
+A	services/organization-authority/test/presentation/private-slack-approval-interaction-http-port-v1.test.ts
+A	services/organization-authority/test/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.test.ts
+A	services/organization-authority/test/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.test.ts
+M	services/organization-authority/test/processing/adapters/granola-meeting-source.test.ts
+M	services/organization-authority/test/processing/adapters/granola-record-owner-observation.test.ts
+M	services/organization-authority/test/processing/adapters/llm-decision-processor.test.ts
+M	services/organization-authority/test/processing/adapters/llm-provider-clients.test.ts
+A	services/organization-authority/test/processing/adapters/meeting-sources/synthetic-demo/synthetic-demo-meeting-source-v1.test.ts
+M	services/organization-authority/test/processing/adapters/slack-web-api-client.test.ts
+R053	services/organization-authority/test/processing/clean-v1/live-only-source-cycle.test.ts	services/organization-authority/test/processing/admitted-meeting-processing/meeting-processing-cycle-v1.test.ts
+R071	services/organization-authority/test/processing/live/clean-live-worker-lifecycle.test.ts	services/organization-authority/test/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.test.ts
+R064	services/organization-authority/test/processing/clean-v1/review-lineage-semantics.test.ts	services/organization-authority/test/processing/admitted-meeting-processing/review-lineage-semantics.test.ts
+R074	services/organization-authority/test/processing/live/serialized-authority-meeting-worker.test.ts	services/organization-authority/test/processing/admitted-meeting-processing/serialized-meeting-processing-worker.test.ts
+R063	services/organization-authority/test/sqlite-live-only-source-state.test.ts	services/organization-authority/test/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.test.ts
+D	services/organization-authority/test/processing/clean-v1/clean-slack-approval-stager.test.ts
+M	services/organization-authority/test/processing/core/meeting-context-schema.test.ts
+R092	services/organization-authority/test/processing/core/tool-agnostic-core.test.ts	services/organization-authority/test/processing/reference/reference-meeting-processing-cycle.test.ts
+A	services/organization-authority/test/readable-search-generation-composition.test.ts
+A	services/organization-authority/test/readable-search-generation-reconciler.test.ts
+A	services/organization-authority/test/retrieval-coverage-fixture.ts
+A	services/organization-authority/test/shared/person-email-rules.test.ts
+A	services/organization-authority/test/slack-browser-identity-provider.test.ts
+M	services/organization-authority/test/state-lineage-manifest-v1.test.ts
+A	services/organization-authority/test/synthetic-demo-organization-authority-cli.test.ts
+M	services/organization-authority/tsconfig.json
+D	services/organization-control-plane/README.md
+D	services/organization-control-plane/package.json
+D	services/organization-control-plane/source-boundary.v1.json
+D	services/organization-control-plane/src/adapters/slack/clean-slack-reaction-observer-v1.ts
+D	services/organization-control-plane/src/application/contracts.ts
+D	services/organization-control-plane/src/application/person-slack-approval-activation-v2.ts
+D	services/organization-control-plane/src/application/person-slack-approval-contracts-v2.ts
+D	services/organization-control-plane/src/application/person-slack-approval-finalization-v2.ts
+D	services/organization-control-plane/src/clean-founder-v1.ts
+D	services/organization-control-plane/src/clean-person-slack-approval-activate-main.ts
+D	services/organization-control-plane/src/clean-runtime-v1.ts
+D	services/organization-control-plane/src/clean-slack-connect-main.ts
+D	services/organization-control-plane/src/composition/clean-person-slack-approval-activate-cli.ts
+D	services/organization-control-plane/src/persistence/baseline.ts
+D	services/organization-control-plane/src/persistence/clean-person-slack-approval-target-v1.ts
+D	services/organization-control-plane/src/persistence/clean-stopped-state-authority-administrator-fence-v1.ts
+D	services/organization-control-plane/src/persistence/sqlite-person-slack-approval-activation-v2.ts
+D	services/organization-control-plane/src/persistence/sqlite-person-slack-approval-finalization-v2.ts
+D	services/organization-control-plane/src/persistence/sqlite-person-slack-pending-approval-v1.ts
+D	services/organization-control-plane/test/clean-person-slack-approval-activate-cli.test.ts
+D	services/organization-control-plane/test/clean-person-slack-approval-finalization-v2.test.ts
+D	services/organization-control-plane/test/person-slack-approval-activation-v2.test.ts
+D	services/organization-control-plane/test/person-slack-approval-contracts-v2.test.ts
+D	services/organization-control-plane/test/person-slack-approval-finalization-v2.test.ts
+D	services/organization-control-plane/test/sqlite-person-slack-approval-activation-v2.test.ts
+D	services/organization-record/AGENTS.md
+D	services/organization-record/source-boundary.v1.json
+D	services/organization-record/src/application/contracts.ts
+D	services/organization-record/src/application/errors.ts
+D	services/organization-record/src/application/permission-pilot.ts
+D	services/organization-record/src/new-lineage-v1.ts
+D	services/organization-record/src/persistence/record-log-baseline.ts
+D	services/organization-retrieval/source-boundary.v1.json
+D	services/organization-retrieval/src/application/analyzer.ts
+D	services/organization-retrieval/test/analyzer.test.ts
+D	services/organization-retrieval/test/clean-generation-build.test.ts
+M	src/product/person-client/authority-client.ts
+M	src/product/person-client/browser-login-handoff.ts
+M	src/product/person-client/client.ts
+M	src/product/person-client/commands.ts
+M	src/product/person-client/index.ts
+M	src/product/person-client/onboarding-invitation.ts
+A	src/product/person-client/person-api-request-builders.ts
+D	src/product/person-client/requests.ts
+M	src/product/person-client/source-boundary.v1.json
+M	tests/README.md
+M	tests/architecture/authority-backup-maintenance.test.ts
+M	tests/architecture/authority-observability-stack.test.ts
+A	tests/architecture/authority-operator-playbook.test.ts
+M	tests/architecture/authority-recovery-helper-stack.test.ts
+M	tests/architecture/authority-recovery-verifier.test.ts
+A	tests/architecture/authority-staging-asm-exec.test.ts
+M	tests/architecture/authority-staging-edge.test.ts
+M	tests/architecture/authority-staging-host-bootstrap.test.ts
+M	tests/architecture/authority-staging-host-bundle.test.ts
+M	tests/architecture/authority-staging-host-restore.test.ts
+M	tests/architecture/authority-staging-host-stack.test.ts
+A	tests/architecture/authority-staging-invitation-export.test.ts
+A	tests/architecture/authority-staging-journey-explorer-stack.test.ts
+A	tests/architecture/authority-staging-journey-observability-stack.test.ts
+A	tests/architecture/authority-staging-journey.test.ts
+M	tests/architecture/authority-staging-lifecycle.test.ts
+M	tests/architecture/authority-staging-onboarding-transfer.test.ts
+A	tests/architecture/authority-staging-release.test.ts
+M	tests/architecture/canonical-json-conformance.test.ts
+M	tests/architecture/ci-workflow.test.ts
+D	tests/architecture/clean-deployment-profile.test.ts
+D	tests/architecture/clean-release-record.test.ts
+M	tests/architecture/docs-validator.test.ts
+A	tests/architecture/echo-overlay-sources-fixture.test.ts
+A	tests/architecture/echo-overlay.test.ts
+A	tests/architecture/echo-people.test.ts
+M	tests/architecture/github-governance.test.ts
+A	tests/architecture/linux-person-installer.test.ts
+A	tests/architecture/linux-person-kit.test.ts
+R075	tests/architecture/clean-founder-command-rehearsal.test.ts	tests/architecture/organization-authority-command-rehearsal.test.ts
+A	tests/architecture/organization-authority-deployment-profile.test.ts
+A	tests/architecture/organization-authority-release-record.test.ts
+R077	tests/architecture/clean-reset-closure.test.ts	tests/architecture/organization-authority-state-reset-boundary.test.ts
+A	tests/architecture/person-account-ui.test.ts
+A	tests/architecture/person-onboarding-ui.test.ts
+R093	tests/architecture/source-independence.test.ts	tests/architecture/product-source-independence.test.ts
+R061	tests/architecture/clean-package-artifacts.test.ts	tests/architecture/release-package-boundaries.test.ts
+R066	tests/architecture/clean-layer3-layer4-exclusion.test.ts	tests/architecture/retrieval-answer-composition-boundary.test.ts
+A	tests/architecture/staging-journey-explorer-handler.test.ts
+A	tests/architecture/staging-journey-observability-reconciliation.test.ts
+M	tests/architecture/test-layer-ownership.test.ts
+A	tests/architecture/tooling-build.test.ts
+A	tests/architecture/tooling-lint.test.ts
+M	tests/architecture/workspace-boundaries.test.ts
+A	tests/fixtures/asm-exec/LICENSE
+A	tests/fixtures/asm-exec/NOTICE
+A	tests/fixtures/asm-exec/README.md
+A	tests/fixtures/asm-exec/upstream.py
+A	tests/fixtures/coherent-worktree.ts
+A	tests/fixtures/echo-overlay-source-proof.swift
+A	tests/fixtures/linux-person-onboarding-smoke.mjs
+R100	tests/fixtures/layer3-layer4-exclusion/dynamic-import.ts	tests/fixtures/retrieval-answer-composition-boundary/dynamic-import.ts
+R100	tests/fixtures/layer3-layer4-exclusion/openai-adapter.ts	tests/fixtures/retrieval-answer-composition-boundary/openai-adapter.ts
+R100	tests/fixtures/layer3-layer4-exclusion/re-export.ts	tests/fixtures/retrieval-answer-composition-boundary/re-export.ts
+R100	tests/fixtures/layer3-layer4-exclusion/require.ts	tests/fixtures/retrieval-answer-composition-boundary/require.ts
+A	tests/fixtures/staging-journey-docker.py
+A	tests/fixtures/staging-journey-fetch.mjs
+A	tests/fixtures/staging-journey-host.py
+A	tests/fixtures/staging-journey-observability/phase4-reconciliation-v1.jsonl
+A	tests/fixtures/staging-journey-runtime.mjs
+A	tests/fixtures/staging-release-host-test.py
+A	tests/fixtures/staging-release-journey.mjs
+A	tests/fixtures/staging-release-posix-proof.py
+M	tests/person-client/browser-login-handoff.test.ts
+A	tests/person-client/browser-opener.test.ts
+M	tests/person-client/person-client-session-store.test.ts
+M	tests/person-client/person-client.test.ts
+D	tests/product/fixtures/phase1-synthetic-replay-corpus.v1.json
+M	tools/authority-staging-edge.d.mts
+M	tools/authority-staging-edge.mjs
+A	tools/authority-staging-invitation-export.d.mts
+A	tools/authority-staging-invitation-export.mjs
+A	tools/authority-staging-invitation-seal.mjs
+M	tools/authority-staging-onboarding-transfer.d.mts
+M	tools/authority-staging-onboarding-transfer.mjs
+A	tools/authority-staging-release-host.py
+A	tools/authority-staging-release.d.mts
+A	tools/authority-staging-release.mjs
+M	tools/authority-staging.d.mts
+M	tools/authority-staging.mjs
+M	tools/build-authority-image.mjs
+M	tools/build-authority-recovery-helper-bundle.d.mts
+M	tools/build-authority-recovery-helper-bundle.mjs
+M	tools/build-authority-staging-host-bundle.mjs
+A	tools/build-echo-overlay.mjs
+A	tools/build-staging-journey-explorer-template.mjs
+M	tools/build.mjs
+R058	tools/check-boundary.mjs	tools/check-architecture-boundaries.mjs
+M	tools/check-docs.mjs
+M	tools/clean-v1-release.mjs
+M	tools/clean-v1-runtime-profile.mjs
+A	tools/evals/authority-core/README.md
+A	tools/evals/authority-core/core-approval.mjs
+A	tools/evals/authority-core/core-candidate.mjs
+A	tools/evals/authority-core/core-checkpoint.mjs
+A	tools/evals/authority-core/core-identity.mjs
+A	tools/evals/authority-core/core-input.mjs
+A	tools/evals/authority-core/core-read-routes.mjs
+A	tools/evals/authority-core/corpus-v1.mjs
+A	tools/evals/authority-core/grading.mjs
+A	tools/evals/authority-core/metrics.v2.json
+A	tools/evals/authority-core/metrics.v3.json
+A	tools/evals/authority-core/metrics.v4.json
+A	tools/evals/authority-core/observation-cost.mjs
+A	tools/evals/authority-core/oracle-v1.mjs
+A	tools/evals/authority-core/retrieval-quality.mjs
+A	tools/evals/authority-core/search-generation-fixture.mjs
+A	tools/evals/authority-core/test/core-approval-wake.test.mjs
+A	tools/evals/authority-core/test/core-identity.test.mjs
+A	tools/evals/authority-core/test/core-input.test.mjs
+A	tools/evals/authority-core/test/core-read-routes.test.mjs
+A	tools/evals/authority-core/test/corpus-v1.test.mjs
+A	tools/evals/authority-core/test/grading.test.mjs
+A	tools/evals/authority-core/test/oracle-engine-agreement.test.mjs
+A	tools/evals/authority-core/test/oracle-v1.test.mjs
+A	tools/evals/authority-core/test/retrieval-quality.test.mjs
+A	tools/evals/authority-core/verify-contract.mjs
+M	tools/pack-person-client.mjs
+M	tools/validate-authority-recovery-templates.mjs
+M	tools/verify-authority-recovery.mjs
+M	tools/workspace-source-boundaries.v1.json
+M	tsconfig.workspaces.json
+M	vitest.config.ts

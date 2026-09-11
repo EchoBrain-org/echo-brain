@@ -1,0 +1,14 @@
+Source: 3b663a74ec5d64e2f99b80ca590429df1415e02d
+Command: npm run check
+Exit code: 0
+Node: v22.22.1
+Local macOS validation in an isolated checkout.
+Architecture, documentation, ESLint, workspace build, TypeScript, Vitest: passed.
+
+ Test Files  161 passed (161)
+      Tests  1989 passed | 1 skipped (1990)
+   Start at  12:00:19
+   Duration  280.99s (transform 1.73s, setup 0ms, import 5.11s, tests 521.77s, environment 6ms)
+
+
+Warning: MaxListenersExceededWarning reported 11 SIGINT listeners in the test process. It did not fail the gate; its cause was not investigated in this review.

@@ -1,0 +1,44 @@
+QUERY: formatStagingJourneyContentRecordV1
+services/organization-authority/src/composition/staging/observability/staging-journey-content-telemetry-v1.ts:166:export function formatStagingJourneyContentRecordV1(
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:4:  formatStagingJourneyContentRecordV1,
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:23:    const record = formatStagingJourneyContentRecordV1({
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:48:      formatStagingJourneyContentRecordV1({ ...BASE, journey_id: "nope", content: {} }),
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:51:      formatStagingJourneyContentRecordV1({
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:58:      formatStagingJourneyContentRecordV1({ ...BASE, release_sha: "abc", content: {} }),
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:61:      formatStagingJourneyContentRecordV1({ ...BASE, build_number: 0, content: {} }),
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:64:      formatStagingJourneyContentRecordV1({ ...BASE, sequence: -1, content: {} }),
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:67:      formatStagingJourneyContentRecordV1({
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:74:      formatStagingJourneyContentRecordV1({
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:84:    const record = formatStagingJourneyContentRecordV1({
+services/organization-authority/test/composition/staging/observability/staging-journey-content-telemetry-v1.test.ts:126:    const record = formatStagingJourneyContentRecordV1({
+
+QUERY: OrganizationInstallationSlackIdentityLink
+packages/organization-api/src/index.ts:33:  OrganizationInstallationSlackIdentityLinkBeginRequestPayloadV1,
+packages/organization-api/src/index.ts:34:  OrganizationInstallationSlackIdentityLinkBeginRequestV1,
+packages/organization-api/src/index.ts:35:  OrganizationInstallationSlackIdentityLinkBeginResponseV1,
+packages/organization-api/src/index.ts:36:  OrganizationInstallationSlackIdentityLinkCompleteRequestPayloadV1,
+packages/organization-api/src/index.ts:37:  OrganizationInstallationSlackIdentityLinkCompleteRequestV1,
+packages/organization-api/src/index.ts:38:  OrganizationInstallationSlackIdentityLinkResultV1,
+packages/organization-api/src/contracts.ts:233:export interface OrganizationInstallationSlackIdentityLinkBeginRequestPayloadV1 {
+packages/organization-api/src/contracts.ts:251:export interface OrganizationInstallationSlackIdentityLinkBeginRequestV1
+packages/organization-api/src/contracts.ts:252:  extends OrganizationInstallationSlackIdentityLinkBeginRequestPayloadV1 {
+packages/organization-api/src/contracts.ts:256:export interface OrganizationInstallationSlackIdentityLinkCompleteRequestPayloadV1 {
+packages/organization-api/src/contracts.ts:280:export interface OrganizationInstallationSlackIdentityLinkCompleteRequestV1
+packages/organization-api/src/contracts.ts:281:  extends OrganizationInstallationSlackIdentityLinkCompleteRequestPayloadV1 {
+packages/organization-api/src/contracts.ts:285:export interface OrganizationInstallationSlackIdentityLinkBeginResponseV1 {
+packages/organization-api/src/contracts.ts:296:export interface OrganizationInstallationSlackIdentityLinkResultV1 {
+
+QUERY: organization_person_slack_pending_approvals|organization_person_slack_pending_approval_commands
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:399:CREATE TABLE organization_person_slack_pending_approvals (
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:414:CREATE TRIGGER organization_person_slack_pending_approvals_immutable_update
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:415:BEFORE UPDATE ON organization_person_slack_pending_approvals
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:418:CREATE TRIGGER organization_person_slack_pending_approvals_immutable_delete
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:419:BEFORE DELETE ON organization_person_slack_pending_approvals
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:423:CREATE TABLE organization_person_slack_pending_approval_commands (
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:430:    REFERENCES organization_person_slack_pending_approvals(approval_id),
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:434:CREATE TRIGGER organization_person_slack_pending_approval_commands_immutable_update
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:435:BEFORE UPDATE ON organization_person_slack_pending_approval_commands
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:438:CREATE TRIGGER organization_person_slack_pending_approval_commands_immutable_delete
+packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql:439:BEFORE DELETE ON organization_person_slack_pending_approval_commands
+packages/organization-control-plane/test/control-plane-baseline.test.ts:112:  organization_person_slack_pending_approval_commands: [
+packages/organization-control-plane/test/control-plane-baseline.test.ts:118:  organization_person_slack_pending_approvals: [
