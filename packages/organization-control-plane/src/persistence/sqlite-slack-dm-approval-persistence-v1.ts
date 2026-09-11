@@ -16,7 +16,7 @@ import {
   type PrivateApprovalAuthorizationAllowV1,
   type PrivateApprovalResolutionCommandV1,
   type PrivateApprovalResolutionV1,
-} from "../application/private-approval-policy-resolution-v1.js";
+} from "../application/slack/private-approval-policy-resolution-v1.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import {
   validateOrganizationToolConnectionContractV2,

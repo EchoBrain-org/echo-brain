@@ -13,7 +13,7 @@ import {
   type PendingPrivateApprovalV1,
   type PrivateApprovalAuthorizationAllowV1,
   type PrivateApprovalResolutionCommandV1,
-} from "../src/application/private-approval-policy-resolution-v1.js";
+} from "../src/application/slack/private-approval-policy-resolution-v1.js";
 
 const ASSIGNEE = {
   principal_id: "prn_11111111-1111-4111-8111-111111111111",

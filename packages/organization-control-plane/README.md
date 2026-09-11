@@ -16,12 +16,16 @@ reaction approval path, its owner-attributed activation command, and its
 on 2026-09-06; their baseline tables remain in the frozen V1 baseline until a
 versioned schema migration retires them.
 
-`record-visibility-policy-contracts-v1` is provider-neutral. Its public facade
-re-exports the application policy contracts consumed by the private approval
-resolution; Slack integration contracts are separately named under
-`application/slack-integration-contracts`, and the organization tool
-connection and external identity-link contracts live under
-`application/organization-tool-connection-contracts-v2`.
+`record-visibility-policy-contracts-v1` is provider-neutral, and so is
+`application/private-approval-policy-resolution-core-v1`: the durable command
+shape, verified assignees, the shared commitment identity, policy binding, and
+exact replay matching know no provider. Everything Slack-owned lives under
+explicitly declared Slack roots: `application/slack/` binds that core to one
+exact Slack human and validates the Slack link proof, Slack integration
+contracts are under `application/slack-integration-contracts`, and the
+organization tool connection and external identity-link contracts live under
+`application/organization-tool-connection-contracts-v2`. The neutral secret
+custody contract is `application/organization-secret-store-contracts`.
 
 Private-approval fresh state is initialized from the composed V2 baseline:
 the retained `baselines/organization-control-plane-baseline-v1.sql` plus

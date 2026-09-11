@@ -8,7 +8,7 @@ import {
   type PersonMembershipType,
 } from "../application/organization-tool-connection-contracts-v2.js";
 import type { ApprovalContractSha256 } from "../application/record-visibility-policy-contracts-v1.js";
-import type { PrivateApprovalSlackIdentityLinkV1 } from "../application/private-approval-policy-resolution-v1.js";
+import type { PrivateApprovalSlackIdentityLinkV1 } from "../application/slack/private-approval-policy-resolution-v1.js";
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import type Database from "better-sqlite3";
 
