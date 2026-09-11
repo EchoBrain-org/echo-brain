@@ -7,7 +7,6 @@ import {
   type StructuredGenerationUsageV1,
 } from "../../../answer-composition/retrieval-grounded-answer-composition.js";
 
-export const OPENROUTER_STRUCTURED_GENERATION_TIMEOUT_MS = 30_000;
 export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
 export type OpenRouterFailureClass =

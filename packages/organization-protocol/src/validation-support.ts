@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import {
   assertFederationId,
   assertUtcMillisecondTimestamp,
@@ -10,17 +9,12 @@ import type {
   FederationIdPrefix,
   P256SigningKeyDescriptor,
   Sha256Digest,
-  SignedIntegrity,
 } from "@echo-brain/federation-protocol";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export const MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES = 16 * 1024;
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
-const CANONICAL_BASE64_PATTERN =
-  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-const UUID_V4_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function translateFederationValidation<T>(validate: () => T): T {
   try {
@@ -90,27 +84,6 @@ export function assertId(
     );
   }
   translateFederationValidation(() => assertFederationId(value, prefix, label));
-}
-
-/**
- * Same identifier syntax as `assertId` for prefixes the federation identifier
- * union does not own, such as the authority's `pcr` and `pgr` identifiers that
- * reach this package only as quoted evidence.
- */
-export function assertPrefixedUuidId(
-  value: unknown,
-  prefix: string,
-  label: string,
-): asserts value is string {
-  if (
-    typeof value !== "string" ||
-    !value.startsWith(`${prefix}_`) ||
-    !UUID_V4_PATTERN.test(value.slice(prefix.length + 1))
-  ) {
-    organizationProtocolValidationFailure(
-      `${label} must be a canonical ${prefix} identifier`,
-    );
-  }
 }
 
 export function assertTimestamp(
@@ -186,54 +159,6 @@ export function validateP256SigningKey(
     verifyP256SigningKeyDescriptor(descriptor),
   );
   return canonicalSnapshot(descriptor, label);
-}
-
-export function validateSignedIntegrity(
-  value: unknown,
-  label: string,
-): SignedIntegrity {
-  const record = asRecord(value, label);
-  assertExactKeys(
-    record,
-    [
-      "canonicalization",
-      "payload_sha256",
-      "signature_algorithm",
-      "key_id",
-      "signature_base64",
-    ],
-    label,
-  );
-  assertLiteral(
-    record.canonicalization,
-    "RFC8785",
-    `${label} canonicalization`,
-  );
-  assertDigest(record.payload_sha256, `${label} payload_sha256`);
-  assertLiteral(
-    record.signature_algorithm,
-    "ecdsa-p256-sha256-der-low-s",
-    `${label} signature_algorithm`,
-  );
-  assertDigest(record.key_id, `${label} key_id`);
-  const signature = record.signature_base64;
-  if (
-    typeof signature !== "string" ||
-    signature.length < 8 ||
-    signature.length > 96 ||
-    !CANONICAL_BASE64_PATTERN.test(signature)
-  ) {
-    organizationProtocolValidationFailure(
-      `${label} signature must be bounded canonical base64`,
-    );
-  }
-  const decoded = Buffer.from(signature, "base64");
-  if (decoded.toString("base64") !== signature) {
-    organizationProtocolValidationFailure(
-      `${label} signature must be bounded canonical base64`,
-    );
-  }
-  return canonicalSnapshot(record as unknown as SignedIntegrity, label);
 }
 
 /**

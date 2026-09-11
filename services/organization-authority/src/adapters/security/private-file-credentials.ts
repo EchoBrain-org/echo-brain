@@ -199,16 +199,6 @@ export function readPrivateAuthorityGranolaOwnerEmail(
   return value;
 }
 
-export function readPrivateAuthorityOrganizationCredentialScope(
-  reference: string,
-): 'organization' {
-  const value = readPrivateVisibleAsciiCredential(reference, 1);
-  if (value !== 'organization') {
-    fail('provider credential scope must be organization');
-  }
-  return value;
-}
-
 /** Reads the exact 32-byte Person-session PKCE key from canonical base64url. */
 export function readPrivateAuthorityPersonSessionPkceKey(
   reference: string,
