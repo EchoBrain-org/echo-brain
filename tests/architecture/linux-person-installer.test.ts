@@ -95,6 +95,15 @@ describe("Linux x64 Person onboarding installer", () => {
     const symlinkedPayload = linked.run(1);
     expect(symlinkedPayload.status).toBe(1);
     expect(symlinkedPayload.stderr).toContain("entrypoint is missing");
+
+    const linkedRuntime = fixture();
+    expect(linkedRuntime.run(1).status).toBe(0);
+    const installedNode = join(linkedRuntime.home, ".local/share/echo/person/releases/clean-v1-linux-1/node");
+    rmSync(installedNode);
+    symlinkSync(join(linkedRuntime.kit, "node"), installedNode);
+    const rejected = linkedRuntime.run(1);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("symbolic link");
   });
 
   it("fails before executing Node for the wrong ELF header and rejects verifier tampering", () => {

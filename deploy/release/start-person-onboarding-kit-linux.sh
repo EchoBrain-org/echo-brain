@@ -144,6 +144,7 @@ if [[ -e "$release_root" || -L "$release_root" ]]; then
   require_private_directory "$release_root" 'the installed release directory'
   for artifact in node verify-person-onboarding-kit.mjs clean-v1-release.mjs release.json \
     kit-manifest.v1.json person-client.tgz build-identity.v1.json; do
+    require_safe_regular_file "$release_root/$artifact" 'an installed release artifact'
     cmp -s "$SCRIPT_DIR/$artifact" "$release_root/$artifact" || \
       fail 'the installed release ID belongs to different release artifacts'
   done
