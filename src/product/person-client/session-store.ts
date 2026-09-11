@@ -53,8 +53,11 @@ export interface PersonSessionRefreshClaim {
 }
 
 export class PersonClientSessionUnavailableError extends Error {
-  constructor(message = 'Person session is unavailable; sign in again') {
-    super(message);
+  constructor(
+    message = 'Person session is unavailable; sign in again',
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
     this.name = 'PersonClientSessionUnavailableError';
   }
 }
@@ -296,6 +299,18 @@ export class PersonSessionStore {
     }
   }
 
+  private readStoredSession(path: string): StoredPersonClientSessionV1 {
+    const contents = readPrivateFile(path);
+    try {
+      return parseStoredSession(contents);
+    } catch (error) {
+      throw new PersonClientSessionUnavailableError(
+        'Person session store is unreadable; sign in again',
+        { cause: error },
+      );
+    }
+  }
+
   private cleanupTransitions(): void {
     let changed = false;
     for (const path of [
@@ -334,7 +349,7 @@ export class PersonSessionStore {
       if (existsSync(this.paths.refreshing)) {
         let value: StoredPersonClientSessionV1;
         try {
-          value = parseStoredSession(readPrivateFile(this.paths.live));
+          value = this.readStoredSession(this.paths.live);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
             throw new PersonClientSessionUnavailableError(
@@ -355,7 +370,7 @@ export class PersonSessionStore {
         'Person session logout was interrupted; sign in again',
       );
     }
-    return parseStoredSession(readPrivateFile(this.paths.live));
+    return this.readStoredSession(this.paths.live);
   }
 
   private createClaim(path: string): string {
@@ -441,13 +456,18 @@ export class PersonSessionStore {
       this.createClaim(this.paths.logout_claim);
       renameSync(this.paths.live, this.paths.logging_out);
       fsyncDirectory(this.paths.directory);
-      return parseStoredSession(readPrivateFile(this.paths.logging_out));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
         throw new PersonClientSessionUnavailableError(
           'Person session logout is already claimed',
         );
       }
+      throw error;
+    }
+    try {
+      return this.readStoredSession(this.paths.logging_out);
+    } catch (error) {
+      this.finishLogout();
       throw error;
     }
   }

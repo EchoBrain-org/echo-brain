@@ -2,12 +2,12 @@
 
 The provider-neutral processing architecture survives, but the whole product does not yet meet the stronger claim that providers are interchangeable without changes outside their adapters. Provider code is spread across multiple folders and packages. There are concrete boundary leaks, unused code and tests, and documentation that no longer describes the implementation. CI is healthy and reasonably fast; staging's maintenance surface is the larger complexity concern.
 
-This is a diagnosis, not a remediation or deployment. No production source, schema, test expectation, or deployment configuration was changed for this review.
+The original diagnosis below describes the pinned September 11 baseline. The remediation section records the subsequent cleanup. Raw evidence remains available at the linked historical commit and in the original review worktree; generated inventories are not part of the maintained source tree.
 
 **Scope and confidence**
 
 - Reviewed landed `main` at `3b663a74ec5d64e2f99b80ca590429df1415e02d`, fetched from origin on September 11.
-- Window: August 28 through September 11, 2026, starting at `d75fd8c147e66f3139e25d8e09ee7d2545a1da9a`. There are 68 first-parent landing commits and 719 changed paths. See [the complete landing inventory](review-evidence/landed-commits.tsv) and [changed paths](review-evidence/changed-files.tsv).
+- Window: August 28 through September 11, 2026, starting at `d75fd8c147e66f3139e25d8e09ee7d2545a1da9a`. There are 68 first-parent landing commits and 719 changed paths. See [the complete landing inventory](https://github.com/EchoBrain-org/echo-brain/blob/35b653e25c965ed3491ccfdfb3ce836781a55da4/review-evidence/landed-commits.tsv) and [changed paths](https://github.com/EchoBrain-org/echo-brain/blob/35b653e25c965ed3491ccfdfb3ce836781a55da4/review-evidence/changed-files.tsv).
 - Recovered the July 17 architecture at `5086d53`, then followed accepted amendments rather than treating superseded founder-only, local-processing, or no-search restrictions as current requirements.
 - Inventoried the complete change window and examined the relevant provider dependency paths, policy contracts, retrieval/scoring boundaries, telemetry, build/CI, staging tooling, and test ownership. This is a targeted architecture review, not a claim to have manually audited every changed line or every permission path.
 - Unmerged local branches and edits are excluded. The review branch and validation checkout both start from the same pinned landed commit.
@@ -106,7 +106,7 @@ Two distinct goals should be recorded separately: provider semantics must termin
 
 **CI evidence and optimization order**
 
-The [reviewed CI run](https://github.com/EchoBrain-org/echo-brain/actions/runs/34629839791) tests exactly `3b663a7`. The last ten main runs retrieved were all successful. The latest workflow ran from 17:49:22Z to 17:56:17Z: 6m55s including scheduling and aggregation. [Raw summarized evidence](review-evidence/ci.json) records the exact runs, jobs, steps and suites.
+The [reviewed CI run](https://github.com/EchoBrain-org/echo-brain/actions/runs/34629839791) tests exactly `3b663a7`. The last ten main runs retrieved were all successful. The latest workflow ran from 17:49:22Z to 17:56:17Z: 6m55s including scheduling and aggregation. [Raw summarized evidence](https://github.com/EchoBrain-org/echo-brain/blob/35b653e25c965ed3491ccfdfb3ce836781a55da4/review-evidence/ci.json) records the exact runs, jobs, steps and suites.
 
 | Latest job/step | Observed duration |
 | --- | --- |
@@ -151,15 +151,15 @@ Release checks for immutable artifacts, current-host reuse, retained-volume owne
 4. Consolidate the telemetry contract vocabulary and assess its cost on a representative rehearsal. Avoid a broader observability or release framework.
 5. Qualify one genuinely different provider through the existing seams before strengthening the product's portability claim. The test should preserve policy, canonical records and processing behavior, not merely compile a second adapter.
 
-The full local `npm run check` passed on the pinned source: architecture, documentation, lint, build, types, and all 161 test files; 1,989 tests passed and one was skipped. Vitest took 280.99s. The test process emitted a non-failing SIGINT listener warning, recorded without attributing an uninvestigated cause. Validation results and reproducible probe outputs are retained in [review-evidence](review-evidence/), including `scope.json` and `validation.txt`.
+The full local `npm run check` passed on the pinned source: architecture, documentation, lint, build, types, and all 161 test files; 1,989 tests passed and one was skipped. Vitest took 280.99s. The test process emitted a non-failing SIGINT listener warning, recorded without attributing an uninvestigated cause. Validation results and reproducible probe outputs are retained in [review-evidence](https://github.com/EchoBrain-org/echo-brain/blob/35b653e25c965ed3491ccfdfb3ce836781a55da4/review-evidence/), including `scope.json` and `validation.txt`.
 
 ## Remediation pass — 2026-09-11
 
-This section records what the same-day cleanup pass changed in this review worktree, what it deliberately left alone, and the additional dead surface an independent export scan found beyond F5. Every removal below was verified by reference search before deletion and by the full local gate afterwards; see [remediation-validation.txt](review-evidence/remediation-validation.txt).
+This section records what the same-day cleanup pass changed in this review worktree, what it deliberately left alone, and the additional dead surface an independent export scan found beyond F5. Every removal below was verified by reference search before deletion and by the full local gate afterwards; see [remediation-validation.txt](https://github.com/EchoBrain-org/echo-brain/blob/35b653e25c965ed3491ccfdfb3ce836781a55da4/review-evidence/remediation-validation.txt).
 
 **Own pass: additional findings**
 
-The [dead-export scan](review-evidence/dead-export-scan.txt) listed 103 exported values that no other file references. Most are constants or helpers still used inside their own module and were left alone. The scan also exposed a stale port that the diagnosis above did not reach:
+The [dead-export scan](https://github.com/EchoBrain-org/echo-brain/blob/35b653e25c965ed3491ccfdfb3ce836781a55da4/review-evidence/dead-export-scan.txt) listed 103 exported values that no other file references. Most are constants or helpers still used inside their own module and were left alone. The scan also exposed a stale port that the diagnosis above did not reach:
 
 - **The Authority repository port was two-thirds fiction.** [authority-repository.ts](services/organization-authority/src/application/ports/authority-repository.ts) declared `AuthorityReadTransaction`, `AuthorityWriteTransaction`, and `OrganizationAuthorityRepository` with eleven methods that had no implementation and no caller, plus the complete reviewer-query, readable-search-query, Person-read-decision, and meeting-ingestion-exclusion audit vocabularies, three unenforced 180-day retention constants, and a never-emitted `permission.readable_search_generation_published` action. The only repository is the Person session store, which implements the separate `PersonSessionRepository` port. The session application reached the stale type only through `as unknown as AuthorityWriteTransaction` casts inside `withAuthenticatedWrite` and `createPersonReadAuthorizationPort`, both of which threw unconditionally for that store and were called by nothing except a test asserting the throw. The port now carries only the entity types the session store actually reads and writes.
 - **A no-op legacy audit hook.** `PersonSessionWriteTransaction.appendAudit?` existed "for the legacy repository only"; no repository implemented it, so the login-grant audit call in the session application never executed. Removed with the hook and its `supports_full_person_authorization_transactions` flag.

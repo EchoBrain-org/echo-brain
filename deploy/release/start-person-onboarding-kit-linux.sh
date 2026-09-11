@@ -50,7 +50,7 @@ ensure_owned_directory_chain() {
       fi
     else
       [[ "$owned" == 1 ]] || fail "$label must be within an existing current-user-owned directory"
-      mkdir -m 0700 "$cursor" || fail "could not create $label"
+      mkdir -m 0700 "$cursor" || fail "could not create $label; check destination permissions and free disk space"
     fi
   done
   [[ "$owned" == 1 ]] || fail "$label must be owned by the current user"
@@ -61,7 +61,15 @@ validate_linux_x64_glibc() {
     fail 'this kit supports Linux x86_64 only'
   local libc
   libc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
-  [[ "$libc" == glibc\ * ]] || fail 'this kit supports glibc Linux only; musl is unsupported'
+  [[ "$libc" == glibc\ * ]] || fail 'this kit supports glibc Linux only; musl is unsupported. Use a supported glibc machine.'
+  local major minor kernel
+  [[ "$libc" =~ ^glibc\ ([0-9]+)\.([0-9]+)$ ]] || fail 'could not determine glibc version'
+  major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
+  (( major > 2 || (major == 2 && minor >= 28) )) || fail 'glibc 2.28 or later is required; upgrade the OS before installing ECHO'
+  kernel="$(uname -r)"
+  [[ "$kernel" =~ ^([0-9]+)\.([0-9]+) ]] || fail 'could not determine Linux kernel version'
+  major="${BASH_REMATCH[1]}"; minor="${BASH_REMATCH[2]}"
+  (( major > 4 || (major == 4 && minor >= 18) )) || fail 'Linux kernel 4.18 or later is required; upgrade the OS before installing ECHO'
 }
 
 validate_linux_x64_node_header() {
@@ -96,12 +104,24 @@ if [[ "$1" == --install-only ]]; then
   install_only=1
 else
   invitation="$1"
-  [[ "$invitation" = /* && -f "$invitation" && ! -L "$invitation" ]] || usage
+  [[ "$invitation" = /* ]] || fail 'use the absolute path to ECHO-invitation-<random>/person-invitation.json inside the folder your owner exported'
+  [[ ! -L "$invitation" ]] || fail 'the invitation is a symbolic link; select the original regular file'
+  [[ -e "$invitation" ]] || fail 'invitation file not found; locate ECHO-invitation-<random>/person-invitation.json in the transferred folder'
+  [[ -f "$invitation" ]] || fail 'the invitation must be a regular file'
 fi
 
 [[ -n "${HOME:-}" && "$HOME" = /* ]] || fail 'a normal Linux user HOME is required'
 validate_linux_x64_glibc
 validate_linux_x64_node_header
+if [[ "$install_only" == 0 ]]; then
+  [[ "$(stat -c '%u' "$invitation")" == "$(id -u)" ]] || fail 'the invitation must be owned by your current user; ask the owner to transfer it to your account'
+  if [[ "$(stat -c '%a' "$invitation")" != 600 ]]; then
+    printf 'ECHO setup: the invitation must have mode 0600. For your file, run: chmod 600 -- %q\n' "$invitation" >&2
+    exit 1
+  fi
+fi
+runtime_version="$("$NODE" --version 2>/dev/null)" || fail 'the bundled Node runtime cannot start; check OS libraries and executable permissions, then re-extract the approved kit'
+[[ "$runtime_version" == v22.22.1 ]] || fail 'the bundled Node version is wrong; re-extract the approved kit'
 for required in "$VERIFY" "$RELEASE_TOOL" "$SCRIPT_DIR/release.json" \
   "$SCRIPT_DIR/kit-manifest.v1.json" "$SCRIPT_DIR/person-client.tgz" \
   "$SCRIPT_DIR/build-identity.v1.json"; do
@@ -110,12 +130,13 @@ done
 
 # Check the ELF header before launching a potentially wrong-architecture runtime.
 # The owner's authenticated archive checksum establishes the kit's origin.
-"$NODE" "$VERIFY" "$SCRIPT_DIR" >/dev/null || fail 'the onboarding kit verification failed'
+"$NODE" "$VERIFY" "$SCRIPT_DIR" >/dev/null || fail 'the onboarding kit verification failed; re-extract the approved kit and verify the owner-provided archive checksum'
 "$NODE" "$RELEASE_TOOL" validate "$SCRIPT_DIR/release.json" >/dev/null || \
   fail 'the release record verification failed'
 
 release_id="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" release-id)"
 expected_version="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" client-version)"
+trap 'fail "installation could not write or extract files; check destination permissions and free disk space, then retry"' ERR
 root="${XDG_DATA_HOME:-$HOME/.local/share}/echo/person"
 ensure_owned_directory_chain "$root" 'the ECHO data root'
 chmod 0700 "$root"
@@ -198,6 +219,8 @@ printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' \
 chmod 0700 "$pending_wrapper"
 mv "$pending_wrapper" "$wrapper" || fail 'the ECHO command could not be activated'
 
+trap - ERR
+printf 'Bundled Node: %s\n' "$runtime_version"
 printf 'ECHO installed: %q\n' "$wrapper"
 printf 'To use it by name in this shell: export PATH=%q:"$PATH"\n' "$bin_root"
 if [[ "$install_only" == 1 ]]; then exit 0; fi

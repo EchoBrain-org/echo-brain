@@ -16,8 +16,8 @@ function fixture() {
   const tools = join(root, "tools");
   for (const path of [home, kit, tools]) mkdirSync(path, { mode: 0o700 });
   const tool = (name: string, body: string) => writeFileSync(join(tools, name), `#!/usr/bin/env bash\nset -eu\n${body}\n`, { mode: 0o755 });
-  tool("uname", 'if [[ "${WRONG_OS:-}" == yes ]]; then echo Darwin; elif [[ "$1" == -s ]]; then echo Linux; else echo x86_64; fi');
-  tool("getconf", '[[ "${MUSL:-}" != yes ]] && echo "glibc 2.36"');
+  tool("uname", 'if [[ "${WRONG_OS:-}" == yes ]]; then echo Darwin; elif [[ "$1" == -s ]]; then echo Linux; elif [[ "$1" == -r ]]; then echo "${KERNEL:-6.1.0}"; else echo x86_64; fi');
+  tool("getconf", '[[ "${MUSL:-}" != yes ]] && echo "glibc ${GLIBC:-2.36}"');
   tool("od", 'if [[ "${WRONG_ELF:-}" == yes ]]; then printf " 127 69 76 70 2 1 1 0 0 0 0 0 0 0 0 0 0 0 3 0\\n"; else printf " 127 69 76 70 2 1 1 0 0 0 0 0 0 0 0 0 0 0 62 0\\n"; fi');
   if (process.platform === "darwin") {
     tool("stat", 'if [[ "$2" == %u ]]; then /usr/bin/stat -f %u "$3"; else /usr/bin/stat -f %Lp "$3"; fi');
@@ -119,7 +119,8 @@ describe("Linux x64 Person onboarding installer", () => {
   it("refuses missing or relative invitations, a held lock, and symlinked data paths", () => {
     const subject = fixture();
     const missing = subject.run(1, "relative.json");
-    expect(missing.status).toBe(2);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("absolute path");
     const root = join(subject.home, ".local/share/echo/person");
     mkdirSync(root, { recursive: true, mode: 0o700 });
     mkdirSync(join(root, ".installer-lock"), { mode: 0o700 });
@@ -164,6 +165,46 @@ describe("Linux x64 Person onboarding installer", () => {
     const result = subject.run(1, "--install-only", { XDG_DATA_HOME: data });
     expect(result.status, result.stderr).toBe(0);
     expect(existsSync(join(data, "echo/person/bin/echo-brain"))).toBe(true);
+  });
+
+  it("rejects old libc and kernels before installation, but accepts the supported floor", () => {
+    const subject = fixture();
+    for (const env of [{ GLIBC: "2.27" }, { KERNEL: "4.17.9" }] as Array<Record<string, string>>) {
+      const result = subject.run(1, "--install-only", env);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/glibc 2.28|kernel 4.18/);
+      expect(existsSync(join(subject.home, ".local"))).toBe(false);
+    }
+    const accepted = subject.run(1, "--install-only", { GLIBC: "2.28", KERNEL: "4.18.0" });
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(accepted.stdout).toContain("Bundled Node: v22.22.1");
+  });
+
+  it("distinguishes absent and linked invitations and gives private-file remediation", () => {
+    const subject = fixture();
+    const invitation = join(subject.root, "invitation with spaces.json");
+    expect(subject.run(1, invitation).stderr).toContain("not found");
+    symlinkSync(join(subject.root, "absent"), invitation);
+    expect(subject.run(1, invitation).stderr).toContain("symbolic link");
+    rmSync(invitation);
+    writeFileSync(invitation, "{}", { mode: 0o644 });
+    const result = subject.run(1, invitation);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("chmod 600");
+    expect(result.stderr).not.toContain("{}");
+    expect(existsSync(join(subject.home, ".local"))).toBe(false);
+  });
+
+  it("reports a staging write failure while preserving the active command", () => {
+    const subject = fixture();
+    expect(subject.run(1).status).toBe(0);
+    const wrapper = join(subject.home, ".local/share/echo/person/bin/echo-brain");
+    const before = readFileSync(wrapper, "utf8");
+    writeFileSync(join(subject.root, "tools", "install"), "#!/bin/bash\nexit 1\n", { mode: 0o755 });
+    const result = subject.run(2);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("free disk space");
+    expect(readFileSync(wrapper, "utf8")).toBe(before);
   });
 
   it("refuses non-Linux and musl hosts before checking the kit", () => {

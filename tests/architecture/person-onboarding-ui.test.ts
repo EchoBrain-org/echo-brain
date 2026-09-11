@@ -56,6 +56,16 @@ describe("graphical employee onboarding bridge", () => {
     expect(failed.calls).toHaveLength(1);
   });
 
+  it("maps only known installer failures to actionable safe guidance", async () => {
+    for (const [phase, instruction] of [["compatibility-failed", "macOS 14"], ["kit-failed", "checksum"], ["destination-failed", "free disk space"]]) {
+      const subject = fixture([{ code: 1, stdout: JSON.stringify({ ok: false, phase, private_detail: "never forward" }) }]);
+      const result = await runOnboardingAction("prepare", undefined, subject.options);
+      expect(result.phase).toBe(phase);
+      expect(result.message).toContain(instruction);
+      expect(JSON.stringify(result)).not.toContain("never forward");
+    }
+  });
+
   it("resumes after interrupted sign-in by checking the saved account without reinstalling", async () => {
     for (const signedIn of [false, true]) {
       const subject = fixture([{ code: 0, stdout: status(signedIn) }]);
@@ -184,5 +194,48 @@ describe("graphical employee onboarding bridge", () => {
   it("bounds a stalled child and suppresses output after timeout", async () => {
     const result = await execute(process.execPath, ["-e", "console.log('private child output'); setInterval(() => {}, 1000)"], { timeoutMs: 100 });
     expect(result).toEqual({ code: 1, stdout: "" });
+  });
+
+  it("preserves specific recovery reasons within installation stages", async () => {
+    for (const [phase, reason, instruction] of [
+      ["compatibility-failed", "unsupported-mac", "Apple silicon"],
+      ["destination-failed", "download-damaged", "damaged or unsigned"],
+      ["destination-failed", "setup-in-progress", "already running"],
+    ]) {
+      const subject = fixture([{ code: 1, stdout: JSON.stringify({ ok: false, phase, reason }) }]);
+      const result = await runOnboardingAction("prepare", undefined, subject.options);
+      expect(result).toMatchObject({ ok: false, phase, reason });
+      expect(result.message).toContain(instruction);
+    }
+    const unknown = fixture([{ code: 1, stdout: JSON.stringify({ ok: false, phase: "destination-failed", reason: "__proto__", message: "private detail" }) }]);
+    const fallback = await runOnboardingAction("prepare", undefined, unknown.options);
+    expect(fallback.phase).toBe("destination-failed");
+    expect(fallback.message).toContain("free disk space");
+    expect(JSON.stringify(fallback)).not.toContain("private detail");
+  });
+
+  it("names a known installer failure reason and ignores any other reason", async () => {
+    const named = fixture([{ code: 1, stdout: JSON.stringify({ ok: false, phase: "install-failed", reason: "existing-install-mismatch" }) }]);
+    const result = await runOnboardingAction("prepare", undefined, named.options);
+    expect(result).toMatchObject({ ok: false, phase: "install-failed", reason: "existing-install-mismatch" });
+    expect(result.message).toContain("earlier ECHO install");
+
+    // Unknown reasons, inherited property names, and installer prose all fall
+    // back to the generic message: the bridge never renders installer text.
+    for (const stdout of [
+      JSON.stringify({ ok: false, phase: "install-failed", reason: "invented-reason" }),
+      JSON.stringify({ ok: false, phase: "install-failed", reason: "constructor" }),
+      JSON.stringify({ ok: false, phase: "install-failed", reason: "__proto__" }),
+      JSON.stringify({ ok: false, phase: "install-failed", reason: "private installer diagnostics" }),
+      "private installer diagnostics",
+    ]) {
+      const subject = fixture([{ code: 1, stdout }]);
+      const fallback = await runOnboardingAction("prepare", undefined, subject.options);
+      expect(fallback, stdout).toEqual({
+        ok: false,
+        phase: "install-failed",
+        message: "ECHO could not finish installing. Try again with the approved download from your owner.",
+      });
+    }
   });
 });
