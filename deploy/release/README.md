@@ -649,7 +649,7 @@ must be recorded separately before claiming public self-service distribution.
 
 The `.tar.gz` kit below remains the operator fallback.
 
-The supported first-cohort employee path is one private macOS Apple-silicon
+The macOS first-cohort employee path is one private Apple-silicon
 kit plus that employee's one-use invitation. The kit carries the exact Person
 client, the matching `ECHO.app` hotkey overlay, and a pinned Node 22.22.1
 runtime. The employee does not install Node, npm, Homebrew, Xcode, Apple's
@@ -737,8 +737,74 @@ client makes one bounded existing-identity login attempt without the invitation
 grant; if no identity exists, it stops before opening Google and tells the
 employee to request a reissued invitation.
 
-The first cohort supports macOS arm64 only. Developer ID signing and notarization
-remain a later distribution improvement for both kit formats.
+Developer ID signing and notarization remain a later distribution improvement
+for both macOS kit formats.
+
+### Linux x64 terminal kit
+
+The Linux kit supports glibc x86_64 machines (Ubuntu 22.04+ / Debian 12+ class).
+It installs the same Person CLI used by the Mac app, with invitation login,
+status, records, Ask, and server-authorized organization commands. There is no
+Linux desktop app. Linux arm64, musl/Alpine, and Windows are unsupported.
+
+Build on Linux x64 from the clean release commit. Supply the official Node
+22.22.1 Linux x64 binary after checking its download against Node's
+`SHASUMS256.txt`. `zip` is a build tool; employees need only Bash, unzip, tar,
+and standard Linux utilities. They do not need Node, npm, Python, a compiler,
+sudo, or a repository checkout.
+
+```sh
+npm run kit:person-onboarding -- \
+  --target linux-x64 \
+  --release /absolute/private/current.clean-v1.json \
+  --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
+  --runtime-node /absolute/private/node-v22.22.1-linux-x64/bin/node \
+  --output /absolute/private/ECHO-linux-x64-source-sha12.zip
+```
+
+For a release offered on both platforms, reuse the **same canonical release
+record and exact Person-client tarball**. The Authority image is shared too;
+the employee's CPU architecture does not select a different server. The kits
+differ in their bundled Node runtime and installer. Linux uses a strict v2
+manifest binding its runtime, release, client, and kit build identity. Existing
+Mac kits retain their v1 manifest and required app archive. Linux omits the
+unused Mac UI bridge.
+
+Send a folder named `ECHO-Employee-Onboarding-linux-x64-<source_sha12>` containing
+the ZIP, `SHA256SUMS.txt`, and a short `README.txt` with the commands below and
+the installed command path. Keep the employee's one-use invitation separate.
+Send the archive digest through the authenticated owner channel; the checksum
+file by itself is not independent proof of origin. The shared kit contains no
+invitation, session, or provider credentials.
+
+```sh
+sha256sum -c SHA256SUMS.txt
+unzip ECHO-linux-x64-source-sha12.zip
+./echo-person-onboarding-kit/Start-ECHO.sh /absolute/path/person-invitation.json
+```
+
+Use `Start-ECHO.sh --install-only` to install without signing in. Without an
+invitation or that flag, it prints usage and exits. Sign-in prints a browser
+handoff; optional `person login --invitation <absolute-path> --open-browser`
+uses `xdg-open` when available. A headless machine needs a browser that can
+reach the client's loopback callback; this kit adds no device-code login.
+
+Installation lives under `${XDG_DATA_HOME:-$HOME/.local/share}/echo/person`.
+The installer prints the absolute `bin/echo-brain` path and an optional PATH
+command; it does not edit shell profiles. Releases are versioned, activation
+is atomic, and reinstalling an identical release is safe. Earlier releases
+are retained. A private lock blocks concurrent or interrupted installations
+until the prior installer has finished or its state has been inspected.
+Existing Person sessions remain at `~/.local/share/echo-brain/person` and are
+preserved; applying another invitation requires explicitly signing out first.
+
+Run `node tests/fixtures/linux-person-onboarding-smoke.mjs` on a clean Linux
+x64 checkout for the offline packaging proof. The existing Ubuntu CI job runs
+it with system Node/npm absent from the installer's PATH. Its fixture release
+uses non-fetchable `rehearsal.invalid` URLs and an undeployed image digest.
+This proves packaging and local installation; accepted release selection,
+real invitation redemption, and permission-aware server reads remain live
+release checks. An offline fixture kit is not an employee release.
 
 ## Advanced client-only install or reinstall
 

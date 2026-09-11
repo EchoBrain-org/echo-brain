@@ -256,13 +256,33 @@ function optionalRecordLimit(
   return Number(value);
 }
 
-function openAuthorizationUrl(url: string): boolean {
-  if (process.platform !== "darwin") return false;
-  const opened = spawnSync("/usr/bin/open", [url], {
-    stdio: "ignore",
-    timeout: 10_000,
-  });
-  return opened.status === 0;
+export interface BrowserOpenerOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly spawn_sync?: typeof spawnSync;
+}
+
+/** Opens a browser only when the host supplies the platform's standard opener. */
+export function openAuthorizationUrl(
+  url: string,
+  options: BrowserOpenerOptions = {},
+): boolean {
+  const platform = options.platform ?? process.platform;
+  const command = platform === "darwin"
+    ? "/usr/bin/open"
+    : platform === "linux"
+      ? "xdg-open"
+      : undefined;
+  if (command === undefined) return false;
+  try {
+    const opened = (options.spawn_sync ?? spawnSync)(command, [url], {
+      stdio: "ignore",
+      timeout: 10_000,
+      shell: false,
+    });
+    return opened.error === undefined && opened.status === 0;
+  } catch {
+    return false;
+  }
 }
 
 async function beginSlackBrowserConnect(
