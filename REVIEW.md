@@ -40,7 +40,7 @@ The accepted server migration and hosted-operation amendments changed earlier cu
 
 **F1 — Medium: private approval policy embeds Slack identity semantics outside the declared provider roots.**
 
-Evidence: [private-approval-policy-resolution-v1.ts](packages/organization-control-plane/src/application/private-approval-policy-resolution-v1.ts), especially lines 41–59, 80–111 and 251–287. Its pending, authorization, and terminal resolution contracts carry Slack-specific identity links. Validation requires `provider === "slack"` and a Slack `U`/`W` subject format. This code entered with the private approval implementation on August 28 (`1e4285c`), before the subsequent provider-boundary cleanup, and remains today.
+Evidence: the pre-split `application/private-approval-policy-resolution-v1.ts` (now [the Slack proof module](packages/organization-control-plane/src/application/slack/private-approval-policy-resolution-v1.ts) over [the neutral core](packages/organization-control-plane/src/application/private-approval-policy-resolution-core-v1.ts)), especially its lines 41–59, 80–111 and 251–287 at the reviewed commit. Its pending, authorization, and terminal resolution contracts carry Slack-specific identity links. Validation requires `provider === "slack"` and a Slack `U`/`W` subject format. This code entered with the private approval implementation on August 28 (`1e4285c`), before the subsequent provider-boundary cleanup, and remains today.
 
 Executable evidence: the same otherwise-valid pending approval is accepted with `provider: "slack"` and rejected with `provider: "fixture-provider"`, with the error `assigned_owner_slack_identity_link.provider must be slack`.
 
@@ -176,15 +176,27 @@ Net: 24 files, +304/−1632 lines before the evidence files.
 
 **Deliberately not changed, with the reason**
 
-- **F1 (Slack semantics in the private approval resolver).** The pending, authorization, and resolution contracts are frozen, digested commitments. Separating provider-neutral policy from Slack proof validation changes persisted bytes or requires a parallel contract version, which is a design change with a versioning procedure, not a cleanup edit. The architecture document now states the coupling and the constraint explicitly.
+- **F1 (Slack semantics in the private approval resolver).** Closed in the follow-up pass below without touching persisted bytes: the resolver is split into a provider-independent core and a Slack-owned proof module under a declared Slack root.
 - **F2 (single-Slack Person tools contract).** Under the lean governance rule, the honest fix today is to document it as a Slack-specific inventory rather than to generalize a closed public response contract for a provider that does not exist. Documented; code unchanged.
-- **F4 (opt-in gate coverage).** Widening `provider_neutral_paths` to cover shared directories by default surfaces the F1–F3 leaks as eight checker failures. With F3 fixed, the shared observation module can be added to the neutral list once the fixed provider/model category vocabularies are also moved behind the adapter edge; F1 and F2 still block the other two files. Do this together with F1.
+- **F4 (opt-in gate coverage).** Closed in the follow-up pass below: coverage is neutral by default across the Authority service and every workspace package, with ownership, selecting entrypoints, and reasoned exceptions declared explicitly.
 - **F7 (source-string assertions).** Roughly 100 `toContain` assertions across the deployment-profile and release-record suites each need mapping to a behavioral test before removal. That mapping is real work with real risk to release safety and was not attempted here.
 - **The retired V1 control-plane tables and the `federation-protocol` package name.** The tables are protected by the frozen baseline digest and exact-schema tests; the package name is stale but 160 files import its canonical-JSON and digest helpers, so a rename is churn without lean-down value.
 - **Exports used only inside their own module.** Unexporting them changes nothing at runtime and touches many files for no maintenance gain.
 
 **Next in order**
 
-1. Fix F1 and F4 together, then add the shared observation module and the Person tools API to the neutral-path list.
-2. Profile the three expensive architecture suites; the snapshot copies in the coherent-worktree fixture dominate, not assertion count.
-3. Only after a representative staging rehearsal, decide whether the telemetry vocabulary duplication between producer and Explorer is worth consolidating.
+1. Profile the three expensive architecture suites; the snapshot copies in the coherent-worktree fixture dominate, not assertion count.
+2. Only after a representative staging rehearsal, decide whether the telemetry vocabulary duplication between producer and Explorer is worth consolidating, and retire the three telemetry exceptions in the manifest with it.
+
+## Provider ownership pass — 2026-09-11 (F1 and F4)
+
+**Plain-English summary.** Before this pass the gate only checked a hand-picked list of "neutral" files, so an ordinary new shared file could mention a provider and nobody would notice. Now every source file under the Authority service and every workspace package is neutral unless the manifest says who owns it. There are exactly three ways out, all written in `product/source-boundary.v1.json`: a provider root (the file belongs to Slack, Granola, OpenRouter, or the synthetic demo), a selecting entrypoint (a thin composition root, CLI, main, or package barrel whose job is to choose providers), or a provider-coupled exception with a reason. An exception that stops naming or reaching a provider fails the gate until it is deleted, so the exception list cannot silently grow stale. The generic LLM decision processor keeps its root but is marked as a capability, not a vendor, so neutral telemetry may still say "llm".
+
+Running that rule against the tree found 38 unowned files that named a provider. They fell into four groups, and each got the smallest honest treatment:
+
+- **Provider-owned code that only lacked a declaration.** Nineteen new Slack roots across the control plane, the API, the protocol, the record package, and the Authority OIDC adapter. No code moved.
+- **Real leaks, fixed in code.** The private approval resolver (F1) is now a neutral core plus a Slack proof module. The organization API's Slack request, response, and path contracts moved from the shared `contracts.ts` and `http.ts` into the Slack-owned modules; the public barrel exports the same names. The Slack and Granola credential readers left the neutral private-file credential module for provider-owned modules under their composition roots. The neutral secret-store contract left the Slack contracts file. The Person record-read route no longer pins the Slack resolution-ref kind; it trusts the record package's projector registry and reads the generic final approver. Two comments that named providers were reworded.
+- **Selecting entrypoints.** The composition root, the synthetic-demo CLI and composition root, the three thin `clean-*-main.ts` binaries, and the three package barrels.
+- **Reasoned exceptions.** The two shared telemetry modules and the Ask journey mapper carry finite provider and model allowlists that bound metric cardinality; the current-only V4 record envelope validates the frozen Slack record input. Each entry names its follow-up. Importers of an exception are not counted as a second leak; the exception owns its coupling.
+
+Two regression cases were added to the boundary suite: an ordinary new shared file and a new package file are rejected without any registration, and a stale exception or a missing entrypoint fails the gate. F2 stays as decided: the Person tools API is a Slack-owned module, not a generic inventory.

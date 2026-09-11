@@ -1157,7 +1157,9 @@ describe("workspace source boundaries", () => {
 
     const product = readFixtureJson<{
       adapter_architecture: {
-        provider_neutral_paths: string[];
+        provider_neutral_roots: string[];
+        provider_selecting_entrypoints: string[];
+        provider_coupled_exceptions: Array<{ path: string; reason: string }>;
         provider_identifier_registry: Array<{
           identifier: string;
           transport_provider?: boolean;
@@ -1166,12 +1168,17 @@ describe("workspace source boundaries", () => {
         provider_adapter_roots: Array<{
           identifier: string;
           root: string;
+          provider_identifier?: boolean;
         }>;
-        forbid_discovered_adapter_ids_in_provider_neutral_paths: boolean;
+        forbid_discovered_adapter_ids_in_provider_neutral_roots: boolean;
       };
     }>(fixture, "product/source-boundary.v1.json");
-    expect(product.adapter_architecture.provider_neutral_paths).toContain(
-      "services/organization-authority/src/processing/admitted-meeting-processing/**",
+    expect(product.adapter_architecture.provider_neutral_roots).toEqual([
+      "services/organization-authority/src/**",
+      "packages/*/src/**",
+    ]);
+    expect(product.adapter_architecture.provider_selecting_entrypoints).toContain(
+      "services/organization-authority/src/composition/organization-authority-composition-root.ts",
     );
     expect(
       product.adapter_architecture.provider_identifier_registry.map(
@@ -1180,7 +1187,7 @@ describe("workspace source boundaries", () => {
     ).toEqual(["openrouter", "openai", "anthropic", "ollama", "deepseek"]);
     expect(
       product.adapter_architecture
-        .forbid_discovered_adapter_ids_in_provider_neutral_paths,
+        .forbid_discovered_adapter_ids_in_provider_neutral_roots,
     ).toBe(true);
     expect(product.adapter_architecture.provider_adapter_roots).toEqual(expect.arrayContaining([
       {
@@ -1190,6 +1197,11 @@ describe("workspace source boundaries", () => {
       {
         identifier: "llm",
         root: "services/organization-authority/src/processing/adapters/decision-processors/llm/",
+        provider_identifier: false,
+      },
+      {
+        identifier: "slack",
+        root: "packages/organization-control-plane/src/application/slack/",
       },
       {
         identifier: "slack",
@@ -1351,6 +1363,62 @@ describe("workspace source boundaries", () => {
     } finally {
       rmSync(newClient, { force: true });
     }
+  });
+
+  it("covers an ordinary new shared file and a new package file without registration", () => {
+    const fixture = fixtureRepository();
+    const sharedProbe =
+      "services/organization-authority/src/shared/new-shared-observation-probe.ts";
+    const packageProbe = "packages/organization-record/src/log/new-record-probe.ts";
+    writeFileSync(join(fixture, sharedProbe), 'export const surface = "slack";\n');
+    writeFileSync(join(fixture, packageProbe), 'export const source = "granola";\n');
+    const result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain(
+      `provider identifier 'slack' leaked into provider-neutral module: ${sharedProbe}`,
+    );
+    expect(result.stdout + result.stderr).toContain(
+      `provider identifier 'granola' leaked into provider-neutral module: ${packageProbe}`,
+    );
+    // The generic LLM capability family owns a root but is not a vendor name.
+    rmSync(join(fixture, sharedProbe), { force: true });
+    rmSync(join(fixture, packageProbe), { force: true });
+    const capabilityProbe =
+      "services/organization-authority/src/processing/core/llm-capability-probe.ts";
+    writeFileSync(join(fixture, capabilityProbe), 'export const llm_usage = "llm";\n');
+    const capability = runBoundary(fixture);
+    expect(capability.status, capability.stdout + capability.stderr).toBe(0);
+    expect(capability.stdout + capability.stderr).not.toContain(
+      "leaked into provider-neutral module",
+    );
+  });
+
+  it("keeps every provider-coupled exception earned and every entrypoint real", () => {
+    const fixture = fixtureRepository();
+    const product = readFixtureJson<{
+      adapter_architecture: {
+        provider_selecting_entrypoints: string[];
+        provider_coupled_exceptions: Array<{ path: string; reason: string }>;
+      };
+    }>(fixture, "product/source-boundary.v1.json");
+    const cleanPath =
+      "services/organization-authority/src/processing/core/contracts/decision.ts";
+    product.adapter_architecture.provider_coupled_exceptions.push({
+      path: cleanPath,
+      reason: "fixture: this file does not name or reach a provider",
+    });
+    product.adapter_architecture.provider_selecting_entrypoints.push(
+      "services/organization-authority/src/composition/missing-entrypoint.ts",
+    );
+    writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
+    const result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain(
+      `provider-coupled exception is no longer needed and must be removed: ${cleanPath}`,
+    );
+    expect(result.stdout + result.stderr).toContain(
+      "provider-selecting entrypoint names no source file: services/organization-authority/src/composition/missing-entrypoint.ts",
+    );
   });
 
   it("rejects direct and transitive neutral-module reachability into declared provider roots", () => {

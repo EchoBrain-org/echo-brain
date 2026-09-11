@@ -11,7 +11,7 @@ reviewed_at: 2026-09-07
 reviewed_ref: 52652d26dab3d753333ce489f866e1e7d0d1f4aa
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Active provider boundaries: processing core, neutral orchestration, and canonical durable contracts
+enforcement_scope: Every source file under the Authority service and workspace package source roots is provider-neutral unless a declared provider root, selecting entrypoint, or reasoned exception owns it
 failure_pattern_ids:
   - FP-ADAPTERS-005
 ---
@@ -56,11 +56,21 @@ introduced as a conditional for one vendor.
 ## Enforcement and failure behavior
 
 The source-boundary manifest names every active provider-owned implementation
-root, including selecting composition, ingress, identity, approval/delivery,
-and the active synthetic-demo source and evaluator as well as processing adapters. One provider may
-own several explicit roots. The gate rejects an unlisted adapter implementation
-or a source file under the adapter tree, and rejects a provider-neutral module
-that directly or transitively reaches any declared root. The typed
+root across workspaces, including selecting composition, ingress, identity,
+approval/delivery, control-plane persistence and contracts, public API
+modules, record projectors, and the active synthetic-demo source and
+evaluator as well as processing adapters. One provider may own several
+explicit roots. Coverage is neutral by default: every source file under
+`services/organization-authority/src` and `packages/*/src` is checked for
+provider identifiers and for direct or transitive reach into a declared root
+unless the manifest owns it as a provider root, lists it as a thin
+provider-selecting entrypoint, or records it as a provider-coupled exception
+with a reason. An exception that no longer names or reaches a provider fails
+the gate until it is removed, and a listed entrypoint or exception that names
+no source file fails as stale. A capability-family root such as the generic
+LLM decision processor may be marked `provider_identifier: false` so neutral
+modules may still use that word. The gate rejects an unlisted adapter
+implementation or a source file under the adapter tree. The typed
 `LLM_PROVIDER_IDS` source is checked against the registered transport-provider
 set; provider-client declarations not represented there fail, while the
 separately registered `deepseek` model namespace remains lexical evidence for
@@ -119,7 +129,9 @@ graders and deterministic core-runtime checkpoint remain available.
 Enforcement remains partial and this record does not claim full provider
 qualification. Static checks catch names and dependency edges but cannot prove
 that a generically named shared abstraction does not encode one provider's
-semantics or that a newly added neutral file was registered. Initial-owner
+semantics. A newly added shared file no longer needs registration to be
+checked; the recorded exceptions are the telemetry dimension allowlists and
+the current-only V4 record envelope, each with the follow-up that retires it. Initial-owner
 onboarding and the compatibility CLI intentionally select a concrete
 Granola, OpenRouter, and Slack product profile; source admission is supplied by
 that profile rather than one universal onboarding command. Any change that
