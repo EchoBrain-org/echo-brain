@@ -188,6 +188,38 @@ import Foundation
     expect(result.stdout.trim().split("\n")).toEqual(["https://example.com", "https://example.com:444"]);
   });
 
+  it.skipIf(process.platform !== "darwin")("shows an installer-supplied reason only when it is safe to display", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-onboarding-message-proof-")));
+    roots.push(root);
+    const onboarding = readFileSync(join(repo, "product/echo-onboarding/main.swift"), "utf8");
+    writeFileSync(join(root, "onboarding.swift"), onboarding.slice(0, onboarding.indexOf("@main\nprivate enum EchoOnboardingMain")));
+    writeFileSync(join(root, "proof.swift"), `import AppKit
+import Foundation
+@main enum Proof { static func main() {
+  print(onboardingSafeMessage("An earlier ECHO install was left incomplete on this Mac.") ?? "rejected")
+  print(onboardingSafeMessage(nil) ?? "rejected")
+  print(onboardingSafeMessage("   ") ?? "rejected")
+  print(onboardingSafeMessage("broken\\u{0}message") ?? "rejected")
+  print(onboardingSafeMessage(String(repeating: "x", count: 301)) ?? "rejected")
+} }
+`);
+    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", join(root, "onboarding.swift"), join(root, "proof.swift"), "-o", join(root, "proof")], {
+      stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
+    });
+    const result = spawnSync(join(root, "proof"), { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "An earlier ECHO install was left incomplete on this Mac.",
+      "rejected",
+      "rejected",
+      "rejected",
+      "rejected",
+    ]);
+    // The decoded reason must actually reach the failure screen.
+    expect(onboarding).toContain("let message: String?");
+    expect(onboarding).toContain("showFailure(result.phase, result.message)");
+  });
+
   it.skipIf(process.platform !== "darwin")("strictly compiles the onboarding interface without a real session", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-onboarding-compile-")));
     roots.push(root);

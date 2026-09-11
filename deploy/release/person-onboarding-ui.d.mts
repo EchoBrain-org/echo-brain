@@ -1,6 +1,7 @@
 export interface SetupEvent {
   readonly ok: boolean;
   readonly phase: string;
+  readonly reason?: string;
   readonly display_name?: string;
   readonly authority?: string;
   readonly message?: string;

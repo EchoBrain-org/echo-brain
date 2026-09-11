@@ -16,8 +16,30 @@ const messages = Object.freeze({
   'access-failed': 'ECHO could not verify your organization access. Check your connection or ask your owner to check your membership.',
   'logout-failed': 'ECHO could not finish signing out. Close setup and try again.',
 });
+const installReasons = Object.freeze({
+  'existing-install-mismatch': 'An earlier ECHO install was left incomplete on this Mac. Ask your ECHO owner for the reset step, then run setup again.',
+  'setup-in-progress': 'Another ECHO setup is already running. Close it, then open setup again.',
+  'unsupported-mac': 'ECHO setup needs a Mac with Apple silicon. Ask your owner for the build for this Mac.',
+  'download-damaged': 'This ECHO download is damaged or unsigned. Ask your owner for a fresh download.',
+  'app-running': 'Quit ECHO, then try installation again.',
+  'activation-failed': 'ECHO could not finish installing, so the previous version was restored. Try again.',
+});
 const failed = phase => ({ ok: false, phase, message: messages[phase] });
 const parsed = text => { try { return JSON.parse(text); } catch { return undefined; } };
+// Accept only an enumerated reason the bridge already knows. Installer prose,
+// unknown reasons, and inherited property names all fall back to the generic
+// message, so no installer diagnostic can reach the screen.
+const failedInstall = stdout => {
+  const lines = String(stdout).split('\n').filter(Boolean).slice(-10).reverse();
+  for (const line of lines) {
+    const event = parsed(line);
+    if (event?.ok !== false || event.phase !== 'install-failed') continue;
+    const reason = event.reason;
+    if (typeof reason !== 'string' || !Object.hasOwn(installReasons, reason)) break;
+    return { ok: false, phase: 'install-failed', reason, message: installReasons[reason] };
+  }
+  return failed('install-failed');
+};
 const httpsOrigin = value => {
   try {
     const url = new URL(value);
@@ -128,7 +150,8 @@ export async function runOnboardingAction(action, value, {
     if (action === 'prepare' || action === 'status') {
       if (action === 'prepare') {
         emit({ ok: true, phase: 'installing' });
-        if ((await run('/bin/bash', [installer, '--install-only'], {})).code !== 0) return failed(failurePhase);
+        const installed = await run('/bin/bash', [installer, '--install-only'], {});
+        if (installed.code !== 0) return failedInstall(installed.stdout);
       }
       failurePhase = 'status-failed';
       const result = await run(client, ['person', 'status'], { timeoutMs: 10_000 });

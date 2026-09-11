@@ -4,6 +4,7 @@ import Foundation
 private struct SetupResult: Decodable {
     let ok: Bool
     let phase: String
+    let message: String?
     let display_name: String?
     let authority: String?
 }
@@ -24,6 +25,15 @@ func onboardingAuthorityOrigin(_ source: String) -> String? {
     origin.port = components.port == 443 ? nil : components.port
     origin.path = ""
     return origin.url?.absoluteString
+}
+
+func onboardingSafeMessage(_ source: String?) -> String? {
+    guard let source = source, source.count <= 300 else { return nil }
+    let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          trimmed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+    else { return nil }
+    return trimmed
 }
 
 @MainActor
@@ -200,7 +210,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
             return
         }
         guard let result else { showFailure("install-failed"); return }
-        guard succeeded && result.ok else { showFailure(result.phase); return }
+        guard succeeded && result.ok else { showFailure(result.phase, result.message); return }
         switch result.phase {
         case "signed-in":
             rememberAuthority(result.authority)
@@ -231,7 +241,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         }
     }
 
-    private func showFailure(_ phase: String) {
+    private func showFailure(_ phase: String, _ message: String? = nil) {
         active = nil
         spinner.stopAnimation(nil)
         primary.isEnabled = true
@@ -251,7 +261,8 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         } else {
             nextAction = "prepare"
             primary.title = "Try installation again"
-            status.stringValue = "ECHO could not finish setup. Try again with the approved download from your owner."
+            status.stringValue = onboardingSafeMessage(message) ??
+                "ECHO could not finish setup. Try again with the approved download from your owner."
         }
     }
 
