@@ -153,6 +153,7 @@ function installerFixture() {
     writeFileSync(join(fake, name), `#!/usr/bin/env bash\nset -eu\n${body}\n`, { mode: 0o755 });
   };
   tool("uname", 'if [[ "$1" == -s ]]; then echo Darwin; else echo arm64; fi');
+  tool("sw_vers", 'echo 14.0');
   tool("codesign", 'exit 0');
   tool("lipo", '[[ "${REFUSE_LIPO:-}" != yes ]] && echo arm64');
   tool("retire-overlay", 'exit "${REFUSE_RETIREMENT:-0}"');

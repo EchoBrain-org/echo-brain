@@ -38,7 +38,7 @@ jobs:
         run: sudo -n python3 -B tests/fixtures/staging-release-posix-proof.py tools/authority-staging-release-host.py deploy/organization-authority/update-clean-v1.sh deploy/organization-authority/onboard-clean-v1.sh
       - run: npm run check
       - name: Build and install the Linux x64 Person kit without system Node
-        run: node tests/fixtures/linux-person-onboarding-smoke.mjs
+        run: node tests/fixtures/person-onboarding-smoke.mjs
       - name: Verify four-meeting answer coverage and privacy
         run: node --test demo/test/rehearsal-evaluator.test.mjs
       - name: Verify the Authority core evaluation components
@@ -184,6 +184,7 @@ jobs:
               throw new Error("graphical kit did not install into a fresh home");
             }
           ' "$stdout_file"
+          node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$graphical_resources"
           test -x "$person_home/Applications/ECHO.app/Contents/MacOS/ECHO"
           test -x "$person_home/Library/Application Support/ECHO/bin/echo-brain"
       - name: Exercise native Account, People, and Sources with offline fixtures
