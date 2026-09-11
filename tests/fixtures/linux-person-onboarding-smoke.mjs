@@ -72,7 +72,7 @@ try {
   mkdirSync(home, { mode: 0o700 });
   mkdirSync(path, { mode: 0o700 });
   // Standard OS utilities only: no node, npm, Python, compiler or network tool.
-  for (const command of ['bash', 'dirname', 'uname', 'getconf', 'od', 'stat', 'id', 'mkdir', 'chmod', 'install', 'cmp', 'diff', 'mktemp', 'tar', 'find', 'mv', 'rm', 'rmdir', 'realpath', 'cat']) {
+  for (const command of ['bash', 'dirname', 'uname', 'getconf', 'od', 'stat', 'id', 'mkdir', 'chmod', 'install', 'cmp', 'diff', 'mktemp', 'tar', 'gzip', 'find', 'mv', 'rm', 'rmdir', 'realpath', 'cat']) {
     symlinkSync(run('/bin/sh', ['-c', `command -v ${command}`]), join(path, command));
   }
   const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, 'custom data'), PATH: path };
