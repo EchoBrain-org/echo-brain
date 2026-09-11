@@ -9,6 +9,9 @@ import { pathToFileURL } from 'node:url';
 
 const messages = Object.freeze({
   'invalid-request': 'Choose the invitation file your ECHO owner sent you.',
+  'compatibility-failed': 'This kit requires an Apple-silicon Mac with macOS 14 or later. Update macOS or use a supported machine.',
+  'kit-failed': 'The kit or bundled runtime could not be verified. Re-extract the approved download and check the archive checksum supplied by your owner.',
+  'destination-failed': 'ECHO could not write its installation. Check free disk space and permissions in your Applications and Library/Application Support folders, then retry.',
   'install-failed': 'ECHO could not finish installing. Try again with the approved download from your owner.',
   'status-failed': 'ECHO could not check the installed account. Close setup and try again.',
   'login-failed': 'Sign-in did not finish. Try your invitation again. If it has expired, ask your owner for a new one.',
@@ -33,10 +36,10 @@ const failedInstall = stdout => {
   const lines = String(stdout).split('\n').filter(Boolean).slice(-10).reverse();
   for (const line of lines) {
     const event = parsed(line);
-    if (event?.ok !== false || event.phase !== 'install-failed') continue;
+    if (event?.ok !== false || !['install-failed', 'compatibility-failed', 'kit-failed', 'destination-failed'].includes(event.phase)) continue;
     const reason = event.reason;
-    if (typeof reason !== 'string' || !Object.hasOwn(installReasons, reason)) break;
-    return { ok: false, phase: 'install-failed', reason, message: installReasons[reason] };
+    if (typeof reason !== 'string' || !Object.hasOwn(installReasons, reason)) return failed(event.phase);
+    return { ok: false, phase: event.phase, reason, message: installReasons[reason] };
   }
   return failed('install-failed');
 };

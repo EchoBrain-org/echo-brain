@@ -568,7 +568,7 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
                 }
             case .invitation(let path, let expires):
                 self.savedInvitation = URL(fileURLWithPath: path); self.reveal.isHidden = false
-                self.status.stringValue = "Invitation saved. Expires \(expires.formatted(date: .omitted, time: .shortened)). Privately send this file and the approved ECHO setup package to this employee."
+                self.status.stringValue = "Invitation saved at \(path). Expires \(expires.formatted(date: .omitted, time: .shortened)). Privately send this file and the approved ECHO setup package to this employee."
                 self.name.stringValue = ""; self.email.stringValue = ""
                 self.loadRoster()
             case .revoked:
@@ -661,6 +661,7 @@ final class PeopleController: NSObject, NSWindowDelegate, NSTableViewDataSource,
         let title = NSTextField(labelWithString: "People")
         title.font = .systemFont(ofSize: 26, weight: .semibold); title.textColor = EchoTheme.text
         identityLabel.font = .systemFont(ofSize: 12); identityLabel.textColor = EchoTheme.mutedText
+        status.isSelectable = true
         status.font = .systemFont(ofSize: 13); status.textColor = EchoTheme.mutedText
         name.placeholderString = "Employee name"; email.placeholderString = "Email address"
         name.setAccessibilityLabel("Employee name"); email.setAccessibilityLabel("Employee email")

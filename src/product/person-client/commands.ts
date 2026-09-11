@@ -324,6 +324,7 @@ async function completePersonLogin(input: {
   readonly client: PersonClient;
   readonly authority_url: string;
   readonly login_grant?: string;
+  readonly invitation_expires_at?: string;
   /**
    * The address the invitation names, when it carries one. It is sent as an
    * OIDC `login_hint` to the directly opened browser, but is never written to
@@ -398,6 +399,11 @@ async function completePersonLogin(input: {
         ? {}
         : { authorization_url: manualAuthorizationUrl(begun.authorization_url) }),
       expires_at: begun.expires_at,
+      timing: `Browser sign-in lasts up to 10 minutes; complete it before ${begun.expires_at}. ` +
+        (input.invitation_expires_at === undefined ? "" :
+          `The separate invitation expires at ${input.invitation_expires_at} (15 minutes after issue). `) +
+        "Keep this command running and use a browser on this machine that can reach its loopback address (127.0.0.1). " +
+        "Opening this URL on another computer will not return sign-in here. If time runs out, rerun the command; ask your owner to reissue an expired invitation. Already-bound people can use person login --authority-url <url>.",
       ...(browserOpened === undefined ? {} : { browser_opened: browserOpened }),
       instruction: recoveredExistingInvitation
         ? browserWasOpened
@@ -571,6 +577,7 @@ export async function runPersonClientCli(
           client,
           authority_url: authorityUrl,
           login_grant: invitation?.login_grant,
+          invitation_expires_at: invitation?.expires_at,
           expected_email: invitation?.expected_email,
           stdout,
           ...(dependencies.random_bytes === undefined
@@ -582,7 +589,7 @@ export async function runPersonClientCli(
                   const opened = await (
                     dependencies.open_authorization_url ?? openAuthorizationUrl
                   )(url);
-                  if (!opened) throw new Error("Person browser could not be opened");
+                  if (!opened) throw new Error("Person browser could not be opened. Set a default browser, or rerun without --open-browser and open authorization_url on this same machine; its browser must reach 127.0.0.1.");
                   return true;
                 },
               }
@@ -599,6 +606,7 @@ export async function runPersonClientCli(
           client,
           authority_url: invitation.authority_url,
           login_grant: invitation.login_grant,
+          invitation_expires_at: invitation.expires_at,
           expected_email: invitation.expected_email,
           stdout,
           ...(dependencies.random_bytes === undefined
