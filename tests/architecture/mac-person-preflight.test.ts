@@ -15,5 +15,18 @@ it("rejects macOS 13 before launching a runtime or writing an installation (mock
     const result = spawnSync("/bin/bash", [join(root, "start.sh"), "--install-only"], { encoding: "utf8", env: { HOME: home, PATH: `${root}:/usr/bin:/bin` } });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("macOS 14 or later");
+    expect(result.stdout.trim().split("\n").map(line => JSON.parse(line))).toEqual([{ ok: false, phase: "compatibility-failed" }]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("emits one compatibility failure with the reason on an unsupported Mac", () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "echo-mac-preflight-"));
+  try {
+    writeFileSync(join(root, "uname"), '#!/bin/bash\nif [[ "$1" == -s ]]; then echo Darwin; else echo x86_64; fi\n', { mode: 0o755 });
+    const result = spawnSync("/bin/bash", [resolve("deploy/release/start-person-onboarding-kit.sh"), "--install-only"], { encoding: "utf8", env: { HOME: root, PATH: `${root}:/usr/bin:/bin` } });
+    expect(result.status).toBe(1);
+    expect(result.stdout.trim().split("\n").map(line => JSON.parse(line))).toEqual([
+      { ok: false, phase: "compatibility-failed", reason: "unsupported-mac" },
+    ]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

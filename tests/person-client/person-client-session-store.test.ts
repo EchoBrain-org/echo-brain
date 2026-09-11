@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -293,6 +294,67 @@ describe("Person session store", () => {
       );
       store.finishLogout();
       expect(() => store.read()).toThrow(PersonClientSessionUnavailableError);
+    });
+  });
+});
+
+describe("Person session store recovery", () => {
+  // A store written by an older release: valid session, but a top-level key
+  // the current exact-key check does not accept.
+  const LEGACY_STORE = `${JSON.stringify({
+    schema_version: 1,
+    kind: "echo-person-client-session",
+    authority_origin: "https://authority.example",
+    authority_id: AUTHORITY_ID,
+    session: SESSION,
+    legacy_device_id: "dev_1",
+  })}\n`;
+
+  function plantStore(home: string, contents: string): PersonSessionStore {
+    const store = new PersonSessionStore(home);
+    mkdirSync(store.paths.directory, { recursive: true, mode: 0o700 });
+    writeFileSync(store.paths.live, contents, { mode: 0o600 });
+    return store;
+  }
+
+  it("reports a session written by an older release as unavailable", () => {
+    withHome((home) => {
+      const store = plantStore(home, LEGACY_STORE);
+      expect(() => store.read()).toThrow(PersonClientSessionUnavailableError);
+    });
+  });
+
+  it("reports a truncated session file as unavailable", () => {
+    withHome((home) => {
+      const store = plantStore(home, '{"schema_version":1,"kind":"echo-per');
+      expect(() => store.read()).toThrow(PersonClientSessionUnavailableError);
+    });
+  });
+
+  it("keeps session file integrity failures loud", () => {
+    withHome((home) => {
+      const store = plantStore(home, LEGACY_STORE);
+      chmodSync(store.paths.live, 0o644);
+      let caught: unknown;
+      try {
+        store.read();
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as Error).message).toMatch(/bounded current-user 0600/);
+      expect(caught instanceof PersonClientSessionUnavailableError).toBe(false);
+    });
+  });
+
+  it("clears an unreadable store during logout instead of stranding it", () => {
+    withHome((home) => {
+      const store = plantStore(home, LEGACY_STORE);
+      expect(() => store.claimLogout()).toThrow(
+        PersonClientSessionUnavailableError,
+      );
+      expect(existsSync(store.paths.live)).toBe(false);
+      expect(existsSync(store.paths.logging_out)).toBe(false);
+      expect(existsSync(store.paths.logout_claim)).toBe(false);
     });
   });
 });
