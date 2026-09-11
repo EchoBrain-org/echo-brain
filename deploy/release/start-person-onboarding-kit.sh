@@ -8,7 +8,12 @@ VERIFY="$SCRIPT_DIR/verify-person-onboarding-kit.mjs"
 RELEASE_TOOL="$SCRIPT_DIR/clean-v1-release.mjs"
 APP_ARCHIVE="$SCRIPT_DIR/ECHO.app.zip"
 
-fail() { printf 'ECHO setup: %s\n' "$*" >&2; exit 1; }
+failure_phase=install-failed
+fail() {
+  printf 'ECHO setup: %s\n' "$*" >&2
+  printf '{"ok":false,"phase":"%s"}\n' "$failure_phase"
+  exit 1
+}
 
 require_safe_owned_directory_or_absent() {
   local path="$1"
@@ -99,14 +104,21 @@ validate_thin_arm64_executable() {
 install_only=0
 if [[ "${1:-}" == --install-only ]]; then install_only=1; shift; fi
 [[ -n "${HOME:-}" && "$HOME" = /* ]] || fail 'a normal macOS user HOME is required'
+failure_phase=compatibility-failed
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || \
   fail 'this first-cohort kit supports macOS on Apple silicon only'
+macos_version="$(sw_vers -productVersion)"
+[[ "$macos_version" =~ ^([0-9]+)\. ]] || fail 'could not determine macOS version'
+(( BASH_REMATCH[1] >= 14 )) || fail 'macOS 14 or later is required by ECHO Setup and ECHO; update macOS before installing'
+failure_phase=kit-failed
 [[ -f "$NODE" && ! -L "$NODE" && -x "$NODE" ]] || fail 'the bundled Node runtime is unavailable'
 [[ -f "$VERIFY" && ! -L "$VERIFY" ]] || fail 'the kit verifier is unavailable'
 [[ -f "$RELEASE_TOOL" && ! -L "$RELEASE_TOOL" ]] || fail 'the release verifier is unavailable'
 [[ -f "$APP_ARCHIVE" && ! -L "$APP_ARCHIVE" ]] || fail 'the ECHO application archive is unavailable'
 
-"$NODE" "$VERIFY" "$SCRIPT_DIR" >/dev/null
+runtime_version="$("$NODE" --version 2>/dev/null)" || fail 'the bundled Node runtime cannot start; re-extract the approved Apple-silicon kit and check executable permissions'
+[[ "$runtime_version" == v22.22.1 ]] || fail 'the bundled Node version is wrong; re-extract the approved kit'
+"$NODE" "$VERIFY" "$SCRIPT_DIR" >/dev/null || fail 'the onboarding kit verification failed; re-extract the approved kit and verify the owner-provided archive checksum'
 "$NODE" "$RELEASE_TOOL" validate "$SCRIPT_DIR/release.json" >/dev/null
 
 invitation="${1:-}"
@@ -123,6 +135,8 @@ fi
 release_id="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" release-id)"
 expected_version="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" client-version)"
 expected_source_sha="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" source-sha)"
+failure_phase=destination-failed
+trap 'fail "installation could not write or extract files; check destination permissions and free disk space, then retry"' ERR
 application_root="$HOME/Library/Application Support/ECHO"
 releases_root="$application_root/releases"
 bin_root="$application_root/bin"
@@ -224,6 +238,7 @@ printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' \
   "$release_root/node" "$release_root/package/dist/main.js" > "$wrapper_pending"
 chmod 0700 "$wrapper_pending"
 
+failure_phase=install-failed
 app_was_present=0
 app_needs_activation=1
 app_backup=''
@@ -464,6 +479,8 @@ RETENTION
 trap - HUP INT TERM
 [[ "$interrupted" == 0 ]] || fail 'setup was interrupted; the new matched app and command remain installed'
 
+trap - ERR
+printf 'ECHO installed: %s\nBundled Node: %s\n' "$wrapper_destination" "$runtime_version" >&2
 if [[ "$install_only" == 1 ]]; then
   printf '{"ok":true,"phase":"installed"}\n'
   exit 0

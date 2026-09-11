@@ -56,6 +56,16 @@ describe("graphical employee onboarding bridge", () => {
     expect(failed.calls).toHaveLength(1);
   });
 
+  it("maps only known installer failures to actionable safe guidance", async () => {
+    for (const [phase, instruction] of [["compatibility-failed", "macOS 14"], ["kit-failed", "checksum"], ["destination-failed", "free disk space"]]) {
+      const subject = fixture([{ code: 1, stdout: JSON.stringify({ ok: false, phase, private_detail: "never forward" }) }]);
+      const result = await runOnboardingAction("prepare", undefined, subject.options);
+      expect(result.phase).toBe(phase);
+      expect(result.message).toContain(instruction);
+      expect(JSON.stringify(result)).not.toContain("never forward");
+    }
+  });
+
   it("resumes after interrupted sign-in by checking the saved account without reinstalling", async () => {
     for (const signedIn of [false, true]) {
       const subject = fixture([{ code: 0, stdout: status(signedIn) }]);

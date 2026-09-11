@@ -9,6 +9,9 @@ import { pathToFileURL } from 'node:url';
 
 const messages = Object.freeze({
   'invalid-request': 'Choose the invitation file your ECHO owner sent you.',
+  'compatibility-failed': 'This kit requires an Apple-silicon Mac with macOS 14 or later. Update macOS or use a supported machine.',
+  'kit-failed': 'The kit or bundled runtime could not be verified. Re-extract the approved download and check the archive checksum supplied by your owner.',
+  'destination-failed': 'ECHO could not write its installation. Check free disk space and permissions in your Applications and Library/Application Support folders, then retry.',
   'install-failed': 'ECHO could not finish installing. Try again with the approved download from your owner.',
   'status-failed': 'ECHO could not check the installed account. Close setup and try again.',
   'login-failed': 'Sign-in did not finish. Try your invitation again. If it has expired, ask your owner for a new one.',
@@ -128,7 +131,11 @@ export async function runOnboardingAction(action, value, {
     if (action === 'prepare' || action === 'status') {
       if (action === 'prepare') {
         emit({ ok: true, phase: 'installing' });
-        if ((await run('/bin/bash', [installer, '--install-only'], {})).code !== 0) return failed(failurePhase);
+        const installed = await run('/bin/bash', [installer, '--install-only'], {});
+        if (installed.code !== 0) {
+          const phase = parsed(installed.stdout.trim().split('\n').at(-1))?.phase;
+          return failed(['compatibility-failed', 'kit-failed', 'destination-failed'].includes(phase) ? phase : failurePhase);
+        }
       }
       failurePhase = 'status-failed';
       const result = await run(client, ['person', 'status'], { timeoutMs: 10_000 });
