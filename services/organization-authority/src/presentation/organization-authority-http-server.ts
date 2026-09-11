@@ -473,13 +473,19 @@ export function createOrganizationAuthorityHttpServer(
           (route) =>
             route.method === method && route.path === url.pathname,
         );
-      if (externalIdentityRoute !== undefined && url.search === "") {
+      if (
+        externalIdentityRoute !== undefined &&
+        (url.search === "" || externalIdentityRoute.accepts_query === true)
+      ) {
         const headers = singletonHeaders(request.headers);
         const result = await options.person_external_identity_link!.accept({
           route_id: externalIdentityRoute.route_id,
           raw_body: await rawBody(request),
           content_type: headers["content-type"],
           headers,
+          ...(externalIdentityRoute.accepts_query === true
+            ? { query: new URLSearchParams(url.search) }
+            : {}),
         });
         if (result.content_type === "text/html") {
           if (typeof result.body !== "string" || Buffer.byteLength(result.body) > 16_384)

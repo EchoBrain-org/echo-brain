@@ -52,7 +52,12 @@ const SLACK_BROWSER_IDENTITY_ROUTES_V1 = Object.freeze([
   Object.freeze({ route_id: "slack-browser-begin", method: "POST" as const, path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH }),
   Object.freeze({ route_id: "slack-browser-status", method: "POST" as const, path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH }),
   Object.freeze({ route_id: "slack-browser-cancel", method: "POST" as const, path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH }),
-  Object.freeze({ route_id: "slack-browser-callback", method: "POST" as const, path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH }),
+  Object.freeze({
+    route_id: "slack-browser-callback",
+    method: "GET" as const,
+    path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH,
+    accepts_query: true as const,
+  }),
 ]);
 
 function parseBody(raw: Uint8Array): unknown {
@@ -71,13 +76,6 @@ function accessToken(headers: Readonly<Record<string, string | undefined>>): str
   return value.slice("Bearer ".length);
 }
 
-function formBody(raw: Uint8Array, contentType: string | undefined): URLSearchParams {
-  if (contentType === undefined || !/^application\/x-www-form-urlencoded(?:\s*;.*)?$/i.test(contentType)) {
-    throw new AuthorityOperationError("invalid_request", "request body is invalid");
-  }
-  return new URLSearchParams(Buffer.from(raw).toString("utf8"));
-}
-
 export function createSlackExternalIdentityHttpApplicationV1(input: {
   readonly service: {
     tools(accessToken: string): Promise<unknown>;
@@ -91,7 +89,7 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
     async accept(request: PersonExternalIdentityHttpRequestV1) {
       if (request.route_id === "slack-browser-callback") {
         if (input.browser === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
-        await input.browser.callback(formBody(request.raw_body, request.content_type));
+        await input.browser.callback(request.query ?? new URLSearchParams());
         return Object.freeze({ status: 200 as const, body: "<!doctype html><meta charset=\"utf-8\"><title>ECHO</title><p>Return to ECHO to finish connecting. ECHO will show the connection status.</p>", content_type: "text/html" as const });
       }
       const token = accessToken(request.headers);
