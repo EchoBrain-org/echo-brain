@@ -3,12 +3,7 @@ import {
   sha256Digest,
   type Sha256Digest,
 } from '@echo-brain/federation-protocol';
-import type {
-  OrganizationPersonSlackIdentityLinkBeginRequestV2,
-  OrganizationPersonSlackIdentityLinkBeginResponseV2,
-  OrganizationPersonSlackIdentityLinkCompleteRequestV2,
-  OrganizationPersonSlackIdentityLinkResultV2,
-} from './contracts.js';
+import type { OrganizationApiSha256Digest } from './contracts.js';
 import {
   asRecord,
   assertDigest,
@@ -18,6 +13,62 @@ import {
   assertTimestamp,
   fail,
 } from './validation.js';
+
+export const ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH =
+  '/v2/integration-links/slack/challenges';
+export const ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH =
+  '/v2/integration-links/slack/completions';
+
+/**
+ * A Person-authenticated request to post one Slack identity challenge.
+ * Identity and route context come from the bearer credential and matched route.
+ */
+export interface OrganizationPersonSlackIdentityLinkBeginRequestV2 {
+  /** Delivery hint only; exact Slack reply remains the identity proof. */
+  recipient_user_id: string;
+  request_id: string;
+  challenge_code_sha256: OrganizationApiSha256Digest;
+}
+
+/**
+ * A Person-authenticated request to prove the exact reply to that challenge.
+ * The request ID and message timestamp remain replay inputs until persisted
+ * challenge state owns the provider coordinate.
+ */
+export interface OrganizationPersonSlackIdentityLinkCompleteRequestV2 {
+  request_id: string;
+  challenge_attempt_id: string;
+  challenge_message_ts: string;
+  challenge_code: string;
+}
+
+export interface OrganizationPersonSlackIdentityLinkBeginResponseV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-slack-link-begin-response';
+  challenge_attempt_id: string;
+  provider: 'slack';
+  provider_tenant_id: string;
+  channel_id: string;
+  challenge_message_ts: string;
+  expires_at: string;
+}
+
+/** Person linking proves identity only; adapter bindings and grants are absent. */
+export interface OrganizationPersonSlackIdentityLinkResultV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-slack-link-result';
+  identity_link_id: string;
+  connection_id: string;
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  provider: 'slack';
+  provider_tenant_id: string;
+  provider_subject_id: string;
+  channel_id: string;
+  linked_at: string;
+  identity_link_created: boolean;
+}
 
 const BASE64URL_ALPHABET =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
