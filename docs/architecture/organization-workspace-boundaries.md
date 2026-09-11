@@ -12,6 +12,19 @@ contracts. `src/product/` contains shipped machine product. Therefore the
 control plane, record, and retrieval workspaces are packages linked into the
 Authority process rather than deployable services.
 
+The provider-boundary migration reserves repository-root `providers/<provider>/`
+for each provider's implementation, provider-only tests, client fragments, and
+assets. This is outside the Authority service. A provider workspace must declare
+its public exports and join the workspace registry, TypeScript references, test
+discovery, and artifact inputs in the same change that introduces it. Tests stay
+outside production `src` directories. Split client-safe contracts from server
+code within a provider root only when their artifact/dependency closures require
+it; the Person artifact must not acquire Authority or native SQLite dependencies.
+No provider workspace has been introduced yet. The reserved parent and the
+existing composition/provider parent already reject undeclared JavaScript and
+TypeScript source files. Swift and runtime-asset ownership need separate checks
+as those surfaces migrate.
+
 ## Workspace graph
 
 ```text
@@ -60,9 +73,10 @@ its three dependency workspaces and the client. The legacy root machine
 runtime, local SQLite state, installation signer, LaunchAgent, JSONL outbox,
 and fleet updater are removed.
 
-`product/source-boundary.v1.json` is now a retirement fence. Its entry-point
-closure is intentionally empty and its removed-root list prevents the old
-machine product from silently reappearing outside the Person workspace.
+`product/source-boundary.v1.json` owns the cross-workspace provider declarations
+and the retirement fence. Its entry-point closure is intentionally empty and
+its removed-root list prevents the old machine product from silently
+reappearing outside the Person workspace.
 
 ## Authority layers
 

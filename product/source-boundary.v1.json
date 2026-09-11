@@ -19,7 +19,9 @@
   "layer_rules": [],
   "adapter_architecture": {
     "adapters_roots": [
-      "services/organization-authority/src/processing/adapters/"
+      "services/organization-authority/src/processing/adapters/",
+      "services/organization-authority/src/composition/providers/",
+      "providers/"
     ],
     "provider_adapter_roots": [
       {
@@ -33,14 +35,6 @@
       {
         "identifier": "granola",
         "root": "services/organization-authority/src/clean-granola-source-main.ts"
-      },
-      {
-        "identifier": "granola",
-        "root": "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
-      },
-      {
-        "identifier": "granola",
-        "root": "services/organization-authority/src/composition/organization-authority-service-cli.ts"
       },
       {
         "identifier": "llm",
@@ -205,7 +199,9 @@
       "services/organization-authority/src/composition/synthetic-demo-organization-authority-composition-root-v1.ts",
       "packages/organization-api/src/index.ts",
       "packages/organization-protocol/src/index.ts",
-      "packages/organization-record/src/organization-record-api-v1.ts"
+      "packages/organization-record/src/organization-record-api-v1.ts",
+      "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
+      "services/organization-authority/src/composition/organization-authority-service-cli.ts"
     ],
     "provider_coupled_exceptions": [
       {

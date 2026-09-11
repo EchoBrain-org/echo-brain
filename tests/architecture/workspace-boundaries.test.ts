@@ -1365,6 +1365,64 @@ describe("workspace source boundaries", () => {
     }
   });
 
+  it("requires declared ownership for new provider folders, independent of vendor names", () => {
+    const fixture = fixtureRepository();
+    const roots = [
+      "services/organization-authority/src/composition/providers/fixture-surface/",
+      "providers/fixture-surface/",
+    ];
+    const product = readFixtureJson<{
+      adapter_architecture: {
+        provider_adapter_roots: Array<{ identifier: string; root: string }>;
+      };
+    }>(fixture, "product/source-boundary.v1.json");
+    for (const root of roots) {
+      const path = join(fixture, root, "src/client.ts");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "export const marker = true;\n");
+    }
+    let result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    for (const root of roots) {
+      expect(result.stdout + result.stderr).toContain(
+        `provider/adapter source is not covered by declared provider_adapter_roots: ${root}src/client.ts`,
+      );
+      product.adapter_architecture.provider_adapter_roots.push({
+        identifier: "fixture-surface",
+        root,
+      });
+    }
+    writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
+    result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+
+  it("classifies mixed-provider CLIs as bootstrap without hiding their dependencies", () => {
+    const fixture = fixtureRepository();
+    const product = readFixtureJson<{
+      adapter_architecture: {
+        provider_adapter_roots: Array<{ root: string }>;
+        provider_selecting_entrypoints: string[];
+      };
+    }>(fixture, "product/source-boundary.v1.json");
+    for (const name of ["setup", "service"]) {
+      const path = `services/organization-authority/src/composition/organization-authority-${name}-cli.ts`;
+      expect(product.adapter_architecture.provider_selecting_entrypoints).toContain(path);
+      expect(product.adapter_architecture.provider_adapter_roots.some(
+        ({ root }) => matchesGlob(path, root),
+      )).toBe(false);
+    }
+    const probe = "services/organization-authority/src/composition/fixture-bootstrap-consumer.ts";
+    writeFileSync(join(fixture, probe),
+      'export * from "./organization-authority-service-cli.js";\n');
+    const result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain(
+      `provider-neutral module reaches declared provider/adapter root`,
+    );
+    expect(result.stdout + result.stderr).toContain(probe);
+  });
+
   it("covers an ordinary new shared file and a new package file without registration", () => {
     const fixture = fixtureRepository();
     const sharedProbe =

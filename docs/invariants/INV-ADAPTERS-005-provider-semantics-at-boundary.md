@@ -70,7 +70,11 @@ the gate until it is removed, and a listed entrypoint or exception that names
 no source file fails as stale. A capability-family root such as the generic
 LLM decision processor may be marked `provider_identifier: false` so neutral
 modules may still use that word. The gate rejects an unlisted adapter
-implementation or a source file under the adapter tree. The typed
+implementation or an undeclared JavaScript/TypeScript source file under
+`services/organization-authority/src/processing/adapters/`,
+`services/organization-authority/src/composition/providers/`, or the reserved
+repository-root `providers/` tree. Folder coverage does not depend on a known
+vendor name or an `implements` declaration. The typed
 `LLM_PROVIDER_IDS` source is checked against the registered transport-provider
 set; provider-client declarations not represented there fail, while the
 separately registered `deepseek` model namespace remains lexical evidence for
@@ -138,6 +142,13 @@ checked; the recorded exceptions are the telemetry dimension allowlists and
 the current-only V4 record envelope, each with the follow-up that retires it. Initial-owner
 onboarding and the compatibility CLI intentionally select a concrete
 Granola, OpenRouter, and Slack product profile; source admission is supplied by
-that profile rather than one universal onboarding command. Any change that
+that profile rather than one universal onboarding command. The setup and service
+CLIs are therefore classified as mixed-provider selecting entrypoints, not
+Granola-owned implementations. This classification does not prove that these
+modules contain only wiring: their remaining provider behavior must still be
+extracted. Selecting entrypoints remain traversable when a neutral caller
+imports them; they cannot hide a transitive dependency on a provider root.
+The source manifest, application source/ports, and selecting entrypoints are
+covered by repository CODEOWNERS rules. Any change that
 moves a provider fact into a neutral layer requires an explicit invariant
 review and, when it changes a canonical contract, a versioned design decision.
