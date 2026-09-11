@@ -2,7 +2,7 @@ import type { ApprovalDecision } from '../approval/approval-gate.js';
 import { isCanonicalPersonEmail } from '../../../shared/person-email-rules.js';
 import type { AdapterIdentity } from './adapter.js';
 import type { DecisionSet, ExtractedSignal } from './decision.js';
-import type { DecisionBrief, DeliveryEnvelope } from './delivery.js';
+import type { DecisionBrief } from './delivery.js';
 import type {
   MeetingBatch,
   MeetingDocument,
@@ -1093,37 +1093,4 @@ export function assertCanonicalApprovalDecision(
   } else if (approval['approved_brief'] !== null) {
     throw new Error('rejected approval cannot contain an approved brief');
   }
-}
-
-export function assertCanonicalDeliveryEnvelope(
-  value: unknown,
-): asserts value is DeliveryEnvelope {
-  const envelope = object(value, 'delivery_envelope');
-  onlyKeys(
-    envelope,
-    [
-      'schema_version',
-      'id',
-      'idempotency_key',
-      'destination',
-      'brief',
-      'approved_at',
-    ],
-    'delivery_envelope',
-  );
-  if (envelope['schema_version'] !== 1) throw new Error('delivery_envelope.schema_version must be 1');
-  nonEmptyString(envelope['id'], 'delivery_envelope.id');
-  nonEmptyString(envelope['idempotency_key'], 'delivery_envelope.idempotency_key');
-  timestamp(envelope['approved_at'], 'delivery_envelope.approved_at');
-  const destination = object(envelope['destination'], 'delivery_envelope.destination');
-  onlyKeys(
-    destination,
-    ['adapter_id', 'instance_id', 'external_id', 'metadata'],
-    'delivery_envelope.destination',
-  );
-  nonEmptyString(destination['adapter_id'], 'delivery_envelope.destination.adapter_id');
-  nonEmptyString(destination['instance_id'], 'delivery_envelope.destination.instance_id');
-  nonEmptyString(destination['external_id'], 'delivery_envelope.destination.external_id');
-  metadata(destination['metadata'], 'delivery_envelope.destination.metadata');
-  assertCanonicalDecisionBrief(envelope['brief']);
 }

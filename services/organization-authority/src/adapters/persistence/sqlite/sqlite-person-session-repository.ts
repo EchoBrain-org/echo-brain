@@ -864,7 +864,6 @@ class Transaction implements PersonSessionWriteTransaction {
 export class SqlitePersonSessionRepository
   implements PersonSessionRepository, PersonMembershipWriteRepository
 {
-  readonly supports_full_person_authorization_transactions = false;
 
   constructor(private readonly database: Database.Database) {}
 

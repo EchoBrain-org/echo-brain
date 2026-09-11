@@ -2,7 +2,6 @@ export const TRUSTED_PROXY_AUTHORIZATION_HEADER = 'x-echo-proxy-authorization';
 export const TRUSTED_PROXY_CLIENT_ID_HEADER = 'x-echo-authenticated-client-id';
 
 export const ORGANIZATION_API_ADMIN_AUTH_SCHEME = 'Bearer';
-export const ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME = 'Echo-Enrollment';
 export const ORGANIZATION_API_PROXY_AUTH_SCHEME = 'Echo-Proxy';
 
 export const ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH =

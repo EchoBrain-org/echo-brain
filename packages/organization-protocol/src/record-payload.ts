@@ -11,7 +11,6 @@ import {
   assertExactKeys,
   assertLiteral,
   assertTimestamp,
-  canonicalSnapshot,
 } from "./validation-support.js";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
 
@@ -614,23 +613,4 @@ export function assertOrganizationRecordRejectionPayload(
   if (payload.reconsider_after !== null) {
     assertTimestamp(payload.reconsider_after, `${label}.reconsider_after`);
   }
-}
-
-/**
- * Standalone brief validation for callers pinning the payload shape outside a
- * signed envelope, such as the shared golden payload fixtures.
- */
-export function validateOrganizationRecordDecisionBrief(
-  value: unknown,
-): OrganizationRecordDecisionBriefV1 {
-  const snapshot = canonicalSnapshot(
-    value,
-    "organization record decision brief",
-    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
-  );
-  assertOrganizationRecordDecisionBrief(
-    snapshot,
-    "organization record decision brief",
-  );
-  return snapshot;
 }

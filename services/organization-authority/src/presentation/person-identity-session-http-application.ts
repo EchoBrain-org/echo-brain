@@ -10,8 +10,6 @@ export {
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH as PERSON_SESSION_REVOCATIONS_PATH,
 } from '@echo-brain/organization-api';
 
-export const PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH = '/v2/admin/memberships';
-
 export interface BegunPersonOidcHttpLogin {
   authorization_url: string;
   expires_at: string;

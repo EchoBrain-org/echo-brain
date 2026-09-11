@@ -78,12 +78,6 @@ export const READABLE_SEARCH_LEXICAL_BASELINE_V1: ReadableSearchPlaneBaselineV1 
   ),
 };
 
-export function readableSearchPlaneBaselineSqlV1(
-  baseline: ReadableSearchPlaneBaselineV1,
-): string {
-  return readableSearchPlaneBaselineSql(baseline);
-}
-
 export function readableSearchPlaneBaselineSql(
   baseline: ReadableSearchPlaneBaseline,
 ): string {
@@ -103,19 +97,11 @@ export function readableSearchPlaneBaselineSha256(
 }
 
 /**
- * Installs the plane's baseline v1 into a completely empty writable database:
- * no schema objects, `user_version = 0`, and `application_id = 0`. Anything
- * else is refused without mutation — a baseline never upgrades, relabels, or
- * claims an existing database, whatever lineage it belongs to.
+ * Installs an exact V1 or V2 baseline into a completely empty writable
+ * database: no schema objects, `user_version = 0`, and `application_id = 0`.
+ * Anything else is refused without mutation — a baseline never upgrades,
+ * relabels, or claims an existing database, whatever lineage it belongs to.
  */
-export function applyReadableSearchPlaneBaselineV1(
-  database: Database.Database,
-  baseline: ReadableSearchPlaneBaselineV1,
-): void {
-  applyReadableSearchPlaneBaseline(database, baseline);
-}
-
-/** Installs an exact V1 or V2 baseline into a completely empty database. */
 export function applyReadableSearchPlaneBaseline(
   database: Database.Database,
   baseline: ReadableSearchPlaneBaseline,

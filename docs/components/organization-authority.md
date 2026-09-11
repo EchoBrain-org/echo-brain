@@ -56,7 +56,7 @@ Its hosting account and operator are selected under
 | Workspace                    | Owns                                                                         |
 | ---------------------------- | ---------------------------------------------------------------------------- |
 | `organization-authority`     | Organization identity, access, HTTP boundary, and composition                |
-| `organization-control-plane` | Provider connection, identity links, bindings, grants, and integration audit |
+| `organization-control-plane` | Verified provider connection, Person identity links, and private approval persistence |
 | `organization-record`        | Append-only approved record and deterministic append-side projections        |
 | `organization-retrieval`     | Rebuildable permission-aware retrieval generations                           |
 

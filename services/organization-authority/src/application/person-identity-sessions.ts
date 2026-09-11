@@ -22,7 +22,6 @@ import {
 import { timestampMillis } from "../domain/rules.js";
 import type {
   AuthorityPersonMembershipBinding,
-  AuthorityWriteTransaction,
   NewPersonSessionCredential,
   StoredOidcIdentityBinding,
   StoredOidcLoginAttempt,
@@ -121,78 +120,7 @@ export interface PersonAccessAuthorization extends AuthorityPersonMembershipBind
   checked_at: string;
 }
 
-export type PersonReadAdmission = PersonAccessAuthorization;
-
-export type PersonReadStartDenyDecision =
-  | {
-      decision: "deny";
-      reason_code: "person_or_session_inactive";
-      authorization: null;
-      checked_at: string;
-    }
-  | {
-      decision: "deny";
-      reason_code: "caller_subject_mismatch";
-      authorization: PersonAccessAuthorization;
-      checked_at: string;
-    };
-
-export type PersonReadFinalDecision =
-  | {
-      decision: "allow";
-      authorization: PersonAccessAuthorization;
-    }
-  | {
-      decision: "deny";
-      reason_code:
-        | "caller_subject_mismatch"
-        | "person_or_session_inactive"
-        | "authorization_state_changed";
-      checked_at: string;
-    };
-
 type SynchronousResult<T> = T extends PromiseLike<unknown> ? never : T;
-
-export interface PersonReadAuthorizationPort {
-  admitSelfRead(input: {
-    access_token: string;
-    subject_principal_id: string;
-    /** Commits the closed start-gate deny audit before this method throws. */
-    commitStartDeny: (
-      decision: PersonReadStartDenyDecision,
-      transaction: AuthorityWriteTransaction,
-    ) => void;
-  }): PersonReadAdmission;
-  /**
-   * `commit` runs under the final Authority write fence. It must append the
-   * route's allow or deny audit synchronously and must not release response
-   * bytes for deny. A committed deny is mapped to the same opaque public
-   * authorization error.
-   */
-  finalizeSelfRead<T>(input: {
-    admission: PersonReadAdmission;
-    subject_principal_id: string;
-    commit: (
-      decision: PersonReadFinalDecision,
-      transaction: AuthorityWriteTransaction,
-    ) => SynchronousResult<T>;
-  }): SynchronousResult<T>;
-}
-
-/**
- * Resolves an access token and commits one synchronous Person mutation under
- * the same Authority write transaction. The callback cannot retain or await
- * the transaction.
- */
-export interface PersonAuthenticatedWritePort {
-  withAuthenticatedWrite<T>(input: {
-    access_token: string;
-    commit: (
-      authorization: PersonAccessAuthorization,
-      transaction: AuthorityWriteTransaction,
-    ) => SynchronousResult<T>;
-  }): SynchronousResult<T>;
-}
 
 /**
  * A deliberately separate authenticated transaction for employee
@@ -208,14 +136,6 @@ export interface PersonAuthenticatedMembershipWritePort {
       observed_at: string,
     ) => SynchronousResult<T>;
   }): SynchronousResult<T>;
-}
-
-/** Only the read port's expected, already-audited denials use this sentinel. */
-export class PersonReadUnauthorizedError extends AuthorityOperationError {
-  constructor() {
-    super("unauthorized", "person authentication failed");
-    this.name = "PersonReadUnauthorizedError";
-  }
 }
 
 interface SessionCredentialCandidate {
@@ -387,10 +307,6 @@ function exactPersonTuple(
 
 export class PersonIdentitySessionApplication {
   private readonly configuration: FrozenPersonSessionOidcConfiguration;
-  private readonly admissionCredentialDigests = new WeakMap<
-    PersonReadAdmission,
-    Sha256Digest
-  >();
 
   constructor(
     private readonly repository: PersonSessionRepository,
@@ -640,23 +556,6 @@ export class PersonIdentitySessionApplication {
       expected_email_sha256: expectedEmailSha256,
       oidc_configuration_sha256: this.configuration.oidc_configuration_sha256,
       expires_at: expiresAt,
-    });
-    transaction.appendAudit?.({
-      occurred_at: stored.issued_at,
-      actor_kind: "admin",
-      action: "person_login_grant.issued",
-      subject_id: stored.membership_id,
-      detail: {
-        organization_id: stored.organization_id,
-        principal_id: stored.principal_id,
-        membership_id: stored.membership_id,
-        membership_type: stored.membership_type,
-        login_grant_sha256: stored.login_grant_sha256,
-        expected_issuer: stored.expected_issuer,
-        expected_email_sha256: stored.expected_email_sha256,
-        issued_at: stored.issued_at,
-        expires_at: stored.expires_at,
-      },
     });
     return {
       organization_id: stored.organization_id,
@@ -1236,55 +1135,6 @@ export class PersonIdentitySessionApplication {
     return resolution.authorization;
   }
 
-  withAuthenticatedWrite<T>(input: {
-    access_token: string;
-    commit: (
-      authorization: PersonAccessAuthorization,
-      transaction: AuthorityWriteTransaction,
-    ) => SynchronousResult<T>;
-  }): SynchronousResult<T> {
-    if (
-      this.repository.supports_full_person_authorization_transactions === false
-    ) {
-      throw new Error(
-        "Person session runtime does not expose full Authority write transactions",
-      );
-    }
-    let tokenSha256: Sha256Digest;
-    try {
-      tokenSha256 = this.digestSecret(input.access_token);
-    } catch {
-      throw personSessionUnauthorized();
-    }
-    const outcome = this.repository.writeAtLinearization(
-      () => this.runtime.clock.now(),
-      (
-        transaction,
-        checkedAt,
-      ):
-        | { kind: "denied" }
-        | { kind: "committed"; result: SynchronousResult<T> } => {
-        const resolution = this.resolveAccess(
-          transaction,
-          tokenSha256,
-          checkedAt,
-        );
-        if (resolution.kind === "denied") return { kind: "denied" };
-        const result = input.commit(
-          resolution.authorization,
-          transaction as unknown as AuthorityWriteTransaction,
-        );
-        this.assertSynchronousCommit(
-          result,
-          "Person authenticated write commit must be synchronous",
-        );
-        return { kind: "committed", result };
-      },
-    );
-    if (outcome.kind === "denied") throw personSessionUnauthorized();
-    return outcome.result;
-  }
-
   refresh(input: { refresh_token: string }): IssuedPersonSession {
     const tokenSha256 = this.digestSecret(input.refresh_token);
     const candidate = this.sessionCredentialCandidate();
@@ -1406,164 +1256,6 @@ export class PersonIdentitySessionApplication {
       () => this.runtime.clock.now(),
       (transaction) => transaction.expireOidcLoginAttempts(input.limit),
     );
-  }
-
-  createPersonReadAuthorizationPort(): PersonReadAuthorizationPort {
-    if (
-      this.repository.supports_full_person_authorization_transactions === false
-    ) {
-      throw new Error(
-        "Person session runtime does not expose Person read authorization",
-      );
-    }
-    return {
-      admitSelfRead: (input) => {
-        let tokenSha256: Sha256Digest | undefined;
-        try {
-          tokenSha256 = this.digestSecret(input.access_token);
-        } catch {
-          tokenSha256 = undefined;
-        }
-        let outcome:
-          | { kind: "allowed"; authorization: PersonAccessAuthorization }
-          | { kind: "denied" };
-        outcome = this.repository.writeAtLinearization(
-          () => this.runtime.clock.now(),
-          (transaction, checkedAt) => {
-            const resolution =
-              tokenSha256 === undefined
-                ? ({ kind: "denied" } as const)
-                : this.resolveAccess(transaction, tokenSha256, checkedAt);
-            if (resolution.kind === "denied") {
-              const committed = input.commitStartDeny(
-                {
-                  decision: "deny",
-                  reason_code: "person_or_session_inactive",
-                  authorization: null,
-                  checked_at: checkedAt,
-                },
-                transaction as unknown as AuthorityWriteTransaction,
-              );
-              this.assertSynchronousCommit(committed);
-              return { kind: "denied" as const };
-            }
-            if (
-              resolution.authorization.principal_id !==
-              input.subject_principal_id
-            ) {
-              const committed = input.commitStartDeny(
-                {
-                  decision: "deny",
-                  reason_code: "caller_subject_mismatch",
-                  authorization: resolution.authorization,
-                  checked_at: checkedAt,
-                },
-                transaction as unknown as AuthorityWriteTransaction,
-              );
-              this.assertSynchronousCommit(committed);
-              return { kind: "denied" as const };
-            }
-            return {
-              kind: "allowed" as const,
-              authorization: resolution.authorization,
-            };
-          },
-        );
-        if (outcome.kind === "denied") throw new PersonReadUnauthorizedError();
-        const authorization = outcome.authorization;
-        const admission: PersonReadAdmission = { ...authorization };
-        this.admissionCredentialDigests.set(
-          admission,
-          authorization.access_credential_sha256,
-        );
-        return admission;
-      },
-      finalizeSelfRead: <T>(input: {
-        admission: PersonReadAdmission;
-        subject_principal_id: string;
-        commit: (
-          decision: PersonReadFinalDecision,
-          transaction: AuthorityWriteTransaction,
-        ) => SynchronousResult<T>;
-      }): SynchronousResult<T> => {
-        const tokenSha256 = this.admissionCredentialDigests.get(
-          input.admission,
-        );
-        if (tokenSha256 === undefined) {
-          throw new Error(
-            "Person read admission is invalid or already finalized",
-          );
-        }
-        this.admissionCredentialDigests.delete(input.admission);
-        const outcome = this.repository.writeAtLinearization(
-          () => this.runtime.clock.now(),
-          (transaction, checkedAt) => {
-            if (input.subject_principal_id !== input.admission.principal_id) {
-              const committed = input.commit(
-                {
-                  decision: "deny",
-                  reason_code: "caller_subject_mismatch",
-                  checked_at: checkedAt,
-                },
-                transaction as unknown as AuthorityWriteTransaction,
-              );
-              this.assertSynchronousCommit(committed);
-              return { kind: "denied" as const };
-            }
-            const fresh = this.resolveAccess(
-              transaction as unknown as AuthorityWriteTransaction,
-              tokenSha256,
-              checkedAt,
-            );
-            if (fresh.kind === "denied") {
-              const committed = input.commit(
-                {
-                  decision: "deny",
-                  reason_code: "person_or_session_inactive",
-                  checked_at: checkedAt,
-                },
-                transaction as unknown as AuthorityWriteTransaction,
-              );
-              this.assertSynchronousCommit(committed);
-              return { kind: "denied" as const };
-            }
-            if (
-              fresh.authorization.principal_id !== input.subject_principal_id ||
-              fresh.authorization.person_state_sha256 !==
-                input.admission.person_state_sha256 ||
-              fresh.authorization.session_state_sha256 !==
-                input.admission.session_state_sha256 ||
-              fresh.authorization.access_credential_sha256 !==
-                input.admission.access_credential_sha256 ||
-              fresh.authorization.session_family_id !==
-                input.admission.session_family_id
-            ) {
-              const committed = input.commit(
-                {
-                  decision: "deny",
-                  reason_code: "authorization_state_changed",
-                  checked_at: checkedAt,
-                },
-                transaction as unknown as AuthorityWriteTransaction,
-              );
-              this.assertSynchronousCommit(committed);
-              return { kind: "denied" as const };
-            }
-            const committed = input.commit(
-              { decision: "allow", authorization: fresh.authorization },
-              transaction as unknown as AuthorityWriteTransaction,
-            );
-            this.assertSynchronousCommit(committed);
-            return {
-              kind: "allowed" as const,
-              value: committed,
-            };
-          },
-        );
-        if (outcome.kind === "denied") throw new PersonReadUnauthorizedError();
-        return outcome.value;
-      },
-    };
   }
 
   private diagnoseOidcFailure(reason: PersonSessionOidcFailureReason): void {

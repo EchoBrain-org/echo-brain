@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { AnthropicClient } from '../../../src/processing/adapters/decision-processors/llm/anthropic-client.js';
 import { OllamaClient } from '../../../src/processing/adapters/decision-processors/llm/ollama-client.js';
+import {
+  observeCoreRuntimeV1,
+  type CoreRuntimeObservationV1,
+} from '../../../src/shared/core-runtime-observation-v1.js';
 import { OpenAiClient } from '../../../src/processing/adapters/decision-processors/llm/openai-client.js';
 import { OpenRouterClient } from '../../../src/processing/adapters/decision-processors/llm/openrouter-client.js';
 import {
@@ -55,6 +59,42 @@ describe('Ollama provider client', () => {
       format: generationRequest.schema,
       options: { temperature: 0, num_ctx: 32_768, num_predict: 4096 },
     });
+  });
+
+  it('records Ollama token usage on the model call, even when the body is then rejected', async () => {
+    const events: CoreRuntimeObservationV1[] = [];
+    const scope = { observer: (event: CoreRuntimeObservationV1) => { events.push(event); } };
+    let body: Record<string, unknown> = {
+      message: { role: 'assistant', content: '{"signals":[]}' },
+      prompt_eval_count: 12,
+      eval_count: 5,
+    };
+    const client = new OllamaClient({
+      baseUrl: 'http://127.0.0.1:11434',
+      fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
+    });
+
+    await observeCoreRuntimeV1(
+      'model_call',
+      () => client.generateStructured({ ...generationRequest, model: 'qwen3:4b' }),
+      scope,
+    );
+    body = { message: { role: 'assistant', content: '' }, prompt_eval_count: 12, eval_count: 5 };
+    await expect(
+      observeCoreRuntimeV1(
+        'model_call',
+        () => client.generateStructured({ ...generationRequest, model: 'qwen3:4b' }),
+        scope,
+      ),
+    ).rejects.toThrow('did not contain message content');
+
+    const finished = events.filter(
+      (event) => event.phase === 'model_call' && event.event !== 'started',
+    );
+    expect(finished.map((event) => event.event)).toEqual(['succeeded', 'failed']);
+    for (const event of finished) {
+      expect(event.counts).toMatchObject({ input_tokens: 12, output_tokens: 5, total_tokens: 17 });
+    }
   });
 
   it('maps transport failures onto the shared adapter taxonomy', async () => {
