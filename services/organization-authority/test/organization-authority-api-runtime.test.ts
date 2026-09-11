@@ -977,35 +977,6 @@ describe("Organization Authority API runtime", () => {
       output_path: invitationPath,
     });
     expect(invitation.output_path).toBe(invitationPath);
-    const boundaryDatabase = openAuthorityDatabase(
-      join(initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
-      const crypto = new NodePersonSessionCrypto(pkce);
-      const cleanOnlySessions = new PersonIdentitySessionApplication(
-        new SqlitePersonSessionRepository(boundaryDatabase),
-        oidc,
-        {
-          clock: new SystemAuthorityClock(),
-          random: crypto,
-          hash: crypto,
-          pkce_sealer: crypto,
-          oidc_provider: new MockOidcProvider(),
-        },
-      );
-      expect(() =>
-        cleanOnlySessions.createPersonReadAuthorizationPort(),
-      ).toThrow("Person session runtime");
-      expect(() =>
-        cleanOnlySessions.withAuthenticatedWrite({
-          access_token: "unreachable",
-          commit: () => undefined,
-        }),
-      ).toThrow("Person session runtime");
-    } finally {
-      boundaryDatabase.close();
-    }
     const invitationBody = JSON.parse(readFileSync(invitationPath, "utf8")) as {
       login_grant: string;
     };

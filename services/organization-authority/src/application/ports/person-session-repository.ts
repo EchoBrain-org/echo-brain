@@ -1,6 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
-  AuthorityAuditEntry,
   NewOidcIdentityBinding,
   NewOidcLoginAttempt,
   NewPersonLoginGrant,
@@ -96,8 +95,6 @@ export interface PersonSessionReadTransaction {
 }
 
 export interface PersonSessionWriteTransaction extends PersonSessionReadTransaction {
-  /** Present for the legacy repository only; the session store has no generic audit. */
-  appendAudit?(entry: AuthorityAuditEntry): void;
   insertOidcIdentityBinding(
     binding: NewOidcIdentityBinding,
   ): StoredOidcIdentityBinding;
@@ -154,11 +151,6 @@ export interface PersonSessionWriteTransaction extends PersonSessionReadTransact
  * durable row, not an additional legacy audit event.
  */
 export interface PersonSessionRepository {
-  /**
-   * `false` means this is the login/session-only store. Legacy callers
-   * that need a full Authority transaction leave this absent (treated as true).
-   */
-  readonly supports_full_person_authorization_transactions?: boolean;
   read<T>(operation: (transaction: PersonSessionReadTransaction) => T): T;
   writeAtLinearization<T>(
     observe: () => string,
