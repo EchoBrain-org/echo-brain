@@ -8,7 +8,27 @@ VERIFY="$SCRIPT_DIR/verify-person-onboarding-kit.mjs"
 RELEASE_TOOL="$SCRIPT_DIR/clean-v1-release.mjs"
 APP_ARCHIVE="$SCRIPT_DIR/ECHO.app.zip"
 
-fail() { printf 'ECHO setup: %s\n' "$*" >&2; exit 1; }
+failure_phase=install-failed
+failure_reason=''
+fail() {
+  printf 'ECHO setup: %s\n' "$*" >&2
+  if [[ -n "$failure_reason" ]]; then
+    printf '{"ok":false,"phase":"%s","reason":"%s"}\n' "$failure_phase" "$failure_reason"
+  else
+    printf '{"ok":false,"phase":"%s"}\n' "$failure_phase"
+  fi
+  exit 1
+}
+
+# The graphical installer reads an enumerated reason, never a diagnostic string.
+fail_reason() {
+  local reason="$1"
+  shift
+  if [[ "${install_only:-0}" == 1 ]]; then
+    failure_reason="$reason"
+  fi
+  fail "$@"
+}
 
 require_safe_owned_directory_or_absent() {
   local path="$1"
@@ -99,14 +119,21 @@ validate_thin_arm64_executable() {
 install_only=0
 if [[ "${1:-}" == --install-only ]]; then install_only=1; shift; fi
 [[ -n "${HOME:-}" && "$HOME" = /* ]] || fail 'a normal macOS user HOME is required'
+failure_phase=compatibility-failed
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || \
-  fail 'this first-cohort kit supports macOS on Apple silicon only'
+  fail_reason unsupported-mac 'this first-cohort kit supports macOS on Apple silicon only'
+macos_version="$(sw_vers -productVersion)"
+[[ "$macos_version" =~ ^([0-9]+)\. ]] || fail 'could not determine macOS version'
+(( BASH_REMATCH[1] >= 14 )) || fail 'macOS 14 or later is required by ECHO Setup and ECHO; update macOS before installing'
+failure_phase=kit-failed
 [[ -f "$NODE" && ! -L "$NODE" && -x "$NODE" ]] || fail 'the bundled Node runtime is unavailable'
 [[ -f "$VERIFY" && ! -L "$VERIFY" ]] || fail 'the kit verifier is unavailable'
 [[ -f "$RELEASE_TOOL" && ! -L "$RELEASE_TOOL" ]] || fail 'the release verifier is unavailable'
 [[ -f "$APP_ARCHIVE" && ! -L "$APP_ARCHIVE" ]] || fail 'the ECHO application archive is unavailable'
 
-"$NODE" "$VERIFY" "$SCRIPT_DIR" >/dev/null
+runtime_version="$("$NODE" --version 2>/dev/null)" || fail 'the bundled Node runtime cannot start; re-extract the approved Apple-silicon kit and check executable permissions'
+[[ "$runtime_version" == v22.22.1 ]] || fail 'the bundled Node version is wrong; re-extract the approved kit'
+"$NODE" "$VERIFY" "$SCRIPT_DIR" >/dev/null || fail 'the onboarding kit verification failed; re-extract the approved kit and verify the owner-provided archive checksum'
 "$NODE" "$RELEASE_TOOL" validate "$SCRIPT_DIR/release.json" >/dev/null
 
 invitation="${1:-}"
@@ -123,6 +150,8 @@ fi
 release_id="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" release-id)"
 expected_version="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" client-version)"
 expected_source_sha="$("$NODE" "$RELEASE_TOOL" field "$SCRIPT_DIR/release.json" source-sha)"
+failure_phase=destination-failed
+trap 'fail "installation could not write or extract files; check destination permissions and free disk space, then retry"' ERR
 application_root="$HOME/Library/Application Support/ECHO"
 releases_root="$application_root/releases"
 bin_root="$application_root/bin"
@@ -139,7 +168,7 @@ require_private_owned_directory "$bin_root"
 # Serialize installers so retention cannot remove another activation's recovery.
 install_lock="$application_root/.installer-lock"
 mkdir -m 0700 "$install_lock" 2>/dev/null || \
-  fail 'another or interrupted ECHO setup owns the installer lock'
+  fail_reason setup-in-progress 'another or interrupted ECHO setup owns the installer lock'
 cleanup_lock() { rmdir "$install_lock"; }
 trap cleanup_lock EXIT
 
@@ -199,21 +228,21 @@ trap 'cleanup_overlay; cleanup_lock' EXIT
 chmod 0700 "$overlay_staging"
 /usr/bin/ditto -x -k "$APP_ARCHIVE" "$overlay_staging"
 [[ "$(find "$overlay_staging" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" == 1 ]] || \
-  fail 'the ECHO application archive has an invalid top-level layout'
+  fail_reason download-damaged 'the ECHO application archive has an invalid top-level layout'
 staged_app="$overlay_staging/ECHO.app"
 [[ -d "$staged_app" && ! -L "$staged_app" ]] || fail 'the ECHO application bundle is missing'
 [[ -z "$(find "$staged_app" -type l -print -quit)" ]] || \
-  fail 'the ECHO application bundle contains a symbolic link'
+  fail_reason download-damaged 'the ECHO application bundle contains a symbolic link'
 [[ -f "$staged_app/Contents/Info.plist" && ! -L "$staged_app/Contents/Info.plist" ]] || \
-  fail 'the ECHO application Info.plist is missing'
+  fail_reason download-damaged 'the ECHO application Info.plist is missing'
 [[ -f "$staged_app/Contents/MacOS/ECHO" && ! -L "$staged_app/Contents/MacOS/ECHO" && \
    -x "$staged_app/Contents/MacOS/ECHO" ]] || fail 'the ECHO application executable is missing'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$staged_app/Contents/Info.plist")" == \
    'org.echobrain.echo-overlay' ]] || fail 'the ECHO application bundle identifier is invalid'
 /usr/bin/codesign --verify --deep --strict "$staged_app" || \
-  fail 'the ECHO application signature is invalid'
+  fail_reason download-damaged 'the ECHO application signature is invalid'
 validate_thin_arm64_executable "$staged_app/Contents/MacOS/ECHO" || \
-  fail 'the ECHO application executable is not arm64-only'
+  fail_reason download-damaged 'the ECHO application executable is not arm64-only'
 validate_overlay_identity "$staged_app" "$expected_source_sha" "$expected_version"
 
 wrapper_destination="$bin_root/echo-brain"
@@ -224,6 +253,7 @@ printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' \
   "$release_root/node" "$release_root/package/dist/main.js" > "$wrapper_pending"
 chmod 0700 "$wrapper_pending"
 
+failure_phase=install-failed
 app_was_present=0
 app_needs_activation=1
 app_backup=''
@@ -271,7 +301,7 @@ fi
 
 if [[ "$wrapper_was_present" != "$app_was_present" ]] || \
    [[ "$wrapper_was_present" == 1 && -z "$previous_release" ]]; then
-  fail 'the existing ECHO app and command are not a recognized installed pair'
+  fail_reason existing-install-mismatch 'the existing ECHO app and command are not a recognized installed pair'
 fi
 if [[ -n "$previous_release" ]]; then
   prior_record="$releases_root/$previous_release/release.json"
@@ -335,7 +365,7 @@ if ! mv "$wrapper_pending" "$wrapper_destination"; then
     mv "$wrapper_backup" "$wrapper_destination" || \
       fail 'pair activation failed and the prior ECHO command could not be restored'
   fi
-  fail 'pair activation failed; the prior app and command were restored'
+  fail_reason activation-failed 'pair activation failed; the prior app and command were restored'
 fi
 
 restore_prior_pair_after_retirement_failure() {
@@ -365,7 +395,7 @@ restore_prior_pair_after_retirement_failure() {
       fail 'overlay retirement failed and the new ECHO command could not be restored'
     fail 'overlay retirement failed; the new matched app and command remain installed'
   fi
-  fail 'the running ECHO application could not be stopped; the prior app and command were restored'
+  fail_reason app-running 'the running ECHO application could not be stopped; the prior app and command were restored'
 }
 
 # A changed bundle cannot remain active while its prior process owns the status
@@ -464,6 +494,8 @@ RETENTION
 trap - HUP INT TERM
 [[ "$interrupted" == 0 ]] || fail 'setup was interrupted; the new matched app and command remain installed'
 
+trap - ERR
+printf 'ECHO installed: %s\nBundled Node: %s\n' "$wrapper_destination" "$runtime_version" >&2
 if [[ "$install_only" == 1 ]]; then
   printf '{"ok":true,"phase":"installed"}\n'
   exit 0

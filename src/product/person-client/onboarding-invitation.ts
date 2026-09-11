@@ -184,8 +184,17 @@ function validate(value: unknown): PersonOnboardingInvitation {
 export function readPersonOnboardingInvitation(
   inputPath: string,
 ): PersonOnboardingInvitation {
-  const path = canonicalInvitationPath(inputPath);
-  const before = lstatSync(path);
+  let path: string;
+  let before: ReturnType<typeof lstatSync>;
+  try {
+    path = canonicalInvitationPath(inputPath);
+    before = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error("Person onboarding invitation file not found; select person-invitation.json inside the owner's ECHO-invitation-<random> folder");
+    }
+    throw error;
+  }
   const currentUid = process.getuid?.();
   if (
     before.isSymbolicLink() ||
@@ -193,12 +202,15 @@ export function readPersonOnboardingInvitation(
     before.size <= 0 ||
     before.size > MAXIMUM_INVITATION_BYTES ||
     realpathSync(path) !== path ||
-    (currentUid !== undefined && before.uid !== currentUid) ||
-    (before.mode & 0o777) !== 0o600
+    (currentUid !== undefined && before.uid !== currentUid)
   ) {
     throw new Error(
       "Person onboarding invitation must be a bounded current-user 0600 canonical file",
     );
+  }
+  if ((before.mode & 0o777) !== 0o600) {
+    const quotedPath = "'" + path.replaceAll("'", "'\\''") + "'";
+    throw new Error(`Person onboarding invitation must have mode 0600. For your file, run: chmod 600 ${quotedPath}`);
   }
   const descriptor = openSync(
     path,

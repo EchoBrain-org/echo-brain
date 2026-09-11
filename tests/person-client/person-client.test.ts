@@ -4,6 +4,7 @@ import {
   chmodSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -19,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EmployeeMutationError,
   PersonClient,
+  PersonSessionStore,
   runPersonClientCli,
 } from "../../src/product/person-client/index.js";
 
@@ -2936,6 +2938,46 @@ describe("Person client", () => {
       await expect(client.records()).rejects.toThrow(/request failed/);
       await expect(client.records()).rejects.toThrow(/sign in again/);
       expect(refreshCalls).toBe(1);
+    });
+  });
+});
+
+describe("Person client status recovery", () => {
+  it("reports signed-out status for a session written by an older release", async () => {
+    await withHome(async (home) => {
+      const store = new PersonSessionStore(home);
+      mkdirSync(store.paths.directory, { recursive: true, mode: 0o700 });
+      writeFileSync(
+        store.paths.live,
+        `${JSON.stringify({
+          schema_version: 1,
+          kind: "echo-person-client-session",
+          authority_origin: "https://authority.example",
+          authority_id: ORGANIZATION_IDS.authority,
+          session: SESSION,
+          legacy_device_id: "dev_1",
+        })}\n`,
+        { mode: 0o600 },
+      );
+
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(["status"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: (value) => ((stderr += String(value)), true) },
+        home_directory: home,
+        fetch: async () => {
+          throw new Error("status must not contact the Authority");
+        },
+      });
+
+      expect(status).toBe(0);
+      expect(stderr).toBe("");
+      expect(JSON.parse(stdout)).toMatchObject({
+        signed_in: false,
+        display_name: null,
+        connected_authority: null,
+      });
     });
   });
 });

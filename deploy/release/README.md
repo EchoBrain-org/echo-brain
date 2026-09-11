@@ -740,6 +740,93 @@ employee to request a reissued invitation.
 Developer ID signing and notarization remain a later distribution improvement
 for both macOS kit formats.
 
+### Employee machine requirements and handoff
+
+The shipped targets are **macOS ARM64 (Apple silicon)** and **Linux x64
+(x86_64)**. CPU architecture alone does not identify a compatible kit.
+
+| Kit | Required machine | Bundled executables and tools |
+| --- | --- | --- |
+| macOS ARM64 | macOS 14 or later, Apple silicon | ECHO Setup and ECHO both compile for `arm64-apple-macos14.0`; this sets the kit floor, above Node's macOS floor. Both app plists declare 14.0. Standard macOS utilities are used during installation. |
+| Linux x64 | Linux kernel 4.18 or later, glibc 2.28 or later, x86_64 | The only bundled native executable is Node 22.22.1. Its system libraries must be available, including libstdc++; the installer checks that this exact runtime can start. Bash, unzip, tar/gzip and standard core utilities are required. CLI only. |
+
+The Linux prerequisites follow the pinned [Node 22.22.1 build contract](https://github.com/nodejs/node/blob/v22.22.1/BUILDING.md).
+Ubuntu 22.04+ and Debian 12+ are the intended distro class; passing prerequisite
+checks is not certification of every distro at the numeric floor. Neither kit
+uses system Node/npm, downloads dependencies, or requires a compiler during
+installation. `--install-only` is offline and needs no invitation or login.
+
+Before activation, installers check OS/CPU and OS/libc floors, start the bundled
+runtime, verify matched kit artifacts, and stage writes/extraction in the install
+destination. A write or extraction failure stops activation and gives permission
+and free-space guidance. Space is tested by doing the actual staged writes, not
+by promising that a compressed archive's size predicts free-space needs. Existing
+integrity, same-release, atomic activation and Mac matched-pair rollback checks
+remain authoritative. A successful install prints the command path and bundled
+Node version; the absolute command works in every shell. The Linux PATH export
+is optional and lasts for the current shell only; setup never edits profiles.
+
+The owner's People window saves a file at
+`<chosen-folder>/ECHO-invitation-<random>/person-invitation.json`. It shows the
+selectable full path and offers **Show invitation in Finder**. Privately send
+that file (or its containing folder) alongside the correct kit, and tell the
+employee to select the file inside the nested folder. Do not paste invitation
+contents into chat or a shell command. Linux rejects a relative path, a missing
+file and a symlink with separate recovery instructions. If transfer changes the
+current user's file to mode 0644, use the printed, quoted `chmod 600 <path>`
+command, then retry. Ownership, file size, canonical content and symlink checks
+still apply; changing permissions does not make an invalid invitation valid.
+
+An invitation expires **15 minutes after issue**. Each browser attempt lasts
+**up to 10 minutes**, independently bounded by its printed `expires_at`; the
+CLI explains both absolute deadlines. Keep the command/setup running. Use a
+browser on the same machine that can reach its loopback address (`127.0.0.1`).
+Opening the URL on a different computer does not complete a remote/headless
+client's callback. Use an interactive supported machine; this kit supplies no
+remote-login forwarding or device-code protocol. If automatic opening fails,
+configure a default browser or use CLI login without `--open-browser` and open
+its `authorization_url` locally. After timeout, retry; ask the owner to reissue
+an expired invitation. An already-bound person can sign in on another machine
+using `person login --authority-url <url>` without a new invitation.
+
+Intel macOS and Linux ARM64 are follow-up ports, **not supported targets**.
+Intel macOS needs x64 builds of both Swift apps and Node, matching packaging and
+verification identities, and native install/reinstall/update/browser proof.
+Linux ARM64 needs the pinned arm64 Node runtime, ELF/identity/installer support,
+and native distro and browser proof. Changing an architecture check or mocking
+`uname` proves neither port. Windows, 32-bit x86 and musl/Alpine remain outside
+this scope. Mac archives are ad-hoc signed, not Developer ID signed/notarized;
+normal downloaded-app distribution still needs Apple's program access and a
+quarantine/Gatekeeper rehearsal. Do not bypass OS protection to claim support.
+
+The existing smoke helper now supports both shipped native targets:
+
+```sh
+node tests/fixtures/person-onboarding-smoke.mjs
+```
+
+Run from clean committed source on the matching target. It builds the exact
+offline package (including both Mac apps), checks its digest, installs into an
+empty temporary HOME/XDG path containing spaces and Unicode, starts CLI version
+and signed-out status, reinstalls, and checks tampering cannot replace the active
+command. Installer PATH contains only OS utilities, with no Node/npm/compiler or
+network command, and Mac developer tools are disabled for that step. CI reuses
+its already-built Mac kit through `--kit-root`; the helper copies it before
+negative tests. This is isolated native-host proof, **not a pristine OS image or
+real browser-login proof**; host libraries remain available.
+
+| Validation | What it establishes | Still required before distribution |
+| --- | --- | --- |
+| Linux shell tests on Mac | Mocked OS/libc/ELF failure paths, staged write failure, reinstall preservation | Native Linux kit smoke; a Mac skip is not a Linux pass |
+| Native Mac smoke and existing Mac CI | Real compiled package, fresh user state, restricted tool PATH, install/start/reinstall | Clean macOS 14 and current macOS machines; downloaded archive/quarantine, actual setup UI and browser sign-in |
+| Native Linux smoke in existing Ubuntu CI | Real Linux Node and packaged client, fresh state, offline install/start/reinstall | Ubuntu 22.04 and Debian 12 floor-class hosts; actual browser opening, deadlines, invitation transfer modes and permission-aware reads |
+
+The previous 3b663a7 Linux rehearsal on Debian 13/glibc 2.41 is evidence for
+that earlier artifact and host, not this PR's resulting artifact. Record the
+source SHA, archive checksum, OS/CPU/libc, native vs emulated environment and
+browser/read outcome for each new manual rehearsal. No fixture success marks a
+candidate accepted; release authority stays in the operator playbook.
+
 ### Linux x64 terminal kit
 
 The Linux kit supports glibc x86_64 machines (Ubuntu 22.04+ / Debian 12+ class).
@@ -780,7 +867,7 @@ invitation, session, or provider credentials.
 ```sh
 sha256sum -c SHA256SUMS.txt
 unzip ECHO-linux-x64-source-sha12.zip
-./echo-person-onboarding-kit/Start-ECHO.sh /absolute/path/person-invitation.json
+./echo-person-onboarding-kit/Start-ECHO.sh '/absolute/path/ECHO-invitation-XXXXXXXX/person-invitation.json'
 ```
 
 Use `Start-ECHO.sh --install-only` to install without signing in. Without an
@@ -798,7 +885,7 @@ until the prior installer has finished or its state has been inspected.
 Existing Person sessions remain at `~/.local/share/echo-brain/person` and are
 preserved; applying another invitation requires explicitly signing out first.
 
-Run `node tests/fixtures/linux-person-onboarding-smoke.mjs` on a clean Linux
+Run `node tests/fixtures/person-onboarding-smoke.mjs` on a clean Linux
 x64 checkout for the offline packaging proof. The existing Ubuntu CI job runs
 it with system Node/npm absent from the installer's PATH. Its fixture release
 uses non-fetchable `rehearsal.invalid` URLs and an undeployed image digest.

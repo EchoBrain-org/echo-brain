@@ -243,7 +243,7 @@ export async function startPersonLoopbackHandoff(input: {
   timeout = setTimeout(() => {
     if (!settled) {
       settled = true;
-      rejectWait!(new Error("Person browser sign-in timed out"));
+      rejectWait!(new Error("Person browser sign-in timed out after the browser-attempt deadline. Rerun the command on a machine whose browser can reach its loopback address (127.0.0.1); ask your owner to reissue an expired invitation."));
       void close();
     }
   }, input.timeout_ms ?? 10 * 60 * 1000);

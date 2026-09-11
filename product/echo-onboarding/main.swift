@@ -4,6 +4,7 @@ import Foundation
 private struct SetupResult: Decodable {
     let ok: Bool
     let phase: String
+    let message: String?
     let display_name: String?
     let authority: String?
 }
@@ -24,6 +25,15 @@ func onboardingAuthorityOrigin(_ source: String) -> String? {
     origin.port = components.port == 443 ? nil : components.port
     origin.path = ""
     return origin.url?.absoluteString
+}
+
+func onboardingSafeMessage(_ source: String?) -> String? {
+    guard let source = source, source.count <= 300 else { return nil }
+    let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          trimmed.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+    else { return nil }
+    return trimmed
 }
 
 @MainActor
@@ -169,7 +179,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         secondary.title = "Cancel sign-in"
         spinner.startAnimation(nil)
         status.stringValue = action == "prepare" ? "Installing the approved ECHO app…" :
-            (action == "start" || action == "login") ? "Complete Google sign-in in your browser. ECHO will check your access when you return." :
+            (action == "start" || action == "login") ? "Complete Google sign-in in this Mac’s browser within 10 minutes. Invitations expire 15 minutes after issue; ask your owner for a new one if needed. Keep setup open." :
             action == "logout" ? "Signing out…" : "Checking your organization access…"
         try? output.fileHandleForWriting.close()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -200,7 +210,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
             return
         }
         guard let result else { showFailure("install-failed"); return }
-        guard succeeded && result.ok else { showFailure(result.phase); return }
+        guard succeeded && result.ok else { showFailure(result.phase, result.message); return }
         switch result.phase {
         case "signed-in":
             rememberAuthority(result.authority)
@@ -214,7 +224,7 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         case "needs-invitation":
             heading.stringValue = "Join your organization"
             detail.stringValue = "Choose your private invitation, then sign in with your invited work account."
-            status.stringValue = "Your organization owner provides the invitation."
+            status.stringValue = "Choose person-invitation.json inside the ECHO-invitation-… folder your owner sent."
             primary.title = "Choose invitation"
             nextAction = "start"
             secondary.title = "Sign in with existing account"
@@ -231,17 +241,29 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         }
     }
 
-    private func showFailure(_ phase: String) {
+    private func showFailure(_ phase: String, _ message: String? = nil) {
         active = nil
         spinner.stopAnimation(nil)
         primary.isEnabled = true
         secondary.isHidden = true
+        let installRecovery = [
+            "compatibility-failed": "This kit requires an Apple-silicon Mac with macOS 14 or later. Update macOS or use a supported machine.",
+            "kit-failed": "Re-extract the approved download and verify the archive checksum your owner supplied.",
+            "destination-failed": "Check free disk space and permissions in your Applications and Library/Application Support folders, then retry."
+        ]
+        if let recovery = installRecovery[phase] {
+            heading.stringValue = "Setup needs attention"
+            status.stringValue = onboardingSafeMessage(message) ?? recovery
+            primary.title = "Try again"
+            nextAction = "prepare"
+            return
+        }
         if phase == "login-failed" || phase == "invalid-request" || phase == "browser-failed" {
             nextAction = "status"
             primary.title = "Continue setup"
             status.stringValue = phase == "browser-failed" ?
                 "Your browser could not open. Check your default browser, then try sign-in again." :
-                "Sign-in did not finish. Try again. If your invitation expired, ask your owner for a new one."
+                "Browser sign-in has a 10-minute window. Try again on this Mac. Invitations expire 15 minutes after issue; ask your owner for a new one if needed."
         } else if phase == "access-failed" {
             nextAction = "continue"
             primary.title = "Try again"
@@ -251,7 +273,8 @@ private final class SetupController: NSObject, NSApplicationDelegate, NSWindowDe
         } else {
             nextAction = "prepare"
             primary.title = "Try installation again"
-            status.stringValue = "ECHO could not finish setup. Try again with the approved download from your owner."
+            status.stringValue = onboardingSafeMessage(message) ??
+                "ECHO could not finish setup. Try again with the approved download from your owner."
         }
     }
 
