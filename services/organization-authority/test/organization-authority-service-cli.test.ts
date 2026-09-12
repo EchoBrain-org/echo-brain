@@ -139,11 +139,13 @@ vi.mock(
         dependencies: Parameters<
           typeof actual.createStagingJourneyTelemetryTransportFromEnvironmentV1
         >[1],
+        vocabulary: Parameters<typeof actual.createStagingJourneyTelemetryTransportFromEnvironmentV1>[2],
       ) {
         const transport =
           actual.createStagingJourneyTelemetryTransportFromEnvironmentV1(
             environment,
             dependencies,
+            vocabulary,
           );
         return {
           ...transport,

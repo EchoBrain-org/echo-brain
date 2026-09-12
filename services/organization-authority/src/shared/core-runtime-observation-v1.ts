@@ -1,3 +1,4 @@
+import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, telemetryLabelV1, type TelemetryVocabularyV1 } from "./telemetry-vocabulary-v1.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -6,7 +7,7 @@ export const CORE_RUNTIME_PHASES_V1 = [
   "person_tools_status", "person_tool_delivery", "person_tool_completion",
   "worker_request", "worker_gate", "worker_execution", "worker_timer", "source_poll", "source_cursor",
   "source_intake", "extraction", "candidate_persist", "approval_staging", "recovery",
-  "approval_observation", "record_append", "approval_action", "slack_terminal_update",
+  "approval_observation", "record_append", "approval_action", "approval_terminal_update",
   "search_reconciliation", "search_snapshot", "search_enrichment", "search_build",
   "search_validation", "search_publication", "related_projection", "model_call",
   "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer",
@@ -36,8 +37,8 @@ export interface CoreRuntimeDetailV1 {
   readonly source_revision: string | null;
   readonly cursor: string | null;
   readonly action: string | null;
-  readonly provider: "openrouter" | "openai" | "anthropic" | "ollama" | "other" | null;
-  readonly model: "anthropic/claude-sonnet-4.6" | "deepseek/deepseek-v3.2" | "other" | null;
+  readonly provider: string | null;
+  readonly model: string | null;
   readonly finish_reason: "stop" | "length" | "content_filter" | "completed" | "other" | null;
   readonly provider_request: string | null;
   /** Process-wide counters can overlap other spans; they are not exclusive cost. */
@@ -60,6 +61,7 @@ export interface CoreRuntimeContentV1 {
   readonly content: unknown;
 }
 export interface CoreRuntimeObservationScopeV1 {
+  readonly vocabulary?: TelemetryVocabularyV1;
   readonly observer?: CoreRuntimeObserverV1;
   readonly content_observer?: (event: CoreRuntimeContentV1) => void | Promise<void>;
 }
@@ -100,7 +102,7 @@ function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1)
     const detail: CoreRuntimeDetailV1 = { operation_id, span_id: randomUUID(), parent_span_id: parent?.detail.span_id ?? null,
       phase, purpose: phase === "model_call" ? parent?.detail.phase ?? phase : phase, root: !parent, linked_journey_ids: parent?.detail.linked_journey_ids ?? [], counts: {}, result: null, generation: null, source_revision: parent?.detail.source_revision ?? null, cursor: parent?.detail.cursor ?? null, action: parent?.detail.action ?? null, provider: null, model: null, finish_reason: null, provider_request: null,
       resource_scope: "process_overlap", sqlite_lock_time: "unavailable", disk_io_latency: "unavailable", event_loop_delay: "unavailable" };
-    const current: Context = { observer, ...(scope?.content_observer ?? parent?.content_observer ? { content_observer: scope?.content_observer ?? parent?.content_observer } : {}), detail };
+    const current: Context = { observer, vocabulary: createTelemetryVocabularyV1(scope?.vocabulary ?? parent?.vocabulary ?? EMPTY_TELEMETRY_VOCABULARY_V1), ...(scope?.content_observer ?? parent?.content_observer ? { content_observer: scope?.content_observer ?? parent?.content_observer } : {}), detail };
     const emit = (event: CoreRuntimeObservationV1["event"]) => safe(() => observer({ ...detail, counts: { ...detail.counts }, stage: phase, event, observed_at: new Date().toISOString(), elapsed_ms: event === "started" ? 0 : Math.max(0, Math.floor(performance.now() - started)) }));
     if (phase === "model_call") { activeModels += 1; Object.assign(detail.counts, { active_models: activeModels }); }
     emit("started");
@@ -149,7 +151,8 @@ export function observeCoreRuntimeRootV1<T>(phase: CoreRuntimePhaseV1, operation
 }
 
 /** Rebuild the finite metadata contract; never admit raw IDs, errors, or content. */
-export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1): CoreRuntimeDetailV1 {
+export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1, vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1): CoreRuntimeDetailV1 {
+  const admitted = createTelemetryVocabularyV1(vocabulary);
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   if (!uuid.test(input.operation_id) || !uuid.test(input.span_id) || (input.parent_span_id !== null && !uuid.test(input.parent_span_id)) ||
       !CORE_RUNTIME_PHASES_V1.includes(input.phase) || !CORE_RUNTIME_PHASES_V1.includes(input.purpose) || typeof input.root !== "boolean" ||
@@ -167,7 +170,7 @@ export function normalizeCoreRuntimeDetailV1(input: CoreRuntimeDetailV1): CoreRu
     phase: input.phase, purpose: input.purpose, root: input.root, linked_journey_ids: Object.freeze([...input.linked_journey_ids]), counts: Object.freeze(counts),
     result: input.result, generation: input.generation,
     source_revision: opaque(input.source_revision), cursor: opaque(input.cursor), action: opaque(input.action), provider_request: opaque(input.provider_request),
-    provider: finite(input.provider, ["openrouter", "openai", "anthropic", "ollama", "other"]), model: finite(input.model, ["anthropic/claude-sonnet-4.6", "deepseek/deepseek-v3.2", "other"]),
+    provider: finite(input.provider, admitted.providers), model: finite(input.model, admitted.models),
     finish_reason: finite(input.finish_reason, ["stop", "length", "content_filter", "completed", "other"]), resource_scope: "process_overlap", sqlite_lock_time: "unavailable", disk_io_latency: "unavailable", event_loop_delay: input.event_loop_delay === "process_sample" ? "process_sample" : "unavailable" });
 }
 
@@ -182,13 +185,14 @@ function finite<T extends string>(value: T | null, allowed: readonly T[]): T | n
   return value;
 }
 export function observeCoreModelMetadataV1(input: { provider: string; model: string; request_id?: string; finish_reason?: string }): void {
-  annotateCoreRuntimeV1({ provider: ["openrouter", "openai", "anthropic", "ollama"].includes(input.provider) ? input.provider as NonNullable<CoreRuntimeDetailV1["provider"]> : "other",
-    model: ["anthropic/claude-sonnet-4.6", "deepseek/deepseek-v3.2"].includes(input.model) ? input.model as NonNullable<CoreRuntimeDetailV1["model"]> : "other",
+  const vocabulary = context.getStore()?.vocabulary ?? EMPTY_TELEMETRY_VOCABULARY_V1;
+  annotateCoreRuntimeV1({ provider: telemetryLabelV1(input.provider, vocabulary.providers),
+    model: telemetryLabelV1(input.model, vocabulary.models),
     ...(input.request_id === undefined ? {} : { provider_request: coreRuntimeIdentityV1("provider_request", input.request_id) }),
     ...(input.finish_reason === undefined ? {} : { finish_reason: ["stop", "length", "content_filter", "completed"].includes(input.finish_reason) ? input.finish_reason as NonNullable<CoreRuntimeDetailV1["finish_reason"]> : "other" }) });
 }
 
 export function currentCoreRuntimeDetailV1(): CoreRuntimeDetailV1 | null {
-  try { const value = context.getStore()?.detail; return value ? normalizeCoreRuntimeDetailV1({ ...value, root: false }) : null; }
+  try { const value = context.getStore()?.detail; return value ? normalizeCoreRuntimeDetailV1({ ...value, root: false }, context.getStore()?.vocabulary) : null; }
   catch { return null; }
 }

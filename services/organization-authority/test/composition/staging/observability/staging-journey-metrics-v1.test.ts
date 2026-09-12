@@ -1,3 +1,4 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../observability/telemetry-fixture-vocabulary-v1.js";
 import { currentCoreRuntimeDetailV1, observeCoreRuntimeSyncV1 } from "../../../../src/shared/core-runtime-observation-v1.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -49,7 +50,7 @@ function journey(event: Record<string, unknown>): JourneyTelemetryEventV1 {
       },
       ...event,
     } as never,
-  });
+  }, TELEMETRY_FIXTURE_VOCABULARY_V1);
 }
 
 function metric(record: Record<string, unknown>, name: string): unknown {
@@ -63,15 +64,15 @@ describe("staging journey EMF metrics v1", () => {
       context: { environment: "staging", workflow: "meeting_approval", release_sha: RELEASE_SHA, build_number: 123 },
       event: { stage: "meeting_search_publication", event: "succeeded", elapsed_ms: 100, outcome: "published",
         diagnostic: currentCoreRuntimeDetailV1()!, accounting: { kind: "shared_reference", execution_attempt: 1, retry_count: 0 } },
-    }), { observer: () => {} });
-    const records = formatJourneyTelemetryMetricsV1(event);
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1), { observer: () => {} });
+    const records = formatJourneyTelemetryMetricsV1(event, TELEMETRY_FIXTURE_VOCABULARY_V1);
     expect(records).toContainEqual(expect.objectContaining({ workflow: "meeting_approval", stage: "meeting_search_publication", StageSucceeded: 1 }));
     expect(records.every((record) => record.StageClosedLatencyMs === undefined)).toBe(true);
     expect(records).toContainEqual(expect.objectContaining({ stage: "meeting_search_publication", outcome: "published", TerminalOutcome: 1 }));
   });
 
   it("projects a closed LLM stage into exact independent metric dimension sets", () => {
-    const records = formatJourneyTelemetryMetricsV1(journey({}));
+    const records = formatJourneyTelemetryMetricsV1(journey({}), TELEMETRY_FIXTURE_VOCABULARY_V1);
     expect(records).toHaveLength(2);
     expect(records[0]).toMatchObject({
       _aws: {
@@ -123,7 +124,7 @@ describe("staging journey EMF metrics v1", () => {
         provider_latency_ms: 11,
         finish_reason: "unknown",
       },
-    }));
+    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
     const llm = records.find((record) => metric(record, "LlmAttempt") === 1)!;
     expect(llm.LlmUsageUnavailable).toBe(1);
     expect(JSON.stringify(llm)).not.toContain("LlmInputTokens");
@@ -140,7 +141,7 @@ describe("staging journey EMF metrics v1", () => {
         cached_input_tokens: 3,
         finish_reason: "completed",
       },
-    }));
+    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
     const llm = records.find((record) => metric(record, "LlmAttempt") === 1)!;
     expect(llm.LlmUsageReported).toBe(1);
     expect(llm.LlmCachedInputTokens).toBe(3);
@@ -153,7 +154,7 @@ describe("staging journey EMF metrics v1", () => {
       stage: "ask_response",
       llm_usage: null,
       outcome: "answered",
-    }));
+    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
     expect(records).toHaveLength(2);
     expect(records[1]).toMatchObject({
       workflow: "ask",
@@ -173,14 +174,14 @@ describe("staging journey EMF metrics v1", () => {
       elapsed_ms: 0,
       llm_usage: null,
       attempt: 1,
-    }));
+    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
     const retry = formatJourneyTelemetryMetricsV1(journey({
       event: "started",
       elapsed_ms: 0,
       llm_usage: null,
       attempt: 2,
       accounting: { kind: "execution", execution_attempt: 2, retry_count: 1, retry_of_attempt: 1 },
-    }));
+    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
     expect(first[0]).toMatchObject({ StageStarted: 1 });
     expect(first[0]).not.toHaveProperty("StageRetryAttempt");
     expect(retry[0]).toMatchObject({ StageStarted: 1, StageRetryAttempt: 1 });
@@ -197,7 +198,7 @@ describe("staging journey EMF metrics v1", () => {
         context_atom_count: 0,
         citation_count: 0,
       },
-    }));
+    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
     const retrieval = records.find((record) => metric(record, "RetrievalPlannedQueries") === 0)!;
     expect(retrieval).toMatchObject({
       workflow: "ask",
@@ -227,7 +228,7 @@ describe("staging journey EMF metrics v1", () => {
         elapsed_ms: 9,
         queue_age_ms: 86_400_000,
       },
-    }));
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1), TELEMETRY_FIXTURE_VOCABULARY_V1);
     expect(records[0]).toMatchObject({ StageClosedLatencyMs: 9 });
     expect(records[1]).toMatchObject({ ApprovalHumanWaitMs: 86_400_000 });
     expect(records[1]).not.toHaveProperty("StageClosedLatencyMs");
@@ -240,7 +241,7 @@ describe("staging journey EMF metrics v1", () => {
       llm_usage: null,
       failure_class: "unavailable",
       retryable: true,
-    }));
+    }), TELEMETRY_FIXTURE_VOCABULARY_V1);
     expect(records).toContainEqual(expect.objectContaining({ AskRetrievalFailure: 1 }));
     expect(records).toContainEqual(expect.objectContaining({
       workflow: "ask",
@@ -256,7 +257,7 @@ describe("staging journey EMF metrics v1", () => {
       prompt: "prompt-sentinel",
       error: "error-sentinel",
     };
-    const serialized = JSON.stringify(formatJourneyTelemetryMetricsV1(forged));
+    const serialized = JSON.stringify(formatJourneyTelemetryMetricsV1(forged, TELEMETRY_FIXTURE_VOCABULARY_V1));
     for (const forbidden of [
       JOURNEY_ID,
       RELEASE_SHA,
@@ -312,7 +313,7 @@ describe("staging journey EMF metrics v1", () => {
         (event) => event.kind === "echo-authority-journey-stage-v1",
       ) as unknown as JourneyTelemetryEventV1[];
     const records = events.flatMap((event) =>
-      formatJourneyTelemetryMetricsV1(event),
+      formatJourneyTelemetryMetricsV1(event, TELEMETRY_FIXTURE_VOCABULARY_V1),
     );
     const sum = (name: string): number =>
       records.reduce(

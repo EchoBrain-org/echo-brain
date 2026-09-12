@@ -541,7 +541,8 @@
         "services/organization-authority/src/processing/admitted-meeting-processing/**",
         "services/organization-authority/src/processing/adapters/approval-resolution/slack/**",
         "services/organization-authority/src/quality/**",
-        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts",
+        "services/organization-authority/src/shared/telemetry-vocabulary-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -687,7 +688,8 @@
       "name": "authority-journey-telemetry-is-provider-neutral-and-content-free",
       "from": "services/organization-authority/src/shared/journey-telemetry-v1.ts",
       "allowed_imports": [
-        "services/organization-authority/src/shared/core-runtime-observation-v1.ts"
+        "services/organization-authority/src/shared/core-runtime-observation-v1.ts",
+        "services/organization-authority/src/shared/telemetry-vocabulary-v1.ts"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -816,13 +818,23 @@
     {
       "name": "authority-core-runtime-observations-have-no-business-dependencies",
       "from": "services/organization-authority/src/shared/core-runtime-observation-v1.ts",
-      "allowed_imports": [],
+      "allowed_imports": [
+        "services/organization-authority/src/shared/telemetry-vocabulary-v1.ts"
+      ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": [
         "async_hooks",
         "crypto"
       ]
+    },
+    {
+      "name": "authority-telemetry-vocabulary-is-a-bounded-value",
+      "from": "services/organization-authority/src/shared/telemetry-vocabulary-v1.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     }
   ]
 }

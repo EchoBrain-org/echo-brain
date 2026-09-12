@@ -1559,7 +1559,7 @@ describe("workspace source boundaries", () => {
     );
   });
 
-  it("follows provider exports through workspace barrels and coupled exceptions", () => {
+  it("follows provider exports through workspace barrels and neutral wrappers", () => {
     const fixture = fixtureRepository();
     const probePath = "services/organization-authority/src/composition/boundary-export-probe.ts";
     const probe = join(fixture, probePath);
@@ -1579,14 +1579,15 @@ describe("workspace source boundaries", () => {
         `provider-neutral module reaches declared provider/adapter root 'slack': ${probePath}`,
       );
     }
-    const exception = join(fixture, "services/organization-authority/src/composition/ask-journey-telemetry-v1.ts");
-    writeFileSync(exception, `${readFileSync(exception, "utf8")}\nexport { validateOrganizationPersonSlackBrowserLinkBeginRequest as validateInput } from "@echo-brain/organization-api";\n`);
-    writeFileSync(probe, 'export { validateInput } from "./ask-journey-telemetry-v1.js";\n');
+    const wrapper = join(fixture, "services/organization-authority/src/composition/boundary-neutral-wrapper.ts");
+    writeFileSync(wrapper, 'export { validateOrganizationPersonSlackBrowserLinkBeginRequest as validateInput } from "@echo-brain/organization-api";\n');
+    writeFileSync(probe, 'export { validateInput } from "./boundary-neutral-wrapper.js";\n');
     const escaped = runBoundary(fixture);
     expect(escaped.status, escaped.stdout + escaped.stderr).toBe(1);
     expect(escaped.stdout + escaped.stderr).toContain(
       `provider-neutral module reaches declared provider/adapter root 'slack': ${probePath}`,
     );
+    rmSync(wrapper);
     // An ordinary neutral export from the same public API must remain usable.
     writeFileSync(probe, 'export { validateOrganizationAuthorityOrigin as validateInput } from "@echo-brain/organization-api";\n');
     const neutral = runBoundary(fixture);

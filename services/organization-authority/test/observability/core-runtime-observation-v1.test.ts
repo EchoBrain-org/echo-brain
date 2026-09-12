@@ -1,3 +1,4 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "./telemetry-fixture-vocabulary-v1.js";
 import { SerializedMeetingProcessingWorker } from "../../src/processing/admitted-meeting-processing/serialized-meeting-processing-worker.js";
 import { describe, expect, it } from "vitest";
 import {
@@ -59,7 +60,7 @@ describe("core runtime observations through the existing journey channel", () =>
 
   it("captures a failed model call followed by a successful call without inventing usage", async () => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1(identity, { write: (line) => { lines.push(line); } }, { content_enabled: true });
+    const transport = createStagingJourneyTelemetryTransportV1(identity, { write: (line) => { lines.push(line); } }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
     let calls = 0;
     const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "fixture", credential_resolver: () => "fixture-credential-never-record",
@@ -107,7 +108,7 @@ describe("core runtime observations through the existing journey channel", () =>
     const transport = createStagingJourneyTelemetryTransportV1(identity, {
       write: (line) => { if (fail) throw new Error("writer failure"); lines.push(line); },
       scheduler: { set_interval: (fn) => { callback = fn; return 1; }, clear_interval: () => {} },
-    }, { content_enabled: true });
+    }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
     transport.start();
     await expect(observeCoreRuntimeV1("search_reconciliation", async () => {
       captureCoreRuntimeContentV1("model_response", new Proxy({}, { ownKeys() { throw new Error("content failure"); } }));

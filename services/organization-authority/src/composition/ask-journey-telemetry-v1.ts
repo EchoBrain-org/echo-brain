@@ -1,3 +1,4 @@
+import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, telemetryLabelV1, type TelemetryVocabularyV1 } from "../shared/telemetry-vocabulary-v1.js";
 import { RetrievalGroundedAnswerCompositionError } from "../answer-composition/retrieval-grounded-answer-composition.js";
 import type {
   AnswerCompositionContentKindV1,
@@ -8,11 +9,9 @@ import type {
 import { AuthorityOperationError } from "../domain/errors.js";
 import {
   createJourneyTelemetryV1,
-  JOURNEY_LLM_MODELS_V1,
   type JourneyFailureClassV1,
   type JourneyLlmFinishReasonV1,
   type JourneyLlmModelV1,
-  type JourneyLlmProviderV1,
   type JourneyLlmUsageInputV1,
   type JourneyOutcomeV1,
   type JourneyRetrievalCountersInputV1,
@@ -196,20 +195,8 @@ export function classifyAskJourneyFailureV1(
   return { failure_class: "unknown", retryable: false };
 }
 
-function provider(value: string): JourneyLlmProviderV1 {
-  switch (value) {
-    case "openrouter":
-    case "openai":
-    case "anthropic":
-    case "ollama":
-      return value;
-    default:
-      return "other";
-  }
-}
-
-function requiredModel(value: JourneyLlmModelV1): JourneyLlmModelV1 {
-  if (!JOURNEY_LLM_MODELS_V1.includes(value)) {
+function requiredModel(value: JourneyLlmModelV1, vocabulary: TelemetryVocabularyV1): JourneyLlmModelV1 {
+  if (!vocabulary.models.includes(value)) {
     throw new TypeError("Ask journey telemetry model is not allowlisted");
   }
   return value;
@@ -232,6 +219,7 @@ function llmUsage(
   value: AnswerCompositionGenerationObservationV1 | null,
   configuredModel: JourneyLlmModelV1,
   elapsedMs: number,
+  vocabulary: TelemetryVocabularyV1,
 ): JourneyLlmUsageInputV1 {
   const matchingValue = value?.model === configuredModel ? value : null;
   const reported = [
@@ -243,7 +231,7 @@ function llmUsage(
   ].some((part) => part !== null);
   return Object.freeze({
     usage_status: reported ? "reported" : "unavailable",
-    provider: provider(matchingValue?.adapter_id ?? "other"),
+    provider: telemetryLabelV1(matchingValue?.adapter_id ?? "other", vocabulary.providers),
     model: configuredModel,
     provider_latency_ms: matchingValue?.provider_latency_ms ?? elapsedMs,
     input_tokens: matchingValue?.input_tokens ?? null,
@@ -257,6 +245,7 @@ function llmUsage(
 
 /** Creates staging-only request-local recorders over the Phase 0 contract. */
 export function createAskJourneyTelemetryFactoryV1(input: {
+  readonly vocabulary?: TelemetryVocabularyV1;
   readonly observer: JourneyTelemetryObserverV1;
   readonly release_sha: string;
   readonly build_number: number;
@@ -267,10 +256,11 @@ export function createAskJourneyTelemetryFactoryV1(input: {
   /** Staging debugging only; absent in every other deployment. */
   readonly content_observer?: AskJourneyContentObserverV1;
 }): AskJourneyTelemetryFactoryV1 {
-  const telemetry = createJourneyTelemetryV1(input.observer, input.clock);
+  const vocabulary = createTelemetryVocabularyV1(input.vocabulary ?? EMPTY_TELEMETRY_VOCABULARY_V1);
+  const telemetry = createJourneyTelemetryV1(input.observer, input.clock, vocabulary);
   const nowMs = input.now_ms ?? (() => performance.now());
-  const plannerModel = requiredModel(input.planner_model);
-  const answerModel = requiredModel(input.answer_model);
+  const plannerModel = requiredModel(input.planner_model, vocabulary);
+  const answerModel = requiredModel(input.answer_model, vocabulary);
 
   return Object.freeze({
     start(): AskJourneyTelemetryRecorderV1 {
@@ -415,12 +405,14 @@ export function createAskJourneyTelemetryFactoryV1(input: {
                     event.generation_usage,
                     plannerModel,
                     event.elapsed_ms,
+                    vocabulary,
                   )
                 : event.stage === "answer"
                   ? llmUsage(
                       event.generation_usage,
                       answerModel,
                       event.elapsed_ms,
+                      vocabulary,
                     )
                   : null;
             emit(stage, {
@@ -441,12 +433,14 @@ export function createAskJourneyTelemetryFactoryV1(input: {
                   event.generation_usage,
                   plannerModel,
                   event.elapsed_ms,
+                  vocabulary,
                 )
               : event.stage === "answer"
                 ? llmUsage(
                     event.generation_usage,
                     answerModel,
                     event.elapsed_ms,
+                    vocabulary,
                   )
                 : null;
           emit(stage, {

@@ -1,3 +1,4 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../observability/telemetry-fixture-vocabulary-v1.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,6 +58,7 @@ function telemetry(
 ) {
   return openMeetingApprovalJourneyTelemetryV1(
     {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       state_directory: "/unused-with-injected-state",
       observer: (event) => {
         events.push(event);
@@ -96,6 +98,7 @@ describe("meeting approval journey telemetry v1", () => {
   it("reports a fixed failure pair and contains failure-reporting exceptions", () => {
     const failures: unknown[] = [];
     const recorder = openMeetingApprovalJourneyTelemetryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       state_directory: "/unused-with-injected-state",
       observer: () => {},
       on_observation_failure: (failure) => {
@@ -451,6 +454,7 @@ describe("meeting approval journey telemetry v1", () => {
     const state = openState(stateFile(), () => journeyIds.shift() as string);
     const recorder = openMeetingApprovalJourneyTelemetryV1(
       {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         state_directory: "/unused-with-injected-state",
         observer: async (event) => {
           events.push(event);
@@ -725,6 +729,7 @@ describe("meeting approval journey telemetry v1", () => {
     const state = openState(stateFile());
     const recorder = openMeetingApprovalJourneyTelemetryV1(
       {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         state_directory: "/unused-with-injected-state",
         observer: () => {
           throw new Error("observer-private-error-sentinel");

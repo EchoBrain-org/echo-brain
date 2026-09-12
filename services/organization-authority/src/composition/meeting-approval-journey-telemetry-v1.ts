@@ -1,3 +1,4 @@
+import type { TelemetryVocabularyV1 } from "../shared/telemetry-vocabulary-v1.js";
 import { currentCoreRuntimeDetailV1 } from "../shared/core-runtime-observation-v1.js";
 import { join } from "node:path";
 import type { AdapterError } from "../processing/core/contracts/adapter.js";
@@ -53,6 +54,7 @@ export interface MeetingApprovalObservationFailureV1 {
 }
 
 export interface MeetingApprovalJourneyTelemetryConfigV1 {
+  readonly vocabulary?: TelemetryVocabularyV1;
   readonly state_directory: string;
   readonly observer: JourneyTelemetryObserverV1;
   readonly on_observation_failure?: (failure: MeetingApprovalObservationFailureV1) => void;
@@ -747,8 +749,8 @@ class MeetingApprovalJourneyTelemetryV1
       event: { ...event, ...(shared === null ? {} : { diagnostic: shared }), accounting: event.event === "skipped"
         ? { kind: "skip", execution_attempt: 0, retry_count: 0 }
         : { ...this.state.executionAccounting(journey_id, event.stage, event.attempt), ...(event.recovered ? { kind: "recovery" as const } : shared !== null ? { kind: "shared_reference" as const } : {}) } },
-    });
-    observeJourneyTelemetryBestEffortV1(this.config.observer, normalized);
+    }, this.config.vocabulary);
+    observeJourneyTelemetryBestEffortV1(this.config.observer, normalized, this.config.vocabulary);
   }
 }
 

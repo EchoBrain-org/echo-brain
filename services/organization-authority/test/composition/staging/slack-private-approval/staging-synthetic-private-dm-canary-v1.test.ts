@@ -1,3 +1,4 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../observability/telemetry-fixture-vocabulary-v1.js";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -142,6 +143,7 @@ function journeyTelemetry(now = NOW) {
   const events: JourneyTelemetryEventV1[] = [];
   const telemetry = openMeetingApprovalJourneyTelemetryV1(
     {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       state_directory: root,
       observer: (event) => {
         events.push(event);

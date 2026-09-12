@@ -205,18 +205,6 @@
     ],
     "provider_coupled_exceptions": [
       {
-        "path": "services/organization-authority/src/shared/core-runtime-observation-v1.ts",
-        "reason": "Provider and model allowlists bound telemetry dimension cardinality, and one phase is named after the approval surface. Source these vocabularies from provider bundles (review F3 follow-up) before removing this entry."
-      },
-      {
-        "path": "services/organization-authority/src/shared/journey-telemetry-v1.ts",
-        "reason": "JOURNEY_LLM_PROVIDERS_V1 and JOURNEY_LLM_MODELS_V1 bound telemetry dimension cardinality. Same follow-up as core-runtime-observation-v1."
-      },
-      {
-        "path": "services/organization-authority/src/composition/ask-journey-telemetry-v1.ts",
-        "reason": "Maps adapter provider identifiers onto the bounded journey provider dimension. Same follow-up as journey-telemetry-v1."
-      },
-      {
         "path": "packages/organization-protocol/src/record-envelope-v4.ts",
         "reason": "The current-only V4 record envelope validates the frozen private Slack block-approval record input. A provider-independent record-input registry is a versioned protocol decision, not a cleanup edit."
       }

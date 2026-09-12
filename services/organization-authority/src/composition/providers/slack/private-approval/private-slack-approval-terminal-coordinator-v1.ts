@@ -405,7 +405,7 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     if (presentation === undefined) {
       throw new Error("private terminal has no frozen Slack card presentation");
     }
-    const outcome = await observeCoreRuntimeV1("slack_terminal_update", async () => {
+    const outcome = await observeCoreRuntimeV1("approval_terminal_update", async () => {
       try {
         const journey = this.options.journey_telemetry?.readForApproval(terminal.approval_id);
         if (journey) annotateCoreRuntimeV1({ linked_journey_ids: [journey.journey_id] });

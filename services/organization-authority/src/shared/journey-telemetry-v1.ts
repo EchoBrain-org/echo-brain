@@ -1,10 +1,11 @@
+import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "./telemetry-vocabulary-v1.js";
 import { normalizeCoreRuntimeDetailV1, type CoreRuntimeDetailV1 } from "./core-runtime-observation-v1.js";
 import { randomUUID } from "node:crypto";
 
 /**
  * Content-free, provider-neutral telemetry for an Authority business journey.
  * This contract never admits arbitrary metadata, prompts, answers, meeting
- * content, person or Slack identifiers, Authority IDs, errors, or credentials.
+ * content, person or provider identifiers, Authority IDs, errors, or credentials.
  */
 export const JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 = 1 as const;
 export const JOURNEY_TELEMETRY_KIND_V1 = "echo-authority-journey-stage-v1" as const;
@@ -103,21 +104,8 @@ export const JOURNEY_FAILURE_CLASSES_V1 = Object.freeze([
 ] as const);
 export type JourneyFailureClassV1 = (typeof JOURNEY_FAILURE_CLASSES_V1)[number];
 
-export const JOURNEY_LLM_PROVIDERS_V1 = Object.freeze([
-  "anthropic",
-  "openai",
-  "openrouter",
-  "ollama",
-  "other",
-] as const);
-export type JourneyLlmProviderV1 = (typeof JOURNEY_LLM_PROVIDERS_V1)[number];
-
-/** Finite configuration-derived model identities admitted by telemetry V1. */
-export const JOURNEY_LLM_MODELS_V1 = Object.freeze([
-  "anthropic/claude-sonnet-4.6",
-  "deepseek/deepseek-v3.2",
-] as const);
-export type JourneyLlmModelV1 = (typeof JOURNEY_LLM_MODELS_V1)[number];
+export type JourneyLlmProviderV1 = string;
+export type JourneyLlmModelV1 = string;
 
 export const JOURNEY_LLM_FINISH_REASONS_V1 = Object.freeze([
   "completed",
@@ -440,7 +428,7 @@ export function createJourneyIdV1(createUuid: () => string = randomUUID): Journe
   return journeyId;
 }
 
-function normalizeLlmUsage(input: JourneyLlmUsageInputV1): JourneyLlmUsageV1 {
+function normalizeLlmUsage(input: JourneyLlmUsageInputV1, vocabulary: TelemetryVocabularyV1): JourneyLlmUsageV1 {
   const provider = input.provider;
   const model = input.model;
   const finishReason = input.finish_reason;
@@ -460,10 +448,10 @@ function normalizeLlmUsage(input: JourneyLlmUsageInputV1): JourneyLlmUsageV1 {
     cachedInputTokens !== null ||
     reasoningTokens !== null;
   const usageStatus = input.usage_status ?? (hasReportedUsage ? "reported" : "unavailable");
-  if (!includes(JOURNEY_LLM_PROVIDERS_V1, provider)) {
+  if (!includes(vocabulary.providers, provider)) {
     invalid("llm provider is invalid");
   }
-  if (!includes(JOURNEY_LLM_MODELS_V1, model)) {
+  if (!includes(vocabulary.models, model)) {
     invalid("llm model is invalid");
   }
   if (!includes(JOURNEY_LLM_FINISH_REASONS_V1, finishReason)) {
@@ -540,7 +528,8 @@ export function createJourneyTelemetryEventV1(input: {
   readonly observed_at: string;
   readonly context: JourneyTelemetryContextInputV1;
   readonly event: JourneyStageEventInputV1;
-}): JourneyTelemetryEventV1 {
+}, vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1): JourneyTelemetryEventV1 {
+  const admitted = createTelemetryVocabularyV1(vocabulary);
   const journeyId = parseJourneyIdV1(input.journey_id);
   if (journeyId === null) invalid("journey_id is not a UUID v4");
   const context = normalizeContext(input.context);
@@ -571,7 +560,7 @@ export function createJourneyTelemetryEventV1(input: {
   if ((!isLlmStage || event === "started" || event === "skipped") && hasLlmUsage) {
     invalid("llm_usage is not allowed for this stage event");
   }
-  const llmUsage = hasLlmUsage ? normalizeLlmUsage(input.event.llm_usage!) : null;
+  const llmUsage = hasLlmUsage ? normalizeLlmUsage(input.event.llm_usage!, admitted) : null;
   const retrieval = normalizeRetrieval(input.event.retrieval);
   if (retrieval !== null && (!ASK_COUNT_STAGES.has(stage) || event !== "succeeded")) {
     invalid("Ask counters are not allowed for this stage event");
@@ -586,7 +575,7 @@ export function createJourneyTelemetryEventV1(input: {
   }
   return Object.freeze({
     schema_version: input.event.accounting === undefined && input.event.diagnostic === undefined ? JOURNEY_TELEMETRY_SCHEMA_VERSION_V1 : 2,
-    ...(input.event.diagnostic === undefined ? {} : { diagnostic: normalizeCoreRuntimeDetailV1(input.event.diagnostic) }),
+    ...(input.event.diagnostic === undefined ? {} : { diagnostic: normalizeCoreRuntimeDetailV1(input.event.diagnostic, admitted) }),
     ...(input.event.accounting === undefined ? {} : { accounting: normalizeAccounting(input.event.accounting) }),
     kind: JOURNEY_TELEMETRY_KIND_V1,
     observed_at: timestamp(input.observed_at),
@@ -611,24 +600,25 @@ export function createJourneyTelemetryEventV1(input: {
 }
 
 /** Revalidate observer input through the same strict allowlist as new events. */
-export function recanonicalizeJourneyTelemetryEventV1(event: JourneyTelemetryEventV1): JourneyTelemetryEventV1 {
+export function recanonicalizeJourneyTelemetryEventV1(event: JourneyTelemetryEventV1, vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1): JourneyTelemetryEventV1 {
   return createJourneyTelemetryEventV1({
     journey_id: event.journey_id,
     sequence: event.sequence,
     observed_at: event.observed_at,
     context: event,
     event,
-  });
+  }, vocabulary);
 }
 
 /** Observer delivery is deliberately outside application control flow. */
 export function observeJourneyTelemetryBestEffortV1(
   observer: JourneyTelemetryObserverV1 | undefined,
   event: JourneyTelemetryEventV1,
+  vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1,
 ): void {
   if (observer === undefined) return;
   void Promise.resolve()
-    .then(() => observer(recanonicalizeJourneyTelemetryEventV1(event)))
+    .then(() => observer(recanonicalizeJourneyTelemetryEventV1(event, vocabulary)))
     .catch(() => undefined);
 }
 
@@ -638,6 +628,7 @@ function createJourneyEmitter(
   context: JourneyTelemetryContextV1,
   now: () => string,
   observer: JourneyTelemetryObserverV1 | undefined,
+  vocabulary: TelemetryVocabularyV1,
 ): JourneyTelemetryJourneyV1 {
   let currentSequence = previousSequence;
   return Object.freeze({
@@ -651,9 +642,9 @@ function createJourneyEmitter(
           observed_at: now(),
           context,
           event: input,
-        });
+        }, vocabulary);
         currentSequence = event.sequence;
-        observeJourneyTelemetryBestEffortV1(observer, event);
+        observeJourneyTelemetryBestEffortV1(observer, event, vocabulary);
         return event;
       } catch {
         return null;
@@ -669,13 +660,15 @@ function createJourneyEmitter(
 export function createJourneyTelemetryV1(
   observer: JourneyTelemetryObserverV1 | undefined,
   dependencies: JourneyTelemetryDependenciesV1 = {},
+  vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1,
 ): JourneyTelemetryV1 {
+  const admitted = createTelemetryVocabularyV1(vocabulary);
   const now = dependencies.now ?? (() => new Date().toISOString());
   const createUuid = dependencies.create_uuid ?? randomUUID;
   return Object.freeze({
     startJourney(context: JourneyTelemetryContextInputV1): JourneyTelemetryJourneyV1 | null {
       try {
-        return createJourneyEmitter(createJourneyIdV1(createUuid), 0, normalizeContext(context), now, observer);
+        return createJourneyEmitter(createJourneyIdV1(createUuid), 0, normalizeContext(context), now, observer, admitted);
       } catch {
         return null;
       }
@@ -688,7 +681,7 @@ export function createJourneyTelemetryV1(
         const journeyId = parseJourneyIdV1(input.journey_id);
         if (journeyId === null) invalid("journey_id is not a UUID v4");
         const previousSequence = validSequence(input.previous_sequence, "previous_sequence", 0);
-        return createJourneyEmitter(journeyId, previousSequence, normalizeContext(input), now, observer);
+        return createJourneyEmitter(journeyId, previousSequence, normalizeContext(input), now, observer, admitted);
       } catch {
         return null;
       }

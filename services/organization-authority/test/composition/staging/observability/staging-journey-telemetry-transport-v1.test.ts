@@ -1,3 +1,4 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../observability/telemetry-fixture-vocabulary-v1.js";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -54,7 +55,7 @@ describe("staging journey telemetry transport v1", () => {
           },
           clear_interval: (id) => cleared.push(id),
         },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
 
     expect(transport.enabled).toBe(true);
@@ -111,7 +112,7 @@ describe("staging journey telemetry transport v1", () => {
           },
           clear_interval: () => undefined,
         },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
 
     transport.close();
@@ -136,7 +137,7 @@ describe("staging journey telemetry transport v1", () => {
           },
           clear_interval: () => undefined,
         },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     const event = createJourneyTelemetryEventV1({
       journey_id: JOURNEY_ID,
@@ -153,7 +154,7 @@ describe("staging journey telemetry transport v1", () => {
         event: "succeeded",
         elapsed_ms: 1,
       },
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
 
     transport.observer(event);
 
@@ -185,7 +186,7 @@ describe("staging journey telemetry transport v1", () => {
           },
           clear_interval: () => undefined,
         },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
 
     expect(transport.enabled).toBe(false);
@@ -222,7 +223,7 @@ describe("staging journey telemetry transport v1", () => {
         },
         clear_interval: () => undefined,
       },
-    });
+    }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 });
 
     identity.release_sha = "b".repeat(40);
     identity.build_number = 999;
@@ -258,7 +259,7 @@ describe("staging journey telemetry transport v1", () => {
         write: () => undefined,
         now: () => STARTED_AT,
         scheduler: { set_interval: () => 1, clear_interval: () => undefined },
-      },
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1,
     );
     expect(valid.enabled).toBe(true);
     expect(valid.identity).toEqual({
@@ -287,7 +288,7 @@ describe("staging journey telemetry transport v1", () => {
           write: () => {
             throw new Error("disabled transport must not write");
           },
-        }).enabled,
+        }, TELEMETRY_FIXTURE_VOCABULARY_V1).enabled,
       ).toBe(false);
     }
   });
@@ -308,7 +309,7 @@ describe("staging journey telemetry transport v1", () => {
         event: "succeeded",
         elapsed_ms: 1,
       },
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
     const synchronous = createStagingJourneyTelemetryTransportV1(
       { release_sha: RELEASE_SHA, build_number: 42 },
       {
@@ -317,7 +318,7 @@ describe("staging journey telemetry transport v1", () => {
         },
         now: () => STARTED_AT,
         scheduler: { set_interval: () => 1, clear_interval: () => undefined },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     const asynchronous = createStagingJourneyTelemetryTransportV1(
       { release_sha: RELEASE_SHA, build_number: 42 },
@@ -327,7 +328,7 @@ describe("staging journey telemetry transport v1", () => {
         },
         now: () => STARTED_AT,
         scheduler: { set_interval: () => 1, clear_interval: () => undefined },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
 
     synchronous.start();
@@ -344,7 +345,7 @@ describe("staging journey telemetry transport v1", () => {
         write: () => undefined,
         now: () => STARTED_AT,
         scheduler: { set_interval: () => 1, clear_interval: () => undefined },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     const throwingInput = new Proxy({} as JourneyTelemetryEventV1, {
       get: () => {
@@ -367,7 +368,7 @@ describe("staging journey telemetry transport v1", () => {
         },
         now: () => STARTED_AT,
         scheduler: { set_interval: () => 1, clear_interval: () => undefined },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     const event = createJourneyTelemetryEventV1({
       journey_id: JOURNEY_ID,
@@ -392,7 +393,7 @@ describe("staging journey telemetry transport v1", () => {
           finish_reason: "completed",
         },
       },
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
     const injected = {
       ...event,
       request_content: "must-not-serialize",
@@ -435,7 +436,7 @@ describe("staging journey telemetry transport v1", () => {
         },
         now: () => STARTED_AT,
         scheduler: { set_interval: () => 1, clear_interval: () => undefined },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     lines.length = 0;
 
@@ -516,7 +517,7 @@ describe("staging journey content telemetry switch", () => {
     const lines: string[] = [];
     const transport = contentTransport.createStagingJourneyTelemetryTransportV1(
       identity,
-      { write: (line) => void lines.push(line) },
+      { write: (line) => void lines.push(line) }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     expect(transport.content_enabled).toBe(false);
     transport.content_observer(record);
@@ -528,7 +529,7 @@ describe("staging journey content telemetry switch", () => {
     const transport = contentTransport.createStagingJourneyTelemetryTransportV1(
       identity,
       { write: (line) => void lines.push(line) },
-      { content_enabled: true },
+      { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true },
     );
     expect(transport.content_enabled).toBe(true);
     transport.content_observer(record);
@@ -593,13 +594,13 @@ describe("bounded rejection accounting", () => {
       { release_sha: RELEASE_SHA, build_number: 42 }, {
         write: (line) => { lines.push(line); }, now: () => STARTED_AT,
         scheduler: { set_interval: () => 1, clear_interval: () => {} },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     const valid = createJourneyTelemetryEventV1({
       journey_id: JOURNEY_ID, sequence: 1, observed_at: STARTED_AT,
       context: { environment: "staging", workflow: "ask", release_sha: RELEASE_SHA, build_number: 42 },
       event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
     for (const invalid of [null, new Proxy({}, { get() { throw new Error("private-getter"); } }),
       { ...valid, llm_usage: { provider: "private-provider", model: "private-model", input_tokens: -1 } },
     ]) expect(() => transport.observer(invalid as never)).not.toThrow();
@@ -626,7 +627,7 @@ describe("bounded rejection accounting", () => {
       { release_sha: RELEASE_SHA, build_number: 42 }, {
         write: (line) => { lines.push(line); return block ? pending : undefined; }, now: () => STARTED_AT,
         scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     transport.start();
     for (let i = 0; i < 500; i += 1) heartbeat();
@@ -651,7 +652,7 @@ describe("bounded rejection accounting", () => {
       {
         write: (line) => { lines.push(line); }, now: () => STARTED_AT,
         scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
-      }, { content_enabled },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled },
     );
     const malformed = { environment: "staging", release_sha: RELEASE_SHA, build_number: 42, journey_id: "private-invalid-input" };
     expect(() => transport.observer(malformed as never)).not.toThrow();
@@ -699,7 +700,7 @@ describe("bounded rejection accounting", () => {
           return Promise.reject(new Error("private-writer-error"));
         },
         scheduler: { set_interval: (fn) => { heartbeat = fn; return 1; }, clear_interval: () => {} },
-      },
+      }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1 },
     );
     transport.start();
     await new Promise<void>((resolve) => setImmediate(resolve));

@@ -1,3 +1,4 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "./observability/telemetry-fixture-vocabulary-v1.js";
 import { createHmac } from "node:crypto";
 import {
   chmodSync,
@@ -1181,6 +1182,7 @@ describe("Organization Authority runtime private approval lane", () => {
         // non-staging Authority origin.
         staging_meeting_approval_journey_telemetry_enabled: true,
         meeting_approval_journey_telemetry: {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
           observer: () => undefined,
           release_sha: "a".repeat(40),
           build_number: 1,
@@ -1260,6 +1262,7 @@ describe("Organization Authority runtime private approval lane", () => {
       core_runtime_observation: { observer: (event) => { observations.push(event); }, content_observer: (event) => { contents.push(event); } },
       staging_meeting_approval_journey_telemetry_enabled: true,
       meeting_approval_journey_telemetry: {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         observer: (event) => { journeys.push(event); }, release_sha: "a".repeat(40), build_number: 42,
         extraction_provider: "openrouter", extraction_model: "deepseek/deepseek-v3.2",
       },

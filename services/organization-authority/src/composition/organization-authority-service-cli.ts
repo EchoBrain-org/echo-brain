@@ -1,3 +1,4 @@
+import { OPENROUTER_TELEMETRY_VOCABULARY_V1 } from "./providers/openrouter/openrouter-telemetry-vocabulary-v1.js";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { resolve } from "node:path";
 import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
@@ -216,13 +217,14 @@ export async function runOrganizationAuthorityServiceCli(
       STAGING_AUTHORITY_ORIGIN_V1
         ? createStagingJourneyTelemetryTransportFromEnvironmentV1(process.env, {
             write: io.stderr,
-          })
+          }, OPENROUTER_TELEMETRY_VOCABULARY_V1)
         : undefined;
     const askJourneyTelemetry =
       stagingJourneyTelemetry?.identity === null ||
       stagingJourneyTelemetry?.identity === undefined
         ? undefined
         : createAskJourneyTelemetryFactoryV1({
+            vocabulary: OPENROUTER_TELEMETRY_VOCABULARY_V1,
             observer: stagingJourneyTelemetry.observer,
             release_sha: stagingJourneyTelemetry.identity.release_sha,
             build_number: stagingJourneyTelemetry.identity.build_number,
@@ -243,6 +245,7 @@ export async function runOrganizationAuthorityServiceCli(
               stagingJourneyTelemetry.approved_search_backlog_observer,
             release_sha: stagingJourneyTelemetry.identity.release_sha,
             build_number: stagingJourneyTelemetry.identity.build_number,
+            vocabulary: OPENROUTER_TELEMETRY_VOCABULARY_V1,
             extraction_provider: OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
             extraction_model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
           } as const;

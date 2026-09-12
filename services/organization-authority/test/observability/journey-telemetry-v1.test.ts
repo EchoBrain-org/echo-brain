@@ -1,3 +1,4 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "./telemetry-fixture-vocabulary-v1.js";
 import { describe, expect, it } from "vitest";
 import {
   createJourneyIdV1,
@@ -8,8 +9,6 @@ import {
   JOURNEY_EVENTS_V1,
   JOURNEY_FAILURE_CLASSES_V1,
   JOURNEY_LLM_FINISH_REASONS_V1,
-  JOURNEY_LLM_MODELS_V1,
-  JOURNEY_LLM_PROVIDERS_V1,
   JOURNEY_LLM_USAGE_STATUSES_V1,
   JOURNEY_METRIC_DIMENSION_KEYS_V1,
   JOURNEY_OUTCOMES_V1,
@@ -52,10 +51,21 @@ function strict(input: Record<string, unknown> = {}) {
       } as never,
       ...input,
     },
-  });
+  }, TELEMETRY_FIXTURE_VOCABULARY_V1);
 }
 
 describe("journey telemetry v1", () => {
+  it("admits a finite vocabulary selected by another provider without changing the telemetry core", () => {
+    const input = strict();
+    const event = createJourneyTelemetryEventV1({
+      journey_id: input.journey_id, sequence: 2, observed_at: input.observed_at,
+      context: askContext,
+      event: { stage: "ask_answer", event: "succeeded", elapsed_ms: 1,
+        llm_usage: { ...input.llm_usage!, provider: "fixture-provider", model: "fixture-model" } },
+    }, { providers: ["fixture-provider", "other"], models: ["fixture-model", "other"] });
+    expect(event.llm_usage).toMatchObject({ provider: "fixture-provider", model: "fixture-model" });
+  });
+
   it("constructs a frozen, exact, content-free event without an external request identifier", () => {
     const event = strict({
       question: "prompt-sentinel",
@@ -136,7 +146,7 @@ describe("journey telemetry v1", () => {
           private_atoms: ["private-sentinel"],
         } as never,
       },
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
 
     expect(event.retrieval).toEqual({
       planned_query_count: 2,
@@ -168,7 +178,7 @@ describe("journey telemetry v1", () => {
             finish_reason: "completed",
           },
         },
-      }).retrieval,
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1).retrieval,
     ).toMatchObject({ citation_count: 2 });
   });
 
@@ -180,7 +190,7 @@ describe("journey telemetry v1", () => {
         observed_at: OBSERVED_AT,
         context: askContext,
         event: { stage: "ask_planner", event: "succeeded", elapsed_ms: 1 },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("llm_usage is required");
     expect(() =>
       createJourneyTelemetryEventV1({
@@ -194,7 +204,7 @@ describe("journey telemetry v1", () => {
           elapsed_ms: 0,
           llm_usage: {} as never,
         },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("llm_usage is not allowed");
     expect(() =>
       createJourneyTelemetryEventV1({
@@ -208,7 +218,7 @@ describe("journey telemetry v1", () => {
           elapsed_ms: 1,
           llm_usage: {} as never,
         },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("llm_usage is not allowed");
     expect(
       createJourneyTelemetryEventV1({
@@ -229,7 +239,7 @@ describe("journey telemetry v1", () => {
             finish_reason: "unknown",
           },
         },
-      }).llm_usage,
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1).llm_usage,
     ).toMatchObject({ usage_status: "unavailable", input_tokens: null });
   });
 
@@ -237,7 +247,7 @@ describe("journey telemetry v1", () => {
     const telemetry = createJourneyTelemetryV1(undefined, {
       create_uuid: () => JOURNEY_ID,
       now: () => OBSERVED_AT,
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
     const resumed = telemetry.resumeJourney({
       environment: "staging",
       workflow: "meeting_approval",
@@ -270,7 +280,7 @@ describe("journey telemetry v1", () => {
           event: "succeeded",
           elapsed_ms: LONG_HUMAN_WAIT_MS,
         },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("elapsed_ms");
     expect(() =>
       strict({
@@ -295,7 +305,7 @@ describe("journey telemetry v1", () => {
           elapsed_ms: 1,
           queue_age_ms: LONG_HUMAN_WAIT_MS,
         },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("queue_age_ms");
     expect(() =>
       createJourneyTelemetryEventV1({
@@ -309,7 +319,7 @@ describe("journey telemetry v1", () => {
           elapsed_ms: 1,
           queue_age_ms: LONG_HUMAN_WAIT_MS,
         },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("queue_age_ms");
   });
 
@@ -321,7 +331,7 @@ describe("journey telemetry v1", () => {
         observed_at: OBSERVED_AT,
         context: { environment: "staging", workflow: "ask" },
         event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("staging release_sha");
     expect(() =>
       createJourneyTelemetryEventV1({
@@ -334,7 +344,7 @@ describe("journey telemetry v1", () => {
           release_sha: RELEASE_SHA,
         },
         event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("staging build_number");
     expect(
       createJourneyTelemetryEventV1({
@@ -343,7 +353,7 @@ describe("journey telemetry v1", () => {
         observed_at: OBSERVED_AT,
         context: { environment: "test", workflow: "ask" },
         event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toMatchObject({ environment: "test", release_sha: null, build_number: null });
   });
 
@@ -384,8 +394,8 @@ describe("journey telemetry v1", () => {
       JOURNEY_EVENTS_V1,
       JOURNEY_OUTCOMES_V1,
       JOURNEY_FAILURE_CLASSES_V1,
-      JOURNEY_LLM_PROVIDERS_V1,
-      JOURNEY_LLM_MODELS_V1,
+      TELEMETRY_FIXTURE_VOCABULARY_V1.providers,
+      TELEMETRY_FIXTURE_VOCABULARY_V1.models,
       JOURNEY_LLM_FINISH_REASONS_V1,
       JOURNEY_LLM_USAGE_STATUSES_V1,
     ];
@@ -403,7 +413,7 @@ describe("journey telemetry v1", () => {
         observed_at: OBSERVED_AT,
         context: { ...askContext, environment: injected } as never,
         event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("environment");
     expect(() =>
       createJourneyTelemetryEventV1({
@@ -412,7 +422,7 @@ describe("journey telemetry v1", () => {
         observed_at: OBSERVED_AT,
         context: { ...askContext, workflow: injected } as never,
         event: { stage: "ask_validation", event: "succeeded", elapsed_ms: 1 },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("workflow");
     expect(() => strict({ stage: injected, llm_usage: null })).toThrow("stage");
     expect(() => strict({ event: injected })).toThrow("event");
@@ -485,7 +495,7 @@ describe("journey telemetry v1", () => {
           outcome: "approved",
           elapsed_ms: 1,
         },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("stage outcome");
     expect(
       createJourneyTelemetryEventV1({
@@ -499,7 +509,7 @@ describe("journey telemetry v1", () => {
           outcome: "approved",
           elapsed_ms: 1,
         },
-      }).outcome,
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1).outcome,
     ).toBe("approved");
     expect(
       createJourneyTelemetryEventV1({
@@ -513,7 +523,7 @@ describe("journey telemetry v1", () => {
           outcome: "staged",
           elapsed_ms: 1,
         },
-      }).outcome,
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1).outcome,
     ).toBe("staged");
     expect(() =>
       strict({ event: "succeeded", outcome: "skipped" }),
@@ -533,13 +543,13 @@ describe("journey telemetry v1", () => {
     const badUuid = createJourneyTelemetryV1(undefined, {
       create_uuid: () => "candidate-hash",
       now: () => OBSERVED_AT,
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
     expect(badUuid.startJourney(askContext)).toBeNull();
 
     const badClock = createJourneyTelemetryV1(undefined, {
       create_uuid: () => JOURNEY_ID,
       now: () => "not-an-iso-clock",
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
     const badClockJourney = badClock.startJourney(askContext);
     expect(badClockJourney?.emit({ stage: "ask_validation", event: "started", elapsed_ms: 0 })).toBeNull();
     const throwingClock = createJourneyTelemetryV1(undefined, {
@@ -547,7 +557,7 @@ describe("journey telemetry v1", () => {
       now: () => {
         throw new Error("clock sentinel");
       },
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
     expect(
       throwingClock.startJourney(askContext)?.emit({
         stage: "ask_validation",
@@ -559,7 +569,7 @@ describe("journey telemetry v1", () => {
     const telemetry = createJourneyTelemetryV1(undefined, {
       create_uuid: () => JOURNEY_ID,
       now: () => OBSERVED_AT,
-    });
+    }, TELEMETRY_FIXTURE_VOCABULARY_V1);
     const journey = telemetry.startJourney(askContext);
     expect(journey).not.toBeNull();
     expect(
@@ -626,7 +636,7 @@ describe("journey telemetry v1", () => {
         observerInvoked = true;
         throw new Error("observer sentinel");
       },
-      { create_uuid: () => JOURNEY_ID, now: () => OBSERVED_AT },
+      { create_uuid: () => JOURNEY_ID, now: () => OBSERVED_AT }, TELEMETRY_FIXTURE_VOCABULARY_V1,
     );
     const journey = telemetry.startJourney(askContext);
     const event = journey?.emit({
@@ -665,13 +675,13 @@ describe("journey telemetry v1", () => {
           event: "succeeded",
           elapsed_ms: 1,
         },
-      }),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1),
     ).toThrow("release_sha");
     expect(
       createJourneyTelemetryV1(undefined, {
         create_uuid: () => JOURNEY_ID,
         now: () => OBSERVED_AT,
-      }).startJourney({ ...askContext, build_number: "candidate-id" } as never),
+      }, TELEMETRY_FIXTURE_VOCABULARY_V1).startJourney({ ...askContext, build_number: "candidate-id" } as never),
     ).toBeNull();
     expect(() =>
       strict({

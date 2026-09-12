@@ -1,3 +1,4 @@
+import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "../../../shared/telemetry-vocabulary-v1.js";
 import type { MeetingApprovalObservationFailureV1 } from "../../meeting-approval-journey-telemetry-v1.js";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { CoreRuntimeObservationScopeV1 } from "../../../shared/core-runtime-observation-v1.js";
@@ -78,6 +79,7 @@ export interface StagingJourneyTelemetryTransportDependenciesV1 {
 }
 
 export interface StagingJourneyTelemetryTransportOptionsV1 {
+  readonly vocabulary?: TelemetryVocabularyV1;
   /** Staging debugging switch: also write prompts, released text, and raw model output. */
   readonly content_enabled?: boolean;
 }
@@ -168,6 +170,7 @@ export function createStagingJourneyTelemetryTransportV1(
 ): StagingJourneyTelemetryTransportV1 {
   if (!isValidIdentity(identity)) return disabledTransport();
   const immutableIdentity = Object.freeze({ ...identity });
+  const vocabulary = createTelemetryVocabularyV1(options.vocabulary ?? EMPTY_TELEMETRY_VOCABULARY_V1);
   const contentEnabled = options.content_enabled === true;
 
   const now = dependencies.now ?? (() => new Date().toISOString());
@@ -252,9 +255,9 @@ export function createStagingJourneyTelemetryTransportV1(
         return;
       }
       // Reconstruct the contract before serialization to drop injected fields.
-      const normalized = recanonicalizeJourneyTelemetryEventV1(event);
+      const normalized = recanonicalizeJourneyTelemetryEventV1(event, vocabulary);
       write(normalized);
-      for (const metric of formatJourneyTelemetryMetricsV1(normalized)) {
+      for (const metric of formatJourneyTelemetryMetricsV1(normalized, vocabulary)) {
         write(metric);
       }
     } catch {
@@ -304,8 +307,9 @@ export function createStagingJourneyTelemetryTransportV1(
       }
     };
   const coreJourneys = new Map<string, { journey: NonNullable<ReturnType<ReturnType<typeof createJourneyTelemetryV1>["resumeJourney"]>>; content_sequence: number }>();
-  const coreEmitter = createJourneyTelemetryV1(observer);
+  const coreEmitter = createJourneyTelemetryV1(observer, {}, vocabulary);
   const coreRuntime: CoreRuntimeObservationScopeV1 = {
+    vocabulary,
     observer(event) {
       let entry = coreJourneys.get(event.operation_id);
       if (!entry) {
@@ -373,6 +377,7 @@ export function createStagingJourneyTelemetryTransportV1(
 export function createStagingJourneyTelemetryTransportFromEnvironmentV1(
   environment: Readonly<Record<string, string | undefined>>,
   dependencies: StagingJourneyTelemetryTransportDependenciesV1,
+  vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1,
 ): StagingJourneyTelemetryTransportV1 {
   if (environment.ECHO_STAGING_JOURNEY_TELEMETRY_V1 !== "true") {
     return disabledTransport();
@@ -390,6 +395,7 @@ export function createStagingJourneyTelemetryTransportFromEnvironmentV1(
     },
     dependencies,
     {
+      vocabulary,
       content_enabled:
         environment.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1 === "true",
     },

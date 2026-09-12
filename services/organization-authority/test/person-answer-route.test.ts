@@ -1,3 +1,4 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "./observability/telemetry-fixture-vocabulary-v1.js";
 import { once } from "node:events";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -188,6 +189,7 @@ function stagingTelemetry(
 ): AskJourneyTelemetryFactoryV1 {
   let monotonicNow = 3_000;
   return createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
     observer: (event) => {
       events.push(event);
     },
@@ -311,6 +313,7 @@ describe("Person answer route", () => {
       }),
     };
     const journeyFactory = createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       observer: (event) => {
         telemetry.push(event);
       },
@@ -487,6 +490,7 @@ describe("Person answer route", () => {
       model,
       generation: STAGING_GENERATION,
       ask_journey_telemetry: createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         observer: (event) => {
           telemetry.push(event);
         },
@@ -651,6 +655,7 @@ describe("Person answer route", () => {
     });
     const value = setup({
       ask_journey_telemetry: createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         observer,
         release_sha: "c".repeat(40),
         build_number: 44,
@@ -1125,6 +1130,7 @@ it("routes the question and raw output to the staging content observer while sta
     }),
   };
   const journeyFactory = createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
     observer: (event) => {
       telemetry.push(event);
     },
