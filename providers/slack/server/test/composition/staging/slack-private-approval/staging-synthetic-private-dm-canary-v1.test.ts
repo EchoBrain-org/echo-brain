@@ -1,4 +1,4 @@
-import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../../../../services/organization-authority/test/observability/telemetry-fixture-vocabulary-v1.js";
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

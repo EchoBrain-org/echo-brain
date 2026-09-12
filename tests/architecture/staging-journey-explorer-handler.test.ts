@@ -1,4 +1,4 @@
-import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../services/organization-authority/test/observability/telemetry-fixture-vocabulary-v1.js";
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../support/telemetry-fixture-vocabulary-v1.js";
 import { CORE_RUNTIME_PHASES_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { createStagingJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
 import { afterAll, describe, expect, it, vi } from "vitest";

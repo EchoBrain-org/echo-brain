@@ -1,4 +1,4 @@
-import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "./observability/telemetry-fixture-vocabulary-v1.js";
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { once } from "node:events";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";

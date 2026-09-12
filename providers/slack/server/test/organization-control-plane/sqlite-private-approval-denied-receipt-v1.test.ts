@@ -1,10 +1,10 @@
+import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import { canonicalJson, canonicalSha256 } from "../src/canonical/canonical-json.js";
-import { PrivateApprovalDeniedReceiptConflictError, SqliteSlackDmApprovalPersistenceV1, type PrivateApprovalSignedTerminalActionV1 } from "../../../providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
+import { canonicalJson, canonicalSha256 } from "../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
+import { PrivateApprovalDeniedReceiptConflictError, SqliteSlackDmApprovalPersistenceV1, type PrivateApprovalSignedTerminalActionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 
 const directories: string[] = [];
 const now = () => "2026-08-28T00:00:00.000Z";

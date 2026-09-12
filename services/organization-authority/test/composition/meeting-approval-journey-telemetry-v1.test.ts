@@ -1,4 +1,4 @@
-import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../observability/telemetry-fixture-vocabulary-v1.js";
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

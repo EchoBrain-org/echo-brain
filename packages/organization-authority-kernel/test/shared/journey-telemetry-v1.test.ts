@@ -1,4 +1,4 @@
-import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../services/organization-authority/test/observability/telemetry-fixture-vocabulary-v1.js";
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { describe, expect, it } from "vitest";
 import {
   createJourneyIdV1,

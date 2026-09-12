@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { adapterConformance } from '../../../../tests/support/adapter-conformance.js';
 import {
   AdapterError,
   assertCanonicalDecisionSet,
   type AdapterConfig,
   type MeetingDocument,
 } from "../../src/core/index.js";
-import { referenceMeetingProcessingKey } from "../../src/reference/reference-meeting-processing-cycle.js";
 import {
   extractionGroundingFailureStage,
   extractionSchemaFailureStage,
@@ -19,16 +19,12 @@ import {
   type StructuredGenerationRequest,
   type StructuredGenerationResult,
 } from "../../src/llm/llm-provider.js";
-import { validateOllamaDecisionProcessorConfig, ollamaProcessingVersion } from "@echo-brain/provider-ollama/llm/ollama-decision-processor";
-import { createOpenAiDecisionProcessor } from "@echo-brain/provider-openai/llm/openai-decision-processor";
-import { createAnthropicDecisionProcessor } from "@echo-brain/provider-anthropic/llm/anthropic-decision-processor";
-import { createOpenRouterDecisionProcessor } from "@echo-brain/provider-openrouter/llm/openrouter-decision-processor";
-import { adapterConformance } from '../../../../tests/support/adapter-conformance.js';
+import { referenceMeetingProcessingKey } from "../../src/reference/reference-meeting-processing-cycle.js";
 
 const processorConfig: AdapterConfig = {
   adapter_id: 'llm',
   instance_id: 'local',
-  settings: { model: 'qwen3:4b' },
+  settings: { model: 'fixture-model' },
 };
 
 const meeting: MeetingDocument = {
@@ -83,9 +79,9 @@ class FakeLlmClient implements LlmProviderClient {
   readonly requests: StructuredGenerationRequest[] = [];
   constructor(
     private readonly content: string,
-    private readonly models: readonly string[] = ['qwen3:4b'],
+    private readonly models: readonly string[] = ['fixture-model'],
     private readonly failure?: Error,
-    readonly provider: LlmProviderId = 'ollama',
+    readonly provider: LlmProviderId = 'fixture-local',
     private readonly result?: StructuredGenerationResult,
   ) {}
 
@@ -102,7 +98,7 @@ class FakeLlmClient implements LlmProviderClient {
     if (!this.models.includes(model)) {
       throw new AdapterError(
         'permanently_rejected',
-        `Model '${model}' is not installed in Ollama`,
+        `Model '${model}' is not installed in fixture-local`,
         false,
       );
     }
@@ -115,8 +111,8 @@ function processor(
 ): LlmDecisionProcessor {
   return new LlmDecisionProcessor(config, {
     client,
-    validateProviderConfig: config.settings['provider'] === undefined || config.settings['provider'] === 'ollama' ? validateOllamaDecisionProcessorConfig : () => [],
-    identityEndpoint: client.provider === 'ollama' ? 'http://127.0.0.1:11434' : null,
+    validateProviderConfig: config => config.settings['unsupported'] === true ? ['fixture setting is unsupported'] : [],
+    identityEndpoint: null,
     now: () => '2026-07-17T18:00:00.000Z',
   });
 }
@@ -129,9 +125,9 @@ function extractionContext(instance: LlmDecisionProcessor) {
 }
 
 function testProcessingVersion(config: AdapterConfig): string {
-  return config.settings['provider'] === 'openai'
-    ? processingVersion(config, 'openai', null)
-    : ollamaProcessingVersion(config);
+  return config.settings['provider'] === 'fixture-remote'
+    ? processingVersion(config, 'fixture-remote', null)
+    : processingVersion(config, 'fixture-local', null);
 }
 
 function modelSignal(overrides: Record<string, unknown>) {
@@ -203,7 +199,7 @@ adapterConformance({
     adapter_id: 'llm',
     instance_id: 'local',
     credential_ref: 'env:SECRET_TOKEN',
-    settings: { model: 'qwen3:4b', unsupported: true },
+    settings: { model: 'fixture-model', unsupported: true },
   },
 });
 
@@ -308,7 +304,7 @@ describe('llm decision processor extraction', () => {
     );
 
     // The model was asked for structured output over the meeting content.
-    expect(client.requests[0]!.model).toBe('qwen3:4b');
+    expect(client.requests[0]!.model).toBe('fixture-model');
     expect(client.requests[0]!.schema).toMatchObject({ type: 'object' });
     expect(client.requests[0]!.schema).toMatchObject({
       additionalProperties: false,
@@ -973,43 +969,13 @@ describe('llm decision processor extraction', () => {
     );
   });
 
-  it('applies identical v5 extraction semantics for every provider', async () => {
+  it('applies identical extraction semantics for independently supplied clients', async () => {
     const matrix: readonly [LlmProviderId, AdapterConfig][] = [
-      [
-        'ollama',
-        {
-          adapter_id: 'llm',
-          instance_id: 'local',
-          settings: { provider: 'ollama', model: 'qwen3:4b' },
-        },
-      ],
-      [
-        'openai',
-        {
-          adapter_id: 'llm',
-          instance_id: 'openai',
-          credential_ref: 'env:OPENAI_API_KEY',
-          settings: { provider: 'openai', model: 'gpt-5' },
-        },
-      ],
-      [
-        'anthropic',
-        {
-          adapter_id: 'llm',
-          instance_id: 'anthropic',
-          credential_ref: 'env:ANTHROPIC_API_KEY',
-          settings: { provider: 'anthropic', model: 'claude-sonnet' },
-        },
-      ],
-      [
-        'openrouter',
-        {
-          adapter_id: 'llm',
-          instance_id: 'openrouter',
-          credential_ref: 'env:OPENROUTER_API_KEY',
-          settings: { provider: 'openrouter', model: 'openai/gpt-5' },
-        },
-      ],
+      ['fixture-local', processorConfig],
+      ['fixture-remote', {
+        adapter_id: 'llm', instance_id: 'remote',
+        settings: { provider: 'fixture-remote', model: 'another-model' },
+      }],
     ];
     const expectedSignals = (
       await processor(new FakeLlmClient(validModelOutput)).extract(
@@ -1141,9 +1107,9 @@ describe('llm decision processor extraction', () => {
     const observations: unknown[] = [];
     const client = new FakeLlmClient(
       validModelOutput,
-      ['openai/gpt-test'],
+      ['fixture-remote/gpt-test'],
       undefined,
-      'openrouter',
+      'fixture-hosted',
       {
         content: validModelOutput,
         requestId: 'provider-request-id-must-not-escape',
@@ -1159,9 +1125,9 @@ describe('llm decision processor extraction', () => {
     const instance = new LlmDecisionProcessor(
       {
         adapter_id: 'llm',
-        instance_id: 'openrouter',
+        instance_id: 'fixture-hosted',
         credential_ref: 'env:OPENROUTER_API_KEY',
-        settings: { provider: 'openrouter', model: 'openai/gpt-test' },
+        settings: { provider: 'fixture-hosted', model: 'fixture-remote/gpt-test' },
       },
       {
         client,
@@ -1180,8 +1146,8 @@ describe('llm decision processor extraction', () => {
     expect(observations).toEqual([
       {
         outcome: 'succeeded',
-        provider: 'openrouter',
-        model: 'openai/gpt-test',
+        provider: 'fixture-hosted',
+        model: 'fixture-remote/gpt-test',
         provider_latency_ms: 57,
         input_tokens: 0,
         output_tokens: 5,
@@ -1197,17 +1163,17 @@ describe('llm decision processor extraction', () => {
     const observations: unknown[] = [];
     const failedClient = new FakeLlmClient(
       validModelOutput,
-      ['openai/gpt-test'],
+      ['fixture-remote/gpt-test'],
       new AdapterError('temporarily_unavailable', 'provider detail', true),
-      'openrouter',
+      'fixture-hosted',
     );
     const ticks = [10, 33];
     const failed = new LlmDecisionProcessor(
       {
         adapter_id: 'llm',
-        instance_id: 'openrouter',
+        instance_id: 'fixture-hosted',
         credential_ref: 'env:OPENROUTER_API_KEY',
-        settings: { provider: 'openrouter', model: 'openai/gpt-test' },
+        settings: { provider: 'fixture-hosted', model: 'fixture-remote/gpt-test' },
       },
       {
         client: failedClient,
@@ -1226,8 +1192,8 @@ describe('llm decision processor extraction', () => {
     expect(observations).toEqual([
       {
         outcome: 'failed',
-        provider: 'openrouter',
-        model: 'openai/gpt-test',
+        provider: 'fixture-hosted',
+        model: 'fixture-remote/gpt-test',
         provider_latency_ms: 23,
         input_tokens: null,
         output_tokens: null,
@@ -1253,7 +1219,7 @@ describe('llm decision processor extraction', () => {
     const observations: unknown[] = [];
     const failedClient = new FakeLlmClient(
       validModelOutput,
-      ['openai/gpt-test'],
+      ['fixture-remote/gpt-test'],
       new StructuredGenerationAttemptError(
         'temporarily_unavailable',
         'provider response was truncated',
@@ -1267,15 +1233,15 @@ describe('llm decision processor extraction', () => {
           stopReason: 'length',
         },
       ),
-      'openrouter',
+      'fixture-hosted',
     );
     const ticks = [10, 33];
     const failed = new LlmDecisionProcessor(
       {
         adapter_id: 'llm',
-        instance_id: 'openrouter',
+        instance_id: 'fixture-hosted',
         credential_ref: 'env:OPENROUTER_API_KEY',
-        settings: { provider: 'openrouter', model: 'openai/gpt-test' },
+        settings: { provider: 'fixture-hosted', model: 'fixture-remote/gpt-test' },
       },
       {
         client: failedClient,
@@ -1294,8 +1260,8 @@ describe('llm decision processor extraction', () => {
     expect(observations).toEqual([
       {
         outcome: 'failed',
-        provider: 'openrouter',
-        model: 'openai/gpt-test',
+        provider: 'fixture-hosted',
+        model: 'fixture-remote/gpt-test',
         provider_latency_ms: 23,
         input_tokens: 40,
         output_tokens: 5,
@@ -1320,108 +1286,64 @@ describe('llm decision processor extraction', () => {
 });
 
 describe('llm decision processor configuration', () => {
-  it('requires a model and rejects unsupported settings and credentials', () => {
+  it('requires a model and incorporates the injected validation errors', () => {
     const instance = processor(new FakeLlmClient(validModelOutput));
-    expect(
-      instance.validateConfig({
-        adapter_id: 'llm',
-        instance_id: 'local',
-        settings: {},
-      }).ok,
-    ).toBe(false);
-    expect(
-      instance.validateConfig({
-        adapter_id: 'llm',
-        instance_id: 'local',
-        settings: { model: 'qwen3:4b', temperature: 1 },
-      }).ok,
-    ).toBe(false);
-    expect(
-      instance.validateConfig({
-        adapter_id: 'llm',
-        instance_id: 'local',
-        credential_ref: 'env:NOT_NEEDED',
-        settings: { model: 'qwen3:4b' },
-      }).ok,
-    ).toBe(false);
-    expect(
-      instance.validateConfig({
-        adapter_id: 'llm',
-        instance_id: 'local',
-        settings: {
-          model: 'qwen3:4b',
-          base_url: 'http://127.0.0.1:11434',
-          request_timeout_ms: 60_000,
-        },
-      }),
-    ).toEqual({ ok: true, errors: [] });
+    expect(instance.validateConfig({ ...processorConfig, settings: {} }).errors).toContain('settings.model is required');
+    expect(instance.validateConfig(processorConfig)).toEqual({ ok: true, errors: [] });
+    const policy = vi.fn(() => ['fixture policy rejected configuration']);
+    const rejecting = new LlmDecisionProcessor(processorConfig, {
+      client: new FakeLlmClient(validModelOutput), validateProviderConfig: policy, identityEndpoint: null,
+    });
+    expect(rejecting.validateConfig(processorConfig).errors).toContain('fixture policy rejected configuration');
+    expect(policy).toHaveBeenCalledWith(processorConfig);
   });
-
-  it('requires credentials and fixes endpoints in each hosted provider factory', () => {
-    for (const [provider, create, model] of [
-      ['openai', createOpenAiDecisionProcessor, 'gpt-model'],
-      ['anthropic', createAnthropicDecisionProcessor, 'claude-model'],
-      ['openrouter', createOpenRouterDecisionProcessor, 'anthropic/claude-model'],
-    ] as const) {
-      const config: AdapterConfig = {
-        adapter_id: 'llm', instance_id: 'local', credential_ref: 'env:TEST',
-        settings: { provider, model },
-      };
-      const instance = create(config);
-      expect(instance.validateConfig(config)).toEqual({ ok: true, errors: [] });
-      const { credential_ref: _reference, ...missing } = config;
-      expect(instance.validateConfig(missing).errors).toContain(`credential_ref is required by the ${provider} provider`);
-      expect(instance.validateConfig({ ...config, settings: { ...config.settings, base_url: 'https://attacker.invalid' } }).ok).toBe(false);
-    }
-  });
-
   it('changes processing identity for provider, model, or schema-affecting settings', () => {
-    const ollama = processorConfig;
-    const explicitOllama: AdapterConfig = {
+    const local = processorConfig;
+    const explicitLocal: AdapterConfig = {
       ...processorConfig,
-      settings: { provider: 'ollama', model: 'qwen3:4b' },
+      settings: { provider: 'fixture-local', model: 'fixture-model' },
     };
     const differentTimeout: AdapterConfig = {
       ...processorConfig,
       settings: {
-        model: 'qwen3:4b',
+        model: 'fixture-model',
         request_timeout_ms: 60_000,
       },
     };
     const differentModel: AdapterConfig = {
       ...processorConfig,
-      settings: { model: 'qwen3:8b' },
+      settings: { model: 'fixture-larger-model' },
     };
-    const openai: AdapterConfig = {
+    const remote: AdapterConfig = {
       ...processorConfig,
       credential_ref: 'env:OPENAI_API_KEY',
-      settings: { provider: 'openai', model: 'qwen3:4b' },
+      settings: { provider: 'fixture-remote', model: 'fixture-model' },
     };
     const moreOutput: AdapterConfig = {
       ...processorConfig,
-      settings: { model: 'qwen3:4b', max_output_tokens: 8192 },
+      settings: { model: 'fixture-model', max_output_tokens: 8192 },
     };
 
-    expect(testProcessingVersion(explicitOllama)).toBe(
-      testProcessingVersion(ollama),
+    expect(testProcessingVersion(explicitLocal)).toBe(
+      testProcessingVersion(local),
     );
     expect(testProcessingVersion(differentTimeout)).toBe(
-      testProcessingVersion(ollama),
+      testProcessingVersion(local),
     );
     expect(testProcessingVersion(differentModel)).not.toBe(
-      testProcessingVersion(ollama),
+      testProcessingVersion(local),
     );
-    expect(testProcessingVersion(openai)).not.toBe(testProcessingVersion(ollama));
+    expect(testProcessingVersion(remote)).not.toBe(testProcessingVersion(local));
     expect(testProcessingVersion(moreOutput)).not.toBe(
-      testProcessingVersion(ollama),
+      testProcessingVersion(local),
     );
     const localProcessor = processor(
       new FakeLlmClient(validModelOutput),
-      ollama,
+      local,
     );
     const hostedProcessor = processor(
-      new FakeLlmClient(validModelOutput, undefined, undefined, 'openai'),
-      openai,
+      new FakeLlmClient(validModelOutput, undefined, undefined, 'fixture-remote'),
+      remote,
     );
     expect(hostedProcessor.identity.version).not.toBe(
       localProcessor.identity.version,
@@ -1430,38 +1352,23 @@ describe('llm decision processor configuration', () => {
       referenceMeetingProcessingKey(meeting, localProcessor),
     );
   });
-
   it('reports unavailable health when the configured model is not installed', async () => {
     const instance = processor(
       new FakeLlmClient(validModelOutput, ['some-other-model']),
     );
     const health = await instance.healthCheck();
     expect(health.status).toBe('unavailable');
-    expect(health.message).toContain('qwen3:4b');
+    expect(health.message).toContain('fixture-model');
   });
-
   it('reports unavailable health when the provider cannot be reached', async () => {
     const instance = processor(
       new FakeLlmClient(
         validModelOutput,
-        ['qwen3:4b'],
+        ['fixture-model'],
         new AdapterError('temporarily_unavailable', 'connection refused', true),
       ),
     );
     const health = await instance.healthCheck();
     expect(health.status).toBe('unavailable');
-  });
-
-  it('reports unauthorized before transport when a hosted credential cannot resolve', async () => {
-    const instance = createOpenAiDecisionProcessor({
-      adapter_id: 'llm',
-      instance_id: 'hosted',
-      credential_ref: 'env:OPENAI_API_KEY',
-      settings: { provider: 'openai', model: 'gpt-model' },
-    });
-    await expect(instance.healthCheck()).resolves.toMatchObject({
-      status: 'unauthorized',
-      details: { provider: 'openai', model: 'gpt-model' },
-    });
   });
 });

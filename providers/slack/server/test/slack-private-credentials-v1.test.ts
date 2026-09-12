@@ -1,3 +1,4 @@
+import { readOptionalPrivateAuthoritySlackBrowserOauthConfiguration, readPrivateAuthoritySlackSigningSecret } from "@echo-brain/provider-slack-server/slack-private-credentials-v1";
 import {
   chmodSync,
   mkdtempSync,
@@ -8,7 +9,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readOptionalPrivateAuthoritySlackBrowserOauthConfiguration, readPrivateAuthoritySlackSigningSecret } from "@echo-brain/provider-slack-server/slack-private-credentials-v1";
 
 const roots: string[] = [];
 

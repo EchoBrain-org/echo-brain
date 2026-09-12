@@ -1139,6 +1139,19 @@ describe("Organization Authority API runtime", () => {
       expect(await json(noTools)).toMatchObject({ tools: [], organization_id: initialized.organization_id });
       expect((await fetch(`${origin}/v2/person/tools`)).status).toBe(401);
 
+      const noToolsV3 = await fetch(`${origin}/v3/person/tools`, {
+        headers: { authorization: `Bearer ${session.access_token as string}` },
+      });
+      expect(noToolsV3.status).toBe(200);
+      expect(await json(noToolsV3)).toEqual({
+        schema_version: 3,
+        kind: "echo-organization-person-tools",
+        organization_id: initialized.organization_id,
+        membership_id: initialized.owner_membership_id,
+        tools: [],
+      });
+      expect((await fetch(`${origin}/v3/person/tools`)).status).toBe(401);
+
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,
         {

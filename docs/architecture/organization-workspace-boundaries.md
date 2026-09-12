@@ -55,6 +55,15 @@ External dependencies remain installed; workspace symlinks point only into the
 isolated tree. Full source tests and the existing native/offline artifact checks
 exercise the composed products. No additional CI job is needed.
 
+Neutral package tests may import neutral workspace code, their own test
+fixtures, and shared neutral test support. The test-layer architecture check
+uses the module-reference parser to enforce this across every `packages/*/test`
+root and shared support, including type imports and re-exports. Provider-specific
+contract tests live with their provider; tests that combine a provider with
+Authority transports live with the composing service. Generic processing and
+record tests retain independent fixture implementations and signed protocol
+helpers without importing a provider or application workspace.
+
 The native account shell consumes generic v3 tool status and an injected UI
 interface. Slack owns its actions and retained v2 disconnect decoder. The v2
 HTTP contract remains provider-owned for installed clients; v3 admits up to

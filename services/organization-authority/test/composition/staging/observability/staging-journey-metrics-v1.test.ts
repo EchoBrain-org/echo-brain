@@ -1,4 +1,4 @@
-import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../observability/telemetry-fixture-vocabulary-v1.js";
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { currentCoreRuntimeDetailV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";

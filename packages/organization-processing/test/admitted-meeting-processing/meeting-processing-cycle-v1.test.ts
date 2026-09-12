@@ -1,4 +1,29 @@
 import { describe, expect, it } from "vitest";
+import type {
+  MeetingApprovalJourneyClockV1,
+  MeetingApprovalJourneyRefV1,
+  MeetingApprovalJourneyStageAttemptV1,
+  MeetingApprovalJourneyStageV1,
+  MeetingApprovalJourneyTelemetryPortV1,
+} from "../../src/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
+import {
+  AdmittedMeetingProcessingCycleV1,
+  type AdmittedMeetingProcessingAdmissionV1,
+  type ApprovalWorkflowStagerV1,
+  type AuthorityMeetingProcessingStateV1,
+  type FrozenMeetingProcessingCandidateSnapshotV1,
+  type MeetingProcessingCandidateSnapshotInputV1,
+  type MeetingProcessingCandidateV1,
+} from "../../src/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import {
+  MeetingProcessingWorkerLifecycleV1,
+  type MeetingProcessingWorkerTelemetryEventV1,
+} from "../../src/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
+import {
+  legacyRestrictedReviewerReviewPolicySnapshotV1,
+  reviewInputSha256V1,
+  reviewLineageIdV1,
+} from "../../src/admitted-meeting-processing/review-lineage-semantics.js";
 import {
   type AdapterHealth,
   type DecisionProcessorAdapter,
@@ -7,39 +32,15 @@ import {
   type MeetingDocument,
   type MeetingSourceAdapter,
 } from "../../src/core/index.js";
-import { createGranolaPostCutoffCursor, granolaCursorPhase } from "../../../../providers/granola/src/source/meeting-source-adapter.js";
-import {
-  AdmittedMeetingProcessingCycleV1,
-  type ApprovalWorkflowStagerV1,
-  type MeetingProcessingCandidateSnapshotInputV1,
-  type MeetingProcessingCandidateV1,
-  type FrozenMeetingProcessingCandidateSnapshotV1,
-  type AdmittedMeetingProcessingAdmissionV1,
-  type AuthorityMeetingProcessingStateV1,
-} from "../../src/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import {
-  MeetingProcessingWorkerLifecycleV1,
-  type MeetingProcessingWorkerTelemetryEventV1,
-} from "../../src/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
-import {
-  reviewInputSha256V1,
-  reviewLineageIdV1,
-  legacyRestrictedReviewerReviewPolicySnapshotV1,
-} from "../../src/admitted-meeting-processing/review-lineage-semantics.js";
-import type {
-  MeetingApprovalJourneyClockV1,
-  MeetingApprovalJourneyRefV1,
-  MeetingApprovalJourneyStageV1,
-  MeetingApprovalJourneyStageAttemptV1,
-  MeetingApprovalJourneyTelemetryPortV1,
-} from "../../src/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
+
+const fixtureCursor = (cutoff: string) => `fixture-source:v1:live:${cutoff}`;
 
 const CUT_OFF = "2026-08-22T02:03:04.005Z";
 const DURABLE_STAGED_AT = "2026-08-22T02:05:04.005Z";
 const SOURCE = {
   kind: "meeting-source" as const,
-  adapter_id: "granola",
-  instance_id: "founder-granola",
+  adapter_id: "fixture-source",
+  instance_id: "founder-fixture-source",
   version: "2.2.0",
 };
 const PROCESSOR = {
@@ -49,12 +50,12 @@ const PROCESSOR = {
   version: "1.3.0",
 };
 const REVIEW_POLICY = legacyRestrictedReviewerReviewPolicySnapshotV1;
-const granolaAdmittedMeetingSourceCursorPolicyV1 = {
-  source_adapter_id: "granola",
+const fixtureCursorPolicy = {
+  source_adapter_id: "fixture-source",
   assert_live_cursor(cursor: string): void {
-    if (!cursor.startsWith("granola:v1:") || granolaCursorPhase(cursor) !== "live") {
+    if (!cursor.startsWith("fixture-source:v1:") || !cursor.startsWith("fixture-source:v1:live:")) {
       throw new Error(
-        "admitted meeting-processing cursor must be a Granola v1 incremental cursor",
+        "admitted meeting-processing cursor must be a fixture source v1 incremental cursor",
       );
     }
   },
@@ -62,10 +63,10 @@ const granolaAdmittedMeetingSourceCursorPolicyV1 = {
 
 const admission = (): AdmittedMeetingProcessingAdmissionV1 => ({
   source: {
-    adapter_id: "granola",
+    adapter_id: "fixture-source",
     instance_id: SOURCE.instance_id,
     version: SOURCE.version,
-    cursor: createGranolaPostCutoffCursor(CUT_OFF),
+    cursor: fixtureCursor(CUT_OFF),
     cutoff_at: CUT_OFF,
   },
   processor: {
@@ -81,7 +82,7 @@ const meeting = (): MeetingDocument => ({
   id: "meeting-1",
   provenance: {
     source: SOURCE,
-    external_id: "granola-note-1",
+    external_id: "fixture-source-note-1",
     canonical_revision: "sha256:note-1",
     observed_at: "2026-08-22T02:04:04.005Z",
     normalizer_version: SOURCE.version,
@@ -492,7 +493,7 @@ function liveCycle(
   return new AdmittedMeetingProcessingCycleV1({
     ...options,
     source_cursor_policy:
-      options.source_cursor_policy ?? granolaAdmittedMeetingSourceCursorPolicyV1,
+      options.source_cursor_policy ?? fixtureCursorPolicy,
   });
 }
 
@@ -594,7 +595,7 @@ describe("admitted meeting-processing cycle", () => {
     const reused: MeetingDocument = {
       ...meeting(),
       provenance: { ...meeting().provenance, canonical_revision: "sha256:folder-only" },
-      extensions: { granola: { folder_membership: [] } },
+      extensions: { "fixture-source": { folder_membership: [] } },
     };
     const second = liveCycle({
       source: source({ meetings: [reused] }),
@@ -732,7 +733,7 @@ describe("admitted meeting-processing cycle", () => {
       {
         source: source({
           meetings: [],
-          next_cursor: "granola:v1:next",
+          next_cursor: "fixture-source:v1:next",
         }),
         state: new FailingCursorAdvanceState(admission()),
         failure: "source cursor advance failed",
@@ -836,12 +837,12 @@ describe("admitted meeting-processing cycle", () => {
     ).toEqual(["source_intake:started", "source_intake:succeeded"]);
   });
 
-  it("polls one admitted post-cutoff Granola cursor, stages durably, then advances", async () => {
+  it("polls one admitted post-cutoff fixture source cursor, stages durably, then advances", async () => {
     const current = admission();
     const state = new FakeState(current);
     const downstream = stager({ kind: "staged", stage_id: "stage-1" });
     const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
       stager: downstream,
@@ -857,7 +858,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toEqual([
       {
         expected_cursor: current.source.cursor,
-        next_cursor: "granola:v1:next",
+        next_cursor: "fixture-source:v1:next",
       },
     ]);
   });
@@ -871,7 +872,7 @@ describe("admitted meeting-processing cycle", () => {
       const cycle = liveCycle({
         source: source({
           meetings: [meeting()],
-          next_cursor: "granola:v1:next",
+          next_cursor: "fixture-source:v1:next",
         }),
         processor: processor(),
         state,
@@ -890,7 +891,7 @@ describe("admitted meeting-processing cycle", () => {
     const current = admission();
     const state = new FakeState(current);
     const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
       stager: stager({ kind: "delivery_pending" }),
@@ -904,7 +905,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toEqual([
       {
         expected_cursor: current.source.cursor,
-        next_cursor: "granola:v1:next",
+        next_cursor: "fixture-source:v1:next",
       },
     ]);
   });
@@ -913,7 +914,7 @@ describe("admitted meeting-processing cycle", () => {
     const current = admission();
     const state = new FakeState(current);
     const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
       stager: stager({
@@ -931,7 +932,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toEqual([
       {
         expected_cursor: current.source.cursor,
-        next_cursor: "granola:v1:next",
+        next_cursor: "fixture-source:v1:next",
       },
     ]);
   });
@@ -947,7 +948,7 @@ describe("admitted meeting-processing cycle", () => {
       reconcileSuperseded: async () => {},
     };
     const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
       stager: downstream,
@@ -958,7 +959,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toEqual([
       {
         expected_cursor: current.source.cursor,
-        next_cursor: "granola:v1:next",
+        next_cursor: "fixture-source:v1:next",
       },
     ]);
   });
@@ -974,7 +975,7 @@ describe("admitted meeting-processing cycle", () => {
       reconcileSuperseded: async () => {},
     };
     const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
       stager: downstream,
@@ -988,7 +989,7 @@ describe("admitted meeting-processing cycle", () => {
   it("keeps a pending delivery durable when its source cursor fence drifts", async () => {
     const state = new FakeState(admission(), "state_drift");
     const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
       stager: stager({ kind: "delivery_pending" }),
@@ -1005,7 +1006,7 @@ describe("admitted meeting-processing cycle", () => {
   it("keeps a durable staged item visible when the Authority cursor fence drifts", async () => {
     const state = new FakeState(admission(), "state_drift");
     const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state,
       stager: stager({ kind: "staged", stage_id: "stage-1" }),
@@ -1019,11 +1020,11 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toHaveLength(1);
   });
 
-  it("CAS advances an empty Granola page with a distinct next cursor", async () => {
+  it("CAS advances an empty fixture source page with a distinct next cursor", async () => {
     const current = admission();
     const emptyState = new FakeState(current);
     const empty = liveCycle({
-      source: source({ meetings: [], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state: emptyState,
       stager: stager({ kind: "staged", stage_id: "never" }),
@@ -1035,7 +1036,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(emptyState.advances).toEqual([
       {
         expected_cursor: current.source.cursor,
-        next_cursor: "granola:v1:next",
+        next_cursor: "fixture-source:v1:next",
       },
     ]);
   });
@@ -1044,7 +1045,7 @@ describe("admitted meeting-processing cycle", () => {
     for (const result of ["state_drift", "revoked"] as const) {
       const state = new FakeState(admission(), result);
       const cycle = liveCycle({
-        source: source({ meetings: [], next_cursor: "granola:v1:next" }),
+        source: source({ meetings: [], next_cursor: "fixture-source:v1:next" }),
         processor: processor(),
         state,
         stager: stager({ kind: "staged", stage_id: "never" }),
@@ -1064,7 +1065,7 @@ describe("admitted meeting-processing cycle", () => {
     const state = new FakeState(current);
     const downstream = stager({ kind: "staged", stage_id: "never" });
     const cycle = liveCycle({
-      source: source({ meetings: [meeting()], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [meeting()], next_cursor: "fixture-source:v1:next" }),
       processor: processor(noSignals),
       state,
       stager: downstream,
@@ -1079,7 +1080,7 @@ describe("admitted meeting-processing cycle", () => {
     expect(state.advances).toEqual([
       {
         expected_cursor: current.source.cursor,
-        next_cursor: "granola:v1:next",
+        next_cursor: "fixture-source:v1:next",
       },
     ]);
   });
@@ -1133,7 +1134,7 @@ describe("admitted meeting-processing cycle", () => {
         canonical_revision: "sha256:folder-only",
       },
       extensions: {
-        granola: {
+        "fixture-source": {
           folder_membership: [{ id: "folder-notes", name: "notes" }],
         },
       },
@@ -1451,7 +1452,7 @@ describe("admitted meeting-processing cycle", () => {
       const cycle = liveCycle({
         source: source({
           meetings: [meeting()],
-          next_cursor: "granola:v1:next",
+          next_cursor: "fixture-source:v1:next",
         }),
         processor: processor(noSignals),
         state,
@@ -1489,13 +1490,13 @@ describe("admitted meeting-processing cycle", () => {
       source: { ...admitted.source, cursor: "2020-01-01T00:00:00.000Z" },
     };
     const historyCycle = liveCycle({
-      source: source({ meetings: [], next_cursor: "granola:v1:next" }),
+      source: source({ meetings: [], next_cursor: "fixture-source:v1:next" }),
       processor: processor(),
       state: new FakeState(historical),
       stager: stager({ kind: "staged", stage_id: "never" }),
     });
     await expect(historyCycle.runOnce()).rejects.toThrow(
-      "Granola v1 incremental cursor",
+      "fixture source v1 incremental cursor",
     );
 
     const pageCycle = liveCycle({
@@ -1509,7 +1510,7 @@ describe("admitted meeting-processing cycle", () => {
     await expect(pageCycle.runOnce()).rejects.toThrow("at most one meeting");
   });
 
-  it("accepts a non-Granola source through its injected boundary", async () => {
+  it("accepts a non-fixture source source through its injected boundary", async () => {
     const fixtureSource = {
       ...SOURCE,
       adapter_id: "synthetic-fixture",
