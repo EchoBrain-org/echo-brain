@@ -1,19 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import type Database from 'better-sqlite3';
-import { ORGANIZATION_RECORD_DERIVED_DATABASE } from './database-definition.js';
 
-/**
- * Exact schema baseline v1 for the organization record derived database role.
- *
- * One exact baseline replaces the historical migration chain: the applier
- * stamps the role application ID and `user_version = 1` on an empty database
- * and the committed SQL file creates the complete behavior schema. The legacy
- * migration-ledger objects are deliberately absent; schema
- * identity is carried by the state-lineage manifest digest and the pre-open
- * guard's exact-version check. This module is a private persistence primitive;
- * runtime composition opens it through the organization-record database port.
- */
+/** Historical seven-role fixture only; never shipped as a runtime initializer. */
 export const ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1 = 1;
 
 const BASELINE_SQL_URL = new URL(
@@ -58,7 +47,7 @@ export function applyOrganizationRecordDerivedBaselineV1(
     }
     database.exec(sql);
     database.pragma(
-      `application_id = ${ORGANIZATION_RECORD_DERIVED_DATABASE.application_id}`,
+      `application_id = ${0x45435244}`,
     );
     database.pragma(
       `user_version = ${ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1}`,

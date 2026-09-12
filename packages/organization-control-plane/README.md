@@ -13,8 +13,8 @@ approval integration serves the private Slack DM approval path and performs
 permission checks against current Authority membership. The earlier Slack
 reaction approval path, its owner-attributed activation command, and its
 `echo-organization-control-plane-activate-person-slack-*` binaries were removed
-on 2026-09-06; their baseline tables remain in the frozen V1 baseline until a
-versioned schema migration retires them.
+on 2026-09-06. The standalone V3 baseline now retires their nine tables.
+Historical V1/V2 baseline bytes remain unchanged for compatibility validation.
 
 `record-visibility-policy-contracts-v1` is provider-neutral, and so is
 `application/private-approval-policy-resolution-core-v1`: the durable command
@@ -27,12 +27,13 @@ organization tool connection and external identity-link contracts live under
 `application/organization-tool-connection-contracts-v2`. The neutral secret
 custody contract is `application/organization-secret-store-contracts`.
 
-Private-approval fresh state is initialized from the composed V2 baseline:
-the retained `baselines/organization-control-plane-baseline-v1.sql` plus
-`baselines/organization-control-plane-private-approval-v2.sql`. It applies
-only to an empty database; existing V1 state is refused rather than migrated.
-Historical migration runners and generic control-plane root APIs are not
-shipped.
+Private-approval fresh state uses the standalone byte-pinned V3 baseline with
+11 active tables. It applies only to an empty database. The
+[offline schema-cleanup converter](../../docs/product/2026-09-12-database-migration-cleanup.md)
+accepts exact V2 control state within the supported whole-Authority lineage,
+writes a separate output, and refuses nonempty retired tables. Current runtime
+and stopped-state setup commands require the converted V2-root lineage and V3
+control database; neither silently upgrades an existing database.
 
 See [the canonical architecture specification](../../docs/architecture/organization-control-plane.md)
 for the complete safety and deferred-scope contract.

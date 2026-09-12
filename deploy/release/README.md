@@ -7,8 +7,8 @@ schema migration or client fleet-management system.
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current provider-neutral Authority V4, private-approval control-plane V2, and
-record-log V2 state lineage. For populated state, `stage` pulls the immutable
+current Authority V5, private-approval control-plane V3, record-log V3, and
+six-role V2 root lineage. For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
 mutation. While there are no live users,
@@ -16,6 +16,56 @@ run `onboard-clean-v1.sh
 replace-rehearsal --confirm-no-live-users`, then prepare the organization again
 with the new release record and matching profile. Do not point this updater at
 the older accepted record.
+
+## Offline schema cleanup
+
+The [cleanup contract and validation](../../docs/product/2026-09-12-database-migration-cleanup.md)
+define the sole supported source: exact Authority V4/control V2/log V2/derived
+V1 baselines with retrieval facts V2 and lexical/content V1. Other historical
+schema bytes and nonempty retired tables refuse. Read the
+[operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
+for obtaining an independently stopped/restored copy; this local command does
+not stop a writer, create a backup, access a host, or activate its output.
+
+Use a built candidate checkout (`npm ci`, `npm run build`). All supplied paths
+must be canonical absolute paths: current-user-owned directories mode 0700,
+regular files mode 0600, no symlinks, hard links or SQLite hot-state files.
+The output must not exist, and its private parent must already exist. Bind
+conversion to the inspection's exact inventory digest and reviewed candidate
+source SHA:
+
+```sh
+node tools/authority-schema-cleanup.mjs inspect \
+  --offline-source /absolute/private/restored-state
+node tools/authority-schema-cleanup.mjs convert \
+  --offline-source /absolute/private/restored-state \
+  --output /absolute/private/converted-state \
+  --source-inventory-sha256 <inspection-digest> \
+  --artifact-source-sha <reviewed-candidate-commit>
+```
+
+Keep the JSON inspection and conversion receipt in private operator evidence.
+They contain table counts and digests, never file contents. The artifact SHA is
+a caller-supplied provenance label, not a signature or release authorization.
+The source remains unchanged and readable with its matching old release.
+Conversion verifies retained rows and unchanged files before publishing output;
+copied bytes and directory entries are flushed before reporting success. No
+live path or accepted-release pointer is changed. A caught failure before
+publication removes the partial copy. If the final parent-directory flush fails
+after publication, the CLI exits unsuccessfully with
+`schema_cleanup_output_published_sync_unconfirmed`, `output_published: true`
+and an `echo-authority-schema-cleanup-publication-pending-v1` receipt containing
+the verification digests. The published output remains for inspection; it is
+not a successful conversion receipt. Resolve the filesystem failure and retry
+from the unchanged source into a different absent output path before activation.
+A killed process may leave a private `.schema-cleanup-*` directory to discard
+after confirming no converter still owns it.
+
+Qualify the converted copy and a new candidate in staging before planning any
+live cutover. Rollback before candidate writes uses the untouched source and
+its old image; rollback after candidate writes needs explicit reconciliation.
+Do not swap only an image across these schema versions, reset an existing org,
+or reuse an earlier candidate's acceptance.
 
 ## Release record
 
@@ -238,8 +288,8 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
 migration is not eligible for this loop; make an explicit migration decision
-instead. If persisted state is older or otherwise not that exact V4/V2/V2
-lineage, `stage` refuses before activating or recording the candidate. It does
+instead. If persisted state lacks the candidate's exact V5/V3/V3 databases and
+V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
 
 ### Environment drift before staging

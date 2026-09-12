@@ -27,6 +27,7 @@
   ],
   "runtime_assets": [
     "packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql",
+    "packages/organization-control-plane/baselines/organization-control-plane-baseline-v3.sql",
     "packages/organization-control-plane/baselines/organization-control-plane-private-approval-v2.sql"
   ],
   "component_index_contract": {

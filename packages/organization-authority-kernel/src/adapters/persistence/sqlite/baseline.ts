@@ -30,6 +30,20 @@ export const AUTHORITY_BASELINE_SCHEMA_VERSION_V4 = 4;
 /** The Authority application ID is role-stable across fresh schemas. */
 export const AUTHORITY_BASELINE_APPLICATION_ID_V4 =
   AUTHORITY_BASELINE_APPLICATION_ID_V1;
+export const AUTHORITY_BASELINE_SCHEMA_VERSION_V5 = 5;
+
+export function authorityBaselineSqlV5(): string {
+  return readFileSync(new URL("../../../../baselines/authority-baseline-v5.sql", import.meta.url), "utf8");
+}
+
+export function authorityBaselineSha256V5(): Sha256Digest {
+  return sha256Digest(authorityBaselineSqlV5());
+}
+
+/** Active schema; existing databases use the explicit offline transition. */
+export function applyAuthorityBaselineV5(database: Database.Database): void {
+  applyFreshAuthorityBaseline(database, authorityBaselineSqlV5(), AUTHORITY_BASELINE_APPLICATION_ID_V1, AUTHORITY_BASELINE_SCHEMA_VERSION_V5);
+}
 
 const BASELINE_SQL_URL = new URL(
   "../../../../baselines/authority-baseline-v1.sql",

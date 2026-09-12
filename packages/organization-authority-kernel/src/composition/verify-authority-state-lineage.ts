@@ -1,14 +1,12 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  organizationControlBaselineSha256V2,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+  organizationControlBaselineSha256V3,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  organizationRecordDerivedBaselineSha256V1,
-  organizationRecordLogBaselineSha256V2,
-  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
+  organizationRecordLogBaselineSha256V3,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   readableSearchPlaneBaselineSha256,
@@ -20,16 +18,19 @@ import {
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
-  authorityBaselineSha256V4,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
+  authorityBaselineSha256V5,
 } from "../adapters/persistence/sqlite/baseline.js";
-import { verifyStateLineageBeforeOpen } from "../state-lineage/state-lineage-preopen-guard.js";
-import { validateStateLineageRootManifestV1 } from "../state-lineage/state-lineage-manifest-v1.js";
+import { StateLineagePreopenRefusal, verifyStateLineageBeforeOpen } from "../state-lineage/state-lineage-preopen-guard.js";
+import { validateStateLineageRootManifestV2 } from "../state-lineage/state-lineage-manifest-v1.js";
 
 function rootForState(stateDirectory: string) {
-  const path = join(stateDirectory, "state-lineage-root.v1.json");
+  if (existsSync(join(stateDirectory, "state-lineage-root.v1.json"))) {
+    throw new StateLineagePreopenRefusal("legacy_state", "Authority state requires the explicit offline schema-cleanup transition");
+  }
+  const path = join(stateDirectory, "state-lineage-root.v2.json");
   try {
-    return validateStateLineageRootManifestV1(
+    return validateStateLineageRootManifestV2(
       JSON.parse(readFileSync(path, "utf8")),
     );
   } catch {
@@ -44,6 +45,7 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
   const root = rootForState(stateDirectory);
   return verifyStateLineageBeforeOpen({
     state_directory: stateDirectory,
+    root_manifest_version: 2,
     expected_binding: {
       authority_id: root.authority_id,
       organization_id: root.organization_id,
@@ -51,23 +53,18 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
     },
     expected_schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
-        schema_sha256: authorityBaselineSha256V4(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
+        schema_sha256: authorityBaselineSha256V5(),
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-        schema_sha256: organizationControlBaselineSha256V2(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
+        schema_sha256: organizationControlBaselineSha256V3(),
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
-        schema_sha256: organizationRecordLogBaselineSha256V2(),
-      },
-      "record-derived": {
-        database_schema_version:
-          ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordDerivedBaselineSha256V1(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
+        schema_sha256: organizationRecordLogBaselineSha256V3(),
       },
       "retrieval-facts": {
         database_schema_version:

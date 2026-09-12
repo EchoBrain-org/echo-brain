@@ -11,19 +11,16 @@ import {
   type OrganizationAuthorityDescriptorV1,
 } from "@echo-brain/organization-protocol";
 import {
-  applyOrganizationControlBaselineV2,
+  applyOrganizationControlBaselineV3,
   openOrganizationControlDatabase,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-  organizationControlBaselineSha256V2,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
+  organizationControlBaselineSha256V3,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  applyOrganizationRecordDerivedBaselineV1,
-  applyOrganizationRecordLogBaselineV2,
+  applyOrganizationRecordLogBaselineV3,
   openOrganizationRecordDatabase,
-  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
-  organizationRecordDerivedBaselineSha256V1,
-  organizationRecordLogBaselineSha256V2,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
+  organizationRecordLogBaselineSha256V3,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
@@ -35,21 +32,21 @@ import {
   readableSearchPlaneBaselineSha256V1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  applyAuthorityBaselineV4,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
-  authorityBaselineSha256V4,
+  applyAuthorityBaselineV5,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
+  authorityBaselineSha256V5,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
 import { assertDisplayName } from "@echo-brain/organization-authority-kernel/domain/rules";
 import {
-  initializeAuthorityStateLineageV1,
+  initializeAuthorityStateLineageV2,
   type InitializedAuthorityStateLineageV1,
   type StagedAuthorityStateV1,
 } from "../state-lineage/authority-state-lineage-initializer.js";
 import {
   stateLineageDatabaseManifestSha256V1,
-  stateLineageRootManifestSha256V1,
+  stateLineageRootManifestSha256V2,
 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 
 /**
@@ -298,34 +295,6 @@ function prepareAuthorityState(
   } finally {
     recordLog.close();
   }
-
-  const derived = openOrganizationRecordDatabase(
-    join(state.state_directory, "record-derived.sqlite"),
-    { fileMustExist: true },
-  );
-  try {
-    derived.exec("BEGIN IMMEDIATE");
-    derived
-      .prepare(
-        `INSERT INTO organization_derived_metadata
-         (singleton, organization_id, created_at) VALUES (?, ?, ?)`,
-      )
-      .run(1, seed.organization_id, state.created_at);
-    derived
-      .prepare(
-        `INSERT INTO organization_derived_cursor
-         (singleton, last_position, updated_at) VALUES (?, ?, ?)`,
-      )
-      .run(1, 0, state.created_at);
-    derived.exec("COMMIT");
-  } catch (error) {
-    try {
-      derived.exec("ROLLBACK");
-    } catch {}
-    throw error;
-  } finally {
-    derived.close();
-  }
 }
 
 function manifestEvidence(
@@ -343,7 +312,7 @@ function manifestEvidence(
     );
   }
   return Object.freeze({
-    root_manifest_sha256: stateLineageRootManifestSha256V1(
+    root_manifest_sha256: stateLineageRootManifestSha256V2(
       initialized.verification.root,
     ),
     database_manifests: Object.freeze(databaseManifests),
@@ -360,7 +329,7 @@ export function bootstrapOrganizationAuthorityState(
     input.seed ?? generatedAuthorityStateSeed(),
   );
   const captured: { descriptor_sha256?: Sha256Digest } = {};
-  const initialized = initializeAuthorityStateLineageV1({
+  const initialized = initializeAuthorityStateLineageV2({
     state_directory: input.state_directory,
     binding: {
       authority_id: seed.authority_id,
@@ -371,23 +340,18 @@ export function bootstrapOrganizationAuthorityState(
     creating_artifact_revision: input.creating_artifact_revision,
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
-        schema_sha256: authorityBaselineSha256V4(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
+        schema_sha256: authorityBaselineSha256V5(),
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-        schema_sha256: organizationControlBaselineSha256V2(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
+        schema_sha256: organizationControlBaselineSha256V3(),
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
-        schema_sha256: organizationRecordLogBaselineSha256V2(),
-      },
-      "record-derived": {
-        database_schema_version:
-          ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordDerivedBaselineSha256V1(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
+        schema_sha256: organizationRecordLogBaselineSha256V3(),
       },
       "retrieval-facts": {
         database_schema_version:
@@ -412,10 +376,9 @@ export function bootstrapOrganizationAuthorityState(
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV4 },
-      "control-plane": { apply: applyOrganizationControlBaselineV2 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV2 },
-      "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },
+      authority: { apply: applyAuthorityBaselineV5 },
+      "control-plane": { apply: applyOrganizationControlBaselineV3 },
+      "record-log": { apply: applyOrganizationRecordLogBaselineV3 },
     },
     open_writable_database: (path, role) => {
       if (role === "authority") return openAuthorityDatabase(path);

@@ -1,3 +1,8 @@
+import {
+  applyOrganizationRecordDerivedBaselineV1,
+  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+  organizationRecordDerivedBaselineSha256V1,
+} from "../../../packages/organization-record/test/fixtures/derived-baseline-v1.js";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,11 +31,8 @@ import {
   openOrganizationControlDatabase,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  applyOrganizationRecordDerivedBaselineV1,
   applyOrganizationRecordLogBaselineV1,
-  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
-  organizationRecordDerivedBaselineSha256V1,
   organizationRecordLogBaselineSha256V1,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";

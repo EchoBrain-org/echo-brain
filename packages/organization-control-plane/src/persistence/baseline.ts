@@ -2,11 +2,24 @@ import { readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { sha256Digest } from "../canonical/canonical-json.js";
 
-/** Private fresh-lineage control-plane baseline. It is not live-wired. */
+/** Frozen V1 foundation retained by the fresh V2 control-plane baseline. */
 export const ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1 = 1;
 export const ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID = 0x45434f50;
 /** Fresh private-approval control-plane lineage: retained V1 plus V2 tables. */
 export const ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2 = 2;
+export const ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3 = 3;
+
+export function organizationControlBaselineSqlV3(): string {
+  return readFileSync(new URL("../../baselines/organization-control-plane-baseline-v3.sql", import.meta.url), "utf8");
+}
+
+export function organizationControlBaselineSha256V3(): `sha256:${string}` {
+  return sha256Digest(organizationControlBaselineSqlV3());
+}
+
+export function applyOrganizationControlBaselineV3(database: Database.Database): void {
+  applyFreshBaseline(database, organizationControlBaselineSqlV3(), ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3);
+}
 /** `ECOP` is stable for the Control Plane database role. */
 export const ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID_V2 =
   ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID;
@@ -49,6 +62,10 @@ export function organizationControlBaselineSha256V2(): `sha256:${string}` {
 export function applyOrganizationControlBaselineV1(
   database: Database.Database,
 ): void {
+  applyFreshBaseline(database, organizationControlBaselineSqlV1(), ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1);
+}
+
+function applyFreshBaseline(database: Database.Database, sql: string, version: number): void {
   database.exec("BEGIN IMMEDIATE");
   try {
     const userVersion = database.pragma("user_version", {
@@ -66,12 +83,12 @@ export function applyOrganizationControlBaselineV1(
         "organization control baseline requires a completely empty database",
       );
     }
-    database.exec(organizationControlBaselineSqlV1());
+    database.exec(sql);
     database.pragma(
       `application_id = ${ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID}`,
     );
     database.pragma(
-      `user_version = ${ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1}`,
+      `user_version = ${version}`,
     );
     database.exec("COMMIT");
   } catch (error) {
@@ -89,35 +106,5 @@ export function applyOrganizationControlBaselineV1(
 export function applyOrganizationControlBaselineV2(
   database: Database.Database,
 ): void {
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const userVersion = database.pragma("user_version", {
-      simple: true,
-    }) as number;
-    const applicationId = database.pragma("application_id", {
-      simple: true,
-    }) as number;
-    const objectCount = database
-      .prepare("SELECT count(*) AS objects FROM sqlite_master")
-      .pluck()
-      .get() as number;
-    if (userVersion !== 0 || applicationId !== 0 || objectCount !== 0) {
-      throw new Error(
-        "organization control baseline requires a completely empty database",
-      );
-    }
-    database.exec(organizationControlBaselineSqlV2());
-    database.pragma(
-      `application_id = ${ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID_V2}`,
-    );
-    database.pragma(
-      `user_version = ${ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2}`,
-    );
-    database.exec("COMMIT");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK");
-    } catch {}
-    throw error;
-  }
+  applyFreshBaseline(database, organizationControlBaselineSqlV2(), ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2);
 }

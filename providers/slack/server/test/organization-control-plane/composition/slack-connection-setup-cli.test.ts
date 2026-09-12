@@ -16,11 +16,11 @@ import {
 import { runSlackConnectionSetupCli } from "../../../src/organization-control-plane/composition/slack-connection-setup-cli.js";
 import {
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
   applyOrganizationControlBaselineV1,
-  applyOrganizationControlBaselineV2,
+  applyOrganizationControlBaselineV3,
   organizationControlBaselineSha256V1,
-  organizationControlBaselineSha256V2,
+  organizationControlBaselineSha256V3,
 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../../../../../../packages/organization-control-plane/src/persistence/open-organization-control-database.js";
 import type { SlackConnectionVerifierV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
@@ -44,8 +44,8 @@ function stateDirectory(): string {
 
 function rootManifest() {
   return {
-    schema_version: 1,
-    kind: "echo-state-lineage-root-manifest-v1",
+    schema_version: 2,
+    kind: "echo-state-lineage-root-manifest-v2",
     ...COORDINATES,
     databases: [
       {
@@ -62,11 +62,6 @@ function rootManifest() {
         role: "record-log",
         location: { kind: "state_file", filename: "record-log.sqlite" },
         application_id: 0x4543524c,
-      },
-      {
-        role: "record-derived",
-        location: { kind: "state_file", filename: "record-derived.sqlite" },
-        application_id: 0x45435244,
       },
       {
         role: "retrieval-facts",
@@ -101,10 +96,10 @@ function rootManifest() {
   };
 }
 
-function setupOrganizationControlState(baseline: "v1" | "v2" = "v2"): string {
+function setupOrganizationControlState(baseline: "v1" | "v3" = "v3"): string {
   const directory = stateDirectory();
   writeFileSync(
-    join(directory, "state-lineage-root.v1.json"),
+    join(directory, "state-lineage-root.v2.json"),
     canonicalJson(rootManifest()),
     { encoding: "utf8", mode: 0o600, flag: "wx" },
   );
@@ -112,7 +107,7 @@ function setupOrganizationControlState(baseline: "v1" | "v2" = "v2"): string {
     join(directory, "integrations.sqlite"),
   );
   try {
-    if (baseline === "v2") applyOrganizationControlBaselineV2(database);
+    if (baseline === "v3") applyOrganizationControlBaselineV3(database);
     else applyOrganizationControlBaselineV1(database);
     database
       .prepare(
@@ -134,12 +129,12 @@ function setupOrganizationControlState(baseline: "v1" | "v2" = "v2"): string {
       role: "control-plane",
       ...COORDINATES,
       database_schema_version:
-        baseline === "v2"
-          ? ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2
+        baseline === "v3"
+          ? ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3
           : ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
       schema_sha256:
-        baseline === "v2"
-          ? organizationControlBaselineSha256V2()
+        baseline === "v3"
+          ? organizationControlBaselineSha256V3()
           : organizationControlBaselineSha256V1(),
       created_at: "2026-08-22T00:00:00.000Z",
       creating_artifact_revision: "test",

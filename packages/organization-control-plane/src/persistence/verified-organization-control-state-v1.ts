@@ -1,21 +1,20 @@
 import { canonicalJson, canonicalSha256 } from "../canonical/canonical-json.js";
 import {
   ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-  organizationControlBaselineSha256V2,
+  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
+  organizationControlBaselineSha256V3,
 } from "./baseline.js";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 
-const ROOT_MANIFEST_FILE = "state-lineage-root.v1.json";
+const ROOT_MANIFEST_FILE = "state-lineage-root.v2.json";
 const LINEAGE_MANIFEST_TABLE = "echo_state_lineage_manifest";
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const REQUIRED_ROLES = [
   "authority",
   "control-plane",
   "record-log",
-  "record-derived",
   "retrieval-facts",
   "retrieval-lexical",
   "retrieval-content",
@@ -132,12 +131,12 @@ function parseRootManifest(path: string): OrganizationControlRootBinding {
     "organization control state root manifest",
   );
   if (
-    body.schema_version !== 1 ||
-    body.kind !== "echo-state-lineage-root-manifest-v1" ||
+    body.schema_version !== 2 ||
+    body.kind !== "echo-state-lineage-root-manifest-v2" ||
     !Array.isArray(body.databases) ||
     body.databases.length !== REQUIRED_ROLES.length
   ) {
-    throw new Error("organization control state root manifest is not v1");
+    throw new Error("organization control state root manifest is not v2");
   }
   const roles = new Set<string>();
   let controlPlane = false;
@@ -172,7 +171,7 @@ function parseRootManifest(path: string): OrganizationControlRootBinding {
   }
   if (roles.size !== REQUIRED_ROLES.length || !controlPlane) {
     throw new Error(
-      "organization control state root manifest does not cover the v1 roles",
+      "organization control state root manifest does not cover the v2 roles",
     );
   }
   return Object.freeze({
@@ -193,7 +192,7 @@ function verifyControlDatabase(path: string, binding: OrganizationControlRootBin
       database.pragma("application_id", { simple: true }) !==
         ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID ||
       database.pragma("user_version", { simple: true }) !==
-        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2
+        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3
     ) {
       throw new Error(
         "integrations database has the wrong baseline identity",
@@ -259,11 +258,11 @@ function verifyControlDatabase(path: string, binding: OrganizationControlRootBin
       record.organization_id !== binding.organization_id ||
       record.state_lineage_id !== binding.state_lineage_id ||
       record.database_schema_version !==
-        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2 ||
-      record.schema_sha256 !== organizationControlBaselineSha256V2()
+        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3 ||
+      record.schema_sha256 !== organizationControlBaselineSha256V3()
     ) {
       throw new Error(
-        "integrations lineage manifest does not match private-approval baseline v2",
+        "integrations lineage manifest does not match control-plane baseline v3",
       );
     }
   } finally {
@@ -291,6 +290,9 @@ export function verifyOrganizationControlStateV1(
     );
   }
   assertPrivateDirectory(stateDirectory, "organization control state directory");
+  if (existsSync(join(stateDirectory, "state-lineage-root.v1.json")) || existsSync(join(stateDirectory, "record-derived.sqlite"))) {
+    throw new Error("organization control state requires the completed offline schema transition");
+  }
   const binding = parseRootManifest(join(stateDirectory, ROOT_MANIFEST_FILE));
   const integrationsDatabasePath = join(stateDirectory, "integrations.sqlite");
   verifyControlDatabase(integrationsDatabasePath, binding);

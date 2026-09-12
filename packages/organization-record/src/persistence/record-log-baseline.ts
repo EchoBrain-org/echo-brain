@@ -42,76 +42,43 @@ export function organizationRecordLogBaselineSha256V2(): Sha256Digest {
   return sha256Digest(organizationRecordLogBaselineSqlV2());
 }
 
-export function applyOrganizationRecordLogBaselineV1(
-  database: Database.Database,
-): void {
-  const sql = organizationRecordLogBaselineSqlV1();
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    const userVersion = database.pragma("user_version", {
-      simple: true,
-    }) as number;
-    const applicationId = database.pragma("application_id", {
-      simple: true,
-    }) as number;
-    const objectCount = database
-      .prepare("SELECT count(*) AS objects FROM sqlite_master")
-      .pluck()
-      .get() as number;
-    if (userVersion !== 0 || applicationId !== 0 || objectCount !== 0) {
-      throw new Error(
-        "organization record log baseline requires a completely empty database",
-      );
-    }
-    database.exec(sql);
-    database.pragma(
-      `application_id = ${ORGANIZATION_RECORD_LOG_DATABASE.application_id}`,
-    );
-    database.pragma(
-      `user_version = ${ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1}`,
-    );
-    database.exec("COMMIT");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK");
-    } catch {}
-    throw error;
-  }
+export const ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3 = 3;
+
+export function organizationRecordLogBaselineSqlV3(): string {
+  return readFileSync(new URL("../../baselines/organization-record-log-baseline-v3.sql", import.meta.url), "utf8");
 }
 
-/**
- * Fresh-only companion for the private Block Kit lineage. This refuses any
- * populated V1/V2 file rather than attempting an in-place policy upgrade.
- */
-export function applyOrganizationRecordLogBaselineV2(
-  database: Database.Database,
-): void {
-  const sql = organizationRecordLogBaselineSqlV2();
+export function organizationRecordLogBaselineSha256V3(): Sha256Digest {
+  return sha256Digest(organizationRecordLogBaselineSqlV3());
+}
+
+export function applyOrganizationRecordLogBaselineV1(database: Database.Database): void {
+  applyFreshBaseline(database, organizationRecordLogBaselineSqlV1(), ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1);
+}
+
+export function applyOrganizationRecordLogBaselineV2(database: Database.Database): void {
+  applyFreshBaseline(database, organizationRecordLogBaselineSqlV2(), ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2);
+}
+
+export function applyOrganizationRecordLogBaselineV3(database: Database.Database): void {
+  applyFreshBaseline(database, organizationRecordLogBaselineSqlV3(), ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3);
+}
+
+/** Fresh-only initialization; no existing file is upgraded or relabeled. */
+function applyFreshBaseline(database: Database.Database, sql: string, version: number): void {
   database.exec("BEGIN IMMEDIATE");
   try {
-    const userVersion = database.pragma("user_version", { simple: true }) as number;
-    const applicationId = database.pragma("application_id", { simple: true }) as number;
-    const objectCount = database
-      .prepare("SELECT count(*) AS objects FROM sqlite_master")
-      .pluck()
-      .get() as number;
-    if (userVersion !== 0 || applicationId !== 0 || objectCount !== 0) {
-      throw new Error(
-        "organization record log baseline requires a completely empty database",
-      );
+    if (database.pragma("user_version", { simple: true }) !== 0 ||
+        database.pragma("application_id", { simple: true }) !== 0 ||
+        database.prepare("SELECT count(*) FROM sqlite_master").pluck().get() !== 0) {
+      throw new Error("organization record log baseline requires a completely empty database");
     }
     database.exec(sql);
-    database.pragma(
-      `application_id = ${ORGANIZATION_RECORD_LOG_DATABASE.application_id}`,
-    );
-    database.pragma(
-      `user_version = ${ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2}`,
-    );
+    database.pragma(`application_id = ${ORGANIZATION_RECORD_LOG_DATABASE.application_id}`);
+    database.pragma(`user_version = ${version}`);
     database.exec("COMMIT");
   } catch (error) {
-    try {
-      database.exec("ROLLBACK");
-    } catch {}
+    try { database.exec("ROLLBACK"); } catch {}
     throw error;
   }
 }
