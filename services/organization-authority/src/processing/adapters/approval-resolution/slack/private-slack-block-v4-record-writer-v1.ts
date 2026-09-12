@@ -21,7 +21,7 @@ import type {
   PinnedOrganizationAuthority,
 } from "@echo-brain/organization-protocol";
 import {
-  OrganizationRecordAppenderV4,
+  type AppendV4RecordInput,
   type AppendedV4Record,
   type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1,
   type V4ReceiptFactory,
@@ -87,7 +87,7 @@ export interface PrivateSlackBlockApprovalTerminalV1 {
 }
 
 export interface PrivateSlackBlockV4RecordWriterV1Options {
-  readonly append: OrganizationRecordAppenderV4;
+  readonly append: { append(input: AppendV4RecordInput): Promise<AppendedV4Record> };
   readonly signer: OrganizationAuthoritySigner;
   readonly pinned_authority: PinnedOrganizationAuthority;
   readonly state_lineage_id: string;
@@ -320,7 +320,7 @@ export class PrivateSlackBlockV4RecordWriterV1 {
 }
 
 export async function createPrivateSlackBlockV4RecordWriterV1(input: {
-  readonly append: OrganizationRecordAppenderV4;
+  readonly append: { append(input: AppendV4RecordInput): Promise<AppendedV4Record> };
   readonly signer: OrganizationAuthoritySigner;
   readonly state_lineage_id: string;
   readonly now?: () => string;

@@ -1,8 +1,7 @@
-import type Database from "better-sqlite3";
 import type { OrganizationAuthoritySigner } from "../application/ports/organization-authority-signer.js";
-import type { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
+import type { AppendV4RecordInput, AppendedV4Record } from "@echo-brain/organization-record/organization-record-api-v1";
 import type { ApprovalWorkflowStagerV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import type { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+import type { ApprovalWorkflowStateV1 } from "../processing/admitted-meeting-processing/approval-workflow-state-v1.js";
 import type { ProviderHttpApplicationV1 } from "../application/ports/provider-http-application-v1.js";
 import type { MeetingApprovalJourneyTelemetryPortV1 } from "../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
@@ -15,10 +14,8 @@ export interface ApprovalWorkflowProcessingV1 {
 
 /** Generic Authority resources made available to the selected approval surface. */
 export interface ApprovalWorkflowContextV1 {
-  readonly state: SqliteAuthorityMeetingProcessingStateV1;
-  readonly authority_database: Database.Database;
-  readonly control_plane_database: Database.Database;
-  readonly record_append: OrganizationRecordAppenderV4;
+  readonly state: ApprovalWorkflowStateV1;
+  readonly record_append: { append(input: AppendV4RecordInput): Promise<AppendedV4Record> };
   readonly signer: OrganizationAuthoritySigner;
   readonly coordinates: {
     readonly authority_id: string;
@@ -39,6 +36,8 @@ export interface ApprovalWorkflowContextV1 {
 }
 
 export interface ApprovalWorkflowComponentsV1 {
+  /** Release adapter-owned resources after ingress and the worker have stopped. */
+  close?(): void;
   readonly stager: ApprovalWorkflowStagerV1;
   readonly processing: ApprovalWorkflowProcessingV1;
   /** Omitted only for an approval surface with no inbound interaction route. */

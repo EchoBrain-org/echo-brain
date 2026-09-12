@@ -24,10 +24,8 @@ import {
   type PrivateApprovalTerminalReceiptV1,
   type RecordPrivateApprovalTerminalReceiptInputV1,
 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
-import {
-  SqliteAuthorityMeetingProcessingStateV1,
-  type FrozenMeetingProcessingCandidateForApprovalV1,
-} from "../../../../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+import type { FrozenMeetingProcessingCandidateForApprovalV1 } from "../../../../processing/admitted-meeting-processing/approval-workflow-state-v1.js";
+import { ApprovalWorkflowStateV1 } from "../../../../processing/admitted-meeting-processing/approval-workflow-state-v1.js";
 
 /** The immutable root that every generated record provenance must carry. */
 export interface PrivateSlackApprovalTerminalAuthorityCoordinatesV1 {
@@ -37,7 +35,7 @@ export interface PrivateSlackApprovalTerminalAuthorityCoordinatesV1 {
 }
 
 export interface SqlitePrivateSlackApprovalTerminalAuthorityV1Options {
-  readonly source: SqliteAuthorityMeetingProcessingStateV1;
+  readonly source: ApprovalWorkflowStateV1;
   readonly assignments: SqlitePrivateSlackApprovalAssignmentStateV1;
   readonly coordinates: PrivateSlackApprovalTerminalAuthorityCoordinatesV1;
 }
@@ -112,7 +110,7 @@ function processorProvenance(
 export class SqlitePrivateSlackApprovalTerminalAuthorityV1
   implements PrivateSlackApprovalTerminalAuthorityV1
 {
-  private readonly source: SqliteAuthorityMeetingProcessingStateV1;
+  private readonly source: ApprovalWorkflowStateV1;
   private readonly assignments: SqlitePrivateSlackApprovalAssignmentStateV1;
   private readonly coordinates: PrivateSlackApprovalTerminalAuthorityCoordinatesV1;
 

@@ -42,10 +42,8 @@ import {
   type ApprovalWorkflowStageResultV1,
   type ApprovalWorkflowStagerV1,
 } from "../../../../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import {
-  SqliteAuthorityMeetingProcessingStateV1,
-  type ApprovalWorkflowOutboxV1,
-} from "../../../../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+import type { ApprovalWorkflowOutboxV1 } from "../../../../processing/admitted-meeting-processing/approval-workflow-state-v1.js";
+import { ApprovalWorkflowStateV1 } from "../../../../processing/admitted-meeting-processing/approval-workflow-state-v1.js";
 import type { MeetingApprovalJourneyTelemetryPortV1 } from "../../../../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
 type Digest = ApprovalContractSha256;
@@ -56,7 +54,7 @@ type ReviewSignal =
   | CompiledDecisionBrief["rationales"][number];
 
 export interface PrivateSlackDmApprovalStagerV1Options {
-  readonly authority: SqliteAuthorityMeetingProcessingStateV1;
+  readonly authority: ApprovalWorkflowStateV1;
   readonly authority_database: Database.Database;
   readonly control_plane_database: Database.Database;
   readonly coordinates: SlackDmApprovalReviewerTargetCoordinatesV1;

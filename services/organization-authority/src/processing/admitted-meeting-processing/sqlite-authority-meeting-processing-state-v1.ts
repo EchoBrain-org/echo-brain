@@ -1,3 +1,4 @@
+import type { OutstandingApprovalPresentationV1, PostedPrivateApprovalCardV1, PreparedPrivateApprovalPostV1, ApprovalWorkflowOutboxV1, ApprovalDeliveryQuarantineV1, SupersededPrivateApprovalCardV1, FrozenMeetingProcessingCandidateForApprovalV1, ApprovalWorkflowStateV1 } from "./approval-workflow-state-v1.js";
 import type Database from "better-sqlite3";
 import {
   canonicalJson,
@@ -19,7 +20,6 @@ import {
 } from "./review-lineage-semantics.js";
 import type {
   AdmittedMeetingProcessingAdmissionV1,
-  ActionableMeetingProcessingCandidateV1,
   ApprovalDeliveryQuarantineReasonV1,
   FrozenMeetingProcessingCandidateSnapshotV1,
   MeetingProcessingCandidateSnapshotInputV1,
@@ -91,54 +91,6 @@ function candidateSemanticDigest(input: {
   });
 }
 
-export interface PostedPrivateApprovalCardV1 {
-  readonly candidate_id: string;
-  readonly post_started_at: string;
-  /** Opaque identifier assigned by the approval presentation provider. */
-  readonly presentation_external_id: string;
-  readonly frozen_card_sha256: string;
-  readonly approved_snapshot: Readonly<Record<string, unknown>>;
-}
-
-export interface PreparedPrivateApprovalPostV1 {
-  readonly outbox: ApprovalWorkflowOutboxV1;
-  /** True only for the transaction that froze the durable post intent. */
-  readonly created: boolean;
-}
-
-export type ApprovalWorkflowOutboxV1 = ActionableMeetingProcessingCandidateV1 & {
-  readonly presentation_external_id: string | null;
-  readonly frozen_card_sha256: string | null;
-  readonly approved_snapshot_json: string | null;
-  readonly approved_snapshot_sha256: string | null;
-  readonly post_started_at: string | null;
-  readonly control_approval_sha256: string | null;
-  readonly superseded_by_candidate_id: string | null;
-  readonly superseded_at: string | null;
-  readonly tombstoned_at: string | null;
-};
-
-export interface ApprovalDeliveryQuarantineV1 {
-  readonly candidate_id: string;
-  readonly reason_code: ApprovalDeliveryQuarantineReasonV1;
-  readonly quarantined_at: string;
-}
-
-export interface SupersededPrivateApprovalCardV1 {
-  readonly approval_id: string;
-  readonly review_lineage_id: string;
-  readonly superseded_by_candidate_id: string;
-  readonly presentation_external_id: string | null;
-  readonly post_started_at: string;
-}
-
-export type FrozenMeetingProcessingCandidateForApprovalV1 = ApprovalWorkflowOutboxV1 & {
-  readonly admission: AdmittedMeetingProcessingAdmissionV1;
-  readonly meeting: MeetingDocument;
-  readonly decisions: DecisionSet;
-  readonly approved_snapshot: Readonly<Record<string, unknown>> | null;
-};
-
 export class AuthorityMeetingProcessingRevokedError extends Error {
   constructor() {
     super("admitted meeting-processing owner membership is revoked");
@@ -190,7 +142,7 @@ function admissionFrom(
  * admission. Subsequent advances compare the expected persisted cursor inside
  * one SQLite transaction, so no runner can overwrite a newer checkpoint.
  */
-export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeetingProcessingStateV1 {
+export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeetingProcessingStateV1, ApprovalWorkflowStateV1 {
   private readonly expectedProcessorAdapterId: string;
   private readonly now: () => string;
 
@@ -545,6 +497,14 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
    * frozen reader then verifies the immutable meeting, decisions, and any
    * frozen card snapshot before exposing it to a delivery worker.
    */
+  listOutstandingApprovalPresentations(): readonly OutstandingApprovalPresentationV1[] {
+    return this.database.prepare(`SELECT approval_id, candidate_id, state
+      FROM authority_live_approval_outbox_v2
+      WHERE state IN ('posting', 'posted', 'staged')
+        OR (state = 'superseded' AND post_started_at IS NOT NULL AND tombstoned_at IS NULL)
+      ORDER BY approval_id`).all() as OutstandingApprovalPresentationV1[];
+  }
+
   listPendingApprovalDeliveries(): readonly FrozenMeetingProcessingCandidateForApprovalV1[] {
     const approvals = this.database
       .prepare(

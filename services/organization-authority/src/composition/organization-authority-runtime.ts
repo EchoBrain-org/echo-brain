@@ -1,8 +1,8 @@
+import { bindApprovalWorkflowStateV1 } from "../processing/admitted-meeting-processing/approval-workflow-state-v1.js";
 import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
 import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   type RecordPolicyFactProjectorRegistryV1,
   OrganizationRecordAppenderV4,
@@ -19,6 +19,7 @@ import {
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import type {
   ApprovalWorkflowProcessingV1,
+  ApprovalWorkflowComponentsV1,
   ApprovalWorkflowBundleV1,
 } from "./approval-workflow-bundle-v1.js";
 import type {
@@ -322,14 +323,11 @@ export async function openOrganizationAuthorityRuntime(
     );
     return { ...runtime, processing: "active" };
   }
-  const control = openOrganizationControlDatabase(
-    join(config.state_directory, "integrations.sqlite"),
-    { fileMustExist: true },
-  );
   const record = openOrganizationRecordDatabase(
     join(config.state_directory, "record-log.sqlite"),
     { fileMustExist: true },
   );
+  let openedApprovals: ApprovalWorkflowComponentsV1 | undefined;
   let meetingApprovalJourneyTelemetry:
     | MeetingApprovalJourneyTelemetryPortV1
     | undefined;
@@ -390,29 +388,23 @@ export async function openOrganizationAuthorityRuntime(
     // signal is bound late. Until the lifecycle starts it is a no-op; the
     // periodic cycle still publishes anything queued in that window.
     let requestApprovalPublication: (() => void) | undefined;
-    const approvalContext = {
+    const recordAppend = new OrganizationRecordAppenderV4(record, coordinates, config.record_policy_fact_projectors);
+    const approvalContext = Object.freeze({
       on_terminal_action_queued: () => requestApprovalPublication?.(),
-      state: sourceState,
-      authority_database: authority,
-      control_plane_database: control,
-      record_append: new OrganizationRecordAppenderV4(
-        record,
-        {
-          ...coordinates,
-        },
-        config.record_policy_fact_projectors,
-      ),
-      signer,
+      state: bindApprovalWorkflowStateV1(sourceState),
+      record_append: Object.freeze({ append: recordAppend.append.bind(recordAppend) }),
+      signer: Object.freeze({ inspect: signer.inspect.bind(signer), sign: signer.sign.bind(signer) }),
       coordinates,
       next_envelope_id: () => `env_${randomUUID()}`,
       ...(meetingApprovalJourneyTelemetry === undefined
         ? {}
         : { journey_telemetry: meetingApprovalJourneyTelemetry }),
-    };
+    });
     await config.approval_workflow_bundle.assert_existing_presentations_owned(
       approvalContext,
     );
     const approvals = await config.approval_workflow_bundle.load(approvalContext);
+    openedApprovals = approvals;
     const sourceCycle = new AdmittedMeetingProcessingCycleV1({
       source,
       processor,
@@ -507,18 +499,20 @@ export async function openOrganizationAuthorityRuntime(
         try {
           await runtime.close();
         } finally {
-          meetingApprovalJourneyTelemetry?.close();
-          record.close();
-          control.close();
-          authority.close();
+          try { openedApprovals?.close?.(); } finally {
+            meetingApprovalJourneyTelemetry?.close();
+            record.close();
+            authority.close();
+          }
         }
       },
     };
   } catch (error) {
-    meetingApprovalJourneyTelemetry?.close();
-    record.close();
-    control.close();
-    authority.close();
+    try { openedApprovals?.close?.(); } finally {
+      meetingApprovalJourneyTelemetry?.close();
+      record.close();
+      authority.close();
+    }
     throw error;
   }
 }
