@@ -7,6 +7,8 @@ export interface SchemaCleanupInspection {
   readonly retained_rows: Readonly<Record<string, readonly { table: string; rows: number; sha256: string }[]>>;
 }
 export function inspectAuthoritySchemaCleanup(source: string): SchemaCleanupInspection;
+/** Throws schema_cleanup_output_published_sync_unconfirmed with a pending receipt
+ * in Error.cause if publication completed but its final directory flush failed. */
 export function convertAuthoritySchemaCleanup(input: {
   source: string;
   output: string;

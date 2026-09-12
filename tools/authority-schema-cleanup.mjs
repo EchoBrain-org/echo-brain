@@ -220,7 +220,12 @@ export function convertAuthoritySchemaCleanup({ source, output, expectedSourceIn
     // Reserve without replacing an existing destination, then publish by rename.
     mkdirSync(output, { mode: 0o700 }); reserved = lstatSync(output);
     renameSync(staging, output); reserved = undefined;
-    syncDirectory(dirname(output));
+    try { syncDirectory(dirname(output)); }
+    catch {
+      throw new Error('schema_cleanup_output_published_sync_unconfirmed', {
+        cause: { ...receipt, kind: 'echo-authority-schema-cleanup-publication-pending-v1' },
+      });
+    }
     return Object.freeze(receipt);
   } catch (error) {
     if (reserved && existsSync(output)) {
@@ -244,5 +249,12 @@ function main(argv) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { process.stdout.write(JSON.stringify(main(process.argv.slice(2))) + '\n'); }
-  catch { process.stderr.write('schema_cleanup_refused\n'); process.exitCode = 1; }
+  catch (error) {
+    const pending = error instanceof Error && error.message === 'schema_cleanup_output_published_sync_unconfirmed'
+      && error.cause?.kind === 'echo-authority-schema-cleanup-publication-pending-v1';
+    process.stderr.write(pending
+      ? JSON.stringify({ ok: false, code: error.message, output_published: true, receipt: error.cause }) + '\n'
+      : 'schema_cleanup_refused\n');
+    process.exitCode = 1;
+  }
 }

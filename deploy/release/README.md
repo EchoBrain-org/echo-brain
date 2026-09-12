@@ -50,9 +50,16 @@ a caller-supplied provenance label, not a signature or release authorization.
 The source remains unchanged and readable with its matching old release.
 Conversion verifies retained rows and unchanged files before publishing output;
 copied bytes and directory entries are flushed before reporting success. No
-live path or accepted-release pointer is changed. A caught failure removes
-the partial output; a killed process may leave a private `.schema-cleanup-*`
-directory to discard after confirming no converter still owns it.
+live path or accepted-release pointer is changed. A caught failure before
+publication removes the partial copy. If the final parent-directory flush fails
+after publication, the CLI exits unsuccessfully with
+`schema_cleanup_output_published_sync_unconfirmed`, `output_published: true`
+and an `echo-authority-schema-cleanup-publication-pending-v1` receipt containing
+the verification digests. The published output remains for inspection; it is
+not a successful conversion receipt. Resolve the filesystem failure and retry
+from the unchanged source into a different absent output path before activation.
+A killed process may leave a private `.schema-cleanup-*` directory to discard
+after confirming no converter still owns it.
 
 Qualify the converted copy and a new candidate in staging before planning any
 live cutover. Rollback before candidate writes uses the untouched source and

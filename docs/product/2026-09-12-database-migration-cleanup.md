@@ -135,6 +135,13 @@ SQL assets, V1 manifest golden bytes and negative compatibility fixtures remain
 because source validation needs them. Existing active record fields, signed
 shapes, constraints, permission facts and provider commitments are unchanged.
 
+This is a reduction in active storage, not a net source-line deletion. The
+predecessor's primary bootstrap SQL totals 3,076 lines; the new three primary
+baselines total 2,144, a reduction of 932. The historical SQL remains alongside
+the new baselines for conversion and historical fixtures, so repository size
+increases during the transition. Historical appliers still have test callers;
+their presence is not evidence that current startup accepts those schemas.
+
 ## Validation and remaining release work
 
 Focused tests cover populated signed records, member versus restricted reads,
@@ -154,7 +161,10 @@ sharing the manifest table's name was also omitted. Inspection now exempts only
 the literal reserved SQLite prefix and the manifest table itself. Retired-table
 emptiness uses a bounded existence query instead of hashing rejected contents.
 Copied files, the new root and directory entries are flushed before returning
-success; an injected flush failure proves no partial output is published.
+success. Injected flush failures verify both outcomes: failure before publication
+removes the partial copy; failure of the final parent-directory flush preserves
+the published output and returns an explicit pending receipt with verification
+digests instead of a generic refusal. Neither outcome changes the source.
 Stale runtime ownership and release-version documentation is corrected.
 
 The installed staging updater has no database conversion or state-cutover action.

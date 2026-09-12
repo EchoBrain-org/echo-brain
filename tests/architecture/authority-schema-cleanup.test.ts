@@ -163,6 +163,29 @@ it("does not publish output when copied bytes cannot be flushed", () => {
   expect(inspectAuthoritySchemaCleanup(source)).toEqual(checked);
 });
 
+it("identifies a published output whose final directory flush is unconfirmed", () => {
+  const { source, output, parent } = fixture();
+  const checked = inspectAuthoritySchemaCleanup(source);
+  const parentIdentity = fs.statSync(parent);
+  const flush = fs.fsyncSync;
+  vi.spyOn(fs, "fsyncSync").mockImplementation(fd => {
+    const file = fs.fstatSync(fd);
+    if (file.dev === parentIdentity.dev && file.ino === parentIdentity.ino) throw new Error("injected-parent-flush-failure");
+    flush(fd);
+  });
+  syncBuiltinESMExports();
+  let failure: unknown;
+  try { convertAuthoritySchemaCleanup({ source, output, expectedSourceInventorySha256: checked.source_inventory_sha256, artifactSourceSha: artifact }); }
+  catch (error) { failure = error; }
+  expect(failure).toMatchObject({
+    message: "schema_cleanup_output_published_sync_unconfirmed",
+    cause: { kind: "echo-authority-schema-cleanup-publication-pending-v1", source_inventory_sha256: checked.source_inventory_sha256, output_inventory_sha256: expect.stringMatching(/^[a-f0-9]{64}$/) },
+  });
+  expect(verifyAuthorityStateLineage(output).root.schema_version).toBe(2);
+  expect(inspectAuthoritySchemaCleanup(source)).toEqual(checked);
+  expect(readdirSync(parent).sort()).toEqual(["output", "source"]);
+});
+
 it("rejects unknown lineage, symlinks, hot journals and existing destinations", () => {
   const { source, output } = fixture();
   const checked = inspectAuthoritySchemaCleanup(source);
