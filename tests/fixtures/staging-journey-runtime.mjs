@@ -7,7 +7,7 @@ import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
-import { openOrganizationControlDatabase } from '@echo-brain/organization-control-plane/slack-approval-integration-v1';
+import { openOrganizationControlDatabase } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
 
 const REPO = resolve(import.meta.dirname, '../..');
 const [mode, root, releaseId] = process.argv.slice(2);
@@ -37,8 +37,8 @@ async function port() {
 
 async function seedOwner(initialized) {
   const { initializePersonSessionCredentials, issuePersonOnboardingInvitation } = await product('composition/person-onboarding-service.js');
-  const { readPrivateAuthorityPersonSessionPkceKey } = await product('adapters/security/private-file-credentials.js');
-  const { openAuthorityDatabase } = await product('adapters/persistence/sqlite/open-authority-database.js');
+  const { readPrivateAuthorityPersonSessionPkceKey } = await import(pathToFileURL(join(REPO, 'packages/organization-authority-kernel/dist/adapters/security/private-file-credentials.js')));
+  const { openAuthorityDatabase } = await import(pathToFileURL(join(REPO, 'packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js')));
   const { PersonIdentitySessionApplication } = await product('application/person-identity-sessions.js');
   const { SqlitePersonSessionRepository } = await product('adapters/persistence/sqlite/sqlite-person-session-repository.js');
   const { NodePersonSessionCrypto } = await product('adapters/security/node-person-session-crypto.js');
@@ -65,7 +65,7 @@ async function seedOwner(initialized) {
 }
 
 async function seedSlack(initialized, connectionId) {
-  const { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, buildExternalHumanIdentityLinkContractV2 } = await import(pathToFileURL(join(REPO, 'packages/organization-control-plane/dist/application/organization-tool-connection-contracts-v2.js')));
+  const { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, buildExternalHumanIdentityLinkContractV2 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/organization-control-plane/application/organization-tool-connection-contracts-v2.js')));
   const coordinates = { authority_id: initialized.authority_id, organization_id: initialized.organization_id, state_lineage_id: initialized.state_lineage_id };
   const connection = buildOrganizationToolConnectionContractV2({ ...coordinates, connection_id: connectionId, provider_issuer: 'https://slack.com', provider_tenant_kind: 'workspace', provider_tenant_id: SLACK.workspace, provider_enterprise_id: null, tool_kind: 'slack', provider_app_id: SLACK.app, provider_bot_id: SLACK.bot, provider_bot_user_id: SLACK.botUser, required_provider_scopes: SCOPES, public_connection_configuration_sha256: canonicalSha256({ fixture: true }) });
   const connectionSha = canonicalSha256(connection);
@@ -90,8 +90,8 @@ if (mode === 'init') {
   const llm = write(join(root, 'llm.fixture'), 'synthetic-not-a-provider-credential-000000');
   const signing = write(join(root, 'slack.fixture'), 'synthetic-not-a-signing-secret-00000000');
   const connectionId = `con_${randomUUID()}`;
-  const { admitGranolaMeetingSource } = await product('composition/providers/granola/granola-meeting-source-admission.js');
-  const { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } = await product('composition/providers/openrouter/openrouter-decision-processor-admission-commitment.js');
+  const { admitGranolaMeetingSource } = await import(pathToFileURL(join(REPO, 'providers/granola/dist/granola-meeting-source-admission.js')));
+  const { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } = await import(pathToFileURL(join(REPO, 'providers/openrouter/dist/openrouter-decision-processor-admission-commitment.js')));
   const admitted = await admitGranolaMeetingSource({ state_directory: state, source_instance_id: 'founder-granola-v1', granola_credential_reference: `file:${granola}`, granola_owner_email_reference: `file:${email}`, processor: createOpenRouterDecisionProcessorAdmissionCommitmentV1({ instance_id: 'founder-llm-v1', credential_reference: `file:${llm}` }), create_granola_record_owner_client: () => ({ async listNotes() { return { notes: [{ id: 'fixture', owner: { email: OWNER } }], hasMore: false, cursor: null }; } }), now: () => NOW });
   await seedSlack(initialized, connectionId);
   const oidcPath = write(join(root, 'oidc.json'), { ...OIDC, client_authentication: 'none' });
@@ -104,7 +104,7 @@ if (mode === 'init') {
   write(evidencePath, { extraction_calls: 0, source_pulls: 0, requests: [], messages: [], publish_failures_remaining: 0, worker_errors: [] });
 } else if (mode === 'serve') {
   const metadata = read(metadataPath);
-  const { PrivateSlackApprovalCardPosterV1 } = await product('processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js');
+  const { PrivateSlackApprovalCardPosterV1 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js')));
   const fetchImpl = async (url, options) => {
     assert.ok(String(url).startsWith('https://slack.com/api/'));
     const method = new URL(url).pathname.split('/').at(-1);
@@ -152,7 +152,7 @@ if (mode === 'init') {
   const { openOrganizationAuthorityService } = await product('composition/organization-authority-composition-root.js');
   const runtime = await openOrganizationAuthorityService({ ...metadata.config, on_worker_error(error) { const evidence = read(evidencePath); evidence.worker_errors.push(error.message); write(evidencePath, evidence); } }, { processing_adapter_overrides: { source, processor, private_approval_card_poster: new PrivateSlackApprovalCardPosterV1('synthetic-provider-token', { fetchImpl }) } });
   assert.equal(runtime.processing, 'active');
-  const { openStagingSyntheticPrivateDmCanaryControlV1 } = await product('composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js');
+  const { openStagingSyntheticPrivateDmCanaryControlV1 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js')));
   const observedRuntime = { ...runtime, async run_staging_synthetic_private_dm_canary(...args) {
     try { return await runtime.run_staging_synthetic_private_dm_canary(...args); }
     catch (error) { write(join(root, 'runtime-error.txt'), String(error.stack)); throw error; }
@@ -162,11 +162,11 @@ if (mode === 'init') {
   await new Promise(resolve => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve); });
   await control.close(); await runtime.close();
 } else if (mode === 'client') {
-  const { requestStagingSyntheticPrivateDmCanaryV1 } = await product('composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js');
+  const { requestStagingSyntheticPrivateDmCanaryV1 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js')));
   process.stdout.write(JSON.stringify(await requestStagingSyntheticPrivateDmCanaryV1({ release_id: releaseId, socket_path: socket })) + '\n');
 } else if (mode === 'verify') {
-  const { verifyAuthorityStateLineage } = await product('composition/verify-authority-state-lineage.js');
-  const { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } = await product('composition/providers/openrouter/verify-openrouter-decision-processor-admission-v1.js');
+  const { verifyAuthorityStateLineage } = await import(pathToFileURL(join(REPO, 'packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js')));
+  const { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } = await import(pathToFileURL(join(REPO, 'providers/openrouter/dist/verify-openrouter-decision-processor-admission-v1.js')));
   verifyAuthorityStateLineage(state); verifyPersistedOpenRouterDecisionProcessorAdmissionV1(state);
 } else if (mode === 'setup-status') {
   const { runOrganizationAuthoritySetupCli } = await product('composition/organization-authority-setup-cli.js');

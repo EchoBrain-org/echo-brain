@@ -1,5 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { StoredAuthorityMembership } from "./authority-repository.js";
+import type { StoredAuthorityMembership } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 
 /** The intentionally small, owner-visible employee lifecycle projection. */
 export interface EmployeeRosterEntry {

@@ -141,9 +141,10 @@ a new browser sign-in.
 ## Artifact boundary
 
 `tools/pack-person-client.mjs` builds the Person client and only its protocol
-dependency closure. The tarball contains no Authority service, processing
-runtime, provider adapter, LaunchAgent code, JSONL outbox, or root product
-package.
+and provider-client dependency closure. The Slack client fragment owns wire
+contracts and commands without acquiring server code. The tarball contains no
+Authority service, processing runtime, server provider, native SQLite, LaunchAgent
+code, JSONL outbox, or root product package.
 
 CI installs the exact tarball offline on macOS arm64 and checks version, help,
 and absent-session behavior. Server deployment is a separate Authority
@@ -163,3 +164,8 @@ every current or future machine interface.
 
 The repository root is workspace orchestration only. It is private and has no
 runtime export or executable.
+
+The neutral client and account shell use `/v3/person/tools`, a bounded generic
+status contract. Provider commands and native actions are composed at explicit
+entrypoints. Supported v2 routes remain in the Slack provider for existing
+clients; the native disconnect action decodes that retained response there.

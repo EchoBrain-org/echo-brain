@@ -1,3 +1,11 @@
+/**
+ * V1 stopped-state bootstrap for the shipped Granola/OpenRouter/Slack profile.
+ * Its manifest, commands and finalization intentionally require Slack. This is
+ * not a swappable setup port: another profile needs a versioned bootstrap design.
+ * Provider verification and persisted provider facts stay in provider helpers.
+ */
+import { captureCommand } from '@echo-brain/organization-authority-kernel/composition/capture-stopped-state-command';
+import { connectInitialOwnerSlackV1, plannedSlackConnectionIsActiveV1, readInitialOwnerSlackSetupStatusV1, type SafeSlackVerification, type ConnectedSlack } from '@echo-brain/provider-slack-server/setup/initial-owner-slack-setup-v1';
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -24,34 +32,25 @@ import {
   federationId,
 } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
-import {
-  runSlackConnectionSetupCli,
-  SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-} from "@echo-brain/organization-control-plane/slack-connection-setup-v1";
-import { assertDisplayName } from "../domain/rules.js";
-import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
+
+
+import { assertDisplayName } from "@echo-brain/organization-authority-kernel/domain/rules";
+import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
 import {
   isCanonicalPersonEmail,
   isExpectedPersonEmail,
-} from "../domain/person-session-rules.js";
-import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
-import { readPrivateAuthorityCredential } from "../adapters/security/private-file-credentials.js";
-import {
-  readPrivateAuthorityGranolaOrganizationCredential,
-  readPrivateAuthorityGranolaOwnerEmail,
-} from "./providers/granola/granola-private-credentials-v1.js";
+} from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { readPrivateAuthorityCredential } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { readGranolaSetupCredentialsV1, granolaSetupAdmissionProofV1 } from '@echo-brain/provider-granola/granola-setup-proof-v1';
 import {
   bootstrapOrganizationAuthorityState,
   type AuthorityStateSeedV1,
 } from "./organization-authority-state-bootstrap.js";
-import { runGranolaMeetingSourceAdmissionCli } from "./providers/granola/granola-meeting-source-admission-cli.js";
-import { admitSyntheticDemoMeetingSource } from "./providers/synthetic-demo/synthetic-demo-meeting-source-admission.js";
-import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "./providers/openrouter/openrouter-decision-processor-admission-commitment.js";
-import {
-  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
+import { runGranolaMeetingSourceAdmissionCli } from "./admit-granola-meeting-source-cli-v1.js";
+import { admitSyntheticDemoMeetingSource } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-admission";
+import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
+import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import {
   assertPersonAuthorityCallback,
@@ -59,17 +58,13 @@ import {
   runOrganizationAuthorityPersonAdministrationCli,
 } from "./organization-authority-person-administration-cli.js";
 import { reissueLegacyPersonOnboardingInvitation } from "./person-onboarding-service.js";
-import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import {
   isStagingSyntheticMeetingCanaryEnvelopeV1,
   stagingSyntheticMeetingCanaryInputFromEnvelopeV1,
-} from "../shared/staging-synthetic-meeting-canary-envelope-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/staging-synthetic-meeting-canary-envelope-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
-import {
-  isSyntheticDemoFixtureMeetingV1,
-  SYNTHETIC_DEMO_MEETING_COUNT_V1,
-  syntheticDemoMeetingSourceIdentityV1,
-} from "../processing/adapters/meeting-sources/synthetic-demo/synthetic-demo-meeting-source-v1.js";
+import { syntheticFixtureApprovalEvidence, isSyntheticDemoSetupAdmissionV1 } from '@echo-brain/provider-synthetic-demo/synthetic-demo-setup-evidence-v1';
 
 const MANIFEST_DIRECTORY = "onboarding";
 const MANIFEST_FILENAME = "clean-founder-v1.json";
@@ -175,27 +170,9 @@ interface CredentialInstallInput extends FinalizeInput {
   readonly llm_credential_source: string;
 }
 
-interface SafeSlackVerification {
-  readonly workspace_id: string;
-  readonly enterprise_id: string | null;
-  readonly app_id: string;
-  readonly bot_id: string;
-  readonly bot_user_id: string;
-  /** Temporary public channel used solely by initial-owner identity linking. */
-  readonly identity_link_channel_id: string;
-  readonly required_scopes: readonly string[];
-  readonly identity_link_channel_access: "verified";
-  readonly selected_channel_public: true;
-  readonly selected_channel_active: true;
-  readonly bot_membership_verified: true;
-  readonly bot_access_verified: true;
-  readonly verified_at: string;
-}
 
-interface ConnectedSlack {
-  readonly connection_id: string;
-  readonly verification?: SafeSlackVerification;
-}
+
+
 
 interface OrganizationAuthoritySetupStage {
   readonly credentials_ready: boolean;
@@ -248,22 +225,7 @@ export interface OrganizationAuthoritySetupCliDependencies {
   ) => OrganizationAuthoritySetupStage;
 }
 
-function captureCommand(
-  run: (stdout: (value: string) => void) => number | Promise<number>,
-): Promise<Record<string, unknown>> {
-  let output = "";
-  return Promise.resolve(run((value) => (output += value))).then((status) => {
-    if (status !== 0)
-      throw new Error("organization setup stopped-state command failed");
-    try {
-      return JSON.parse(output) as Record<string, unknown>;
-    } catch {
-      throw new Error(
-        "organization setup stopped-state command returned invalid JSON",
-      );
-    }
-  });
-}
+
 
 const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
   now: () => new Date().toISOString(),
@@ -279,76 +241,7 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       ),
     );
   },
-  connect_slack: async (input) => {
-    const result = await captureCommand((stdout) =>
-      runSlackConnectionSetupCli(
-        [
-          "--state-dir",
-          input.state_directory,
-          "--approval-channel-id",
-          input.approval_channel_id,
-          ...(input.connection_id === undefined
-            ? []
-            : ["--connection-id", input.connection_id]),
-        ],
-        { stdout, read_stdin: input.read_stdin },
-      ),
-    );
-    for (const field of [
-      "provider_tenant_id",
-      "provider_app_id",
-      "provider_bot_id",
-      "provider_bot_user_id",
-      "approval_channel_id",
-      "verified_at",
-    ] as const) {
-      if (typeof result[field] !== "string") {
-        throw new Error("Slack connection did not return safe verification details");
-      }
-    }
-    if (
-      result.provider_enterprise_id !== null &&
-      typeof result.provider_enterprise_id !== "string"
-    ) {
-      throw new Error("Slack connection did not return safe verification details");
-    }
-    if (
-      !Array.isArray(result.required_scopes) ||
-      result.required_scopes.length !== SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES.length ||
-      result.required_scopes.some(
-        (scope, index) => scope !== SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES[index],
-      ) ||
-      result.selected_channel_public !== true ||
-      result.selected_channel_active !== true ||
-      result.bot_membership_verified !== true ||
-      result.bot_access_verified !== true
-    ) {
-      throw new Error("Slack connection did not return complete channel verification");
-    }
-    if (input.connection_id === undefined) {
-      throw new Error(
-        "organization setup Slack connection requires a planned connection ID",
-      );
-    }
-    return Object.freeze({
-      connection_id: input.connection_id,
-      verification: Object.freeze({
-        workspace_id: result.provider_tenant_id as string,
-        enterprise_id: result.provider_enterprise_id as string | null,
-        app_id: result.provider_app_id as string,
-        bot_id: result.provider_bot_id as string,
-        bot_user_id: result.provider_bot_user_id as string,
-        identity_link_channel_id: result.approval_channel_id as string,
-        required_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-        identity_link_channel_access: "verified" as const,
-        selected_channel_public: true,
-        selected_channel_active: true,
-        bot_membership_verified: true,
-        bot_access_verified: true,
-        verified_at: result.verified_at as string,
-      }),
-    });
-  },
+  connect_slack: connectInitialOwnerSlackV1,
   issue_invitation: async (input) => {
     await captureCommand((stdout) =>
       runOrganizationAuthorityPersonAdministrationCli(
@@ -1022,20 +915,7 @@ function plannedSlackIsActive(
 ): boolean {
   try {
     verifySetupGenesis(manifest);
-    const database = new Database(join(manifest.state_directory, "integrations.sqlite"), {
-      readonly: true,
-      fileMustExist: true,
-    });
-    try {
-      return (database
-        .prepare(
-          "SELECT 1 FROM organization_tool_connection_current_state " +
-            "WHERE connection_id = ? AND current_status = 'active' LIMIT 1",
-        )
-        .get(manifest.slack_connection_id) !== undefined);
-    } finally {
-      database.close();
-    }
+    return plannedSlackConnectionIsActiveV1(manifest.state_directory, manifest.slack_connection_id);
   } catch {
     return false;
   }
@@ -1436,10 +1316,7 @@ function stagingSyntheticCanaryObserved(
   return false;
 }
 
-interface SyntheticFixtureApprovalEvidence {
-  readonly source_admitted: boolean;
-  readonly all_fixture_meetings_approved: boolean;
-}
+
 
 /**
  * The fixed fixture source cannot use a one-record canary as completion
@@ -1448,79 +1325,7 @@ interface SyntheticFixtureApprovalEvidence {
  * have a corresponding published approval record. Distinct meeting IDs keep
  * retries and duplicate approvals from inflating the count.
  */
-function syntheticFixtureApprovalEvidence(
-  manifest: OrganizationAuthoritySetupManifestV1,
-  authority: Database.Database,
-  record: Database.Database,
-): SyntheticFixtureApprovalEvidence {
-  const admission = authority
-    .prepare(
-      `SELECT semantic_input_sha256
-         FROM authority_live_source_admission_v2
-        WHERE singleton = 1 AND organization_id = ? AND principal_id = ?
-          AND membership_id = ? AND membership_type = 'owner'
-          AND source_adapter_id = ? AND source_adapter_instance_id = ?
-          AND source_adapter_version = ?
-        LIMIT 1`,
-    )
-    .get(
-      manifest.organization_id,
-      manifest.owner_principal_id,
-      manifest.owner_membership_id,
-      syntheticDemoMeetingSourceIdentityV1.adapter_id,
-      syntheticDemoMeetingSourceIdentityV1.instance_id,
-      syntheticDemoMeetingSourceIdentityV1.version,
-    ) as { readonly semantic_input_sha256: string } | undefined;
-  if (admission === undefined) {
-    return Object.freeze({
-      source_admitted: false,
-      all_fixture_meetings_approved: false,
-    });
-  }
-  const candidates = authority
-    .prepare(
-      `SELECT candidate.meeting_json, candidate.meeting_sha256, outbox.approval_id
-         FROM authority_live_source_candidates_v2 AS candidate
-         JOIN authority_live_approval_outbox_v2 AS outbox
-           ON outbox.candidate_id = candidate.candidate_id
-        WHERE candidate.admission_semantic_input_sha256 = ?
-          AND candidate.disposition = 'actionable'`,
-    )
-    .all(admission.semantic_input_sha256) as readonly {
-    readonly meeting_json: string;
-    readonly meeting_sha256: string;
-    readonly approval_id: string;
-  }[];
-  const approvedMeetingIds = new Set<string>();
-  for (const candidate of candidates) {
-    try {
-      const meeting = JSON.parse(candidate.meeting_json) as unknown;
-      if (
-        canonicalJson(meeting as never) !== candidate.meeting_json ||
-        canonicalSha256(meeting as never) !== candidate.meeting_sha256 ||
-        !isSyntheticDemoFixtureMeetingV1(meeting) ||
-        record
-          .prepare(
-            `SELECT 1 FROM organization_record_log
-              WHERE event_kind = 'approved' AND action = 'approve'
-                AND approval_id = ?
-              LIMIT 1`,
-          )
-          .get(candidate.approval_id) === undefined
-      ) {
-        continue;
-      }
-      approvedMeetingIds.add(meeting.id);
-    } catch {
-      // A malformed candidate or record mapping cannot become setup evidence.
-    }
-  }
-  return Object.freeze({
-    source_admitted: true,
-    all_fixture_meetings_approved:
-      approvedMeetingIds.size === SYNTHETIC_DEMO_MEETING_COUNT_V1,
-  });
-}
+
 
 /**
  * Read only durable proof. The head and active-generation pointer are read
@@ -1691,146 +1496,39 @@ function initialOwnerSetupStatus(
             readonly source_custodian_observed_at: unknown;
           }
         | undefined;
-      if (
-        admission?.source_adapter_id === "granola" &&
-        admission.source_adapter_instance_id === SOURCE_INSTANCE_ID &&
-        admission?.source_custodian_assurance ===
-          "provider_record_owner_observed" &&
-        typeof admission.source_custodian_observed_at === "string"
-      ) {
-        admittedSourceMode = "granola";
-        granolaAdmissionProof = Object.freeze({
-          owner_observation_assurance: "provider_record_owner_observed",
-          owner_observed_at: admission.source_custodian_observed_at,
-        });
-      } else if (
-        admission?.source_adapter_id === "synthetic-demo-source" &&
-        admission.source_adapter_instance_id === "customer-demo" &&
-        admission.source_custodian_assurance ===
-          "authority_initial_owner_identity" &&
-        typeof admission.source_custodian_observed_at === "string" &&
-        manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN
-      ) {
-        admittedSourceMode = "staging_synthetic";
+      granolaAdmissionProof = granolaSetupAdmissionProofV1(admission, SOURCE_INSTANCE_ID);
+      if (granolaAdmissionProof !== undefined) admittedSourceMode = 'granola';
+      else if (isSyntheticDemoSetupAdmissionV1(admission) && manifest.authority_url === STAGING_SYNTHETIC_CANARY_ORIGIN) {
+        admittedSourceMode = 'staging_synthetic';
       }
     } finally {
       authority.close();
     }
     let granolaCredentialsValid = false;
     try {
-      void readPrivateAuthorityGranolaOrganizationCredential(
-        `file:${manifest.granola_credential_file}`,
-      );
-      const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
-        `file:${manifest.granola_owner_email_file}`,
-      );
+      readGranolaSetupCredentialsV1({ credential_file: manifest.granola_credential_file, owner_email_file: manifest.granola_owner_email_file, expected_owner_email: manifest.owner_email });
       void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`);
-      granolaCredentialsValid = ownerEmail === manifest.owner_email;
+      granolaCredentialsValid = true;
     } catch {}
-    const control = new Database(join(manifest.state_directory, "integrations.sqlite"), {
-      readonly: true,
-      fileMustExist: true,
+    const slackStatus = readInitialOwnerSlackSetupStatusV1({
+      state_directory: manifest.state_directory, connection_id: manifest.slack_connection_id,
+      principal_id: manifest.owner_principal_id, membership_id: manifest.owner_membership_id,
+      identity_link_channel_id: manifest.slack_approval_channel_id,
     });
-    try {
-      const initialOwnerSlackIdentityLinkActive = control.prepare(
-        `SELECT 1 FROM organization_external_human_link_current AS link
-          JOIN organization_tool_connection_contracts AS connection
-            ON connection.connection_id = ?
-          JOIN organization_tool_connection_current_state AS connection_state
-            ON connection_state.connection_id = connection.connection_id
-          WHERE link.current_status = 'active' AND link.principal_id = ?
-            AND link.membership_id = ? AND link.provider_issuer = 'https://slack.com'
-            AND link.provider_tenant_id = json_extract(connection.contract_json, '$.provider_tenant_id')
-            AND COALESCE(link.provider_enterprise_id, '') =
-                COALESCE(json_extract(connection.contract_json, '$.provider_enterprise_id'), '')
-            AND connection_state.current_status = 'active'
-          LIMIT 1`,
-      ).get(
-        manifest.slack_connection_id,
-        manifest.owner_principal_id,
-        manifest.owner_membership_id,
-      ) !== undefined;
-      const slackProofRow = control.prepare(
-        `SELECT json_extract(connection.contract_json, '$.provider_tenant_id') AS workspace_id,
-                json_extract(connection.contract_json, '$.provider_enterprise_id') AS enterprise_id,
-                json_extract(connection.contract_json, '$.provider_app_id') AS app_id,
-                json_extract(connection.contract_json, '$.provider_bot_id') AS bot_id,
-                json_extract(connection.contract_json, '$.provider_bot_user_id') AS bot_user_id,
-                json_extract(state.state_json, '$.observed_granted_scopes') AS observed_scopes_json,
-                json_extract(state.state_json, '$.verified_at') AS verified_at
-           FROM organization_tool_connection_contracts AS connection
-           JOIN organization_tool_connection_current_state AS state
-             ON state.connection_id = connection.connection_id
-            AND state.connection_contract_sha256 = connection.contract_sha256
-          WHERE connection.connection_id = ? AND state.current_status = 'active'
-          LIMIT 1`,
-      ).get(manifest.slack_connection_id) as
-        | {
-            readonly workspace_id: unknown;
-            readonly enterprise_id: unknown;
-            readonly app_id: unknown;
-            readonly bot_id: unknown;
-            readonly bot_user_id: unknown;
-            readonly observed_scopes_json: unknown;
-            readonly verified_at: unknown;
-          }
-        | undefined;
-      let requiredScopesObserved = false;
-      try {
-        const scopes = JSON.parse(
-          typeof slackProofRow?.observed_scopes_json === "string"
-            ? slackProofRow.observed_scopes_json
-            : "null",
-        ) as unknown;
-        requiredScopesObserved =
-          Array.isArray(scopes) &&
-          SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES.every((scope) =>
-            scopes.includes(scope),
-          );
-      } catch {}
-      const slackVerification =
-        slackProofRow !== undefined &&
-        requiredScopesObserved &&
-        typeof slackProofRow.workspace_id === "string" &&
-        (slackProofRow.enterprise_id === null ||
-          typeof slackProofRow.enterprise_id === "string") &&
-        typeof slackProofRow.app_id === "string" &&
-        typeof slackProofRow.bot_id === "string" &&
-        typeof slackProofRow.bot_user_id === "string" &&
-        typeof slackProofRow.verified_at === "string"
-          ? Object.freeze({
-              workspace_id: slackProofRow.workspace_id,
-              enterprise_id: slackProofRow.enterprise_id,
-              app_id: slackProofRow.app_id,
-              bot_id: slackProofRow.bot_id,
-              bot_user_id: slackProofRow.bot_user_id,
-              identity_link_channel_id: manifest.slack_approval_channel_id,
-              required_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-              identity_link_channel_access: "verified" as const,
-              selected_channel_public: true as const,
-              selected_channel_active: true as const,
-              bot_membership_verified: true as const,
-              bot_access_verified: true as const,
-              verified_at: slackProofRow.verified_at,
-            })
-          : undefined;
       return Object.freeze({
         founder_oidc_bound: initialOwnerOidcBound,
-        founder_slack_link_active: initialOwnerSlackIdentityLinkActive,
+        founder_slack_link_active: slackStatus.identity_link_active,
         granola_credentials_valid: granolaCredentialsValid,
         granola_admission_present: granolaAdmissionProof !== undefined,
         source_admission_present: admittedSourceMode !== undefined,
         ...(admittedSourceMode === undefined
           ? {}
           : { source_mode: admittedSourceMode }),
-        ...(slackVerification === undefined ? {} : { slack_verification: slackVerification }),
+        ...(slackStatus.verification === undefined ? {} : { slack_verification: slackStatus.verification }),
         ...(granolaAdmissionProof === undefined
           ? {}
           : { granola_admission_proof: granolaAdmissionProof }),
       });
-    } finally {
-      control.close();
-    }
   } catch {
     return Object.freeze(empty);
   }
@@ -2044,21 +1742,10 @@ function installProviderCredentials(
   // Read and validate every source before replacing any destination. Values
   // are never accepted as argv text and never enter output or durable setup
   // metadata.
-  const granolaCredential =
-    readPrivateAuthorityGranolaOrganizationCredential(
-      `file:${input.granola_credential_source}`,
-    );
-  const granolaOwnerEmail = readPrivateAuthorityGranolaOwnerEmail(
-    `file:${input.granola_owner_email_source}`,
-  );
-  const llmCredential = readPrivateAuthorityCredential(
-    `file:${input.llm_credential_source}`,
-  );
-  if (granolaOwnerEmail !== manifest.owner_email) {
-    throw new Error(
-      "Granola owner email does not match the initial-owner setup email",
-    );
-  }
+  const { credential: granolaCredential, owner_email: granolaOwnerEmail } = readGranolaSetupCredentialsV1({
+    credential_file: input.granola_credential_source, owner_email_file: input.granola_owner_email_source, expected_owner_email: manifest.owner_email,
+  });
+  const llmCredential = readPrivateAuthorityCredential(`file:${input.llm_credential_source}`);
 
   installPrivateCredentialValue(
     manifest.granola_credential_file,

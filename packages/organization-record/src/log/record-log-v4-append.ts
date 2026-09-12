@@ -6,11 +6,13 @@ import {
 import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import {
+  createPersonPolicyFactProjectorV2,
+} from "../application/person-policy-facts-v2.js";
+import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  createPersonPolicyFactProjectorV2,
   type PersonPolicyFactProjectionV2,
-} from "../application/person-policy-facts-v2.js";
+} from "../application/person-policy-fact-contracts-v2.js";
 import {
   createRecordPolicyFactProjectorRegistryV1,
   type RecordPolicyFactEnvelopeV1,

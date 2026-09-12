@@ -9,27 +9,27 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import type { SlackIdentityProviderV1 } from "@echo-brain/organization-control-plane/slack-external-identity-integration-v1";
-import { runSlackConnectionSetupCli } from "../../packages/organization-control-plane/src/composition/slack-connection-setup-cli.js";
+import type { SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
+import { runSlackConnectionSetupCli } from "@echo-brain/provider-slack-server/organization-control-plane/composition/slack-connection-setup-cli";
 import { verifyOrganizationControlStateV1 } from "../../packages/organization-control-plane/src/persistence/verified-organization-control-state-v1.js";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../../services/organization-authority/src/application/person-identity-sessions.js";
-import { readPrivateAuthorityPersonSessionPkceKey } from "../../services/organization-authority/src/adapters/security/private-file-credentials.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import {
   runOrganizationAuthoritySetupCli,
   type OrganizationAuthoritySetupCliDependencies,
 } from "../../services/organization-authority/src/composition/organization-authority-setup-cli.js";
-import { runGranolaMeetingSourceAdmissionCli } from "../../services/organization-authority/src/composition/providers/granola/granola-meeting-source-admission-cli.js";
+import { runGranolaMeetingSourceAdmissionCli } from "@echo-brain/organization-authority/composition/admit-granola-meeting-source-cli-v1";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
 } from "../../services/organization-authority/src/composition/person-onboarding-service.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
 import { openOrganizationAuthorityService } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../services/organization-authority/src/composition/providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import type { OrganizationAuthorityProcessingCycleV1 } from "../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
-import { runPersonClientCli } from "../../src/product/person-client/commands.js";
+import { runPersonClientCli } from "../../src/product/person-client/composition.js";
 
 const roots: string[] = [];
 const AUTHORITY_URL = "https://authority.example";

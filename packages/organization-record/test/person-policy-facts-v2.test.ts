@@ -6,18 +6,20 @@ import {
 import { describe, expect, it } from 'vitest';
 import { derivedAtomIdentity } from '../src/application/atom-identity.js';
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   PersonPolicyFactProjectionV2Error,
-  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   projectPersonPolicyFactsV2,
   type PersonHumanActActionV2,
   type PersonHumanActResolutionRefV1View,
-  type PersonPolicyFactItemKindV2,
-  type PersonPolicyIdV2,
   type ProjectPersonPolicyFactsV2Input,
   type RevalidatedPersonPolicyAuthorizationWitnessV2,
   type StructurallyVerifiedPersonPolicyRecordV4View,
 } from '../src/application/person-policy-facts-v2.js';
+import {
+  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  type PersonPolicyFactItemKindV2,
+  type PersonPolicyIdV2,
+} from '../src/application/person-policy-fact-contracts-v2.js';
 
 const AUTHORITY_ID = 'oau_authority_one';
 const ORGANIZATION_ID = 'org_organization_one';

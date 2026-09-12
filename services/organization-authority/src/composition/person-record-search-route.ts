@@ -1,4 +1,4 @@
-import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   canonicalJson,
   canonicalSha256,
@@ -17,9 +17,9 @@ import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/pe
 import {
   containsCanonicalReleaseId,
   isCanonicalReleaseId,
-} from "../answer-composition/canonical-release-id.js";
-import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
-import { AuthorityOperationError } from "../domain/errors.js";
+} from "@echo-brain/organization-authority-kernel/shared/canonical-release-id";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type {
   PersonRecordSearchHttpApplicationV1,
   PersonRecordSearchResponseV1,

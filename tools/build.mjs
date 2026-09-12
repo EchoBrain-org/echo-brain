@@ -17,6 +17,7 @@ const personClientWorkspaces = [
   ['packages', 'federation-protocol'],
   ['packages', 'organization-protocol'],
   ['packages', 'organization-api'],
+  ['providers', 'slack', 'client'],
   ['src', 'product', 'person-client'],
 ];
 

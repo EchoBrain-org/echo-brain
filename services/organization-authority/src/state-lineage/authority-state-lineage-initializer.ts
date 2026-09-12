@@ -20,13 +20,13 @@ import {
   stateLineageDatabaseSlotsV1,
   validateStateLineageDatabaseManifestV1,
   validateStateLineageRootManifestV1,
-} from "./state-lineage-manifest-v1.js";
+} from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 import type {
   StateLineagePreopenExpectationV1,
   StateLineagePreopenResultV1,
-} from "./state-lineage-preopen-guard.js";
-import { verifyStateLineageBeforeOpen } from "./state-lineage-preopen-guard.js";
-import type { StateLineageRoleV1 } from "./state-lineage-manifest-v1.js";
+} from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-preopen-guard";
+import { verifyStateLineageBeforeOpen } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-preopen-guard";
+import type { StateLineageRoleV1 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 
 /**
  * Private, dependency-injected Authority state-lineage initialization.

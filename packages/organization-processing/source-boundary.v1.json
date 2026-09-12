@@ -1,0 +1,144 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/organization-processing",
+  "workspace": true,
+  "boundary_root": "packages/organization-processing",
+  "source_root": "packages/organization-processing/src",
+  "package_json": "packages/organization-processing/package.json",
+  "entry_points": [
+    "packages/organization-processing/src/core/ports/adapters.ts",
+    "packages/organization-processing/src/core/contracts/adapter.ts",
+    "packages/organization-processing/src/core/contracts/decision.ts",
+    "packages/organization-processing/src/core/contracts/meeting.ts",
+    "packages/organization-processing/src/core/processing/brief.ts",
+    "packages/organization-processing/src/llm/llm-decision-processor.ts",
+    "packages/organization-processing/src/core/contracts/validation.ts",
+    "packages/organization-processing/src/core/index.ts",
+    "packages/organization-processing/src/core/approval/approval-gate.ts",
+    "packages/organization-processing/src/core/delivery/envelope.ts",
+    "packages/organization-processing/src/core/storage/meeting-processing-state-store.ts",
+    "packages/organization-processing/src/llm/llm-provider.ts"
+  ],
+  "owned_source_paths": [
+    "packages/organization-processing/src/**"
+  ],
+  "allowed_internal_paths": [
+    "packages/organization-processing/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/organization-authority-kernel",
+    "@echo-brain/organization-record",
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-control-plane"
+  ],
+  "allowed_external_packages": [
+    "better-sqlite3"
+  ],
+  "allowed_node_builtins": [
+    "crypto"
+  ],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "organization-processing-reference",
+      "from": "packages/organization-processing/src/reference/**",
+      "allowed_imports": [
+        "packages/organization-processing/src/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "crypto"
+      ]
+    },
+    {
+      "name": "organization-processing-ports",
+      "from": "packages/organization-processing/src/ports/**",
+      "allowed_imports": [
+        "packages/organization-processing/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-record"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "organization-processing-admitted-meeting-processing",
+      "from": "packages/organization-processing/src/admitted-meeting-processing/**",
+      "allowed_imports": [
+        "packages/organization-processing/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-control-plane"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "organization-processing-llm",
+      "from": "packages/organization-processing/src/llm/**",
+      "allowed_imports": [
+        "packages/organization-processing/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-authority-kernel"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "crypto"
+      ]
+    },
+    {
+      "name": "organization-processing-core",
+      "from": "packages/organization-processing/src/core/**",
+      "allowed_imports": [
+        "packages/organization-processing/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-authority-kernel"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "crypto"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Admitted meeting-processing cycle",
+        "path": "packages/organization-processing/src/admitted-meeting-processing/meeting-processing-cycle-v1.ts",
+        "export": "AdmittedMeetingProcessingCycleV1"
+      },
+      {
+        "name": "Reference meeting-processing cycle",
+        "path": "packages/organization-processing/src/reference/reference-meeting-processing-cycle.ts",
+        "export": "runReferenceMeetingProcessingCycle"
+      },
+      {
+        "name": "Meeting source bundle",
+        "path": "packages/organization-processing/src/ports/meeting-source-bundle-v1.ts",
+        "export": "MeetingSourceBundleV1"
+      },
+      {
+        "name": "Decision processor bundle",
+        "path": "packages/organization-processing/src/ports/decision-processor-bundle-v1.ts",
+        "export": "DecisionProcessorBundleV1"
+      },
+      {
+        "name": "Approval workflow bundle",
+        "path": "packages/organization-processing/src/ports/approval-workflow-bundle-v1.ts",
+        "export": "ApprovalWorkflowBundleV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

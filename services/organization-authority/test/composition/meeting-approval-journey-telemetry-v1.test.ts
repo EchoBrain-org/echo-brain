@@ -1,8 +1,9 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AdapterError } from "../../src/processing/core/contracts/adapter.js";
+import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
 import {
   openMeetingApprovalJourneyStateV1,
   type MeetingApprovalJourneyStateV1,
@@ -13,7 +14,7 @@ import {
   type MeetingApprovalSearchBacklogObserverV1,
   type MeetingApprovalJourneyTelemetryDependenciesV1,
 } from "../../src/composition/meeting-approval-journey-telemetry-v1.js";
-import type { JourneyTelemetryEventV1 } from "../../src/shared/journey-telemetry-v1.js";
+import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 
 const RELEASE_SHA = "c".repeat(40);
 const JOURNEY_ID = "1b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";
@@ -57,6 +58,7 @@ function telemetry(
 ) {
   return openMeetingApprovalJourneyTelemetryV1(
     {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       state_directory: "/unused-with-injected-state",
       observer: (event) => {
         events.push(event);
@@ -96,6 +98,7 @@ describe("meeting approval journey telemetry v1", () => {
   it("reports a fixed failure pair and contains failure-reporting exceptions", () => {
     const failures: unknown[] = [];
     const recorder = openMeetingApprovalJourneyTelemetryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       state_directory: "/unused-with-injected-state",
       observer: () => {},
       on_observation_failure: (failure) => {
@@ -451,6 +454,7 @@ describe("meeting approval journey telemetry v1", () => {
     const state = openState(stateFile(), () => journeyIds.shift() as string);
     const recorder = openMeetingApprovalJourneyTelemetryV1(
       {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         state_directory: "/unused-with-injected-state",
         observer: async (event) => {
           events.push(event);
@@ -725,6 +729,7 @@ describe("meeting approval journey telemetry v1", () => {
     const state = openState(stateFile());
     const recorder = openMeetingApprovalJourneyTelemetryV1(
       {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         state_directory: "/unused-with-injected-state",
         observer: () => {
           throw new Error("observer-private-error-sentinel");

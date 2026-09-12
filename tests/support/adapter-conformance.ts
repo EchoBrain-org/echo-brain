@@ -3,7 +3,7 @@ import type {
   Adapter,
   AdapterConfig,
   AdapterKind,
-} from '../../services/organization-authority/src/processing/core/index.js';
+} from "@echo-brain/organization-processing/core";
 
 export interface AdapterConformanceOptions<T extends Adapter> {
   name: string;

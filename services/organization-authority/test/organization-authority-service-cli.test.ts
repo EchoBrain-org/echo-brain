@@ -3,8 +3,8 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AdapterError } from "../src/processing/core/contracts/adapter.js";
-import { MeetingProcessingWorkerLifecycleV1 } from "../src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
+import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
+import { MeetingProcessingWorkerLifecycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 
 type WorkerErrorObserver = (error: Error) => void;
 type AnswerCompositionFailureObserver = (event: object) => void;
@@ -139,11 +139,13 @@ vi.mock(
         dependencies: Parameters<
           typeof actual.createStagingJourneyTelemetryTransportFromEnvironmentV1
         >[1],
+        vocabulary: Parameters<typeof actual.createStagingJourneyTelemetryTransportFromEnvironmentV1>[2],
       ) {
         const transport =
           actual.createStagingJourneyTelemetryTransportFromEnvironmentV1(
             environment,
             dependencies,
+            vocabulary,
           );
         return {
           ...transport,

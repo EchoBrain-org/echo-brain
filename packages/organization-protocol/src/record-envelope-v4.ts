@@ -1,3 +1,4 @@
+import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4, type RecordResolutionRefV4, type RecordHumanActEventV4 } from "./record-input-codec-v4.js";
 import { Buffer } from "node:buffer";
 import {
   assertP256LowS,
@@ -14,29 +15,6 @@ import {
   resolvePinnedOrganizationAuthority,
 } from "./authority-descriptor.js";
 import type { PinnedOrganizationAuthority } from "./authority-descriptor.js";
-import {
-  buildHumanActRecordInputV1,
-  validateHumanActRecordInputV1,
-  validateHumanActResolutionRefV1,
-  validateHumanActEventV1,
-} from "./human-act-record-input-v1.js";
-import type {
-  HumanActEventV1,
-  HumanActRecordInputV1,
-  HumanActResolutionRefV1,
-} from "./human-act-record-input-v1.js";
-import {
-  buildPrivateSlackBlockApprovalRecordInputV1,
-  validatePrivateSlackBlockApprovalEventV1,
-  validatePrivateSlackBlockApprovalRecordInputV1,
-  validatePrivateSlackBlockApprovalResolutionRefV1,
-  PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
-} from "./private-slack-block-approval-record-input-v1.js";
-import type {
-  PrivateSlackBlockApprovalEventV1,
-  PrivateSlackBlockApprovalRecordInputV1,
-  PrivateSlackBlockApprovalResolutionRefV1,
-} from "./private-slack-block-approval-record-input-v1.js";
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
 import {
   assertDigest,
@@ -179,14 +157,12 @@ export interface OrganizationRecordEnvelopeBodyV4 {
   readonly issued_at: string;
   readonly predecessor_position: number | null;
   readonly predecessor_record_sha256: Sha256Digest | null;
-  readonly human_act_resolution_ref:
-    | HumanActResolutionRefV1
-    | PrivateSlackBlockApprovalResolutionRefV1;
+  readonly human_act_resolution_ref: RecordResolutionRefV4;
   readonly source_provenance: MeetingSourceProvenanceV1;
   readonly source_provenance_sha256: Sha256Digest;
   readonly processor_provenance: DecisionProcessorProvenanceV1;
   readonly processor_provenance_sha256: Sha256Digest;
-  readonly event: HumanActEventV1 | PrivateSlackBlockApprovalEventV1;
+  readonly event: RecordHumanActEventV4;
 }
 
 export interface OrganizationRecordSignatureInputV4 {
@@ -211,9 +187,7 @@ export interface CreateOrganizationRecordEnvelopeV4Input {
   readonly issued_at: string;
   readonly predecessor_position: number | null;
   readonly predecessor_record_sha256: Sha256Digest | null;
-  readonly human_act_record_input:
-    | HumanActRecordInputV1
-    | PrivateSlackBlockApprovalRecordInputV1;
+  readonly human_act_record_input: unknown;
   readonly source_provenance: MeetingSourceProvenanceV1;
   readonly processor_provenance: DecisionProcessorProvenanceV1;
 }
@@ -494,77 +468,8 @@ function assertSourceLocatorJoin(
   }
 }
 
-type HumanActResolutionRefV4 =
-  | HumanActResolutionRefV1
-  | PrivateSlackBlockApprovalResolutionRefV1;
-type HumanActEventV4 = HumanActEventV1 | PrivateSlackBlockApprovalEventV1;
-
-interface ValidatedHumanActRecordInputV4 {
-  readonly human_act_resolution_ref: HumanActResolutionRefV4;
-  readonly event: HumanActEventV4;
-  readonly semantic_idempotency_key: Sha256Digest;
-}
-
-function isPrivateSlackBlockResolutionRef(
-  value: HumanActResolutionRefV4,
-): value is PrivateSlackBlockApprovalResolutionRefV1 {
-  return value.kind === PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND;
-}
-
-function validateHumanActRecordInputV4(
-  value: unknown,
-): ValidatedHumanActRecordInputV4 {
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.hasOwn(value, "private_slack_block_approval_resolution_ref")
-  ) {
-    const privateInput = validatePrivateSlackBlockApprovalRecordInputV1(value);
-    return {
-      human_act_resolution_ref:
-        privateInput.private_slack_block_approval_resolution_ref,
-      event: privateInput.event,
-      semantic_idempotency_key: privateInput.semantic_idempotency_key,
-    };
-  }
-  const legacy = validateHumanActRecordInputV1(value);
-  return {
-    human_act_resolution_ref: legacy.human_act_resolution_ref,
-    event: legacy.event,
-    semantic_idempotency_key: legacy.semantic_idempotency_key,
-  };
-}
-
-function buildHumanActRecordInputV4(
-  reference: HumanActResolutionRefV4,
-  event: HumanActEventV4,
-): ValidatedHumanActRecordInputV4 {
-  if (isPrivateSlackBlockResolutionRef(reference)) {
-    const privateInput = buildPrivateSlackBlockApprovalRecordInputV1({
-      private_slack_block_approval_resolution_ref: reference,
-      event: validatePrivateSlackBlockApprovalEventV1(event),
-    });
-    return {
-      human_act_resolution_ref:
-        privateInput.private_slack_block_approval_resolution_ref,
-      event: privateInput.event,
-      semantic_idempotency_key: privateInput.semantic_idempotency_key,
-    };
-  }
-  const legacy = buildHumanActRecordInputV1({
-    human_act_resolution_ref: reference,
-    event: validateHumanActEventV1(event),
-  });
-  return {
-    human_act_resolution_ref: legacy.human_act_resolution_ref,
-    event: legacy.event,
-    semantic_idempotency_key: legacy.semantic_idempotency_key,
-  };
-}
-
 function assertEventProvenanceJoins(
-  event: HumanActEventV4,
+  event: RecordHumanActEventV4,
   source: MeetingSourceProvenanceV1,
   processor: DecisionProcessorProvenanceV1,
 ): void {
@@ -596,6 +501,7 @@ function assertEventProvenanceJoins(
 
 export function validateOrganizationRecordEnvelopeBodyV4(
   value: unknown,
+  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): OrganizationRecordEnvelopeBodyV4 {
   const body = exactObject(value, RECORD_BODY_KEYS, "Record envelope body v4");
   if (
@@ -619,19 +525,9 @@ export function validateOrganizationRecordEnvelopeBodyV4(
   assertTimestamp(body.issued_at, "Record envelope body v4 issued_at");
   assertPredecessor(body.predecessor_position, body.predecessor_record_sha256);
 
-  const reference =
-    body.human_act_resolution_ref !== null &&
-    typeof body.human_act_resolution_ref === "object" &&
-    !Array.isArray(body.human_act_resolution_ref) &&
-    (body.human_act_resolution_ref as Record<string, unknown>).kind ===
-      PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND
-      ? validatePrivateSlackBlockApprovalResolutionRefV1(
-          body.human_act_resolution_ref,
-        )
-      : validateHumanActResolutionRefV1(body.human_act_resolution_ref);
-  const event = isPrivateSlackBlockResolutionRef(reference)
-    ? validatePrivateSlackBlockApprovalEventV1(body.event)
-    : validateHumanActEventV1(body.event);
+  const aggregate = codecs.fromReference(body.human_act_resolution_ref, body.event);
+  const reference = aggregate.human_act_resolution_ref;
+  const event = aggregate.event;
   const source = validateMeetingSourceProvenanceV1(body.source_provenance);
   const processor = validateDecisionProcessorProvenanceV1(
     body.processor_provenance,
@@ -663,7 +559,6 @@ export function validateOrganizationRecordEnvelopeBodyV4(
   assertCoordinates(source, coordinates, "Source provenance");
   assertCoordinates(processor, coordinates, "Processor provenance");
 
-  const aggregate = buildHumanActRecordInputV4(reference, event);
   if (body.semantic_idempotency_key !== aggregate.semantic_idempotency_key) {
     fail("Record envelope body v4 semantic idempotency key does not match the human act");
   }
@@ -689,8 +584,9 @@ export function validateOrganizationRecordEnvelopeBodyV4(
 
 export function organizationRecordEnvelopeBodyV4Sha256(
   value: OrganizationRecordEnvelopeBodyV4,
+  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): Sha256Digest {
-  return canonicalSha256(validateOrganizationRecordEnvelopeBodyV4(value));
+  return canonicalSha256(validateOrganizationRecordEnvelopeBodyV4(value, codecs));
 }
 
 export function validateOrganizationRecordSignatureInputV4(
@@ -722,8 +618,9 @@ export function validateOrganizationRecordSignatureInputV4(
 export function buildOrganizationRecordSignatureInputV4(
   body: OrganizationRecordEnvelopeBodyV4,
   signingKeyId: Sha256Digest,
+  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): OrganizationRecordSignatureInputV4 {
-  const validatedBody = validateOrganizationRecordEnvelopeBodyV4(body);
+  const validatedBody = validateOrganizationRecordEnvelopeBodyV4(body, codecs);
   assertDigest(signingKeyId, "Record signature input v4 signing_key_id");
   return validateOrganizationRecordSignatureInputV4({
     schema_version: 4,
@@ -732,7 +629,7 @@ export function buildOrganizationRecordSignatureInputV4(
     organization_id: validatedBody.organization_id,
     state_lineage_id: validatedBody.state_lineage_id,
     signing_key_id: signingKeyId,
-    record_sha256: organizationRecordEnvelopeBodyV4Sha256(validatedBody),
+    record_sha256: organizationRecordEnvelopeBodyV4Sha256(validatedBody, codecs),
   });
 }
 
@@ -765,11 +662,12 @@ function decodeSignature(value: unknown): Buffer {
 
 export function validateOrganizationRecordEnvelopeV4(
   value: unknown,
+  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): OrganizationRecordEnvelopeV4 {
   const wrapper = exactObject(value, RECORD_WRAPPER_KEYS, "Record envelope v4");
-  const body = validateOrganizationRecordEnvelopeBodyV4(wrapper.body);
+  const body = validateOrganizationRecordEnvelopeBodyV4(wrapper.body, codecs);
   assertDigest(wrapper.record_sha256, "Record envelope v4 record_sha256");
-  if (wrapper.record_sha256 !== organizationRecordEnvelopeBodyV4Sha256(body)) {
+  if (wrapper.record_sha256 !== organizationRecordEnvelopeBodyV4Sha256(body, codecs)) {
     fail("Record envelope v4 record digest does not match its body");
   }
   const descriptor = validateP256SigningKey(
@@ -815,8 +713,9 @@ export function verifyOrganizationRecordEnvelopeV4(
   value: unknown,
   pinnedAuthority: PinnedOrganizationAuthority,
   expectedStateLineageId: string,
+  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): OrganizationRecordEnvelopeV4 {
-  const envelope = validateOrganizationRecordEnvelopeV4(value);
+  const envelope = validateOrganizationRecordEnvelopeV4(value, codecs);
   const publicKey = assertPinnedEnvelope(
     envelope,
     pinnedAuthority,
@@ -824,7 +723,7 @@ export function verifyOrganizationRecordEnvelopeV4(
   );
   const signatureInput = buildOrganizationRecordSignatureInputV4(
     envelope.body,
-    envelope.signing_key_descriptor.key_id,
+    envelope.signing_key_descriptor.key_id, codecs,
   );
   const signature = decodeSignature(envelope.signature);
   let valid = false;
@@ -846,12 +745,13 @@ export async function createOrganizationRecordEnvelopeV4(
   pinnedAuthority: PinnedOrganizationAuthority,
   expectedStateLineageId: string,
   sign: AuthorityDetachedSigner,
+  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): Promise<OrganizationRecordEnvelopeV4> {
   const input = exactObject(value, CREATE_INPUT_KEYS, "Create record envelope v4 input");
   assertText(input.envelope_id, "Create record envelope v4 envelope_id");
   assertTimestamp(input.issued_at, "Create record envelope v4 issued_at");
   assertPredecessor(input.predecessor_position, input.predecessor_record_sha256);
-  const aggregate = validateHumanActRecordInputV4(input.human_act_record_input);
+  const aggregate = codecs.validateInput(input.human_act_record_input);
   const source = validateMeetingSourceProvenanceV1(input.source_provenance);
   const processor = validateDecisionProcessorProvenanceV1(input.processor_provenance);
   const authority = resolvePinnedOrganizationAuthority(pinnedAuthority);
@@ -874,15 +774,15 @@ export async function createOrganizationRecordEnvelopeV4(
     processor_provenance: processor,
     processor_provenance_sha256: decisionProcessorProvenanceV1Sha256(processor),
     event: aggregate.event,
-  });
-  const recordSha256 = organizationRecordEnvelopeBodyV4Sha256(body);
+  }, codecs);
+  const recordSha256 = organizationRecordEnvelopeBodyV4Sha256(body, codecs);
   const signingKeyDescriptor = canonicalSnapshot(
     authority.signing_key,
     "Record envelope v4 signing key descriptor",
   );
   const signatureInput = buildOrganizationRecordSignatureInputV4(
     body,
-    signingKeyDescriptor.key_id,
+    signingKeyDescriptor.key_id, codecs,
   );
   // Everything returned or signed is detached from caller-owned objects before
   // the first await, so an asynchronous signer cannot race input mutation.
@@ -910,6 +810,6 @@ export async function createOrganizationRecordEnvelopeV4(
       signature: signature.toString("base64"),
     },
     pinnedAuthority,
-    expectedStateLineageId,
+    expectedStateLineageId, codecs,
   );
 }

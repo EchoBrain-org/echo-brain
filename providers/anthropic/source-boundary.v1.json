@@ -1,0 +1,52 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-anthropic",
+  "workspace": true,
+  "boundary_root": "providers/anthropic",
+  "source_root": "providers/anthropic/src",
+  "package_json": "providers/anthropic/package.json",
+  "entry_points": [
+    "providers/anthropic/src/llm/anthropic-client.ts",
+    "providers/anthropic/src/llm/anthropic-decision-processor.ts"
+  ],
+  "owned_source_paths": [
+    "providers/anthropic/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/anthropic/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/organization-processing"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": [],
+  "runtime_assets": [
+    "providers/anthropic/assets/telemetry-vocabulary.v1.json"
+  ],
+  "layer_rules": [
+    {
+      "name": "provider-anthropic-implementation",
+      "from": "providers/anthropic/src/**",
+      "allowed_imports": [
+        "providers/anthropic/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-processing"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "@echo-brain/provider-anthropic implementation",
+        "path": "providers/anthropic/src/llm/anthropic-client.ts",
+        "export": "AnthropicClient"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

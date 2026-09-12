@@ -20,7 +20,7 @@ const assetExports = [
 describe("organization protocol package contract", () => {
   it("publishes only the code entry point and exact versioned assets", () => {
     expect(Object.keys(packageJson.exports).sort()).toEqual(
-      [".", ...assetExports].sort(),
+      [".", "./record-codec-support-v4", ...assetExports].sort(),
     );
     for (const subpath of assetExports) {
       const target = packageJson.exports[subpath];

@@ -20,36 +20,16 @@ const EXPECTED_RELEASE_OWNERSHIP = [
   ["/tsconfig.workspaces.json", "@EchoBrain-org"],
   ["/vitest.config.ts", "@EchoBrain-org"],
   ["/vitest.package.config.ts", "@EchoBrain-org"],
-  ["/packages/federation-protocol/package.json", "@EchoBrain-org"],
-  ["/packages/federation-protocol/tsconfig.json", "@EchoBrain-org"],
-  ["/packages/federation-protocol/source-boundary.v1.json", "@EchoBrain-org"],
-  ["/packages/organization-protocol/package.json", "@EchoBrain-org"],
-  ["/packages/organization-protocol/tsconfig.json", "@EchoBrain-org"],
-  ["/packages/organization-protocol/source-boundary.v1.json", "@EchoBrain-org"],
-  ["/packages/organization-api/package.json", "@EchoBrain-org"],
-  ["/packages/organization-api/tsconfig.json", "@EchoBrain-org"],
-  ["/packages/organization-api/source-boundary.v1.json", "@EchoBrain-org"],
-  ["/src/product/person-client/package.json", "@EchoBrain-org"],
-  ["/src/product/person-client/tsconfig.json", "@EchoBrain-org"],
-  ["/src/product/person-client/source-boundary.v1.json", "@EchoBrain-org"],
-  ["/services/organization-authority/package.json", "@EchoBrain-org"],
-  ["/services/organization-authority/tsconfig.json", "@EchoBrain-org"],
-  ["/services/organization-authority/source-boundary.v1.json", "@EchoBrain-org"],
-  ["/packages/organization-control-plane/package.json", "@EchoBrain-org"],
-  ["/packages/organization-control-plane/tsconfig.json", "@EchoBrain-org"],
-  ["/packages/organization-control-plane/source-boundary.v1.json", "@EchoBrain-org"],
-  ["/packages/organization-record/package.json", "@EchoBrain-org"],
-  ["/packages/organization-record/tsconfig.json", "@EchoBrain-org"],
-  ["/packages/organization-record/source-boundary.v1.json", "@EchoBrain-org"],
-  ["/packages/organization-retrieval/package.json", "@EchoBrain-org"],
-  ["/packages/organization-retrieval/tsconfig.json", "@EchoBrain-org"],
-  ["/packages/organization-retrieval/source-boundary.v1.json", "@EchoBrain-org"],
-  ["/tests/architecture/ci-workflow.test.ts", "@EchoBrain-org"],
-  ["/tests/architecture/github-governance.test.ts", "@EchoBrain-org"],
-  [
-    "/docs/operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md",
-    "@EchoBrain-org",
-  ],
+  ["/docs/operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md", "@EchoBrain-org"],
+  ["/product/", "@EchoBrain-org"],
+  ["/packages/", "@EchoBrain-org"],
+  ["/providers/", "@EchoBrain-org"],
+  ["/services/", "@EchoBrain-org"],
+  ["/src/product/person-client/", "@EchoBrain-org"],
+  ["/tests/architecture/", "@EchoBrain-org"],
+  ["/docs/architecture/", "@EchoBrain-org"],
+  ["/docs/invariants/", "@EchoBrain-org"],
+  ["/docs/qualification/", "@EchoBrain-org"],
 ] as const;
 
 function ownershipRules() {
@@ -61,6 +41,29 @@ function ownershipRules() {
 }
 
 describe("GitHub release governance", () => {
+  it("protects provider ownership, public ports, and selecting entrypoints", () => {
+    const manifest = JSON.parse(readFileSync(
+      resolve(REPO, "product/source-boundary.v1.json"), "utf8",
+    )) as { adapter_architecture: { bootstrap_entrypoints: string[] } };
+    const paths = [
+      "product/source-boundary.v1.json",
+      "providers/slack/server/src/setup/initial-owner-slack-setup-v1.ts",
+      "providers/slack/client/swift/slack-connected-tools.swift",
+      "packages/organization-processing/src/core/contracts",
+      "packages/organization-processing/src/ports/approval-workflow-bundle-v1.ts",
+      "docs/invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md",
+      ...manifest.adapter_architecture.bootstrap_entrypoints,
+    ];
+    const rules = ownershipRules();
+    for (const path of paths) {
+      // These repository rules use exact paths or directory prefixes. Honor
+      // last-match precedence so a later unowned entry cannot pass this check.
+      const rule = rules.slice().reverse().find(([pattern]) => pattern === `/${path}` ||
+        (pattern!.endsWith("/") && `/${path}`.startsWith(pattern!)));
+      expect(rule?.slice(1), path).toEqual(["@EchoBrain-org"]);
+    }
+  });
+
   it("requires the repository owner to review every policy and release surface", () => {
     expect(ownershipRules()).toEqual(EXPECTED_RELEASE_OWNERSHIP);
   });

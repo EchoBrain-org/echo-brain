@@ -3,12 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootstrapOrganizationAuthorityState } from "../../../services/organization-authority/dist/composition/organization-authority-state-bootstrap.js";
-import { verifyAuthorityStateLineage } from "../../../services/organization-authority/dist/composition/verify-authority-state-lineage.js";
-import { openAuthorityDatabase } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
+import { verifyAuthorityStateLineage } from "../../../packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js";
+import { openAuthorityDatabase } from "../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../../services/organization-authority/dist/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
 import { createStagingJourneyTelemetryTransportV1 } from "../../../services/organization-authority/dist/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
-import { observeCoreRuntimeV1, captureCoreRuntimeContentV1 } from "../../../services/organization-authority/dist/shared/core-runtime-observation-v1.js";
+import { observeCoreRuntimeV1, captureCoreRuntimeContentV1 } from "../../../packages/organization-authority-kernel/dist/shared/core-runtime-observation-v1.js";
 import { openOrganizationRecordDatabase, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { clearReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 

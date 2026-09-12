@@ -2,82 +2,102 @@
 
 **Status:** Current
 
-The repository contains eight workspaces. The root package is private
-workspace orchestration only: it has no executable, runtime export, product
-database, or packable application.
+The repository contains eighteen workspaces: eight neutral packages, eight
+provider workspaces under seven provider folders, the Authority service, and
+the Person client. The root package only orchestrates workspaces.
 
-`services/` is reserved for independently deployable processes and lifecycle
-owners. `packages/` contains linked reusable/server modules and shared
-contracts. `src/product/` contains shipped machine product. Therefore the
-control plane, record, and retrieval workspaces are packages linked into the
-Authority process rather than deployable services.
+`packages/` owns inward contracts and reusable implementations. `services/`
+owns deployable processes and their lifecycle. `providers/<provider>/` owns
+that provider's wire formats, credentials, persistence translations, model
+vocabulary, command/UI fragments, tests, and runtime assets. Slack has separate
+client and server workspaces because the Person artifact must remain free of
+Authority code and native SQLite.
 
-## Workspace graph
+## Dependency direction
 
-```text
-federation-protocol
-  -> organization-protocol
-  -> organization-api
-  -> person-client
+Neutral modules can import other neutral modules. A neutral library cannot
+import a composing application. Providers depend inward on neutral public
+exports; they cannot import another provider or the Authority service.
+Explicit bootstrap modules select implementations and inject ports. Neutral
+modules cannot import bootstrap modules. Cross-workspace imports use explicit
+public exports, and the complete workspace graph must remain acyclic.
 
-federation-protocol
-  -> organization-record
-  -> organization-retrieval
+- `organization-processing` owns processing contracts, the bounded cycle, generic
+  LLM prompt/grounding behavior, and processing state.
+- `organization-authority-kernel` owns reusable Authority contracts, rules,
+  telemetry, state verification, SQLite baseline access, and bundle ports.
+- Federation/API/protocol, control-plane, record and retrieval retain their
+  existing responsibilities. Record has no runtime dependency on protocol.
+- The Authority and Person composition modules select provider implementations.
+  The deployed Authority selects its product profile; it does not ship unused
+  OpenAI, Anthropic or Ollama transports.
 
-organization-control-plane ─┐
-organization-record ────────┼-> organization-authority
-organization-retrieval ─────┤
-organization-api/protocol ──┘
-```
-
-- Protocol packages contain signed documents, canonicalization, identifiers,
-  and HTTP DTOs; they import no product or service implementation.
-- The Person client depends only on federation, organization protocol, and
-  organization API.
-- `organization-control-plane` owns provider connections and grants and has no
-  workspace dependency.
-- `organization-record` and `organization-retrieval` depend only on federation
-  canonicalization.
-- The Authority is the sole composition root across server workspaces.
-- Cross-workspace imports use declared package exports.
-
-The checked registry is
+The registry is
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json).
-Each workspace owns every TypeScript file below its source root, and every
-owned production file must match exactly one layer rule.
+Every production module has an owner. The gate follows whole modules, including
+unused re-exports, namespace/side-effect imports, type queries and literal dynamic
+imports. Runtime asset references obey the same direction. Native Swift and the
+Explorer deployment have explicit source assemblies shared by their builders
+and the same architecture gate. Native builds typecheck the neutral sources
+alone and each provider with neutral sources only, before composing the full app.
+The macOS job also runs adversarial symbol-reference probes. The cross-platform
+gate checks Swift ownership; it does not parse Swift dependencies. Deployment
+JavaScript has exact external and builtin import allowlists shared by the gate
+and builder, with computed imports and loader acquisition rejected.
+There is no provider-name registry, symbol-based
+traversal or exception mechanism.
 
-## Product split
+## Product and build boundaries
 
-There are two operational artifacts:
+The Person tarball contains the client, federation/protocol/API and the Slack
+client fragment. It includes public versioned data exports and contains no
+Authority, processing, server provider or SQLite dependency. Its dedicated build
+compiles these five workspaces. The Authority image contains its fourteen-workspace
+dependency closure and the required frozen SQL/provider assets.
 
-```text
-Person tarball       -> src/product/person-client
-Authority container -> services/organization-authority + server dependencies
-```
+The architecture suite compiles all eight neutral packages in an isolated tree
+with no provider, Person, service or prebuilt workspace output available.
+External dependencies remain installed; workspace symlinks point only into the
+isolated tree. Full source tests and the existing native/offline artifact checks
+exercise the composed products. No additional CI job is needed.
 
-The Authority image does not copy Person source. The Person packer builds only
-its three dependency workspaces and the client. The legacy root machine
-runtime, local SQLite state, installation signer, LaunchAgent, JSONL outbox,
-and fleet updater are removed.
+Neutral package tests may import neutral workspace code, their own test
+fixtures, and shared neutral test support. The test-layer architecture check
+uses the module-reference parser to enforce this across every `packages/*/test`
+root and shared support, including type imports and re-exports. Provider-specific
+contract tests live with their provider; tests that combine a provider with
+Authority transports live with the composing service. Generic processing and
+record tests retain independent fixture implementations and signed protocol
+helpers without importing a provider or application workspace.
 
-`product/source-boundary.v1.json` is now a retirement fence. Its entry-point
-closure is intentionally empty and its removed-root list prevents the old
-machine product from silently reappearing outside the Person workspace.
+The native account shell consumes generic v3 tool status and an injected UI
+interface. Slack owns its actions and retained v2 disconnect decoder. The v2
+HTTP contract remains provider-owned for installed clients; v3 admits up to
+32 independently identified tools without imposing a provider's identity grammar.
+
+`product/source-boundary.v1.json` declares bootstrap modules, provider folders,
+source assemblies and retired roots. The legacy machine runtime remains absent.
 
 ## Authority layers
 
-```text
-domain        pure organization and access rules
-application   commands, queries, and transaction ports
-adapters      SQLite, signing, credentials, OIDC, private files
-presentation  JSON routes and explicit provider ingress
-composition   configuration and concrete wiring
-processing    meeting core, adapters, admitted-meeting cycle, replay, and durability
-```
+Routes call application use cases rather than SQLite. The service owns one
+organization, Person identity and sessions, authorization, and process lifecycle.
+Provider bundles receive explicit state/action/transport ports. The listener stays
+loopback-only behind the trusted reverse proxy. Stopped-state setup selects the
+fixed V1 Granola/OpenRouter/Slack profile. Its manifest, readiness checks and
+finalization require Slack; setup is not a swappable provider port. Another
+profile requires a versioned bootstrap design alongside the runtime selection.
+Provider verification, identity SQL, credential interpretation and source
+admission proofs stay in their provider folders.
 
-Routes call application use cases rather than SQLite. The service is bound to
-one organization and contains no tenant registry, billing, or cross-org query.
-The built-in listener stays loopback-only behind the trusted reverse proxy.
+The synchronous approval-state port crosses between two handles on
+`authority.sqlite`. Both connection owners guard against calls inside an open
+transaction. Each authority operation commits before the other owner runs. The
+provider's stable approval fence uses its own authority handle and the separate
+control-plane database, without calling back through the state port. The
+file-backed ordering regression verifies lock refusal and committed visibility;
+existing delivery, restart and terminal-approval integration tests cover the
+composed workflow.
 
 ## Persistence ownership
 

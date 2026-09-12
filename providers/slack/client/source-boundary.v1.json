@@ -1,0 +1,57 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-slack-client",
+  "workspace": true,
+  "boundary_root": "providers/slack/client",
+  "source_root": "providers/slack/client/src",
+  "package_json": "providers/slack/client/package.json",
+  "entry_points": [
+    "providers/slack/client/src/organization-api/person-slack-identity-link.ts",
+    "providers/slack/client/src/organization-api/person-slack-browser-link.ts",
+    "providers/slack/client/src/organization-api/person-tools.ts"
+  ],
+  "owned_source_paths": [
+    "providers/slack/client/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/slack/client/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/organization-api",
+    "@echo-brain/federation-protocol"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": [
+    "buffer"
+  ],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "provider-slack-client-implementation",
+      "from": "providers/slack/client/src/**",
+      "allowed_imports": [
+        "providers/slack/client/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-api",
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "buffer"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Person Slack identity-link contract",
+        "path": "providers/slack/client/src/organization-api/person-slack-identity-link.ts",
+        "export": "validateOrganizationPersonSlackIdentityLinkBeginRequest"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

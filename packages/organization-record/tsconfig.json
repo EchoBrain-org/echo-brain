@@ -8,5 +8,8 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../../packages/federation-protocol" }]
+  "references": [
+    { "path": "../../packages/federation-protocol" },
+    { "path": "../federation-protocol" }
+  ]
 }

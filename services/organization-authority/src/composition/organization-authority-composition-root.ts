@@ -1,24 +1,25 @@
-import {
-  createRecordPolicyFactProjectorRegistryV1,
-  createPersonPolicyFactProjectorV2,
-  createPrivateSlackBlockApprovalPolicyProjectorV1,
-} from "@echo-brain/organization-record/organization-record-api-v1";
+import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
+import { composeRecordApproverProjectorsV1, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { createPrivateSlackBlockApprovalPolicyProjectorV1, projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import {
   openOrganizationAuthorityRuntime,
   type OrganizationAuthorityRuntimeConfig,
   type OrganizationAuthorityRuntimeDependencies,
   type OpenedOrganizationAuthorityRuntime,
 } from "./organization-authority-runtime.js";
-import { createGranolaMeetingSourceBundleV1 } from "./providers/granola/granola-meeting-source-bundle-v1.js";
-import { createSyntheticDemoMeetingSourceBundleV1 } from "./providers/synthetic-demo/synthetic-demo-meeting-source-bundle-v1.js";
-import { createOpenRouterDecisionProcessorBundleV1 } from "./providers/openrouter/openrouter-decision-processor-bundle-v1.js";
-import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
-import { createPrivateSlackApprovalWorkflowBundleV1 } from "./providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
-import { createSlackBrowserIdentityProvider } from "../adapters/oidc/slack-browser-identity-provider.js";
-import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.js";
-import { runStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
-import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+import { createGranolaMeetingSourceBundleV1 } from "@echo-brain/provider-granola/granola-meeting-source-bundle-v1";
+import { createSyntheticDemoMeetingSourceBundleV1 } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-bundle-v1";
+import { createOpenRouterDecisionProcessorBundleV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1";
+import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
+import { createPrivateSlackApprovalWorkflowBundleV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-workflow-bundle-v1";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
+import { createSlackBrowserIdentityProvider } from "@echo-brain/provider-slack-server/adapters/oidc/slack-browser-identity-provider";
+import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-interaction-protocol-v1";
+import { runStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1";
+import type { PrivateSlackApprovalCardPosterV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 
 export interface OrganizationAuthorityServiceConfig
@@ -29,6 +30,7 @@ export interface OrganizationAuthorityServiceConfig
     | "approval_workflow_bundle"
     | "answer_composition_generation_bundle"
     | "record_policy_fact_projectors"
+    | "record_input_codecs"
   > {
   readonly granola_credential_file?: string;
   readonly granola_owner_email_file?: string;
@@ -70,8 +72,9 @@ export interface OrganizationAuthorityServiceDependencies
 }
 
 /**
- * The deployable service composition root. This is the only component that
- * selects the current Granola, OpenRouter, and Slack provider bundles.
+ * The deployable service selects the fixed Granola/OpenRouter/Slack profile.
+ * The stopped-state V1 setup CLI selects the same profile; the shared runtime
+ * remains provider-neutral. Changing a profile requires both bootstrap selections.
  */
 export async function openOrganizationAuthorityService(
   config: OrganizationAuthorityServiceConfig,
@@ -128,9 +131,13 @@ export async function openOrganizationAuthorityService(
         };
   const apiDependencies = {
     ...dependencies.api,
+    record_approver: composeRecordApproverProjectorsV1([
+      projectPrivateSlackBlockApprovalApproverV1,
+      ...(dependencies.api?.record_approver === undefined ? [] : [dependencies.api.record_approver]),
+    ]),
     external_identity_runtime_bundle:
       dependencies.api?.external_identity_runtime_bundle ??
-      createSlackPersonExternalIdentityRuntimeBundleV1({
+      composePersonExternalIdentityRuntimeBundlesV1([createSlackPersonExternalIdentityRuntimeBundleV1({
         identity_link_channel_id: slack_identity_link_channel_id,
         ...(slack_browser_oauth === undefined
           ? {}
@@ -138,7 +145,7 @@ export async function openOrganizationAuthorityService(
               browser_provider:
                 createSlackBrowserIdentityProvider(slack_browser_oauth),
             }),
-      }),
+      })]),
   };
   return openOrganizationAuthorityRuntime(
     {
@@ -166,6 +173,7 @@ export async function openOrganizationAuthorityService(
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
         }),
+      record_input_codecs: RECORD_INPUT_CODECS,
       record_policy_fact_projectors:
         createRecordPolicyFactProjectorRegistryV1([
           createPersonPolicyFactProjectorV2(),

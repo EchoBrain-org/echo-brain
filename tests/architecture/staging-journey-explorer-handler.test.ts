@@ -1,4 +1,5 @@
-import { CORE_RUNTIME_PHASES_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "../../services/organization-authority/src/shared/core-runtime-observation-v1.js";
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../support/telemetry-fixture-vocabulary-v1.js";
+import { CORE_RUNTIME_PHASES_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { createStagingJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
@@ -1578,7 +1579,7 @@ describe("staging Journey Explorer custom widget", () => {
 
 
 describe("core observation Explorer round trip", () => {
-  it.each(CORE_RUNTIME_PHASES_V1)("reads the %s core-runtime diagnostic phase", async (phase) => {
+  it.each([...CORE_RUNTIME_PHASES_V1, "slack_terminal_update"])("reads the %s core-runtime diagnostic phase", async (phase) => {
     const coreSpanId = "22222222-2222-4222-8222-222222222222";
     const diagnostic = JSON.stringify({
       operation_id: id,
@@ -1620,7 +1621,7 @@ describe("core observation Explorer round trip", () => {
 
   it("reads real emitted V2 spans, preserves diagnostic fields, and renders escaped content", async () => {
     const lines: string[] = [];
-    const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 42 }, { write: (line) => { lines.push(line); } }, { content_enabled: true });
+    const transport = createStagingJourneyTelemetryTransportV1({ release_sha: "a".repeat(40), build_number: 42 }, { write: (line) => { lines.push(line); } }, { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, content_enabled: true });
     await observeCoreRuntimeV1("search_reconciliation", async () => {
       annotateCoreRuntimeV1({ linked_journey_ids: [id], counts: { captured_head: 4 } });
       observeCoreRuntimeSyncV1("search_build", () => { annotateCoreRuntimeV1({ counts: { atom_count: 12 } }); });

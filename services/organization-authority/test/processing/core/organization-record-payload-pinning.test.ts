@@ -5,7 +5,7 @@
 // and any divergence fails on one side or the other.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { assertCanonicalDecisionBrief } from '../../../src/processing/core/index.js';
+import { assertCanonicalDecisionBrief } from "@echo-brain/organization-processing/core";
 
 interface PayloadConformanceFixture {
   fixture_version: number;

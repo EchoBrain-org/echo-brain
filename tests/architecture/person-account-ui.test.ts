@@ -6,18 +6,10 @@ import { afterAll, describe, expect, it } from "vitest";
 
 const repo = resolve(import.meta.dirname, "../..");
 const account = join(repo, "product/echo-overlay/account.swift");
+const slack = join(repo, "providers/slack/client/swift/slack-connected-tools.swift");
 const builder = join(repo, "tools/build-echo-overlay.mjs");
 const roots: string[] = [];
-const overlaySource = readFileSync(join(repo, "product/echo-overlay/main.swift"), "utf8");
-const themeStart = overlaySource.indexOf("enum EchoTheme {");
-const themeEnd = overlaySource.indexOf("private let sha256Pattern", themeStart);
-const pillStart = overlaySource.indexOf("final class PillButton: NSButton {");
-const pillEnd = overlaySource.indexOf("@MainActor\nprivate final class SourceDocumentView", pillStart);
-if (themeStart < 0 || themeEnd < 0 || pillStart < 0 || pillEnd < 0) {
-  throw new Error("could not extract native Connected tools theme fixture");
-}
-const themeFixture = overlaySource.slice(themeStart, themeEnd);
-const pillButtonFixture = overlaySource.slice(pillStart, pillEnd);
+const support = join(repo, "product/echo-overlay/ui-support.swift");
 
 afterAll(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
 
@@ -39,9 +31,9 @@ describe("native Person account controls", () => {
 
   it("builds account.swift into the overlay and binds it to the committed source", () => {
     const source = readFileSync(builder, "utf8");
-    expect(source).toContain("const accountPath = 'product/echo-overlay/account.swift';");
-    expect(source).toContain("regularFile(accountSource, 'Account Swift source')");
-    expect(source).toContain("stagedAccount");
+    expect(source).toContain("swiftSourceAssemblyV1");
+    expect(source).toContain("committedFile(before.sha, assemblyPath");
+    expect(source).toContain("...stagedSources");
   });
 
   it("clears account-scoped surfaces and blocks an account change during a People mutation", () => {
@@ -52,8 +44,8 @@ describe("native Person account controls", () => {
     expect(source).toContain("people?.hasOutstandingMutation");
   });
 
-  it("routes Connected tools through bounded client calls and clears account state", () => {
-    const source = readFileSync(account, "utf8");
+  it("routes provider tool fragments through bounded client calls and clears account state", () => {
+    const source = readFileSync(account, "utf8") + readFileSync(slack, "utf8");
     expect(source).toContain('title: "Connected tools…"');
     expect(source).toContain('["person", "tools"]');
     expect(source).toContain('["person", "slack-connect-begin"]');
@@ -84,24 +76,22 @@ describe("native Person account controls", () => {
     const proof = join(root, "proof.swift");
     writeFileSync(proof, `import AppKit
 import Foundation
-${themeFixture}
-${pillButtonFixture}
 @main enum Proof { static func main() {
     let member = "mem_00000000-0000-4000-8000-000000000001"
     func fixture(_ tools: [[String: Any]]) -> Data {
-        try! JSONSerialization.data(withJSONObject: ["ok": true, "result": ["schema_version": 2, "kind": "echo-organization-person-tools", "organization_id": "org_00000000-0000-4000-8000-000000000001", "membership_id": member, "tools": tools]])
+        try! JSONSerialization.data(withJSONObject: ["ok": true, "result": ["schema_version": 3, "kind": "echo-organization-person-tools", "organization_id": "org_00000000-0000-4000-8000-000000000001", "membership_id": member, "tools": tools]])
     }
     let noTools = decodeConnectedTools(fixture([]), membershipID: member)!
     print(connectedToolsSummary(noTools))
     print(connectedToolsSlackAction(noTools).rawValue)
     for status in ["unlinked", "linked", "revoked"] {
-        let row: [String: Any] = ["provider": "slack", "availability": "enabled", "personal_status": status, "workspace_id": "T123ABC", "account_id": status == "linked" ? "U123ABC" : NSNull()]
+        let row: [String: Any] = ["tool_id": "slack", "display_name": "Slack", "availability": "enabled", "personal_status": status, "external_scope_id": "T123ABC", "external_subject_id": status == "linked" ? "U123ABC" : NSNull()]
         let data = fixture([row])
         print(connectedToolsSummary(decodeConnectedTools(data, membershipID: member)).replacingOccurrences(of: "\\n", with: " / "))
         print(connectedToolsSlackAction(decodeConnectedTools(data, membershipID: member)!).rawValue)
         print(decodeConnectedTools(data, membershipID: "different-account") == nil)
     }
-    let unavailable: [String: Any] = ["provider": "slack", "availability": "unavailable", "personal_status": "unavailable", "workspace_id": NSNull(), "account_id": NSNull()]
+    let unavailable: [String: Any] = ["tool_id": "slack", "display_name": "Slack", "availability": "unavailable", "personal_status": "unavailable", "external_scope_id": NSNull(), "external_subject_id": NSNull()]
     print(connectedToolsSummary(decodeConnectedTools(fixture([unavailable]), membershipID: member)).replacingOccurrences(of: "\\n", with: " / "))
     print(connectedToolsSummary(decodeConnectedTools(Data("failure".utf8), membershipID: member)))
     let gate = AccountRequestGate(); let stale = gate.replace(); let fresh = gate.replace()
@@ -114,7 +104,7 @@ ${pillButtonFixture}
 } }
 `);
     const binary = join(root, "proof");
-    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", account, proof, "-o", binary], {
+    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", support, account, slack, proof, "-o", binary], {
       stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
     });
     const result = spawnSync(binary, { encoding: "utf8" });
@@ -131,35 +121,18 @@ ${pillButtonFixture}
     ]);
   });
 
-  it.skipIf(process.platform !== "darwin")("strictly compiles the account interface without a real session", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-account-compile-")));
-    roots.push(root);
-    const proof = join(root, "proof.swift");
-    writeFileSync(proof, `import AppKit
-import Foundation
-${themeFixture}
-${pillButtonFixture}
-@main enum Proof { static func main() {} }
-`);
-    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", account, proof, "-o", join(root, "proof")], {
-      stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
-    });
-  });
-
   it.skipIf(process.platform !== "darwin")("matches the installed client authority-origin normalization", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-account-origin-proof-")));
     roots.push(root);
     const proof = join(root, "proof.swift");
     writeFileSync(proof, `import AppKit
 import Foundation
-${themeFixture}
-${pillButtonFixture}
 @main enum Proof { static func main() {
   print(validateAuthorityOrigin("https://EXAMPLE.COM:443/") ?? "invalid")
   print(validateAuthorityOrigin("https://EXAMPLE.COM:444/") ?? "invalid")
 } }
 `);
-    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", account, proof, "-o", join(root, "proof")], {
+    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", support, account, proof, "-o", join(root, "proof")], {
       stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
     });
     const result = spawnSync(join(root, "proof"), { encoding: "utf8" });
@@ -255,8 +228,6 @@ if (args[1] === "status") {
     chmodSync(cli, 0o700);
     writeFileSync(join(root, "proof.swift"), `import AppKit
 import Foundation
-${themeFixture}
-${pillButtonFixture}
 @main enum Proof {
   static func main() {
     let observation = AccountObservation()
@@ -279,7 +250,7 @@ ${pillButtonFixture}
   }
 }
 `);
-    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", account, join(root, "proof.swift"), "-o", binary], {
+    execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors", "-target", "arm64-apple-macos14.0", "-framework", "AppKit", support, account, join(root, "proof.swift"), "-o", binary], {
       stdio: "pipe", env: { ...process.env, CLANG_MODULE_CACHE_PATH: join(root, "module-cache") },
     });
     const run = (mode: string) => {

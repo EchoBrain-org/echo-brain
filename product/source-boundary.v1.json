@@ -18,251 +18,38 @@
   "runtime_assets": [],
   "layer_rules": [],
   "adapter_architecture": {
-    "adapters_roots": [
-      "services/organization-authority/src/processing/adapters/"
+    "ownership_version": 1,
+    "provider_roots": [
+      "providers/anthropic",
+      "providers/granola",
+      "providers/ollama",
+      "providers/openai",
+      "providers/openrouter",
+      "providers/slack",
+      "providers/synthetic-demo"
     ],
-    "provider_adapter_roots": [
-      {
-        "identifier": "granola",
-        "root": "services/organization-authority/src/processing/adapters/meeting-sources/granola/"
-      },
-      {
-        "identifier": "granola",
-        "root": "services/organization-authority/src/composition/providers/granola/"
-      },
-      {
-        "identifier": "granola",
-        "root": "services/organization-authority/src/clean-granola-source-main.ts"
-      },
-      {
-        "identifier": "granola",
-        "root": "services/organization-authority/src/composition/organization-authority-setup-cli.ts"
-      },
-      {
-        "identifier": "granola",
-        "root": "services/organization-authority/src/composition/organization-authority-service-cli.ts"
-      },
-      {
-        "identifier": "llm",
-        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/",
-        "provider_identifier": false
-      },
-      {
-        "identifier": "openai",
-        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/openai-client.ts"
-      },
-      {
-        "identifier": "anthropic",
-        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/anthropic-client.ts"
-      },
-      {
-        "identifier": "ollama",
-        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/ollama-client.ts"
-      },
-      {
-        "identifier": "openrouter",
-        "root": "services/organization-authority/src/processing/adapters/decision-processors/llm/openrouter-client.ts"
-      },
-      {
-        "identifier": "openrouter",
-        "root": "services/organization-authority/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.ts"
-      },
-      {
-        "identifier": "openrouter",
-        "root": "services/organization-authority/src/composition/providers/openrouter/"
-      },
-      {
-        "identifier": "deepseek",
-        "root": "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/processing/adapters/shared/slack/"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/composition/providers/slack/"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/composition/staging/slack-private-approval/"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/presentation/private-slack-approval-interaction-http-port-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.ts"
-      },
-      {
-        "identifier": "synthetic-demo-source",
-        "root": "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/"
-      },
-      {
-        "identifier": "synthetic-demo-source",
-        "root": "services/organization-authority/src/composition/providers/synthetic-demo/"
-      },
-      {
-        "identifier": "synthetic-demo-source",
-        "root": "services/organization-authority/src/synthetic-demo-main.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/application/slack/"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/adapters/slack/"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/application/slack-integration-contracts.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/application/organization-tool-connection-contracts-v2.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/persistence/sqlite-slack-bot-token-reader-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/persistence/sqlite-slack-connection-coordinator-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/persistence/sqlite-slack-dm-approval-persistence-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/persistence/sqlite-slack-dm-approval-reviewer-target-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/composition/slack-connection-setup-cli.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/clean-slack-connect-main.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/slack-approval-integration-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/slack-connection-setup-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-control-plane/src/slack-external-identity-integration-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-api/src/person-slack-identity-link.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-api/src/person-slack-browser-link.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-api/src/person-tools.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-protocol/src/private-slack-block-approval-record-input-v1.ts"
-      },
-      {
-        "identifier": "slack",
-        "root": "packages/organization-record/src/adapters/record-policy-projection/slack/"
-      },
-      {
-        "identifier": "slack",
-        "root": "services/organization-authority/src/adapters/oidc/slack-browser-identity-provider.ts"
-      }
-    ],
-    "provider_neutral_roots": [
-      "services/organization-authority/src/**",
-      "packages/*/src/**"
-    ],
-    "provider_selecting_entrypoints": [
+    "bootstrap_entrypoints": [
       "services/organization-authority/src/clean-person-main.ts",
       "services/organization-authority/src/clean-live-main.ts",
       "services/organization-authority/src/clean-founder-main.ts",
       "services/organization-authority/src/composition/organization-authority-composition-root.ts",
       "services/organization-authority/src/composition/synthetic-demo-organization-authority-cli.ts",
       "services/organization-authority/src/composition/synthetic-demo-organization-authority-composition-root-v1.ts",
-      "packages/organization-api/src/index.ts",
-      "packages/organization-protocol/src/index.ts",
-      "packages/organization-record/src/organization-record-api-v1.ts"
+      "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
+      "services/organization-authority/src/composition/organization-authority-service-cli.ts",
+      "services/organization-authority/src/synthetic-demo-main.ts",
+      "services/organization-authority/src/clean-granola-source-main.ts",
+      "services/organization-authority/src/composition/admit-granola-meeting-source-cli-v1.ts",
+      "services/organization-authority/src/composition/synthetic-demo-pre-slack-evaluator-cli-v1.ts",
+      "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts",
+      "src/product/person-client/main.ts",
+      "src/product/person-client/composition.ts"
     ],
-    "provider_coupled_exceptions": [
-      {
-        "path": "services/organization-authority/src/shared/core-runtime-observation-v1.ts",
-        "reason": "Provider and model allowlists bound telemetry dimension cardinality, and one phase is named after the approval surface. Source these vocabularies from provider bundles (review F3 follow-up) before removing this entry."
-      },
-      {
-        "path": "services/organization-authority/src/shared/journey-telemetry-v1.ts",
-        "reason": "JOURNEY_LLM_PROVIDERS_V1 and JOURNEY_LLM_MODELS_V1 bound telemetry dimension cardinality. Same follow-up as core-runtime-observation-v1."
-      },
-      {
-        "path": "services/organization-authority/src/composition/ask-journey-telemetry-v1.ts",
-        "reason": "Maps adapter provider identifiers onto the bounded journey provider dimension. Same follow-up as journey-telemetry-v1."
-      },
-      {
-        "path": "packages/organization-protocol/src/record-envelope-v4.ts",
-        "reason": "The current-only V4 record envelope validates the frozen private Slack block-approval record input. A provider-independent record-input registry is a versioned protocol decision, not a cleanup edit."
-      }
-    ],
-    "provider_identifier_registry": [
-      {
-        "identifier": "openrouter",
-        "transport_provider": true,
-        "source_evidence_paths": [
-          "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts"
-        ]
-      },
-      {
-        "identifier": "openai",
-        "transport_provider": true,
-        "source_evidence_paths": [
-          "services/organization-authority/src/processing/adapters/decision-processors/llm/openai-client.ts"
-        ]
-      },
-      {
-        "identifier": "anthropic",
-        "transport_provider": true,
-        "source_evidence_paths": [
-          "services/organization-authority/src/processing/adapters/decision-processors/llm/anthropic-client.ts"
-        ]
-      },
-      {
-        "identifier": "ollama",
-        "transport_provider": true,
-        "source_evidence_paths": [
-          "services/organization-authority/src/processing/adapters/decision-processors/llm/ollama-client.ts"
-        ]
-      },
-      {
-        "identifier": "deepseek",
-        "transport_provider": false,
-        "source_evidence_paths": [
-          "services/organization-authority/src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.ts"
-        ]
-      }
-    ],
-    "forbid_discovered_adapter_ids_in_provider_neutral_roots": true
+    "source_assemblies": [
+      "product/echo-overlay/source-assembly.v1.json",
+      "product/echo-onboarding/source-assembly.v1.json",
+      "deploy/organization-authority/journey-explorer-assembly.v1.json"
+    ]
   },
   "child_process_owner": null
 }

@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -10,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, posix, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   copyCoherentWorktreeSnapshot,
@@ -74,33 +73,11 @@ interface PackageManifest {
   name: string;
   dependencies?: Record<string, string>;
   files?: string[];
+  exports?: Record<string, unknown>;
 }
 
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(join(REPO, path), "utf8")) as T;
-}
-
-// Mirrors matchesGlob in tools/check-architecture-boundaries.mjs. The tool runs main() at
-// import time, so its matcher cannot be imported; a boundary pattern is
-// compared against another pattern exactly as the tool compares it to a path.
-function matchesGlob(path: string, pattern: string): boolean {
-  if (pattern.endsWith("/")) return path.startsWith(pattern);
-  if (!pattern.includes("*")) return path === pattern;
-  let expression = "^";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const character = pattern[index];
-    if (character === "*") {
-      if (pattern[index + 1] === "*") {
-        expression += ".*";
-        index += 1;
-      } else {
-        expression += "[^/]*";
-      }
-    } else {
-      expression += character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  return new RegExp(`${expression}$`).test(path);
 }
 
 function snapshotRepository(): string {
@@ -339,28 +316,93 @@ describe("workspace source boundaries", () => {
 
     expect(graph).toEqual({
       "@echo-brain/federation-protocol": [],
+      "@echo-brain/organization-protocol": [
+        "@echo-brain/federation-protocol"
+      ],
       "@echo-brain/organization-api": [
         "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-protocol"
       ],
       "@echo-brain/organization-authority": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-control-plane",
+        "@echo-brain/organization-processing",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-record",
+        "@echo-brain/organization-retrieval",
+        "@echo-brain/provider-granola",
+        "@echo-brain/provider-openrouter",
+        "@echo-brain/provider-slack-server",
+        "@echo-brain/provider-synthetic-demo"
+      ],
+      "@echo-brain/organization-control-plane": [],
+      "@echo-brain/organization-record": [
+        "@echo-brain/federation-protocol"
+      ],
+      "@echo-brain/organization-retrieval": [
+        "@echo-brain/federation-protocol"
+      ],
+      "@echo-brain/person-client": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/provider-slack-client"
+      ],
+      "@echo-brain/organization-authority-kernel": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
         "@echo-brain/organization-control-plane",
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-record",
-        "@echo-brain/organization-retrieval",
+        "@echo-brain/organization-retrieval"
       ],
-      "@echo-brain/organization-control-plane": [],
-      "@echo-brain/organization-protocol": ["@echo-brain/federation-protocol"],
-      "@echo-brain/organization-record": ["@echo-brain/federation-protocol"],
-      "@echo-brain/organization-retrieval": ["@echo-brain/federation-protocol"],
-      "@echo-brain/person-client": [
+      "@echo-brain/organization-processing": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-control-plane",
+        "@echo-brain/organization-record"
+      ],
+      "@echo-brain/provider-openrouter": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing"
+      ],
+      "@echo-brain/provider-anthropic": [
+        "@echo-brain/organization-processing"
+      ],
+      "@echo-brain/provider-ollama": [
+        "@echo-brain/organization-processing"
+      ],
+      "@echo-brain/provider-openai": [
+        "@echo-brain/organization-processing"
+      ],
+      "@echo-brain/provider-synthetic-demo": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing"
+      ],
+      "@echo-brain/provider-slack-server": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-control-plane",
+        "@echo-brain/organization-processing",
         "@echo-brain/organization-protocol",
+        "@echo-brain/organization-record",
+        "@echo-brain/provider-slack-client"
       ],
-    });
+      "@echo-brain/provider-slack-client": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "@echo-brain/provider-granola": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing"
+      ]
+    });;
   });
 
   it("keeps the Authority container closed over its workspace build and runtime dependencies", () => {
@@ -423,6 +465,12 @@ describe("workspace source boundaries", () => {
       "COPY src/product/person-client ./src/product/person-client",
     );
 
+    for (const match of dockerfile.matchAll(/^COPY --from=build \/app\/(.+?) \./gm)) {
+      const path = match[1]!;
+      if (path === "node_modules" || path.endsWith("/dist")) continue;
+      expect(existsSync(join(REPO, path)), `runtime COPY source is missing: ${path}`).toBe(true);
+    }
+
     // npm's workspace links resolve into these runtime directories. Every
     // reachable workspace therefore needs its package exports and compiled
     // code, and service packages that ship Authority state baselines need those
@@ -435,6 +483,14 @@ describe("workspace source boundaries", () => {
       expect(dockerfile).toContain(
         `COPY --from=build /app/${workspace}/dist ./${workspace}/dist`,
       );
+      for (const target of Object.values(manifest.exports ?? {})) {
+        if (typeof target !== "string" || !target.endsWith(".json")) continue;
+        const asset = target.replace(/^\.\//, "");
+        const copied = [asset, dirname(asset)].some(path => dockerfile.includes(
+          `COPY --from=build /app/${workspace}/${path} ./${workspace}/${path}`,
+        ));
+        expect(copied, `runtime omits public asset ${workspace}/${asset}`).toBe(true);
+      }
       if (manifest.files?.some((path) => path.startsWith("baselines/"))) {
         expect(dockerfile).toContain(
           `COPY --from=build /app/${workspace}/baselines ./${workspace}/baselines`,
@@ -449,7 +505,7 @@ describe("workspace source boundaries", () => {
       "utf8",
     );
     const cleanup =
-      "RUN find packages services -type f \\( -name '*.d.ts' -o -name '*.tsbuildinfo' \\) -delete";
+      "RUN find packages services providers -type f \\( -name '*.d.ts' -o -name '*.d.ts.map' -o -name '*.tsbuildinfo' \\) -delete";
 
     expect(dockerfile).toContain(cleanup);
     expect(dockerfile.indexOf(cleanup)).toBeGreaterThan(
@@ -460,6 +516,7 @@ describe("workspace source boundaries", () => {
     );
     expect([...cleanup.matchAll(/-name '([^']+)'/g)].map((match) => match[1])).toEqual([
       "*.d.ts",
+      "*.d.ts.map",
       "*.tsbuildinfo",
     ]);
     expect(cleanup).not.toContain("*.map");
@@ -503,7 +560,7 @@ describe("workspace source boundaries", () => {
 
   it("declares and ships all Authority state baseline SQL assets", () => {
     const expectedByRoot: Record<string, string[]> = {
-      "services/organization-authority": [
+      "packages/organization-authority-kernel": [
         "authority-approval-delivery-quarantine-v4.sql",
         "authority-baseline-v1.sql",
         "authority-meeting-processing-v3.sql",
@@ -531,7 +588,7 @@ describe("workspace source boundaries", () => {
         `${root}/source-boundary.v1.json`,
       );
       const packageManifest = readJson<PackageManifest>(`${root}/package.json`);
-      expect(packageManifest.files).toContain("baselines/**");
+      expect(packageManifest.files?.some(path => path === "baselines/**" || path === "baselines/*.sql")).toBe(true);
       expect(
         [...(manifest.runtime_assets ?? [])]
           .filter((path) => path.startsWith(`${root}/baselines/`))
@@ -1069,573 +1126,185 @@ describe("workspace source boundaries", () => {
     );
   });
 
-  it("discovers adapter ids and rejects them in provider-neutral core", () => {
+  it("checks whole modules for named, type, namespace, side-effect and re-export edges", () => {
     const fixture = fixtureRepository();
-    let result = runBoundary(fixture);
+    const entry = join(fixture, "packages/federation-protocol/src/provider-probe.ts");
+    const target = "@echo-brain/provider-openai/llm/openai-client";
+    for (const source of [
+      `import { OpenAiClient as Client } from '${target}'; export { Client };`,
+      `import type { OpenAiClient } from '${target}'; export type Client = OpenAiClient;`,
+      `import * as adapter from '${target}'; export { adapter };`,
+      `import '${target}';`,
+      `export { OpenAiClient } from '${target}';`,
+      `export * from '${target}';`,
+      `export type Client = import('${target}').OpenAiClient;`,
+      `export const load = () => import('${target}');`,
+    ]) {
+      writeFileSync(entry, source);
+      const result = runBoundary(fixture);
+      expect(result.status, source).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain("neutral module reaches provider");
+    }
+    for (const source of [
+      "export type FileStats = import('node:fs').Stats;",
+      "export type Database = import('better-sqlite3').Database;",
+    ]) {
+      writeFileSync(entry, source);
+      expect(runBoundary(fixture).status, source).not.toBe(0);
+    }
+    writeFileSync(entry, `export const documentation = 'Slack, Granola, OpenRouter and an unknown future vendor';\n`);
+    expect(runBoundary(fixture).status).toBe(0);
+  });
+
+  it("enforces executable deployment assembly imports as well as workspace imports", () => {
+    const fixture = fixtureRepository();
+    const entry = join(fixture, "deploy/organization-authority/staging-journey-explorer-handler-v1.mjs");
+    const original = readFileSync(entry, "utf8");
+    for (const [probe, error] of [
+      ["const target = 'unexpected'; export const load = () => import(target);", "assembly forbids opaque module loading"],
+      ["import 'unexpected-provider-sdk';", "assembly import is not allowed"],
+      ["import 'node:fs';", "assembly import is not allowed"],
+      ["import '@aws-sdk/client-cloudwatch-logs/unreviewed';", "assembly import is not allowed"],
+      ["const load = process.getBuiltinModule;", "assembly forbids opaque module loading"],
+      ["import './unregistered.mjs';", "assembly import is not a declared input"],
+    ]) {
+      writeFileSync(entry, original + "\n" + probe);
+      const result = runBoundary(fixture);
+      expect(result.status, probe).not.toBe(0);
+      expect(result.stdout + result.stderr, probe).toContain(error);
+    }
+    writeFileSync(entry, original);
+    expect(runBoundary(fixture).status).toBe(0);
+  });
+
+  it("checks provider assets and native assembly ownership through the same gate", () => {
+    const fixture = fixtureRepository();
+    const entry = join(fixture, "packages/federation-protocol/src/asset-probe.ts");
+    writeFileSync(entry, "export const asset = new URL('../../../providers/openrouter/assets/telemetry-vocabulary.v1.json', import.meta.url);\n");
+    expect(runBoundary(fixture).stdout).toContain("neutral module reaches provider");
+    rmSync(entry);
+    const orphan = join(fixture, "product/echo-overlay/unregistered.swift");
+    writeFileSync(orphan, "struct Unregistered {}\n");
+    expect(runBoundary(fixture).stdout).toContain("Swift source has no assembly owner");
+    rmSync(orphan);
+    const assemblyPath = "product/echo-overlay/source-assembly.v1.json";
+    const assembly = readFixtureJson<{ neutral_sources: string[]; provider_sources: string[] }>(fixture, assemblyPath);
+    assembly.neutral_sources.push(...assembly.provider_sources);
+    assembly.provider_sources = [];
+    writeFixtureJson(fixture, assemblyPath, assembly);
+    expect(runBoundary(fixture).stdout).toContain("assembly input has the wrong provider owner");
+  });
+
+  it("builds neutral packages with no provider, Person or service workspace available", () => {
+    const result = spawnSync(process.execPath, [join(REPO, "tools/check-neutral-build.mjs")], { cwd: REPO, encoding: "utf8" });
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    const report = JSON.parse(result.stdout) as {
-      discovered_adapter_ids: string[];
+    expect(JSON.parse(result.stdout)).toEqual({ ok: true, neutral_workspaces: 8, provider_workspaces: 0, service_workspaces: 0, prebuilt_workspace_outputs: 0 });
+  });
+
+  it("does not hide provider exports behind an unused name in a shared barrel", () => {
+    const fixture = fixtureRepository();
+    const barrel = join(fixture, "packages/organization-api/src/index.ts");
+    writeFileSync(barrel, readFileSync(barrel, "utf8") + "\nexport { OpenAiClient } from '@echo-brain/provider-openai/llm/openai-client';\n");
+    const result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("neutral module reaches provider: packages/organization-api/src/index.ts");
+  });
+
+  it("forbids neutral-to-bootstrap, provider-to-service and cross-provider dependencies", () => {
+    const fixture = fixtureRepository();
+    const cases = [
+      ["packages/organization-api/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-setup-cli.js", "neutral module reaches bootstrap"],
+      ["providers/openai/src/direction-probe.ts", "../../../services/organization-authority/src/composition/organization-authority-runtime.js", "provider imports the composing service"],
+      ["providers/openai/src/direction-probe.ts", "@echo-brain/provider-anthropic/llm/anthropic-client", "cross-provider dependency"],
+    ];
+    for (const [path, target, failure] of cases) {
+      const entry = join(fixture, path!);
+      writeFileSync(entry, `import '${target}';\n`);
+      const result = runBoundary(fixture);
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain(failure);
+      rmSync(entry);
+    }
+    expect(runBoundary(fixture).status).toBe(0);
+  });
+
+  it("requires production ownership even for a test-named folder inside shipped source", () => {
+    const fixture = fixtureRepository();
+    const hidden = join(fixture, "packages/federation-protocol/src/test");
+    mkdirSync(hidden);
+    writeFileSync(join(hidden, "bridge.ts"), "import '@echo-brain/provider-openai/llm/openai-client';\n");
+    expect(runBoundary(fixture).stdout).toContain("neutral module reaches provider");
+    rmSync(hidden, { recursive: true });
+    const orphan = join(fixture, "packages/unregistered/src");
+    mkdirSync(orphan, { recursive: true });
+    writeFileSync(join(orphan, "index.ts"), "export const value = 1;\n");
+    expect(runBoundary(fixture).stdout).toContain("production module has no architecture owner");
+  });
+
+  it("admits a new vendor only through a real workspace and one provider folder", () => {
+    const fixture = fixtureRepository();
+    const root = "providers/unseen-adapter";
+    const source = `${root}/src/index.ts`;
+    mkdirSync(join(fixture, root, "src"), { recursive: true });
+    writeFileSync(join(fixture, source), "export const decode = (value: unknown) => ({ value });\n");
+    expect(runBoundary(fixture).stdout).toContain("provider source must belong to a registered workspace package");
+    const name = "@echo-brain/provider-unseen-adapter";
+    writeFixtureJson(fixture, `${root}/package.json`, { name, version: "0.0.0-dev.0", type: "module", exports: { ".": { types: "./dist/index.d.ts", import: "./dist/index.js" } } });
+    writeFixtureJson(fixture, `${root}/tsconfig.json`, { compilerOptions: { rootDir: "src", outDir: "dist" } });
+    const manifest = { boundary_version: 1, kind: "echo-workspace-source-boundary", name, workspace: true,
+      boundary_root: root, source_root: `${root}/src`, package_json: `${root}/package.json`, entry_points: [source],
+      owned_source_paths: [`${root}/src/**`], allowed_internal_paths: [`${root}/src/**`],
+      allowed_workspace_packages: [], allowed_external_packages: [], allowed_node_builtins: [], runtime_assets: [],
+      component_index_contract: { canonical_components: [{ name: "Synthetic decoder", path: source, export: "decode" }], retired_source_paths: [], compatibility_entrypoints: [] },
+      layer_rules: [{ name: "provider-owned", from: `${root}/src/**`, allowed_imports: [`${root}/src/**`], allowed_workspace_packages: [], allowed_external_packages: [], allowed_node_builtins: [] }],
     };
-    expect(report.discovered_adapter_ids).toEqual([
-      "anthropic",
-      "deepseek",
-      "granola",
-      "llm",
-      "ollama",
-      "openai",
-      "openrouter",
-      "slack",
-      "synthetic-demo-source",
-    ]);
-
-    const probe = join(
-      fixture,
-      "services/organization-authority/src/processing/core/adapter-id-leak-probe.ts",
-    );
-    writeFileSync(probe, `export const leakedAdapterId = 'granola';\n`);
-    result = runBoundary(fixture);
-    expect(result.status).not.toBe(0);
-    expect(result.stdout + result.stderr).toContain(
-      "provider identifier 'granola' leaked into provider-neutral module: services/organization-authority/src/processing/core/adapter-id-leak-probe.ts",
-    );
-  });
-
-  it("keeps supplemental provider identifiers and discovered adapters out of neutral modules", () => {
-    const fixture = fixtureRepository();
-    const manifest = readFixtureJson<BoundaryManifest>(
-      fixture,
-      "services/organization-authority/source-boundary.v1.json",
-    );
-    const admittedMeetingProcessingRule = manifest.layer_rules.find(
-      (rule) => rule.name === "admitted-meeting-processing-is-provider-neutral",
-    );
-    expect(admittedMeetingProcessingRule).toBeDefined();
-    expect(admittedMeetingProcessingRule?.allowed_imports).not.toContain(
-      "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
-    );
-    const compositionRule = manifest.layer_rules.find(
-      (rule) => rule.name === "authority-composition-selects-concrete-implementations",
-    );
-    expect(compositionRule?.allowed_imports).toContain(
-      "services/organization-authority/src/shared/journey-telemetry-v1.ts",
-    );
-    expect(compositionRule?.allowed_imports).toContain(
-      "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
-    );
-    expect(compositionRule?.allowed_imports).toContain(
-      "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/**",
-    );
-    expect(
-      manifest.layer_rules.find(
-        (rule) => rule.name === "processing-synthetic-demo-meeting-source",
-      ),
-    ).toMatchObject({
-      from: "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/synthetic-demo-meeting-source-v1.ts",
-      allowed_imports: [
-        "services/organization-authority/src/processing/core/index.ts",
-      ],
-      allowed_workspace_packages: ["@echo-brain/federation-protocol"],
-      allowed_node_builtins: ["fs/promises", "path"],
-    });
-    expect(
-      manifest.layer_rules.find(
-        (rule) =>
-          rule.name === "authority-synthetic-demo-entrypoint-calls-composition",
-      ),
-    ).toMatchObject({
-      from: "services/organization-authority/src/synthetic-demo-main.ts",
-      allowed_imports: [
-        "services/organization-authority/src/composition/synthetic-demo-organization-authority-cli.ts",
-      ],
-    });
-    for (const concreteCompositionModule of [
-      "services/organization-authority/src/composition/providers/granola/granola-admitted-meeting-source-cursor-policy-v1.ts",
-      "services/organization-authority/src/composition/organization-authority-composition-root.ts",
-    ]) {
-      expect(existsSync(join(fixture, concreteCompositionModule))).toBe(true);
-    }
-
-    const product = readFixtureJson<{
-      adapter_architecture: {
-        provider_neutral_roots: string[];
-        provider_selecting_entrypoints: string[];
-        provider_coupled_exceptions: Array<{ path: string; reason: string }>;
-        provider_identifier_registry: Array<{
-          identifier: string;
-          transport_provider?: boolean;
-          source_evidence_paths: string[];
-        }>;
-        provider_adapter_roots: Array<{
-          identifier: string;
-          root: string;
-          provider_identifier?: boolean;
-        }>;
-        forbid_discovered_adapter_ids_in_provider_neutral_roots: boolean;
-      };
-    }>(fixture, "product/source-boundary.v1.json");
-    expect(product.adapter_architecture.provider_neutral_roots).toEqual([
-      "services/organization-authority/src/**",
-      "packages/*/src/**",
-    ]);
-    expect(product.adapter_architecture.provider_selecting_entrypoints).toContain(
-      "services/organization-authority/src/composition/organization-authority-composition-root.ts",
-    );
-    expect(
-      product.adapter_architecture.provider_identifier_registry.map(
-        ({ identifier }) => identifier,
-      ),
-    ).toEqual(["openrouter", "openai", "anthropic", "ollama", "deepseek"]);
-    expect(
-      product.adapter_architecture
-        .forbid_discovered_adapter_ids_in_provider_neutral_roots,
-    ).toBe(true);
-    expect(product.adapter_architecture.provider_adapter_roots).toEqual(expect.arrayContaining([
-      {
-        identifier: "granola",
-        root: "services/organization-authority/src/processing/adapters/meeting-sources/granola/",
-      },
-      {
-        identifier: "llm",
-        root: "services/organization-authority/src/processing/adapters/decision-processors/llm/",
-        provider_identifier: false,
-      },
-      {
-        identifier: "slack",
-        root: "packages/organization-control-plane/src/application/slack/",
-      },
-      {
-        identifier: "slack",
-        root: "services/organization-authority/src/processing/adapters/shared/slack/",
-      },
-      {
-        identifier: "openrouter",
-        root: "services/organization-authority/src/composition/providers/openrouter/",
-      },
-      {
-        identifier: "slack",
-        root: "services/organization-authority/src/composition/providers/slack/",
-      },
-      {
-        identifier: "synthetic-demo-source",
-        root: "services/organization-authority/src/processing/adapters/meeting-sources/synthetic-demo/",
-      },
-      {
-        identifier: "synthetic-demo-source",
-        root: "services/organization-authority/src/composition/providers/synthetic-demo/",
-      },
-      {
-        identifier: "synthetic-demo-source",
-        root: "services/organization-authority/src/synthetic-demo-main.ts",
-      },
-    ]));
-
-    const probePath =
-      "services/organization-authority/src/processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.ts";
-    const probe = join(fixture, probePath);
-    const original = readFileSync(probe, "utf8");
-    for (const providerIdentifier of [
-      "openrouter",
-      "openai",
-      "anthropic",
-      "ollama",
-    ]) {
-      try {
-        writeFileSync(
-          probe,
-          `${original}\n// ${providerIdentifier} compatibility leak.\n`,
-        );
-        const result = runBoundary(fixture);
-        expect(result.status, result.stdout + result.stderr).toBe(1);
-        expect(result.stdout + result.stderr).toContain(
-          `provider identifier '${providerIdentifier}' leaked into provider-neutral module: ${probePath}`,
-        );
-      } finally {
-        writeFileSync(probe, original);
-      }
-    }
-
-    for (const registeredProvider of product.adapter_architecture
-      .provider_identifier_registry) {
-      const sourceEvidence = registeredProvider.source_evidence_paths;
-      try {
-        registeredProvider.source_evidence_paths = [
-          `services/organization-authority/src/composition/missing-${registeredProvider.identifier}-provider.ts`,
-        ];
-        writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
-        const result = runBoundary(fixture);
-        expect(result.status, result.stdout + result.stderr).toBe(1);
-        expect(result.stdout + result.stderr).toContain(
-          `adapter architecture provider '${registeredProvider.identifier}' source evidence path matches no source file`,
-        );
-      } finally {
-        registeredProvider.source_evidence_paths = sourceEvidence;
-        writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
-      }
-    }
-
-    const authority = readFixtureJson<{
-      layer_rules: Array<Record<string, unknown>>;
-    }>(fixture, "services/organization-authority/source-boundary.v1.json");
-    authority.layer_rules.push({
-      name: "test-fixture-provider-adapter",
-      from: "services/organization-authority/src/processing/adapters/delivery-surfaces/fixture-provider/**",
-      allowed_imports: [],
-      allowed_workspace_packages: [],
-      allowed_external_packages: [],
-      allowed_node_builtins: [],
-    });
-    writeFixtureJson(
-      fixture,
-      "services/organization-authority/source-boundary.v1.json",
-      authority,
-    );
-    const fixtureProvider = join(
-      fixture,
-      "services/organization-authority/src/processing/adapters/delivery-surfaces/fixture-provider/client.ts",
-    );
-    mkdirSync(dirname(fixtureProvider), { recursive: true });
-    writeFileSync(fixtureProvider, "export const fixtureProvider = true;\n");
-    let result = runBoundary(fixture);
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stdout + result.stderr).toContain(
-      "provider/adapter source is not covered by declared provider_adapter_roots: services/organization-authority/src/processing/adapters/delivery-surfaces/fixture-provider/client.ts",
-    );
-
-    product.adapter_architecture.provider_adapter_roots.push({
-      identifier: "fixture-provider",
-      root: "services/organization-authority/src/processing/adapters/delivery-surfaces/fixture-provider/",
-    });
-    writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
-    try {
-      writeFileSync(probe, `${original}\n// fixture-provider compatibility leak.\n`);
-      result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        `provider identifier 'fixture-provider' leaked into provider-neutral module: ${probePath}`,
-      );
-    } finally {
-      writeFileSync(probe, original);
-    }
-
-    const newClient = join(
-      fixture,
-      "services/organization-authority/src/processing/adapters/decision-processors/llm/unregistered-client.ts",
-    );
-    try {
-      writeFileSync(
-        newClient,
-        [
-          'import type { LlmProviderClient, StructuredGenerationRequest, StructuredGenerationResult } from "./llm-provider.js";',
-          'export class UnregisteredClient {',
-          '  get provider() { return "unregistered" as unknown as LlmProviderClient["provider"]; }',
-          '  async generateStructured(_request: StructuredGenerationRequest): Promise<StructuredGenerationResult> { throw new Error("fixture"); }',
-          '  async verifyModel(_model: string): Promise<void> {}',
-          '}',
-          '',
-        ].join('\n'),
-      );
-      const result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        "LLM provider declarations must exactly match LLM_PROVIDER_IDS",
-      );
-    } finally {
-      rmSync(newClient, { force: true });
-    }
-
-    try {
-      writeFileSync(
-        newClient,
-        [
-          'import type { LlmProviderClient as Client, StructuredGenerationRequest, StructuredGenerationResult } from "./llm-provider.js";',
-          'export class UnregisteredClient implements Client {',
-          '  async generateStructured(_request: StructuredGenerationRequest): Promise<StructuredGenerationResult> { throw new Error("fixture"); }',
-          '  async verifyModel(_model: string): Promise<void> {}',
-          '}',
-          '',
-        ].join('\n'),
-      );
-      const result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        "LLM provider client 'UnregisteredClient'",
-      );
-    } finally {
-      rmSync(newClient, { force: true });
-    }
-  });
-
-  it("covers an ordinary new shared file and a new package file without registration", () => {
-    const fixture = fixtureRepository();
-    const sharedProbe =
-      "services/organization-authority/src/shared/new-shared-observation-probe.ts";
-    const packageProbe = "packages/organization-record/src/log/new-record-probe.ts";
-    writeFileSync(join(fixture, sharedProbe), 'export const surface = "slack";\n');
-    writeFileSync(join(fixture, packageProbe), 'export const source = "granola";\n');
+    writeFixtureJson(fixture, `${root}/source-boundary.v1.json`, manifest);
+    const pkg = readFixtureJson<{ workspaces: string[] }>(fixture, "package.json");
+    pkg.workspaces.push(root); writeFixtureJson(fixture, "package.json", pkg);
+    const registry = readFixtureJson<Registry>(fixture, REGISTRY);
+    registry.manifests.push(`${root}/source-boundary.v1.json`); writeFixtureJson(fixture, REGISTRY, registry);
+    expect(runBoundary(fixture).stdout).toContain("production module has no architecture owner");
+    const product = readFixtureJson<{ adapter_architecture: { provider_roots: string[] } }>(fixture, "product/source-boundary.v1.json");
+    product.adapter_architecture.provider_roots.push(root); writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
     const result = runBoundary(fixture);
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stdout + result.stderr).toContain(
-      `provider identifier 'slack' leaked into provider-neutral module: ${sharedProbe}`,
-    );
-    expect(result.stdout + result.stderr).toContain(
-      `provider identifier 'granola' leaked into provider-neutral module: ${packageProbe}`,
-    );
-    // The generic LLM capability family owns a root but is not a vendor name.
-    rmSync(join(fixture, sharedProbe), { force: true });
-    rmSync(join(fixture, packageProbe), { force: true });
-    const capabilityProbe =
-      "services/organization-authority/src/processing/core/llm-capability-probe.ts";
-    writeFileSync(join(fixture, capabilityProbe), 'export const llm_usage = "llm";\n');
-    const capability = runBoundary(fixture);
-    expect(capability.status, capability.stdout + capability.stderr).toBe(0);
-    expect(capability.stdout + capability.stderr).not.toContain(
-      "leaked into provider-neutral module",
-    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
   });
 
-  it("keeps every provider-coupled exception earned and every entrypoint real", () => {
+  it("rejects retired exceptions, stale bootstrap declarations and divergent export conditions", () => {
     const fixture = fixtureRepository();
-    const product = readFixtureJson<{
-      adapter_architecture: {
-        provider_selecting_entrypoints: string[];
-        provider_coupled_exceptions: Array<{ path: string; reason: string }>;
-      };
-    }>(fixture, "product/source-boundary.v1.json");
-    const cleanPath =
-      "services/organization-authority/src/processing/core/contracts/decision.ts";
-    product.adapter_architecture.provider_coupled_exceptions.push({
-      path: cleanPath,
-      reason: "fixture: this file does not name or reach a provider",
-    });
-    product.adapter_architecture.provider_selecting_entrypoints.push(
-      "services/organization-authority/src/composition/missing-entrypoint.ts",
-    );
-    writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
-    const result = runBoundary(fixture);
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stdout + result.stderr).toContain(
-      `provider-coupled exception is no longer needed and must be removed: ${cleanPath}`,
-    );
-    expect(result.stdout + result.stderr).toContain(
-      "provider-selecting entrypoint names no source file: services/organization-authority/src/composition/missing-entrypoint.ts",
-    );
-  });
-
-  it("follows provider exports through workspace barrels and coupled exceptions", () => {
-    const fixture = fixtureRepository();
-    const probePath = "services/organization-authority/src/composition/boundary-export-probe.ts";
-    const probe = join(fixture, probePath);
-    for (const statement of [
-      'export { validateOrganizationPersonSlackBrowserLinkBeginRequest as validateInput } from "@echo-brain/organization-api";',
-      'import { validateOrganizationPersonSlackBrowserLinkBeginRequest as validateInput } from "@echo-brain/organization-api"; export { validateInput };',
-      'import type { OrganizationPersonSlackBrowserLinkBeginRequestV1 as Input } from "@echo-brain/organization-api"; export type { Input };',
-      'export type Input = import("@echo-brain/organization-api").OrganizationPersonSlackBrowserLinkBeginRequestV1;',
-      'export * from "@echo-brain/organization-api";',
-      'import * as api from "@echo-brain/organization-api"; export { api };',
-      'export const api = import("@echo-brain/organization-api");',
-    ]) {
-      writeFileSync(probe, `${statement}\n`);
-      const result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        `provider-neutral module reaches declared provider/adapter root 'slack': ${probePath}`,
-      );
-    }
-    const exception = join(fixture, "services/organization-authority/src/composition/ask-journey-telemetry-v1.ts");
-    writeFileSync(exception, `${readFileSync(exception, "utf8")}\nexport { validateOrganizationPersonSlackBrowserLinkBeginRequest as validateInput } from "@echo-brain/organization-api";\n`);
-    writeFileSync(probe, 'export { validateInput } from "./ask-journey-telemetry-v1.js";\n');
-    const escaped = runBoundary(fixture);
-    expect(escaped.status, escaped.stdout + escaped.stderr).toBe(1);
-    expect(escaped.stdout + escaped.stderr).toContain(
-      `provider-neutral module reaches declared provider/adapter root 'slack': ${probePath}`,
-    );
-    // An ordinary neutral export from the same public API must remain usable.
-    writeFileSync(probe, 'export { validateOrganizationAuthorityOrigin as validateInput } from "@echo-brain/organization-api";\n');
-    const neutral = runBoundary(fixture);
-    expect(neutral.status, neutral.stdout + neutral.stderr).toBe(0);
-  });
-
-  it("rejects direct and transitive neutral-module reachability into declared provider roots", () => {
-    const fixture = fixtureRepository();
-    const neutralPath =
-      "services/organization-authority/src/composition/organization-authority-runtime.ts";
-    const neutral = join(fixture, neutralPath);
-    const original = readFileSync(neutral, "utf8");
-    const providerPath =
-      "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts";
-    try {
-      writeFileSync(
-        neutral,
-        `${original}\nimport \"../processing/adapters/meeting-sources/granola/index.js\";\n`,
-      );
-      let result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        `provider-neutral module reaches declared provider/adapter root 'granola': ${neutralPath} -> ${providerPath}`,
-      );
-
-      writeFileSync(neutral, original);
-      const intermediaryPath =
-        "services/organization-authority/src/composition/provider-reach-probe.ts";
-      writeFileSync(
-        join(fixture, intermediaryPath),
-        'import "../processing/adapters/meeting-sources/granola/index.js";\n',
-      );
-      writeFileSync(
-        neutral,
-        `${original}\nimport \"./provider-reach-probe.js\";\n`,
-      );
-      result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        `provider-neutral module reaches declared provider/adapter root 'granola': ${neutralPath} -> ${providerPath}`,
-      );
-    } finally {
-      writeFileSync(neutral, original);
-    }
-  });
-
-  it("rejects a bland three-hop bridge from a neutral root into provider composition", () => {
-    const fixture = fixtureRepository();
-    const neutralPath =
-      "services/organization-authority/src/composition/organization-authority-runtime.ts";
-    const neutral = join(fixture, neutralPath);
-    const original = readFileSync(neutral, "utf8");
-    const firstBridge = "services/organization-authority/src/composition/bland-bridge-one.ts";
-    const secondBridge = "services/organization-authority/src/composition/bland-bridge-two.ts";
-    try {
-      writeFileSync(join(fixture, secondBridge), 'import "./providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.js";\n');
-      writeFileSync(join(fixture, firstBridge), 'import "./bland-bridge-two.js";\n');
-      writeFileSync(neutral, `${original}\nimport "./bland-bridge-one.js";\n`);
-      const result = runBoundary(fixture);
-      expect(result.status, result.stdout + result.stderr).toBe(1);
-      expect(result.stdout + result.stderr).toContain(
-        `provider-neutral module reaches declared provider/adapter root 'slack': ${neutralPath} -> services/organization-authority/src/composition/providers/slack/private-approval/private-slack-approval-interaction-protocol-v1.ts`,
-      );
-    } finally {
-      writeFileSync(neutral, original);
-    }
-  });
-
-  it("rejects Authority composition imports into processing core", () => {
-    const fixture = fixtureRepository();
-    const compositionPath = join(
-      fixture,
-      "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
-    );
-    writeFileSync(
-      compositionPath,
-      `${readFileSync(compositionPath, "utf8")}\nexport * from '../processing/core/index.js';\n`,
-    );
-
-    const result = runBoundary(fixture);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stdout + result.stderr).toContain(
-      "@echo-brain/organization-authority: layer rule 'authority-composition-selects-concrete-implementations' rejects edge: services/organization-authority/src/composition/organization-authority-setup-cli.ts -> services/organization-authority/src/processing/core/index.ts",
-    );
-  });
-
-  it("enforces every Authority processing layer against domain imports", () => {
-    const fixture = fixtureRepository();
-    const manifestPath =
-      "services/organization-authority/source-boundary.v1.json";
-    const domainErrors = "services/organization-authority/src/domain/errors.ts";
-    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
-    const processingRules = manifest.layer_rules.filter((rule) =>
-      rule.name.startsWith("processing-"),
-    );
-
-    expect(processingRules.length).toBeGreaterThan(0);
-    expect(existsSync(join(fixture, domainErrors))).toBe(true);
-
-    // Mirror tools/lib/repository-files.mjs so a dead glob cannot pass by
-    // selecting a path the checker itself never scans.
-    const listed = spawnSync(
-      "git",
-      ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-      { cwd: fixture, encoding: "buffer" },
-    );
-    expect(listed.status, listed.stderr?.toString("utf8")).toBe(0);
-    const sourcePaths = listed.stdout
-      .toString("utf8")
-      .split("\0")
-      .filter(
-        (path) =>
-          path !== "" &&
-          /\.(?:[cm]?[jt]sx?)$/.test(path) &&
-          existsSync(join(fixture, path)) &&
-          lstatSync(join(fixture, path)).isFile(),
-      )
-      .sort();
-
-    const probes = processingRules.map((rule) => {
-      const sourcePath = sourcePaths.find((path) =>
-        matchesGlob(path, rule.from),
-      );
-      if (sourcePath === undefined) {
-        throw new Error(
-          `processing layer rule '${rule.name}' matches no real source`,
-        );
-      }
-      return { rule, sourcePath };
-    });
-
-    // The clean checker rejects overlapping rules; keep each mutation and
-    // restoration unambiguous if the manifest ever regresses.
-    expect(new Set(probes.map(({ sourcePath }) => sourcePath)).size).toBe(
-      probes.length,
-    );
-
-    const baseline = runBoundary(fixture);
-    expect(baseline.status, baseline.stdout + baseline.stderr).toBe(0);
-
-    for (const { rule, sourcePath } of probes) {
-      const absolutePath = join(fixture, sourcePath);
-      const original = readFileSync(absolutePath, "utf8");
-      const relativeTarget = posix
-        .relative(posix.dirname(sourcePath), domainErrors)
-        .replace(/\.ts$/, ".js");
-      const specifier = relativeTarget.startsWith(".")
-        ? relativeTarget
-        : `./${relativeTarget}`;
-
-      try {
-        writeFileSync(
-          absolutePath,
-          `${original}${original.endsWith("\n") ? "" : "\n"}import '${specifier}';\n`,
-        );
-        const result = runBoundary(fixture);
-        expect(result.status, result.stdout + result.stderr).toBe(1);
-        const report = JSON.parse(result.stdout) as { errors: string[] };
-        expect(report.errors, rule.name).toEqual([
-          `@echo-brain/organization-authority: layer rule '${rule.name}' rejects edge: ${sourcePath} -> ${domainErrors}`,
-        ]);
-      } finally {
-        writeFileSync(absolutePath, original);
-      }
-    }
-
-    const restored = runBoundary(fixture);
-    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    const path = "product/source-boundary.v1.json";
+    const product = readFixtureJson<{ adapter_architecture: Record<string, unknown> }>(fixture, path);
+    product.adapter_architecture.provider_coupled_exceptions = [];
+    writeFixtureJson(fixture, path, product);
+    expect(runBoundary(fixture).stdout).toContain("unsupported or retired: provider_coupled_exceptions");
+    delete product.adapter_architecture.provider_coupled_exceptions;
+    (product.adapter_architecture.bootstrap_entrypoints as string[]).push("services/organization-authority/src/missing.ts");
+    writeFixtureJson(fixture, path, product);
+    expect(runBoundary(fixture).stdout).toContain("bootstrap entrypoint must name a composing source module");
+    (product.adapter_architecture.bootstrap_entrypoints as string[]).pop(); writeFixtureJson(fixture, path, product);
+    const packagePath = "providers/openai/package.json";
+    const pkg = readFixtureJson<{ exports: Record<string, Record<string, string>> }>(fixture, packagePath);
+    pkg.exports["./llm/openai-client"]!.node = "./dist/another-entry.js";
+    writeFixtureJson(fixture, packagePath, pkg);
+    expect(runBoundary(fixture).stdout).toContain("requires an explicit workspace export");
   });
 
   it("applies builtin and external allowlists at the matching layer", () => {
     const fixture = fixtureRepository();
     const manifestPath =
-      "services/organization-authority/source-boundary.v1.json";
+      "packages/organization-authority-kernel/source-boundary.v1.json";
     const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
     manifest.allowed_node_builtins = ["process"];
     manifest.allowed_external_packages = ["ajv"];
     writeFixtureJson(fixture, manifestPath, manifest);
-    const packagePath = "services/organization-authority/package.json";
+    const packagePath = "packages/organization-authority-kernel/package.json";
     const packageJson = readFixtureJson<{
       dependencies: Record<string, string>;
     }>(fixture, packagePath);
     packageJson.dependencies.ajv = "8.17.1";
     writeFixtureJson(fixture, packagePath, packageJson);
     writeFileSync(
-      join(fixture, "services/organization-authority/src/domain/probe.ts"),
+      join(fixture, "packages/organization-authority-kernel/src/domain/probe.ts"),
       [
         `import process from 'node:process';`,
         `import Ajv from 'ajv';`,
@@ -1648,10 +1317,10 @@ describe("workspace source boundaries", () => {
     const result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "layer rule 'authority-domain-is-pure' rejects Node builtin node:process",
+      "layer rule 'organization-authority-kernel-domain' rejects Node builtin node:process",
     );
     expect(result.stdout + result.stderr).toContain(
-      "layer rule 'authority-domain-is-pure' rejects external import ajv",
+      "layer rule 'organization-authority-kernel-domain' rejects external import ajv",
     );
   });
 

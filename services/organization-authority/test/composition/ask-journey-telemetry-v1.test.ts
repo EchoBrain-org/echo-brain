@@ -1,6 +1,7 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { describe, expect, it, vi } from "vitest";
 import { createAskJourneyTelemetryFactoryV1 } from "../../src/composition/ask-journey-telemetry-v1.js";
-import type { JourneyTelemetryEventV1 } from "../../src/shared/journey-telemetry-v1.js";
+import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 
 const CLOCK = Object.freeze({
   now: () => "2026-09-02T17:00:00.000Z",
@@ -11,6 +12,7 @@ describe("Ask journey telemetry", () => {
   it("preserves the closed LLM stage when an observed model disagrees with the trusted profile", async () => {
     const events: JourneyTelemetryEventV1[] = [];
     const recorder = createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       observer: (event) => {
         events.push(event);
       },
@@ -74,6 +76,7 @@ describe("Ask journey telemetry", () => {
   it("rejects a runtime model that is outside the telemetry allowlist", () => {
     expect(() =>
       createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         observer: () => undefined,
         release_sha: "b".repeat(40),
         build_number: 43,
@@ -97,6 +100,7 @@ describe("Ask journey content observation", () => {
   it("stamps content with journey identity and its own sequence, and stays silent without a content observer", () => {
     const records: unknown[] = [];
     const recorder = createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       observer: () => undefined,
       ...identity,
       content_observer: (record) => {
@@ -137,6 +141,7 @@ describe("Ask journey content observation", () => {
     ]);
 
     const silent = createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       observer: () => undefined,
       ...identity,
     }).start();
@@ -149,6 +154,7 @@ describe("Ask journey content observation", () => {
     ).not.toThrow();
 
     const throwing = createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       observer: () => undefined,
       ...identity,
       content_observer: () => {

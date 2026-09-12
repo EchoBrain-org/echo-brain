@@ -146,6 +146,16 @@ function main() {
         recursive: true,
       });
       rmSync(join(destinationRoot, 'dist', '.tsbuildinfo'), { force: true });
+      // Public data exports are part of the package contract, even when the CLI
+      // does not read them on its startup path.
+      const dependencyManifest = readJson(join(dependencyRoot, 'package.json'));
+      for (const target of Object.values(dependencyManifest.exports ?? {})) {
+        if (typeof target !== 'string' || !target.endsWith('.json')) continue;
+        if (!target.startsWith('./') || target.includes('..', 2)) throw new Error('Invalid public asset path');
+        const destinationAsset = join(destinationRoot, target);
+        mkdirSync(resolve(destinationAsset, '..'), { recursive: true });
+        cpSync(join(dependencyRoot, target), destinationAsset);
+      }
     }
 
     const packed = npmPack(stagingRoot, destination);

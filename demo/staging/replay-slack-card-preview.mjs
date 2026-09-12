@@ -25,13 +25,13 @@ const { canonicalSha256 } = await import(fromRuntime(
   "node_modules/@echo-brain/federation-protocol/dist/index.js",
 ));
 const { projectPrivateSlackApprovalCardV1 } = await import(fromRuntime(
-  "services/organization-authority/dist/composition/providers/slack/private-approval/private-slack-dm-approval-stager-v1.js",
+  "providers/slack/server/dist/private-approval/private-slack-dm-approval-stager-v1.js",
 ));
 const { assertCanonicalDecisionSet, assertCanonicalMeetingDocument } = await import(fromRuntime(
-  "services/organization-authority/dist/processing/core/index.js",
+  "packages/organization-processing/dist/core/index.js",
 ));
 const { SlackWebApiClient } = await import(fromRuntime(
-  "services/organization-authority/dist/processing/adapters/shared/slack/slack-web-api-client.js",
+  "providers/slack/server/dist/processing/adapters/shared/slack/slack-web-api-client.js",
 ));
 
 const SYNTHETIC_SOURCE = Object.freeze({

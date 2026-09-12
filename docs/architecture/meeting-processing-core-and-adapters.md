@@ -15,13 +15,13 @@ provider API -> server adapter -> processing contracts <- processing cycle
                                   Authority composition -> durable server state
 ```
 
-- `services/organization-authority/src/processing/core/` imports no adapters,
+- `packages/organization-processing/src/core/` imports no adapters,
   vendor SDKs, Authority composition, or persistence implementation.
-- `processing/adapters/` implement typed core ports and own provider transport.
-- `processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.ts`
+- `providers/<provider>/src/` implements typed core ports and owns provider transport.
+- `packages/organization-processing/src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.ts`
   owns the SQLite implementation of production processing state; the core
-  storage port remains under `processing/core/storage/`.
-- `processing/admitted-meeting-processing/` owns the serialized bounded server cycle.
+  storage port remains under `packages/organization-processing/src/core/storage/`.
+- `packages/organization-processing/src/admitted-meeting-processing/` owns the serialized bounded server cycle.
 - Authority composition selects concrete adapters, credentials, organization
   policy, and stores through explicit bundles for meeting source, decision
   processor, answer composition, approval/interaction, and Person external
@@ -29,8 +29,8 @@ provider API -> server adapter -> processing contracts <- processing cycle
   provider is selected.
 
 `npm run check:architecture-boundaries` enforces these rules for every owned
-source file, not only today's entry-point closure. Processing tests live beside
-the Authority; cross-workspace source and artifact checks live under
+source file, not only today's entry-point closure. Processing tests live in `packages/organization-processing/test/`; provider tests
+live in their provider workspaces; cross-workspace source and artifact checks live under
 `tests/architecture/`.
 
 ## Canonical flow
@@ -49,7 +49,8 @@ meeting source
 
 The server owns source cursors, processing state, pending approvals, delivery
 receipts, and organization-record submission. The Person client owns none of
-that state and cannot load provider adapters.
+that state. Its provider client fragments use only authenticated Authority ports;
+server adapters remain outside its dependency closure.
 
 ## Typed capabilities
 
@@ -171,7 +172,7 @@ and
   versioned provider-independent capability.
 - V3 physically stores `provider_message_ts`; shared code treats it as opaque
   `presentation_external_id` until an explicit schema migration.
-- Bundles are trusted static composition, and name/dependency checks cannot
+- Bundles are trusted static composition, and ownership/dependency checks cannot
   detect every hidden semantic coupling. Each selected profile still needs
   capability tests and a bounded staging rehearsal.
 - Compatibility-bound `clean-founder-*` commands, manifest kinds, and durable

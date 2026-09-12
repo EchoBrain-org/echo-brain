@@ -1,0 +1,63 @@
+{
+  "name": "@echo-brain/provider-openrouter",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./llm/openrouter-decision-processor": {
+      "types": "./dist/llm/openrouter-decision-processor.d.ts",
+      "import": "./dist/llm/openrouter-decision-processor.js"
+    },
+    "./openrouter-decision-processor-bundle-v1": {
+      "types": "./dist/openrouter-decision-processor-bundle-v1.d.ts",
+      "import": "./dist/openrouter-decision-processor-bundle-v1.js"
+    },
+    "./openrouter-answer-composition-generation-bundle-v1": {
+      "types": "./dist/openrouter-answer-composition-generation-bundle-v1.d.ts",
+      "import": "./dist/openrouter-answer-composition-generation-bundle-v1.js"
+    },
+    "./openrouter-decision-processor-config-v1": {
+      "types": "./dist/openrouter-decision-processor-config-v1.d.ts",
+      "import": "./dist/openrouter-decision-processor-config-v1.js"
+    },
+    "./openrouter-decision-processor-admission-commitment": {
+      "types": "./dist/openrouter-decision-processor-admission-commitment.d.ts",
+      "import": "./dist/openrouter-decision-processor-admission-commitment.js"
+    },
+    "./openrouter-telemetry-vocabulary-v1": {
+      "types": "./dist/openrouter-telemetry-vocabulary-v1.d.ts",
+      "import": "./dist/openrouter-telemetry-vocabulary-v1.js"
+    },
+    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json",
+    "./llm/openrouter-client": {
+      "types": "./dist/llm/openrouter-client.d.ts",
+      "import": "./dist/llm/openrouter-client.js"
+    },
+    "./verify-openrouter-decision-processor-admission-v1": {
+      "types": "./dist/verify-openrouter-decision-processor-admission-v1.d.ts",
+      "import": "./dist/verify-openrouter-decision-processor-admission-v1.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "assets/**"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/organization-processing": "0.0.0-dev.0",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

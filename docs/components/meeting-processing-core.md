@@ -32,7 +32,7 @@ qualification_ids:
 
 ## Responsibility
 
-`services/organization-authority/src/processing/core/` owns the
+`packages/organization-processing/src/core/` owns the
 provider-neutral decision pipeline, domain contracts, ports, processing rules,
 approval state, delivery contracts, and storage interfaces.
 
@@ -52,7 +52,7 @@ references and approved-record policy projectors.
 ## Current references
 
 - [Meeting processing core and adapters](../architecture/meeting-processing-core-and-adapters.md)
-- Source: [`services/organization-authority/src/processing/core/`](../../services/organization-authority/src/processing/core)
+- Source: [`packages/organization-processing/src/core/`](../../packages/organization-processing/src/core)
 - Core tests: [`services/organization-authority/test/processing/core/`](../../services/organization-authority/test/processing/core)
 
 ## Durable records

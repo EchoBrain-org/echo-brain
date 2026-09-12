@@ -81,7 +81,7 @@ describe.skipIf(process.platform !== "darwin")("native owner People client", () 
 `);
     execFileSync("/usr/bin/xcrun", ["swiftc", "-swift-version", "5", "-parse-as-library", "-warnings-as-errors",
       "-target", "arm64-apple-macos14.0", "-framework", "AppKit", "-framework", "Carbon",
-      join(root, "overlay.swift"), join(repo, "product/echo-overlay/people.swift"), join(repo, "product/echo-overlay/account.swift"), join(root, "proof.swift"), "-o", binary],
+      join(root, "overlay.swift"), join(repo, "product/echo-overlay/ui-support.swift"), join(repo, "product/echo-overlay/people.swift"), join(repo, "product/echo-overlay/account.swift"), join(repo, "providers/slack/client/swift/slack-connected-tools.swift"), join(root, "proof.swift"), "-o", binary],
     { timeout: 120_000, stdio: "pipe" });
     writeFileSync(cli, `#!${process.execPath}
 const fs = require("node:fs");

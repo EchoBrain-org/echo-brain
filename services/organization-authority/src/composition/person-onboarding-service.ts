@@ -1,13 +1,13 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
+import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 import { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
-import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
-import { isCanonicalPersonEmail, isExpectedPersonEmail } from "../domain/person-session-rules.js";
-import { createPrivateAuthorityCredential } from "../adapters/security/private-file-credentials.js";
+import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
+import { isCanonicalPersonEmail, isExpectedPersonEmail } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
+import { createPrivateAuthorityCredential } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { SystemAuthorityClock } from "../adapters/system/system-authority-clock.js";
 import {
   discardPersonOnboardingInvitation,

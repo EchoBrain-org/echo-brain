@@ -7,13 +7,13 @@ import type { BegunPersonOidcLogin } from "../src/application/person-identity-se
 import type {
   FrozenPersonSessionOidcConfiguration,
   OidcAuthorizationCodeResult,
-} from "../src/application/ports/person-session-dependencies.js";
+} from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
-import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
-import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 
 const roots: string[] = [];

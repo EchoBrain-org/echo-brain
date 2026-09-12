@@ -13,6 +13,7 @@ export interface SyntheticDemoOrganizationAuthorityServiceConfigV1
     | "approval_workflow_bundle"
     | "answer_composition_generation_bundle"
     | "record_policy_fact_projectors"
+    | "record_input_codecs"
     | "run_staging_synthetic_private_dm_canary"
   > {
   /** A demo-only state directory. It is never a Granola service state directory. */

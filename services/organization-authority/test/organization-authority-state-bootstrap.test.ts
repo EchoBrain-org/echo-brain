@@ -35,13 +35,13 @@ import {
   applyAuthorityBaselineV4,
   AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
   authorityBaselineSha256V4,
-} from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
+} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { runOrganizationAuthorityResetCli } from "../src/composition/organization-authority-reset-cli.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
-import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { initializeAuthorityStateLineageV1 } from "../src/state-lineage/authority-state-lineage-initializer.js";
-import { StateLineagePreopenRefusal } from "../src/state-lineage/state-lineage-preopen-guard.js";
+import { StateLineagePreopenRefusal } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-preopen-guard";
 
 const roots: string[] = [];
 const CREATED_AT = "2026-08-22T00:00:00.000Z";

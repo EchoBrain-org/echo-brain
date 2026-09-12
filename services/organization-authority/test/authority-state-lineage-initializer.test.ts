@@ -8,7 +8,7 @@ import {
   STATE_LINEAGE_MANIFEST_TABLE,
   STATE_LINEAGE_ROOT_MANIFEST_FILENAME,
   STATE_LINEAGE_ROLE_APPLICATION_IDS_V1,
-} from "../src/state-lineage/state-lineage-manifest-v1.js";
+} from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 import {
   initializeAuthorityStateLineageV1,
   type InitializeAuthorityStateLineageV1Input,
@@ -17,8 +17,8 @@ import {
   applyAuthorityBaselineV1,
   AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
   authorityBaselineSha256V1,
-} from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
+} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import {
   applyOrganizationControlBaselineV1,
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,

@@ -22,7 +22,8 @@
   "bundleDependencies": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-protocol",
-    "@echo-brain/organization-api"
+    "@echo-brain/organization-api",
+    "@echo-brain/provider-slack-client"
   ],
   "scripts": {
     "build": "tsc -b",
@@ -31,7 +32,8 @@
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-api": "0.0.0-dev.0",
-    "@echo-brain/organization-protocol": "0.0.0-dev.0"
+    "@echo-brain/organization-protocol": "0.0.0-dev.0",
+    "@echo-brain/provider-slack-client": "0.0.0-dev.0"
   },
   "engines": {
     "node": "22.22.1",

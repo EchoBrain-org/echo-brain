@@ -1,9 +1,10 @@
-import { currentCoreRuntimeDetailV1 } from "../shared/core-runtime-observation-v1.js";
+import type { TelemetryVocabularyV1 } from "@echo-brain/organization-authority-kernel/shared/telemetry-vocabulary-v1";
+import { currentCoreRuntimeDetailV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { join } from "node:path";
-import type { AdapterError } from "../processing/core/contracts/adapter.js";
-import { AdapterError as AdapterFailure } from "../processing/core/contracts/adapter.js";
-import type { DecisionExtractionGenerationObservation } from "../processing/core/contracts/decision.js";
-import { AuthorityOperationError } from "../domain/errors.js";
+import type { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
+import { AdapterError as AdapterFailure } from "@echo-brain/organization-processing/core/contracts/adapter";
+import type { DecisionExtractionGenerationObservation } from "@echo-brain/organization-processing/core/contracts/decision";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import {
   createJourneyTelemetryEventV1,
   observeJourneyTelemetryBestEffortV1,
@@ -13,7 +14,7 @@ import {
   type JourneyLlmUsageInputV1,
   type JourneyOutcomeV1,
   type JourneyTelemetryObserverV1,
-} from "../shared/journey-telemetry-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import {
   openMeetingApprovalJourneyStateV1,
   type MeetingApprovalJourneyStateV1,
@@ -26,7 +27,7 @@ import type {
   MeetingApprovalJourneyStageSuccessV1,
   MeetingApprovalJourneyStageV1,
   MeetingApprovalJourneyTelemetryPortV1,
-} from "../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
 
 export const STAGING_MEETING_APPROVAL_JOURNEY_STATE_FILE_V1 =
   "staging-meeting-approval-journeys-v1.sqlite" as const;
@@ -53,6 +54,7 @@ export interface MeetingApprovalObservationFailureV1 {
 }
 
 export interface MeetingApprovalJourneyTelemetryConfigV1 {
+  readonly vocabulary?: TelemetryVocabularyV1;
   readonly state_directory: string;
   readonly observer: JourneyTelemetryObserverV1;
   readonly on_observation_failure?: (failure: MeetingApprovalObservationFailureV1) => void;
@@ -747,8 +749,8 @@ class MeetingApprovalJourneyTelemetryV1
       event: { ...event, ...(shared === null ? {} : { diagnostic: shared }), accounting: event.event === "skipped"
         ? { kind: "skip", execution_attempt: 0, retry_count: 0 }
         : { ...this.state.executionAccounting(journey_id, event.stage, event.attempt), ...(event.recovered ? { kind: "recovery" as const } : shared !== null ? { kind: "shared_reference" as const } : {}) } },
-    });
-    observeJourneyTelemetryBestEffortV1(this.config.observer, normalized);
+    }, this.config.vocabulary);
+    observeJourneyTelemetryBestEffortV1(this.config.observer, normalized, this.config.vocabulary);
   }
 }
 

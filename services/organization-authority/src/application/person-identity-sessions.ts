@@ -1,7 +1,8 @@
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { Buffer } from "node:buffer";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import { AuthorityOperationError } from "../domain/errors.js";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import {
   addPersonSessionMilliseconds,
   assertOpaqueSubject,
@@ -18,15 +19,15 @@ import {
   PERSON_SESSION_HARD_REAUTHENTICATION_MS,
   PERSON_SESSION_SECRET_BYTES,
   personSessionUnauthorized,
-} from "../domain/person-session-rules.js";
-import { timestampMillis } from "../domain/rules.js";
+} from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
+import { timestampMillis } from "@echo-brain/organization-authority-kernel/domain/rules";
 import type {
   AuthorityPersonMembershipBinding,
   NewPersonSessionCredential,
   StoredOidcIdentityBinding,
   StoredOidcLoginAttempt,
   StoredPersonSessionFamily,
-} from "./ports/authority-repository.js";
+} from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import type {
   PersonSessionReadTransaction,
   PersonSessionRepository,
@@ -49,8 +50,8 @@ import type {
   PersonSessionRandomPurpose,
   PersonSessionDependencies,
   VerifiedOidcIdentityToken,
-} from "./ports/person-session-dependencies.js";
-import { personLoginGrantExpectedEmailDigestInput } from "../domain/person-email-binding.js";
+} from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
+import { personLoginGrantExpectedEmailDigestInput } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
 
 const SHA256_BYTES = 32;
 const LOCAL_UUID_BYTES = 16;
@@ -109,16 +110,6 @@ export interface IssuedPersonSession extends AuthorityPersonMembershipBinding {
   hard_reauthentication_at: string;
 }
 
-export interface PersonAccessAuthorization extends AuthorityPersonMembershipBinding {
-  identity_binding_id: string;
-  session_family_id: string;
-  access_credential_sha256: Sha256Digest;
-  access_expires_at: string;
-  hard_reauthentication_at: string;
-  person_state_sha256: Sha256Digest;
-  session_state_sha256: Sha256Digest;
-  checked_at: string;
-}
 
 type SynchronousResult<T> = T extends PromiseLike<unknown> ? never : T;
 

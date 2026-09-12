@@ -1,0 +1,65 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-granola",
+  "workspace": true,
+  "boundary_root": "providers/granola",
+  "source_root": "providers/granola/src",
+  "package_json": "providers/granola/package.json",
+  "entry_points": [
+    "providers/granola/src/granola-meeting-source-bundle-v1.ts",
+    "providers/granola/src/granola-private-credentials-v1.ts",
+    "providers/granola/src/source/granola-api-client.ts",
+    "providers/granola/src/source/record-owner-observation.ts",
+    "providers/granola/src/granola-meeting-source-admission.ts",
+    "providers/granola/src/source/meeting-source-adapter.ts",
+    "providers/granola/src/granola-admitted-meeting-source-cursor-policy-v1.ts"
+  ],
+  "owned_source_paths": [
+    "providers/granola/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/granola/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-authority-kernel",
+    "@echo-brain/organization-processing"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": [
+    "path",
+    "crypto"
+  ],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "provider-granola-implementation",
+      "from": "providers/granola/src/**",
+      "allowed_imports": [
+        "providers/granola/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "path",
+        "crypto"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Granola meeting source bundle",
+        "path": "providers/granola/src/granola-meeting-source-bundle-v1.ts",
+        "export": "createGranolaMeetingSourceBundleV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

@@ -1,10 +1,11 @@
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { once } from "node:events";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
-import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
+import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import {
   createPersonAnswerRouteV1,
   type AnswerCompositionFailureEventV1,
@@ -12,7 +13,7 @@ import {
 import type {
   StructuredGenerationInput,
   StructuredGenerationPort,
-} from "../src/answer-composition/retrieval-grounded-answer-composition.js";
+} from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
 import type {
   PersonRecordSearchBatchApplicationV1,
   PersonRecordSearchBatchReleaseV1,
@@ -21,9 +22,9 @@ import {
   createAskJourneyTelemetryFactoryV1,
   type AskJourneyTelemetryFactoryV1,
 } from "../src/composition/ask-journey-telemetry-v1.js";
-import type { AnswerCompositionGenerationProfileV1 } from "../src/composition/answer-composition-generation-bundle-v1.js";
-import { AuthorityOperationError } from "../src/domain/errors.js";
-import type { JourneyTelemetryEventV1 } from "../src/shared/journey-telemetry-v1.js";
+import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
+import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type {
   PersonAnswerHttpApplicationV1,
@@ -188,6 +189,7 @@ function stagingTelemetry(
 ): AskJourneyTelemetryFactoryV1 {
   let monotonicNow = 3_000;
   return createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
     observer: (event) => {
       events.push(event);
     },
@@ -311,6 +313,7 @@ describe("Person answer route", () => {
       }),
     };
     const journeyFactory = createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
       observer: (event) => {
         telemetry.push(event);
       },
@@ -487,6 +490,7 @@ describe("Person answer route", () => {
       model,
       generation: STAGING_GENERATION,
       ask_journey_telemetry: createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         observer: (event) => {
           telemetry.push(event);
         },
@@ -651,6 +655,7 @@ describe("Person answer route", () => {
     });
     const value = setup({
       ask_journey_telemetry: createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         observer,
         release_sha: "c".repeat(40),
         build_number: 44,
@@ -1125,6 +1130,7 @@ it("routes the question and raw output to the staging content observer while sta
     }),
   };
   const journeyFactory = createAskJourneyTelemetryFactoryV1({
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
     observer: (event) => {
       telemetry.push(event);
     },

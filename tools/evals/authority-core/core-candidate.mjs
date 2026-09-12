@@ -1,17 +1,20 @@
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
+import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 /** Single child process running the existing core through canonical IPC ports. */
 import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { bootstrapOrganizationAuthorityState } from "../../../services/organization-authority/dist/composition/organization-authority-state-bootstrap.js";
-import { verifyAuthorityStateLineage } from "../../../services/organization-authority/dist/composition/verify-authority-state-lineage.js";
-import { openAuthorityDatabase } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
+import { verifyAuthorityStateLineage } from "../../../packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js";
+import { openAuthorityDatabase } from "../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../../services/organization-authority/dist/adapters/security/file-organization-authority-signer.js";
-import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../services/organization-authority/dist/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
-import { AdmittedMeetingProcessingCycleV1 } from "../../../services/organization-authority/dist/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import { DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS } from "../../../services/organization-authority/dist/processing/admitted-meeting-processing/serialized-meeting-processing-worker.js";
+import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+import { AdmittedMeetingProcessingCycleV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import { DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS } from "../../../packages/organization-processing/dist/admitted-meeting-processing/serialized-meeting-processing-worker.js";
 import { startOrganizationAuthorityServiceLifecycle } from "../../../services/organization-authority/dist/composition/organization-authority-service-lifecycle.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
-import { openOrganizationRecordDatabase, OrganizationRecordAppenderV4, createRecordPolicyFactProjectorRegistryV1, createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { openOrganizationRecordDatabase, OrganizationRecordAppenderV4, createRecordPolicyFactProjectorRegistryV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { createCoreIdentity } from "./core-identity.mjs";
 import { createCoreInput } from "./core-input.mjs";
 import { createCoreApproval } from "./core-approval.mjs";
@@ -84,6 +87,7 @@ async function open(state_directory) {
   reads = createCoreReadRoutes({ state_directory, sessions: identity.sessions });
   const search = createReadableSearchGenerationReconcilerV1({
     state_directory, root, authority, record, signer,
+    record_input_codecs: createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]),
     policy_projectors: projectors, related_atom_projector: reads.related_atom_projector,
   });
   const source = new AdmittedMeetingProcessingCycleV1({

@@ -1,0 +1,36 @@
+{
+  "name": "@echo-brain/provider-ollama",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./llm/ollama-decision-processor": {
+      "types": "./dist/llm/ollama-decision-processor.d.ts",
+      "import": "./dist/llm/ollama-decision-processor.js"
+    },
+    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json",
+    "./llm/ollama-client": {
+      "types": "./dist/llm/ollama-client.d.ts",
+      "import": "./dist/llm/ollama-client.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "assets/**"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/organization-processing": "0.0.0-dev.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

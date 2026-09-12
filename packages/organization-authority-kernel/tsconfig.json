@@ -1,0 +1,38 @@
+{
+  "extends": "../../tsconfig.build.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../federation-protocol"
+    },
+    {
+      "path": "../organization-protocol"
+    },
+    {
+      "path": "../organization-control-plane"
+    },
+    {
+      "path": "../organization-record"
+    },
+    {
+      "path": "../organization-retrieval"
+    },
+    {
+      "path": "../organization-api"
+    }
+  ]
+}

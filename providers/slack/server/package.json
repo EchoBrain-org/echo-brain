@@ -1,0 +1,108 @@
+{
+  "name": "@echo-brain/provider-slack-server",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./organization-protocol/private-slack-block-approval-record-input-v1": {
+      "types": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.d.ts",
+      "import": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.js"
+    },
+    "./organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1": {
+      "types": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.d.ts",
+      "import": "./dist/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js"
+    },
+    "./private-approval/private-slack-approval-workflow-bundle-v1": {
+      "types": "./dist/private-approval/private-slack-approval-workflow-bundle-v1.d.ts",
+      "import": "./dist/private-approval/private-slack-approval-workflow-bundle-v1.js"
+    },
+    "./person-identity/slack-person-external-identity-runtime-bundle-v1": {
+      "types": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.d.ts",
+      "import": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.js"
+    },
+    "./adapters/oidc/slack-browser-identity-provider": {
+      "types": "./dist/adapters/oidc/slack-browser-identity-provider.d.ts",
+      "import": "./dist/adapters/oidc/slack-browser-identity-provider.js"
+    },
+    "./private-approval/private-slack-approval-interaction-protocol-v1": {
+      "types": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.d.ts",
+      "import": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.js"
+    },
+    "./composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1": {
+      "types": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.d.ts",
+      "import": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js"
+    },
+    "./processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1": {
+      "types": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.d.ts",
+      "import": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js"
+    },
+    "./organization-control-plane/composition/slack-connection-setup-cli": {
+      "types": "./dist/organization-control-plane/composition/slack-connection-setup-cli.d.ts",
+      "import": "./dist/organization-control-plane/composition/slack-connection-setup-cli.js"
+    },
+    "./organization-control-plane/application/slack-integration-contracts": {
+      "types": "./dist/organization-control-plane/application/slack-integration-contracts.d.ts",
+      "import": "./dist/organization-control-plane/application/slack-integration-contracts.js"
+    },
+    "./slack-private-credentials-v1": {
+      "types": "./dist/slack-private-credentials-v1.d.ts",
+      "import": "./dist/slack-private-credentials-v1.js"
+    },
+    "./composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1": {
+      "types": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.d.ts",
+      "import": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js"
+    },
+    "./composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1": {
+      "types": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.d.ts",
+      "import": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js"
+    },
+    "./organization-control-plane/slack-approval-integration-v1": {
+      "types": "./dist/organization-control-plane/slack-approval-integration-v1.d.ts",
+      "import": "./dist/organization-control-plane/slack-approval-integration-v1.js"
+    },
+    "./organization-control-plane/adapters/slack/slack-web-identity-provider-v1": {
+      "types": "./dist/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.d.ts",
+      "import": "./dist/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js"
+    },
+    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json",
+    "./setup/initial-owner-slack-setup-v1": {
+      "types": "./dist/setup/initial-owner-slack-setup-v1.d.ts",
+      "import": "./dist/setup/initial-owner-slack-setup-v1.js"
+    },
+    "./setup/slack-browser-oauth-configuration-v1": {
+      "types": "./dist/setup/slack-browser-oauth-configuration-v1.d.ts",
+      "import": "./dist/setup/slack-browser-oauth-configuration-v1.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "assets/**"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/organization-control-plane": "0.0.0-dev.0",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/provider-slack-client": "0.0.0-dev.0",
+    "@echo-brain/organization-processing": "0.0.0-dev.0",
+    "@echo-brain/organization-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-record": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0",
+    "openid-client": "6.8.4",
+    "@echo-brain/organization-api": "0.0.0-dev.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  },
+  "bin": {
+    "echo-organization-control-plane-connect-slack": "dist/organization-control-plane/clean-slack-connect-main.js"
+  }
+}

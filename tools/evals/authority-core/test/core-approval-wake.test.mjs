@@ -1,3 +1,4 @@
+import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
@@ -8,16 +9,15 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   OrganizationRecordAppenderV4,
-  createPrivateSlackBlockApprovalPolicyProjectorV1,
   createRecordPolicyFactProjectorRegistryV1,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { openAuthorityDatabase } from "../../../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "../../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../../../services/organization-authority/dist/adapters/security/file-organization-authority-signer.js";
 import { bootstrapOrganizationAuthorityState } from "../../../../services/organization-authority/dist/composition/organization-authority-state-bootstrap.js";
-import { verifyAuthorityStateLineage } from "../../../../services/organization-authority/dist/composition/verify-authority-state-lineage.js";
-import { AdmittedMeetingProcessingCycleV1 } from "../../../../services/organization-authority/dist/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../../services/organization-authority/dist/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+import { verifyAuthorityStateLineage } from "../../../../packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js";
+import { AdmittedMeetingProcessingCycleV1 } from "../../../../packages/organization-processing/dist/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../../packages/organization-processing/dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import { createCoreApproval } from "../core-approval.mjs";
 import { createCoreIdentity } from "../core-identity.mjs";
 import { createCoreInput } from "../core-input.mjs";

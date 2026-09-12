@@ -1,7 +1,8 @@
+import { EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "@echo-brain/organization-authority-kernel/shared/telemetry-vocabulary-v1";
 import {
   createJourneyTelemetryEventV1,
   type JourneyTelemetryEventV1,
-} from "../../../shared/journey-telemetry-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 
 /** The staging-only CloudWatch namespace for the V1 journey overview. */
 export const STAGING_JOURNEY_METRICS_NAMESPACE_V1 =
@@ -63,6 +64,7 @@ function validNonnegativeInteger(value: unknown): value is number {
  */
 function normalizedStagingEvent(
   event: JourneyTelemetryEventV1,
+  vocabulary: TelemetryVocabularyV1,
 ): JourneyTelemetryEventV1 | null {
   try {
     const normalized = createJourneyTelemetryEventV1({
@@ -89,7 +91,7 @@ function normalizedStagingEvent(
         retrieval: event.retrieval,
         llm_usage: event.llm_usage,
       },
-    });
+    }, vocabulary);
     return normalized.environment === "staging" ? normalized : null;
   } catch {
     return null;
@@ -128,8 +130,9 @@ function record(
  */
 export function formatJourneyTelemetryMetricsV1(
   input: JourneyTelemetryEventV1,
+  vocabulary: TelemetryVocabularyV1 = EMPTY_TELEMETRY_VOCABULARY_V1,
 ): readonly StagingJourneyMetricRecordV1[] {
-  const event = normalizedStagingEvent(input);
+  const event = normalizedStagingEvent(input, vocabulary);
   if (event === null) return Object.freeze([]);
   const timestamp = canonicalTimestamp(event.observed_at);
   if (timestamp === null) return Object.freeze([]);

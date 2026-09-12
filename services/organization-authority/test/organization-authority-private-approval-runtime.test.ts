@@ -1,3 +1,9 @@
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
+import { persistedApprovalWorkflowFixtureV1 } from "./fixtures/persisted-approval-workflow-v1.js";
+import { createPrivateSlackApprovalWorkflowBundleV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-workflow-bundle-v1";
+import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { createHmac } from "node:crypto";
 import {
   chmodSync,
@@ -20,30 +26,24 @@ import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   openOrganizationControlDatabase,
-} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
-import {
-  buildExternalHumanIdentityLinkContractV2,
-  buildOrganizationToolConnectionContractV2,
-  buildOrganizationToolConnectionStateV2,
-} from "../../../packages/organization-control-plane/src/application/organization-tool-connection-contracts-v2.js";
+} from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
+import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../../providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeContentV1 } from "../src/shared/core-runtime-observation-v1.js";
-import type { JourneyTelemetryEventV1 } from "../src/shared/journey-telemetry-v1.js";
-import type {
-  BegunPersonOidcLogin,
-  PersonAccessAuthorization,
-} from "../src/application/person-identity-sessions.js";
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeContentV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
-import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { SystemAuthorityClock } from "../src/adapters/system/system-authority-clock.js";
-import { admitGranolaMeetingSource } from "../src/composition/providers/granola/granola-meeting-source-admission.js";
-import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "../src/composition/providers/openrouter/openrouter-decision-processor-admission-commitment.js";
+import { admitGranolaMeetingSource } from "@echo-brain/provider-granola/granola-meeting-source-admission";
+import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
@@ -59,29 +59,20 @@ import {
 import {
   STAGING_MEETING_APPROVAL_JOURNEY_STATE_FILE_V1,
 } from "../src/composition/meeting-approval-journey-telemetry-v1.js";
-import type { MeetingSourceBundleV1 } from "../src/composition/meeting-source-bundle-v1.js";
-import type { AnswerCompositionGenerationBundleV1 } from "../src/composition/answer-composition-generation-bundle-v1.js";
-import type { DecisionProcessorBundleV1 } from "../src/composition/decision-processor-bundle-v1.js";
 import type {
   ApprovalWorkflowBundleV1,
   ApprovalWorkflowContextV1,
-} from "../src/composition/approval-workflow-bundle-v1.js";
-import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2, createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+} from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
+import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import { createReadableSearchGenerationReconcilerV1, readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
-import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
-import {
-  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "../src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
+import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
-import type { StructuredGenerationPort } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
-import {
-  PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
-  privateSlackApprovalBlockKitActionIdV1,
-} from "../src/composition/providers/slack/private-approval/private-slack-approval-block-kit-card-v1.js";
+import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
+import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "../../../providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v1.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import type {
@@ -90,14 +81,9 @@ import type {
   DecisionSet,
   MeetingDocument,
   MeetingSourceAdapter,
-} from "../src/processing/core/index.js";
-import { createGranolaPostCutoffCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
-import type {
-  PrivateSlackApprovalCardPresentationV1,
-  PrivateSlackApprovalPostOutcomeV1,
-  PrivateSlackApprovalTerminalPresentationV1,
-  PrivateSlackApprovalUpdateOutcomeV1,
-} from "../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+} from "@echo-brain/organization-processing/core";
+import { createGranolaPostCutoffCursor } from "../../../providers/granola/src/source/meeting-source-adapter.js";
+import type { PrivateSlackApprovalCardPresentationV1, PrivateSlackApprovalPostOutcomeV1, PrivateSlackApprovalTerminalPresentationV1, PrivateSlackApprovalUpdateOutcomeV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 
 const roots: string[] = [];
 let testAuthorizationCheck = 0;
@@ -185,7 +171,7 @@ async function completeFounderReonboarding(input: {
   readonly state_directory: string;
   readonly parent: string;
   readonly owner_membership_id: string;
-}): Promise<string> {
+}): Promise<{ pkce_key_file: string; owner_access_token: string }> {
   const credentials = initializePersonSessionCredentials({
     state_directory: input.state_directory,
   });
@@ -235,14 +221,14 @@ async function completeFounderReonboarding(input: {
       login_grant: invitation.login_grant,
     });
     provider.buildAuthorizationUrl(begun);
-    await sessions.completeOidcLogin({
+    const session = await sessions.completeOidcLogin({
       state: begun.state,
       authorization_code: "founder-code",
     });
+    return { pkce_key_file: pkce, owner_access_token: session.access_token };
   } finally {
     authority.close();
   }
-  return pkce;
 }
 
 /** Seed only the connection and verified owner identity needed for a private DM. */
@@ -538,7 +524,7 @@ async function admittedFixture(input: {
     created_at: "2026-08-22T11:00:00.000Z",
     creating_artifact_revision: "organization-authority-runtime-test",
   });
-  const pkce_key_file = await completeFounderReonboarding({
+  const { pkce_key_file, owner_access_token } = await completeFounderReonboarding({
     state_directory: initialized.state_directory,
     parent,
     owner_membership_id: initialized.owner_membership_id,
@@ -629,6 +615,7 @@ async function admittedFixture(input: {
   };
   return {
     initialized,
+    owner_access_token,
     config,
     source,
     processorIdentity,
@@ -651,6 +638,54 @@ async function activeFixture() {
   return {
     ...fixture,
     runtime,
+  };
+}
+
+async function approvalSeamFixture(provider: "slack" | "fixture", interruptions: Pick<Parameters<typeof persistedApprovalWorkflowFixtureV1>[0], "stop_after_present" | "stop_before_receipt"> = {}) {
+  const fixture = await admittedFixture({ seed_private_slack_connection: provider === "slack" });
+  const path = join(fixture.initialized.state_directory, "fixture-approvals.json");
+  const contexts: ApprovalWorkflowContextV1[] = [];
+  const alternate = () => persistedApprovalWorkflowFixtureV1({ path, actor: { principal_id: fixture.initialized.owner_principal_id, membership_id: fixture.initialized.owner_membership_id }, ...interruptions });
+  const open = async () => {
+    const selected = provider === "slack" ? createPrivateSlackApprovalWorkflowBundleV1({ state_directory: fixture.initialized.state_directory,
+      signing_secret_file: fixture.config.slack_signing_secret_file, connection_id: fixture.config.slack_connection_id, poster: fixture.poster }) : alternate().bundle;
+    const approval_workflow_bundle: ApprovalWorkflowBundleV1 = {
+      async assert_existing_presentations_owned(context) { contexts.push(context); await selected.assert_existing_presentations_owned(context); },
+      async load(context) { contexts.push(context); return selected.load(context); },
+    };
+    return openOrganizationAuthorityRuntime({ ...fixture.config, port: await availablePort(), approval_workflow_bundle, record_input_codecs: RECORD_INPUT_CODECS,
+      staging_meeting_approval_journey_telemetry_enabled: true,
+      meeting_approval_journey_telemetry: { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, observer: () => undefined,
+        release_sha: "a".repeat(40), build_number: 1, extraction_provider: "openrouter", extraction_model: "anthropic/claude-sonnet-4.6" },
+      meeting_source_bundle: {
+        source_cursor_policy: { source_adapter_id: fixture.source.identity.adapter_id, assert_live_cursor(cursor) { expect(cursor.length).toBeGreaterThan(0); } },
+        assert_admission_commitments(commitments) { expect(commitments.source.adapter_id).toBe(fixture.source.identity.adapter_id); },
+        create_source(admission) { expect(admission.source.adapter_id).toBe(fixture.source.identity.adapter_id); return fixture.source; },
+      },
+      decision_processor_bundle: { processor_adapter_id: fixture.processorIdentity.adapter_id,
+        assert_admission_commitments(commitments) { expect(commitments.processor.adapter_id).toBe(fixture.processorIdentity.adapter_id); },
+        create_processor(admission) { expect(admission.processor.adapter_id).toBe(fixture.processorIdentity.adapter_id); return fakeProcessor(fixture.processorIdentity); },
+      },
+      answer_composition_generation_bundle: { load: () => ({ generation: { generation_adapter_id: "fixture-generation", planner_model: "fixture-planner", answer_model: "fixture-answer", timeout_ms: 1000 },
+        structured_output: { async generate() { throw new Error("fixture generation unexpected"); } } }) },
+      record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), ...(provider === "slack" ? [createPrivateSlackBlockApprovalPolicyProjectorV1()] : [])]),
+    }, { api: { oidc_provider: new TestPersonOidcProvider() } });
+  };
+  return { fixture, contexts, open,
+    presented: () => provider === "slack" ? fixture.poster.published.length === 1 : alternate().read().length === 1,
+    presentationCount: () => provider === "slack" ? fixture.poster.markers.length : alternate().read().length,
+    terminal: () => provider === "slack" ? fixture.poster.terminal.length === 1 : alternate().read()[0]?.phase === "appended",
+    approve: (runtime: Awaited<ReturnType<typeof open>>, request_timestamp: string) => provider === "slack"
+      ? clickCard({ fixture: { ...fixture, runtime }, card: fixture.poster.published[0]!, action: "approve", policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID, request_timestamp })
+      : fetch(`http://127.0.0.1:${runtime.address.port}/v2/integrations/test-approval/actions`, { method: "POST", body: "approve" }),
+    removeOwnership() {
+      if (provider === "fixture") { rmSync(path); return; }
+      const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
+      try {
+        authority.exec("DROP TRIGGER authority_private_approval_assignments_v3_delete_denied");
+        authority.prepare("DELETE FROM authority_private_approval_assignments_v3").run();
+      } finally { authority.close(); }
+    },
   };
 }
 
@@ -1071,154 +1106,76 @@ describe("Organization Authority runtime private approval lane", () => {
     );
   });
 
-  it("composes the generic admitted runtime with a non-Slack approval surface", async () => {
-    const fixture = await admittedFixture();
-    const staged: string[] = [];
-    let ingressCalls = 0;
-    const ownershipContexts: ApprovalWorkflowContextV1[] = [];
-    const openedContexts: ApprovalWorkflowContextV1[] = [];
-    const sourceRuntime: MeetingSourceBundleV1 = {
-      source_cursor_policy: {
-        source_adapter_id: fixture.source.identity.adapter_id,
-        assert_live_cursor(cursor) {
-          expect(cursor.length).toBeGreaterThan(0);
-        },
-      },
-      assert_admission_commitments(commitments) {
-        expect(commitments.source.adapter_id).toBe(
-          fixture.source.identity.adapter_id,
-        );
-      },
-      create_source(admission) {
-        expect(admission.source.adapter_id).toBe(
-          fixture.source.identity.adapter_id,
-        );
-        return fixture.source;
-      },
-    };
-    const processorRuntime: DecisionProcessorBundleV1 = {
-      processor_adapter_id: fixture.processorIdentity.adapter_id,
-      assert_admission_commitments(commitments) {
-        expect(commitments.processor.adapter_id).toBe(
-          fixture.processorIdentity.adapter_id,
-        );
-      },
-      create_processor(admission) {
-        expect(admission.processor.adapter_id).toBe(
-          fixture.processorIdentity.adapter_id,
-        );
-        return fakeProcessor(fixture.processorIdentity);
-      },
-    };
-    const answerCompositionRuntime: AnswerCompositionGenerationBundleV1 = {
-      load() {
-        return {
-          generation: {
-            generation_adapter_id: "test-generation-adapter",
-            planner_model: "test-planner",
-            answer_model: "test-answerer",
-            timeout_ms: 1_000,
-          },
-          structured_output: {
-            async generate() {
-              throw new Error("test answer generation was not expected");
-            },
-          },
-        };
-      },
-    };
-    const approvalRuntime: ApprovalWorkflowBundleV1 = {
-      async assert_existing_presentations_owned(context) {
-        ownershipContexts.push(context);
-      },
-      async load(context) {
-        openedContexts.push(context);
-        return {
-          stager: {
-            async stage(input) {
-              staged.push(input.candidate.approval_id);
-              return { kind: "staged", stage_id: "test-stage" };
-            },
-            async reconcilePendingDeliveries() {},
-            async reconcileSuperseded() {},
-          },
-          processing: {
-            async recoverV4Appends() {},
-            async observeAndFinalizePendingApprovals() {},
-            async appendFinalizedApprovalsToV4() {},
-          },
-          interaction_ingress: {
-            method: "POST",
-            path: "/v2/integrations/test-approval/actions",
-            async accept() {
-              ingressCalls += 1;
-              return "accepted";
-            },
-          },
-        };
-      },
-    };
-    const {
-      granola_credential_file: _granolaCredentialFile,
-      granola_owner_email_file: _granolaOwnerEmailFile,
-      openrouter_credential_file: _openRouterCredentialFile,
-      slack_signing_secret_file: _slackSigningSecretFile,
-      slack_connection_id: _slackConnectionId,
-      slack_identity_link_channel_id: _slackIdentityLinkChannelId,
-      ...sharedConfig
-    } = fixture.config;
-    const runtime = await openOrganizationAuthorityRuntime(
-      {
-        ...sharedConfig,
-        // Even an explicit staging marker must not enable telemetry on a
-        // non-staging Authority origin.
-        staging_meeting_approval_journey_telemetry_enabled: true,
-        meeting_approval_journey_telemetry: {
-          observer: () => undefined,
-          release_sha: "a".repeat(40),
-          build_number: 1,
-          extraction_provider: "openrouter",
-          extraction_model: "anthropic/claude-sonnet-4.6",
-        },
-        meeting_source_bundle: sourceRuntime,
-        decision_processor_bundle: processorRuntime,
-        approval_workflow_bundle: approvalRuntime,
-        answer_composition_generation_bundle: answerCompositionRuntime,
-        record_policy_fact_projectors:
-          createRecordPolicyFactProjectorRegistryV1([
-            createPersonPolicyFactProjectorV2(),
-          ]),
-      },
-      { api: { oidc_provider: new TestPersonOidcProvider() } },
-    );
+  it.each(["slack", "fixture"] as const)("runs %s through persisted delivery, dispatch, finalization, append and restart", async (provider) => {
+    const seam = await approvalSeamFixture(provider);
+    let runtime = await seam.open();
+    const record = openOrganizationRecordDatabase(join(seam.fixture.initialized.state_directory, "record-log.sqlite"), { fileMustExist: true });
     try {
-      expect(runtime.processing).toBe("active");
-      expect(
-        existsSync(
-          join(
-            fixture.initialized.state_directory,
-            STAGING_MEETING_APPROVAL_JOURNEY_STATE_FILE_V1,
-          ),
-        ),
-      ).toBe(false);
-      expect(ownershipContexts).toHaveLength(1);
-      expect(openedContexts).toHaveLength(1);
-      expect(openedContexts[0]).toBe(ownershipContexts[0]);
-      await waitFor(() => staged.length === 1, "fake approval staging");
-      const response = await fetch(
-        `http://127.0.0.1:${String(runtime.address.port)}/v2/integrations/test-approval/actions`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/test" },
-          body: "provider-neutral-action",
-        },
-      );
-      expect(response.status).toBe(200);
-      expect(ingressCalls).toBe(1);
-      expect(fixture.errors).toEqual([]);
-    } finally {
+      await waitFor(seam.presented, "seam presentation");
+      expect(seam.contexts).toHaveLength(2);
+      expect(seam.contexts[0]).toBe(seam.contexts[1]);
+      expect(seam.contexts[0]).not.toHaveProperty("authority_database");
+      expect(seam.contexts[0]).not.toHaveProperty("control_plane_database");
+      expect(seam.contexts[0]!.state).not.toHaveProperty("stageCandidate");
+      expect(Object.isFrozen(seam.contexts[0]!.state)).toBe(true);
+      expect(existsSync(join(seam.fixture.initialized.state_directory, STAGING_MEETING_APPROVAL_JOURNEY_STATE_FILE_V1))).toBe(false);
       await runtime.close();
-    }
+      runtime = await seam.open(); // Reconstruction uses disk state and a fresh bundle.
+      const replayTimestamp = String(Math.floor(Date.now() / 1_000));
+      const approve = () => seam.approve(runtime, replayTimestamp);
+      expect((await approve()).status).toBe(provider === "slack" ? 200 : 202);
+      expect((await approve()).status).toBe(provider === "slack" ? 200 : 202);
+      await waitFor(() => (record.prepare("SELECT count(*) AS count FROM organization_record_log").get() as { count: number }).count === 1, "seam signed append");
+      await waitFor(seam.terminal, "seam terminal publication");
+      expect(record.prepare("SELECT policy_id FROM organization_record_restricted_reviewer_person_fact").all())
+        .toEqual([{ policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID }]);
+      if (provider === "fixture") {
+        const response = await fetch(`http://127.0.0.1:${runtime.address.port}/v2/integrations/test-approval/actions?challenge=fixture-challenge`);
+        expect(await response.json()).toEqual({ validated: true });
+      }
+      await runtime.close();
+      runtime = await seam.open();
+      await runtime.drain(new AbortController().signal);
+      expect(record.prepare("SELECT count(*) AS count FROM organization_record_log").get()).toEqual({ count: 1 });
+      expect(seam.presentationCount()).toBe(1);
+      const read = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/records`, { headers: { authorization: `Bearer ${seam.fixture.owner_access_token}` } });
+      expect(read.status).toBe(200);
+      expect((await read.json() as { records: unknown[] }).records).toHaveLength(1);
+      expect(seam.fixture.errors).toEqual([]);
+    } finally { await runtime.close(); record.close(); }
+  });
+
+  it.each(["slack", "fixture"] as const)("rejects %s startup when persisted presentation ownership is missing", async (provider) => {
+    const seam = await approvalSeamFixture(provider);
+    const runtime = await seam.open();
+    await waitFor(seam.presented, "seam presentation");
+    await runtime.close();
+    seam.removeOwnership();
+    await expect(seam.open()).rejects.toThrow(/cannot prove ownership of outstanding/);
+  });
+
+  it("reconstructs the alternate after presentation and after record commit without a second external delivery or append", async () => {
+    let stopPresentation = true;
+    let stopReceipt = true;
+    const seam = await approvalSeamFixture("fixture", { stop_after_present: () => stopPresentation, stop_before_receipt: () => stopReceipt });
+    let runtime = await seam.open();
+    const record = openOrganizationRecordDatabase(join(seam.fixture.initialized.state_directory, "record-log.sqlite"), { fileMustExist: true });
+    try {
+      await waitFor(() => seam.fixture.errors.some((error) => error.message.includes("after presentation")), "presentation interruption");
+      await runtime.close();
+      stopPresentation = false;
+      runtime = await seam.open();
+      await waitFor(() => seam.contexts.at(-1)!.state.listOutstandingApprovalPresentations()[0]?.state === "staged", "delivery reconciliation");
+      expect((await seam.approve(runtime, "unused")).status).toBe(202);
+      await waitFor(() => seam.fixture.errors.some((error) => error.message.includes("before receipt")), "receipt interruption");
+      expect(record.prepare("SELECT count(*) AS count FROM organization_record_log").get()).toEqual({ count: 1 });
+      await runtime.close();
+      stopReceipt = false;
+      runtime = await seam.open();
+      await waitFor(seam.terminal, "append recovery");
+      expect(seam.presentationCount()).toBe(1);
+      expect(record.prepare("SELECT count(*) AS count FROM organization_record_log").get()).toEqual({ count: 1 });
+    } finally { await runtime.close(); record.close(); }
   });
 
   it.each([{ burst: 0, failModel: false }, { burst: 1, failModel: false }, { burst: 4, failModel: false }, { burst: 1, failModel: true }])("finalizes burst $burst during unresolved enrichment (projector failure: $failModel)", async ({ burst, failModel }) => {
@@ -1247,6 +1204,7 @@ describe("Organization Authority runtime private approval lane", () => {
       core_runtime_observation: { observer: (event) => { observations.push(event); }, content_observer: (event) => { contents.push(event); } },
       staging_meeting_approval_journey_telemetry_enabled: true,
       meeting_approval_journey_telemetry: {
+      vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
         observer: (event) => { journeys.push(event); }, release_sha: "a".repeat(40), build_number: 42,
         extraction_provider: "openrouter", extraction_model: "deepseek/deepseek-v3.2",
       },
@@ -1357,6 +1315,7 @@ describe("Organization Authority runtime private approval lane", () => {
           const root = verifyAuthorityStateLineage(fixture.initialized.state_directory).root;
           const generate = vi.fn(async (input: { readonly user_prompt: string }) => projectionResponse(input));
           const baseline = createReadableSearchGenerationReconcilerV1({
+            record_input_codecs: RECORD_INPUT_CODECS,
             state_directory: fixture.initialized.state_directory, root, authority, record,
             signer: FileOrganizationAuthoritySigner.openExisting({ directory: join(fixture.initialized.state_directory, "keys"), authority_id: root.authority_id, organization_id: root.organization_id }),
             policy_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1()]),
@@ -1514,6 +1473,23 @@ describe("Organization Authority runtime private approval lane", () => {
         authority,
         record,
       });
+      // Real signed approval -> permission-filtered reader -> configured
+      // projection -> current directory, through the service's HTTP runtime.
+      const recordsUrl = `http://127.0.0.1:${String(fixture.runtime.address.port)}/v1/person/records`;
+      const headers = { authorization: `Bearer ${fixture.owner_access_token}` };
+      const legacyRead = await fetch(recordsUrl, { headers });
+      expect(legacyRead.status).toBe(200);
+      const legacyRecords = await legacyRead.json() as { records: readonly { envelope: unknown }[] };
+      expect(legacyRecords.records).toHaveLength(1);
+      expect(legacyRecords.records[0]).not.toHaveProperty("source_metadata");
+      const enrichedRead = await fetch(recordsUrl, {
+        headers: { ...headers, "x-echo-person-record-version": "2" },
+      });
+      expect(enrichedRead.status).toBe(200);
+      const enrichedRecords = await enrichedRead.json() as { records: readonly { envelope: unknown; source_metadata: unknown }[] };
+      expect(enrichedRecords.records).toHaveLength(1);
+      expect(enrichedRecords.records[0]?.source_metadata).toEqual({ record_approved_by: { display_name: "Founder" } });
+      expect(enrichedRecords.records[0]?.envelope).toEqual(legacyRecords.records[0]?.envelope);
       expect(teamAnswers.owner).toMatchObject({
         answer: "Ship the clean live migration.",
         citations: [
@@ -1647,49 +1623,6 @@ describe("Organization Authority runtime private approval lane", () => {
     }
   });
 
-  it("fails closed on restart when outstanding Slack delivery lacks its immutable ownership proof", async () => {
-    const fixture = await activeFixture();
-    const authority = openAuthorityDatabase(
-      join(fixture.initialized.state_directory, "authority.sqlite"),
-      { fileMustExist: true },
-    );
-    try {
-      await waitFor(
-        () =>
-          fixture.errors.length > 0 || fixture.poster.published.length === 1,
-        "private approval card",
-      );
-      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
-      const card = fixture.poster.published[0]!;
-      await fixture.runtime.close();
-
-      // Corruption is intentional: the V3 trigger makes ordinary deletion
-      // impossible. A replacement surface must refuse this ambiguous card,
-      // rather than assuming it owns a provider operation already in flight.
-      authority.exec(
-        "DROP TRIGGER authority_private_approval_assignments_v3_delete_denied",
-      );
-      authority
-        .prepare(
-          "DELETE FROM authority_private_approval_assignments_v3 WHERE approval_id = ?",
-        )
-        .run(card.approval_id);
-
-      await expect(
-        openOrganizationAuthorityService(fixture.config, {
-          processing_adapter_overrides: {
-            source: fixture.source,
-            processor: fakeProcessor(fixture.processorIdentity),
-            private_approval_card_poster: new FakePrivateApprovalPoster(),
-          },
-        }),
-      ).rejects.toThrow(
-        /cannot prove ownership of outstanding (posting|posted|staged) presentation/,
-      );
-    } finally {
-      authority.close();
-    }
-  });
 
   it("fails closed before provider I/O when the admitted Slack state changes under the same connection id", async () => {
     const fixture = await activeFixture();

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
-import { transform } from "esbuild";
+import { javascriptSourceAssemblyV1, assertJavaScriptAssemblyImportsV1 } from './lib/source-assemblies.mjs';
+import { build } from "esbuild";
 import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = resolve(import.meta.dirname, "..");
 const deployment = resolve(root, "deploy", "organization-authority");
@@ -10,10 +12,15 @@ const templatePath = resolve(
   deployment,
   "authority-staging-journey-explorer-v1.template.json",
 );
-const handlerPath = resolve(
-  deployment,
-  "staging-journey-explorer-handler-v1.cjs",
-);
+const assembly = javascriptSourceAssemblyV1(JSON.parse(readFileSync(resolve(deployment, 'journey-explorer-assembly.v1.json'), 'utf8')));
+assertJavaScriptAssemblyImportsV1(assembly, path => readFileSync(resolve(root, path), "utf8"), (_path, specifier) => {
+  // Resolve only repository-owned package assets here. External runtime imports
+  // are governed by the manifest even when installed locally.
+  try {
+    const resolved = relative(root, fileURLToPath(import.meta.resolve(specifier)));
+    return resolved.startsWith('../') || resolved.startsWith('node_modules/') ? null : resolved;
+  } catch { return null; }
+});
 const inlineTemplateLimit = 51_200;
 const arguments_ = process.argv.slice(2);
 const check = arguments_.includes("--check");
@@ -22,11 +29,17 @@ if (arguments_.length > 0 && (!check || arguments_.length !== 1)) {
   throw new Error("usage: build-staging-journey-explorer-template.mjs [--check]");
 }
 
-const source = readFileSync(handlerPath, "utf8");
 // Keep the checked-in handler readable for review. CloudFormation transports
 // only the generated inline artifact, where identifier minification keeps the
 // fixed 51,200-byte TemplateBody below its API limit.
-const emitted = await transform(source, {
+const emitted = await build({
+  absWorkingDir: root,
+  entryPoints: [assembly.entrypoint],
+  bundle: true,
+  write: false,
+  metafile: true,
+  platform: "node",
+  external: [...assembly.allowed_external_packages, ...assembly.allowed_node_builtins],
   format: "cjs",
   legalComments: "none",
   minifyIdentifiers: true,
@@ -34,6 +47,9 @@ const emitted = await transform(source, {
   minifyWhitespace: true,
   target: "node24",
 });
+const actualInputs = Object.keys(emitted.metafile.inputs).map(path => relative(root, resolve(root, path))).sort();
+const expectedInputs = [assembly.entrypoint, ...assembly.neutral_sources, ...assembly.provider_assets].sort();
+if (JSON.stringify(actualInputs) !== JSON.stringify(expectedInputs)) throw new Error('Explorer assembly does not match bundled inputs');
 const template = JSON.parse(readFileSync(templatePath, "utf8"));
 const code = template?.Resources?.CustomWidgetJourneyExplorer?.Properties?.Code;
 
@@ -45,7 +61,7 @@ if (!code || typeof code !== "object" || Array.isArray(code)) {
 // separately from the readable handler so Code.ZipFile and template transport
 // whitespace do not consume the 51,200-byte API limit.
 template.Resources.CustomWidgetJourneyExplorer.Properties.Code = {
-  ZipFile: emitted.code,
+  ZipFile: emitted.outputFiles[0].text,
 };
 const generated = `${JSON.stringify(template)}\n`;
 

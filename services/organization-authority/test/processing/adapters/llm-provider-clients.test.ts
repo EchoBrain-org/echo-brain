@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { AnthropicClient } from '../../../src/processing/adapters/decision-processors/llm/anthropic-client.js';
-import { OllamaClient } from '../../../src/processing/adapters/decision-processors/llm/ollama-client.js';
+import { AnthropicClient } from "@echo-brain/provider-anthropic/llm/anthropic-client";
+import { OllamaClient } from "../../../../../providers/ollama/src/llm/ollama-client.js";
 import {
   observeCoreRuntimeV1,
   type CoreRuntimeObservationV1,
-} from '../../../src/shared/core-runtime-observation-v1.js';
-import { OpenAiClient } from '../../../src/processing/adapters/decision-processors/llm/openai-client.js';
-import { OpenRouterClient } from '../../../src/processing/adapters/decision-processors/llm/openrouter-client.js';
+} from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { OpenAiClient } from "@echo-brain/provider-openai/llm/openai-client";
+import { OpenRouterClient } from "../../../../../providers/openrouter/src/llm/openrouter-client.js";
 import {
   StructuredGenerationAttemptError,
   type StructuredGenerationRequest,
-} from '../../../src/processing/adapters/decision-processors/llm/llm-provider.js';
+} from "@echo-brain/organization-processing/llm/llm-provider";
 
 const generationRequest: StructuredGenerationRequest = {
   model: 'provider-model',

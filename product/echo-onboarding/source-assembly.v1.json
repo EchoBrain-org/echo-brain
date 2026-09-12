@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "kind": "echo-swift-source-assembly",
+  "bootstrap_sources": [
+    "product/echo-onboarding/main.swift"
+  ],
+  "neutral_sources": [],
+  "provider_sources": []
+}

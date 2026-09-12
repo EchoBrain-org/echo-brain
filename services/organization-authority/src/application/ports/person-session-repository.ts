@@ -13,7 +13,7 @@ import type {
   StoredPersonLoginGrant,
   StoredPersonSessionCredential,
   StoredPersonSessionFamily,
-} from "./authority-repository.js";
+} from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 
 /**
  * Existing staging databases have no separate retry-count column. The first

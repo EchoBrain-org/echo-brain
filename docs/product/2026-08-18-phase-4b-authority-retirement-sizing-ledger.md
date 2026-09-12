@@ -48,7 +48,7 @@ The measurements use the pinned Git object, not mutable working-tree bytes.
 Path aliases used below:
 
 - `P` —
-  `services/organization-authority/src/application/ports/authority-repository.ts`
+  `packages/organization-authority-kernel/src/application/ports/authority-repository.ts`
 - `R` —
   `services/organization-authority/src/adapters/persistence/sqlite/sqlite-authority-repository.ts`
 - `A` —

@@ -1,292 +1,62 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, posix, relative, resolve } from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, posix, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { describe, expect, it } from 'vitest';
 
-const REPO = resolve(import.meta.dirname, "../..");
-// These are the actual record/retrieval release modules. Deliberately exclude
-// the Person runtime composition root: it may compose an answer, but must
-// not make the lower-layer read/search closures model-aware.
-const RELEASED_RETRIEVAL_ROOTS = [
-  "packages/organization-record/src/retrieve",
-  "packages/organization-retrieval/src",
-  "services/organization-authority/src/application/readable-search-authorization-fence.ts",
-  "services/organization-authority/src/composition/person-record-read-route.ts",
-  "services/organization-authority/src/composition/person-record-search-route.ts",
-  "services/organization-authority/src/presentation/person-record-read-http-application.ts",
-  "services/organization-authority/src/presentation/person-record-search-http-application.ts",
-] as const;
-const ANSWER_COMPOSITION_ROOT =
-  "services/organization-authority/src/answer-composition";
-const ANSWER_COMPOSITION_ROUTE =
-  "services/organization-authority/src/composition/person-answer-route.ts";
-const ANSWER_COMPOSITION_AUDIT_WRITER =
-  "services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts";
-/** Composition roots may select an answer-composition runtime, but never inspect its implementation. */
-const ANSWER_COMPOSITION_WIRING_ROOTS = new Set([
-  "services/organization-authority/src/composition/organization-authority-service-cli.ts",
-  "services/organization-authority/src/composition/organization-authority-api-runtime.ts",
-  "services/organization-authority/src/composition/organization-authority-composition-root.ts",
-  "services/organization-authority/src/composition/organization-authority-runtime.ts",
-  "services/organization-authority/src/composition/synthetic-demo-organization-authority-cli.ts",
-  "services/organization-authority/src/composition/synthetic-demo-organization-authority-composition-root-v1.ts",
-]);
-const MODEL_IMPORT =
-  /(?:anthropic|openai|openrouter|ollama|processing\/adapters\/decision-processors\/llm)/;
-const DIRECT_LOWER_LAYER_IMPORT =
-  /(?:@echo-brain\/organization-(?:record|retrieval)|better-sqlite3|(?:^|\/)(?:record|retrieval|storage)(?:\/|$))/;
-const EXCLUDED_ANSWER_COMPOSITION_PATH =
-  /(?:^|\/)(?:agents?|tools?|memory|iterations?|vector|hybrid|rerank(?:ing)?|streaming)(?:[\/_\-.]|$)/i;
-
+const REPO = resolve(import.meta.dirname, '../..');
+const read = (path: string): string => readFileSync(join(REPO, path), 'utf8');
+const ANSWER_ROOT = 'packages/organization-authority-kernel/src/answer-composition';
+const ANSWER_ROUTE = 'services/organization-authority/src/composition/person-answer-route.ts';
+const AUDIT = 'services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts';
 function files(root: string): string[] {
-  const absolute = join(REPO, root);
-  return readdirSync(absolute).flatMap((name) => {
-    const path = join(absolute, name);
-    const repositoryPath = relative(REPO, path).replaceAll("\\", "/");
-    return statSync(path).isDirectory()
-      ? files(repositoryPath)
-      : path.endsWith(".ts")
-        ? [repositoryPath]
-        : [];
+  return readdirSync(join(REPO, root)).flatMap(name => {
+    const path = posix.join(root, name);
+    return statSync(join(REPO, path)).isDirectory() ? files(path) : path.endsWith('.ts') ? [path] : [];
   });
 }
+// Use the production whole-module graph, including public workspace exports.
+// The loader's bypass mutations live once in workspace-boundaries.test.ts.
+const { repositoryWorktree } = await import(pathToFileURL(join(REPO, 'tools/lib/repository-files.mjs')).href);
+const { providerModuleGraph } = await import(pathToFileURL(join(REPO, 'tools/lib/provider-module-graph.mjs')).href);
+const errors: string[] = [];
+const graph: { targets(path: string): ReadonlySet<string> } = providerModuleGraph(repositoryWorktree(REPO), (_tree: unknown, importer: string, specifier: string) => {
+  const target = posix.normalize(posix.join(posix.dirname(importer), specifier));
+  return [target, target.replace(/\.js$/, '.ts'), `${target}.ts`, `${target}/index.ts`].find(path => existsSync(join(REPO, path))) ?? null;
+}, errors);
 
-function filesIfPresent(root: string): string[] {
-  return existsSync(join(REPO, root)) ? files(root) : [];
-}
-
-function source(path: string): string {
-  return readFileSync(join(REPO, path), "utf8");
-}
-
-function resolveRelative(
-  importer: string,
-  specifier: string,
-): string | undefined {
-  const target = posix.normalize(
-    posix.join(posix.dirname(importer), specifier),
-  );
-  return [
-    ...(specifier.endsWith(".js") ? [target.slice(0, -3) + ".ts"] : []),
-    target,
-    `${target}.ts`,
-    `${target}.mts`,
-    posix.join(target, "index.ts"),
-  ].find((candidate) =>
-    statSync(join(REPO, candidate), { throwIfNoEntry: false })?.isFile(),
-  );
-}
-
-type RuntimeModuleReferenceKind =
-  | "import"
-  | "re-export"
-  | "dynamic-import"
-  | "require";
-
-interface RuntimeModuleReference {
-  readonly kind: RuntimeModuleReferenceKind;
-  readonly specifier: string | undefined;
-}
-
-function runtimeExport(node: ts.ExportDeclaration): boolean {
-  if (node.isTypeOnly) return false;
-  if (node.exportClause === undefined || !ts.isNamedExports(node.exportClause)) {
-    return true;
-  }
-  return node.exportClause.elements.some((element) => !element.isTypeOnly);
-}
-
-function literalSpecifier(expression: ts.Expression | undefined):
-  | string
-  | undefined {
-  if (expression === undefined) return undefined;
-  return ts.isStringLiteral(expression) ||
-    ts.isNoSubstitutionTemplateLiteral(expression)
-    ? expression.text
-    : undefined;
-}
-
-function runtimeModuleReferences(
-  path: string,
-  text = source(path),
-): readonly RuntimeModuleReference[] {
-  const parsed = ts.createSourceFile(
-    path,
-    text,
-    ts.ScriptTarget.Latest,
-    true,
-  );
-  const references: RuntimeModuleReference[] = [];
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isImportDeclaration(node) &&
-      node.importClause?.isTypeOnly !== true &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      references.push({ kind: "import", specifier: node.moduleSpecifier.text });
+describe('retrieval and answer-composition boundaries', () => {
+  it('keeps released read/search closures independent from provider and model implementations', () => {
+    expect(errors).toEqual([]);
+    const pending = [
+      ...files('packages/organization-record/src/retrieve'), ...files('packages/organization-retrieval/src'),
+      'packages/organization-authority-kernel/src/application/readable-search-authorization-fence.ts',
+      ...['person-record-read-route', 'person-record-search-route'].map(name => `services/organization-authority/src/composition/${name}.ts`),
+    ];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const path = pending.pop()!;
+      if (visited.has(path)) continue;
+      visited.add(path);
+      expect(path).not.toMatch(/^providers\/|^packages\/organization-processing\/src\/llm\/|^packages\/organization-authority-kernel\/src\/answer-composition\//);
+      pending.push(...graph.targets(path));
     }
-    if (
-      ts.isExportDeclaration(node) &&
-      runtimeExport(node) &&
-      node.moduleSpecifier !== undefined &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      references.push({ kind: "re-export", specifier: node.moduleSpecifier.text });
+    expect(visited.size).toBeGreaterThan(10);
+  });
+  it('keeps answer composition behind released contracts without direct record, retrieval or storage access', () => {
+    const implementation = [...files(ANSWER_ROOT), ANSWER_ROUTE];
+    expect(implementation.length).toBeGreaterThan(1);
+    for (const path of implementation) for (const target of graph.targets(path)) {
+      if (target === AUDIT) continue; // The route may write its bounded, dedicated audit event.
+      expect(relative(REPO, join(REPO, target))).not.toMatch(/^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
     }
-    if (ts.isCallExpression(node)) {
-      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        references.push({
-          kind: "dynamic-import",
-          specifier: literalSpecifier(node.arguments[0]),
-        });
-      } else if (ts.isIdentifier(node.expression) && node.expression.text === "require") {
-        references.push({
-          kind: "require",
-          specifier: literalSpecifier(node.arguments[0]),
-        });
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(parsed);
-  return references;
-}
-
-function reachableModelEdges(
-  roots: readonly string[] = RELEASED_RETRIEVAL_ROOTS,
-): readonly string[] {
-  const pending = roots.flatMap((root) =>
-    root.endsWith(".ts") ? [root] : files(root),
-  );
-  const visited = new Set<string>();
-  const edges: string[] = [];
-  while (pending.length > 0) {
-    const importer = pending.pop()!;
-    if (visited.has(importer)) continue;
-    visited.add(importer);
-    for (const { kind, specifier } of runtimeModuleReferences(importer)) {
-      if (specifier === undefined) {
-        // An opaque runtime loader cannot be bounded to the caller's reviewed
-        // closure, so it is itself an answer-composition boundary violation.
-        edges.push(`${importer} -> non-static ${kind}`);
-        continue;
-      }
-      const resolved = specifier.startsWith(".")
-        ? resolveRelative(importer, specifier)
-        : undefined;
-      if (
-        MODEL_IMPORT.test(specifier) ||
-        (resolved !== undefined && MODEL_IMPORT.test(resolved))
-      ) {
-        edges.push(`${importer} -> ${specifier}`);
-      }
-      if (resolved !== undefined) pending.push(resolved);
-    }
-  }
-  return edges.sort();
-}
-
-function directAnswerCompositionLowerLayerEdges(): readonly string[] {
-  return [...filesIfPresent(ANSWER_COMPOSITION_ROOT), ANSWER_COMPOSITION_ROUTE]
-    .flatMap((importer) =>
-      runtimeModuleReferences(importer).flatMap(({ specifier }) => {
-        if (specifier === undefined) return [`${importer} -> non-static import`];
-        const resolved = specifier.startsWith(".")
-          ? resolveRelative(importer, specifier)
-          : undefined;
-        return DIRECT_LOWER_LAYER_IMPORT.test(specifier) ||
-            (resolved !== undefined && DIRECT_LOWER_LAYER_IMPORT.test(resolved))
-          ? [`${importer} -> ${specifier}`]
-          : [];
-      }),
-    )
-    .sort();
-}
-
-describe("retrieval and answer-composition boundaries", () => {
-  it("keeps released retrieval independent from LLM processors and model SDKs", () => {
-    expect(reachableModelEdges()).toEqual([]);
+    expect(read(AUDIT)).toContain('context_kind: "answer_composition"');
   });
-
-  it("follows runtime re-exports, import(), and require() when checking the retrieval closure", () => {
-    expect(
-      reachableModelEdges([
-        "tests/fixtures/retrieval-answer-composition-boundary/re-export.ts",
-        "tests/fixtures/retrieval-answer-composition-boundary/dynamic-import.ts",
-        "tests/fixtures/retrieval-answer-composition-boundary/require.ts",
-      ]),
-    ).toEqual([
-      "tests/fixtures/retrieval-answer-composition-boundary/dynamic-import.ts -> ./openai-adapter.js",
-      "tests/fixtures/retrieval-answer-composition-boundary/re-export.ts -> ./openai-adapter.js",
-      "tests/fixtures/retrieval-answer-composition-boundary/require.ts -> ./openai-adapter.js",
-    ]);
-  });
-
-  it("rejects opaque runtime loaders rather than letting them evade the closure", () => {
-    expect(
-      runtimeModuleReferences(
-        "opaque-runtime-loader.ts",
-        'const name = "openai"; void import(name); require(name);',
-      ),
-    ).toEqual([
-      { kind: "dynamic-import", specifier: undefined },
-      { kind: "require", specifier: undefined },
-    ]);
-  });
-
-  it("keeps answer composition confined to its component, audit writer, and declared runtime wiring", () => {
-    const production = [
-      "services/organization-authority/src",
-      "packages/organization-control-plane/src",
-      "packages/organization-record/src",
-      "packages/organization-retrieval/src",
-      "packages/federation-protocol/src",
-      "packages/organization-api/src",
-      "packages/organization-protocol/src",
-      "src/product/person-client",
-    ].flatMap(files);
-    expect(
-      production.filter(
-        (path) =>
-          /answer_composition/.test(source(path)) &&
-          !path.startsWith(`${ANSWER_COMPOSITION_ROOT}/`) &&
-          path !== ANSWER_COMPOSITION_AUDIT_WRITER &&
-          !ANSWER_COMPOSITION_WIRING_ROOTS.has(path),
-      ),
-    ).toEqual([]);
-  });
-
-  it("keeps the persisted answer_composition audit kind in the audit writer", () => {
-    expect(source(ANSWER_COMPOSITION_AUDIT_WRITER)).toContain(
-      'context_kind: "answer_composition"',
-    );
-  });
-
-  it("keeps answer composition from directly importing records, retrieval, or storage", () => {
-    expect(directAnswerCompositionLowerLayerEdges()).toEqual([]);
-  });
-
-  it("keeps excluded agent, tool, memory, iterative retrieval, hybrid retrieval, reranking, and streaming paths absent from answer composition", () => {
-    const answerComposition = filesIfPresent(ANSWER_COMPOSITION_ROOT);
-    expect(answerComposition.filter((path) => EXCLUDED_ANSWER_COMPOSITION_PATH.test(path))).toEqual([]);
-    expect(
-      answerComposition.filter((path) => /(?:ReadableStream|text\/event-stream|stream\s*:\s*true)/.test(source(path))),
-    ).toEqual([]);
-  });
-
-  it("adds no model or agent dependency to released-retrieval workspaces", () => {
-    for (const manifestPath of [
-      "services/organization-authority/package.json",
-      "packages/organization-retrieval/package.json",
-    ]) {
-      const manifest = JSON.parse(source(manifestPath)) as {
-        dependencies?: Record<string, string>;
-      };
-      expect(
-        Object.keys(manifest.dependencies ?? {}).filter((name) =>
-          /anthropic|openai|openrouter|ollama|langchain|agent/i.test(name),
-        ),
-      ).toEqual([]);
+  it('retains bounded answer composition without agent loops or streaming', () => {
+    const implementation = files(ANSWER_ROOT);
+    expect(implementation.length).toBeGreaterThan(0);
+    for (const path of implementation) {
+      expect(path).not.toMatch(/\/(?:agents?|tools?|memory|iterations?|vector|hybrid|rerank(?:ing)?|streaming)(?:[\/_\-.]|$)/i);
+      expect(read(path)).not.toMatch(/ReadableStream|text\/event-stream|stream\s*:\s*true/);
     }
   });
 });

@@ -33,6 +33,14 @@ defines the supported operator and employee flow.
   under `staging/slack-private-approval/`.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
+- Identity and approval callbacks share the application-owned
+  `application/ports/provider-http-application-v1.ts` contract. The host mounts
+  exact routes, preserves raw request bytes, permits queries only by opt-in,
+  and owns response headers and limits: 64 KiB request/response bodies, 8 KiB
+  query strings, and 16 KiB fixed HTML pages. Providers select JSON, bounded
+  response bytes, or an empty acknowledgment and retain verification and
+  durable acceptance. HTML pages never reflect request fields; query-token
+  reflection is not a supported callback mode.
 
 Existing `clean-*` entrypoint filenames and `clean-founder` wire values are
 versioned compatibility names. They are not component boundaries and do not

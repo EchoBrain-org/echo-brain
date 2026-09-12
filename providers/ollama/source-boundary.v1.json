@@ -1,0 +1,52 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-ollama",
+  "workspace": true,
+  "boundary_root": "providers/ollama",
+  "source_root": "providers/ollama/src",
+  "package_json": "providers/ollama/package.json",
+  "entry_points": [
+    "providers/ollama/src/llm/ollama-client.ts",
+    "providers/ollama/src/llm/ollama-decision-processor.ts"
+  ],
+  "owned_source_paths": [
+    "providers/ollama/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/ollama/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/organization-processing"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": [],
+  "runtime_assets": [
+    "providers/ollama/assets/telemetry-vocabulary.v1.json"
+  ],
+  "layer_rules": [
+    {
+      "name": "provider-ollama-implementation",
+      "from": "providers/ollama/src/**",
+      "allowed_imports": [
+        "providers/ollama/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-processing"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "@echo-brain/provider-ollama implementation",
+        "path": "providers/ollama/src/llm/ollama-client.ts",
+        "export": "OllamaClient"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

@@ -1,32 +1,34 @@
-import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
-import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
+import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
+import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
+import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   type RecordPolicyFactProjectorRegistryV1,
   OrganizationRecordAppenderV4,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
-import { AdmittedMeetingProcessingCycleV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
+import { AdmittedMeetingProcessingCycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import {
   readAdmittedMeetingProcessingCommitmentsV1,
-} from "../processing/admitted-meeting-processing/admitted-meeting-processing-commitments.js";
-import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
+import { SqliteAuthorityMeetingProcessingStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1";
 import type {
   ApprovalWorkflowProcessingV1,
+  ApprovalWorkflowComponentsV1,
   ApprovalWorkflowBundleV1,
-} from "./approval-workflow-bundle-v1.js";
+} from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
 import type {
   AnswerCompositionGenerationBindingV1,
   AnswerCompositionGenerationBundleV1,
-} from "./answer-composition-generation-bundle-v1.js";
-import type { DecisionProcessorBundleV1 } from "./decision-processor-bundle-v1.js";
-import type { MeetingSourceBundleV1 } from "./meeting-source-bundle-v1.js";
+} from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
+import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-processing/ports/decision-processor-bundle-v1";
+import type { MeetingSourceBundleV1 } from "@echo-brain/organization-processing/ports/meeting-source-bundle-v1";
 import {
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
@@ -39,13 +41,13 @@ import {
 } from "./readable-search-generation-composition.js";
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
-import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
-import type { MeetingProcessingWorkerPhaseRunnerV1 } from "../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
+import type { MeetingProcessingWorkerPhaseRunnerV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 import type {
   StagingSyntheticMeetingCanaryInputV1,
   StagingSyntheticMeetingCanaryResultV1,
-} from "../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 import {
   openMeetingApprovalJourneyTelemetryV1,
   type MeetingApprovalJourneyTelemetryConfigV1,
@@ -53,8 +55,8 @@ import {
 import type {
   MeetingApprovalJourneyStageAttemptV1,
   MeetingApprovalJourneyTelemetryPortV1,
-} from "../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
-import { STAGING_AUTHORITY_ORIGIN_V1 } from "./staging-authority-environment-v1.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 
 export interface OrganizationAuthorityRuntimeConfig {
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
@@ -74,13 +76,14 @@ export interface OrganizationAuthorityRuntimeConfig {
   /** Explicit answer-composition bundle. This generic root does not select one. */
   readonly answer_composition_generation_bundle: AnswerCompositionGenerationBundleV1;
   /** Exact durable record-resolution protocols admitted into append and retrieval. */
+  readonly record_input_codecs: RecordInputCodecRegistryV4;
   readonly record_policy_fact_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly worker_interval_ms?: number;
   /** Observational only: a failed cycle is retried by the serialized worker. */
   readonly on_worker_error?: (error: Error) => void;
   /** Observational only: bounded, content-free worker lifecycle events. */
   readonly on_worker_telemetry?: (
-    event: import("../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js").MeetingProcessingWorkerTelemetryEventV1,
+    event: import("@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle").MeetingProcessingWorkerTelemetryEventV1,
   ) => void;
   /** Observational only: redacted answer-composition model-stage failures. */
   readonly on_answer_composition_failure?: (
@@ -322,14 +325,11 @@ export async function openOrganizationAuthorityRuntime(
     );
     return { ...runtime, processing: "active" };
   }
-  const control = openOrganizationControlDatabase(
-    join(config.state_directory, "integrations.sqlite"),
-    { fileMustExist: true },
-  );
   const record = openOrganizationRecordDatabase(
     join(config.state_directory, "record-log.sqlite"),
     { fileMustExist: true },
   );
+  let openedApprovals: ApprovalWorkflowComponentsV1 | undefined;
   let meetingApprovalJourneyTelemetry:
     | MeetingApprovalJourneyTelemetryPortV1
     | undefined;
@@ -390,29 +390,25 @@ export async function openOrganizationAuthorityRuntime(
     // signal is bound late. Until the lifecycle starts it is a no-op; the
     // periodic cycle still publishes anything queued in that window.
     let requestApprovalPublication: (() => void) | undefined;
-    const approvalContext = {
+    const recordAppend = new OrganizationRecordAppenderV4(record, coordinates, config.record_policy_fact_projectors);
+    const approvalContext = Object.freeze({
       on_terminal_action_queued: () => requestApprovalPublication?.(),
-      state: sourceState,
-      authority_database: authority,
-      control_plane_database: control,
-      record_append: new OrganizationRecordAppenderV4(
-        record,
-        {
-          ...coordinates,
-        },
-        config.record_policy_fact_projectors,
-      ),
-      signer,
+      state: bindApprovalWorkflowStateV1(sourceState, () => {
+        if (authority.inTransaction) throw new Error("approval state owner transaction must be idle");
+      }),
+      record_append: Object.freeze({ append: recordAppend.append.bind(recordAppend) }),
+      signer: Object.freeze({ inspect: signer.inspect.bind(signer), sign: signer.sign.bind(signer) }),
       coordinates,
       next_envelope_id: () => `env_${randomUUID()}`,
       ...(meetingApprovalJourneyTelemetry === undefined
         ? {}
         : { journey_telemetry: meetingApprovalJourneyTelemetry }),
-    };
+    });
     await config.approval_workflow_bundle.assert_existing_presentations_owned(
       approvalContext,
     );
     const approvals = await config.approval_workflow_bundle.load(approvalContext);
+    openedApprovals = approvals;
     const sourceCycle = new AdmittedMeetingProcessingCycleV1({
       source,
       processor,
@@ -439,6 +435,7 @@ export async function openOrganizationAuthorityRuntime(
       record,
       signer,
       policy_projectors: config.record_policy_fact_projectors,
+      record_input_codecs: config.record_input_codecs,
       related_atom_projector: relatedAtomProjector,
     });
     const runtime = await startOrganizationAuthorityServiceLifecycle(
@@ -507,18 +504,20 @@ export async function openOrganizationAuthorityRuntime(
         try {
           await runtime.close();
         } finally {
-          meetingApprovalJourneyTelemetry?.close();
-          record.close();
-          control.close();
-          authority.close();
+          try { openedApprovals?.close?.(); } finally {
+            meetingApprovalJourneyTelemetry?.close();
+            record.close();
+            authority.close();
+          }
         }
       },
     };
   } catch (error) {
-    meetingApprovalJourneyTelemetry?.close();
-    record.close();
-    control.close();
-    authority.close();
+    try { openedApprovals?.close?.(); } finally {
+      meetingApprovalJourneyTelemetry?.close();
+      record.close();
+      authority.close();
+    }
     throw error;
   }
 }

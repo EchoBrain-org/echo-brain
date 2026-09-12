@@ -38,10 +38,10 @@ import {
   applyAuthorityBaselineV4,
   AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
   authorityBaselineSha256V4,
-} from "../adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
+} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
-import { assertDisplayName } from "../domain/rules.js";
+import { assertDisplayName } from "@echo-brain/organization-authority-kernel/domain/rules";
 import {
   initializeAuthorityStateLineageV1,
   type InitializedAuthorityStateLineageV1,
@@ -50,7 +50,7 @@ import {
 import {
   stateLineageDatabaseManifestSha256V1,
   stateLineageRootManifestSha256V1,
-} from "../state-lineage/state-lineage-manifest-v1.js";
+} from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 
 /**
  * Explicit, absent-state initializer. It creates fresh Authority state only;

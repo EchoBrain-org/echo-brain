@@ -22,7 +22,7 @@ import type {
   StoredPersonLoginGrant,
   StoredPersonSessionCredential,
   StoredPersonSessionFamily,
-} from "../../../application/ports/authority-repository.js";
+} from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import {
   isOidcRedemptionClaimInNamespace,
   namespaceOidcRedemptionClaimId,

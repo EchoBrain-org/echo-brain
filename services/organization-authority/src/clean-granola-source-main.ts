@@ -1,4 +1,4 @@
-import { runGranolaMeetingSourceAdmissionCli } from "./composition/providers/granola/granola-meeting-source-admission-cli.js";
+import { runGranolaMeetingSourceAdmissionCli } from "./composition/admit-granola-meeting-source-cli-v1.js";
 
 try {
   process.exitCode = await runGranolaMeetingSourceAdmissionCli(process.argv.slice(2));

@@ -10,7 +10,7 @@ const CLEAN_ENTRIES = [
   "services/organization-authority/src/clean-live-main.ts",
   "services/organization-authority/src/clean-granola-source-main.ts",
   "services/organization-authority/src/clean-founder-main.ts",
-  "packages/organization-control-plane/src/clean-slack-connect-main.ts",
+  "providers/slack/server/src/organization-control-plane/clean-slack-connect-main.ts",
 ] as const;
 
 interface WorkspaceExport {
@@ -18,57 +18,14 @@ interface WorkspaceExport {
   readonly export_path: string;
 }
 
-const WORKSPACE_EXPORTS: ReadonlyMap<string, WorkspaceExport> = new Map([
-  [
-    "@echo-brain/organization-control-plane/organization-control-database-v1",
-    {
-      package_path: "packages/organization-control-plane/package.json",
-      export_path: "./organization-control-database-v1",
-    },
-  ],
-  [
-    "@echo-brain/organization-control-plane/slack-approval-integration-v1",
-    {
-      package_path: "packages/organization-control-plane/package.json",
-      export_path: "./slack-approval-integration-v1",
-    },
-  ],
-  [
-    "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1",
-    {
-      package_path: "packages/organization-control-plane/package.json",
-      export_path: "./record-visibility-policy-contracts-v1",
-    },
-  ],
-  [
-    "@echo-brain/organization-control-plane/slack-external-identity-integration-v1",
-    {
-      package_path: "packages/organization-control-plane/package.json",
-      export_path: "./slack-external-identity-integration-v1",
-    },
-  ],
-  [
-    "@echo-brain/organization-control-plane/slack-connection-setup-v1",
-    {
-      package_path: "packages/organization-control-plane/package.json",
-      export_path: "./slack-connection-setup-v1",
-    },
-  ],
-  [
-    "@echo-brain/organization-record/organization-record-api-v1",
-    {
-      package_path: "packages/organization-record/package.json",
-      export_path: "./organization-record-api-v1",
-    },
-  ],
-  [
-    "@echo-brain/organization-retrieval/readable-search-engine-v1",
-    {
-      package_path: "packages/organization-retrieval/package.json",
-      export_path: "./readable-search-engine-v1",
-    },
-  ],
-]);
+const WORKSPACE_EXPORTS: ReadonlyMap<string, WorkspaceExport> = new Map(
+  (JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")).workspaces as string[]).flatMap(workspace => {
+    const package_path = `${workspace}/package.json`;
+    const manifest = JSON.parse(readFileSync(join(REPO, package_path), "utf8")) as { name: string; exports?: Record<string, unknown> };
+    return Object.entries(manifest.exports ?? {}).filter(([, value]) => typeof value === "object" && value !== null && "import" in value)
+      .map(([export_path]) => [manifest.name + (export_path === "." ? "" : export_path.slice(1)), { package_path, export_path }] as const);
+  }),
+);
 
 const ALLOWED_LEAF_IMPORTS = new Set([
   "@echo-brain/federation-protocol",

@@ -1,9 +1,9 @@
-import { AuthorityOperationError } from "../domain/errors.js";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import {
   isCanonicalPersonEmail,
   isExpectedPersonEmail,
-} from "../domain/person-session-rules.js";
-import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
+} from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
+import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
 import type {
   EmployeeRosterEntry,
 } from "./ports/person-membership-write.js";
