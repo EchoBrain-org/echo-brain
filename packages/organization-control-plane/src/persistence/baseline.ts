@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import { sha256Digest } from "../canonical/canonical-json.js";
 
-/** Private fresh-lineage control-plane baseline. It is not live-wired. */
+/** Frozen V1 foundation retained by the fresh V2 control-plane baseline. */
 export const ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1 = 1;
 export const ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID = 0x45434f50;
 /** Fresh private-approval control-plane lineage: retained V1 plus V2 tables. */

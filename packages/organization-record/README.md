@@ -26,6 +26,14 @@ Fresh log and derived stores are created only from the two byte-pinned SQL
 baselines. Historical migrations, broad append and maintenance barrels,
 reviewer compatibility APIs, and derived compatibility paths are not shipped.
 
+The derived database is retained by the seven-role state-lineage contract.
+Bootstrap creates its metadata and cursor, but the shipped application has no
+materializer or reader for its seven graph/projection tables. Current Person
+reads and search generation use the canonical log and permission facts.
+Retiring this database therefore requires a versioned lineage transition,
+including initializer, verifier, backup and restore changes; its existence is
+not a reason to restore the retired graph implementation.
+
 The log remains truth and derived state remains disposable. See the
 [append/derive design](../../docs/product/2026-08-07-org-decision-record-append-derive-design.md)
 for the typed historical rationale.

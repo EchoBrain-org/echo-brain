@@ -28,15 +28,13 @@ import type {
  * canonical refusal matrix of the lineage contract, or `invalid_input` for a
  * malformed caller expectation, which is a caller-error family outside that
  * state matrix. It opens every database strictly read-only with `query_only`
- * on, never creates, migrates, checkpoints, or writes, and is deliberately
- * called from no composition root. Symlinks inside the state directory are
+ * on, never creates, migrates, checkpoints, or writes. Runtime composition
+ * and stopped-state validation call this before opening writable state.
+ * Symlinks inside the state directory are
  * followed, exactly as the production openers would follow them: the guard
  * verifies the bytes those openers would open, wherever they resolve.
- *
- * Wiring this guard into composition is NOT authorized until the four
- * open-database entry points are split into open-then-migrate: today each of
- * them migrates inside the open call, so a guard wired in front of them would
- * be advisory rather than blocking.
+ * Baseline application is separate from database opening and accepts only
+ * empty databases. This verifier supplies no automatic upgrade path.
  */
 
 export type StateLineageRefusalFamilyV1 =

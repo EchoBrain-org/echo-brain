@@ -104,6 +104,11 @@ descriptor was not used to establish pin provenance.
 The next executable step is a reviewed production inventory, not `stage` or
 `promote`. No production compatibility or deployment success is claimed here.
 
+The subsequent [database audit](2026-09-12-database-migration-cleanup.md) identifies
+22 table-removal candidates, the unused derived database role, and a redundant
+index. That cleanup requires a preservation-tested versioned transition and a
+new staging qualification before this production rollout can include it.
+
 Validation: canonical release validation, all three copied artifact hashes and
 their staging-closeout bindings, and `npm run check:docs` passed. No runtime code
 was changed. The human operator was asked for the installed updater's `status`

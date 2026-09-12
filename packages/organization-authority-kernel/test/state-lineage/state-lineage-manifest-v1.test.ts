@@ -95,12 +95,8 @@ describe("private state-lineage manifest v1 contracts", () => {
         (value >>> 8) & 0xff,
         value & 0xff,
       ]).toString("latin1");
-    // Six values are the shipped constants; authority is the single new
-    // assignment and no current authority.sqlite carries it, by design:
-    // control-plane from packages/organization-control-plane/src/persistence/
-    // migrate.ts, record roles from packages/organization-record/src/
-    // persistence/database-definition.ts, retrieval roles from
-    // packages/organization-retrieval/src/persistence/database-definition.ts.
+    // Every fresh database carries its shipped role ID. These IDs stay stable
+    // across schema versions; manifest and schema digests bind the lineage.
     expect(STATE_LINEAGE_ROLE_APPLICATION_IDS_V1).toEqual({
       authority: 0x45434155,
       "control-plane": 0x45434f50,

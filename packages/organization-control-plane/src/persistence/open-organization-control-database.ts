@@ -21,7 +21,8 @@ export interface OpenOrganizationControlDatabaseOptions {
 
 /**
  * Opens one control-plane SQLite file without importing or applying migrations.
- * New-lineage genesis uses this seam; legacy callers use the composed opener.
+ * Fresh initialization applies its baseline separately. Runtime callers
+ * verify state lineage before opening an existing database through this seam.
  */
 export function openOrganizationControlDatabase(
   databasePath: string,

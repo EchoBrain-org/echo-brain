@@ -17,12 +17,11 @@ import type {
  *
  * These are contract bodies only. This module opens no file or database, reads
  * no directory, and performs no coherence check across manifests; the separate
- * read-only pre-open guard owns that. The manifest table named here does not
- * exist in any current schema: no migration in this repository creates it, and
- * this module deliberately adds none. Like the Authority initialization
- * manifest, these contracts are composition-owned migration mechanics, not
- * Authority protocol surface, so they reside here rather than in a package
- * export.
+ * read-only pre-open guard owns that. The stopped-state initializer and
+ * retrieval generation builder stamp the manifest table after applying their
+ * frozen baselines. This module defines the bodies; it neither creates nor
+ * upgrades persisted state. These are persistence contracts, not signed
+ * Authority protocol messages.
  */
 
 export class StateLineageContractError extends Error {
@@ -43,7 +42,7 @@ export const STATE_LINEAGE_ROOT_MANIFEST_FILENAME =
 
 /**
  * Expected location of a per-database lineage manifest: one single-row table
- * holding the canonical body and its digest. No migration creates it yet.
+ * holding the canonical body and its digest, stamped during fresh initialization.
  */
 export const STATE_LINEAGE_MANIFEST_TABLE =
   'echo_state_lineage_manifest' as const;
@@ -78,14 +77,10 @@ export const STATE_LINEAGE_ROLES_V1 = Object.freeze([
  * discriminate which role's file this is, while lineage, Authority, and
  * organization identity is carried only by the manifests.
  *
- * Six values are the shipped constants and must not be reassigned:
- * control-plane from packages/organization-control-plane/src/persistence/
- * migrate.ts, record-log and record-derived from packages/organization-record/
- * src/persistence/database-definition.ts, and the three retrieval planes from
- * packages/organization-retrieval/src/persistence/database-definition.ts. Only
- * `authority` is newly assigned here: no authority database written by the
- * current migrator carries any header application_id, so this value can be
- * satisfied only by a future initializer that writes it.
+ * All seven values are shipped and must not be reassigned. Authority and
+ * control-plane baselines stamp their role IDs; record and retrieval IDs are
+ * defined in their persistence/database-definition modules. A schema change
+ * does not change a database role's application_id.
  */
 export const STATE_LINEAGE_ROLE_APPLICATION_IDS_V1: Readonly<
   Record<StateLineageRoleV1, number>
