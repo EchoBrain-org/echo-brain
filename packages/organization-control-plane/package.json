@@ -4,18 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "bin": {
-    "echo-organization-control-plane-connect-slack": "dist/clean-slack-connect-main.js"
-  },
   "exports": {
-    "./slack-approval-integration-v1": {
-      "types": "./dist/slack-approval-integration-v1.d.ts",
-      "import": "./dist/slack-approval-integration-v1.js"
-    },
-    "./slack-external-identity-integration-v1": {
-      "types": "./dist/slack-external-identity-integration-v1.d.ts",
-      "import": "./dist/slack-external-identity-integration-v1.js"
-    },
     "./organization-control-database-v1": {
       "types": "./dist/organization-control-database-v1.d.ts",
       "import": "./dist/organization-control-database-v1.js"
@@ -24,9 +13,33 @@
       "types": "./dist/record-visibility-policy-contracts-v1.d.ts",
       "import": "./dist/record-visibility-policy-contracts-v1.js"
     },
-    "./slack-connection-setup-v1": {
-      "types": "./dist/slack-connection-setup-v1.d.ts",
-      "import": "./dist/slack-connection-setup-v1.js"
+    "./security/file-secret-store": {
+      "types": "./dist/security/file-secret-store.d.ts",
+      "import": "./dist/security/file-secret-store.js"
+    },
+    "./persistence/open-organization-control-database": {
+      "types": "./dist/persistence/open-organization-control-database.d.ts",
+      "import": "./dist/persistence/open-organization-control-database.js"
+    },
+    "./application/record-visibility-policy-contracts-v1": {
+      "types": "./dist/application/record-visibility-policy-contracts-v1.d.ts",
+      "import": "./dist/application/record-visibility-policy-contracts-v1.js"
+    },
+    "./application/private-approval-policy-resolution-core-v1": {
+      "types": "./dist/application/private-approval-policy-resolution-core-v1.d.ts",
+      "import": "./dist/application/private-approval-policy-resolution-core-v1.js"
+    },
+    "./application/organization-secret-store-contracts": {
+      "types": "./dist/application/organization-secret-store-contracts.d.ts",
+      "import": "./dist/application/organization-secret-store-contracts.js"
+    },
+    "./canonical/canonical-json": {
+      "types": "./dist/canonical/canonical-json.d.ts",
+      "import": "./dist/canonical/canonical-json.js"
+    },
+    "./persistence/verified-organization-control-state-v1": {
+      "types": "./dist/persistence/verified-organization-control-state-v1.d.ts",
+      "import": "./dist/persistence/verified-organization-control-state-v1.js"
     }
   },
   "files": [

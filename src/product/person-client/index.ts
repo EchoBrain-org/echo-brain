@@ -24,8 +24,6 @@ export {
 export {
   createPersonMeetingIngestionExclusionChangeRequest,
   createPersonMeetingIngestionExclusionListRequest,
-  createPersonSlackIdentityLinkBeginRequest,
-  createPersonSlackIdentityLinkCompleteRequest,
   type PersonApiRequestIdentity,
 } from "./person-api-request-builders.js";
 export {

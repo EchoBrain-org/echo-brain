@@ -1,4 +1,4 @@
-import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { randomUUID } from "node:crypto";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
@@ -10,19 +10,19 @@ import {
   type AnswerCompositionFailureDiagnosticV1,
   type ReleasedRetrievalBatch,
   type StructuredGenerationPort,
-} from "../answer-composition/retrieval-grounded-answer-composition.js";
+} from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
 import type { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import type {
   PersonRecordSearchBatchApplicationV1,
   PersonRecordSearchBatchReleaseV1,
 } from "./person-record-search-route.js";
-import { AuthorityOperationError } from "../domain/errors.js";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type {
   PersonAnswerHttpApplicationV1,
   PersonAnswerPolicyV1,
   PersonAnswerResponseV1,
 } from "../presentation/person-answer-http-application.js";
-import type { AnswerCompositionGenerationProfileV1 } from "./answer-composition-generation-bundle-v1.js";
+import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import {
   classifyAskJourneyFailureV1,
   type AskJourneyTelemetryFactoryV1,

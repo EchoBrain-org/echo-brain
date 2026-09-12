@@ -1,16 +1,16 @@
-import { annotateCoreRuntimeV1, observeCoreRuntimeRootV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1, observeCoreRuntimeRootV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { ReadableSearchReconciliationTask } from "./readable-search-reconciliation-task.js";
-import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
+import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import type { AddressInfo } from "node:net";
 import {
   SerializedMeetingProcessingWorker,
   type SerializedMeetingProcessingWorkerOptions,
-} from "../processing/admitted-meeting-processing/serialized-meeting-processing-worker.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/serialized-meeting-processing-worker";
 import {
   MeetingProcessingWorkerLifecycleV1,
   type MeetingProcessingWorkerPhaseRunnerV1,
   type MeetingProcessingWorkerTelemetryEventV1,
-} from "../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 import {
   startOrganizationAuthorityApiRuntime,
   type OrganizationAuthorityApiRuntimeConfig,

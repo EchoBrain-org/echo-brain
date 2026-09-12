@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createJourneyTelemetryEventV1,
   type JourneyTelemetryEventV1,
-} from "../../../../src/shared/journey-telemetry-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import {
   createStagingJourneyTelemetryTransportV1,
   createStagingJourneyTelemetryTransportFromEnvironmentV1,

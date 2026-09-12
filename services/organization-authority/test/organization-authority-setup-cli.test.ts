@@ -34,16 +34,12 @@ import {
   type OrganizationAuthoritySetupCliDependencies,
 } from "../src/composition/organization-authority-setup-cli.js";
 import { runOrganizationAuthorityPersonAdministrationCli } from "../src/composition/organization-authority-person-administration-cli.js";
-import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
+import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
 import {bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import {
-  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "../src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
+import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
-import { createStagingSyntheticMeetingCanaryV1 } from "../src/processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
+import { createStagingSyntheticMeetingCanaryV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 
 const temporaryDirectories: string[] = [];
 const syntheticFixtureDirectory = fileURLToPath(

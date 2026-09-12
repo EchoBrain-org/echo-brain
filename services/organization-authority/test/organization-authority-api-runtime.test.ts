@@ -17,7 +17,7 @@ import {
 } from "../src/application/person-identity-sessions.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../src/adapters/system/system-authority-clock.js";
 import { isOidcRedemptionClaimInNamespace } from "../src/application/ports/person-session-repository.js";
@@ -27,13 +27,13 @@ import {
   issuePersonOnboardingInvitation,
 } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../src/composition/providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 import type {
   PersonExternalIdentityRuntimeInputV1,
   OpenedPersonExternalIdentityRuntimeV1,
-} from "../src/composition/person-external-identity-runtime.js";
-import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
-import { MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS } from "../src/domain/person-session-rules.js";
+} from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { MAXIMUM_ACTIVE_OIDC_LOGIN_ATTEMPTS } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
 
 const roots: string[] = [];
 
@@ -175,6 +175,7 @@ describe("Organization Authority API runtime", () => {
                   };
                 },
               },
+              tools: async () => [],
               close: () => {
                 closed += 1;
               },

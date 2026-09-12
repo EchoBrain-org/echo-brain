@@ -1,7 +1,7 @@
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../observability/telemetry-fixture-vocabulary-v1.js";
 import { describe, expect, it, vi } from "vitest";
 import { createAskJourneyTelemetryFactoryV1 } from "../../src/composition/ask-journey-telemetry-v1.js";
-import type { JourneyTelemetryEventV1 } from "../../src/shared/journey-telemetry-v1.js";
+import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 
 const CLOCK = Object.freeze({
   now: () => "2026-09-02T17:00:00.000Z",

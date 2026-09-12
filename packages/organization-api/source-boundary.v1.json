@@ -6,9 +6,15 @@
   "boundary_root": "packages/organization-api",
   "source_root": "packages/organization-api/src",
   "package_json": "packages/organization-api/package.json",
-  "entry_points": ["packages/organization-api/src/index.ts"],
-  "owned_source_paths": ["packages/organization-api/src/**"],
-  "allowed_internal_paths": ["packages/organization-api/src/**"],
+  "entry_points": [
+    "packages/organization-api/src/index.ts"
+  ],
+  "owned_source_paths": [
+    "packages/organization-api/src/**"
+  ],
+  "allowed_internal_paths": [
+    "packages/organization-api/src/**"
+  ],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-protocol"
@@ -37,25 +43,25 @@
         "name": "Person meeting-ingestion exclusion read contract",
         "path": "packages/organization-api/src/person-meeting-ingestion-exclusion-read.ts",
         "export": "validateOrganizationPersonMeetingIngestionExclusionListRequest"
-      },
-      {
-        "name": "Person Slack identity-link contract",
-        "path": "packages/organization-api/src/person-slack-identity-link.ts",
-        "export": "validateOrganizationPersonSlackIdentityLinkBeginRequest"
       }
     ],
+    "compatibility_entrypoints": [],
     "retired_source_paths": [
       "packages/organization-api/src/person-member-exclusion-change.ts",
       "packages/organization-api/src/person-member-exclusion-read.ts",
-       "packages/organization-api/src/person-slack-link.ts"
-     ],
-    "compatibility_entrypoints": []
+      "packages/organization-api/src/person-slack-link.ts",
+      "packages/organization-api/src/person-tools.ts",
+      "packages/organization-api/src/person-slack-identity-link.ts",
+      "packages/organization-api/src/person-slack-browser-link.ts"
+    ]
   },
   "layer_rules": [
     {
       "name": "organization-api-has-no-implementation-dependencies",
       "from": "packages/organization-api/src/**",
-      "allowed_imports": ["packages/organization-api/src/**"],
+      "allowed_imports": [
+        "packages/organization-api/src/**"
+      ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol"

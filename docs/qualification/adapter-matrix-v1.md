@@ -116,6 +116,7 @@ qualification. It cannot mark an external integration qualified.
 
 | Seam | Implementations | Evidence |
 | --- | --- | --- |
+| Person tools and identity | Two independent offline fragments | Generic v3 aggregation, route dispatch, duplicate rejection, account/session revalidation, reverse resource cleanup and injected client command/transport tests. |
 | Approval workflow | Slack with deterministic transport; persisted alternate fixture with the generic HumanAct codec | The shared Authority runtime suite exercises durable presentation, restart reconstruction, dispatch, finalization, signed append, replay, permission-aware record reads and missing-ownership refusal. The alternate additionally interrupts delivery and receipt signing across restart. |
 
 The fixture persists only its own presentation/action state, uses the real

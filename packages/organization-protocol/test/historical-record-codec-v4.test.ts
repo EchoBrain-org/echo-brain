@@ -1,10 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import {
-  createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1,
-  verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4, verifyOrganizationRecordReceiptV2,
-} from "../src/index.js";
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4, verifyOrganizationRecordReceiptV2 } from "../src/index.js";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
 
 // Generated once with the pre-composition implementation at 0817398. Private
 // signing material was ephemeral and is absent from this public signed fixture.

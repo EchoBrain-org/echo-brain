@@ -1,0 +1,67 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-synthetic-demo",
+  "workspace": true,
+  "boundary_root": "providers/synthetic-demo",
+  "source_root": "providers/synthetic-demo/src",
+  "package_json": "providers/synthetic-demo/package.json",
+  "entry_points": [
+    "providers/synthetic-demo/src/synthetic-demo-meeting-source-bundle-v1.ts",
+    "providers/synthetic-demo/src/source/synthetic-demo-meeting-source-v1.ts",
+    "providers/synthetic-demo/src/synthetic-demo-pre-slack-evaluator-v1.ts",
+    "providers/synthetic-demo/src/synthetic-demo-meeting-source-admission.ts",
+    "providers/synthetic-demo/src/synthetic-demo-admitted-meeting-source-cursor-policy-v1.ts"
+  ],
+  "owned_source_paths": [
+    "providers/synthetic-demo/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/synthetic-demo/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/organization-processing",
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-authority-kernel"
+  ],
+  "allowed_external_packages": [
+    "better-sqlite3"
+  ],
+  "allowed_node_builtins": [
+    "path",
+    "fs/promises"
+  ],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "provider-synthetic-demo-implementation",
+      "from": "providers/synthetic-demo/src/**",
+      "allowed_imports": [
+        "providers/synthetic-demo/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-processing",
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-authority-kernel"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "fs/promises",
+        "path"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "@echo-brain/provider-synthetic-demo implementation",
+        "path": "providers/synthetic-demo/src/source/synthetic-demo-meeting-source-v1.ts",
+        "export": "SyntheticDemoMeetingSourceAdapterV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

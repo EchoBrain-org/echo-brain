@@ -8,9 +8,9 @@ import {
   restrictedReviewerPersonPolicyContractSha256, restrictedReviewerPersonConsequenceSha256,
 } from "@echo-brain/organization-protocol";
 import type { V4RecordEnvelopeView, RevalidatedPersonPolicyAuthorizationWitnessV2 } from "@echo-brain/organization-record/organization-record-api-v1";
-import type { ApprovalWorkflowBundleV1, ApprovalWorkflowContextV1 } from "../../src/composition/approval-workflow-bundle-v1.js";
-import type { ApprovalWorkflowStageInputV1 } from "../../src/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import { compileDecisionBrief } from "../../src/processing/core/processing/brief.js";
+import type { ApprovalWorkflowBundleV1, ApprovalWorkflowContextV1 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
+import type { ApprovalWorkflowStageInputV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
+import { compileDecisionBrief } from "@echo-brain/organization-processing/core/processing/brief";
 
 interface Presentation {
   approval_id: string;

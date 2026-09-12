@@ -1,4 +1,5 @@
-import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
 const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync, sign as signMessage } from "node:crypto";
@@ -25,10 +26,7 @@ import {
   type HumanActEventV1,
   validateApprovedDecisionSnapshotV2,
 } from "../../../packages/organization-protocol/src/human-act-record-input-v1.js";
-import {
-  SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
-  buildPrivateSlackBlockApprovalRecordInputV1,
-} from "../../../packages/organization-protocol/src/private-slack-block-approval-record-input-v1.js";
+import { SIGNED_SLACK_BLOCK_ACTION_V1_KIND, buildPrivateSlackBlockApprovalRecordInputV1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
@@ -72,10 +70,7 @@ import {
 import {
   createPersonPolicyFactProjectorV2,
 } from "../src/application/person-policy-facts-v2.js";
-import {
-  createPrivateSlackBlockApprovalPolicyProjectorV1,
-  type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1,
-} from "../src/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js";
+import { createPrivateSlackBlockApprovalPolicyProjectorV1, type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import { PersonRecordReaderV1 } from "../src/retrieve/person-record-reader-v1.js";
 import {
   RecordRetrievalSourceSnapshotPortV1,

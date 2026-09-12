@@ -1,7 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
+import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import {
   ReadableSearchGenerationReconcilerV1,
   type ReadableSearchRecordHeadV1,

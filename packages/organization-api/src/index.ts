@@ -83,35 +83,10 @@ export {
   validateOrganizationPersonSession,
   validateOrganizationPersonSessionRefreshRequest,
 } from './person-session.js';
-export {
-  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
-  type OrganizationPersonSlackIdentityLinkBeginRequestV2,
-  type OrganizationPersonSlackIdentityLinkBeginResponseV2,
-  type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
-  type OrganizationPersonSlackIdentityLinkResultV2,
-  canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes,
-  canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes,
-  organizationPersonSlackIdentityLinkChallengeCodeSha256,
-  validateOrganizationPersonSlackIdentityLinkBeginRequest,
-  validateOrganizationPersonSlackIdentityLinkBeginResponse,
-  validateOrganizationPersonSlackIdentityLinkCompleteRequest,
-  validateOrganizationPersonSlackIdentityLinkResult,
-} from './person-slack-identity-link.js';
-export {
-  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH,
-  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH,
-  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH,
-  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH,
-  type OrganizationPersonSlackBrowserLinkAttemptRequestV1,
-  type OrganizationPersonSlackBrowserLinkBeginRequestV1,
-  type OrganizationPersonSlackBrowserLinkBeginResponseV1,
-  type OrganizationPersonSlackBrowserLinkFailureReasonV1,
-  type OrganizationPersonSlackBrowserLinkStatusResponseV1,
-  validateOrganizationPersonSlackBrowserLinkAttemptRequest,
-  validateOrganizationPersonSlackBrowserLinkBeginRequest,
-  validateOrganizationPersonSlackBrowserLinkBeginResponse,
-  validateOrganizationPersonSlackBrowserLinkStatusResponse,
-} from './person-slack-browser-link.js';
 
-export * from './person-tools.js';
+
+
+
+
+export { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type OrganizationPersonToolV3, type OrganizationPersonToolsV3 } from './person-tools-v3.js';
+export type { PersonToolJsonRequestV1, PersonToolGetRequestV1, PersonToolTransportV1, PersonToolSessionV1, PersonToolHostV1, PersonToolCommandV1 } from './person-tool-client.js';

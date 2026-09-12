@@ -1,18 +1,4 @@
-import {
-  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
-  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
-  organizationPersonSlackIdentityLinkChallengeCodeSha256,
-  validateOrganizationPersonMeetingIngestionExclusionChangeRequest,
-  validateOrganizationPersonMeetingIngestionExclusionListRequest,
-  validateOrganizationPersonSlackIdentityLinkBeginRequest,
-  validateOrganizationPersonSlackIdentityLinkCompleteRequest,
-  type OrganizationPersonMeetingIngestionExclusionChangeRequestV2,
-  type OrganizationPersonMeetingIngestionExclusionListRequestV2,
-  type OrganizationPersonMeetingIngestionExclusionSelectorV2,
-  type OrganizationPersonSessionV2,
-  type OrganizationPersonSlackIdentityLinkBeginRequestV2,
-  type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
-} from '@echo-brain/organization-api';
+import { ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH, ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH, validateOrganizationPersonMeetingIngestionExclusionChangeRequest, validateOrganizationPersonMeetingIngestionExclusionListRequest, type OrganizationPersonMeetingIngestionExclusionChangeRequestV2, type OrganizationPersonMeetingIngestionExclusionListRequestV2, type OrganizationPersonMeetingIngestionExclusionSelectorV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 
 export interface PersonApiRequestIdentity {
   readonly authority_id: string;
@@ -67,32 +53,5 @@ export function createPersonMeetingIngestionExclusionListRequest(
     http_path: ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
     source_adapter_id: sourceAdapterId,
     source_instance_id: sourceInstanceId,
-  });
-}
-
-export function createPersonSlackIdentityLinkBeginRequest(
-  requestId: string,
-  challengeCode: string,
-  recipientUserId: string,
-): OrganizationPersonSlackIdentityLinkBeginRequestV2 {
-  return validateOrganizationPersonSlackIdentityLinkBeginRequest({
-    request_id: requestId,
-    recipient_user_id: recipientUserId,
-    challenge_code_sha256:
-      organizationPersonSlackIdentityLinkChallengeCodeSha256(challengeCode),
-  });
-}
-
-export function createPersonSlackIdentityLinkCompleteRequest(
-  requestId: string,
-  input: {
-    readonly challenge_attempt_id: string;
-    readonly challenge_message_ts: string;
-    readonly challenge_code: string;
-  },
-): OrganizationPersonSlackIdentityLinkCompleteRequestV2 {
-  return validateOrganizationPersonSlackIdentityLinkCompleteRequest({
-    request_id: requestId,
-    ...input,
   });
 }

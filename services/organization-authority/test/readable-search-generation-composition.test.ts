@@ -18,7 +18,7 @@ import {
   READABLE_SEARCH_SCORER_ID,
   searchReadableSearchGenerationV1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
 import {
   createReadableSearchGenerationReconcilerV1,
@@ -31,8 +31,8 @@ import {
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
-import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
-import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../src/shared/core-runtime-observation-v1.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 
 vi.mock("@echo-brain/federation-protocol", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@echo-brain/federation-protocol")>();

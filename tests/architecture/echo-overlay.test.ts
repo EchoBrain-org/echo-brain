@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
@@ -54,6 +54,10 @@ function overlayFixture() {
   copyFileSync(resolve(REPO, "product/echo-overlay/people.swift"), join(sourceRoot, "product", "echo-overlay", "people.swift"));
   copyFileSync(resolve(REPO, "product/echo-overlay/account.swift"), join(sourceRoot, "product", "echo-overlay", "account.swift"));
   copyFileSync(PLIST, join(sourceRoot, "product", "echo-overlay", "Info.plist"));
+  for (const relative of ["product/echo-overlay/source-assembly.v1.json", "providers/slack/client/swift/slack-connected-tools.swift", "tools/lib/swift-source-assembly.mjs"]) {
+    mkdirSync(dirname(join(sourceRoot, relative)), { recursive: true });
+    copyFileSync(join(REPO, relative), join(sourceRoot, relative));
+  }
   execFileSync("git", ["init", "-q", sourceRoot]);
   execFileSync("git", ["-C", sourceRoot, "add", "."]);
   execFileSync("git", [
@@ -400,7 +404,7 @@ describe("native ECHO hotkey overlay", () => {
     });
     expect(changedAfterStatus.status).toBe(1);
     expect(changedAfterStatus.stderr).toContain(
-      "Swift source does not match its committed source",
+      "product/echo-overlay/main.swift does not match its committed source",
     );
     expect(existsSync(subject.toolLog)).toBe(false);
 
@@ -412,7 +416,7 @@ describe("native ECHO hotkey overlay", () => {
     });
     expect(peopleChangedAfterStatus.status).toBe(1);
     expect(peopleChangedAfterStatus.stderr).toContain(
-      "People Swift source does not match its committed source",
+      "product/echo-overlay/people.swift does not match its committed source",
     );
     expect(existsSync(subject.toolLog)).toBe(false);
 
@@ -424,7 +428,7 @@ describe("native ECHO hotkey overlay", () => {
     });
     expect(accountChangedAfterStatus.status).toBe(1);
     expect(accountChangedAfterStatus.stderr).toContain(
-      "Account Swift source does not match its committed source",
+      "product/echo-overlay/account.swift does not match its committed source",
     );
     expect(existsSync(subject.toolLog)).toBe(false);
 

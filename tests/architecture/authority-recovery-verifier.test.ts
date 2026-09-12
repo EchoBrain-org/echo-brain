@@ -21,11 +21,11 @@ import {
   createPersonPolicyFactProjectorV2,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../../services/organization-authority/src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../services/organization-authority/src/composition/readable-search-generation-composition.js";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
-import { verifyAuthorityStateLineage } from "../../services/organization-authority/src/composition/verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import {
   inspectLinuxReadOnlyMount,
   parseLinuxMountinfo,

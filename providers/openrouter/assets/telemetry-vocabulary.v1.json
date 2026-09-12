@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "providers": [
+    "openrouter"
+  ],
+  "models": [
+    "anthropic/claude-sonnet-4.6",
+    "deepseek/deepseek-v3.2"
+  ],
+  "legacy_phases": []
+}

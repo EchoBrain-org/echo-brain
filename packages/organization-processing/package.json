@@ -1,0 +1,122 @@
+{
+  "name": "@echo-brain/organization-processing",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./core/ports/adapters": {
+      "types": "./dist/core/ports/adapters.d.ts",
+      "import": "./dist/core/ports/adapters.js"
+    },
+    "./core/contracts/adapter": {
+      "types": "./dist/core/contracts/adapter.d.ts",
+      "import": "./dist/core/contracts/adapter.js"
+    },
+    "./core/contracts/decision": {
+      "types": "./dist/core/contracts/decision.d.ts",
+      "import": "./dist/core/contracts/decision.js"
+    },
+    "./core/contracts/meeting": {
+      "types": "./dist/core/contracts/meeting.d.ts",
+      "import": "./dist/core/contracts/meeting.js"
+    },
+    "./core/processing/brief": {
+      "types": "./dist/core/processing/brief.d.ts",
+      "import": "./dist/core/processing/brief.js"
+    },
+    "./llm/llm-decision-processor": {
+      "types": "./dist/llm/llm-decision-processor.d.ts",
+      "import": "./dist/llm/llm-decision-processor.js"
+    },
+    "./core/contracts/validation": {
+      "types": "./dist/core/contracts/validation.d.ts",
+      "import": "./dist/core/contracts/validation.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./llm/llm-provider": {
+      "types": "./dist/llm/llm-provider.d.ts",
+      "import": "./dist/llm/llm-provider.js"
+    },
+    "./admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1": {
+      "types": "./dist/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.d.ts",
+      "import": "./dist/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js"
+    },
+    "./admitted-meeting-processing/serialized-meeting-processing-worker": {
+      "types": "./dist/admitted-meeting-processing/serialized-meeting-processing-worker.d.ts",
+      "import": "./dist/admitted-meeting-processing/serialized-meeting-processing-worker.js"
+    },
+    "./admitted-meeting-processing/meeting-processing-worker-lifecycle": {
+      "types": "./dist/admitted-meeting-processing/meeting-processing-worker-lifecycle.d.ts",
+      "import": "./dist/admitted-meeting-processing/meeting-processing-worker-lifecycle.js"
+    },
+    "./admitted-meeting-processing/approval-workflow-state-v1": {
+      "types": "./dist/admitted-meeting-processing/approval-workflow-state-v1.d.ts",
+      "import": "./dist/admitted-meeting-processing/approval-workflow-state-v1.js"
+    },
+    "./admitted-meeting-processing/meeting-processing-cycle-v1": {
+      "types": "./dist/admitted-meeting-processing/meeting-processing-cycle-v1.d.ts",
+      "import": "./dist/admitted-meeting-processing/meeting-processing-cycle-v1.js"
+    },
+    "./admitted-meeting-processing/admitted-meeting-processing-commitments": {
+      "types": "./dist/admitted-meeting-processing/admitted-meeting-processing-commitments.d.ts",
+      "import": "./dist/admitted-meeting-processing/admitted-meeting-processing-commitments.js"
+    },
+    "./admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1": {
+      "types": "./dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.d.ts",
+      "import": "./dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js"
+    },
+    "./ports/approval-workflow-bundle-v1": {
+      "types": "./dist/ports/approval-workflow-bundle-v1.d.ts",
+      "import": "./dist/ports/approval-workflow-bundle-v1.js"
+    },
+    "./ports/decision-processor-bundle-v1": {
+      "types": "./dist/ports/decision-processor-bundle-v1.d.ts",
+      "import": "./dist/ports/decision-processor-bundle-v1.js"
+    },
+    "./ports/meeting-source-bundle-v1": {
+      "types": "./dist/ports/meeting-source-bundle-v1.d.ts",
+      "import": "./dist/ports/meeting-source-bundle-v1.js"
+    },
+    "./admitted-meeting-processing/staging-synthetic-meeting-canary-v1": {
+      "types": "./dist/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.d.ts",
+      "import": "./dist/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js"
+    },
+    "./admitted-meeting-processing/decision-processor-admission-commitment": {
+      "types": "./dist/admitted-meeting-processing/decision-processor-admission-commitment.d.ts",
+      "import": "./dist/admitted-meeting-processing/decision-processor-admission-commitment.js"
+    },
+    "./admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1": {
+      "types": "./dist/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.d.ts",
+      "import": "./dist/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1.js"
+    },
+    "./admitted-meeting-processing/review-lineage-semantics": {
+      "types": "./dist/admitted-meeting-processing/review-lineage-semantics.d.ts",
+      "import": "./dist/admitted-meeting-processing/review-lineage-semantics.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "@echo-brain/organization-record": "0.0.0-dev.0",
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-control-plane": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

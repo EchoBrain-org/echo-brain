@@ -1,7 +1,7 @@
 import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { join } from "node:path";
 import { readdirSync, statSync } from "node:fs";
-import { currentCoreRuntimeDetailV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
+import { currentCoreRuntimeDetailV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
   canonicalJson,
   canonicalSha256,
@@ -53,7 +53,7 @@ import {
   validateStateLineageDatabaseManifestV1,
   type StateLineageRoleV1,
   type StateLineageRootManifestV1,
-} from "../state-lineage/state-lineage-manifest-v1.js";
+} from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 import {
   MAX_RELATED_ATOM_CANDIDATES_V1,
   MAX_RELATED_ATOM_LINKS_PER_ATOM_V1,

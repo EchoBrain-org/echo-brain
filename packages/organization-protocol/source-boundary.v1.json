@@ -6,12 +6,22 @@
   "boundary_root": "packages/organization-protocol",
   "source_root": "packages/organization-protocol/src",
   "package_json": "packages/organization-protocol/package.json",
-  "entry_points": ["packages/organization-protocol/src/index.ts"],
-  "owned_source_paths": ["packages/organization-protocol/src/**"],
-  "allowed_internal_paths": ["packages/organization-protocol/src/**"],
-  "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+  "entry_points": [
+    "packages/organization-protocol/src/index.ts"
+  ],
+  "owned_source_paths": [
+    "packages/organization-protocol/src/**"
+  ],
+  "allowed_internal_paths": [
+    "packages/organization-protocol/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol"
+  ],
   "allowed_external_packages": [],
-  "allowed_node_builtins": ["buffer"],
+  "allowed_node_builtins": [
+    "buffer"
+  ],
   "runtime_assets": [
     "packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json"
   ],
@@ -23,17 +33,25 @@
         "export": "createOrganizationRecordEnvelopeV4"
       }
     ],
-    "retired_source_paths": [],
-    "compatibility_entrypoints": []
+    "compatibility_entrypoints": [],
+    "retired_source_paths": [
+      "packages/organization-protocol/src/private-slack-block-approval-record-input-v1.ts"
+    ]
   },
   "layer_rules": [
     {
       "name": "organization-protocol-depends-only-on-federation-protocol",
       "from": "packages/organization-protocol/src/**",
-      "allowed_imports": ["packages/organization-protocol/src/**"],
-      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_imports": [
+        "packages/organization-protocol/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer"]
+      "allowed_node_builtins": [
+        "buffer"
+      ]
     }
   ]
 }

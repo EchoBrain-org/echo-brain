@@ -41,7 +41,7 @@ qualification_ids:
 
 ## Responsibility
 
-`services/organization-authority/src/processing/adapters/` translates between
+`providers/` translates between
 processing ports and external capabilities:
 
 - meeting sources;
@@ -51,7 +51,7 @@ processing ports and external capabilities:
 - shared provider clients such as Slack.
 
 Selecting composition bundles own external capabilities; provider-neutral
-runtime receives only their ports and canonical contracts. Scope and exceptions
+runtime receives only their ports and canonical contracts. Scope and ownership
 are defined by [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md).
 
 An adapter owns provider transport and canonicalization. It must not redefine
@@ -69,8 +69,8 @@ semantics.
 - [Meeting processing core and adapters](../architecture/meeting-processing-core-and-adapters.md)
 - [Active-provider boundary invariant](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
 - [First-provider architecture failure pattern](../failure-patterns/FP-ADAPTERS-005-first-provider-becomes-architecture.md)
-- Source: [`services/organization-authority/src/processing/adapters/`](../../services/organization-authority/src/processing/adapters)
-- Adapter tests: [`services/organization-authority/test/processing/adapters/`](../../services/organization-authority/test/processing/adapters)
+- Source: [`providers/`](../../providers)
+- Provider tests: `providers/<provider>/test/` (Slack server/client tests use their respective workspace roots).
 - [Failure-pattern registry](../failure-patterns/README.md)
 - [Qualification](../qualification/README.md)
 

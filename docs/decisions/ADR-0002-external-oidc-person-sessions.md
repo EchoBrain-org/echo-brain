@@ -467,7 +467,7 @@ Phase 2 is not complete while any of these blockers remains:
 
 The source facts for this disposition are the
 [machine-boundary audit](../product/2026-08-16-machine-boundary-audit.md), the
-[Authority repository port](../../services/organization-authority/src/application/ports/authority-repository.ts),
+[Authority repository port](https://github.com/EchoBrain-org/echo-brain/blob/862419bbe6abccc66e9ac07dd8f14abe2e3c3653/services/organization-authority/src/application/ports/authority-repository.ts),
 the historical Authority migration ledger, record log schema, and control-plane
 schema recorded by this ADR. Those executable migrations were retired by the
 physical lean V1 closure.

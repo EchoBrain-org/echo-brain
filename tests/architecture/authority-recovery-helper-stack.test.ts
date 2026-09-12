@@ -293,7 +293,7 @@ describe("Authority isolated recovery helper stack", () => {
       'run("npm", ["run", "build:workspaces"]',
       '"npm-shrinkwrap.json"',
       "npm_shrinkwrap_sha256",
-      "services/organization-authority/dist/composition/verify-authority-state-lineage.js",
+      "packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js",
       "authority-recovery-verifier.test.ts",
       "archive_sha256",
       "recovery-helper-bundle.manifest.json",

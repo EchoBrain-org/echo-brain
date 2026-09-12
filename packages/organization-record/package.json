@@ -8,6 +8,22 @@
     "./organization-record-api-v1": {
       "types": "./dist/organization-record-api-v1.d.ts",
       "import": "./dist/organization-record-api-v1.js"
+    },
+    "./application/record-approver-projection-v1": {
+      "types": "./dist/application/record-approver-projection-v1.d.ts",
+      "import": "./dist/application/record-approver-projection-v1.js"
+    },
+    "./application/atom-identity": {
+      "types": "./dist/application/atom-identity.d.ts",
+      "import": "./dist/application/atom-identity.js"
+    },
+    "./application/record-policy-fact-projection-v1": {
+      "types": "./dist/application/record-policy-fact-projection-v1.d.ts",
+      "import": "./dist/application/record-policy-fact-projection-v1.js"
+    },
+    "./application/person-policy-fact-contracts-v2": {
+      "types": "./dist/application/person-policy-fact-contracts-v2.d.ts",
+      "import": "./dist/application/person-policy-fact-contracts-v2.js"
     }
   },
   "files": [

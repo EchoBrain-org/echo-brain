@@ -1,12 +1,12 @@
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../observability/telemetry-fixture-vocabulary-v1.js";
-import { currentCoreRuntimeDetailV1, observeCoreRuntimeSyncV1 } from "../../../../src/shared/core-runtime-observation-v1.js";
+import { currentCoreRuntimeDetailV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createJourneyTelemetryEventV1,
   type JourneyTelemetryEventV1,
-} from "../../../../src/shared/journey-telemetry-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import {
   formatApprovedSearchBacklogMetricsV1,
   formatStagingJourneyLivenessMetricV1,

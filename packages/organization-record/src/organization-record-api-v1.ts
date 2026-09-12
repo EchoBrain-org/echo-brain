@@ -47,18 +47,8 @@ export {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "./application/person-policy-fact-contracts-v2.js";
-export {
-  PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
-  PrivateSlackBlockApprovalPolicyFactProjectionV1Error,
-  SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
-  createPrivateSlackBlockApprovalPolicyProjectorV1,
-  projectPrivateSlackBlockApprovalPolicyFactsV1,
-  projectPrivateSlackBlockApprovalApproverV1,
-} from "./adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js";
-export type {
-  PrivateSlackBlockApprovalPolicyFactsInputV1,
-  RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1,
-} from "./adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js";
+
+
 export {
   createRecordPolicyFactProjectorRegistryV1,
 } from "./application/record-policy-fact-projection-v1.js";

@@ -10,7 +10,7 @@ const TEMPLATE = resolve(
 );
 const HANDLER = resolve(
   REPO,
-  "deploy/organization-authority/staging-journey-explorer-handler-v1.cjs",
+  "deploy/organization-authority/staging-journey-explorer-handler-v1.mjs",
 );
 const STAGING_LOG_GROUP =
   "/echo-brain/authority/authority-staging.echobrain.org";

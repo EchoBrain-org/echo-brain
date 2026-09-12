@@ -12,7 +12,7 @@ import {
   assertMembershipType,
   assertRevocationReason,
   timestampMillis,
-} from '../src/domain/rules.js';
+} from "@echo-brain/organization-authority-kernel/domain/rules";
 
 describe('organization authority domain rules', () => {
   it('keeps configured V1 issuance at five minutes', () => {

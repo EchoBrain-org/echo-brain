@@ -5,8 +5,8 @@ import {
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
 } from "../src/composition/organization-authority-service-lifecycle.js";
-import type { MeetingProcessingWorkerTelemetryEventV1 } from "../src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
-import { AdapterError } from "../src/processing/core/contracts/adapter.js";
+import type { MeetingProcessingWorkerTelemetryEventV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
+import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
 import type {
   OrganizationAuthorityApiRuntimeConfig,
   RunningOrganizationAuthorityApiRuntime,

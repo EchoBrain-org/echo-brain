@@ -41,6 +41,7 @@ beforeAll(() => {
       proofSource,
       join(REPO, "product/echo-overlay/people.swift"),
       join(REPO, "product/echo-overlay/account.swift"),
+      join(REPO, "providers/slack/client/swift/slack-connected-tools.swift"),
       "-o",
       executable,
     ],

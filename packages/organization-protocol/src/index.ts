@@ -65,25 +65,8 @@ export type {
   HumanActRecordInputV1,
   PersonContentPolicyIdV2,
 } from "./human-act-record-input-v1.js";
-export {
-  PRIVATE_SLACK_BLOCK_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
-  PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
-  SIGNED_SLACK_BLOCK_ACTION_V1_KIND,
-  buildPrivateSlackBlockApprovalRecordInputV1,
-  privateSlackBlockApprovalResolutionRefV1Sha256,
-  validatePrivateSlackBlockApprovalEventV1,
-  validatePrivateSlackBlockApprovalRecordInputV1,
-  validatePrivateSlackBlockApprovalResolutionRefV1,
-} from "./private-slack-block-approval-record-input-v1.js";
-export type {
-  PrivateSlackBlockApprovalActionV1,
-  PrivateSlackBlockApprovalAssigneeV1,
-  PrivateSlackBlockApprovalEventV1,
-  PrivateSlackBlockApprovalRecordInputV1,
-  PrivateSlackBlockApprovalResolutionRefV1,
-  PrivateSlackBlockApprovalSlackIdentityLinkV1,
-  ValidatedPrivateSlackBlockApprovalRecordInputV1,
-} from "./private-slack-block-approval-record-input-v1.js";
+
+
 export {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
@@ -96,4 +79,3 @@ export {
 } from "./person-content-policy-v2.js";
 
 export { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecV4, type RecordInputCodecRegistryV4, type RecordResolutionRefV4, type RecordHumanActEventV4, type ValidatedRecordInputV4 } from "./record-input-codec-v4.js";
-export { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "./private-slack-block-approval-record-input-v1.js";

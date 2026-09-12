@@ -118,7 +118,7 @@ function requiredBuildPaths(sourceRoot) {
     "tools/verify-authority-recovery.mjs",
     "tools/clean-v1-release.mjs",
     "tools/clean-v1-runtime-profile.mjs",
-    "services/organization-authority/dist/composition/verify-authority-state-lineage.js",
+    "packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js",
   ];
   for (const path of paths) {
     const absolute = join(sourceRoot, path);
@@ -129,23 +129,13 @@ function requiredBuildPaths(sourceRoot) {
 }
 
 function copyWorkspaceBuildOutputs(sourceRoot, stageRoot) {
-  for (const group of ["packages", "services", "src/product"]) {
-    const sourceGroup = join(sourceRoot, group);
-    if (!existsSync(sourceGroup)) continue;
-    regularDirectory(sourceGroup, group);
-    for (const entry of readdirSync(sourceGroup, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
-      const output = join(sourceGroup, entry.name, "dist");
-      if (!existsSync(output)) continue;
-      regularDirectory(output, `${group}/${entry.name}/dist`);
-      const destination = join(stageRoot, "source", group, entry.name, "dist");
-      mkdirSync(dirname(destination), { recursive: true, mode: 0o755 });
-      cpSync(output, destination, {
-        dereference: false,
-        recursive: true,
-        verbatimSymlinks: true,
-      });
-    }
+  const workspaces = JSON.parse(readFileSync(join(sourceRoot, "package.json"), "utf8")).workspaces;
+  for (const workspace of workspaces) {
+    const output = join(sourceRoot, workspace, "dist");
+    regularDirectory(output, `${workspace}/dist`);
+    const destination = join(stageRoot, "source", workspace, "dist");
+    mkdirSync(dirname(destination), { recursive: true, mode: 0o755 });
+    cpSync(output, destination, { dereference: false, recursive: true, verbatimSymlinks: true });
   }
 }
 
@@ -158,7 +148,7 @@ function makeBundle({ sourceRoot, output }) {
     fail(`must run on Linux ARM64 with Node ${NODE_VERSION}`);
   }
   const commit = checkedCommit(sourceRoot);
-  run("npm", ["run", "build:workspaces"], { cwd: sourceRoot });
+  run("npm", ["run", "build"], { cwd: sourceRoot });
   const requiredPaths = requiredBuildPaths(sourceRoot);
   const lockDigest = sha256(join(sourceRoot, "npm-shrinkwrap.json"));
   mkdirSync(dirname(output), { recursive: true, mode: 0o700 });

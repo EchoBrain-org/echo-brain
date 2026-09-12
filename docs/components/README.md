@@ -27,8 +27,8 @@ and qualification proof.
 
 | Component | Primary source | Responsibility |
 | --- | --- | --- |
-| [Meeting processing core](meeting-processing-core.md) | `services/organization-authority/src/processing/core/` | Provider-neutral meeting processing rules and ports |
-| [Processing adapters](processing-adapters.md) | `services/organization-authority/src/processing/adapters/` | Provider-specific sources, processors, approvals, and delivery |
+| [Meeting processing core](meeting-processing-core.md) | `packages/organization-processing/src/core/` | Provider-neutral meeting processing rules and ports |
+| [Processing adapters](processing-adapters.md) | `providers/` | Provider-specific sources, processors, approvals, and delivery |
 | [Person client](person-client.md) | `src/product/person-client/` | Thin Person CLI and private session state |
 | [Identity and access](identity-access.md) | Person client plus Authority | Person sessions, membership, compatibility enrollment, and revocation state |
 | [Organization Authority](organization-authority.md) | `services/organization-authority/`; `packages/organization-{control-plane,record,retrieval}/` | Organization identity, policy, record, retrieval, and API authority |
@@ -54,3 +54,19 @@ The checked source-boundary registry at
 is the machine-readable inventory for package, service, and Person-client
 workspaces. `npm run check:docs` requires every registered workspace to remain
 reachable from this catalog.
+
+## Provider and inward workspaces
+
+The shared implementation packages are `packages/organization-processing` and
+`packages/organization-authority-kernel`. Provider ownership is physical:
+
+| Workspace | Scope |
+| --- | --- |
+| `providers/openai` | OpenAI transport and processor factory |
+| `providers/anthropic` | Anthropic transport and processor factory |
+| `providers/ollama` | Ollama transport and processor factory |
+| `providers/openrouter` | OpenRouter processing, generation and model vocabulary |
+| `providers/granola` | Granola source, custody, admission and setup proofs |
+| `providers/synthetic-demo` | Fixed synthetic source and its evaluation/setup proofs |
+| `providers/slack/client` | Client contracts, Person commands and Swift tool surface |
+| `providers/slack/server` | Server identity, approval, historical codec/projector, connection/setup and assets |

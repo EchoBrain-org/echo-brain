@@ -3,9 +3,9 @@ import { once } from "node:events";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
-import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
+import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import {
   createPersonAnswerRouteV1,
   type AnswerCompositionFailureEventV1,
@@ -13,7 +13,7 @@ import {
 import type {
   StructuredGenerationInput,
   StructuredGenerationPort,
-} from "../src/answer-composition/retrieval-grounded-answer-composition.js";
+} from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
 import type {
   PersonRecordSearchBatchApplicationV1,
   PersonRecordSearchBatchReleaseV1,
@@ -22,9 +22,9 @@ import {
   createAskJourneyTelemetryFactoryV1,
   type AskJourneyTelemetryFactoryV1,
 } from "../src/composition/ask-journey-telemetry-v1.js";
-import type { AnswerCompositionGenerationProfileV1 } from "../src/composition/answer-composition-generation-bundle-v1.js";
-import { AuthorityOperationError } from "../src/domain/errors.js";
-import type { JourneyTelemetryEventV1 } from "../src/shared/journey-telemetry-v1.js";
+import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
+import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type {
   PersonAnswerHttpApplicationV1,

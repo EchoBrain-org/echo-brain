@@ -3,13 +3,17 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
-    "types": ["node", "vitest/globals"]
+    "types": [
+      "node",
+      "vitest/globals"
+    ]
   },
   "include": [
     "packages/*/test/**/*.ts",
     "services/*/test/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts",
-    "vitest.package.config.ts"
+    "vitest.package.config.ts",
+    "providers/**/test/**/*.ts"
   ]
 }

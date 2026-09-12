@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertCanonicalMeetingDocument,
   type MeetingDocument,
-} from '../../../src/processing/core/index.js';
+} from "@echo-brain/organization-processing/core";
 
 const source = {
   kind: 'meeting-source' as const,

@@ -10,12 +10,17 @@
     "src/product/person-client/index.ts",
     "src/product/person-client/main.ts"
   ],
-  "owned_source_paths": ["src/product/person-client/**"],
-  "allowed_internal_paths": ["src/product/person-client/**"],
+  "owned_source_paths": [
+    "src/product/person-client/**"
+  ],
+  "allowed_internal_paths": [
+    "src/product/person-client/**"
+  ],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-api",
-    "@echo-brain/organization-protocol"
+    "@echo-brain/organization-protocol",
+    "@echo-brain/provider-slack-client"
   ],
   "allowed_external_packages": [],
   "allowed_node_builtins": [
@@ -65,19 +70,25 @@
         "export": "createPersonMeetingIngestionExclusionChangeRequest"
       }
     ],
+    "compatibility_entrypoints": [],
     "retired_source_paths": [
       "src/product/person-client/requests.ts"
-    ],
-    "compatibility_entrypoints": []
+    ]
   },
   "layer_rules": [
     {
       "name": "person-client-bin-dispatches-only-person-commands",
       "from": "src/product/person-client/main.ts",
-      "allowed_imports": ["src/product/person-client/commands.ts"],
+      "allowed_imports": [
+        "src/product/person-client/composition.ts"
+      ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["fs", "process", "url"]
+      "allowed_node_builtins": [
+        "fs",
+        "process",
+        "url"
+      ]
     },
     {
       "name": "person-client-http-speaks-public-contracts",
@@ -85,26 +96,47 @@
       "allowed_imports": [],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api"
+        "@echo-brain/organization-api",
+        "@echo-brain/provider-slack-client"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer"]
+      "allowed_node_builtins": [
+        "buffer"
+      ]
     },
     {
       "name": "person-client-composes-session-and-api-requests",
       "from": "src/product/person-client/client.ts",
-      "allowed_imports": ["src/product/person-client/**"],
-      "allowed_workspace_packages": ["@echo-brain/organization-api"],
+      "allowed_imports": [
+        "src/product/person-client/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-api",
+        "@echo-brain/provider-slack-client"
+      ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer", "crypto"]
+      "allowed_node_builtins": [
+        "buffer",
+        "crypto"
+      ]
     },
     {
       "name": "person-client-cli-composes-client",
       "from": "src/product/person-client/commands.ts",
-      "allowed_imports": ["src/product/person-client/**"],
-      "allowed_workspace_packages": [],
+      "allowed_imports": [
+        "src/product/person-client/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-api"
+      ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer", "child_process", "os", "readline/promises", "util"]
+      "allowed_node_builtins": [
+        "buffer",
+        "child_process",
+        "os",
+        "readline/promises",
+        "util"
+      ]
     },
     {
       "name": "person-client-browser-handoff-is-local-only",
@@ -112,12 +144,19 @@
       "allowed_imports": [],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer", "crypto", "http", "util"]
+      "allowed_node_builtins": [
+        "buffer",
+        "crypto",
+        "http",
+        "util"
+      ]
     },
     {
       "name": "person-client-entry-exports-owned-modules",
       "from": "src/product/person-client/index.ts",
-      "allowed_imports": ["src/product/person-client/**"],
+      "allowed_imports": [
+        "src/product/person-client/**"
+      ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
@@ -126,7 +165,10 @@
       "name": "person-api-request-builders-use-public-contracts",
       "from": "src/product/person-client/person-api-request-builders.ts",
       "allowed_imports": [],
-      "allowed_workspace_packages": ["@echo-brain/organization-api"],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-api",
+        "@echo-brain/provider-slack-client"
+      ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
@@ -134,9 +176,16 @@
       "name": "person-session-store-owns-private-files",
       "from": "src/product/person-client/session-store.ts",
       "allowed_imports": [],
-      "allowed_workspace_packages": ["@echo-brain/organization-api"],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-api"
+      ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer", "crypto", "fs", "path"]
+      "allowed_node_builtins": [
+        "buffer",
+        "crypto",
+        "fs",
+        "path"
+      ]
     },
     {
       "name": "person-onboarding-invitation-owns-private-input",
@@ -147,7 +196,10 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["fs", "path"]
+      "allowed_node_builtins": [
+        "fs",
+        "path"
+      ]
     },
     {
       "name": "person-client-package-identity-reads-only-packaged-provenance",
@@ -155,7 +207,22 @@
       "allowed_imports": [],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["fs", "url"]
+      "allowed_node_builtins": [
+        "fs",
+        "url"
+      ]
+    },
+    {
+      "name": "person-client-composition-selects-tool-fragments",
+      "from": "src/product/person-client/composition.ts",
+      "allowed_imports": [
+        "src/product/person-client/commands.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/provider-slack-client"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     }
   ]
 }

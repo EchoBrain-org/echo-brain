@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "echo-javascript-source-assembly",
+  "entrypoint": "deploy/organization-authority/staging-journey-explorer-composition-v1.mjs",
+  "neutral_sources": [
+    "deploy/organization-authority/staging-journey-explorer-handler-v1.mjs"
+  ],
+  "provider_assets": [
+    "providers/openai/assets/telemetry-vocabulary.v1.json",
+    "providers/anthropic/assets/telemetry-vocabulary.v1.json",
+    "providers/ollama/assets/telemetry-vocabulary.v1.json",
+    "providers/openrouter/assets/telemetry-vocabulary.v1.json",
+    "providers/slack/server/assets/telemetry-vocabulary.v1.json"
+  ]
+}

@@ -12,7 +12,7 @@ import {
   type OpenIdClientPersonSessionProviderOptions,
 } from '../src/adapters/oidc/openid-client-person-session-provider.js';
 import type { BegunPersonOidcLogin } from '../src/application/person-identity-sessions.js';
-import type { FrozenPersonSessionOidcConfiguration } from '../src/application/ports/person-session-dependencies.js';
+import type { FrozenPersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 
 const ISSUER = 'https://identity.example.test/';
 const AUTHORIZATION_ENDPOINT = `${ISSUER}authorize`;

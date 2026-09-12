@@ -1,23 +1,11 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  buildOrganizationToolConnectionContractV2,
-  buildOrganizationToolConnectionStateV2,
-} from "../src/application/organization-tool-connection-contracts-v2.js";
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../src/application/slack-integration-contracts.js";
-import {
-  PRIVATE_APPROVAL_PENDING_KIND,
-  type PendingPrivateApprovalV1,
-} from "../src/application/slack/private-approval-policy-resolution-v1.js";
+import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../../providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
+import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
+import { PRIVATE_APPROVAL_PENDING_KIND } from "../../../providers/slack/server/src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
+import { type PendingPrivateApprovalV1 } from "../../../providers/slack/server/src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
 import { canonicalJson, canonicalSha256 } from "../src/canonical/canonical-json.js";
-import {
-  PrivateApprovalFinalizationConflictError,
-  PrivateApprovalFinalizationDeniedError,
-  SqliteSlackDmApprovalPersistenceV1,
-  type StagePrivateApprovalPendingV1,
-  type PrivateApprovalSignedTerminalActionV1,
-  type PrivateApprovalSlackCardBindingV1,
-} from "../src/persistence/sqlite-slack-dm-approval-persistence-v1.js";
+import { PrivateApprovalFinalizationConflictError, PrivateApprovalFinalizationDeniedError, SqliteSlackDmApprovalPersistenceV1, type StagePrivateApprovalPendingV1, type PrivateApprovalSignedTerminalActionV1, type PrivateApprovalSlackCardBindingV1 } from "../../../providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 
 const databases: Database.Database[] = [];
 const sha = (letter: string) => `sha256:${letter.repeat(64)}` as const;

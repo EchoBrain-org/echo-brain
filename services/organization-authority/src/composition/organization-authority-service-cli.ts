@@ -1,23 +1,17 @@
-import { OPENROUTER_TELEMETRY_VOCABULARY_V1 } from "./providers/openrouter/openrouter-telemetry-vocabulary-v1.js";
+import { OPENROUTER_TELEMETRY_VOCABULARY_V1 } from "@echo-brain/provider-openrouter/openrouter-telemetry-vocabulary-v1";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { resolve } from "node:path";
-import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
-import { readOptionalPrivateAuthoritySlackBrowserOauthConfiguration } from "./providers/slack/slack-private-credentials-v1.js";
+import { readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { readSlackBrowserOauthConfiguration } from '@echo-brain/provider-slack-server/setup/slack-browser-oauth-configuration-v1';
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
 import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
-import {
-  openStagingSyntheticPrivateDmCanaryControlV1,
-} from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.js";
-import { STAGING_AUTHORITY_ORIGIN_V1 } from "./staging-authority-environment-v1.js";
-import { requestStagingSyntheticPrivateDmCanaryV1 } from "./staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.js";
+import { openStagingSyntheticPrivateDmCanaryControlV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
+import { requestStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1";
 import { createStagingJourneyTelemetryTransportFromEnvironmentV1 } from "./staging/observability/staging-journey-telemetry-transport-v1.js";
 import { createAskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
-import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "./providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
-import {
-  OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
-  OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
-} from "./providers/openrouter/openrouter-decision-processor-config-v1.js";
+import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
+import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1, OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 
 const USAGE =
@@ -109,25 +103,7 @@ function positiveInteger(value: string, label: string): number {
   return parsed;
 }
 
-function readSlackBrowserOauthConfiguration(input: {
-  readonly state_directory: string;
-  readonly authority_url: string;
-}): { readonly client_id: string; readonly client_secret: string; readonly redirect_uri: string } | undefined {
-  const path = resolve(
-    input.state_directory,
-    "..",
-    "private",
-    "slack-browser-oidc.json",
-  );
-  const configured = readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
-    `file:${path}`,
-  );
-  if (configured === undefined) return undefined;
-  return Object.freeze({
-    ...configured,
-    redirect_uri: `${input.authority_url}/v2/person/external-identities/slack/browser/callback`,
-  });
-}
+
 
 function stagingCanaryReleaseId(argv: readonly string[]): string {
   if (

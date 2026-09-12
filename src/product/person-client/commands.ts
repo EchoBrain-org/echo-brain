@@ -1,3 +1,4 @@
+import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -19,6 +20,7 @@ interface Output {
 }
 
 export interface PersonClientCliDependencies {
+  readonly tool_commands?: readonly PersonToolCommandV1[];
   readonly stdout?: Output;
   readonly stderr?: Output;
   readonly home_directory?: string;
@@ -32,7 +34,6 @@ export interface PersonClientCliDependencies {
 }
 
 const OPTIONS = {
-  "slack-user": { type: "string" },
   "authority-url": { type: "string" },
   invitation: { type: "string" },
   question: { type: "string" },
@@ -40,9 +41,6 @@ const OPTIONS = {
   "source-adapter-id": { type: "string" },
   "source-instance-id": { type: "string" },
   "meeting-external-id": { type: "string" },
-  "challenge-attempt": { type: "string" },
-  "challenge-message-ts": { type: "string" },
-  "attempt-id": { type: "string" },
   name: { type: "string" },
   email: { type: "string" },
   out: { type: "string" },
@@ -51,7 +49,7 @@ const OPTIONS = {
   "record-sha256": { type: "string" },
 } as const;
 
-type Option = keyof typeof OPTIONS;
+type Option = string;
 
 const RULES: Readonly<
   Record<string, { accepts?: readonly Option[]; requires?: readonly Option[] }>
@@ -84,16 +82,6 @@ const RULES: Readonly<
     requires: ["source-adapter-id", "source-instance-id"],
   },
   "tools": {},
-  "slack-link-begin": { accepts: ["slack-user"], requires: ["slack-user"] },
-  "slack-link": { accepts: ["slack-user"], requires: ["slack-user"] },
-  "slack-link-complete": {
-    accepts: ["challenge-attempt", "challenge-message-ts"],
-    requires: ["challenge-attempt", "challenge-message-ts"],
-  },
-  "slack-connect-begin": {},
-  "slack-connect-status": { accepts: ["attempt-id"], requires: ["attempt-id"] },
-  "slack-connect-cancel": { accepts: ["attempt-id"], requires: ["attempt-id"] },
-  "slack-disconnect": {},
   "employee-invite": {
     accepts: ["name", "email", "out"],
     requires: ["name", "email", "out"],
@@ -125,9 +113,6 @@ Commands:
   records     List records or search the current generation.
   employee    List, invite, reissue, or revoke an employee.
   tools       Read organization tools and your current link status.
-  slack-connect-begin  Open Slack browser connection.
-  slack-disconnect  Remove your personal Slack link.
-  slack-link  Legacy private-DM Slack linking command.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -178,8 +163,12 @@ Shows each employee's name, canonical email, membership state, and invitation st
 };
 
 /** Returns supported human CLI help without constructing a client or session. */
-function personClientCliHelp(argv: readonly string[]): string | undefined {
-  if (argv.length === 1 && argv[0] === "--help") return HELP.person;
+function personClientCliHelp(argv: readonly string[], commands: readonly PersonToolCommandV1[]): string | undefined {
+  const tool = commands.find(command => command.name === argv[0]);
+  if (tool && argv.length === 2 && argv[1] === '--help') {
+    return `usage: echo-brain person ${tool.name}${Object.keys(tool.options).map(option => ' --' + option + ' <value>').join('')}\n\n${tool.description}\n`;
+  }
+  if (argv.length === 1 && argv[0] === "--help") return HELP.person + commands.map(command => `  ${command.name}  ${command.description}\n`).join('');
   if (argv.length === 2 && argv[1] === "--help") return HELP[argv[0] ?? ""];
   if (
     argv.length === 3 &&
@@ -283,30 +272,6 @@ export function openAuthorizationUrl(
   } catch {
     return false;
   }
-}
-
-async function beginSlackBrowserConnect(
-  client: PersonClient,
-  opener: (url: string) => boolean | Promise<boolean>,
-) {
-  const begun = await client.beginSlackBrowserLink();
-  let opened = false;
-  try {
-    opened = await opener(begun.authorization_url);
-  } catch {
-    opened = false;
-  }
-  if (!opened) {
-    // A browser connection that never opened is not useful and should not
-    // remain a pending authorization on the Authority.
-    try {
-      await client.cancelSlackBrowserLink(begun.attempt_id);
-    } catch {
-      // Preserve the browser-launch error. The Authority still bounds expiry.
-    }
-    throw new Error("Slack authorization browser could not be opened");
-  }
-  return begun;
 }
 
 /**
@@ -462,7 +427,16 @@ export async function runPersonClientCli(
 ): Promise<number> {
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
-  const help = personClientCliHelp(argv);
+  const toolCommands = dependencies.tool_commands ?? [];
+  const registered = new Map<string, PersonToolCommandV1>();
+  for (const command of toolCommands) {
+    if (registered.has(command.name) || Object.hasOwn(RULES, command.name) || !/^[a-z][a-z0-9-]*$/.test(command.name) ||
+        command.requires?.some(name => !Object.hasOwn(command.options, name))) {
+      throw new Error('Person tool command registration is invalid or duplicated');
+    }
+    registered.set(command.name, command);
+  }
+  const help = personClientCliHelp(argv, toolCommands);
   if (help !== undefined) {
     stdout.write(help);
     return 0;
@@ -479,7 +453,8 @@ export async function runPersonClientCli(
         ]
       : undefined;
   const action = employeeAction ?? (argv[0] ?? "");
-  const rule = RULES[action];
+  const toolCommand = registered.get(action);
+  const rule = RULES[action] ?? (toolCommand === undefined ? undefined : { accepts: Object.keys(toolCommand.options), requires: toolCommand.requires });
   if (rule === undefined) {
     print(stderr, { ok: false, error: usage() });
     return 2;
@@ -491,7 +466,7 @@ export async function runPersonClientCli(
       args: [...argv.slice(employeeAction === undefined ? 1 : 2)],
       strict: true,
       allowPositionals: false,
-      options: OPTIONS,
+      options: { ...OPTIONS, ...toolCommand?.options },
     }).values as Record<Option, string | boolean | undefined>;
     const accepted = new Set(rule.accepts ?? []);
     for (const [name, value] of Object.entries(values)) {
@@ -565,6 +540,12 @@ export async function runPersonClientCli(
   const readInteractiveLine = dependencies.read_input ?? readBoundedStdinLine;
 
   try {
+    if (toolCommand !== undefined) {
+      await toolCommand.run({ host: client, values, print: (value) => print(stdout, value),
+        read_input: async () => await readInput(), read_interactive_line: async () => await readInteractiveLine(),
+        open_browser: dependencies.open_authorization_url ?? openAuthorizationUrl });
+      return 0;
+    }
     switch (action) {
       case "login": {
         requireSignedOut(client);
@@ -748,80 +729,6 @@ export async function runPersonClientCli(
       }
       case "tools":
         print(stdout, { ok: true, result: await client.tools() });
-        break;
-      case "slack-link-begin":
-        print(stdout, { ok: true, ...(await client.beginSlackIdentityLink(requiredText(values, "slack-user"))) });
-        break;
-      case "slack-link": {
-        const begun = await client.beginSlackIdentityLink(requiredText(values, "slack-user"));
-        // Retain the code and opaque challenge handles in memory. The person
-        // copies the code into Slack, then confirms with one empty line.
-        print(stdout, {
-          ok: true,
-          phase: "reply-in-slack",
-          challenge_code: begun.challenge_code,
-          expires_at: begun.expires_at,
-          instruction:
-            "Reply with challenge_code in the Slack thread, then press Enter here to confirm.",
-        });
-        const acknowledgement = await readInteractiveLine();
-        if (acknowledgement.trim().length !== 0) {
-          throw new Error(
-            "Person Slack identity-link confirmation must be an empty Enter acknowledgement",
-          );
-        }
-        print(stdout, {
-          ok: true,
-          phase: "linked",
-          result: await client.completeSlackIdentityLink({
-            challenge_attempt_id: begun.challenge_attempt_id,
-            challenge_message_ts: begun.challenge_message_ts,
-            challenge_code: begun.challenge_code,
-          }),
-        });
-        break;
-      }
-      case "slack-link-complete":
-        print(stdout, {
-          ok: true,
-          result: await client.completeSlackIdentityLink({
-            challenge_attempt_id: requiredText(values, "challenge-attempt"),
-            challenge_message_ts: requiredText(values, "challenge-message-ts"),
-            challenge_code: (await readInput()).trim(),
-          }),
-        });
-        break;
-      case "slack-connect-begin": {
-        const begun = await beginSlackBrowserConnect(
-          client,
-          dependencies.open_authorization_url ?? openAuthorizationUrl,
-        );
-        // The attempt ID is an opaque cancellation/polling handle. The
-        // authorization URL remains solely in the process that opened it.
-        print(stdout, {
-          ok: true,
-          phase: "waiting-for-slack",
-          attempt_id: begun.attempt_id,
-          expires_at: begun.expires_at,
-        });
-        break;
-      }
-      case "slack-connect-status": {
-        const status = await client.slackBrowserLinkStatus(
-          requiredText(values, "attempt-id"),
-        );
-        print(stdout, { ok: true, ...status });
-        break;
-      }
-      case "slack-connect-cancel": {
-        const status = await client.cancelSlackBrowserLink(
-          requiredText(values, "attempt-id"),
-        );
-        print(stdout, { ok: true, ...status });
-        break;
-      }
-      case "slack-disconnect":
-        print(stdout, { ok: true, result: await client.disconnectSlack() });
         break;
       case "employee-invite":
         print(stdout, {

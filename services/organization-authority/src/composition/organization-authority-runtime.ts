@@ -1,7 +1,7 @@
 import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
-import { bindApprovalWorkflowStateV1 } from "../processing/admitted-meeting-processing/approval-workflow-state-v1.js";
-import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
-import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
+import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
+import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -9,26 +9,26 @@ import {
   OrganizationRecordAppenderV4,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
-import { AdmittedMeetingProcessingCycleV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
+import { AdmittedMeetingProcessingCycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import {
   readAdmittedMeetingProcessingCommitmentsV1,
-} from "../processing/admitted-meeting-processing/admitted-meeting-processing-commitments.js";
-import { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
+import { SqliteAuthorityMeetingProcessingStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1";
 import type {
   ApprovalWorkflowProcessingV1,
   ApprovalWorkflowComponentsV1,
   ApprovalWorkflowBundleV1,
-} from "./approval-workflow-bundle-v1.js";
+} from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
 import type {
   AnswerCompositionGenerationBindingV1,
   AnswerCompositionGenerationBundleV1,
-} from "./answer-composition-generation-bundle-v1.js";
-import type { DecisionProcessorBundleV1 } from "./decision-processor-bundle-v1.js";
-import type { MeetingSourceBundleV1 } from "./meeting-source-bundle-v1.js";
+} from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
+import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-processing/ports/decision-processor-bundle-v1";
+import type { MeetingSourceBundleV1 } from "@echo-brain/organization-processing/ports/meeting-source-bundle-v1";
 import {
   startOrganizationAuthorityServiceLifecycle,
   type OrganizationAuthorityProcessingCycleV1,
@@ -41,13 +41,13 @@ import {
 } from "./readable-search-generation-composition.js";
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
-import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
-import type { MeetingProcessingWorkerPhaseRunnerV1 } from "../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js";
+import type { MeetingProcessingWorkerPhaseRunnerV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 import type {
   StagingSyntheticMeetingCanaryInputV1,
   StagingSyntheticMeetingCanaryResultV1,
-} from "../processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 import {
   openMeetingApprovalJourneyTelemetryV1,
   type MeetingApprovalJourneyTelemetryConfigV1,
@@ -55,8 +55,8 @@ import {
 import type {
   MeetingApprovalJourneyStageAttemptV1,
   MeetingApprovalJourneyTelemetryPortV1,
-} from "../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
-import { STAGING_AUTHORITY_ORIGIN_V1 } from "./staging-authority-environment-v1.js";
+} from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 
 export interface OrganizationAuthorityRuntimeConfig {
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
@@ -83,7 +83,7 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly on_worker_error?: (error: Error) => void;
   /** Observational only: bounded, content-free worker lifecycle events. */
   readonly on_worker_telemetry?: (
-    event: import("../processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.js").MeetingProcessingWorkerTelemetryEventV1,
+    event: import("@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle").MeetingProcessingWorkerTelemetryEventV1,
   ) => void;
   /** Observational only: redacted answer-composition model-stage failures. */
   readonly on_answer_composition_failure?: (

@@ -1,0 +1,179 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-slack-server",
+  "workspace": true,
+  "boundary_root": "providers/slack/server",
+  "source_root": "providers/slack/server/src",
+  "package_json": "providers/slack/server/package.json",
+  "entry_points": [
+    "providers/slack/server/src/organization-protocol/private-slack-block-approval-record-input-v1.ts",
+    "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
+    "providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts",
+    "providers/slack/server/src/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
+    "providers/slack/server/src/adapters/oidc/slack-browser-identity-provider.ts",
+    "providers/slack/server/src/private-approval/private-slack-approval-interaction-protocol-v1.ts",
+    "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.ts",
+    "providers/slack/server/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts",
+    "providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts",
+    "providers/slack/server/src/organization-control-plane/application/slack-integration-contracts.ts",
+    "providers/slack/server/src/slack-private-credentials-v1.ts",
+    "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.ts",
+    "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.ts",
+    "providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.ts",
+    "providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v1.ts",
+    "providers/slack/server/src/organization-control-plane/slack-approval-integration-v1.ts",
+    "providers/slack/server/src/presentation/private-slack-approval-interaction-http-port-v1.ts",
+    "providers/slack/server/src/private-approval/private-slack-approval-http-adapter-v1.ts",
+    "providers/slack/server/src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.ts",
+    "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.ts",
+    "providers/slack/server/src/person-identity/sqlite-slack-person-identity-link-repository-v1.ts",
+    "providers/slack/server/src/person-identity/slack-person-browser-identity-link-workflow-v1.ts",
+    "providers/slack/server/src/private-approval/sqlite-private-slack-approval-terminal-authority-v1.ts",
+    "providers/slack/server/src/private-approval/sqlite-private-slack-approval-assignment-state-v1.ts",
+    "providers/slack/server/src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.ts",
+    "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.ts",
+    "providers/slack/server/src/private-approval/resolve-private-slack-approval-reviewer-target-v1.ts",
+    "providers/slack/server/src/private-approval/sqlite-stable-private-approval-authority-fence-v1.ts",
+    "providers/slack/server/src/private-approval/resolve-current-private-slack-connection-v1.ts",
+    "providers/slack/server/src/private-approval/private-slack-dm-approval-stager-v1.ts",
+    "providers/slack/server/src/private-approval/private-slack-approval-interaction-handler-v1.ts",
+    "providers/slack/server/src/private-approval/private-slack-approval-terminal-coordinator-v1.ts",
+    "providers/slack/server/src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.ts",
+    "providers/slack/server/src/processing/adapters/shared/slack/slack-web-api-client.ts",
+    "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.ts"
+  ],
+  "owned_source_paths": [
+    "providers/slack/server/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/slack/server/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/organization-control-plane",
+    "@echo-brain/organization-authority-kernel",
+    "@echo-brain/federation-protocol",
+    "@echo-brain/provider-slack-client",
+    "@echo-brain/organization-processing",
+    "@echo-brain/organization-protocol",
+    "@echo-brain/organization-record",
+    "@echo-brain/organization-api"
+  ],
+  "allowed_external_packages": [
+    "better-sqlite3",
+    "openid-client"
+  ],
+  "allowed_node_builtins": [
+    "fs",
+    "crypto",
+    "path",
+    "http",
+    "stream/web"
+  ],
+  "runtime_assets": [
+    "providers/slack/server/assets/telemetry-vocabulary.v1.json"
+  ],
+  "layer_rules": [
+    {
+      "name": "provider-slack-server-implementation",
+      "from": "providers/slack/server/src/**",
+      "allowed_imports": [
+        "providers/slack/server/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-protocol",
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-control-plane",
+        "@echo-brain/provider-slack-client",
+        "@echo-brain/organization-processing",
+        "@echo-brain/organization-record",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3",
+        "openid-client"
+      ],
+      "allowed_node_builtins": [
+        "fs",
+        "crypto",
+        "path",
+        "http",
+        "stream/web"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Private Slack approval workflow bundle",
+        "path": "providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts",
+        "export": "createPrivateSlackApprovalWorkflowBundleV1"
+      },
+      {
+        "name": "Slack Person external-identity runtime bundle",
+        "path": "providers/slack/server/src/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
+        "export": "createSlackPersonExternalIdentityRuntimeBundleV1"
+      },
+      {
+        "name": "Private Slack approval interaction protocol",
+        "path": "providers/slack/server/src/private-approval/private-slack-approval-interaction-protocol-v1.ts",
+        "export": "verifyPrivateSlackApprovalRequestV1"
+      },
+      {
+        "name": "Private Slack approval interaction handler",
+        "path": "providers/slack/server/src/private-approval/private-slack-approval-interaction-handler-v1.ts",
+        "export": "createPrivateSlackApprovalInteractionHandlerV1"
+      },
+      {
+        "name": "Private Slack approval HTTP adapter",
+        "path": "providers/slack/server/src/private-approval/private-slack-approval-http-adapter-v1.ts",
+        "export": "createPrivateSlackApprovalHttpAdapterV1"
+      },
+      {
+        "name": "Private Slack approval interaction HTTP port",
+        "path": "providers/slack/server/src/presentation/private-slack-approval-interaction-http-port-v1.ts",
+        "export": "PrivateSlackApprovalInteractionHttpPortV1"
+      },
+      {
+        "name": "Slack approval integration API",
+        "path": "providers/slack/server/src/organization-control-plane/slack-approval-integration-v1.ts",
+        "export": "SqliteSlackDmApprovalPersistenceV1"
+      },
+      {
+        "name": "Slack external-identity integration API",
+        "path": "providers/slack/server/src/organization-control-plane/slack-external-identity-integration-v1.ts",
+        "export": "SlackWebIdentityProviderV1"
+      },
+      {
+        "name": "Organization tool connection contracts",
+        "path": "providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.ts",
+        "export": "validateOrganizationToolConnectionContractV2"
+      },
+      {
+        "name": "Slack integration contracts",
+        "path": "providers/slack/server/src/organization-control-plane/application/slack-integration-contracts.ts",
+        "export": "SlackIntegrationProvider"
+      },
+      {
+        "name": "Slack connection setup command",
+        "path": "providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts",
+        "export": "runSlackConnectionSetupCli"
+      },
+      {
+        "name": "Private Slack Block approval policy projector",
+        "path": "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
+        "export": "createPrivateSlackBlockApprovalPolicyProjectorV1"
+      }
+    ],
+    "compatibility_entrypoints": [
+      {
+        "path": "providers/slack/server/src/organization-control-plane/clean-slack-connect-main.ts",
+        "targets": [
+          "providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts"
+        ]
+      }
+    ],
+    "retired_source_paths": []
+  }
+}

@@ -1,8 +1,8 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import { applyAuthorityBaselineV1 } from "../../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../../src/adapters/persistence/sqlite/open-authority-database.js";
+import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 

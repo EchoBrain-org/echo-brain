@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { STAGING_AUTHORITY_ORIGIN_V1 } from "../staging-authority-environment-v1.js";
+import { STAGING_AUTHORITY_ORIGIN_V1 } from "@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1";
 
 /**
  * A file-backed corpus is a staging rehearsal source only. Keep this check

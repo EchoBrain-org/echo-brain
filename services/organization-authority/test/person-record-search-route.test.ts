@@ -37,11 +37,11 @@ import {
   ANSWER_COMPOSITION_MAX_CONTEXT_ATOMS,
   ANSWER_COMPOSITION_MAX_CONTEXT_UTF8_BYTES,
   type StructuredGenerationInput,
-} from "../src/answer-composition/retrieval-grounded-answer-composition.js";
-import { applyAuthorityBaselineV1 } from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
-import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
-import { AuthorityOperationError } from "../src/domain/errors.js";
+} from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
+import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 

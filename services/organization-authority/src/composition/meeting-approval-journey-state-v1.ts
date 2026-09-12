@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import {
   createJourneyIdV1,
   parseJourneyIdV1,
   type JourneyIdV1,
   type JourneyStageV1,
-} from "../shared/journey-telemetry-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 
 /** A disposable, separate file role. It is never an Authority state baseline. */
 export const MEETING_APPROVAL_JOURNEY_STATE_SCHEMA_VERSION_V1 = 2 as const;

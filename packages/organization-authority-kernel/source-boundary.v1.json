@@ -1,0 +1,178 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/organization-authority-kernel",
+  "workspace": true,
+  "boundary_root": "packages/organization-authority-kernel",
+  "source_root": "packages/organization-authority-kernel/src",
+  "package_json": "packages/organization-authority-kernel/package.json",
+  "entry_points": [
+    "packages/organization-authority-kernel/src/shared/core-runtime-observation-v1.ts",
+    "packages/organization-authority-kernel/src/shared/person-email-rules.ts",
+    "packages/organization-authority-kernel/src/shared/journey-telemetry-v1.ts",
+    "packages/organization-authority-kernel/src/shared/telemetry-vocabulary-v1.ts",
+    "packages/organization-authority-kernel/src/shared/staging-synthetic-meeting-canary-envelope-v1.ts"
+  ],
+  "owned_source_paths": [
+    "packages/organization-authority-kernel/src/**"
+  ],
+  "allowed_internal_paths": [
+    "packages/organization-authority-kernel/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-protocol",
+    "@echo-brain/organization-control-plane",
+    "@echo-brain/organization-record",
+    "@echo-brain/organization-retrieval",
+    "@echo-brain/organization-api"
+  ],
+  "allowed_external_packages": [
+    "better-sqlite3"
+  ],
+  "allowed_node_builtins": [
+    "async_hooks",
+    "crypto",
+    "fs",
+    "path",
+    "buffer"
+  ],
+  "runtime_assets": [
+    "packages/organization-authority-kernel/baselines/authority-approval-delivery-quarantine-v4.sql",
+    "packages/organization-authority-kernel/baselines/authority-baseline-v1.sql",
+    "packages/organization-authority-kernel/baselines/authority-meeting-processing-v3.sql",
+    "packages/organization-authority-kernel/baselines/authority-private-approval-v2.sql"
+  ],
+  "layer_rules": [
+    {
+      "name": "organization-authority-kernel-domain",
+      "from": "packages/organization-authority-kernel/src/domain/**",
+      "allowed_imports": [
+        "packages/organization-authority-kernel/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "organization-authority-kernel-application",
+      "from": "packages/organization-authority-kernel/src/application/**",
+      "allowed_imports": [
+        "packages/organization-authority-kernel/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "buffer"
+      ]
+    },
+    {
+      "name": "organization-authority-kernel-shared",
+      "from": "packages/organization-authority-kernel/src/shared/**",
+      "allowed_imports": [
+        "packages/organization-authority-kernel/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "async_hooks",
+        "crypto"
+      ]
+    },
+    {
+      "name": "organization-authority-kernel-answer-composition",
+      "from": "packages/organization-authority-kernel/src/answer-composition/**",
+      "allowed_imports": [
+        "packages/organization-authority-kernel/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "organization-authority-kernel-state-lineage",
+      "from": "packages/organization-authority-kernel/src/state-lineage/**",
+      "allowed_imports": [
+        "packages/organization-authority-kernel/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "fs",
+        "path"
+      ]
+    },
+    {
+      "name": "organization-authority-kernel-composition",
+      "from": "packages/organization-authority-kernel/src/composition/**",
+      "allowed_imports": [
+        "packages/organization-authority-kernel/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-control-plane",
+        "@echo-brain/organization-record",
+        "@echo-brain/organization-retrieval",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "fs",
+        "path"
+      ]
+    },
+    {
+      "name": "organization-authority-kernel-adapters",
+      "from": "packages/organization-authority-kernel/src/adapters/**",
+      "allowed_imports": [
+        "packages/organization-authority-kernel/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "path"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Organization Authority database",
+        "path": "packages/organization-authority-kernel/src/adapters/persistence/sqlite/open-authority-database.ts",
+        "export": "openAuthorityDatabase"
+      },
+      {
+        "name": "Authority state-lineage verifier",
+        "path": "packages/organization-authority-kernel/src/composition/verify-authority-state-lineage.ts",
+        "export": "verifyAuthorityStateLineage"
+      },
+      {
+        "name": "Answer-composition generation bundle",
+        "path": "packages/organization-authority-kernel/src/composition/answer-composition-generation-bundle-v1.ts",
+        "export": "AnswerCompositionGenerationBundleV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

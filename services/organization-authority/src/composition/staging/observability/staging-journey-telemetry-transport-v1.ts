@@ -1,13 +1,13 @@
-import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "../../../shared/telemetry-vocabulary-v1.js";
+import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "@echo-brain/organization-authority-kernel/shared/telemetry-vocabulary-v1";
 import type { MeetingApprovalObservationFailureV1 } from "../../meeting-approval-journey-telemetry-v1.js";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import type { CoreRuntimeObservationScopeV1 } from "../../../shared/core-runtime-observation-v1.js";
+import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   createJourneyTelemetryV1,
   recanonicalizeJourneyTelemetryEventV1,
   type JourneyTelemetryObserverV1,
-} from "../../../shared/journey-telemetry-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import {
   formatStagingJourneyContentRecordsV2,
   type StagingJourneyContentRecordInputV2,

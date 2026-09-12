@@ -1,7 +1,8 @@
-import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
 const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
 import { persistedApprovalWorkflowFixtureV1 } from "./fixtures/persisted-approval-workflow-v1.js";
-import { createPrivateSlackApprovalWorkflowBundleV1 } from "../src/composition/providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.js";
+import { createPrivateSlackApprovalWorkflowBundleV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-workflow-bundle-v1";
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "./observability/telemetry-fixture-vocabulary-v1.js";
 import { createHmac } from "node:crypto";
 import {
@@ -25,30 +26,24 @@ import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   openOrganizationControlDatabase,
-} from "@echo-brain/organization-control-plane/slack-approval-integration-v1";
-import {
-  buildExternalHumanIdentityLinkContractV2,
-  buildOrganizationToolConnectionContractV2,
-  buildOrganizationToolConnectionStateV2,
-} from "../../../packages/organization-control-plane/src/application/organization-tool-connection-contracts-v2.js";
+} from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
+import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../../providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeContentV1 } from "../src/shared/core-runtime-observation-v1.js";
-import type { JourneyTelemetryEventV1 } from "../src/shared/journey-telemetry-v1.js";
-import type {
-  BegunPersonOidcLogin,
-  PersonAccessAuthorization,
-} from "../src/application/person-identity-sessions.js";
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeContentV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
-import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { SystemAuthorityClock } from "../src/adapters/system/system-authority-clock.js";
-import { admitGranolaMeetingSource } from "../src/composition/providers/granola/granola-meeting-source-admission.js";
-import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "../src/composition/providers/openrouter/openrouter-decision-processor-admission-commitment.js";
+import { admitGranolaMeetingSource } from "@echo-brain/provider-granola/granola-meeting-source-admission";
+import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
@@ -67,23 +62,17 @@ import {
 import type {
   ApprovalWorkflowBundleV1,
   ApprovalWorkflowContextV1,
-} from "../src/composition/approval-workflow-bundle-v1.js";
-import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2, createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+} from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
+import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import { createReadableSearchGenerationReconcilerV1, readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
-import { verifyAuthorityStateLineage } from "../src/composition/verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
-import {
-  OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1,
-  OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-  OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
-} from "../src/composition/providers/openrouter/openrouter-answer-composition-generation-bundle-v1.js";
+import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
-import type { StructuredGenerationPort } from "../src/answer-composition/retrieval-grounded-answer-composition.js";
-import {
-  PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1,
-  privateSlackApprovalBlockKitActionIdV1,
-} from "../src/composition/providers/slack/private-approval/private-slack-approval-block-kit-card-v1.js";
+import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
+import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "../../../providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v1.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import type {
@@ -92,14 +81,9 @@ import type {
   DecisionSet,
   MeetingDocument,
   MeetingSourceAdapter,
-} from "../src/processing/core/index.js";
-import { createGranolaPostCutoffCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
-import type {
-  PrivateSlackApprovalCardPresentationV1,
-  PrivateSlackApprovalPostOutcomeV1,
-  PrivateSlackApprovalTerminalPresentationV1,
-  PrivateSlackApprovalUpdateOutcomeV1,
-} from "../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
+} from "@echo-brain/organization-processing/core";
+import { createGranolaPostCutoffCursor } from "../../../providers/granola/src/source/meeting-source-adapter.js";
+import type { PrivateSlackApprovalCardPresentationV1, PrivateSlackApprovalPostOutcomeV1, PrivateSlackApprovalTerminalPresentationV1, PrivateSlackApprovalUpdateOutcomeV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 
 const roots: string[] = [];
 let testAuthorizationCheck = 0;

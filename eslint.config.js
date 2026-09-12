@@ -13,6 +13,7 @@ export default [
       'packages/*/test/**/*.ts',
       'services/*/src/**/*.ts',
       'services/*/test/**/*.ts',
+      'providers/**/*.ts',
       'vitest.config.ts',
       'vitest.package.config.ts',
     ],

@@ -40,7 +40,8 @@ const rules: readonly TestLayerRule[] = [
   {
     root: 'services/organization-authority/test/processing/core',
     allows: (path) =>
-      path.startsWith('services/organization-authority/src/processing/core/') ||
+      path.startsWith('packages/organization-processing/src/core/') ||
+      path === 'workspace:@echo-brain/organization-processing' ||
       path.startsWith('tests/support/'),
   },
   {
@@ -50,7 +51,8 @@ const rules: readonly TestLayerRule[] = [
       path === 'workspace:@echo-brain/person-client' ||
       path === 'workspace:@echo-brain/federation-protocol' ||
       path === 'workspace:@echo-brain/organization-api' ||
-      path === 'workspace:@echo-brain/organization-protocol',
+      path === 'workspace:@echo-brain/organization-protocol' ||
+      path === 'workspace:@echo-brain/provider-slack-client',
   },
 ];
 

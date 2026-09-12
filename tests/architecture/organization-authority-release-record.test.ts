@@ -44,8 +44,8 @@ import {
   applyAuthorityBaselineV3,
   AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
   authorityBaselineSha256V3,
-} from "../../services/organization-authority/src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../../services/organization-authority/src/adapters/persistence/sqlite/open-authority-database.js";
+} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import { initializeAuthorityStateLineageV1 } from "../../services/organization-authority/src/state-lineage/authority-state-lineage-initializer.js";
 
@@ -76,21 +76,11 @@ const DOCKERFILE = join(REPO, "deploy", "organization-authority", "Dockerfile");
 const AUTHORITY_IMAGE_BUILD = join(REPO, "tools", "build-authority-image.mjs");
 const V4_LINEAGE_VERIFIER = join(
   REPO,
-  "services",
-  "organization-authority",
-  "dist",
-  "composition",
-  "verify-authority-state-lineage.js",
+  "packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js",
 );
 const OPENROUTER_ADMISSION_VERIFIER = join(
   REPO,
-  "services",
-  "organization-authority",
-  "dist",
-  "composition",
-  "providers",
-  "openrouter",
-  "verify-openrouter-decision-processor-admission-v1.js",
+  "providers/openrouter/dist/verify-openrouter-decision-processor-admission-v1.js",
 );
 const roots: string[] = [];
 let isolatedUpdate: string | undefined;

@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { PersonEmployeeLifecycleApplication } from "../../../services/organization-authority/dist/application/person-employee-lifecycle.js";
 import { PersonIdentitySessionApplication } from "../../../services/organization-authority/dist/application/person-identity-sessions.js";
-import { openAuthorityDatabase } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
 import { SqlitePersonSessionRepository } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { NodePersonSessionCrypto } from "../../../services/organization-authority/dist/adapters/security/node-person-session-crypto.js";
 import { SystemAuthorityClock } from "../../../services/organization-authority/dist/adapters/system/system-authority-clock.js";

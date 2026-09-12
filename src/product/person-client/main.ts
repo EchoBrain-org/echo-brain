@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { runPersonClientCli } from './commands.js';
+import { runPersonClientCli } from './composition.js';
 
 function packageVersion(): string {
   const value = JSON.parse(

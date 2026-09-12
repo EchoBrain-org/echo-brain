@@ -8,8 +8,8 @@ import type {
   PersonRecordReaderV1Input,
   RecordApproverProjectorV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
-import { AuthorityOperationError } from "../domain/errors.js";
-import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import type {
   PersonRecordReadHttpApplicationV1,

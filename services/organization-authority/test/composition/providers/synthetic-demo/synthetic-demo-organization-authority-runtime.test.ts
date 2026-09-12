@@ -9,23 +9,19 @@ import {
   createRecordPolicyFactProjectorRegistryV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { afterEach, describe, expect, it } from "vitest";
-import { openAuthorityDatabase } from "../../../../src/adapters/persistence/sqlite/open-authority-database.js";
-import { personLoginGrantExpectedEmailSha256 } from "../../../../src/domain/person-email-binding.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
 import type { PersonSessionOidcAuthorizationProvider } from "../../../../src/composition/lazy-person-session-oidc-provider.js";
-import type { AnswerCompositionGenerationBundleV1 } from "../../../../src/composition/answer-composition-generation-bundle-v1.js";
-import type { ApprovalWorkflowBundleV1 } from "../../../../src/composition/approval-workflow-bundle-v1.js";
-import type { DecisionProcessorBundleV1 } from "../../../../src/composition/decision-processor-bundle-v1.js";
-import type { MeetingSourceBundleV1 } from "../../../../src/composition/meeting-source-bundle-v1.js";
+import type { AnswerCompositionGenerationBundleV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
+import type { ApprovalWorkflowBundleV1 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
+import type { DecisionProcessorBundleV1 } from "@echo-brain/organization-processing/ports/decision-processor-bundle-v1";
+import type { MeetingSourceBundleV1 } from "@echo-brain/organization-processing/ports/meeting-source-bundle-v1";
 import { initializePersonSessionCredentials } from "../../../../src/composition/person-onboarding-service.js";
 import { bootstrapOrganizationAuthorityState } from "../../../../src/composition/organization-authority-state-bootstrap.js";
 import { openOrganizationAuthorityRuntime } from "../../../../src/composition/organization-authority-runtime.js";
-import { createSyntheticDemoMeetingSourceBundleV1 } from "../../../../src/composition/providers/synthetic-demo/synthetic-demo-meeting-source-bundle-v1.js";
-import {
-  SYNTHETIC_DEMO_INITIAL_CURSOR_V1,
-  loadSyntheticDemoMeetingCorpusV1,
-  syntheticDemoMeetingSourceIdentityV1,
-} from "../../../../src/processing/adapters/meeting-sources/synthetic-demo/synthetic-demo-meeting-source-v1.js";
-import type { DecisionProcessorAdapter } from "../../../../src/processing/core/index.js";
+import { createSyntheticDemoMeetingSourceBundleV1 } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-bundle-v1";
+import { SYNTHETIC_DEMO_INITIAL_CURSOR_V1, loadSyntheticDemoMeetingCorpusV1, syntheticDemoMeetingSourceIdentityV1 } from "@echo-brain/provider-synthetic-demo/source/synthetic-demo-meeting-source-v1";
+import type { DecisionProcessorAdapter } from "@echo-brain/organization-processing/core";
 
 const roots: string[] = [];
 const NOW = "2026-08-30T00:00:00.000Z";

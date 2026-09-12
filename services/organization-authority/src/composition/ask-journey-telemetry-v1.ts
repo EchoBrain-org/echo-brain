@@ -1,12 +1,12 @@
-import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, telemetryLabelV1, type TelemetryVocabularyV1 } from "../shared/telemetry-vocabulary-v1.js";
-import { RetrievalGroundedAnswerCompositionError } from "../answer-composition/retrieval-grounded-answer-composition.js";
+import { createTelemetryVocabularyV1, EMPTY_TELEMETRY_VOCABULARY_V1, telemetryLabelV1, type TelemetryVocabularyV1 } from "@echo-brain/organization-authority-kernel/shared/telemetry-vocabulary-v1";
+import { RetrievalGroundedAnswerCompositionError } from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
 import type {
   AnswerCompositionContentKindV1,
   AnswerCompositionContentObservationV1,
   AnswerCompositionGenerationObservationV1,
   AnswerCompositionStageObservationV1,
-} from "../answer-composition/retrieval-grounded-answer-composition.js";
-import { AuthorityOperationError } from "../domain/errors.js";
+} from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import {
   createJourneyTelemetryV1,
   type JourneyFailureClassV1,
@@ -19,7 +19,7 @@ import {
   type JourneyStageV1,
   type JourneyTelemetryDependenciesV1,
   type JourneyTelemetryObserverV1,
-} from "../shared/journey-telemetry-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 
 type AskJourneyStageV1 = Extract<JourneyStageV1, `ask_${string}`>;
 type AskJourneyOutcomeV1 = Extract<

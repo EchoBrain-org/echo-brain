@@ -129,7 +129,9 @@ describe("Linux Person onboarding kit", () => {
       "deploy/release/release-artifact-validation.mjs",
       "deploy/release/start-person-onboarding-kit-linux.sh",
       "tools/clean-v1-release.mjs",
+      "tools/lib/swift-source-assembly.mjs",
     ]) {
+      mkdirSync(join(source, path, ".."), { recursive: true });
       copyFileSync(join(REPO, path), join(source, path));
     }
     chmodSync(join(releaseDirectory, "start-person-onboarding-kit-linux.sh"), 0o755);

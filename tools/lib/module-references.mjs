@@ -258,7 +258,7 @@ function isLoaderReference(node) {
   return node.text === 'require' ? !isRequireNamePosition(node) : true;
 }
 
-export function collectModuleReferences(sourceFile) {
+export function collectModuleReferences(sourceFile, { includeTypeQueries = false } = {}) {
   const references = [];
 
   // CommonJS supplies `require` and `module.require` as ambient capabilities,
@@ -328,6 +328,19 @@ export function collectModuleReferences(sourceFile) {
     ts.forEachChild(node, visit);
   }
 
+  if (includeTypeQueries) {
+    const types = node => {
+      if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+        record(node, node.argument.literal, 'import-type');
+      }
+      if (ts.isImportEqualsDeclaration(node) && node.isTypeOnly &&
+          ts.isExternalModuleReference(node.moduleReference) && node.moduleReference.expression) {
+        record(node, node.moduleReference.expression, 'import-type');
+      }
+      ts.forEachChild(node, types);
+    };
+    types(sourceFile);
+  }
   visit(sourceFile);
   return references;
 }

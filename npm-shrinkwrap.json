@@ -16,7 +16,17 @@
         "services/organization-authority",
         "packages/organization-control-plane",
         "packages/organization-record",
-        "packages/organization-retrieval"
+        "packages/organization-retrieval",
+        "packages/organization-authority-kernel",
+        "packages/organization-processing",
+        "providers/openrouter",
+        "providers/anthropic",
+        "providers/ollama",
+        "providers/openai",
+        "providers/synthetic-demo",
+        "providers/slack/server",
+        "providers/slack/client",
+        "providers/granola"
       ],
       "devDependencies": {
         "@types/better-sqlite3": "7.6.11",
@@ -45,8 +55,16 @@
       "resolved": "services/organization-authority",
       "link": true
     },
+    "node_modules/@echo-brain/organization-authority-kernel": {
+      "resolved": "packages/organization-authority-kernel",
+      "link": true
+    },
     "node_modules/@echo-brain/organization-control-plane": {
       "resolved": "packages/organization-control-plane",
+      "link": true
+    },
+    "node_modules/@echo-brain/organization-processing": {
+      "resolved": "packages/organization-processing",
       "link": true
     },
     "node_modules/@echo-brain/organization-protocol": {
@@ -63,6 +81,38 @@
     },
     "node_modules/@echo-brain/person-client": {
       "resolved": "src/product/person-client",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-anthropic": {
+      "resolved": "providers/anthropic",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-granola": {
+      "resolved": "providers/granola",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-ollama": {
+      "resolved": "providers/ollama",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-openai": {
+      "resolved": "providers/openai",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-openrouter": {
+      "resolved": "providers/openrouter",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-slack-client": {
+      "resolved": "providers/slack/client",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-slack-server": {
+      "resolved": "providers/slack/server",
+      "link": true
+    },
+    "node_modules/@echo-brain/provider-synthetic-demo": {
+      "resolved": "providers/synthetic-demo",
       "link": true
     },
     "node_modules/@emnapi/core": {
@@ -4078,6 +4128,24 @@
         "npm": "10.9.4"
       }
     },
+    "packages/organization-authority-kernel": {
+      "name": "@echo-brain/organization-authority-kernel",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-control-plane": "0.0.0-dev.0",
+        "@echo-brain/organization-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-record": "0.0.0-dev.0",
+        "@echo-brain/organization-retrieval": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
     "packages/organization-control-plane": {
       "name": "@echo-brain/organization-control-plane",
       "version": "0.0.0-dev.0",
@@ -4085,8 +4153,21 @@
       "dependencies": {
         "better-sqlite3": "12.10.0"
       },
-      "bin": {
-        "echo-organization-control-plane-connect-slack": "dist/clean-slack-connect-main.js"
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "packages/organization-processing": {
+      "name": "@echo-brain/organization-processing",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+        "@echo-brain/organization-control-plane": "0.0.0-dev.0",
+        "@echo-brain/organization-record": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
       },
       "engines": {
         "node": "22.22.1",
@@ -4134,6 +4215,123 @@
         "npm": "10.9.4"
       }
     },
+    "providers/anthropic": {
+      "name": "@echo-brain/provider-anthropic",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/organization-processing": "0.0.0-dev.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "providers/granola": {
+      "name": "@echo-brain/provider-granola",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+        "@echo-brain/organization-processing": "0.0.0-dev.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "providers/ollama": {
+      "name": "@echo-brain/provider-ollama",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/organization-processing": "0.0.0-dev.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "providers/openai": {
+      "name": "@echo-brain/provider-openai",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/organization-processing": "0.0.0-dev.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "providers/openrouter": {
+      "name": "@echo-brain/provider-openrouter",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+        "@echo-brain/organization-processing": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "providers/slack/client": {
+      "name": "@echo-brain/provider-slack-client",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "providers/slack/server": {
+      "name": "@echo-brain/provider-slack-server",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+        "@echo-brain/organization-control-plane": "0.0.0-dev.0",
+        "@echo-brain/organization-processing": "0.0.0-dev.0",
+        "@echo-brain/organization-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-record": "0.0.0-dev.0",
+        "@echo-brain/provider-slack-client": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0",
+        "openid-client": "6.8.4"
+      },
+      "bin": {
+        "echo-organization-control-plane-connect-slack": "dist/organization-control-plane/clean-slack-connect-main.js"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "providers/synthetic-demo": {
+      "name": "@echo-brain/provider-synthetic-demo",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+        "@echo-brain/organization-processing": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
     "services/organization-authority": {
       "name": "@echo-brain/organization-authority",
       "version": "0.0.0-dev.0",
@@ -4141,10 +4339,16 @@
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
         "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
         "@echo-brain/organization-control-plane": "0.0.0-dev.0",
+        "@echo-brain/organization-processing": "0.0.0-dev.0",
         "@echo-brain/organization-protocol": "0.0.0-dev.0",
         "@echo-brain/organization-record": "0.0.0-dev.0",
         "@echo-brain/organization-retrieval": "0.0.0-dev.0",
+        "@echo-brain/provider-granola": "0.0.0-dev.0",
+        "@echo-brain/provider-openrouter": "0.0.0-dev.0",
+        "@echo-brain/provider-slack-server": "0.0.0-dev.0",
+        "@echo-brain/provider-synthetic-demo": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0",
         "openid-client": "6.8.4"
       },
@@ -4170,13 +4374,15 @@
       "bundleDependencies": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol",
-        "@echo-brain/organization-api"
+        "@echo-brain/organization-api",
+        "@echo-brain/provider-slack-client"
       ],
       "license": "MIT",
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
         "@echo-brain/organization-api": "0.0.0-dev.0",
-        "@echo-brain/organization-protocol": "0.0.0-dev.0"
+        "@echo-brain/organization-protocol": "0.0.0-dev.0",
+        "@echo-brain/provider-slack-client": "0.0.0-dev.0"
       },
       "bin": {
         "echo-brain": "dist/main.js"

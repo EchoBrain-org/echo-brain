@@ -2,100 +2,75 @@
 
 **Status:** Current
 
-The repository contains eight workspaces. The root package is private
-workspace orchestration only: it has no executable, runtime export, product
-database, or packable application.
+The repository contains eighteen workspaces: eight neutral packages, eight
+provider workspaces under seven provider folders, the Authority service, and
+the Person client. The root package only orchestrates workspaces.
 
-`services/` is reserved for independently deployable processes and lifecycle
-owners. `packages/` contains linked reusable/server modules and shared
-contracts. `src/product/` contains shipped machine product. Therefore the
-control plane, record, and retrieval workspaces are packages linked into the
-Authority process rather than deployable services.
+`packages/` owns inward contracts and reusable implementations. `services/`
+owns deployable processes and their lifecycle. `providers/<provider>/` owns
+that provider's wire formats, credentials, persistence translations, model
+vocabulary, command/UI fragments, tests, and runtime assets. Slack has separate
+client and server workspaces because the Person artifact must remain free of
+Authority code and native SQLite.
 
-The provider-boundary migration reserves repository-root `providers/<provider>/`
-for each provider's implementation, provider-only tests, client fragments, and
-assets. This is outside the Authority service. A provider workspace must declare
-its public exports and join the workspace registry, TypeScript references, test
-discovery, and artifact inputs in the same change that introduces it. Tests stay
-outside production `src` directories. Split client-safe contracts from server
-code within a provider root only when their artifact/dependency closures require
-it; the Person artifact must not acquire Authority or native SQLite dependencies.
-No provider workspace has been introduced yet. The reserved parent and the
-existing composition/provider parent already reject undeclared JavaScript and
-TypeScript source files. Under repository-root `providers/`, the nearest package
-must also be registered in root `workspaces` and the checked boundary registry;
-even a declared provider root cannot bypass that registration. This check does
-not establish test discovery or shipped artifact inclusion: those inputs must
-still be updated and verified when the first provider workspace is introduced.
-Swift and runtime-asset ownership need separate checks as those surfaces migrate.
+## Dependency direction
 
-## Workspace graph
+Neutral modules can import other neutral modules. A neutral library cannot
+import a composing application. Providers depend inward on neutral public
+exports; they cannot import another provider or the Authority service.
+Explicit bootstrap modules select implementations and inject ports. Neutral
+modules cannot import bootstrap modules. Cross-workspace imports use explicit
+public exports, and the complete workspace graph must remain acyclic.
 
-```text
-federation-protocol
-  -> organization-protocol
-  -> organization-api
-  -> person-client
+- `organization-processing` owns processing contracts, the bounded cycle, generic
+  LLM prompt/grounding behavior, and processing state.
+- `organization-authority-kernel` owns reusable Authority contracts, rules,
+  telemetry, state verification, SQLite baseline access, and bundle ports.
+- Federation/API/protocol, control-plane, record and retrieval retain their
+  existing responsibilities. Record has no runtime dependency on protocol.
+- The Authority and Person composition modules select provider implementations.
+  The deployed Authority selects its product profile; it does not ship unused
+  OpenAI, Anthropic or Ollama transports.
 
-federation-protocol
-  -> organization-record
-  -> organization-retrieval
-
-organization-control-plane ─┐
-organization-record ────────┼-> organization-authority
-organization-retrieval ─────┤
-organization-api/protocol ──┘
-```
-
-- Protocol packages contain signed documents, canonicalization, identifiers,
-  and HTTP DTOs; they import no product or service implementation.
-- The Person client depends only on federation, organization protocol, and
-  organization API.
-- `organization-control-plane` owns provider connections and grants and has no
-  workspace dependency.
-- `organization-record` and `organization-retrieval` depend only on federation
-  canonicalization.
-- The Authority is the sole composition root across server workspaces.
-- Cross-workspace imports use declared package exports.
-
-The checked registry is
+The registry is
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json).
-Each workspace owns every TypeScript file below its source root, and every
-owned production file must match exactly one layer rule.
+Every production module has an owner. The gate follows whole modules, including
+unused re-exports, namespace/side-effect imports, type queries and literal dynamic
+imports. Runtime asset references obey the same direction. Native Swift and the
+Explorer deployment have explicit source assemblies shared by their builders
+and the same architecture gate. There is no provider-name registry, symbol-based
+traversal or exception mechanism.
 
-## Product split
+## Product and build boundaries
 
-There are two operational artifacts:
+The Person tarball contains the client, federation/protocol/API and the Slack
+client fragment. It includes public versioned data exports and contains no
+Authority, processing, server provider or SQLite dependency. Its dedicated build
+compiles these five workspaces. The Authority image contains its fourteen-workspace
+dependency closure and the required frozen SQL/provider assets.
 
-```text
-Person tarball       -> src/product/person-client
-Authority container -> services/organization-authority + server dependencies
-```
+The architecture suite compiles all eight neutral packages in an isolated tree
+with no provider, Person, service or prebuilt workspace output available.
+External dependencies remain installed; workspace symlinks point only into the
+isolated tree. Full source tests and the existing native/offline artifact checks
+exercise the composed products. No additional CI job is needed.
 
-The Authority image does not copy Person source. The Person packer builds only
-its three dependency workspaces and the client. The legacy root machine
-runtime, local SQLite state, installation signer, LaunchAgent, JSONL outbox,
-and fleet updater are removed.
+The native account shell consumes generic v3 tool status and an injected UI
+interface. Slack owns its actions and retained v2 disconnect decoder. The v2
+HTTP contract remains provider-owned for installed clients; v3 admits up to
+32 independently identified tools without imposing a provider's identity grammar.
 
-`product/source-boundary.v1.json` owns the cross-workspace provider declarations
-and the retirement fence. Its entry-point closure is intentionally empty and
-its removed-root list prevents the old machine product from silently
-reappearing outside the Person workspace.
+`product/source-boundary.v1.json` declares bootstrap modules, provider folders,
+source assemblies and retired roots. The legacy machine runtime remains absent.
 
 ## Authority layers
 
-```text
-domain        pure organization and access rules
-application   commands, queries, and transaction ports
-adapters      SQLite, signing, credentials, OIDC, private files
-presentation  JSON routes and explicit provider ingress
-composition   configuration and concrete wiring
-processing    meeting core, adapters, admitted-meeting cycle, replay, and durability
-```
-
-Routes call application use cases rather than SQLite. The service is bound to
-one organization and contains no tenant registry, billing, or cross-org query.
-The built-in listener stays loopback-only behind the trusted reverse proxy.
+Routes call application use cases rather than SQLite. The service owns one
+organization, Person identity and sessions, authorization, and process lifecycle.
+Provider bundles receive explicit state/action/transport ports. The listener stays
+loopback-only behind the trusted reverse proxy. Stopped-state setup selects the
+concrete product profile, while provider verification, identity SQL, credential
+interpretation and source admission proofs stay in their provider folders.
 
 ## Persistence ownership
 

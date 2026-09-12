@@ -1,4 +1,4 @@
-import { runPersonClientCli } from "../../src/product/person-client/index.js";
+import { runPersonClientCli } from "../../src/product/person-client/composition.js";
 import { describe, expect, it } from "vitest";
 
 async function help(argv: readonly string[]): Promise<string> {

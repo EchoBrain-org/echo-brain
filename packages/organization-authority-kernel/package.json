@@ -1,0 +1,145 @@
+{
+  "name": "@echo-brain/organization-authority-kernel",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./shared/core-runtime-observation-v1": {
+      "types": "./dist/shared/core-runtime-observation-v1.d.ts",
+      "import": "./dist/shared/core-runtime-observation-v1.js"
+    },
+    "./shared/person-email-rules": {
+      "types": "./dist/shared/person-email-rules.d.ts",
+      "import": "./dist/shared/person-email-rules.js"
+    },
+    "./shared/journey-telemetry-v1": {
+      "types": "./dist/shared/journey-telemetry-v1.d.ts",
+      "import": "./dist/shared/journey-telemetry-v1.js"
+    },
+    "./shared/telemetry-vocabulary-v1": {
+      "types": "./dist/shared/telemetry-vocabulary-v1.d.ts",
+      "import": "./dist/shared/telemetry-vocabulary-v1.js"
+    },
+    "./shared/staging-synthetic-meeting-canary-envelope-v1": {
+      "types": "./dist/shared/staging-synthetic-meeting-canary-envelope-v1.d.ts",
+      "import": "./dist/shared/staging-synthetic-meeting-canary-envelope-v1.js"
+    },
+    "./domain/errors": {
+      "types": "./dist/domain/errors.d.ts",
+      "import": "./dist/domain/errors.js"
+    },
+    "./application/ports/provider-http-application-v1": {
+      "types": "./dist/application/ports/provider-http-application-v1.d.ts",
+      "import": "./dist/application/ports/provider-http-application-v1.js"
+    },
+    "./application/ports/authority-repository": {
+      "types": "./dist/application/ports/authority-repository.d.ts",
+      "import": "./dist/application/ports/authority-repository.js"
+    },
+    "./application/ports/person-access-authorization": {
+      "types": "./dist/application/ports/person-access-authorization.d.ts",
+      "import": "./dist/application/ports/person-access-authorization.js"
+    },
+    "./domain/person-session-rules": {
+      "types": "./dist/domain/person-session-rules.d.ts",
+      "import": "./dist/domain/person-session-rules.js"
+    },
+    "./domain/rules": {
+      "types": "./dist/domain/rules.d.ts",
+      "import": "./dist/domain/rules.js"
+    },
+    "./application/ports/person-session-dependencies": {
+      "types": "./dist/application/ports/person-session-dependencies.d.ts",
+      "import": "./dist/application/ports/person-session-dependencies.js"
+    },
+    "./domain/person-email-binding": {
+      "types": "./dist/domain/person-email-binding.d.ts",
+      "import": "./dist/domain/person-email-binding.js"
+    },
+    "./answer-composition/retrieval-grounded-answer-composition": {
+      "types": "./dist/answer-composition/retrieval-grounded-answer-composition.d.ts",
+      "import": "./dist/answer-composition/retrieval-grounded-answer-composition.js"
+    },
+    "./application/ports/authority-clock": {
+      "types": "./dist/application/ports/authority-clock.d.ts",
+      "import": "./dist/application/ports/authority-clock.js"
+    },
+    "./application/ports/organization-authority-signer": {
+      "types": "./dist/application/ports/organization-authority-signer.d.ts",
+      "import": "./dist/application/ports/organization-authority-signer.js"
+    },
+    "./adapters/persistence/sqlite/open-authority-database": {
+      "types": "./dist/adapters/persistence/sqlite/open-authority-database.d.ts",
+      "import": "./dist/adapters/persistence/sqlite/open-authority-database.js"
+    },
+    "./adapters/persistence/sqlite/baseline": {
+      "types": "./dist/adapters/persistence/sqlite/baseline.d.ts",
+      "import": "./dist/adapters/persistence/sqlite/baseline.js"
+    },
+    "./state-lineage/state-lineage-manifest-v1": {
+      "types": "./dist/state-lineage/state-lineage-manifest-v1.d.ts",
+      "import": "./dist/state-lineage/state-lineage-manifest-v1.js"
+    },
+    "./composition/answer-composition-generation-bundle-v1": {
+      "types": "./dist/composition/answer-composition-generation-bundle-v1.d.ts",
+      "import": "./dist/composition/answer-composition-generation-bundle-v1.js"
+    },
+    "./adapters/security/private-file-credentials": {
+      "types": "./dist/adapters/security/private-file-credentials.d.ts",
+      "import": "./dist/adapters/security/private-file-credentials.js"
+    },
+    "./composition/verify-authority-state-lineage": {
+      "types": "./dist/composition/verify-authority-state-lineage.d.ts",
+      "import": "./dist/composition/verify-authority-state-lineage.js"
+    },
+    "./shared/canonical-release-id": {
+      "types": "./dist/shared/canonical-release-id.d.ts",
+      "import": "./dist/shared/canonical-release-id.js"
+    },
+    "./composition/person-external-identity-runtime": {
+      "types": "./dist/composition/person-external-identity-runtime.d.ts",
+      "import": "./dist/composition/person-external-identity-runtime.js"
+    },
+    "./composition/staging-authority-environment-v1": {
+      "types": "./dist/composition/staging-authority-environment-v1.d.ts",
+      "import": "./dist/composition/staging-authority-environment-v1.js"
+    },
+    "./application/readable-search-authorization-fence": {
+      "types": "./dist/application/readable-search-authorization-fence.d.ts",
+      "import": "./dist/application/readable-search-authorization-fence.js"
+    },
+    "./state-lineage/state-lineage-preopen-guard": {
+      "types": "./dist/state-lineage/state-lineage-preopen-guard.d.ts",
+      "import": "./dist/state-lineage/state-lineage-preopen-guard.js"
+    },
+    "./composition/capture-stopped-state-command": {
+      "types": "./dist/composition/capture-stopped-state-command.d.ts",
+      "import": "./dist/composition/capture-stopped-state-command.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "baselines/*.sql"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-control-plane": "0.0.0-dev.0",
+    "@echo-brain/organization-record": "0.0.0-dev.0",
+    "@echo-brain/organization-retrieval": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

@@ -1,4 +1,4 @@
-import { AuthorityOperationError } from "../domain/errors.js";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 
 export const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";

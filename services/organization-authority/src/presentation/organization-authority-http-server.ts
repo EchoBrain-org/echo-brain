@@ -1,4 +1,4 @@
-import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -8,7 +8,7 @@ import {
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonSessionRefreshRequest,
 } from "@echo-brain/organization-api";
-import { AuthorityOperationError } from "../domain/errors.js";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import {
   PERSON_SESSION_OIDC_BEGIN_PATH,
   PERSON_SESSION_OIDC_CALLBACK_PATH,
@@ -21,7 +21,7 @@ import {
   type PersonIdentitySessionApplication,
 } from "../application/person-identity-sessions.js";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
-import type { ProviderHttpApplicationV1, ProviderHttpRouteV1, ProviderHttpResponseV1 } from "../application/ports/provider-http-application-v1.js";
+import type { ProviderHttpApplicationV1, ProviderHttpRouteV1, ProviderHttpResponseV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 import {
   PERSON_RECORDS_PATH_V1,
   type PersonRecordReadHttpApplicationV1,
@@ -85,6 +85,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly expected_issuer: string;
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: ProviderHttpApplicationV1;
+  readonly person_tools?: ProviderHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
   readonly person_record_read?: PersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
@@ -102,7 +103,7 @@ function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
 ): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
   const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
-  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link]) {
+  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools]) {
     if (application === undefined) continue;
     const routeIds = new Set<string>();
     for (const route of application.routes) {

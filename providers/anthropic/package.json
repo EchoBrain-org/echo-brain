@@ -1,0 +1,36 @@
+{
+  "name": "@echo-brain/provider-anthropic",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./llm/anthropic-client": {
+      "types": "./dist/llm/anthropic-client.d.ts",
+      "import": "./dist/llm/anthropic-client.js"
+    },
+    "./llm/anthropic-decision-processor": {
+      "types": "./dist/llm/anthropic-decision-processor.d.ts",
+      "import": "./dist/llm/anthropic-decision-processor.js"
+    },
+    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "assets/**"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/organization-processing": "0.0.0-dev.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

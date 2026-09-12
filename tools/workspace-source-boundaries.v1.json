@@ -14,6 +14,16 @@
     "packages/organization-control-plane/source-boundary.v1.json",
     "packages/organization-record/source-boundary.v1.json",
     "packages/organization-retrieval/source-boundary.v1.json",
-    "src/product/person-client/source-boundary.v1.json"
+    "src/product/person-client/source-boundary.v1.json",
+    "packages/organization-authority-kernel/source-boundary.v1.json",
+    "packages/organization-processing/source-boundary.v1.json",
+    "providers/openrouter/source-boundary.v1.json",
+    "providers/anthropic/source-boundary.v1.json",
+    "providers/ollama/source-boundary.v1.json",
+    "providers/openai/source-boundary.v1.json",
+    "providers/synthetic-demo/source-boundary.v1.json",
+    "providers/slack/server/source-boundary.v1.json",
+    "providers/slack/client/source-boundary.v1.json",
+    "providers/granola/source-boundary.v1.json"
   ]
 }

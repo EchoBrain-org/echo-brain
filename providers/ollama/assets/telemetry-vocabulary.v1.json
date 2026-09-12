@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "providers": [
+    "ollama"
+  ],
+  "models": [],
+  "legacy_phases": []
+}

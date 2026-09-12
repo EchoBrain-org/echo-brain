@@ -1,0 +1,62 @@
+/**
+ * Public integration surface for Slack-backed approval contracts and
+ * persistence used by Organization Authority: the private-DM approval path.
+ */
+export { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/persistence/open-organization-control-database";
+export * from "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1";
+export {
+  type OrganizationToolConnectionContractV2,
+  type OrganizationToolConnectionStateV2,
+  validateOrganizationToolConnectionContractV2,
+  validateOrganizationToolConnectionStateV2,
+} from "./application/organization-tool-connection-contracts-v2.js";
+export { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
+export { SqliteSlackBotTokenReaderV1 } from "./persistence/sqlite-slack-bot-token-reader-v1.js";
+export {
+  PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND,
+  PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,
+  PRIVATE_APPROVAL_PENDING_KIND,
+  PRIVATE_APPROVAL_PRESENTATION_DEFAULT_POLICY_ID,
+  PRIVATE_APPROVAL_RESOLUTION_KIND,
+  resolvePrivateApprovalPolicyV1,
+  validatePendingPrivateApprovalV1,
+  validatePrivateApprovalAuthorizationAllowV1,
+  validatePrivateApprovalResolutionCommandV1,
+  validatePrivateApprovalResolutionV1,
+  type PendingPrivateApprovalV1,
+  type PrivateApprovalActionV1,
+  type PrivateApprovalAssigneeV1,
+  type PrivateApprovalAuthorizationAllowV1,
+  type PrivateApprovalPolicyBindingV1,
+  type PrivateApprovalResolutionCommandV1,
+  type PrivateApprovalResolutionV1,
+  type PrivateApprovalSlackIdentityLinkV1,
+  type ResolvePrivateApprovalPolicyInputV1,
+} from "./application/slack/private-approval-policy-resolution-v1.js";
+export {
+  SLACK_DM_APPROVAL_REQUIRED_SCOPES,
+  resolveCurrentSlackDmApprovalReviewerTargetV1,
+  type CurrentSlackDmApprovalReviewerV1,
+  type CurrentSlackDmApprovalReviewerTargetV1,
+  type SlackDmApprovalReviewerTargetCoordinatesV1,
+} from "./persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
+export {
+  PrivateApprovalFinalizationConflictError,
+  PrivateApprovalFinalizationDeniedError,
+  SqliteSlackDmApprovalPersistenceV1,
+  validatePrivateApprovalSlackCardBindingV1,
+  type DeniedPrivateApprovalSignedActionV1,
+  type DeniedPrivateApprovalRecoveryV1,
+  type DurablePrivateApprovalTerminalV1,
+  type EnqueuePrivateApprovalInteractionResultV1,
+  type EnqueuePrivateApprovalInteractionV1,
+  type PrivateApprovalAuthorityFenceV1,
+  type PrivateApprovalDeniedReceiptReasonV1,
+  type PrivateApprovalFinalizationDeniedReasonV1,
+  type PrivateApprovalSignedTerminalActionV1,
+  type PrivateApprovalSlackCardBindingV1,
+  type QueuedPrivateApprovalSignedActionV1,
+  type StablePrivateApprovalAuthorityFenceV1,
+  type StagePrivateApprovalPendingV1,
+  type StagedPrivateApprovalPendingV1,
+} from "./persistence/sqlite-slack-dm-approval-persistence-v1.js";

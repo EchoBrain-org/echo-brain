@@ -2,12 +2,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { bootstrapOrganizationAuthorityState } from "../../../services/organization-authority/dist/composition/organization-authority-state-bootstrap.js";
-import { verifyAuthorityStateLineage } from "../../../services/organization-authority/dist/composition/verify-authority-state-lineage.js";
-import { openAuthorityDatabase } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/open-authority-database.js";
+import { verifyAuthorityStateLineage } from "../../../packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js";
+import { openAuthorityDatabase } from "../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
 import { FileOrganizationAuthoritySigner } from "../../../services/organization-authority/dist/adapters/security/file-organization-authority-signer.js";
-import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../services/organization-authority/dist/processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
-import { AdmittedMeetingProcessingCycleV1 } from "../../../services/organization-authority/dist/processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
-import { DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS } from "../../../services/organization-authority/dist/processing/admitted-meeting-processing/serialized-meeting-processing-worker.js";
+import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
+import { AdmittedMeetingProcessingCycleV1 } from "../../../packages/organization-processing/dist/admitted-meeting-processing/meeting-processing-cycle-v1.js";
+import { DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS } from "../../../packages/organization-processing/dist/admitted-meeting-processing/serialized-meeting-processing-worker.js";
 import { startOrganizationAuthorityServiceLifecycle } from "../../../services/organization-authority/dist/composition/organization-authority-service-lifecycle.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";

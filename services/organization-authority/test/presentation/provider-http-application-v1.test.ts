@@ -1,12 +1,9 @@
 import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createOrganizationAuthorityHttpServer } from "../../src/presentation/organization-authority-http-server.js";
-import {
-  PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1,
-  type PrivateSlackApprovalInteractionHttpPortV1,
-} from "../../src/presentation/private-slack-approval-interaction-http-port-v1.js";
-import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/composition/providers/slack/private-approval/private-slack-approval-http-adapter-v1.js";
-import type { ProviderHttpApplicationV1, ProviderHttpResponseV1 } from "../../src/application/ports/provider-http-application-v1.js";
+import { PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1, type PrivateSlackApprovalInteractionHttpPortV1 } from "../../../../providers/slack/server/src/presentation/private-slack-approval-interaction-http-port-v1.js";
+import { createPrivateSlackApprovalHttpAdapterV1 } from "../../../../providers/slack/server/src/private-approval/private-slack-approval-http-adapter-v1.js";
+import type { ProviderHttpApplicationV1, ProviderHttpResponseV1 } from "../../../../packages/organization-authority-kernel/src/application/ports/provider-http-application-v1.js";
 import { PERSON_SESSION_OIDC_BEGIN_PATH } from "../../src/presentation/person-identity-session-http-application.js";
 
 function serverOptions(input: {

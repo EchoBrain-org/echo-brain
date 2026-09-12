@@ -1,0 +1,36 @@
+{
+  "name": "@echo-brain/provider-openai",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./llm/openai-client": {
+      "types": "./dist/llm/openai-client.d.ts",
+      "import": "./dist/llm/openai-client.js"
+    },
+    "./llm/openai-decision-processor": {
+      "types": "./dist/llm/openai-decision-processor.d.ts",
+      "import": "./dist/llm/openai-decision-processor.js"
+    },
+    "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "assets/**"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/organization-processing": "0.0.0-dev.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

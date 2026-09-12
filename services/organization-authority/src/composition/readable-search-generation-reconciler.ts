@@ -1,4 +1,4 @@
-import { annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, type CoreRuntimeObserverV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, type CoreRuntimeObserverV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 

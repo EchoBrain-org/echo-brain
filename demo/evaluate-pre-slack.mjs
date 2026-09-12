@@ -25,7 +25,7 @@ if (credentialFile !== undefined) {
 }
 if (process.exitCode === undefined) {
   const { runNorthstarPreSlackEvaluatorCommandV1 } = await import(
-    "../services/organization-authority/dist/composition/providers/synthetic-demo/synthetic-demo-pre-slack-evaluator-v1.js"
+    "../services/organization-authority/dist/composition/synthetic-demo-pre-slack-evaluator-cli-v1.js"
   );
   process.exitCode = await runNorthstarPreSlackEvaluatorCommandV1(args);
 }

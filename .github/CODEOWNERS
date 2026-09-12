@@ -17,6 +17,7 @@
 /docs/operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md @EchoBrain-org
 /product/ @EchoBrain-org
 /packages/ @EchoBrain-org
+/providers/ @EchoBrain-org
 /services/ @EchoBrain-org
 /src/product/person-client/ @EchoBrain-org
 /tests/architecture/ @EchoBrain-org

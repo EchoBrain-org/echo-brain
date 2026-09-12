@@ -1,4 +1,5 @@
-import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
+import { createPersonToolsHttpApplicationV3 } from '../presentation/person-tools-http-application-v3.js';
+import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -13,11 +14,11 @@ import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-ap
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-authority-database.js";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
 import { OpenIdClientPersonSessionProvider } from "../adapters/oidc/openid-client-person-session-provider.js";
 import { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
+import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 import { SystemAuthorityClock } from "../adapters/system/system-authority-clock.js";
 import { createOrganizationAuthorityHttpServer } from "../presentation/organization-authority-http-server.js";
 import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
@@ -27,17 +28,17 @@ import { createPersonRecordSearchRouteV1 } from "./person-record-search-route.js
 import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
-import { verifyAuthorityStateLineage } from "./verify-authority-state-lineage.js";
+import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import {
   createPersonAnswerRouteV1,
   type AnswerCompositionFailureEventV1,
 } from "./person-answer-route.js";
-import type { AnswerCompositionGenerationBindingV1 } from "./answer-composition-generation-bundle-v1.js";
-import type { ProviderHttpApplicationV1 } from "../application/ports/provider-http-application-v1.js";
+import type { AnswerCompositionGenerationBindingV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
+import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 import type {
   PersonExternalIdentityRuntimeBundleV1,
   OpenedPersonExternalIdentityRuntimeV1,
-} from "./person-external-identity-runtime.js";
+} from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import type { AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 
 export interface OrganizationAuthorityApiRuntimeConfig {
@@ -247,6 +248,10 @@ export async function startOrganizationAuthorityApiRuntime(
           },
         }),
       ),
+      person_tools: createPersonToolsHttpApplicationV3({
+        authenticate: (access_token) => sessions.authenticateAccess({ access_token }),
+        tools: (token) => externalIdentity?.tools(token) ?? Promise.resolve([]),
+      }),
       ...(externalIdentity === undefined
         ? {}
         : { person_external_identity_link: externalIdentity.application }),

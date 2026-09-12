@@ -23,6 +23,7 @@ const EXPECTED_RELEASE_OWNERSHIP = [
   ["/docs/operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md", "@EchoBrain-org"],
   ["/product/", "@EchoBrain-org"],
   ["/packages/", "@EchoBrain-org"],
+  ["/providers/", "@EchoBrain-org"],
   ["/services/", "@EchoBrain-org"],
   ["/src/product/person-client/", "@EchoBrain-org"],
   ["/tests/architecture/", "@EchoBrain-org"],
@@ -43,13 +44,15 @@ describe("GitHub release governance", () => {
   it("protects provider ownership, public ports, and selecting entrypoints", () => {
     const manifest = JSON.parse(readFileSync(
       resolve(REPO, "product/source-boundary.v1.json"), "utf8",
-    )) as { adapter_architecture: { provider_selecting_entrypoints: string[] } };
+    )) as { adapter_architecture: { bootstrap_entrypoints: string[] } };
     const paths = [
       "product/source-boundary.v1.json",
-      "services/organization-authority/src/processing/core/contracts",
-      "services/organization-authority/src/composition/approval-workflow-bundle-v1.ts",
+      "providers/slack/server/src/setup/initial-owner-slack-setup-v1.ts",
+      "providers/slack/client/swift/slack-connected-tools.swift",
+      "packages/organization-processing/src/core/contracts",
+      "packages/organization-processing/src/ports/approval-workflow-bundle-v1.ts",
       "docs/invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md",
-      ...manifest.adapter_architecture.provider_selecting_entrypoints,
+      ...manifest.adapter_architecture.bootstrap_entrypoints,
     ];
     const rules = ownershipRules();
     for (const path of paths) {

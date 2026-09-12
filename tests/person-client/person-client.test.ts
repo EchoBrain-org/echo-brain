@@ -1,3 +1,5 @@
+import { SlackPersonClient } from '@echo-brain/provider-slack-client/person/slack-person-client';
+import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import {
@@ -14,14 +16,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
+import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EmployeeMutationError,
   PersonClient,
   PersonSessionStore,
-  runPersonClientCli,
 } from "../../src/product/person-client/index.js";
 
 function fixtureId(prefix: string, suffix: number): string {
@@ -826,15 +827,15 @@ describe("Person client", () => {
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
         if (path === "/v1/person/ask") return json({ schema_version: 1, kind: "echo-clean-person-answer-v1", generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 0, record_sha256: null }, answer: "No approved records.", citations: [] });
-        expect(path).toBe("/v2/person/tools");
+        expect(path).toBe("/v3/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
-        return json({ schema_version: 2, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
+        return json({ schema_version: 3, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
       } });
       await client.installSession("https://authority.example", ROTATED_SESSION);
       expect((await client.tools()).tools).toEqual([]);
       expect(await client.records(1)).toMatchObject({ records: [] });
       expect((await client.ask("What is approved?")).answer).toBe("No approved records.");
-      tools = [{ provider: "slack", availability: "enabled", personal_status: "linked", workspace_id: "T123ABC", account_id: "U123PERSON" }];
+      tools = [{ tool_id: "calendar", display_name: "Calendar", availability: "enabled", personal_status: "linked", external_scope_id: "calendar-workspace", external_subject_id: "calendar-user" }];
       expect((await client.tools()).tools[0]?.personal_status).toBe("linked");
       expect(await client.records(1)).toMatchObject({ records: [] });
       expect((await client.ask("What is approved?")).answer).toBe("No approved records.");
@@ -850,7 +851,7 @@ describe("Person client", () => {
       const client: PersonClient = new PersonClient({ home_directory: home, now: () => NOW, fetch: async input => {
         if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
         await client.installSession("https://authority.example", { ...ROTATED_SESSION, membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2) });
-        return json({ schema_version: 2, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools: [] });
+        return json({ schema_version: 3, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools: [] });
       } });
       await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(client.tools()).rejects.toThrow("current account");
@@ -968,7 +969,7 @@ describe("Person client", () => {
         },
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(client.slackBrowserLinkStatus(fixtureId("sbl", 9))).rejects.toThrow("current account");
+      await expect(new SlackPersonClient(client).slackBrowserLinkStatus(fixtureId("sbl", 9))).rejects.toThrow("current account");
     });
   });
 
@@ -1055,7 +1056,7 @@ describe("Person client", () => {
         home_directory: home,
       });
       expect(invalid).toBe(2);
-      expect(stderr).toContain("--slack-user is not valid");
+      expect(stderr).toContain("Unknown option '--slack-user'");
       expect(requests).toBe(1);
     });
   });
@@ -1084,7 +1085,7 @@ describe("Person client", () => {
         },
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(client.disconnectSlack()).rejects.toThrow("malformed response");
+      await expect(new SlackPersonClient(client).disconnectSlack()).rejects.toThrow("malformed response");
     });
 
     await withHome(async (home) => {
@@ -1109,7 +1110,7 @@ describe("Person client", () => {
         },
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(client.disconnectSlack()).rejects.toThrow("current account");
+      await expect(new SlackPersonClient(client).disconnectSlack()).rejects.toThrow("current account");
     });
   });
 
@@ -1174,9 +1175,9 @@ describe("Person client", () => {
       });
 
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      const begun = await client.beginSlackIdentityLink("U123PERSON");
+      const begun = await new SlackPersonClient(client).beginSlackIdentityLink("U123PERSON");
       expect(begun.challenge_code).toBe(challengeCode);
-      await client.completeSlackIdentityLink({
+      await new SlackPersonClient(client).completeSlackIdentityLink({
         challenge_attempt_id: begun.challenge_attempt_id,
         challenge_message_ts: begun.challenge_message_ts,
         challenge_code: begun.challenge_code,

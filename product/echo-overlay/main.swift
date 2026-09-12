@@ -2208,6 +2208,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             self?.peopleMenuItem?.isHidden = !available
         }
         account = AccountController(
+            makeToolsController: { SlackConnectedToolsController(client: $0) },
             onSessionWillChange: { [weak self] in
                 self?.controller?.accountWillChange()
                 self?.people?.conceal()

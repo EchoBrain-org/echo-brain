@@ -1,70 +1,15 @@
+import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import {
-  MAX_ORGANIZATION_API_BODY_BYTES,
-  ORGANIZATION_API_PERSON_TOOLS_PATH,
-  ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH,
-  validateOrganizationPersonTools,
-  validateOrganizationPersonSlackDisconnectRequest,
-  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
-  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
-  ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
-  ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH,
-  ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
-  ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
-  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
-  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH,
-  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH,
-  ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH,
-  isCanonicalPersonEmail,
-  isExpectedPersonEmail,
-  isOrganizationApiValidationError,
-  validateOrganizationApiError,
-  validateOrganizationAuthorityDescriptorResponse,
-  validateOrganizationPersonMeetingIngestionExclusionChangeRequest,
-  validateOrganizationMeetingIngestionExclusionListResponse,
-  validateOrganizationPersonMeetingIngestionExclusionListRequest,
-  validateOrganizationPersonOidcBeginRequest,
-  validateOrganizationPersonOidcBeginResponse,
-  validateOrganizationPersonSession,
-  validateOrganizationPersonSessionRefreshRequest,
-  validateOrganizationPersonSlackIdentityLinkBeginRequest,
-  validateOrganizationPersonSlackIdentityLinkBeginResponse,
-  validateOrganizationPersonSlackIdentityLinkCompleteRequest,
-  validateOrganizationPersonSlackIdentityLinkResult,
-  validateOrganizationPersonSlackBrowserLinkAttemptRequest,
-  validateOrganizationPersonSlackBrowserLinkBeginRequest,
-  validateOrganizationPersonSlackBrowserLinkBeginResponse,
-  validateOrganizationPersonSlackBrowserLinkStatusResponse,
-  type OrganizationPersonMeetingIngestionExclusionChangeRequestV2,
-  type OrganizationMeetingIngestionExclusionListResponseV2,
-  type OrganizationPersonMeetingIngestionExclusionListRequestV2,
-  type OrganizationAuthorityDescriptorResponseV1,
-  type OrganizationPersonOidcBeginRequestV2,
-  type OrganizationPersonOidcBeginResponseV2,
-  type OrganizationPersonSessionV2,
-  type OrganizationPersonToolsV2,
-  type OrganizationPersonSlackIdentityLinkBeginRequestV2,
-  type OrganizationPersonSlackIdentityLinkBeginResponseV2,
-  type OrganizationPersonSlackIdentityLinkCompleteRequestV2,
-  type OrganizationPersonSlackIdentityLinkResultV2,
-  type OrganizationPersonSlackBrowserLinkAttemptRequestV1,
-  type OrganizationPersonSlackBrowserLinkBeginRequestV1,
-  type OrganizationPersonSlackBrowserLinkBeginResponseV1,
-  type OrganizationPersonSlackBrowserLinkStatusResponseV1,
-} from "@echo-brain/organization-api";
+import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH, ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isCanonicalPersonEmail, isExpectedPersonEmail, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonMeetingIngestionExclusionChangeRequest, validateOrganizationMeetingIngestionExclusionListResponse, validateOrganizationPersonMeetingIngestionExclusionListRequest, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationPersonMeetingIngestionExclusionChangeRequestV2, type OrganizationMeetingIngestionExclusionListResponseV2, type OrganizationPersonMeetingIngestionExclusionListRequestV2, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
-const SLACK_TIMEOUT_MS = 75_000;
 const ASK_TIMEOUT_MS = 135_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
 const PERSON_ANSWER_PATH_V1 = "/v1/person/ask";
-export type PersonSlackBrowserLinkBeginV1 = OrganizationPersonSlackBrowserLinkBeginResponseV1;
-export type PersonSlackBrowserLinkStatusV1 = OrganizationPersonSlackBrowserLinkStatusResponseV1;
 export interface EmployeeInvitationV1 {
   readonly login_grant: string;
   readonly expires_at: string;
@@ -650,39 +595,6 @@ function validateEmployeeRoster(value: unknown): EmployeeRosterV1 {
   });
 }
 
-function validateSlackAuthorizationUrl(value: unknown): string {
-  if (typeof value !== "string" || value.length > 4_096) {
-    throw new Error("Slack browser authorization URL is invalid");
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("Slack browser authorization URL is invalid");
-  }
-  // The Authority is the only party that should select a browser destination.
-  // Reject credentials, fragments, and arbitrary HTTPS origins before calling
-  // the host browser. Slack's production OpenID path is deliberately exact.
-  if (
-    url.origin !== "https://slack.com" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.hash !== "" ||
-    url.pathname !== "/openid/connect/authorize"
-  ) {
-    throw new Error("Slack browser authorization URL is invalid");
-  }
-  return url.toString();
-}
-
-function validateSlackBrowserBegin(value: unknown): PersonSlackBrowserLinkBeginV1 {
-  const response = validateOrganizationPersonSlackBrowserLinkBeginResponse(value);
-  return Object.freeze({
-    ...response,
-    authorization_url: validateSlackAuthorizationUrl(response.authorization_url),
-  });
-}
-
 function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<Record<string, string>> {
   const request = asPlainRecord(value, "employee request is invalid");
   exactKeys(request, includeName ? ["name", "email"] : ["email"], "employee request is invalid");
@@ -1082,91 +994,39 @@ export class PersonAuthorityClient {
     });
   }
 
+  /** A tool receives bounded methods tied to this Authority, without the bearer credential. */
+  toolTransport(accessToken: string): PersonToolTransportV1 {
+    const assertPath = (path: string): void => {
+      if (!path.startsWith('/') || path.startsWith('//') || new URL(path, this.origin).origin !== this.origin.origin) {
+        throw new Error('Person tool request must remain on its Authority');
+      }
+    };
+    const assertBounds = (bytes: number, timeout = this.timeoutMs): void => {
+      if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > MAXIMUM_ORDINARY_RESPONSE_BYTES ||
+          !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 75_000) {
+        throw new Error('Person tool transport bounds are invalid');
+      }
+    };
+    return Object.freeze({
+      json: async <T>(input: import('@echo-brain/organization-api').PersonToolJsonRequestV1<T>): Promise<T> => {
+        assertPath(input.path);
+        assertBounds(input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.timeout_ms);
+        return this.json({ path: input.path, body: input.body, validate_request: input.validate_request,
+          validate_response: input.validate_response, maximum_response_bytes: input.maximum_response_bytes,
+          timeout_ms: input.timeout_ms, access_token: accessToken });
+      },
+      getJson: async <T>(input: import('@echo-brain/organization-api').PersonToolGetRequestV1<T>): Promise<T> => {
+        assertPath(input.path);
+        assertBounds(input.maximum_response_bytes);
+        return this.getJson({ path: input.path, validate_response: input.validate_response,
+          maximum_response_bytes: input.maximum_response_bytes, access_token: accessToken });
+      },
+    });
+  }
+
   tools(accessToken: string) {
-    return this.getJson({ path: ORGANIZATION_API_PERSON_TOOLS_PATH, access_token: accessToken,
-      validate_response: validateOrganizationPersonTools, maximum_response_bytes: 4096 });
-  }
-
-  disconnectSlack(accessToken: string): Promise<OrganizationPersonToolsV2> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH,
-      body: {},
-      validate_request: validateOrganizationPersonSlackDisconnectRequest,
-      validate_response: validateOrganizationPersonTools,
-      access_token: accessToken,
-      maximum_response_bytes: 4096,
-      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
-    });
-  }
-
-  beginSlackIdentityLink(
-    request: OrganizationPersonSlackIdentityLinkBeginRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationPersonSlackIdentityLinkBeginResponseV2> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonSlackIdentityLinkBeginRequest,
-      validate_response: validateOrganizationPersonSlackIdentityLinkBeginResponse,
-      access_token: accessToken,
-      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
-    });
-  }
-
-  completeSlackIdentityLink(
-    request: OrganizationPersonSlackIdentityLinkCompleteRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationPersonSlackIdentityLinkResultV2> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonSlackIdentityLinkCompleteRequest,
-      validate_response: validateOrganizationPersonSlackIdentityLinkResult,
-      access_token: accessToken,
-      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
-    });
-  }
-
-  beginSlackBrowserLink(
-    request: OrganizationPersonSlackBrowserLinkBeginRequestV1,
-    accessToken: string,
-  ): Promise<PersonSlackBrowserLinkBeginV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonSlackBrowserLinkBeginRequest,
-      validate_response: validateSlackBrowserBegin,
-      access_token: accessToken,
-      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
-    });
-  }
-
-  slackBrowserLinkStatus(
-    request: OrganizationPersonSlackBrowserLinkAttemptRequestV1,
-    accessToken: string,
-  ): Promise<PersonSlackBrowserLinkStatusV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonSlackBrowserLinkAttemptRequest,
-      validate_response: validateOrganizationPersonSlackBrowserLinkStatusResponse,
-      access_token: accessToken,
-      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
-    });
-  }
-
-  cancelSlackBrowserLink(
-    request: OrganizationPersonSlackBrowserLinkAttemptRequestV1,
-    accessToken: string,
-  ): Promise<PersonSlackBrowserLinkStatusV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonSlackBrowserLinkAttemptRequest,
-      validate_response: validateOrganizationPersonSlackBrowserLinkStatusResponse,
-      access_token: accessToken,
-      timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
-    });
+    return this.getJson({ path: ORGANIZATION_API_PERSON_TOOLS_PATH_V3, access_token: accessToken,
+      validate_response: validateOrganizationPersonToolsV3, maximum_response_bytes: 32768 });
   }
 
   employees(accessToken: string): Promise<EmployeeRosterV1> {

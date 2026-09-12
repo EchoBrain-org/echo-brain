@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { swiftSourceAssemblyV1 } from './lib/swift-source-assembly.mjs';
+
 /** Build one dependency-free macOS-arm64 ECHO overlay application archive. */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -19,13 +21,10 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 
 const repository = resolve(import.meta.dirname, '..');
-const sourcePath = 'product/echo-overlay/main.swift';
-const peoplePath = 'product/echo-overlay/people.swift';
-const accountPath = 'product/echo-overlay/account.swift';
-const peopleSource = join(repository, peoplePath);
-const accountSource = join(repository, accountPath);
+const assemblyPath = 'product/echo-overlay/source-assembly.v1.json';
+const assemblySource = join(repository, assemblyPath);
+const sourceAssembly = swiftSourceAssemblyV1(JSON.parse(readFileSync(assemblySource, 'utf8')));
 const plistPath = 'product/echo-overlay/Info.plist';
-const source = join(repository, sourcePath);
 const plist = join(repository, plistPath);
 const SHA = /^[0-9a-f]{40}$/;
 
@@ -150,16 +149,14 @@ function main(argv) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') {
     fail('build requires macOS on Apple silicon');
   }
-  regularFile(source, 'Swift source');
   regularFile(plist, 'Info.plist');
-  regularFile(peopleSource, 'People Swift source');
-  regularFile(accountSource, 'Account Swift source');
+  regularFile(assemblySource, 'Swift source assembly');
+  for (const path of sourceAssembly.sources) regularFile(join(repository, path), path);
   const before = sourceSnapshot();
   if (!before.clean) fail('build requires clean, committed source');
   if (before.sha !== sourceSha) fail('source SHA must match clean committed source');
-  const sourceBytes = committedFile(before.sha, sourcePath, source, 'Swift source');
-  const peopleBytes = committedFile(before.sha, peoplePath, peopleSource, 'People Swift source');
-  const accountBytes = committedFile(before.sha, accountPath, accountSource, 'Account Swift source');
+  committedFile(before.sha, assemblyPath, assemblySource, 'Swift source assembly');
+  const sourceInputs = sourceAssembly.sources.map(path => ({ path, bytes: committedFile(before.sha, path, join(repository, path), path) }));
   const plistBytes = committedFile(before.sha, plistPath, plist, 'Info.plist');
   const parent = privateCanonicalDirectory(dirname(output));
   absent(output);
@@ -176,12 +173,11 @@ function main(argv) {
     mkdirSync(resources, { mode: 0o700 });
     // Compile a private materialization of the exact committed inputs. The
     // post-build snapshot prevents publishing when the checkout changes.
-    const stagedSource = join(staging, 'main.swift');
-    writeFileSync(stagedSource, sourceBytes, { mode: 0o600, flag: 'wx' });
-    const stagedPeople = join(staging, 'people.swift');
-    writeFileSync(stagedPeople, peopleBytes, { mode: 0o600, flag: 'wx' });
-    const stagedAccount = join(staging, 'account.swift');
-    writeFileSync(stagedAccount, accountBytes, { mode: 0o600, flag: 'wx' });
+    const stagedSources = sourceInputs.map((input, index) => {
+      const staged = join(staging, `input-${index}.swift`);
+      writeFileSync(staged, input.bytes, { mode: 0o600, flag: 'wx' });
+      return staged;
+    });
     writeFileSync(join(contents, 'Info.plist'), plistBytes, { mode: 0o600, flag: 'wx' });
     const numericVersion = version.match(/[0-9]+\.[0-9]+\.[0-9]+/)?.[0] ?? '0.0.0';
     run(
@@ -216,9 +212,7 @@ function main(argv) {
         'AppKit',
         '-framework',
         'Carbon',
-        stagedSource,
-        stagedPeople,
-        stagedAccount,
+        ...stagedSources,
         '-o',
         executable,
       ],

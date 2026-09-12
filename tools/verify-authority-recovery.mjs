@@ -429,11 +429,7 @@ async function importedValidator(sourceRoot) {
   const profilePath = join(sourceRoot, "tools", "clean-v1-runtime-profile.mjs");
   const lineagePath = join(
     sourceRoot,
-    "services",
-    "organization-authority",
-    "dist",
-    "composition",
-    "verify-authority-state-lineage.js",
+    "packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js",
   );
   safeRegularFile(releasePath);
   safeRegularFile(profilePath);

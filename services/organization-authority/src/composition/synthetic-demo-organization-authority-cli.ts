@@ -1,8 +1,8 @@
 import { isAbsolute, resolve } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { readPrivateAuthorityOidcClientSecret } from "../adapters/security/private-file-credentials.js";
-import { admitSyntheticDemoMeetingSource } from "./providers/synthetic-demo/synthetic-demo-meeting-source-admission.js";
-import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "./providers/openrouter/openrouter-decision-processor-admission-commitment.js";
+import { readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { admitSyntheticDemoMeetingSource } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-admission";
+import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
 import { openSyntheticDemoOrganizationAuthorityServiceV1 } from "./synthetic-demo-organization-authority-composition-root-v1.js";
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";

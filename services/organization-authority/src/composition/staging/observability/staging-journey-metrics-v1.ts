@@ -1,8 +1,8 @@
-import { EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "../../../shared/telemetry-vocabulary-v1.js";
+import { EMPTY_TELEMETRY_VOCABULARY_V1, type TelemetryVocabularyV1 } from "@echo-brain/organization-authority-kernel/shared/telemetry-vocabulary-v1";
 import {
   createJourneyTelemetryEventV1,
   type JourneyTelemetryEventV1,
-} from "../../../shared/journey-telemetry-v1.js";
+} from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 
 /** The staging-only CloudWatch namespace for the V1 journey overview. */
 export const STAGING_JOURNEY_METRICS_NAMESPACE_V1 =

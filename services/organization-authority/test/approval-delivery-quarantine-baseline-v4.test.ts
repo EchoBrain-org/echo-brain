@@ -5,8 +5,8 @@ import {
   AUTHORITY_BASELINE_APPLICATION_ID_V4,
   AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
   authorityBaselineSha256V4,
-} from "../src/adapters/persistence/sqlite/baseline.js";
-import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-authority-database.js";
+} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const AUTHORITY_BASELINE_SHA256_V4 =
   "sha256:70778da965c467d04be350bd36cc73b711ba783310077c6d0c04c85777b76512";

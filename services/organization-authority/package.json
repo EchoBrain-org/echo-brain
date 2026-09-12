@@ -16,8 +16,7 @@
     "dist/**/*.js",
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
-    "dist/**/*.d.ts.map",
-    "baselines/**"
+    "dist/**/*.d.ts.map"
   ],
   "scripts": {
     "build": "tsc -b",
@@ -32,7 +31,13 @@
     "@echo-brain/organization-record": "0.0.0-dev.0",
     "@echo-brain/organization-retrieval": "0.0.0-dev.0",
     "better-sqlite3": "12.10.0",
-    "openid-client": "6.8.4"
+    "openid-client": "6.8.4",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "@echo-brain/organization-processing": "0.0.0-dev.0",
+    "@echo-brain/provider-openrouter": "0.0.0-dev.0",
+    "@echo-brain/provider-slack-server": "0.0.0-dev.0",
+    "@echo-brain/provider-granola": "0.0.0-dev.0",
+    "@echo-brain/provider-synthetic-demo": "0.0.0-dev.0"
   },
   "devDependencies": {
     "ajv": "8.20.0"
@@ -40,5 +45,11 @@
   "engines": {
     "node": "22.22.1",
     "npm": "10.9.4"
+  },
+  "exports": {
+    "./composition/admit-granola-meeting-source-cli-v1": {
+      "types": "./dist/composition/admit-granola-meeting-source-cli-v1.d.ts",
+      "import": "./dist/composition/admit-granola-meeting-source-cli-v1.js"
+    }
   }
 }

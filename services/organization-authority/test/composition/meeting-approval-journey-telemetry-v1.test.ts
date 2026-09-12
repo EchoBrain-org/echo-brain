@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AdapterError } from "../../src/processing/core/contracts/adapter.js";
+import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
 import {
   openMeetingApprovalJourneyStateV1,
   type MeetingApprovalJourneyStateV1,
@@ -14,7 +14,7 @@ import {
   type MeetingApprovalSearchBacklogObserverV1,
   type MeetingApprovalJourneyTelemetryDependenciesV1,
 } from "../../src/composition/meeting-approval-journey-telemetry-v1.js";
-import type { JourneyTelemetryEventV1 } from "../../src/shared/journey-telemetry-v1.js";
+import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 
 const RELEASE_SHA = "c".repeat(40);
 const JOURNEY_ID = "1b3c4d5e-6f70-4a12-8b34-5c6d7e8f9012";

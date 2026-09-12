@@ -1,0 +1,52 @@
+{
+  "name": "@echo-brain/provider-granola",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./granola-meeting-source-bundle-v1": {
+      "types": "./dist/granola-meeting-source-bundle-v1.d.ts",
+      "import": "./dist/granola-meeting-source-bundle-v1.js"
+    },
+    "./granola-private-credentials-v1": {
+      "types": "./dist/granola-private-credentials-v1.d.ts",
+      "import": "./dist/granola-private-credentials-v1.js"
+    },
+    "./source/granola-api-client": {
+      "types": "./dist/source/granola-api-client.d.ts",
+      "import": "./dist/source/granola-api-client.js"
+    },
+    "./source/record-owner-observation": {
+      "types": "./dist/source/record-owner-observation.d.ts",
+      "import": "./dist/source/record-owner-observation.js"
+    },
+    "./granola-meeting-source-admission": {
+      "types": "./dist/granola-meeting-source-admission.d.ts",
+      "import": "./dist/granola-meeting-source-admission.js"
+    },
+    "./granola-setup-proof-v1": {
+      "types": "./dist/granola-setup-proof-v1.d.ts",
+      "import": "./dist/granola-setup-proof-v1.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "@echo-brain/organization-processing": "0.0.0-dev.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

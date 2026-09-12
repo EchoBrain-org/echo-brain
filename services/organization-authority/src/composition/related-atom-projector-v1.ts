@@ -1,4 +1,4 @@
-import { annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 /**
  * Disposable Layer 2 projection core for material cross-record relationships.
  * It receives only approved retrieval-atom summaries from one exact visibility

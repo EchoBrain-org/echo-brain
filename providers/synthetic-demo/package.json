@@ -1,0 +1,49 @@
+{
+  "name": "@echo-brain/provider-synthetic-demo",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./synthetic-demo-meeting-source-bundle-v1": {
+      "types": "./dist/synthetic-demo-meeting-source-bundle-v1.d.ts",
+      "import": "./dist/synthetic-demo-meeting-source-bundle-v1.js"
+    },
+    "./source/synthetic-demo-meeting-source-v1": {
+      "types": "./dist/source/synthetic-demo-meeting-source-v1.d.ts",
+      "import": "./dist/source/synthetic-demo-meeting-source-v1.js"
+    },
+    "./synthetic-demo-pre-slack-evaluator-v1": {
+      "types": "./dist/synthetic-demo-pre-slack-evaluator-v1.d.ts",
+      "import": "./dist/synthetic-demo-pre-slack-evaluator-v1.js"
+    },
+    "./synthetic-demo-meeting-source-admission": {
+      "types": "./dist/synthetic-demo-meeting-source-admission.d.ts",
+      "import": "./dist/synthetic-demo-meeting-source-admission.js"
+    },
+    "./synthetic-demo-setup-evidence-v1": {
+      "types": "./dist/synthetic-demo-setup-evidence-v1.d.ts",
+      "import": "./dist/synthetic-demo-setup-evidence-v1.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/organization-processing": "0.0.0-dev.0",
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

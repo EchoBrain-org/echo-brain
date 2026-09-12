@@ -115,7 +115,7 @@ Use Node `22.22.1`, npm `10.9.4`, and independent worktree dependencies:
 ```sh
 npm ci --no-audit --no-fund
 npm run build:workspaces
-npx vitest run --config vitest.config.ts services/organization-authority/test/organization-authority-service-lifecycle.test.ts services/organization-authority/test/readable-search-generation-reconciler.test.ts services/organization-authority/test/processing/admitted-meeting-processing/serialized-meeting-processing-worker.test.ts services/organization-authority/test/composition/providers/slack/private-approval/private-slack-approval-interaction-handler-v1.test.ts services/organization-authority/test/observability/core-runtime-observation-v1.test.ts
+npx vitest run --config vitest.config.ts services/organization-authority/test/organization-authority-service-lifecycle.test.ts services/organization-authority/test/readable-search-generation-reconciler.test.ts packages/organization-processing/test/admitted-meeting-processing/serialized-meeting-processing-worker.test.ts providers/slack/server/test/private-approval/private-slack-approval-interaction-handler-v1.test.ts packages/organization-authority-kernel/test/shared/core-runtime-observation-v1.test.ts
 npm run test:capacity
 npm run capacity:checkpoint
 npm run check

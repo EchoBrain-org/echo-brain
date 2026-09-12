@@ -1,0 +1,71 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-openrouter",
+  "workspace": true,
+  "boundary_root": "providers/openrouter",
+  "source_root": "providers/openrouter/src",
+  "package_json": "providers/openrouter/package.json",
+  "entry_points": [
+    "providers/openrouter/src/llm/openrouter-decision-processor.ts",
+    "providers/openrouter/src/llm/openrouter-client.ts"
+  ],
+  "owned_source_paths": [
+    "providers/openrouter/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/openrouter/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/organization-processing",
+    "@echo-brain/organization-authority-kernel",
+    "@echo-brain/federation-protocol"
+  ],
+  "allowed_external_packages": [
+    "better-sqlite3"
+  ],
+  "allowed_node_builtins": [
+    "path",
+    "fs"
+  ],
+  "runtime_assets": [
+    "providers/openrouter/assets/telemetry-vocabulary.v1.json"
+  ],
+  "layer_rules": [
+    {
+      "name": "provider-openrouter-implementation",
+      "from": "providers/openrouter/src/**",
+      "allowed_imports": [
+        "providers/openrouter/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing",
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "path",
+        "fs"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "OpenRouter answer-composition generation bundle",
+        "path": "providers/openrouter/src/openrouter-answer-composition-generation-bundle-v1.ts",
+        "export": "createOpenRouterAnswerCompositionGenerationBundleV1"
+      },
+      {
+        "name": "OpenRouter decision processor bundle",
+        "path": "providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts",
+        "export": "createOpenRouterDecisionProcessorBundleV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

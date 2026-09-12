@@ -1,18 +1,19 @@
+import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { readFileSync } from "node:fs";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
-import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
+import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 import {
   readPrivateAuthorityOidcClientSecret,
   readPrivateAuthorityPersonSessionPkceKey,
-} from "../adapters/security/private-file-credentials.js";
+} from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
 } from "./person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "./organization-authority-api-runtime.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "./providers/slack/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 
 const USAGE = `usage:
   echo-organization-authority-person-admin credentials-init --state-dir <absolute-path>
@@ -214,10 +215,10 @@ export async function runOrganizationAuthorityPersonAdministrationCli(
     }, {
       record_approver: projectPrivateSlackBlockApprovalApproverV1,
       external_identity_runtime_bundle:
-        createSlackPersonExternalIdentityRuntimeBundleV1({
+        composePersonExternalIdentityRuntimeBundlesV1([createSlackPersonExternalIdentityRuntimeBundleV1({
           // The public V1 flag keeps its compatibility-bound legacy name.
           identity_link_channel_id: parsed["--slack-approval-channel-id"],
-        }),
+        })]),
     });
     io.stderr(
       `${canonicalJson({ schema_version: 1, kind: "echo-clean-person-runtime-ready-v1", host: runtime.address.address, port: runtime.address.port } as never)}\n`,

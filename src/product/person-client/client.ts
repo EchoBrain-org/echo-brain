@@ -1,14 +1,6 @@
-import { Buffer } from "node:buffer";
+import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
-import {
-  isCanonicalPersonEmail,
-  isExpectedPersonEmail,
-  validateOrganizationPersonSession,
-  validateOrganizationPersonSlackBrowserLinkAttemptRequest,
-  validateOrganizationPersonSlackBrowserLinkBeginRequest,
-  type OrganizationPersonMeetingIngestionExclusionSelectorV2,
-  type OrganizationPersonSessionV2,
-} from "@echo-brain/organization-api";
+import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonMeetingIngestionExclusionSelectorV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 import {
   PersonAuthorityClient,
   PersonAuthorityClientError,
@@ -20,8 +12,6 @@ import {
 import {
   createPersonMeetingIngestionExclusionChangeRequest,
   createPersonMeetingIngestionExclusionListRequest,
-  createPersonSlackIdentityLinkBeginRequest,
-  createPersonSlackIdentityLinkCompleteRequest,
 } from "./person-api-request-builders.js";
 import {
   PersonClientSessionUnavailableError,
@@ -232,8 +222,9 @@ export class PersonClient {
   }
 
   private requestId(
-    prefix: "rdr" | "rrd" | "osq" | "mex" | "psb" | "psc",
+    prefix: string,
   ): string {
+    if (!/^[a-z][a-z0-9]{0,15}$/.test(prefix)) throw new Error("Person request identifier prefix is invalid");
     return `${prefix}_${this.randomUuid()}`;
   }
 
@@ -326,7 +317,7 @@ export class PersonClient {
       current.session.membership_id !== stored.session.membership_id ||
       current.session.session_family_id !== stored.session.session_family_id
     ) {
-      throw new Error("Slack browser link did not match the current account");
+      throw new Error("Person tool operation did not match the current account");
     }
   }
 
@@ -433,6 +424,18 @@ export class PersonClient {
     );
   }
 
+  async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>): Promise<T> {
+    const stored = await this.accessSession();
+    const result = await operation(Object.freeze({
+      identity: Object.freeze({ organization_id: stored.session.organization_id, membership_id: stored.session.membership_id }),
+      transport: this.authority(stored.authority_origin).toolTransport(stored.session.access_token),
+      request_id: (prefix: string) => this.requestId(prefix),
+      random_bytes: (size: number) => this.randomBytes(size),
+    }));
+    this.assertCurrentSession(stored);
+    return result;
+  }
+
   async tools() {
     const stored = await this.accessSession();
     const result = await this.authority(stored.authority_origin).tools(stored.session.access_token);
@@ -443,87 +446,6 @@ export class PersonClient {
       throw new Error("Connected tools did not match the current account");
     }
     return result;
-  }
-
-  async disconnectSlack() {
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).disconnectSlack(
-      stored.session.access_token,
-    );
-    this.assertCurrentSession(stored);
-    if (
-      result.organization_id !== stored.session.organization_id ||
-      result.membership_id !== stored.session.membership_id
-    ) {
-      throw new Error("Connected tools did not match the current account");
-    }
-    return result;
-  }
-
-  async beginSlackIdentityLink(recipientUserId: string) {
-    const stored = await this.accessSession();
-    const challengeBytes = this.randomBytes(32);
-    if (challengeBytes.byteLength !== 32) {
-      throw new Error(
-        "Person client challenge generator returned the wrong size",
-      );
-    }
-    const challengeCode = Buffer.from(challengeBytes).toString("base64url");
-    try {
-      const response = await this.authority(
-        stored.authority_origin,
-      ).beginSlackIdentityLink(
-        createPersonSlackIdentityLinkBeginRequest(this.requestId("psb"), challengeCode, recipientUserId),
-        stored.session.access_token,
-      );
-      return { ...response, challenge_code: challengeCode };
-    } finally {
-      challengeBytes.fill(0);
-    }
-  }
-
-  async completeSlackIdentityLink(input: {
-    readonly challenge_attempt_id: string;
-    readonly challenge_message_ts: string;
-    readonly challenge_code: string;
-  }) {
-    const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).completeSlackIdentityLink(
-      createPersonSlackIdentityLinkCompleteRequest(this.requestId("psc"), input),
-      stored.session.access_token,
-    );
-  }
-
-  async beginSlackBrowserLink() {
-    const stored = await this.accessSession();
-    const response = await this.authority(stored.authority_origin).beginSlackBrowserLink(
-      validateOrganizationPersonSlackBrowserLinkBeginRequest({
-        request_id: this.requestId("psb"),
-      }),
-      stored.session.access_token,
-    );
-    this.assertCurrentSession(stored);
-    return response;
-  }
-
-  async slackBrowserLinkStatus(attemptId: string) {
-    const stored = await this.accessSession();
-    const response = await this.authority(stored.authority_origin).slackBrowserLinkStatus(
-      validateOrganizationPersonSlackBrowserLinkAttemptRequest({ attempt_id: attemptId }),
-      stored.session.access_token,
-    );
-    this.assertCurrentSession(stored);
-    return response;
-  }
-
-  async cancelSlackBrowserLink(attemptId: string) {
-    const stored = await this.accessSession();
-    const response = await this.authority(stored.authority_origin).cancelSlackBrowserLink(
-      validateOrganizationPersonSlackBrowserLinkAttemptRequest({ attempt_id: attemptId }),
-      stored.session.access_token,
-    );
-    this.assertCurrentSession(stored);
-    return response;
   }
 
   async employees(): Promise<EmployeeRosterV1> {

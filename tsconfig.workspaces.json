@@ -8,6 +8,16 @@
     { "path": "./services/organization-authority" },
     { "path": "./packages/organization-control-plane" },
     { "path": "./packages/organization-record" },
-    { "path": "./packages/organization-retrieval" }
+    { "path": "./packages/organization-retrieval" },
+    { "path": "./packages/organization-authority-kernel" },
+    { "path": "./packages/organization-processing" },
+    { "path": "./providers/openrouter" },
+    { "path": "./providers/anthropic" },
+    { "path": "./providers/ollama" },
+    { "path": "./providers/openai" },
+    { "path": "./providers/synthetic-demo" },
+    { "path": "./providers/slack/server" },
+    { "path": "./providers/slack/client" },
+    { "path": "./providers/granola" }
   ]
 }

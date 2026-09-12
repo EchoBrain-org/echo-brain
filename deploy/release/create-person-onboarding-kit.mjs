@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 /** Build one exact macOS-arm64 or Linux-x64 employee kit with a pinned client and Node runtime. */
+import { swiftSourceAssemblyV1 } from '../../tools/lib/swift-source-assembly.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -210,9 +211,15 @@ function committedSource(release, paths, description) {
   }));
 }
 
+const graphicalAssemblyPath = 'product/echo-onboarding/source-assembly.v1.json';
+function graphicalAssembly() {
+  return swiftSourceAssemblyV1(JSON.parse(readFileSync(join(repository, graphicalAssemblyPath), 'utf8')));
+}
 function graphicalSource(release) {
   return committedSource(release, [
-    'product/echo-onboarding/main.swift',
+    graphicalAssemblyPath,
+    'tools/lib/swift-source-assembly.mjs',
+    ...graphicalAssembly().sources,
     'product/echo-onboarding/Info.plist',
     'deploy/release/person-onboarding-ui.mjs',
     'deploy/release/start-person-onboarding-kit.sh',
@@ -225,6 +232,7 @@ function graphicalSource(release) {
 
 function linuxSource(release) {
   return committedSource(release, [
+    'tools/lib/swift-source-assembly.mjs',
     'deploy/release/start-person-onboarding-kit-linux.sh',
     'deploy/release/create-person-onboarding-kit.mjs',
     'deploy/release/verify-person-onboarding-kit.mjs',
@@ -241,8 +249,12 @@ function buildGraphicalKit({ kitRoot, stagingParent, pendingKit, release, source
   const executable = join(contents, 'MacOS', 'ECHO');
   mkdirSync(dirname(executable), { recursive: true, mode: 0o755 });
   mkdirSync(resources, { mode: 0o755 });
-  const swift = join(stagingParent, 'onboarding.swift');
-  writeFileSync(swift, sourceBytes['product/echo-onboarding/main.swift']);
+  const assembly = swiftSourceAssemblyV1(JSON.parse(sourceBytes[graphicalAssemblyPath].toString('utf8')));
+  const swift = assembly.sources.map((path, index) => {
+    const staged = join(stagingParent, String(index) + '-' + basename(path));
+    writeFileSync(staged, sourceBytes[path]);
+    return staged;
+  });
   writeFileSync(join(contents, 'Info.plist'), sourceBytes['product/echo-onboarding/Info.plist']);
   cpSync(kitRoot, join(resources, 'kit'), { recursive: true });
   writeFileSync(join(resources, 'build-identity.v1.json'), canonicalJson({
@@ -255,7 +267,7 @@ function buildGraphicalKit({ kitRoot, stagingParent, pendingKit, release, source
     architecture: 'arm64',
   }) + '\n');
   run('/usr/bin/plutil', ['-replace', 'CFBundleShortVersionString', '-string', release.person_client.version.match(/[0-9]+\.[0-9]+\.[0-9]+/)?.[0] ?? '0.0.0', join(contents, 'Info.plist')], 'setup app version could not be stamped');
-  run('/usr/bin/xcrun', ['swiftc', '-swift-version', '5', '-parse-as-library', '-warnings-as-errors', '-O', '-target', 'arm64-apple-macos14.0', '-framework', 'AppKit', swift, '-o', executable], 'setup app compilation failed');
+  run('/usr/bin/xcrun', ['swiftc', '-swift-version', '5', '-parse-as-library', '-warnings-as-errors', '-O', '-target', 'arm64-apple-macos14.0', '-framework', 'AppKit', ...swift, '-o', executable], 'setup app compilation failed');
   chmodSync(executable, 0o755);
   run('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', '--options', 'runtime', app], 'setup app signing failed');
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], 'setup app signature verification failed');

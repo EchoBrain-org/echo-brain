@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "providers": [],
+  "models": [],
+  "legacy_phases": [
+    "slack_terminal_update"
+  ]
+}
