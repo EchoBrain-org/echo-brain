@@ -51,6 +51,7 @@ COPY --from=build /app/node_modules ./node_modules
 
 COPY --from=build /app/packages/federation-protocol/package.json ./packages/federation-protocol/package.json
 COPY --from=build /app/packages/federation-protocol/dist ./packages/federation-protocol/dist
+COPY --from=build /app/packages/federation-protocol/fixtures/signed-document-p256-rfc8785.v1.json ./packages/federation-protocol/fixtures/signed-document-p256-rfc8785.v1.json
 COPY --from=build /app/packages/organization-api/package.json ./packages/organization-api/package.json
 COPY --from=build /app/packages/organization-api/dist ./packages/organization-api/dist
 COPY --from=build /app/packages/organization-authority-kernel/package.json ./packages/organization-authority-kernel/package.json
@@ -63,6 +64,8 @@ COPY --from=build /app/packages/organization-processing/package.json ./packages/
 COPY --from=build /app/packages/organization-processing/dist ./packages/organization-processing/dist
 COPY --from=build /app/packages/organization-protocol/package.json ./packages/organization-protocol/package.json
 COPY --from=build /app/packages/organization-protocol/dist ./packages/organization-protocol/dist
+COPY --from=build /app/packages/organization-protocol/fixtures/organization-record-payload-conformance.v1.json ./packages/organization-protocol/fixtures/organization-record-payload-conformance.v1.json
+COPY --from=build /app/packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json ./packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json
 COPY --from=build /app/packages/organization-record/package.json ./packages/organization-record/package.json
 COPY --from=build /app/packages/organization-record/dist ./packages/organization-record/dist
 COPY --from=build /app/packages/organization-record/baselines ./packages/organization-record/baselines

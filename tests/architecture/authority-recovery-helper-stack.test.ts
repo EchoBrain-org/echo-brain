@@ -290,7 +290,7 @@ describe("Authority isolated recovery helper stack", () => {
       'process.arch !== "arm64"',
       'NODE_VERSION = "v22.22.1"',
       '"--porcelain=v1"',
-      'run("npm", ["run", "build:workspaces"]',
+      'run("npm", ["run", "build"]',
       '"npm-shrinkwrap.json"',
       "npm_shrinkwrap_sha256",
       "packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js",

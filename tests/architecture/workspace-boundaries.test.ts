@@ -73,6 +73,7 @@ interface PackageManifest {
   name: string;
   dependencies?: Record<string, string>;
   files?: string[];
+  exports?: Record<string, unknown>;
 }
 
 function readJson<T>(path: string): T {
@@ -482,6 +483,14 @@ describe("workspace source boundaries", () => {
       expect(dockerfile).toContain(
         `COPY --from=build /app/${workspace}/dist ./${workspace}/dist`,
       );
+      for (const target of Object.values(manifest.exports ?? {})) {
+        if (typeof target !== "string" || !target.endsWith(".json")) continue;
+        const asset = target.replace(/^\.\//, "");
+        const copied = [asset, dirname(asset)].some(path => dockerfile.includes(
+          `COPY --from=build /app/${workspace}/${path} ./${workspace}/${path}`,
+        ));
+        expect(copied, `runtime omits public asset ${workspace}/${asset}`).toBe(true);
+      }
       if (manifest.files?.some((path) => path.startsWith("baselines/"))) {
         expect(dockerfile).toContain(
           `COPY --from=build /app/${workspace}/baselines ./${workspace}/baselines`,
