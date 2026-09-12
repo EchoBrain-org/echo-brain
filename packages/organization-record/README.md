@@ -22,17 +22,18 @@ its coordinates and resolves a current display name. Unknown references, and
 generic HumanAct references without an actor, have no optional approver
 metadata. No derived metadata is added to canonical records.
 
-Fresh log and derived stores are created only from the two byte-pinned SQL
-baselines. Historical migrations, broad append and maintenance barrels,
-reviewer compatibility APIs, and derived compatibility paths are not shipped.
+Fresh logs use the standalone byte-pinned V3 baseline. Current Person reads
+and search generation use the canonical log and permission facts. The unused
+nine-table derived database is retired from fresh initialization and the V2
+six-role state-lineage contract. The log's redundant member-readable lookup
+index is also removed; its UNIQUE constraint still supplies the same index.
 
-The derived database is retained by the seven-role state-lineage contract.
-Bootstrap creates its metadata and cursor, but the shipped application has no
-materializer or reader for its seven graph/projection tables. Current Person
-reads and search generation use the canonical log and permission facts.
-Retiring this database therefore requires a versioned lineage transition,
-including initializer, verifier, backup and restore changes; its existence is
-not a reason to restore the retired graph implementation.
+Historical baseline bytes and compatibility fixtures remain for explicit source
+validation. The derived initializer and database definition are removed from
+runtime source and the public API; only a test fixture can create that old role. Existing V1-root state cannot be opened by the current runtime:
+the [offline schema-cleanup converter](../../docs/product/2026-09-12-database-migration-cleanup.md)
+accepts only the exact supported predecessor, preserves retained records and
+receipts, and refuses nonempty retired evidence. There is no startup migration.
 
 The log remains truth and derived state remains disposable. See the
 [append/derive design](../../docs/product/2026-08-07-org-decision-record-append-derive-design.md)

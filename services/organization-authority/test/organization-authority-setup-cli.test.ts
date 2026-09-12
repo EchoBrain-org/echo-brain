@@ -1452,7 +1452,7 @@ describe("Organization Authority setup coordinator", () => {
       base,
     );
     order.splice(0);
-    writeFileSync(join(state, "state-lineage-root.v1.json"), "{}", { mode: 0o600 ,});
+    writeFileSync(join(state, "state-lineage-root.v2.json"), "{}", { mode: 0o600 ,});
 
     let stderr = "";
     const result = await runOrganizationAuthoritySetupCli(

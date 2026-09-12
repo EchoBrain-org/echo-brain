@@ -1,4 +1,9 @@
 import {
+  applyOrganizationRecordDerivedBaselineV1,
+  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+  organizationRecordDerivedBaselineSha256V1,
+} from "../../packages/organization-record/test/fixtures/derived-baseline-v1.js";
+import {
   chmodSync,
   copyFileSync,
   existsSync,
@@ -24,12 +29,9 @@ import {
   organizationControlBaselineSha256V2,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  applyOrganizationRecordDerivedBaselineV1,
   applyOrganizationRecordLogBaselineV2,
   openOrganizationRecordDatabase,
-  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
-  organizationRecordDerivedBaselineSha256V1,
   organizationRecordLogBaselineSha256V2,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
@@ -74,7 +76,7 @@ const ONBOARDING_KIT = join(
 );
 const DOCKERFILE = join(REPO, "deploy", "organization-authority", "Dockerfile");
 const AUTHORITY_IMAGE_BUILD = join(REPO, "tools", "build-authority-image.mjs");
-const V4_LINEAGE_VERIFIER = join(
+const CURRENT_LINEAGE_VERIFIER = join(
   REPO,
   "packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js",
 );
@@ -1932,7 +1934,7 @@ fi
     );
   });
 
-  it("rejects a valid Authority V3 lineage before staging a V4 candidate and explains the pre-live rehearsal replacement path", () => {
+  it("rejects a valid Authority V3 lineage before staging the current candidate and explains the pre-live rehearsal replacement path", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-v3-lineage-"));
     roots.push(root);
     const envFile = join(root, ".env.clean-v1");
@@ -1956,7 +1958,7 @@ if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
 fi
 if [[ "$1" == run ]]; then
   touch "${verifier}"
-  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${V4_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "${stateDirectory}"
+  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "${stateDirectory}"
   exit $?
 fi
 if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
@@ -1989,7 +1991,7 @@ fi
     expect(result.stderr).toContain(
       "candidate Authority image rejected persisted state lineage",
     );
-    expect(result.stderr).toContain("schema version is not exactly 4");
+    expect(result.stderr).toContain("explicit offline schema-cleanup transition");
     expect(result.stderr).toContain(
       "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
     );
@@ -2024,7 +2026,7 @@ if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
 fi
 if [[ "$1" == run ]]; then
   touch "${verifier}"
-  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${V4_LINEAGE_VERIFIER}"; import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "${OPENROUTER_ADMISSION_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]); verifyPersistedOpenRouterDecisionProcessorAdmissionV1(process.argv[1]);' "${stateDirectory}"
+  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "${OPENROUTER_ADMISSION_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]); verifyPersistedOpenRouterDecisionProcessorAdmissionV1(process.argv[1]);' "${stateDirectory}"
   exit $?
 fi
 if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then

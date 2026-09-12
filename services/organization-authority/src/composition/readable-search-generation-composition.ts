@@ -52,7 +52,7 @@ import {
   stateLineageDatabaseManifestSha256V1,
   validateStateLineageDatabaseManifestV1,
   type StateLineageRoleV1,
-  type StateLineageRootManifestV1,
+  type StateLineageRootManifest,
 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 import {
   MAX_RELATED_ATOM_CANDIDATES_V1,
@@ -439,7 +439,7 @@ function recordHead(database: Database.Database): ReadableSearchRecordHeadV1 {
 }
 
 function lineagePlane(
-  root: StateLineageRootManifestV1,
+  root: StateLineageRootManifest,
   role: Extract<
     StateLineageRoleV1,
     "retrieval-facts" | "retrieval-content" | "retrieval-lexical"
@@ -477,7 +477,7 @@ function lineagePlane(
 export function createReadableSearchGenerationReconcilerV1(input: {
   readonly record_input_codecs?: RecordInputCodecRegistryV4;
   readonly state_directory: string;
-  readonly root: StateLineageRootManifestV1;
+  readonly root: StateLineageRootManifest;
   readonly authority: Database.Database;
   readonly record: Database.Database;
   readonly signer: FileOrganizationAuthoritySigner;

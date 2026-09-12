@@ -264,7 +264,7 @@ describe("authority offline recovery verifier", () => {
       state_lineage_valid: true,
       private_metadata_valid: true,
       private_entry_count: 1,
-      primary_sqlite_database_count: 4,
+      primary_sqlite_database_count: 3,
       primary_sqlite_integrity_valid: true,
       retrieval_generation_count: 1,
       retrieval_segment_count: 1,

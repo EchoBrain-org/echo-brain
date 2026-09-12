@@ -1,4 +1,9 @@
 import {
+  applyOrganizationRecordDerivedBaselineV1,
+  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+  organizationRecordDerivedBaselineSha256V1,
+} from "../../../packages/organization-record/test/fixtures/derived-baseline-v1.js";
+import {
   chmodSync,
   existsSync,
   mkdtempSync,
@@ -14,12 +19,9 @@ import {
   organizationControlBaselineSha256V2,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  applyOrganizationRecordDerivedBaselineV1,
   applyOrganizationRecordLogBaselineV1,
   openOrganizationRecordDatabase,
-  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
-  organizationRecordDerivedBaselineSha256V1,
   organizationRecordLogBaselineSha256V1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
@@ -140,7 +142,7 @@ function initializeRecordLogV1State(stateDirectory: string): void {
 }
 
 describe("Authority state initialization", () => {
-  it("creates only the fresh binding metadata, active owner, and derived cursor", () => {
+  it("creates only the active storage roles, fresh binding metadata, and owner", () => {
     const root = fixtureRoot();
     const stateDirectory = join(root, "new-state");
     const result = bootstrapOrganizationAuthorityState({
@@ -155,9 +157,8 @@ describe("Authority state initialization", () => {
       "authority.sqlite",
       "integrations.sqlite",
       "keys",
-      "record-derived.sqlite",
       "record-log.sqlite",
-      "state-lineage-root.v1.json",
+      "state-lineage-root.v2.json",
     ]);
     expect(
       existsSync(
@@ -174,7 +175,6 @@ describe("Authority state initialization", () => {
     expect(Object.keys(result.manifests.database_manifests).sort()).toEqual([
       "authority",
       "control-plane",
-      "record-derived",
       "record-log",
     ]);
     expect(
@@ -182,19 +182,19 @@ describe("Authority state initialization", () => {
         join(stateDirectory, "authority.sqlite"),
         "PRAGMA user_version",
       ),
-    ).toEqual([{ user_version: 4 }]);
+    ).toEqual([{ user_version: 5 }]);
     expect(
       rows(
         join(stateDirectory, "integrations.sqlite"),
         "PRAGMA user_version",
       ),
-    ).toEqual([{ user_version: 2 }]);
+    ).toEqual([{ user_version: 3 }]);
     expect(
       rows(
         join(stateDirectory, "record-log.sqlite"),
         "PRAGMA user_version",
       ),
-    ).toEqual([{ user_version: 2 }]);
+    ).toEqual([{ user_version: 3 }]);
 
     expect(
       rows(
@@ -235,12 +235,9 @@ describe("Authority state initialization", () => {
          UNION ALL SELECT count(*) FROM authority_oidc_login_attempts
          UNION ALL SELECT count(*) FROM authority_person_session_families
          UNION ALL SELECT count(*) FROM authority_person_session_credentials
-         UNION ALL SELECT count(*) FROM authority_provider_human_action_reproofs
-         UNION ALL SELECT count(*) FROM authority_record_write_inputs
-         UNION ALL SELECT count(*) FROM authority_record_write_receipts
          UNION ALL SELECT count(*) FROM authority_readable_search_active_generation`,
       ).map((row) => row.count),
-    ).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    ).toEqual([0, 0, 0, 0, 0, 0]);
     expect(
       rows(
         join(stateDirectory, "integrations.sqlite"),
@@ -271,20 +268,7 @@ describe("Authority state initialization", () => {
         created_at: CREATED_AT,
       },
     ]);
-    expect(
-      rows(
-        join(stateDirectory, "record-derived.sqlite"),
-        "SELECT organization_id, created_at FROM organization_derived_metadata",
-      ),
-    ).toEqual([
-      { organization_id: result.organization_id, created_at: CREATED_AT },
-    ]);
-    expect(
-      rows(
-        join(stateDirectory, "record-derived.sqlite"),
-        "SELECT last_position, updated_at FROM organization_derived_cursor",
-      ),
-    ).toEqual([{ last_position: 0, updated_at: CREATED_AT }]);
+
   });
 
   it("exposes state initialization through its compatibility CLI without legacy flags", () => {
@@ -355,7 +339,7 @@ describe("Authority state initialization", () => {
       verifyAuthorityStateLineage(stateDirectory);
       throw new Error("expected V1 lineage to be refused");
     } catch (error) {
-      expect(error).toMatchObject({ family: "schema_version_mismatch" });
+      expect(error).toMatchObject({ family: "legacy_state" });
     }
     expect(() =>
       bootstrapOrganizationAuthorityState({

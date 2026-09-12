@@ -563,17 +563,20 @@ describe("workspace source boundaries", () => {
       "packages/organization-authority-kernel": [
         "authority-approval-delivery-quarantine-v4.sql",
         "authority-baseline-v1.sql",
+        "authority-baseline-v5.sql",
         "authority-meeting-processing-v3.sql",
         "authority-private-approval-v2.sql",
       ],
       "packages/organization-control-plane": [
         "organization-control-plane-baseline-v1.sql",
+        "organization-control-plane-baseline-v3.sql",
         "organization-control-plane-private-approval-v2.sql",
       ],
       "packages/organization-record": [
         "organization-record-derived-baseline-v1.sql",
         "organization-record-log-baseline-v1.sql",
         "organization-record-log-baseline-v2.sql",
+        "organization-record-log-baseline-v3.sql",
       ],
       "packages/organization-retrieval": [
         "readable-search-content-baseline-v1.sql",

@@ -28,7 +28,8 @@
   "runtime_assets": [
     "packages/organization-record/baselines/organization-record-derived-baseline-v1.sql",
     "packages/organization-record/baselines/organization-record-log-baseline-v1.sql",
-    "packages/organization-record/baselines/organization-record-log-baseline-v2.sql"
+    "packages/organization-record/baselines/organization-record-log-baseline-v2.sql",
+    "packages/organization-record/baselines/organization-record-log-baseline-v3.sql"
   ],
   "component_index_contract": {
     "canonical_components": [
@@ -60,6 +61,7 @@
     ],
     "compatibility_entrypoints": [],
     "retired_source_paths": [
+      "packages/organization-record/src/persistence/baseline.ts",
       "packages/organization-record/src/organization-record-service-v1.ts",
       "packages/organization-record/src/organization-record-runtime-v1.ts",
       "packages/organization-record/src/persistence/open-unmigrated-database.ts",

@@ -11,9 +11,12 @@ import {
   STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
   stateLineageDatabaseManifestSha256V1,
   stateLineageDatabaseSlotsV1,
+  stateLineageDatabaseSlotsV2,
   stateLineageRootManifestSha256V1,
+  stateLineageRootManifestSha256V2,
   validateStateLineageDatabaseManifestV1,
   validateStateLineageRootManifestV1,
+  validateStateLineageRootManifestV2,
   validateStoredStateLineageDatabaseManifestV1,
 } from "../../src/state-lineage/state-lineage-manifest-v1.js";
 import type { StateLineageRoleV1 } from "../../src/state-lineage/state-lineage-manifest-v1.js";
@@ -28,6 +31,31 @@ const ROOT_MANIFEST_SHA256 =
   "sha256:98d89794f60ecc414cd9ee79b681b72493300b7bfb04877f6dcb5743f6988a1e";
 const DATABASE_MANIFEST_SHA256 =
   "sha256:286138c1afb64727afb40b2be70297ee3edc32171cafa4e71ca3f4670002f9c9";
+
+describe("six-role root manifest v2", () => {
+  const body = () => ({ ...goldenRootManifest(), schema_version: 2,
+    kind: "echo-state-lineage-root-manifest-v2", databases: stateLineageDatabaseSlotsV2() });
+
+  it("pins the new identity without changing historical V1 bytes", () => {
+    const root = validateStateLineageRootManifestV2(body());
+    expect(Object.isFrozen(root)).toBe(true);
+    expect(root.databases).toEqual(stateLineageDatabaseSlotsV1().filter(slot => slot.role !== "record-derived"));
+    expect(stateLineageRootManifestSha256V2(body())).toBe("sha256:cec1c3a2f923fa568bb1a595a9589fa8c22b12d4b2d91365113f0872c4509f57");
+    expect(stateLineageRootManifestSha256V1(goldenRootManifest())).toBe(ROOT_MANIFEST_SHA256);
+  });
+
+  it("refuses cross-version roots, retired slots, missing slots, and altered bindings", () => {
+    expect(() => validateStateLineageRootManifestV1(body())).toThrow();
+    expect(() => validateStateLineageRootManifestV2(goldenRootManifest())).toThrow();
+    for (const mutation of [
+      { databases: stateLineageDatabaseSlotsV1() },
+      { databases: stateLineageDatabaseSlotsV2().slice(1) },
+      { databases: [...stateLineageDatabaseSlotsV2()].reverse() },
+      { databases: stateLineageDatabaseSlotsV2().map(slot => ({ ...slot, application_id: 1 })) },
+      { organization_id: "unknown" }, { extra: true },
+    ]) expect(() => validateStateLineageRootManifestV2({ ...body(), ...mutation })).toThrow();
+  });
+});
 
 function goldenRootManifest(): Record<string, unknown> {
   return {

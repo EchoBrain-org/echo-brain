@@ -178,14 +178,15 @@ proof module and its own versioned contract rather than renaming these.
 
 ## Storage
 
-Fresh state is initialized from the composed baseline: the retained
-`baselines/organization-control-plane-baseline-v1.sql` plus
-`baselines/organization-control-plane-private-approval-v2.sql`. It applies
-only to an empty database; existing state with a different baseline digest is
-refused rather than migrated. There is no migration runner and no migration
-ledger table. Re-onboard disposable staging against a new artifact; an
-in-place upgrade requires a separately reviewed, versioned schema change and
-state-lineage qualification.
+Fresh state uses `baselines/organization-control-plane-baseline-v3.sql`,
+containing only the 11 active tables below. Its applier requires an empty
+database. Runtime and stopped-state setup require its exact digest and the
+six-role V2 root manifest. Startup performs no schema migration.
+
+The [offline cleanup transition](../product/2026-09-12-database-migration-cleanup.md)
+converts an independently stopped/restored copy of the exact supported
+predecessor. It preserves active rows and refuses nonempty retired evidence;
+it does not replace production state or authorize a release.
 
 Tables with a current reader or writer:
 
@@ -200,15 +201,12 @@ Tables with a current reader or writer:
 | `organization_private_approval_denied_action_receipts_v2` | Every rejected Slack action |
 | `organization_private_approval_terminal_evidence_v2` | The final approve or reject with its revalidated authorization |
 
-Nine further V1 tables (`organization_approval_binding_*`,
-`organization_approval_action_capability_*`,
-`organization_approval_activation_*`,
+Nine V1 reaction-approval tables (`organization_approval_binding_*`,
+`organization_approval_action_capability_*`, `organization_approval_activation_*`,
 `organization_person_slack_pending_approval*`, and
-`organization_provider_human_action_evidence`) belonged to the retired
-reaction-approval path. No runtime code reads or writes them. They remain in
-the frozen V1 baseline because the exact-schema tests and baseline digest
-protect installed schema identity; removing them is a deliberate versioned
-schema revision, not a cleanup edit.
+`organization_provider_human_action_evidence`) have no runtime reader or writer
+and are absent from V3. Their frozen historical baselines remain unchanged for
+source identity validation and negative compatibility tests.
 
 Authority `principal_id` and `membership_id` values are opaque references.
 They are not foreign keys because the Authority remains the sole source of

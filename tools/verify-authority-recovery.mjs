@@ -547,7 +547,9 @@ export async function verifyAuthorityRecovery({
     database.role.startsWith("retrieval-"),
   );
   if (
-    primaryDatabases.length !== 4 ||
+    primaryDatabases.length !== lineage.root.databases.filter(
+      (slot) => slot.location.kind === "state_file",
+    ).length ||
     retrievalDatabases.length !== lineage.retrieval.segment_count * 3
   ) {
     fail();
