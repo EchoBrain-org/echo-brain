@@ -21,7 +21,7 @@ import {
   type PersonIdentitySessionApplication,
 } from "../application/person-identity-sessions.js";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
-import type { PersonExternalIdentityLinkHttpApplicationV1 } from "./person-external-identity-link-http-application.js";
+import type { ProviderHttpApplicationV1, ProviderHttpRouteV1, ProviderHttpResponseV1 } from "../application/ports/provider-http-application-v1.js";
 import {
   PERSON_RECORDS_PATH_V1,
   type PersonRecordReadHttpApplicationV1,
@@ -38,9 +38,10 @@ import {
   PERSON_ANSWER_PATH_V1,
   type PersonAnswerHttpApplicationV1,
 } from "./person-answer-http-application.js";
-import type { PrivateApprovalInteractionHttpApplicationV1 } from "./private-approval-interaction-http-application-v1.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
+const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
+const MAXIMUM_PROVIDER_RESPONSE_BYTES = 64 * 1024;
 const OIDC_BEGIN_CLIENT_WINDOW_MS = 60 * 1000;
 const OIDC_BEGIN_CLIENT_LIMIT = 10;
 const MAXIMUM_TRACKED_OIDC_BEGIN_CLIENTS = 1024;
@@ -83,7 +84,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly oidc_provider: AuthorityOidcAuthorizationUrlProvider;
   readonly expected_issuer: string;
   /** Optional: no connected external identity provider is required for login. */
-  readonly person_external_identity_link?: PersonExternalIdentityLinkHttpApplicationV1;
+  readonly person_external_identity_link?: ProviderHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
   readonly person_record_read?: PersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
@@ -94,34 +95,38 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer?: PersonAnswerHttpApplicationV1;
   /** Optional until an active private-approval surface is fully composed. */
   readonly private_approval_interaction_ingress?:
-    PrivateApprovalInteractionHttpApplicationV1;
+    ProviderHttpApplicationV1;
 }
 
-function validateProviderIngressRoutes(
+function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
-): void {
-  const providerRoutes = [
-    ...(options.private_approval_interaction_ingress === undefined
-      ? []
-      : [
-          {
-            method: options.private_approval_interaction_ingress.method,
-            path: options.private_approval_interaction_ingress.path,
-          },
-        ]),
-    ...(options.person_external_identity_link?.routes ?? []),
-  ];
-  const seen = new Set<string>();
-  for (const route of providerRoutes) {
-    const key = routeKey(route.method, route.path);
-    if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key)) {
-      throw new Error(`provider ingress route collides with Authority route: ${key}`);
+): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
+  const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
+  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link]) {
+    if (application === undefined) continue;
+    const routeIds = new Set<string>();
+    for (const route of application.routes) {
+      const parsed = new URL(route.path, "http://localhost");
+      if (
+        (route.method !== "GET" && route.method !== "POST") ||
+        !route.path.startsWith("/") || route.path.startsWith("//") ||
+        parsed.pathname !== route.path || parsed.search !== "" || parsed.hash !== "" ||
+        route.route_id.length === 0 || routeIds.has(route.route_id)
+      ) throw new Error("invalid provider ingress route");
+      routeIds.add(route.route_id);
+      const key = routeKey(route.method, route.path);
+      if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key)) {
+        throw new Error(`provider ingress route collides with Authority route: ${key}`);
+      }
+      if (mounted.has(key)) {
+        throw new Error(`provider ingress route is configured more than once: ${key}`);
+      }
+      // Dispatch the same configuration that passed collision checks, even
+      // if an adapter later mutates its original route array or objects.
+      mounted.set(key, { route: Object.freeze({ ...route }), accept: application.accept.bind(application) });
     }
-    if (seen.has(key)) {
-      throw new Error(`provider ingress route is configured more than once: ${key}`);
-    }
-    seen.add(key);
   }
+  return mounted;
 }
 
 interface PendingLoopbackHandoff {
@@ -191,12 +196,46 @@ function noContent(response: ServerResponse): void {
   response.end();
 }
 
-function ok(response: ServerResponse): void {
-  response.writeHead(200, {
-    "content-length": "0",
+function providerResponse(response: ServerResponse, result: ProviderHttpResponseV1): void {
+  if (![200, 201, 202].includes(result.status)) throw new Error("invalid provider response status");
+  let bytes: Buffer;
+  let contentType: string | undefined;
+  let maximum = MAXIMUM_PROVIDER_RESPONSE_BYTES;
+  if ("raw_body" in result) {
+    if (
+      !(result.raw_body instanceof Uint8Array) ||
+      (result.content_type !== undefined && result.content_type !== "text/plain" && result.content_type !== "application/octet-stream") ||
+      (result.raw_body.byteLength > 0 && result.content_type === undefined)
+    ) throw new Error("invalid provider response bytes");
+    // Bound bytes before copying them, then preserve their exact encoding.
+    if (result.raw_body.byteLength > maximum) throw new Error("provider response is too large");
+    bytes = Buffer.from(result.raw_body);
+    contentType = result.content_type;
+  } else if (result.content_type === "text/html") {
+    if (typeof result.body !== "string") throw new Error("invalid provider callback page");
+    maximum = 16_384;
+    if (Buffer.byteLength(result.body, "utf8") > maximum) throw new Error("provider response is too large");
+    bytes = Buffer.from(result.body, "utf8");
+    contentType = "text/html; charset=utf-8";
+  } else {
+    if (result.content_type !== undefined) throw new Error("invalid provider response content type");
+    bytes = Buffer.from(JSON.stringify(result.body), "utf8");
+    contentType = "application/json; charset=utf-8";
+  }
+  if (bytes.byteLength > maximum) throw new Error("provider response is too large");
+  response.writeHead(result.status, {
+    ...(contentType === undefined ? {} : { "content-type": contentType }),
+    "content-length": String(bytes.byteLength),
     "cache-control": "no-store",
+    ...(result.content_type === "text/html" ? {
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+    } : "raw_body" in result && bytes.byteLength > 0 ? {
+      "x-content-type-options": "nosniff",
+    } : {}),
   });
-  response.end();
+  response.end(bytes);
 }
 
 /**
@@ -436,7 +475,7 @@ function answerInput(value: unknown): { readonly question: string } {
 export function createOrganizationAuthorityHttpServer(
   options: OrganizationAuthorityHttpServerOptions,
 ): Server {
-  validateProviderIngressRoutes(options);
+  const providerRoutes = providerIngressRoutes(options);
   const handoffs = new Map<string, PendingLoopbackHandoff>();
   const oidcBeginWindows = new Map<string, OidcBeginClientWindow>();
   let activeHttp = 0;
@@ -452,57 +491,26 @@ export function createOrganizationAuthorityHttpServer(
       }
       const url = new URL(request.url ?? "/", "http://localhost");
       const method = request.method ?? "GET";
-      const approvalIngress = options.private_approval_interaction_ingress;
+      const ingress = providerRoutes.get(routeKey(method, url.pathname));
       if (
-        approvalIngress !== undefined &&
-        method === approvalIngress.method &&
-        url.pathname === approvalIngress.path &&
-        url.search === ""
+        ingress !== undefined &&
+        (url.search === "" || ingress.route.accepts_query === true)
       ) {
+        if (Buffer.byteLength(url.search, "utf8") > MAXIMUM_PROVIDER_QUERY_BYTES)
+          throw new AuthorityOperationError("invalid_request", "request query is too large");
         const headers = singletonHeaders(request.headers);
-        await approvalIngress.accept({
+        const result = await ingress.accept({
+          route_id: ingress.route.route_id,
+          method: ingress.route.method,
+          path: ingress.route.path,
           raw_body: await rawBody(request),
           content_type: headers["content-type"],
           headers,
-        });
-        ok(response);
-        return;
-      }
-      const externalIdentityRoute =
-        options.person_external_identity_link?.routes.find(
-          (route) =>
-            route.method === method && route.path === url.pathname,
-        );
-      if (
-        externalIdentityRoute !== undefined &&
-        (url.search === "" || externalIdentityRoute.accepts_query === true)
-      ) {
-        const headers = singletonHeaders(request.headers);
-        const result = await options.person_external_identity_link!.accept({
-          route_id: externalIdentityRoute.route_id,
-          raw_body: await rawBody(request),
-          content_type: headers["content-type"],
-          headers,
-          ...(externalIdentityRoute.accepts_query === true
+          ...(ingress.route.accepts_query === true
             ? { query: new URLSearchParams(url.search) }
             : {}),
         });
-        if (result.content_type === "text/html") {
-          if (typeof result.body !== "string" || Buffer.byteLength(result.body) > 16_384)
-            throw new Error("Invalid external identity callback page");
-          const page = Buffer.from(result.body, "utf8");
-          response.writeHead(result.status, {
-            "content-type": "text/html; charset=utf-8",
-            "content-length": String(page.byteLength),
-            "cache-control": "no-store",
-            "referrer-policy": "no-referrer",
-            "x-content-type-options": "nosniff",
-            "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
-          });
-          response.end(page);
-        } else {
-          json(response, result.status, result.body);
-        }
+        providerResponse(response, result);
         return;
       }
       if (

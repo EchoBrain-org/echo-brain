@@ -1,5 +1,5 @@
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
-import type { PersonExternalIdentityLinkHttpApplicationV1 } from "../presentation/person-external-identity-link-http-application.js";
+import type { ProviderHttpApplicationV1 } from "../application/ports/provider-http-application-v1.js";
 
 /**
  * Provider-neutral inputs available after the Person runtime has opened its
@@ -24,7 +24,7 @@ export interface PersonExternalIdentityRuntimeInputV1 {
 
 export interface OpenedPersonExternalIdentityRuntimeV1 {
   /** The currently-versioned external-identity HTTP application. */
-  readonly application: PersonExternalIdentityLinkHttpApplicationV1;
+  readonly application: ProviderHttpApplicationV1;
   close(): void;
 }
 

@@ -1,7 +1,7 @@
 import type {
-  PrivateApprovalInteractionHttpApplicationV1,
-  PrivateApprovalInteractionHttpRequestV1,
-} from "../../../../presentation/private-approval-interaction-http-application-v1.js";
+  ProviderHttpApplicationV1,
+  ProviderHttpRequestV1,
+} from "../../../../application/ports/provider-http-application-v1.js";
 import {
   PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1,
   type PrivateSlackApprovalInteractionHttpPortV1,
@@ -10,16 +10,20 @@ import {
 /** Adapts the generic raw HTTP ingress to Slack's two signed headers. */
 export function createPrivateSlackApprovalHttpAdapterV1(
   interaction_handler: PrivateSlackApprovalInteractionHttpPortV1,
-): PrivateApprovalInteractionHttpApplicationV1 {
+): ProviderHttpApplicationV1 {
   return Object.freeze({
-    method: "POST",
-    path: PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1,
-    accept: ({ raw_body, content_type, headers }: PrivateApprovalInteractionHttpRequestV1) =>
-      interaction_handler.accept({
+    routes: Object.freeze([Object.freeze({
+      route_id: "private-approval-interaction", method: "POST" as const,
+      path: PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1,
+    })]),
+    async accept({ raw_body, content_type, headers }: ProviderHttpRequestV1) {
+      await interaction_handler.accept({
         raw_body,
         content_type,
         slack_request_timestamp: headers["x-slack-request-timestamp"],
         slack_signature: headers["x-slack-signature"],
-      }),
+      });
+      return { status: 200 as const, raw_body: new Uint8Array() };
+    },
   });
 }

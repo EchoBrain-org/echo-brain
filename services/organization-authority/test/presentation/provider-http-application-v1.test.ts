@@ -6,13 +6,12 @@ import {
   type PrivateSlackApprovalInteractionHttpPortV1,
 } from "../../src/presentation/private-slack-approval-interaction-http-port-v1.js";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/composition/providers/slack/private-approval/private-slack-approval-http-adapter-v1.js";
-import type { PrivateApprovalInteractionHttpApplicationV1 } from "../../src/presentation/private-approval-interaction-http-application-v1.js";
-import type { PersonExternalIdentityLinkHttpApplicationV1 } from "../../src/presentation/person-external-identity-link-http-application.js";
+import type { ProviderHttpApplicationV1, ProviderHttpResponseV1 } from "../../src/application/ports/provider-http-application-v1.js";
 import { PERSON_SESSION_OIDC_BEGIN_PATH } from "../../src/presentation/person-identity-session-http-application.js";
 
 function serverOptions(input: {
-  readonly approval?: PrivateApprovalInteractionHttpApplicationV1;
-  readonly external_identity?: PersonExternalIdentityLinkHttpApplicationV1;
+  readonly approval?: ProviderHttpApplicationV1;
+  readonly external_identity?: ProviderHttpApplicationV1;
 } = {}) {
   return {
     descriptor: {} as never,
@@ -29,7 +28,7 @@ function serverOptions(input: {
 }
 
 async function start(
-  application?: PrivateApprovalInteractionHttpApplicationV1,
+  application?: ProviderHttpApplicationV1,
 ) {
   const server = createOrganizationAuthorityHttpServer(
     serverOptions({ approval: application }),
@@ -51,7 +50,7 @@ async function start(
   };
 }
 
-describe("private Slack approval interactions HTTP mount V1", () => {
+describe("provider identity and approval HTTP transport V1", () => {
   it("serves a fixed identity callback page with no-store and restrictive browser headers", async () => {
     const path = "/v2/integrations/example/identity/callback";
     const page = "<!doctype html><title>ECHO</title><p>Return to ECHO to finish connecting.</p>";
@@ -145,9 +144,8 @@ describe("private Slack approval interactions HTTP mount V1", () => {
       createOrganizationAuthorityHttpServer(
         serverOptions({
           approval: {
-            method: "POST",
-            path: PERSON_SESSION_OIDC_BEGIN_PATH,
-            accept: async () => "accepted",
+            routes: [{ route_id: "collision", method: "POST", path: PERSON_SESSION_OIDC_BEGIN_PATH }],
+            accept: async () => ({ status: 200, raw_body: new Uint8Array() }),
           },
         }),
       ),
@@ -161,7 +159,7 @@ describe("private Slack approval interactions HTTP mount V1", () => {
     expect(() =>
       createOrganizationAuthorityHttpServer(
         serverOptions({
-          approval: { method: "POST", path, accept: async () => "accepted" },
+          approval: { routes: [{ route_id: "approval", method: "POST", path }], accept: async () => ({ status: 200, raw_body: new Uint8Array() }) },
           external_identity: {
             routes: [{ route_id: "example-identity", method: "POST", path }],
             accept: async () => ({ status: 200, body: {} }),
@@ -171,17 +169,29 @@ describe("private Slack approval interactions HTTP mount V1", () => {
     ).toThrow(`provider ingress route is configured more than once: POST ${path}`);
   });
 
+  it("rejects ambiguous or noncanonical route declarations before listening", () => {
+    const route = { route_id: "approval", method: "POST" as const, path: "/v2/integrations/example/approvals" };
+    const accept = async () => ({ status: 200 as const, body: {} });
+    for (const routes of [
+      [route, { ...route, route_id: "duplicate" }],
+      [route, { ...route, path: "/v2/integrations/example/challenge" }],
+      [{ ...route, path: `${route.path}?query=undeclared` }],
+      [{ ...route, path: "/v2/integrations/example/../approvals" }],
+    ]) {
+      expect(() => createOrganizationAuthorityHttpServer(serverOptions({ approval: { routes, accept } }))).toThrow(/provider ingress route/);
+    }
+  });
+
   it("mounts a selected non-Slack ingress without a server route change", async () => {
     const accept = vi.fn(
       async (
         _request: Parameters<
-          PrivateApprovalInteractionHttpApplicationV1["accept"]
+          ProviderHttpApplicationV1["accept"]
         >[0],
-      ) => "accepted" as const,
+      ) => ({ status: 202 as const, body: { queued: true } }),
     );
     const server = await start({
-      method: "POST",
-      path: "/v2/integrations/example/approvals",
+      routes: [{ route_id: "approval", method: "POST", path: "/v2/integrations/example/approvals" }],
       accept,
     });
     try {
@@ -196,8 +206,12 @@ describe("private Slack approval interactions HTTP mount V1", () => {
           body: "exact-body",
         },
       );
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ queued: true });
       expect(accept).toHaveBeenCalledWith({
+        route_id: "approval",
+        method: "POST",
+        path: "/v2/integrations/example/approvals",
         raw_body: expect.any(Uint8Array),
         content_type: "text/plain",
         headers: expect.objectContaining({ "x-example-signature": "proof" }),
@@ -208,6 +222,94 @@ describe("private Slack approval interactions HTTP mount V1", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("dispatches an opt-in approval query challenge without reflecting its fields", async () => {
+    const accept = vi.fn(async () => ({ status: 200 as const, body: { validated: true } }));
+    const path = "/v2/integrations/example/approvals";
+    const server = await start({
+      routes: [{ route_id: "challenge", method: "GET", path, accepts_query: true }],
+      accept,
+    });
+    try {
+      const response = await fetch(`${server.url}${path}?challenge=private%2Bvalue&tag=one&tag=two`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ validated: true });
+      expect(accept).toHaveBeenCalledWith(expect.objectContaining({
+        route_id: "challenge", path, query: new URLSearchParams("challenge=private%2Bvalue&tag=one&tag=two"),
+      }));
+    } finally { await server.close(); }
+  });
+
+  it("keeps query opt-in and exact method/path matching on the validated route snapshot", async () => {
+    const accept = vi.fn(async () => ({ status: 200 as const, body: {} }));
+    const path = "/v2/integrations/example/approvals";
+    const route = { route_id: "approval", method: "POST" as const, path };
+    const server = await start({ routes: [route], accept });
+    try {
+      // Dispatch uses the validated route snapshot, not a mutable provider object.
+      route.path = PERSON_SESSION_OIDC_BEGIN_PATH;
+      for (const [method, suffix] of [["POST", "?unexpected=true"], ["GET", ""], ["POST", "/other"]]) {
+        expect((await fetch(`${server.url}${path}${suffix}`, { method })).status).toBe(404);
+      }
+      expect(accept).not.toHaveBeenCalled();
+      expect((await fetch(`${server.url}${path}`, { method: "POST" })).status).toBe(200);
+      expect(accept).toHaveBeenCalledWith(expect.objectContaining({ path }));
+    } finally { await server.close(); }
+  });
+
+  it("bounds opted-in query bytes before calling the application", async () => {
+    const accept = vi.fn(async () => ({ status: 200 as const, body: {} }));
+    const path = "/v2/integrations/example/approvals";
+    const server = await start({ routes: [{ route_id: "challenge", method: "GET", path, accepts_query: true }], accept });
+    try {
+      expect((await fetch(`${server.url}${path}?challenge=${"a".repeat(8192)}`)).status).toBe(400);
+      expect(accept).not.toHaveBeenCalled();
+    } finally { await server.close(); }
+  });
+
+  it("preserves response bytes and only emits host-approved headers", async () => {
+    const bytes = new Uint8Array([0, 255, 128, 13, 10]);
+    const path = "/v2/integrations/example/approvals";
+    const server = await start({
+      routes: [{ route_id: "approval", method: "POST", path }],
+      accept: async () => ({
+        status: 202, raw_body: bytes, content_type: "application/octet-stream",
+        headers: { "set-cookie": "not-allowed", location: "https://not-allowed.example", "cache-control": "public" },
+      }),
+    });
+    try {
+      const response = await fetch(`${server.url}${path}`, { method: "POST" });
+      expect(response.status).toBe(202);
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+      expect(response.headers.get("content-length")).toBe(String(bytes.byteLength));
+      expect(response.headers.get("content-type")).toBe("application/octet-stream");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(response.headers.get("location")).toBeNull();
+    } finally { await server.close(); }
+  });
+
+  it.each([
+    { name: "JSON UTF-8 bytes", response: { status: 200, body: "é".repeat(32 * 1024) } },
+    { name: "HTML UTF-8 bytes", response: { status: 200, body: "é".repeat(8193), content_type: "text/html" } },
+    { name: "raw bytes", response: { status: 200, raw_body: new Uint8Array(64 * 1024 + 1), content_type: "application/octet-stream" } },
+    { name: "untyped nonempty bytes", response: { status: 200, raw_body: new Uint8Array([65]) } },
+    { name: "unsupported status", response: { status: 302, body: "must-not-appear" } },
+    { name: "unsupported content type", response: { status: 200, body: "must-not-appear", content_type: "text/javascript" } },
+  ])("rejects invalid provider output before releasing it: $name", async ({ response: result }) => {
+    const path = "/v2/integrations/example/approvals";
+    const server = await start({
+      routes: [{ route_id: "approval", method: "POST", path }],
+      // Deliberately violate the output contract to exercise the host guard.
+      accept: async () => result as ProviderHttpResponseV1,
+    });
+    try {
+      const response = await fetch(`${server.url}${path}`, { method: "POST" });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: { code: "internal", message: "request failed" } });
+    } finally { await server.close(); }
   });
 
   it("passes the exact unparsed bytes and Slack headers to the signed application", async () => {
@@ -237,6 +339,9 @@ describe("private Slack approval interactions HTTP mount V1", () => {
       );
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("");
+      expect(response.headers.get("content-length")).toBe("0");
+      expect(response.headers.get("content-type")).toBeNull();
+      expect(response.headers.get("cache-control")).toBe("no-store");
       expect(accept).toHaveBeenCalledOnce();
       const accepted = accept.mock.calls[0]![0];
       expect(Buffer.from(accepted.raw_body).toString("utf8")).toBe(raw);

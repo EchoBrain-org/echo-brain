@@ -1149,11 +1149,17 @@ describe("Organization Authority runtime private approval lane", () => {
             async appendFinalizedApprovalsToV4() {},
           },
           interaction_ingress: {
-            method: "POST",
-            path: "/v2/integrations/test-approval/actions",
-            async accept() {
+            routes: [
+              { route_id: "actions", method: "POST", path: "/v2/integrations/test-approval/actions" },
+              { route_id: "challenge", method: "GET", path: "/v2/integrations/test-approval/actions", accepts_query: true },
+            ],
+            async accept(request) {
               ingressCalls += 1;
-              return "accepted";
+              if (request.route_id === "challenge") {
+                expect(request.query?.get("challenge")).toBe("fixture-challenge");
+                return { status: 200, body: { validated: true } };
+              }
+              return { status: 202, body: { queued: true } };
             },
           },
         };
@@ -1214,8 +1220,14 @@ describe("Organization Authority runtime private approval lane", () => {
           body: "provider-neutral-action",
         },
       );
-      expect(response.status).toBe(200);
-      expect(ingressCalls).toBe(1);
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ queued: true });
+      const challenge = await fetch(
+        `http://127.0.0.1:${String(runtime.address.port)}/v2/integrations/test-approval/actions?challenge=fixture-challenge`,
+      );
+      expect(challenge.status).toBe(200);
+      expect(await challenge.json()).toEqual({ validated: true });
+      expect(ingressCalls).toBe(2);
       expect(fixture.errors).toEqual([]);
     } finally {
       await runtime.close();

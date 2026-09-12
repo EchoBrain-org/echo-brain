@@ -3,7 +3,7 @@ import type { OrganizationAuthoritySigner } from "../application/ports/organizat
 import type { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
 import type { ApprovalWorkflowStagerV1 } from "../processing/admitted-meeting-processing/meeting-processing-cycle-v1.js";
 import type { SqliteAuthorityMeetingProcessingStateV1 } from "../processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
-import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
+import type { ProviderHttpApplicationV1 } from "../application/ports/provider-http-application-v1.js";
 import type { MeetingApprovalJourneyTelemetryPortV1 } from "../processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
 /** The approval-only phases used by the shared admitted-processing lifecycle. */
@@ -42,7 +42,7 @@ export interface ApprovalWorkflowComponentsV1 {
   readonly stager: ApprovalWorkflowStagerV1;
   readonly processing: ApprovalWorkflowProcessingV1;
   /** Omitted only for an approval surface with no inbound interaction route. */
-  readonly interaction_ingress?: PrivateApprovalInteractionHttpApplicationV1;
+  readonly interaction_ingress?: ProviderHttpApplicationV1;
 }
 
 /**

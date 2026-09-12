@@ -33,7 +33,7 @@ import {
   type AnswerCompositionFailureEventV1,
 } from "./person-answer-route.js";
 import type { AnswerCompositionGenerationBindingV1 } from "./answer-composition-generation-bundle-v1.js";
-import type { PrivateApprovalInteractionHttpApplicationV1 } from "../presentation/private-approval-interaction-http-application-v1.js";
+import type { ProviderHttpApplicationV1 } from "../application/ports/provider-http-application-v1.js";
 import type {
   PersonExternalIdentityRuntimeBundleV1,
   OpenedPersonExternalIdentityRuntimeV1,
@@ -73,7 +73,7 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   /** Present only when the signed private-approval surface is active. */
   readonly private_approval_interaction_ingress?:
-    PrivateApprovalInteractionHttpApplicationV1;
+    ProviderHttpApplicationV1;
 }
 
 export interface RunningOrganizationAuthorityApiRuntime {

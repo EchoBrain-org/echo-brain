@@ -238,6 +238,8 @@
       "services/organization-authority/src/composition/private-slack-approval-interactions-application-v1.ts",
       "services/organization-authority/src/composition/private-slack-approval-interaction-http-ingress-v1.ts",
       "services/organization-authority/src/presentation/private-slack-approval-interactions-http-application-v1.ts",
+      "services/organization-authority/src/presentation/private-approval-interaction-http-application-v1.ts",
+      "services/organization-authority/src/presentation/person-external-identity-link-http-application.ts",
       "services/organization-authority/src/quality/synthetic-meeting-fixture-v1.ts",
       "services/organization-authority/src/quality/synthetic-answer-composition-fixture-port-v1.ts",
       "services/organization-authority/src/quality/synthetic-meeting-quality-evaluator-v1.ts",

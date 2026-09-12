@@ -19,9 +19,9 @@ import { openOrganizationControlDatabase } from "@echo-brain/organization-contro
 import { ReadableSearchAuthorizationFence } from "../../../../application/readable-search-authorization-fence.js";
 import { AuthorityOperationError } from "../../../../domain/errors.js";
 import type {
-  PersonExternalIdentityHttpRequestV1,
-  PersonExternalIdentityLinkHttpApplicationV1,
-} from "../../../../presentation/person-external-identity-link-http-application.js";
+  ProviderHttpRequestV1,
+  ProviderHttpApplicationV1,
+} from "../../../../application/ports/provider-http-application-v1.js";
 import {
   createSqliteSlackPersonIdentityLinkWorkflowV1,
   createSqliteSlackPersonIdentityLinkRepositoryV1,
@@ -86,10 +86,10 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
     disconnect(input: unknown, accessToken: string): Promise<unknown>;
   };
   readonly browser?: SlackPersonBrowserIdentityLinkWorkflowV1;
-}): PersonExternalIdentityLinkHttpApplicationV1 {
+}): ProviderHttpApplicationV1 {
   return Object.freeze({
     routes: input.browser === undefined ? SLACK_IDENTITY_ROUTES_V1 : Object.freeze([...SLACK_IDENTITY_ROUTES_V1, ...SLACK_BROWSER_IDENTITY_ROUTES_V1]),
-    async accept(request: PersonExternalIdentityHttpRequestV1) {
+    async accept(request: ProviderHttpRequestV1) {
       if (request.route_id === "slack-browser-callback") {
         if (input.browser === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
         await input.browser.callback(request.query ?? new URLSearchParams());
@@ -136,10 +136,10 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
   });
 }
 
-function unavailableSlackIdentityApplication(runtime: PersonExternalIdentityRuntimeInputV1): PersonExternalIdentityLinkHttpApplicationV1 {
+function unavailableSlackIdentityApplication(runtime: PersonExternalIdentityRuntimeInputV1): ProviderHttpApplicationV1 {
   return Object.freeze({
     routes: SLACK_IDENTITY_ROUTES_V1,
-    async accept(request: PersonExternalIdentityHttpRequestV1) {
+    async accept(request: ProviderHttpRequestV1) {
       if (request.route_id === "tools") {
         return observeCoreRuntimeV1("person_tools_status", async () => {
           const auth = runtime.authentication.authenticateAccess({ access_token: accessToken(request.headers) });

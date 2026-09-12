@@ -419,7 +419,7 @@ describe("private Slack interactions application V1", () => {
         throw new Error("test HTTP server did not bind TCP");
       }
       const signed = request(raw());
-      const response = await fetch(`http://127.0.0.1:${address.port}${ingress.path}`, {
+      const response = await fetch(`http://127.0.0.1:${address.port}${ingress.routes[0]!.path}`, {
         method: "POST",
         headers: {
           "content-type": signed.content_type,
@@ -433,7 +433,7 @@ describe("private Slack interactions application V1", () => {
       await published;
       expect(order).toEqual(["enqueue", "acknowledgement", "publication"]);
       closing = true;
-      const rejected = await fetch(`http://127.0.0.1:${address.port}${ingress.path}`, {
+      const rejected = await fetch(`http://127.0.0.1:${address.port}${ingress.routes[0]!.path}`, {
         method: "POST",
         headers: {
           "content-type": signed.content_type,
