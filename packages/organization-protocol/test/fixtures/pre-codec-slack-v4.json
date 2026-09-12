@@ -1,0 +1,192 @@
+{
+  "generated_with": "0817398",
+  "descriptor": {
+    "authority_id": "oau_00000000-0000-4000-8000-000000000001",
+    "kind": "echo-organization-authority",
+    "organization_id": "org_00000000-0000-4000-8000-000000000002",
+    "schema_version": 1,
+    "signing_key": {
+      "algorithm": "ecdsa-p256-sha256-der-low-s",
+      "key_id": "sha256:54a0bc1f6f0f62321142a5c306f0521ed46255bf542fe6a1e4358fdc37a17eb6",
+      "public_key_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmcea24Pg4ac8lfOx0NnS33/+p3Wxcp9kvTbrVhg4mpwadIyTi0O1/lgyo8qeYRQKJPQNeaRLxok9KJPKf7XEYQ=="
+    }
+  },
+  "pin": "sha256:1787000e1893bb4658b58c5ad18d66c099033a421c1850ad54e175362dd09c28",
+  "lineage": "state-lineage-1",
+  "envelope": {
+    "body": {
+      "schema_version": 4,
+      "kind": "echo-organization-record-envelope-v4",
+      "envelope_id": "historical-envelope",
+      "authority_id": "oau_00000000-0000-4000-8000-000000000001",
+      "organization_id": "org_00000000-0000-4000-8000-000000000002",
+      "state_lineage_id": "state-lineage-1",
+      "semantic_idempotency_key": "sha256:e2f32a6d235ef70e8590983e70d8bc67df85644ebe0081f542a19da5bacdd459",
+      "issued_at": "2026-08-21T12:01:00.000Z",
+      "predecessor_position": null,
+      "predecessor_record_sha256": null,
+      "human_act_resolution_ref": {
+        "schema_version": 1,
+        "kind": "echo-private-slack-block-approval-resolution-ref-v1",
+        "authority_id": "oau_00000000-0000-4000-8000-000000000001",
+        "organization_id": "org_00000000-0000-4000-8000-000000000002",
+        "state_lineage_id": "state-lineage-1",
+        "command_id": "command-historical-approval",
+        "approval_id": "historical-approval",
+        "candidate_sha256": "sha256:8c4297ae59cf64a799cb4b1fa1a52ef8d8661ce8967f79ea3d5de80c69b3055f",
+        "frozen_card_sha256": "sha256:6a2e1024c02f67614da8d27cdfd67cf612cffd49f05291569134278643b5daa5",
+        "approved_snapshot_sha256": "sha256:1106196b5df93286d461731c5f5dae0886bf666ae12b64faf0eda2d6f942e904",
+        "final_approver": {
+          "principal_id": "principal-1",
+          "membership_id": "membership-1"
+        },
+        "current_slack_identity_link": {
+          "provider": "slack",
+          "external_identity_link_id": "clm_historical-approval",
+          "external_identity_link_contract_sha256": "sha256:d1f95f5b3fa691f9485fc64826f4c4fd5cd728d2497004ae7599765e6fd6ca98",
+          "provider_subject_id": "U123"
+        },
+        "action": "approve",
+        "selected_policy_id": "restricted-reviewer-person-v2",
+        "policy_contract_sha256": "sha256:c0b1676ad1bd2f27d9d781605420beac2e6fd3cd18ffa69f0d18ea62fe48f043",
+        "policy_consequence_sha256": "sha256:f2d87d2ca6b4892ed9ce166f67120092de639b513fd919e864c0ddf58f253594",
+        "comment": "Approved in the private card.",
+        "audit_event_id": "audit-historical-approval",
+        "audit_sequence": 1,
+        "audit_entry_sha256": "sha256:22b65669294a810c00ae5232cb8f2eaf5529c030f52910283e7a8289341f91eb",
+        "provider_action_kind": "echo-signed-slack-block-action-v1",
+        "provider_action_schema_version": 1,
+        "provider_action_sha256": "sha256:f0ceb75c8482ef0cc1522dc7edf700e979b382bc5dfeaea7aa55db62f1b01b76",
+        "authorization_proof_sha256": "sha256:03964ddd51582b46782e7fe1f78599656e6b7d94edfdfcfa86e0133ddaa09cdd"
+      },
+      "source_provenance": {
+        "authority_id": "oau_00000000-0000-4000-8000-000000000001",
+        "canonical_revision": "revision-1",
+        "external_id": "external-approval-1",
+        "kind": "echo-meeting-source-provenance-v1",
+        "normalizer_version": "2.2.0",
+        "organization_id": "org_00000000-0000-4000-8000-000000000002",
+        "schema_version": 1,
+        "source_adapter_id": "granola",
+        "source_adapter_instance_id": "primary",
+        "source_adapter_kind": "meeting-source",
+        "source_adapter_version": "2.2.0",
+        "source_revision": null,
+        "state_lineage_id": "state-lineage-1"
+      },
+      "source_provenance_sha256": "sha256:a1d7f0d4fc346f5cb7d2983f1a48c77e91d43fc55585e14872200ec0933fc0fc",
+      "processor_provenance": {
+        "authority_id": "oau_00000000-0000-4000-8000-000000000001",
+        "kind": "echo-decision-processor-provenance-v1",
+        "organization_id": "org_00000000-0000-4000-8000-000000000002",
+        "processor_adapter_id": "llm",
+        "processor_adapter_instance_id": "primary",
+        "processor_adapter_kind": "decision-processor",
+        "processor_adapter_version": "1.3.0+processing.0123456789abcdef",
+        "processor_contract_sha256": "sha256:2f2adab6a666941b34026a47c023049ec9932864da020f0f65610bc88e6ed2c9",
+        "schema_version": 1,
+        "state_lineage_id": "state-lineage-1"
+      },
+      "processor_provenance_sha256": "sha256:3a4c2a101c25c681359f3ab3c501559e962b7ab42a7426c3c65df19c51e9e157",
+      "event": {
+        "kind": "approved",
+        "approved_snapshot": {
+          "approval_id": "historical-approval",
+          "approved_payload": {
+            "alternatives": [],
+            "brief": {
+              "actions": [],
+              "decisions": [
+                {
+                  "confidence": null,
+                  "evidence": [
+                    {
+                      "block_id": "block-0",
+                      "meeting_id": "meeting-historical-approval"
+                    }
+                  ],
+                  "id": "decision-historical-approval-0",
+                  "kind": "decision",
+                  "status": "decided",
+                  "subject": null,
+                  "text": "Decision 0"
+                }
+              ],
+              "id": "brief-historical-approval",
+              "meeting": {
+                "id": "meeting-historical-approval",
+                "participants": []
+              },
+              "provenance": {
+                "generated_at": "2026-08-20T12:00:00.000Z",
+                "meeting_revision": "revision-1",
+                "processor": {
+                  "adapter_id": "llm",
+                  "instance_id": "primary",
+                  "kind": "decision-processor",
+                  "version": "1.3.0+processing.0123456789abcdef"
+                }
+              },
+              "rationales": [],
+              "schema_version": 1
+            },
+            "links": null,
+            "reviewed_at": "2026-08-20T12:01:00.000Z",
+            "source": {
+              "adapter_id": "granola",
+              "external_id": "external-approval-1",
+              "instance_id": "primary"
+            },
+            "surface": "person-approval"
+          },
+          "final_content_sha256": "sha256:94e056e0fc22daccd5b499946d19f0a964eb0f6e8d274c449d005b1ac3f1e8be",
+          "kind": "echo-approved-decision-snapshot-v2",
+          "payload_contract_id": "organization-record-approval-payload-v1",
+          "schema_version": 2,
+          "staged_content_sha256": "sha256:89daa4d69453e7d4303c11ccd9e36e8b10abc2af217177accf52dcbba8c85a80"
+        },
+        "approved_snapshot_sha256": "sha256:1106196b5df93286d461731c5f5dae0886bf666ae12b64faf0eda2d6f942e904",
+        "policy_id": "restricted-reviewer-person-v2",
+        "policy_contract_sha256": "sha256:c0b1676ad1bd2f27d9d781605420beac2e6fd3cd18ffa69f0d18ea62fe48f043",
+        "policy_consequence_text": "Approving records this package under restricted-reviewer-person-v2. Only you, the approving reviewer, may later read its decisions, actions, and rationales while this exact ECHO principal and membership tenure remain current and the request is authenticated by a current Authority Person session.",
+        "policy_consequence_sha256": "sha256:f2d87d2ca6b4892ed9ce166f67120092de639b513fd919e864c0ddf58f253594"
+      }
+    },
+    "record_sha256": "sha256:95cf6e1f131f7ca31aaaefc6c519d24c2d132c40ed0b9a283fc21432e9744f5e",
+    "signing_key_descriptor": {
+      "algorithm": "ecdsa-p256-sha256-der-low-s",
+      "key_id": "sha256:54a0bc1f6f0f62321142a5c306f0521ed46255bf542fe6a1e4358fdc37a17eb6",
+      "public_key_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmcea24Pg4ac8lfOx0NnS33/+p3Wxcp9kvTbrVhg4mpwadIyTi0O1/lgyo8qeYRQKJPQNeaRLxok9KJPKf7XEYQ=="
+    },
+    "signature": "MEUCIQC+8hJzTUBKJePiDVLrm6Riuv4lKRe1mZPGfFZNHP8ckQIgKPaO1wo7VSgXnVe+TJow7zWqqtCPdmNJn0b3fLTWM4Q="
+  },
+  "receipt": {
+    "body": {
+      "schema_version": 2,
+      "kind": "echo-organization-record-receipt-v2",
+      "authority_id": "oau_00000000-0000-4000-8000-000000000001",
+      "organization_id": "org_00000000-0000-4000-8000-000000000002",
+      "state_lineage_id": "state-lineage-1",
+      "envelope_id": "historical-envelope",
+      "semantic_idempotency_key": "sha256:e2f32a6d235ef70e8590983e70d8bc67df85644ebe0081f542a19da5bacdd459",
+      "event_kind": "approved",
+      "record_position": 1,
+      "record_sha256": "sha256:95cf6e1f131f7ca31aaaefc6c519d24c2d132c40ed0b9a283fc21432e9744f5e",
+      "predecessor_record_sha256": null,
+      "record_head_position": 1,
+      "record_head_sha256": "sha256:95cf6e1f131f7ca31aaaefc6c519d24c2d132c40ed0b9a283fc21432e9744f5e",
+      "issued_at": "2026-08-21T12:01:00.000Z",
+      "policy_fact_outcome": {
+        "kind": "appended",
+        "policy_id": "restricted-reviewer-person-v2"
+      }
+    },
+    "receipt_sha256": "sha256:479d596c82af5d375bb21e0ffa6e6ca995da0c8ca321c79bec416a01d82d64b9",
+    "signing_key_descriptor": {
+      "algorithm": "ecdsa-p256-sha256-der-low-s",
+      "key_id": "sha256:54a0bc1f6f0f62321142a5c306f0521ed46255bf542fe6a1e4358fdc37a17eb6",
+      "public_key_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmcea24Pg4ac8lfOx0NnS33/+p3Wxcp9kvTbrVhg4mpwadIyTi0O1/lgyo8qeYRQKJPQNeaRLxok9KJPKf7XEYQ=="
+    },
+    "signature": "MEUCIQCzIMsySb1KSugWCwlw7tib8U1j4183a5S4cT1PeJgpsAIgNAESCaeAhPTFPZ3baVZIkissFBgYfDuDMKveqQX3lEI="
+  }
+}

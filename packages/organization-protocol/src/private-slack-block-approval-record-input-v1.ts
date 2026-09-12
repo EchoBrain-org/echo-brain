@@ -1,3 +1,4 @@
+import type { RecordInputCodecV4 } from "./record-input-codec-v4.js";
 import {
   canonicalSha256,
   type Sha256Digest,
@@ -307,3 +308,18 @@ export function buildPrivateSlackBlockApprovalRecordInputV1(value: BuildPrivateS
     event: input.event,
   });
 }
+
+/** Frozen historical decoder; selected independently of the active approval surface. */
+export const PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1: RecordInputCodecV4 = Object.freeze({
+  input_reference_field: "private_slack_block_approval_resolution_ref",
+  reference_kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND,
+  reference_schema_version: 1,
+  validateInput(value: unknown) {
+    const input = validatePrivateSlackBlockApprovalRecordInputV1(value);
+    return { human_act_resolution_ref: input.private_slack_block_approval_resolution_ref, event: input.event, semantic_idempotency_key: input.semantic_idempotency_key };
+  },
+  fromReference(reference: unknown, event: unknown) {
+    const input = buildPrivateSlackBlockApprovalRecordInputV1({ private_slack_block_approval_resolution_ref: validatePrivateSlackBlockApprovalResolutionRefV1(reference), event: validatePrivateSlackBlockApprovalEventV1(event) });
+    return { human_act_resolution_ref: input.private_slack_block_approval_resolution_ref, event: input.event, semantic_idempotency_key: input.semantic_idempotency_key };
+  },
+});

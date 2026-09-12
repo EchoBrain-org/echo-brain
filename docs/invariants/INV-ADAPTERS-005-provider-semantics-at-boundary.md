@@ -63,11 +63,10 @@ evaluator as well as processing adapters. One provider may own several
 explicit roots. Coverage is neutral by default: every source file under
 `services/organization-authority/src` and `packages/*/src` is checked for
 provider identifiers and for direct or transitive reach into a declared root
-unless the manifest owns it as a provider root, lists it as a thin
-provider-selecting entrypoint, or records it as a provider-coupled exception
-with a reason. An exception that no longer names or reaches a provider fails
-the gate until it is removed, and a listed entrypoint or exception that names
-no source file fails as stale. A capability-family root such as the generic
+unless the manifest owns it as a provider root or lists it as a thin
+provider-selecting entrypoint. A listed entrypoint that names no source file
+fails as stale. Provider-coupled exceptions and their traversal bypass are
+retired; reintroducing the field fails the gate. A capability-family root such as the generic
 LLM decision processor may be marked `provider_identifier: false` so neutral
 modules may still use that word. The gate rejects an unlisted adapter
 implementation or an undeclared JavaScript/TypeScript source file under
@@ -86,11 +85,9 @@ the fixed OpenRouter answer-composition model selection. Stale evidence and
 identifier leaks also fail the gate. Architecture tests include a bland
 three-hop composition bridge. Workspace imports and re-exports are resolved
 to their declaring source with TypeScript, including aliases, type imports,
-namespace exports, and literal dynamic imports. Direct provider re-exports
-through a coupled exception are rejected. Local value, function, and namespace
-wrappers can still hide provider behavior behind an exception; this remains an
-open enforcement gap until its consumers migrate and the exception mechanism
-is removed.
+namespace exports, and literal dynamic imports. Provider traversal no longer stops at exceptions. Module ownership and
+whole-module workspace edges remain the next enforcement step before retiring
+provider-name discovery.
 Checks use the source worktree rather than potentially stale build output.
 The source path stores generic source identity and opaque cursors,
 and the shared runtime receives explicit source, processor, Layer 4, approval,

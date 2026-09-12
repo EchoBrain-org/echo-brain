@@ -1,3 +1,4 @@
+import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4 } from "./record-input-codec-v4.js";
 import { Buffer } from "node:buffer";
 import {
   assertP256LowS,
@@ -547,11 +548,12 @@ export function verifyOrganizationRecordReceiptV2(
   envelopeValue: unknown,
   pinnedAuthority: PinnedOrganizationAuthority,
   expectedStateLineageId: string,
+  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): OrganizationRecordReceiptV2 {
   const envelope = verifyOrganizationRecordEnvelopeV4(
     envelopeValue,
     pinnedAuthority,
-    expectedStateLineageId,
+    expectedStateLineageId, codecs,
   );
   const receipt = validateOrganizationRecordReceiptV2(value);
   assertReceiptMatchesEnvelope(receipt, envelope);
@@ -604,12 +606,13 @@ export async function createOrganizationRecordReceiptV2(
   pinnedAuthority: PinnedOrganizationAuthority,
   expectedStateLineageId: string,
   sign: AuthorityDetachedSigner,
+  codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): Promise<OrganizationRecordReceiptV2> {
   const input = exactObject(value, CREATE_INPUT_KEYS, "Create record receipt v2 input");
   const envelope = verifyOrganizationRecordEnvelopeV4(
     input.envelope,
     pinnedAuthority,
-    expectedStateLineageId,
+    expectedStateLineageId, codecs,
   );
   assertPositionContinuesEnvelope(envelope, input.record_position as number);
   assertTimestamp(input.issued_at, "Create record receipt v2 issued_at");
@@ -671,6 +674,6 @@ export async function createOrganizationRecordReceiptV2(
     },
     envelope,
     pinnedAuthority,
-    expectedStateLineageId,
+    expectedStateLineageId, codecs,
   );
 }

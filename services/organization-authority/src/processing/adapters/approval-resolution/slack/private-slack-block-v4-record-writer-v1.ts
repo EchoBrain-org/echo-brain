@@ -1,3 +1,5 @@
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
 import { canonicalSha256, type JsonObject, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
@@ -282,13 +284,13 @@ export class PrivateSlackBlockV4RecordWriterV1 {
           },
           this.options.pinned_authority,
           this.options.state_lineage_id,
-          (message, expectedKeyId) => this.options.signer.sign(message, expectedKeyId),
+          (message, expectedKeyId) => this.options.signer.sign(message, expectedKeyId), RECORD_INPUT_CODECS,
         )) as unknown as JsonObject,
       verify: (value) =>
         verifyOrganizationRecordEnvelopeV4(
           value,
           this.options.pinned_authority,
-          this.options.state_lineage_id,
+          this.options.state_lineage_id, RECORD_INPUT_CODECS,
         ) as unknown as V4RecordEnvelopeView & JsonObject,
     };
   }
@@ -312,9 +314,9 @@ export class PrivateSlackBlockV4RecordWriterV1 {
           record_position: envelope.body.predecessor_position === null ? 1 : envelope.body.predecessor_position + 1,
           issued_at: (receipt_seed as { readonly issued_at: string }).issued_at,
         }, this.options.pinned_authority, this.options.state_lineage_id,
-        (message, expectedKeyId) => this.options.signer.sign(message, expectedKeyId))) as unknown as JsonObject,
+        (message, expectedKeyId) => this.options.signer.sign(message, expectedKeyId), RECORD_INPUT_CODECS)) as unknown as JsonObject,
       verify: ({ receipt, envelope }) =>
-        verifyOrganizationRecordReceiptV2(receipt, envelope as never, this.options.pinned_authority, this.options.state_lineage_id) as unknown as JsonObject,
+        verifyOrganizationRecordReceiptV2(receipt, envelope as never, this.options.pinned_authority, this.options.state_lineage_id, RECORD_INPUT_CODECS) as unknown as JsonObject,
     };
   }
 }

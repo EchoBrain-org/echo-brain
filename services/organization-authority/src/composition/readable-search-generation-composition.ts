@@ -1,3 +1,4 @@
+import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { join } from "node:path";
 import { readdirSync, statSync } from "node:fs";
 import { currentCoreRuntimeDetailV1, coreRuntimeIdentityV1, annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
@@ -474,6 +475,7 @@ function lineagePlane(
  * verified snapshot transaction has closed.
  */
 export function createReadableSearchGenerationReconcilerV1(input: {
+  readonly record_input_codecs?: RecordInputCodecRegistryV4;
   readonly state_directory: string;
   readonly root: StateLineageRootManifestV1;
   readonly authority: Database.Database;
@@ -541,6 +543,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
             value,
             pinnedAuthority,
             input.root.state_lineage_id,
+            input.record_input_codecs ?? HUMAN_ACT_RECORD_INPUT_CODECS_V4,
           ),
       });
       if (currentCoreRuntimeDetailV1() !== null) {

@@ -1,3 +1,5 @@
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
 import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
@@ -30,6 +32,7 @@ export interface OrganizationAuthorityServiceConfig
     | "approval_workflow_bundle"
     | "answer_composition_generation_bundle"
     | "record_policy_fact_projectors"
+    | "record_input_codecs"
   > {
   readonly granola_credential_file?: string;
   readonly granola_owner_email_file?: string;
@@ -169,6 +172,7 @@ export async function openOrganizationAuthorityService(
         createOpenRouterAnswerCompositionGenerationBundleV1({
           credential_file: openrouter_credential_file,
         }),
+      record_input_codecs: RECORD_INPUT_CODECS,
       record_policy_fact_projectors:
         createRecordPolicyFactProjectorRegistryV1([
           createPersonPolicyFactProjectorV2(),

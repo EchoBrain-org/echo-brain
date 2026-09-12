@@ -1,3 +1,4 @@
+import { HUMAN_ACT_RECORD_INPUT_CODECS_V4 } from "@echo-brain/organization-protocol";
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -252,6 +253,7 @@ describe("synthetic-demo organization-authority runtime", () => {
       decision_processor_bundle: processorBundle(),
       approval_workflow_bundle: approvalBundle,
       answer_composition_generation_bundle: answerBundle,
+      record_input_codecs: HUMAN_ACT_RECORD_INPUT_CODECS_V4,
       record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([
         createPersonPolicyFactProjectorV2(),
       ]),

@@ -1,3 +1,5 @@
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
 import { persistedApprovalWorkflowFixtureV1 } from "./fixtures/persisted-approval-workflow-v1.js";
 import { createPrivateSlackApprovalWorkflowBundleV1 } from "../src/composition/providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.js";
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "./observability/telemetry-fixture-vocabulary-v1.js";
@@ -667,7 +669,7 @@ async function approvalSeamFixture(provider: "slack" | "fixture", interruptions:
       async assert_existing_presentations_owned(context) { contexts.push(context); await selected.assert_existing_presentations_owned(context); },
       async load(context) { contexts.push(context); return selected.load(context); },
     };
-    return openOrganizationAuthorityRuntime({ ...fixture.config, port: await availablePort(), approval_workflow_bundle,
+    return openOrganizationAuthorityRuntime({ ...fixture.config, port: await availablePort(), approval_workflow_bundle, record_input_codecs: RECORD_INPUT_CODECS,
       staging_meeting_approval_journey_telemetry_enabled: true,
       meeting_approval_journey_telemetry: { vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1, observer: () => undefined,
         release_sha: "a".repeat(40), build_number: 1, extraction_provider: "openrouter", extraction_model: "anthropic/claude-sonnet-4.6" },
@@ -1329,6 +1331,7 @@ describe("Organization Authority runtime private approval lane", () => {
           const root = verifyAuthorityStateLineage(fixture.initialized.state_directory).root;
           const generate = vi.fn(async (input: { readonly user_prompt: string }) => projectionResponse(input));
           const baseline = createReadableSearchGenerationReconcilerV1({
+            record_input_codecs: RECORD_INPUT_CODECS,
             state_directory: fixture.initialized.state_directory, root, authority, record,
             signer: FileOrganizationAuthoritySigner.openExisting({ directory: join(fixture.initialized.state_directory, "keys"), authority_id: root.authority_id, organization_id: root.organization_id }),
             policy_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1()]),

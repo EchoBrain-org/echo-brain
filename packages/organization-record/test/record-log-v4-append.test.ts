@@ -1,3 +1,5 @@
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync, sign as signMessage } from "node:crypto";
 import {
@@ -529,14 +531,14 @@ function envelopeFactory(
         },
         authority.pinned,
         COORDINATES.state_lineage_id,
-        authority.sign,
+        authority.sign, RECORD_INPUT_CODECS,
       ) as unknown as JsonObject;
     },
     verify(value) {
       return verifyOrganizationRecordEnvelopeV4(
         value,
         authority.pinned,
-        COORDINATES.state_lineage_id,
+        COORDINATES.state_lineage_id, RECORD_INPUT_CODECS,
       ) as unknown as V4RecordEnvelopeView & JsonObject;
     },
   };
@@ -566,14 +568,14 @@ function privateSlackBlockEnvelopeFactory(
         },
         authority.pinned,
         COORDINATES.state_lineage_id,
-        authority.sign,
+        authority.sign, RECORD_INPUT_CODECS,
       ) as unknown as JsonObject;
     },
     verify(value) {
       return verifyOrganizationRecordEnvelopeV4(
         value,
         authority.pinned,
-        COORDINATES.state_lineage_id,
+        COORDINATES.state_lineage_id, RECORD_INPUT_CODECS,
       ) as unknown as V4RecordEnvelopeView & JsonObject;
     },
   };
@@ -622,7 +624,7 @@ function receiptFactory(
         },
         authority.pinned,
         COORDINATES.state_lineage_id,
-        authority.sign,
+        authority.sign, RECORD_INPUT_CODECS,
       );
       if (canonicalJson(receipt.body) !== canonicalJson(receipt_seed))
         throw new Error(
@@ -635,7 +637,7 @@ function receiptFactory(
         receipt,
         envelope,
         authority.pinned,
-        COORDINATES.state_lineage_id,
+        COORDINATES.state_lineage_id, RECORD_INPUT_CODECS,
       ) as unknown as JsonObject;
     },
   };
@@ -858,7 +860,7 @@ describe("V4 organization-record append", () => {
           verifyOrganizationRecordEnvelopeV4(
             value,
             authority.pinned,
-            COORDINATES.state_lineage_id,
+            COORDINATES.state_lineage_id, RECORD_INPUT_CODECS,
           ) as unknown as RecordRetrievalSourceVerifiedEnvelopeV1,
       });
       expect(sourceSnapshot.atoms).toHaveLength(2);
@@ -1103,7 +1105,7 @@ describe("V4 organization-record append", () => {
           verifyOrganizationRecordEnvelopeV4(
             value,
             authority.pinned,
-            COORDINATES.state_lineage_id,
+            COORDINATES.state_lineage_id, RECORD_INPUT_CODECS,
           ) as unknown as RecordRetrievalSourceVerifiedEnvelopeV1,
       });
 
@@ -1189,7 +1191,7 @@ describe("V4 organization-record append", () => {
             verifyOrganizationRecordEnvelopeV4(
               value,
               authority.pinned,
-              COORDINATES.state_lineage_id,
+              COORDINATES.state_lineage_id, RECORD_INPUT_CODECS,
             ) as unknown as RecordRetrievalSourceVerifiedEnvelopeV1,
         }),
       ).toThrow("provider action digest");
@@ -1340,7 +1342,7 @@ describe("V4 organization-record append", () => {
         },
         authority.pinned,
         COORDINATES.state_lineage_id,
-        authority.sign,
+        authority.sign, RECORD_INPUT_CODECS,
       );
       db.prepare(
         `INSERT INTO organization_record_signed_receipt (position, signed_receipt, materialized_at)

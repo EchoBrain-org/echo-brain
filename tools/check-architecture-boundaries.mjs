@@ -645,7 +645,7 @@ function collectDeclaredProviderAdapterRoots(tree, adapterArchitecture, errors) 
   };
 }
 
-function reachableProviderAdapterRoot(tree, start, providerAdapterRoots, stopAt, symbolTargets) {
+function reachableProviderAdapterRoot(tree, start, providerAdapterRoots, symbolTargets) {
   const seen = new Set();
   const work = [start];
   while (work.length > 0) {
@@ -663,9 +663,6 @@ function reachableProviderAdapterRoot(tree, start, providerAdapterRoots, stopAt,
     for (const resolved of targets) {
       const root = providerAdapterRoots.find((entry) => matchesGlob(resolved, entry.root));
       if (root !== undefined) return { root, path: resolved };
-      // An exception owns its implementation, but alias resolution above still
-      // exposes any provider declarations that it re-exports to its callers.
-      if (stopAt.has(resolved)) continue;
       work.push(resolved);
     }
   }
@@ -1217,39 +1214,18 @@ function main() {
 
   // Every source file under a neutral root is provider-neutral by default.
   // Ownership is the only way out: a declared provider root, a selecting
-  // composition entrypoint, or a reasoned exception that must still be earned.
+  // composition entrypoint. Provider-coupled exceptions are retired.
   if (adapterArchitecture?.forbid_discovered_adapter_ids_in_provider_neutral_roots === true) {
     const neutralRoots = adapterArchitecture.provider_neutral_roots;
     const selectingEntrypoints = adapterArchitecture.provider_selecting_entrypoints ?? [];
-    const coupledExceptions = adapterArchitecture.provider_coupled_exceptions ?? [];
+    if (Object.hasOwn(adapterArchitecture, "provider_coupled_exceptions")) {
+      errors.push("adapter architecture provider_coupled_exceptions is retired");
+    }
     if (!isStringArray(neutralRoots) || neutralRoots.length === 0) {
       errors.push('adapter architecture provider_neutral_roots must be a nonempty string array');
     }
     if (!isStringArray(selectingEntrypoints)) {
       errors.push('adapter architecture provider_selecting_entrypoints must be a string array');
-    }
-    const exceptionReasons = new Map();
-    if (!Array.isArray(coupledExceptions)) {
-      errors.push('adapter architecture provider_coupled_exceptions must be an array');
-    } else {
-      for (const entry of coupledExceptions) {
-        if (
-          entry === null ||
-          typeof entry !== 'object' ||
-          typeof entry.path !== 'string' ||
-          !isRepositoryPath(entry.path) ||
-          typeof entry.reason !== 'string' ||
-          entry.reason.trim().length === 0
-        ) {
-          errors.push('adapter architecture provider_coupled_exceptions contains an invalid entry');
-          continue;
-        }
-        if (!tree.has(entry.path) || !SOURCE_FILE_RE.test(entry.path)) {
-          errors.push(`provider-coupled exception names no source file: ${entry.path}`);
-          continue;
-        }
-        exceptionReasons.set(entry.path, entry.reason);
-      }
     }
     if (isStringArray(selectingEntrypoints)) {
       for (const path of selectingEntrypoints) {
@@ -1282,17 +1258,8 @@ function main() {
           tree,
           path,
           declaredProviderAdapterRoots,
-          new Set(exceptionReasons.keys()),
           symbolTargets,
         );
-        if (exceptionReasons.has(path)) {
-          if (leaked.length === 0 && reachable === undefined) {
-            errors.push(
-              `provider-coupled exception is no longer needed and must be removed: ${path}`,
-            );
-          }
-          continue;
-        }
         for (const providerIdentifier of leaked) {
           errors.push(`provider identifier '${providerIdentifier}' leaked into provider-neutral module: ${path}`);
         }

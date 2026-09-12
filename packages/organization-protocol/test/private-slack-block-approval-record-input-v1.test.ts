@@ -1,3 +1,4 @@
+import { createRecordInputCodecRegistryV4, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "../src/index.js";
 import { describe, expect, it } from "vitest";
 import {
   organizationMemberReadablePersonConsequenceSha256,
@@ -140,6 +141,6 @@ describe("private Slack Block Kit approval D3 witness v1", () => {
       human_act_resolution_ref: built.private_slack_block_approval_resolution_ref,
       source_provenance: source, source_provenance_sha256: meetingSourceProvenanceV1Sha256(source),
       processor_provenance: processor, processor_provenance_sha256: decisionProcessorProvenanceV1Sha256(processor), event: built.event,
-    }).human_act_resolution_ref.kind).toBe(PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND);
+    }, createRecordInputCodecRegistryV4([PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1])).human_act_resolution_ref.kind).toBe(PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V1_KIND);
   });
 });

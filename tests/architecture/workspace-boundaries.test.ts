@@ -1159,7 +1159,6 @@ describe("workspace source boundaries", () => {
       adapter_architecture: {
         provider_neutral_roots: string[];
         provider_selecting_entrypoints: string[];
-        provider_coupled_exceptions: Array<{ path: string; reason: string }>;
         provider_identifier_registry: Array<{
           identifier: string;
           transport_provider?: boolean;
@@ -1531,20 +1530,14 @@ describe("workspace source boundaries", () => {
     );
   });
 
-  it("keeps every provider-coupled exception earned and every entrypoint real", () => {
+  it("rejects the retired exception field and stale entrypoints", () => {
     const fixture = fixtureRepository();
     const product = readFixtureJson<{
       adapter_architecture: {
         provider_selecting_entrypoints: string[];
-        provider_coupled_exceptions: Array<{ path: string; reason: string }>;
       };
     }>(fixture, "product/source-boundary.v1.json");
-    const cleanPath =
-      "services/organization-authority/src/processing/core/contracts/decision.ts";
-    product.adapter_architecture.provider_coupled_exceptions.push({
-      path: cleanPath,
-      reason: "fixture: this file does not name or reach a provider",
-    });
+    Object.assign(product.adapter_architecture, { provider_coupled_exceptions: [] });
     product.adapter_architecture.provider_selecting_entrypoints.push(
       "services/organization-authority/src/composition/missing-entrypoint.ts",
     );
@@ -1552,7 +1545,7 @@ describe("workspace source boundaries", () => {
     const result = runBoundary(fixture);
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(result.stdout + result.stderr).toContain(
-      `provider-coupled exception is no longer needed and must be removed: ${cleanPath}`,
+      "adapter architecture provider_coupled_exceptions is retired",
     );
     expect(result.stdout + result.stderr).toContain(
       "provider-selecting entrypoint names no source file: services/organization-authority/src/composition/missing-entrypoint.ts",

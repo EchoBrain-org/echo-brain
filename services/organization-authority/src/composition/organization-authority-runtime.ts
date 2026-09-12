@@ -1,3 +1,4 @@
+import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { bindApprovalWorkflowStateV1 } from "../processing/admitted-meeting-processing/approval-workflow-state-v1.js";
 import { annotateCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
 import type { CoreRuntimeObservationScopeV1 } from "../shared/core-runtime-observation-v1.js";
@@ -75,6 +76,7 @@ export interface OrganizationAuthorityRuntimeConfig {
   /** Explicit answer-composition bundle. This generic root does not select one. */
   readonly answer_composition_generation_bundle: AnswerCompositionGenerationBundleV1;
   /** Exact durable record-resolution protocols admitted into append and retrieval. */
+  readonly record_input_codecs: RecordInputCodecRegistryV4;
   readonly record_policy_fact_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly worker_interval_ms?: number;
   /** Observational only: a failed cycle is retried by the serialized worker. */
@@ -431,6 +433,7 @@ export async function openOrganizationAuthorityRuntime(
       record,
       signer,
       policy_projectors: config.record_policy_fact_projectors,
+      record_input_codecs: config.record_input_codecs,
       related_atom_projector: relatedAtomProjector,
     });
     const runtime = await startOrganizationAuthorityServiceLifecycle(

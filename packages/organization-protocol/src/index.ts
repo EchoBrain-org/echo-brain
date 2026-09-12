@@ -94,3 +94,6 @@ export {
   restrictedReviewerPersonConsequenceSha256,
   restrictedReviewerPersonPolicyContractSha256,
 } from "./person-content-policy-v2.js";
+
+export { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecV4, type RecordInputCodecRegistryV4, type RecordResolutionRefV4, type RecordHumanActEventV4, type ValidatedRecordInputV4 } from "./record-input-codec-v4.js";
+export { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "./private-slack-block-approval-record-input-v1.js";

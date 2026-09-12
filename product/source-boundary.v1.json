@@ -203,12 +203,6 @@
       "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
       "services/organization-authority/src/composition/organization-authority-service-cli.ts"
     ],
-    "provider_coupled_exceptions": [
-      {
-        "path": "packages/organization-protocol/src/record-envelope-v4.ts",
-        "reason": "The current-only V4 record envelope validates the frozen private Slack block-approval record input. A provider-independent record-input registry is a versioned protocol decision, not a cleanup edit."
-      }
-    ],
     "provider_identifier_registry": [
       {
         "identifier": "openrouter",
