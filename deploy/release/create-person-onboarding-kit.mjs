@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /** Build one exact macOS-arm64 or Linux-x64 employee kit with a pinned client and Node runtime. */
-import { swiftSourceAssemblyV1 } from '../../tools/lib/swift-source-assembly.mjs';
+import { swiftSourceAssemblyV1, checkSwiftSourceDirectionsV1 } from '../../tools/lib/swift-source-assembly.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -267,6 +267,7 @@ function buildGraphicalKit({ kitRoot, stagingParent, pendingKit, release, source
     architecture: 'arm64',
   }) + '\n');
   run('/usr/bin/plutil', ['-replace', 'CFBundleShortVersionString', '-string', release.person_client.version.match(/[0-9]+\.[0-9]+\.[0-9]+/)?.[0] ?? '0.0.0', join(contents, 'Info.plist')], 'setup app version could not be stamped');
+  checkSwiftSourceDirectionsV1(assembly, swift, run, stagingParent);
   run('/usr/bin/xcrun', ['swiftc', '-swift-version', '5', '-parse-as-library', '-warnings-as-errors', '-O', '-target', 'arm64-apple-macos14.0', '-framework', 'AppKit', ...swift, '-o', executable], 'setup app compilation failed');
   chmodSync(executable, 0o755);
   run('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', '--options', 'runtime', app], 'setup app signing failed');

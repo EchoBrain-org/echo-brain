@@ -1,3 +1,4 @@
+import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
@@ -8,7 +9,6 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
   OrganizationRecordAppenderV4,
-  createPrivateSlackBlockApprovalPolicyProjectorV1,
   createRecordPolicyFactProjectorRegistryV1,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";

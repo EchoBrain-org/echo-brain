@@ -28,7 +28,8 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
   }
   const registry = JSON.parse(textFile(tree, 'tools/workspace-source-boundaries.v1.json'));
   const manifests = registry.manifests.map(path => JSON.parse(textFile(tree, path)));
-  const assemblies = sourceAssemblyOwners(tree, architecture.source_assemblies, providerRoots, manifests, errors);
+  const graph = providerModuleGraph(tree, resolveRelative, errors);
+  const assemblies = sourceAssemblyOwners(tree, architecture.source_assemblies, providerRoots, manifests, errors, graph.resolve);
   const workspace = path => manifests.find(manifest => within(path, manifest.source_root) || manifest.runtime_assets?.includes(path) || path === manifest.package_json);
   const provider = path => providerRoots.find(root => within(path, root));
   const production = [...tree.keys()].filter(path => {
@@ -55,7 +56,6 @@ export function checkProviderOwnership(tree, architecture, resolveRelative, erro
     if (within(path, 'providers')) return null;
     return { kind: 'neutral', manifest };
   };
-  const graph = providerModuleGraph(tree, resolveRelative, errors);
   const edges = [];
   const workspaceEdges = new Map();
   for (const path of production) {

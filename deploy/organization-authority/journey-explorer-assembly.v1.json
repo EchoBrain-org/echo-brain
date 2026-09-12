@@ -11,5 +11,9 @@
     "providers/ollama/assets/telemetry-vocabulary.v1.json",
     "providers/openrouter/assets/telemetry-vocabulary.v1.json",
     "providers/slack/server/assets/telemetry-vocabulary.v1.json"
-  ]
+  ],
+  "allowed_external_packages": [
+    "@aws-sdk/client-cloudwatch-logs"
+  ],
+  "allowed_node_builtins": []
 }

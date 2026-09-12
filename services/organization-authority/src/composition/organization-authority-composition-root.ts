@@ -2,7 +2,7 @@ import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organ
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
 const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
-import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { composeRecordApproverProjectorsV1, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { createPrivateSlackBlockApprovalPolicyProjectorV1, projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import {
   openOrganizationAuthorityRuntime,
@@ -72,8 +72,9 @@ export interface OrganizationAuthorityServiceDependencies
 }
 
 /**
- * The deployable service composition root. This is the only component that
- * selects the current Granola, OpenRouter, and Slack provider bundles.
+ * The deployable service selects the fixed Granola/OpenRouter/Slack profile.
+ * The stopped-state V1 setup CLI selects the same profile; the shared runtime
+ * remains provider-neutral. Changing a profile requires both bootstrap selections.
  */
 export async function openOrganizationAuthorityService(
   config: OrganizationAuthorityServiceConfig,
@@ -130,8 +131,10 @@ export async function openOrganizationAuthorityService(
         };
   const apiDependencies = {
     ...dependencies.api,
-    record_approver:
-      dependencies.api?.record_approver ?? projectPrivateSlackBlockApprovalApproverV1,
+    record_approver: composeRecordApproverProjectorsV1([
+      projectPrivateSlackBlockApprovalApproverV1,
+      ...(dependencies.api?.record_approver === undefined ? [] : [dependencies.api.record_approver]),
+    ]),
     external_identity_runtime_bundle:
       dependencies.api?.external_identity_runtime_bundle ??
       composePersonExternalIdentityRuntimeBundlesV1([createSlackPersonExternalIdentityRuntimeBundleV1({

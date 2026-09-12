@@ -52,9 +52,10 @@ export {
 export {
   createRecordPolicyFactProjectorRegistryV1,
 } from "./application/record-policy-fact-projection-v1.js";
-export type {
-  RecordApproverV1,
-  RecordApproverProjectorV1,
+export {
+  composeRecordApproverProjectorsV1,
+  type RecordApproverV1,
+  type RecordApproverProjectorV1,
 } from "./application/record-approver-projection-v1.js";
 export type {
   RecordPolicyFactEnvelopeV1,

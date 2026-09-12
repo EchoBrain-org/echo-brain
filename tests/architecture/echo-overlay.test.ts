@@ -54,7 +54,7 @@ function overlayFixture() {
   copyFileSync(resolve(REPO, "product/echo-overlay/people.swift"), join(sourceRoot, "product", "echo-overlay", "people.swift"));
   copyFileSync(resolve(REPO, "product/echo-overlay/account.swift"), join(sourceRoot, "product", "echo-overlay", "account.swift"));
   copyFileSync(PLIST, join(sourceRoot, "product", "echo-overlay", "Info.plist"));
-  for (const relative of ["product/echo-overlay/source-assembly.v1.json", "providers/slack/client/swift/slack-connected-tools.swift", "tools/lib/swift-source-assembly.mjs"]) {
+  for (const relative of ["product/echo-overlay/ui-support.swift", "product/echo-overlay/source-assembly.v1.json", "providers/slack/client/swift/slack-connected-tools.swift", "tools/lib/swift-source-assembly.mjs"]) {
     mkdirSync(dirname(join(sourceRoot, relative)), { recursive: true });
     copyFileSync(join(REPO, relative), join(sourceRoot, relative));
   }
@@ -95,6 +95,10 @@ child.spawnSync = (command, args, options) => {
   }
   fs.appendFileSync(process.env.ECHO_OVERLAY_TOOL_LOG, command + "\\n");
   if (command === "/usr/bin/xcrun") {
+    if (args.includes("-typecheck")) {
+      if (process.env.ECHO_OVERLAY_FAIL_DIRECTION) return { status: 1, stdout: "", stderr: "forbidden dependency" };
+      return { status: 0, stdout: "", stderr: "" };
+    }
     fs.writeFileSync(args[args.indexOf("-o") + 1], "fake executable");
     if (process.env.ECHO_OVERLAY_MUTATE_PATH) fs.appendFileSync(process.env.ECHO_OVERLAY_MUTATE_PATH, "// changed\\n");
     return { status: 0, stdout: "", stderr: "" };
@@ -226,6 +230,15 @@ afterEach(() => {
 });
 
 describe("native ECHO hotkey overlay", () => {
+  it("refuses publication when Swift dependency isolation fails", () => {
+    const subject = overlayFixture();
+    const result = runOverlayBuilder(subject, subject.sourceSha, { ECHO_OVERLAY_FAIL_DIRECTION: "1" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Swift dependency direction failed for neutral");
+    expect(readFileSync(subject.toolLog, "utf8")).not.toContain("/usr/bin/ditto");
+    expect(readdirSync(subject.output)).toEqual([]);
+  });
+
   it("uses the bundled Node runtime to require a thin arm64 executable", () => {
     const valid = installerFixture();
     const installed = valid.install(1, { REFUSE_LIPO: "yes" });
@@ -513,8 +526,8 @@ describe("native ECHO hotkey overlay", () => {
     const source = readFileSync(SOURCE, "utf8");
 
     expect(source).toContain('PillButton(title: "Copy answer"');
-    expect(source).toContain("final class PillButton: NSButton");
-    expect(source).toContain("override func drawFocusRingMask()");
+    expect(readFileSync(resolve(REPO, "product/echo-overlay/ui-support.swift"), "utf8")).toContain("final class PillButton: NSButton");
+    expect(readFileSync(resolve(REPO, "product/echo-overlay/ui-support.swift"), "utf8")).toContain("override func drawFocusRingMask()");
     expect(source).not.toContain("bezelColor");
     expect(source).toContain("NSPasteboard.general.setString(answer, forType: .string)");
     expect(source).toContain('askButton.title = "Cancel"');
@@ -557,12 +570,12 @@ describe("native ECHO hotkey overlay", () => {
   it("uses the ECHO brand palette", () => {
     const source = readFileSync(SOURCE, "utf8");
 
-    expect(source).toContain("The warm dark palette published by echobrain.org");
-    expect(source).toContain("enum EchoTheme");
-    expect(source).toContain("static let ink = NSColor(srgbRed: 36 / 255");
-    expect(source).toContain("static let text = NSColor(srgbRed: 240 / 255");
-    expect(source).toContain("static let goldBright = NSColor(srgbRed: 240 / 255");
-    expect(source).toContain("static let ember = NSColor(srgbRed: 234 / 255");
+    const support = readFileSync(resolve(REPO, "product/echo-overlay/ui-support.swift"), "utf8");
+    expect(readFileSync(resolve(REPO, "product/echo-overlay/ui-support.swift"), "utf8")).toContain("enum EchoTheme");
+    expect(support).toContain("static let ink = NSColor(srgbRed: 36 / 255");
+    expect(support).toContain("static let text = NSColor(srgbRed: 240 / 255");
+    expect(support).toContain("static let goldBright = NSColor(srgbRed: 240 / 255");
+    expect(support).toContain("static let ember = NSColor(srgbRed: 234 / 255");
     expect(source).toContain("panel.appearance = NSAppearance(named: .darkAqua)");
     expect(source).toContain("panel.isMovableByWindowBackground = true");
     expect(source).toContain(

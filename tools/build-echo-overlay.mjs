@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { swiftSourceAssemblyV1 } from './lib/swift-source-assembly.mjs';
+import { swiftSourceAssemblyV1, checkSwiftSourceDirectionsV1 } from './lib/swift-source-assembly.mjs';
 
 /** Build one dependency-free macOS-arm64 ECHO overlay application archive. */
 import { spawnSync } from 'node:child_process';
@@ -86,9 +86,9 @@ function absent(path) {
   fail('output archive already exists');
 }
 
-function run(command, args, label) {
+function run(command, args, label, cwd = repository) {
   const result = spawnSync(command, args, {
-    cwd: repository,
+    cwd,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
   });
@@ -178,6 +178,7 @@ function main(argv) {
       writeFileSync(staged, input.bytes, { mode: 0o600, flag: 'wx' });
       return staged;
     });
+    checkSwiftSourceDirectionsV1(sourceAssembly, stagedSources, run, staging);
     writeFileSync(join(contents, 'Info.plist'), plistBytes, { mode: 0o600, flag: 'wx' });
     const numericVersion = version.match(/[0-9]+\.[0-9]+\.[0-9]+/)?.[0] ?? '0.0.0';
     run(

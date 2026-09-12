@@ -1,3 +1,4 @@
+import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { join } from "node:path";
@@ -80,6 +81,16 @@ function openPrivateApprovalPersistence(stateDirectory: string) {
   } catch (error) { authority_database.close(); throw error; }
 }
 
+/** Same-file handles must never call each other from an open transaction. */
+function bindProviderState(
+  context: ApprovalWorkflowContextV1,
+  authority: ReturnType<typeof openAuthorityDatabase>,
+) {
+  return bindApprovalWorkflowStateV1(context.state, () => {
+    if (authority.inTransaction) throw new Error("approval provider transaction must be idle");
+  });
+}
+
 /**
  * The current Slack private-DM approval lane behind the provider-neutral
  * approval-workflow seam. Its ordering and all durable Slack behavior are
@@ -95,11 +106,15 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
       const persistence = openPrivateApprovalPersistence(config.state_directory);
       try {
         const slack = resolveCurrentPrivateSlackConnectionV1(persistence.control_plane_database, config.connection_id, context.coordinates);
-        assertPrivateSlackApprovalPresentationOwnershipV1(context, persistence.authority_database, slack);
+        assertPrivateSlackApprovalPresentationOwnershipV1({
+          ...context,
+          state: bindProviderState(context, persistence.authority_database),
+        }, persistence.authority_database, slack);
       } finally { persistence.close(); }
     },
     async load(context: ApprovalWorkflowContextV1) {
       const persistence = openPrivateApprovalPersistence(config.state_directory);
+      const state = bindProviderState(context, persistence.authority_database);
       try {
         const slack = resolveCurrentPrivateSlackConnectionV1(
           persistence.control_plane_database,
@@ -130,7 +145,7 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
           now: () => new Date().toISOString(),
         });
         const stager = new PrivateSlackDmApprovalStagerV1({
-          authority: context.state,
+          authority: state,
           authority_database: persistence.authority_database,
           control_plane_database: persistence.control_plane_database,
           coordinates: context.coordinates,
@@ -152,7 +167,7 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
         const processing = new PrivateSlackApprovalTerminalCoordinatorV1({
           control_plane: controlPlane,
           authority: new SqlitePrivateSlackApprovalTerminalAuthorityV1({
-            source: context.state,
+            source: state,
             assignments,
             coordinates: context.coordinates,
           }),
@@ -176,7 +191,7 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
             : {
                 journey_telemetry: context.journey_telemetry,
                 read_durable_card_staged_at: (approvalId: string) =>
-                  context.state.readDurableCardStagedAt(approvalId),
+                  state.readDurableCardStagedAt(approvalId),
               }),
         });
         return Object.freeze({

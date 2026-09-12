@@ -1,3 +1,9 @@
+/**
+ * V1 stopped-state bootstrap for the shipped Granola/OpenRouter/Slack profile.
+ * Its manifest, commands and finalization intentionally require Slack. This is
+ * not a swappable setup port: another profile needs a versioned bootstrap design.
+ * Provider verification and persisted provider facts stay in provider helpers.
+ */
 import { captureCommand } from '@echo-brain/organization-authority-kernel/composition/capture-stopped-state-command';
 import { connectInitialOwnerSlackV1, plannedSlackConnectionIsActiveV1, readInitialOwnerSlackSetupStatusV1, type SafeSlackVerification, type ConnectedSlack } from '@echo-brain/provider-slack-server/setup/initial-owner-slack-setup-v1';
 import { createHash, randomUUID } from "node:crypto";

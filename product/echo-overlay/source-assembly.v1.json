@@ -1,7 +1,15 @@
 {
   "schema_version": 1,
   "kind": "echo-swift-source-assembly",
-  "bootstrap_sources": ["product/echo-overlay/main.swift"],
-  "neutral_sources": ["product/echo-overlay/people.swift", "product/echo-overlay/account.swift"],
-  "provider_sources": ["providers/slack/client/swift/slack-connected-tools.swift"]
+  "bootstrap_sources": [
+    "product/echo-overlay/main.swift"
+  ],
+  "neutral_sources": [
+    "product/echo-overlay/ui-support.swift",
+    "product/echo-overlay/people.swift",
+    "product/echo-overlay/account.swift"
+  ],
+  "provider_sources": [
+    "providers/slack/client/swift/slack-connected-tools.swift"
+  ]
 }

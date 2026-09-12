@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { javascriptSourceAssemblyV1 } from './lib/source-assemblies.mjs';
+import { javascriptSourceAssemblyV1, assertJavaScriptAssemblyImportsV1 } from './lib/source-assemblies.mjs';
 import { build } from "esbuild";
 import { readFileSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = resolve(import.meta.dirname, "..");
 const deployment = resolve(root, "deploy", "organization-authority");
@@ -12,6 +13,14 @@ const templatePath = resolve(
   "authority-staging-journey-explorer-v1.template.json",
 );
 const assembly = javascriptSourceAssemblyV1(JSON.parse(readFileSync(resolve(deployment, 'journey-explorer-assembly.v1.json'), 'utf8')));
+assertJavaScriptAssemblyImportsV1(assembly, path => readFileSync(resolve(root, path), "utf8"), (_path, specifier) => {
+  // Resolve only repository-owned package assets here. External runtime imports
+  // are governed by the manifest even when installed locally.
+  try {
+    const resolved = relative(root, fileURLToPath(import.meta.resolve(specifier)));
+    return resolved.startsWith('../') || resolved.startsWith('node_modules/') ? null : resolved;
+  } catch { return null; }
+});
 const inlineTemplateLimit = 51_200;
 const arguments_ = process.argv.slice(2);
 const check = arguments_.includes("--check");
@@ -30,7 +39,7 @@ const emitted = await build({
   write: false,
   metafile: true,
   platform: "node",
-  external: ["@aws-sdk/client-cloudwatch-logs"],
+  external: [...assembly.allowed_external_packages, ...assembly.allowed_node_builtins],
   format: "cjs",
   legalComments: "none",
   minifyIdentifiers: true,

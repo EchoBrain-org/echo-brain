@@ -68,9 +68,14 @@ The single architecture gate traverses whole modules, including type imports
 and inline import types, side effects, namespaces, unused barrel exports and
 literal dynamic imports. Runtime assets follow the same ownership direction.
 All production Swift files belong to a source assembly shared by the native
-builder and gate. The Explorer's assembly also binds the exact bundled modules
-and provider-owned historical vocabulary assets. Checks inspect source instead
-of stale emitted code. Architecture mutation tests cover each mechanism with
+builder and gate. Native builders also typecheck neutral inputs alone, then
+neutral inputs plus one provider at a time, without bootstrap sources or other
+providers. The existing macOS CI job runs these compiler checks and adversarial
+symbol-reference probes. The cross-platform gate checks Swift ownership only.
+The Explorer's assembly binds the exact bundled modules, provider-owned
+historical vocabulary assets, and exact external/builtin import allowlists.
+Both its builder and the gate reject computed imports and loader acquisition.
+Checks inspect source instead of stale emitted code. Architecture mutation tests cover each mechanism with
 positive controls, and an isolated build removes all provider/application
 workspaces before compiling the neutral packages.
 
@@ -88,7 +93,18 @@ Before work resumes, the selected surface MUST prove ownership of every
 outstanding external presentation. It may adopt pristine queued work only.
 The approved-record policy-projector registry is additive across such a
 change: it MUST retain projectors for historical record protocols as well as
-the selected surface's new protocol.
+the selected surface's new protocol. The optional approver-metadata projector
+uses an explicit retained composite too: unsupported or multiply matched records
+omit metadata. Projection runs after read authorization and cannot grant access.
+
+The approval-state port is synchronous and is called only when both authority
+connection owners are outside transactions. The runtime guards its handle and
+the provider guards its own before every port call. Each operation commits before
+the next owner runs. The provider's stable approval fence uses its own authority
+handle while committing the separate control-plane database; it must not call
+back through the state port inside that fence. Both handles retain DELETE journal
+mode and existing durability settings; this is an ordering contract, not a
+cross-database atomic transaction.
 
 Provider bundles are trusted, reviewed composition code rather than an
 independently installable plugin surface. The runtime enforces that the
@@ -130,8 +146,13 @@ checks are not a hostile-code sandbox and cannot prove arbitrary runtime code
 generation or data flow. Shared-contract review, meaningful substitution tests
 and provider qualification remain necessary.
 
-The setup and service CLIs deliberately select the current product profile.
-Their retained V1 operator flags and persisted vocabulary remain supported;
+The V1 setup and service CLIs deliberately select the fixed
+Granola/OpenRouter/Slack product profile. Setup status, planning and finalization
+require Slack and are not provider-swappable. Provider neutrality covers the
+shared runtime and contracts, not this stopped-state bootstrap workflow. A
+non-Slack setup profile needs an explicit versioned bootstrap design and its own
+qualification; changing only the runtime bundle is insufficient. The retained V1
+operator flags and persisted vocabulary remain supported;
 provider verification and wire/state interpretation are delegated to their
 provider folders. Adding a provider can require a new versioned domain capability,
 but cannot silently widen an existing canonical contract. V2 Person compatibility

@@ -1156,6 +1156,27 @@ describe("workspace source boundaries", () => {
     expect(runBoundary(fixture).status).toBe(0);
   });
 
+  it("enforces executable deployment assembly imports as well as workspace imports", () => {
+    const fixture = fixtureRepository();
+    const entry = join(fixture, "deploy/organization-authority/staging-journey-explorer-handler-v1.mjs");
+    const original = readFileSync(entry, "utf8");
+    for (const [probe, error] of [
+      ["const target = 'unexpected'; export const load = () => import(target);", "assembly forbids opaque module loading"],
+      ["import 'unexpected-provider-sdk';", "assembly import is not allowed"],
+      ["import 'node:fs';", "assembly import is not allowed"],
+      ["import '@aws-sdk/client-cloudwatch-logs/unreviewed';", "assembly import is not allowed"],
+      ["const load = process.getBuiltinModule;", "assembly forbids opaque module loading"],
+      ["import './unregistered.mjs';", "assembly import is not a declared input"],
+    ]) {
+      writeFileSync(entry, original + "\n" + probe);
+      const result = runBoundary(fixture);
+      expect(result.status, probe).not.toBe(0);
+      expect(result.stdout + result.stderr, probe).toContain(error);
+    }
+    writeFileSync(entry, original);
+    expect(runBoundary(fixture).status).toBe(0);
+  });
+
   it("checks provider assets and native assembly ownership through the same gate", () => {
     const fixture = fixtureRepository();
     const entry = join(fixture, "packages/federation-protocol/src/asset-probe.ts");

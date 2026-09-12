@@ -55,7 +55,12 @@ export interface OutstandingApprovalPresentationV1 {
   readonly state: "posting" | "posted" | "staged" | "superseded";
 }
 
-/** Candidate and presentation capabilities consumed by approval workflows. */
+/**
+ * Synchronous candidate/presentation calls must begin and end outside the
+ * caller's and owner's authority transactions. Commit each authority operation
+ * before crossing this port; never await or call back across it while holding
+ * a same-file SQLite transaction. Provider fences use their own handle only.
+ */
 export interface ApprovalWorkflowStateV1 {
   listOutstandingApprovalPresentations(): readonly OutstandingApprovalPresentationV1[];
   listPendingApprovalDeliveries(): readonly FrozenMeetingProcessingCandidateForApprovalV1[];
@@ -97,20 +102,29 @@ export interface ApprovalWorkflowStateV1 {
 }
 
 /** Expose only the named capabilities, without the backing store object. */
-export function bindApprovalWorkflowStateV1(state: ApprovalWorkflowStateV1): ApprovalWorkflowStateV1 {
+export function bindApprovalWorkflowStateV1(
+  state: ApprovalWorkflowStateV1,
+  assertTransactionIdle: () => void,
+): ApprovalWorkflowStateV1 {
+  function guarded<Args extends unknown[], Result>(operation: (...args: Args) => Result) {
+    return (...args: Args): Result => {
+      assertTransactionIdle();
+      return operation(...args);
+    };
+  }
   return Object.freeze({
-    listOutstandingApprovalPresentations: state.listOutstandingApprovalPresentations.bind(state),
-    listPendingApprovalDeliveries: state.listPendingApprovalDeliveries.bind(state),
-    listPendingSupersededApprovalCards: state.listPendingSupersededApprovalCards.bind(state),
-    recordSupersededApprovalCardTombstoned: state.recordSupersededApprovalCardTombstoned.bind(state),
-    readCandidateByApprovalId: state.readCandidateByApprovalId.bind(state),
-    readDurableCardStagedAt: state.readDurableCardStagedAt.bind(state),
-    readApprovalDeliveryQuarantine: state.readApprovalDeliveryQuarantine.bind(state),
-    quarantineApprovalDelivery: state.quarantineApprovalDelivery.bind(state),
-    readFrozenCandidateForApproval: state.readFrozenCandidateForApproval.bind(state),
-    prepareApprovalPost: state.prepareApprovalPost.bind(state),
-    releaseApprovalPostAttempt: state.releaseApprovalPostAttempt.bind(state),
-    recordPostedApprovalCard: state.recordPostedApprovalCard.bind(state),
-    markControlPlaneStaged: state.markControlPlaneStaged.bind(state),
+    listOutstandingApprovalPresentations: guarded(state.listOutstandingApprovalPresentations.bind(state)),
+    listPendingApprovalDeliveries: guarded(state.listPendingApprovalDeliveries.bind(state)),
+    listPendingSupersededApprovalCards: guarded(state.listPendingSupersededApprovalCards.bind(state)),
+    recordSupersededApprovalCardTombstoned: guarded(state.recordSupersededApprovalCardTombstoned.bind(state)),
+    readCandidateByApprovalId: guarded(state.readCandidateByApprovalId.bind(state)),
+    readDurableCardStagedAt: guarded(state.readDurableCardStagedAt.bind(state)),
+    readApprovalDeliveryQuarantine: guarded(state.readApprovalDeliveryQuarantine.bind(state)),
+    quarantineApprovalDelivery: guarded(state.quarantineApprovalDelivery.bind(state)),
+    readFrozenCandidateForApproval: guarded(state.readFrozenCandidateForApproval.bind(state)),
+    prepareApprovalPost: guarded(state.prepareApprovalPost.bind(state)),
+    releaseApprovalPostAttempt: guarded(state.releaseApprovalPostAttempt.bind(state)),
+    recordPostedApprovalCard: guarded(state.recordPostedApprovalCard.bind(state)),
+    markControlPlaneStaged: guarded(state.markControlPlaneStaged.bind(state)),
   });
 }

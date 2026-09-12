@@ -38,7 +38,13 @@ Every production module has an owner. The gate follows whole modules, including
 unused re-exports, namespace/side-effect imports, type queries and literal dynamic
 imports. Runtime asset references obey the same direction. Native Swift and the
 Explorer deployment have explicit source assemblies shared by their builders
-and the same architecture gate. There is no provider-name registry, symbol-based
+and the same architecture gate. Native builds typecheck the neutral sources
+alone and each provider with neutral sources only, before composing the full app.
+The macOS job also runs adversarial symbol-reference probes. The cross-platform
+gate checks Swift ownership; it does not parse Swift dependencies. Deployment
+JavaScript has exact external and builtin import allowlists shared by the gate
+and builder, with computed imports and loader acquisition rejected.
+There is no provider-name registry, symbol-based
 traversal or exception mechanism.
 
 ## Product and build boundaries
@@ -78,8 +84,20 @@ Routes call application use cases rather than SQLite. The service owns one
 organization, Person identity and sessions, authorization, and process lifecycle.
 Provider bundles receive explicit state/action/transport ports. The listener stays
 loopback-only behind the trusted reverse proxy. Stopped-state setup selects the
-concrete product profile, while provider verification, identity SQL, credential
-interpretation and source admission proofs stay in their provider folders.
+fixed V1 Granola/OpenRouter/Slack profile. Its manifest, readiness checks and
+finalization require Slack; setup is not a swappable provider port. Another
+profile requires a versioned bootstrap design alongside the runtime selection.
+Provider verification, identity SQL, credential interpretation and source
+admission proofs stay in their provider folders.
+
+The synchronous approval-state port crosses between two handles on
+`authority.sqlite`. Both connection owners guard against calls inside an open
+transaction. Each authority operation commits before the other owner runs. The
+provider's stable approval fence uses its own authority handle and the separate
+control-plane database, without calling back through the state port. The
+file-backed ordering regression verifies lock refusal and committed visibility;
+existing delivery, restart and terminal-approval integration tests cover the
+composed workflow.
 
 ## Persistence ownership
 

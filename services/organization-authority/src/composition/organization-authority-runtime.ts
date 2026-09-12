@@ -393,7 +393,9 @@ export async function openOrganizationAuthorityRuntime(
     const recordAppend = new OrganizationRecordAppenderV4(record, coordinates, config.record_policy_fact_projectors);
     const approvalContext = Object.freeze({
       on_terminal_action_queued: () => requestApprovalPublication?.(),
-      state: bindApprovalWorkflowStateV1(sourceState),
+      state: bindApprovalWorkflowStateV1(sourceState, () => {
+        if (authority.inTransaction) throw new Error("approval state owner transaction must be idle");
+      }),
       record_append: Object.freeze({ append: recordAppend.append.bind(recordAppend) }),
       signer: Object.freeze({ inspect: signer.inspect.bind(signer), sign: signer.sign.bind(signer) }),
       coordinates,

@@ -191,6 +191,7 @@ jobs:
         run: >-
           npx vitest run --config vitest.config.ts
           tests/architecture/person-account-ui.test.ts
+          tests/architecture/swift-source-boundaries.test.ts
           tests/architecture/echo-people.test.ts
           tests/architecture/echo-overlay-sources-fixture.test.ts
 
