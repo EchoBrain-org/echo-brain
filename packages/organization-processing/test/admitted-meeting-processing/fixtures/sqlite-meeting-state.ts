@@ -1,7 +1,7 @@
 import {
   type Sha256Digest
 } from "@echo-brain/federation-protocol";
-import { applyAuthorityBaselineV4 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import Database from "better-sqlite3";
 import type {
   ActionableMeetingProcessingCandidateV1,
@@ -91,7 +91,7 @@ export const decisions: DecisionSet = {
 
 export function database(): Database.Database {
   const value = new Database(":memory:");
-  applyAuthorityBaselineV4(value);
+  applyAuthorityBaselineV5(value);
   value
     .prepare(
       `INSERT INTO authority_metadata

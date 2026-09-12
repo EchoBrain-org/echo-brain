@@ -15,11 +15,8 @@ import {
 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
 import { runSlackConnectionSetupCli } from "../../../src/organization-control-plane/composition/slack-connection-setup-cli.js";
 import {
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
-  applyOrganizationControlBaselineV1,
   applyOrganizationControlBaselineV3,
-  organizationControlBaselineSha256V1,
   organizationControlBaselineSha256V3,
 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../../../../../../packages/organization-control-plane/src/persistence/open-organization-control-database.js";
@@ -107,8 +104,8 @@ function setupOrganizationControlState(baseline: "v1" | "v3" = "v3"): string {
     join(directory, "integrations.sqlite"),
   );
   try {
-    if (baseline === "v3") applyOrganizationControlBaselineV3(database);
-    else applyOrganizationControlBaselineV1(database);
+    applyOrganizationControlBaselineV3(database);
+    if (baseline !== "v3") database.pragma("user_version = 1");
     database
       .prepare(
         `INSERT INTO organization_control_plane_metadata
@@ -131,11 +128,11 @@ function setupOrganizationControlState(baseline: "v1" | "v3" = "v3"): string {
       database_schema_version:
         baseline === "v3"
           ? ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3
-          : ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
+          : 1,
       schema_sha256:
         baseline === "v3"
           ? organizationControlBaselineSha256V3()
-          : organizationControlBaselineSha256V1(),
+          : `sha256:${"a".repeat(64)}`,
       created_at: "2026-08-22T00:00:00.000Z",
       creating_artifact_revision: "test",
     };

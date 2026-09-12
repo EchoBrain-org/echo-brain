@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import type { ApprovalContractSha256 } from "../../../../../packages/organization-control-plane/src/application/record-visibility-policy-contracts-v1.js";
 import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
-import { applyOrganizationControlBaselineV1 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
+import { applyOrganizationControlBaselineV3 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { resolveCurrentPrivateSlackConnectionV1, type PrivateSlackConnectionCoordinatesV1 } from "../../src/private-approval/resolve-current-private-slack-connection-v1.js";
 
 const COORDINATES = Object.freeze({
@@ -40,7 +40,7 @@ function seed(
   }> = {},
 ): Database.Database {
   const database = new Database(":memory:");
-  applyOrganizationControlBaselineV1(database);
+  applyOrganizationControlBaselineV3(database);
   databases.push(database);
   const connection = buildOrganizationToolConnectionContractV2({
     ...(input.contract_coordinates ?? COORDINATES),

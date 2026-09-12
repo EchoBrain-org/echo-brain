@@ -1,24 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV3,
-  AUTHORITY_BASELINE_APPLICATION_ID_V3,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
-  authorityBaselineSha256V3,
+  applyAuthorityBaselineV5,
+  AUTHORITY_BASELINE_APPLICATION_ID_V1,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
+  authorityBaselineSha256V5,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V3 =
-  "sha256:ee53f22ed84b8e4bae20b5c86387d6eb4f8a96693618272fa3416fade0356673";
+const AUTHORITY_BASELINE_SHA256_V5 =
+  "sha256:0c11226af116345f5d2eafe6bd833a421e4dcb3ccb5728642ab1134da09bd9ea";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-29T00:00:00.000Z";
 
-function openedV3Database() {
+function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV3(database);
+  applyAuthorityBaselineV5(database);
   return database;
 }
 
-function seedOwner(database: ReturnType<typeof openedV3Database>): void {
+function seedOwner(database: ReturnType<typeof openedCurrentDatabase>): void {
   database
     .prepare(
       `INSERT INTO authority_metadata (
@@ -46,7 +46,7 @@ function seedOwner(database: ReturnType<typeof openedV3Database>): void {
 }
 
 function admitSyntheticSource(
-  database: ReturnType<typeof openedV3Database>,
+  database: ReturnType<typeof openedCurrentDatabase>,
 ): void {
   database
     .prepare(
@@ -70,16 +70,16 @@ function admitSyntheticSource(
     .run(DIGEST, NOW, DIGEST, NOW, DIGEST, DIGEST, DIGEST, NOW);
 }
 
-describe("Authority admitted meeting-source baseline v3", () => {
+describe("Authority admitted meeting-source schema", () => {
   it("is a pinned fresh-only provider-neutral schema with stable role headers", () => {
-    const database = openedV3Database();
+    const database = openedCurrentDatabase();
     try {
-      expect(authorityBaselineSha256V3()).toBe(AUTHORITY_BASELINE_SHA256_V3);
+      expect(authorityBaselineSha256V5()).toBe(AUTHORITY_BASELINE_SHA256_V5);
       expect(database.pragma("application_id", { simple: true })).toBe(
-        AUTHORITY_BASELINE_APPLICATION_ID_V3,
+        AUTHORITY_BASELINE_APPLICATION_ID_V1,
       );
       expect(database.pragma("user_version", { simple: true })).toBe(
-        AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
+        AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
       );
       const tables = database
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -92,7 +92,6 @@ describe("Authority admitted meeting-source baseline v3", () => {
           "authority_live_source_candidates_v2",
           "authority_live_source_review_lineage_heads_v2",
           "authority_live_approval_outbox_v2",
-          "authority_live_v4_receipts_v2",
           "authority_private_approval_assignments_v3",
           "authority_private_approval_terminal_receipts_v3",
         ]),
@@ -111,7 +110,7 @@ describe("Authority admitted meeting-source baseline v3", () => {
   });
 
   it("accepts opaque provider cursors while retaining ordered, immutable state", () => {
-    const database = openedV3Database();
+    const database = openedCurrentDatabase();
     try {
       seedOwner(database);
       admitSyntheticSource(database);
@@ -149,7 +148,7 @@ describe("Authority admitted meeting-source baseline v3", () => {
   });
 
   it("keeps the existing Slack DM assignment contract while relinking it to generic candidates", () => {
-    const database = openedV3Database();
+    const database = openedCurrentDatabase();
     try {
       const sql = database
         .prepare(
@@ -170,7 +169,7 @@ describe("Authority admitted meeting-source baseline v3", () => {
   });
 
   it("keeps the private-approval terminal receipt fence dependent on generic candidates", () => {
-    const database = openedV3Database();
+    const database = openedCurrentDatabase();
     try {
       seedOwner(database);
       admitSyntheticSource(database);
@@ -234,10 +233,10 @@ describe("Authority admitted meeting-source baseline v3", () => {
     }
   });
 
-  it("refuses to turn an existing V1, V2, or V3 file into a V3 lineage", () => {
-    const database = openedV3Database();
+  it("refuses to reinitialize an occupied database", () => {
+    const database = openedCurrentDatabase();
     try {
-      expect(() => applyAuthorityBaselineV3(database)).toThrow(
+      expect(() => applyAuthorityBaselineV5(database)).toThrow(
         /completely empty database/,
       );
     } finally {

@@ -291,7 +291,7 @@ export function verifyOrganizationControlStateV1(
   }
   assertPrivateDirectory(stateDirectory, "organization control state directory");
   if (existsSync(join(stateDirectory, "state-lineage-root.v1.json")) || existsSync(join(stateDirectory, "record-derived.sqlite"))) {
-    throw new Error("organization control state requires the completed offline schema transition");
+    throw new Error("organization control state has an unsupported root or retired database");
   }
   const binding = parseRootManifest(join(stateDirectory, ROOT_MANIFEST_FILE));
   const integrationsDatabasePath = join(stateDirectory, "integrations.sqlite");

@@ -3,7 +3,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -491,9 +490,9 @@ describe("workspace source boundaries", () => {
         ));
         expect(copied, `runtime omits public asset ${workspace}/${asset}`).toBe(true);
       }
-      if (manifest.files?.some((path) => path.startsWith("baselines/"))) {
+      for (const asset of manifest.files?.filter(path => path.startsWith("baselines/")) ?? []) {
         expect(dockerfile).toContain(
-          `COPY --from=build /app/${workspace}/baselines ./${workspace}/baselines`,
+          `COPY --from=build /app/${workspace}/${asset} ./${workspace}/${asset}`,
         );
       }
     }
@@ -558,40 +557,40 @@ describe("workspace source boundaries", () => {
       .not.toContain("/migrations");
   });
 
-  it("declares and ships all Authority state baseline SQL assets", () => {
+  it("ships only the six current Authority state baseline SQL assets", () => {
     const expectedByRoot: Record<string, string[]> = {
       "packages/organization-authority-kernel": [
-        "authority-approval-delivery-quarantine-v4.sql",
-        "authority-baseline-v1.sql",
         "authority-baseline-v5.sql",
-        "authority-meeting-processing-v3.sql",
-        "authority-private-approval-v2.sql",
       ],
       "packages/organization-control-plane": [
-        "organization-control-plane-baseline-v1.sql",
         "organization-control-plane-baseline-v3.sql",
-        "organization-control-plane-private-approval-v2.sql",
       ],
       "packages/organization-record": [
-        "organization-record-derived-baseline-v1.sql",
-        "organization-record-log-baseline-v1.sql",
-        "organization-record-log-baseline-v2.sql",
         "organization-record-log-baseline-v3.sql",
       ],
       "packages/organization-retrieval": [
         "readable-search-content-baseline-v1.sql",
-        "readable-search-facts-baseline-v1.sql",
         "readable-search-facts-baseline-v2.sql",
         "readable-search-lexical-baseline-v1.sql",
       ],
     };
+
+    const packed = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json",
+      ...Object.keys(expectedByRoot).flatMap(root => ["--workspace", root]),
+    ], { cwd: REPO, encoding: "utf8", timeout: 30_000 });
+    expect(packed.status, packed.stderr).toBe(0);
+    const artifacts = JSON.parse(packed.stdout) as Array<{ name: string; files: Array<{ path: string }> }>;
 
     for (const [root, expectedBaselines] of Object.entries(expectedByRoot)) {
       const manifest = readJson<{ runtime_assets?: string[] }>(
         `${root}/source-boundary.v1.json`,
       );
       const packageManifest = readJson<PackageManifest>(`${root}/package.json`);
-      expect(packageManifest.files?.some(path => path === "baselines/**" || path === "baselines/*.sql")).toBe(true);
+      const artifact = artifacts.find(item => item.name === packageManifest.name);
+      expect(artifact?.files.filter(file => file.path.endsWith(".sql")).map(file => file.path).sort())
+        .toEqual(expectedBaselines.map(name => `baselines/${name}`).sort());
+      expect(packageManifest.files?.filter(path => path.startsWith("baselines/")).sort())
+        .toEqual(expectedBaselines.map(name => `baselines/${name}`).sort());
       expect(
         [...(manifest.runtime_assets ?? [])]
           .filter((path) => path.startsWith(`${root}/baselines/`))
@@ -599,15 +598,14 @@ describe("workspace source boundaries", () => {
           .sort(),
       ).toEqual([...expectedBaselines].sort());
 
-      const baselineDirectory = join(REPO, root, "baselines");
-      const presentBaselines = existsSync(baselineDirectory)
-        ? readdirSync(baselineDirectory)
-            .filter((path) => path.endsWith(".sql"))
-            .sort()
-        : [];
-      expect(expectedBaselines).toEqual(
-        expect.arrayContaining(presentBaselines),
-      );
+      const dockerfile = readFileSync(join(REPO, "deploy/organization-authority/Dockerfile"), "utf8");
+      expect(dockerfile).not.toContain(`/app/${root}/baselines ./${root}/baselines`);
+      for (const name of expectedBaselines) {
+        expect(existsSync(join(REPO, root, "baselines", name))).toBe(true);
+        expect(dockerfile).toContain(
+          `COPY --from=build /app/${root}/baselines/${name} ./${root}/baselines/${name}`,
+        );
+      }
     }
   });
 

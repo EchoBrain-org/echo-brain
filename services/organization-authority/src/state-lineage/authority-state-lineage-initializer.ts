@@ -14,15 +14,11 @@ import type Database from "better-sqlite3";
 import {
   STATE_LINEAGE_DATABASE_MANIFEST_V1_KIND,
   STATE_LINEAGE_MANIFEST_TABLE,
-  STATE_LINEAGE_ROOT_MANIFEST_FILENAME,
   STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME,
   STATE_LINEAGE_ROOT_MANIFEST_V2_KIND,
-  STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
   stateLineageDatabaseManifestSha256V1,
-  stateLineageDatabaseSlotsV1,
   stateLineageDatabaseSlotsV2,
   validateStateLineageDatabaseManifestV1,
-  validateStateLineageRootManifestV1,
   validateStateLineageRootManifestV2,
 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 import type {
@@ -30,7 +26,7 @@ import type {
   StateLineagePreopenResultV1,
 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-preopen-guard";
 import { verifyStateLineageBeforeOpen } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-preopen-guard";
-import type { StateLineageRoleV1 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
+import type { StateLineageRoleV2 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 
 /**
  * Private, dependency-injected Authority state-lineage initialization.
@@ -42,8 +38,8 @@ import type { StateLineageRoleV1 } from "@echo-brain/organization-authority-kern
  * runtime startup does not initialize missing state.
  */
 
-type TopLevelRoleV1 = Exclude<
-  StateLineageRoleV1,
+type TopLevelRoleV2 = Exclude<
+  StateLineageRoleV2,
   "retrieval-facts" | "retrieval-lexical" | "retrieval-content"
 >;
 
@@ -70,20 +66,17 @@ export interface StagedAuthorityStateV1 {
   readonly creating_artifact_revision: string;
 }
 
-export interface InitializeAuthorityStateLineageV1Input {
-  readonly root_manifest_version?: 1 | 2;
+export interface InitializeAuthorityStateLineageV2Input {
   /** An absent, normalized absolute directory. Its parent must already exist. */
   readonly state_directory: string;
   readonly binding: AuthorityStateBindingV1;
   readonly created_at: string;
   readonly creating_artifact_revision: string;
-  /** Exact schemas for the selected root version, including unbuilt retrieval roles. */
-  readonly schemas: Readonly<Record<Exclude<StateLineageRoleV1, "record-derived">, AuthorityStateSchemaV1> &
-    Partial<Record<"record-derived", AuthorityStateSchemaV1>>>;
-  /** Appliers only for the selected state-directory peer databases. */
+  /** Exact schemas for all six roles, including unbuilt retrieval roles. */
+  readonly schemas: Readonly<Record<StateLineageRoleV2, AuthorityStateSchemaV1>>;
+  /** Appliers only for the three state-directory peer databases. */
   readonly top_level_appliers: Readonly<
-    Record<Exclude<TopLevelRoleV1, "record-derived">, AuthorityStateRoleApplierV1> &
-    Partial<Record<"record-derived", AuthorityStateRoleApplierV1>>
+    Record<TopLevelRoleV2, AuthorityStateRoleApplierV1>
   >;
   /**
    * Deliberately injected so this private scaffold does not guess opener
@@ -92,7 +85,7 @@ export interface InitializeAuthorityStateLineageV1Input {
    */
   readonly open_writable_database: (
     path: string,
-    role: TopLevelRoleV1,
+    role: TopLevelRoleV2,
   ) => Database.Database;
   /**
    * Optional exact metadata preparation while the state remains private
@@ -102,7 +95,7 @@ export interface InitializeAuthorityStateLineageV1Input {
   readonly prepare_staged_state?: (state: StagedAuthorityStateV1) => void;
 }
 
-export interface InitializedAuthorityStateLineageV1 {
+export interface InitializedAuthorityStateLineageV2 {
   readonly state_directory: string;
   readonly verification: StateLineagePreopenResultV1;
 }
@@ -123,20 +116,18 @@ function assertPrivateExistingDirectory(path: string, label: string): void {
 function preopenExpectation(
   stateDirectory: string,
   binding: AuthorityStateBindingV1,
-  schemas: InitializeAuthorityStateLineageV1Input["schemas"],
-  version: 1 | 2,
+  schemas: InitializeAuthorityStateLineageV2Input["schemas"],
 ): StateLineagePreopenExpectationV1 {
   return {
     state_directory: stateDirectory,
     expected_binding: binding,
     expected_schemas: schemas,
-    root_manifest_version: version,
   };
 }
 
 function schemaForRole(
   schemas: unknown,
-  role: StateLineageRoleV1,
+  role: StateLineageRoleV2,
 ): AuthorityStateSchemaV1 {
   if (
     schemas === null ||
@@ -153,7 +144,7 @@ function schemaForRole(
   return schema as AuthorityStateSchemaV1;
 }
 
-function validateInput(input: InitializeAuthorityStateLineageV1Input): void {
+function validateInput(input: InitializeAuthorityStateLineageV2Input): void {
   if (
     typeof input.state_directory !== "string" ||
     input.state_directory.length === 0 ||
@@ -178,9 +169,9 @@ function validateInput(input: InitializeAuthorityStateLineageV1Input): void {
       "Authority state initialization requires an open_writable_database function",
     );
   }
-  for (const slot of slots(input)) {
+  for (const slot of stateLineageDatabaseSlotsV2()) {
     if (slot.location.kind !== "state_file") continue;
-    const role = slot.role as TopLevelRoleV1;
+    const role = slot.role as TopLevelRoleV2;
     if (typeof input.top_level_appliers?.[role]?.apply !== "function") {
       throw new Error(
         `Authority state initialization requires a ${role} baseline applier`,
@@ -191,16 +182,15 @@ function validateInput(input: InitializeAuthorityStateLineageV1Input): void {
   // Validate every caller-provided identity member before touching the
   // filesystem. The same bodies are written below, so this also rejects an
   // invalid schema digest, timestamp, or artifact revision up front.
-  const root = validateRoot(input, {
-    schema_version: input.root_manifest_version ?? 1,
-    kind: input.root_manifest_version === 2 ? STATE_LINEAGE_ROOT_MANIFEST_V2_KIND : STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
+  validateStateLineageRootManifestV2({
+    schema_version: 2,
+    kind: STATE_LINEAGE_ROOT_MANIFEST_V2_KIND,
     ...input.binding,
-    databases: slots(input),
+    databases: stateLineageDatabaseSlotsV2(),
     created_at: input.created_at,
     creating_artifact_revision: input.creating_artifact_revision,
   });
-  void root;
-  for (const slot of slots(input)) {
+  for (const slot of stateLineageDatabaseSlotsV2()) {
     const schema = schemaForRole(input.schemas, slot.role);
     validateStateLineageDatabaseManifestV1({
       schema_version: 1,
@@ -217,8 +207,8 @@ function validateInput(input: InitializeAuthorityStateLineageV1Input): void {
 
 function stampDatabaseManifest(
   database: Database.Database,
-  role: TopLevelRoleV1,
-  input: InitializeAuthorityStateLineageV1Input,
+  role: TopLevelRoleV2,
+  input: InitializeAuthorityStateLineageV2Input,
 ): void {
   const schema = schemaForRole(input.schemas, role);
   const body = validateStateLineageDatabaseManifestV1({
@@ -271,17 +261,17 @@ function stampDatabaseManifest(
 
 function writeRootManifest(
   stagingDirectory: string,
-  input: InitializeAuthorityStateLineageV1Input,
+  input: InitializeAuthorityStateLineageV2Input,
 ): void {
-  const root = validateRoot(input, {
-    schema_version: input.root_manifest_version ?? 1,
-    kind: input.root_manifest_version === 2 ? STATE_LINEAGE_ROOT_MANIFEST_V2_KIND : STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
+  const root = validateStateLineageRootManifestV2({
+    schema_version: 2,
+    kind: STATE_LINEAGE_ROOT_MANIFEST_V2_KIND,
     ...input.binding,
-    databases: slots(input),
+    databases: stateLineageDatabaseSlotsV2(),
     created_at: input.created_at,
     creating_artifact_revision: input.creating_artifact_revision,
   });
-  const path = join(stagingDirectory, input.root_manifest_version === 2 ? STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME : STATE_LINEAGE_ROOT_MANIFEST_FILENAME);
+  const path = join(stagingDirectory, STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME);
   writeFileSync(path, canonicalJson(root as unknown as JsonValue), {
     encoding: "utf8",
     mode: 0o600,
@@ -290,21 +280,21 @@ function writeRootManifest(
 }
 
 /**
- * Creates and validates an isolated v1 state lineage. This does not make that
+ * Creates and validates an isolated v2 state lineage. This does not make that
  * lineage current: the caller receives only read-only verification evidence.
  */
-export function initializeAuthorityStateLineageV1(
-  input: InitializeAuthorityStateLineageV1Input,
-): InitializedAuthorityStateLineageV1 {
+export function initializeAuthorityStateLineageV2(
+  input: InitializeAuthorityStateLineageV2Input,
+): InitializedAuthorityStateLineageV2 {
   validateInput(input);
   const stateParent = dirname(input.state_directory);
   const stagingDirectory = mkdtempSync(join(stateParent, ".installing-"));
   chmodSync(stagingDirectory, 0o700);
   let published = false;
   try {
-    for (const slot of slots(input)) {
+    for (const slot of stateLineageDatabaseSlotsV2()) {
       if (slot.location.kind !== "state_file") continue;
-      const role = slot.role as TopLevelRoleV1;
+      const role = slot.role as TopLevelRoleV2;
       const databasePath = join(stagingDirectory, slot.location.filename);
       const database = input.open_writable_database(databasePath, role);
       try {
@@ -327,12 +317,12 @@ export function initializeAuthorityStateLineageV1(
     // published. The required post-publish check below also proves the exact
     // renamed directory is the state the caller receives.
     verifyStateLineageBeforeOpen(
-      preopenExpectation(stagingDirectory, input.binding, input.schemas, input.root_manifest_version ?? 1),
+      preopenExpectation(stagingDirectory, input.binding, input.schemas),
     );
     renameSync(stagingDirectory, input.state_directory);
     published = true;
     const verification = verifyStateLineageBeforeOpen(
-      preopenExpectation(input.state_directory, input.binding, input.schemas, input.root_manifest_version ?? 1),
+      preopenExpectation(input.state_directory, input.binding, input.schemas),
     );
     return Object.freeze({
       state_directory: input.state_directory,
@@ -344,17 +334,4 @@ export function initializeAuthorityStateLineageV1(
     }
     throw error;
   }
-}
-
-function slots(input: InitializeAuthorityStateLineageV1Input) {
-  return input.root_manifest_version === 2 ? stateLineageDatabaseSlotsV2() : stateLineageDatabaseSlotsV1();
-}
-
-function validateRoot(input: InitializeAuthorityStateLineageV1Input, value: unknown) {
-  return input.root_manifest_version === 2 ? validateStateLineageRootManifestV2(value) : validateStateLineageRootManifestV1(value);
-}
-
-/** Active six-role genesis; V1 remains only for historical conversion fixtures. */
-export function initializeAuthorityStateLineageV2(input: Omit<InitializeAuthorityStateLineageV1Input, "root_manifest_version">): InitializedAuthorityStateLineageV1 {
-  return initializeAuthorityStateLineageV1({ ...input, root_manifest_version: 2 });
 }

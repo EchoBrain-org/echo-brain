@@ -1,19 +1,18 @@
 # Organization control plane
 
 **Status:** current organization-owned Slack onboarding, Person Slack identity
-linking, and private Slack DM approval persistence. Historical paths are
-listed under [Retired paths](#retired-paths); nothing in that section is
-callable today.
+linking, and private Slack DM approval persistence.
 
 The control plane is a library linked into the Organization Authority. It owns
-no HTTP listener. The Authority composes it through five entry points:
+no HTTP listener. The Authority composes neutral control contracts with the
+Slack adapters under `providers/slack/server/src/organization-control-plane`:
 
 | Entry point | Responsibility |
 | --- | --- |
-| `slack-connection-setup-v1` | The owner-attributed Slack connection ceremony and its CLI |
-| `slack-external-identity-integration-v1` | Slack identity provider, external human-link contracts, and the secret store |
-| `slack-approval-integration-v1` | Private DM approval policy resolution, reviewer targeting, and approval persistence |
-| `organization-control-database-v1` | Opening the control database and applying the frozen baselines |
+| Slack provider `composition/slack-connection-setup-cli` | The owner-attributed Slack connection ceremony and its CLI |
+| Slack provider `slack-external-identity-integration-v1` | Slack identity provider, external human-link contracts, and the secret store |
+| Slack provider `slack-approval-integration-v1` | Private DM approval policy resolution, reviewer targeting, and approval persistence |
+| `organization-control-database-v1` | Opening the control database and applying the current V3 baseline |
 | `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy contracts consumed by approval resolution |
 
 ## Current behaviors
@@ -169,7 +168,7 @@ Policy resolution is split along the provider boundary. The neutral core
 (`application/private-approval-policy-resolution-core-v1`) owns the durable
 command shape, verified assignees, the shared commitment identity, policy
 binding, and exact replay matching. The Slack-owned module
-(`application/slack/private-approval-policy-resolution-v1`) binds that core
+(`providers/slack/server/src/organization-control-plane/application/slack/private-approval-policy-resolution-v1`) binds that core
 to one exact Slack human and validates the link proof (`provider: "slack"`,
 canonical `U`/`W` subject). The persisted field names
 `assigned_owner_slack_identity_link` and `current_slack_identity_link` are
@@ -183,11 +182,6 @@ containing only the 11 active tables below. Its applier requires an empty
 database. Runtime and stopped-state setup require its exact digest and the
 six-role V2 root manifest. Startup performs no schema migration.
 
-The [offline cleanup transition](../product/2026-09-12-database-migration-cleanup.md)
-converts an independently stopped/restored copy of the exact supported
-predecessor. It preserves active rows and refuses nonempty retired evidence;
-it does not replace production state or authorize a release.
-
 Tables with a current reader or writer:
 
 | Table | Behavior |
@@ -200,13 +194,6 @@ Tables with a current reader or writer:
 | `organization_private_approval_signed_action_receipts_v2` | Every verified Slack action |
 | `organization_private_approval_denied_action_receipts_v2` | Every rejected Slack action |
 | `organization_private_approval_terminal_evidence_v2` | The final approve or reject with its revalidated authorization |
-
-Nine V1 reaction-approval tables (`organization_approval_binding_*`,
-`organization_approval_action_capability_*`, `organization_approval_activation_*`,
-`organization_person_slack_pending_approval*`, and
-`organization_provider_human_action_evidence`) have no runtime reader or writer
-and are absent from V3. Their frozen historical baselines remain unchanged for
-source identity validation and negative compatibility tests.
 
 Authority `principal_id` and `membership_id` values are opaque references.
 They are not foreign keys because the Authority remains the sole source of
@@ -240,7 +227,7 @@ result is cached.
 
 ## Explicitly deferred
 
-V1 does not persist:
+The current schema does not persist:
 
 - membership or principal mirrors;
 - organization groups or inherited policy;
@@ -268,7 +255,7 @@ today.
 
 ## Schema growth rule
 
-The v1 schema is closed by default. A new table, column, enum branch, index, or
+The current schema is closed by default. A new table, column, enum branch, index, or
 trigger must:
 
 1. support a named externally observable milestone behavior;
@@ -280,22 +267,3 @@ trigger must:
 
 “Future-proofing,” “enterprise readiness,” and “we may need it later” are not
 valid reasons to add persisted state.
-
-## Retired paths
-
-These are recorded so that older design documents and the frozen V1 tables
-stay explainable. None is callable.
-
-- **Installation-signed reaction approval (removed 2026-09-06).** Slack
-  reaction approval, the installation-signed `/v1/permission-checks` request,
-  adapter bindings, direct `view`/`approve`/`reject` grants, and the
-  owner-attributed activation command were removed. The private DM card
-  replaced them.
-- **Installation-signed Person Slack identity linking.** The earlier
-  installation-signed challenge and its API types were removed with the
-  installation model. Linking is Person-session-authenticated only.
-- **Migration ledger and historical migrations.** The earlier
-  `organization_schema_migrations` ledger and numbered migrations were
-  replaced by frozen, checksummed baselines applied only to empty databases.
-- **Migration-era alias exports.** The `clean-*` and `new-lineage-*` facade
-  aliases were retired on 2026-09-06; no workspace imported them.

@@ -1,7 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import {
   ReadableSearchGenerationReconcilerV1,
   type ReadableSearchRecordHeadV1,
@@ -18,7 +18,7 @@ const databases: Database.Database[] = [];
 function database(): Database.Database {
   const value = new Database(":memory:");
   databases.push(value);
-  applyAuthorityBaselineV1(value);
+  applyAuthorityBaselineV5(value);
   value
     .prepare(
       `INSERT INTO authority_metadata (

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV4 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "../../../../src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { createGranolaPostCutoffCursor } from "../../../../../../granola/src/source/meeting-source-adapter.js";
@@ -34,7 +34,7 @@ const telemetryRoots: string[] = [];
 
 function database(): Database.Database {
   const value = new Database(":memory:");
-  applyAuthorityBaselineV4(value);
+  applyAuthorityBaselineV5(value);
   value.prepare(
     `INSERT INTO authority_metadata VALUES (1, 'oau_test', 'org_test', 'Test', '{}', ?, ?)`,
   ).run(NOW, NOW);

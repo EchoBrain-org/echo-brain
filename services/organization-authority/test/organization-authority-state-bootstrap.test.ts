@@ -1,48 +1,19 @@
 import {
-  applyOrganizationRecordDerivedBaselineV1,
-  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-  organizationRecordDerivedBaselineSha256V1,
-} from "../../../packages/organization-record/test/fixtures/derived-baseline-v1.js";
-import {
   chmodSync,
   existsSync,
   mkdtempSync,
   readdirSync,
   rmSync,
+  renameSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  applyOrganizationControlBaselineV2,
-  openOrganizationControlDatabase,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-  organizationControlBaselineSha256V2,
-} from "@echo-brain/organization-control-plane/organization-control-database-v1";
-import {
-  applyOrganizationRecordLogBaselineV1,
-  openOrganizationRecordDatabase,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
-  organizationRecordLogBaselineSha256V1,
-} from "@echo-brain/organization-record/organization-record-api-v1";
-import {
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-  readableSearchPlaneBaselineSha256V1,
-} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  applyAuthorityBaselineV4,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
-  authorityBaselineSha256V4,
-} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
-import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
+
 import { runOrganizationAuthorityResetCli } from "../src/composition/organization-authority-reset-cli.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import { initializeAuthorityStateLineageV1 } from "../src/state-lineage/authority-state-lineage-initializer.js";
 import { StateLineagePreopenRefusal } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-preopen-guard";
 
 const roots: string[] = [];
@@ -75,70 +46,17 @@ function rows(
   }
 }
 
-function initializeRecordLogV1State(stateDirectory: string): void {
-  initializeAuthorityStateLineageV1({
+function writeUnsupportedRootState(stateDirectory: string): void {
+  bootstrapOrganizationAuthorityState({
     state_directory: stateDirectory,
-    binding: {
-      authority_id: "oau_00000000-0000-4000-8000-000000000001",
-      organization_id: "org_00000000-0000-4000-8000-000000000001",
-      state_lineage_id: "lineage-00000000-0000-4000-8000-000000000001",
-    },
-    created_at: CREATED_AT,
-    creating_artifact_revision: "legacy-v1-fixture",
-    schemas: {
-      authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
-        schema_sha256: authorityBaselineSha256V4(),
-      },
-      "control-plane": {
-        database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-        schema_sha256: organizationControlBaselineSha256V2(),
-      },
-      "record-log": {
-        database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordLogBaselineSha256V1(),
-      },
-      "record-derived": {
-        database_schema_version:
-          ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordDerivedBaselineSha256V1(),
-      },
-      "retrieval-facts": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_FACTS_BASELINE_V1,
-        ),
-      },
-      "retrieval-lexical": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_LEXICAL_BASELINE_V1,
-        ),
-      },
-      "retrieval-content": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_CONTENT_BASELINE_V1,
-        ),
-      },
-    },
-    top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV4 },
-      "control-plane": { apply: applyOrganizationControlBaselineV2 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV1 },
-      "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },
-    },
-    open_writable_database: (path, role) => {
-      if (role === "authority") return openAuthorityDatabase(path);
-      if (role === "control-plane") return openOrganizationControlDatabase(path);
-      return openOrganizationRecordDatabase(path);
-    },
+    organization_display_name: "Unsupported root fixture",
+    owner_display_name: "Owner",
+    created_at: "2026-08-22T00:00:00.000Z",
+    creating_artifact_revision: "unsupported-root-fixture",
   });
+  // The old root marker must refuse before any database is opened or rewritten.
+  renameSync(join(stateDirectory, "state-lineage-root.v2.json"),
+    join(stateDirectory, "state-lineage-root.v1.json"));
 }
 
 describe("Authority state initialization", () => {
@@ -327,10 +245,10 @@ describe("Authority state initialization", () => {
     expect(existsSync(stateDirectory)).toBe(false);
   });
 
-  it("refuses a V1 record-log lineage rather than upgrading it in place", () => {
+  it("refuses an unsupported root without upgrading occupied state", () => {
     const root = fixtureRoot();
     const stateDirectory = join(root, "legacy-v1-state");
-    initializeRecordLogV1State(stateDirectory);
+    writeUnsupportedRootState(stateDirectory);
 
     expect(() => verifyAuthorityStateLineage(stateDirectory)).toThrow(
       StateLineagePreopenRefusal,

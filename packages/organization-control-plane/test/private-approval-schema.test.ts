@@ -1,22 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyOrganizationControlBaselineV2,
-  ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID_V2,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-  organizationControlBaselineSha256V2,
+  applyOrganizationControlBaselineV3,
 } from "../src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../src/persistence/open-organization-control-database.js";
 
-const ORGANIZATION_CONTROL_BASELINE_SHA256_V2 =
-  "sha256:9670b8e5518cb8d3014a473ba062851ca0d3abb25f8757b8577eb6bb10db9927";
-
-function openedV2Database() {
+function openedCurrentDatabase() {
   const database = openOrganizationControlDatabase(":memory:");
-  applyOrganizationControlBaselineV2(database);
+  applyOrganizationControlBaselineV3(database);
   return database;
 }
 
-describe("Control Plane private-approval baseline v2", () => {
+describe("Control Plane current private-approval schema", () => {
   it("bounds a durable Slack interaction enqueue below Slack's acknowledgement deadline", () => {
     const database = openOrganizationControlDatabase(":memory:");
     try {
@@ -26,37 +20,8 @@ describe("Control Plane private-approval baseline v2", () => {
     }
   });
 
-  it("pins the fresh V1-plus-private schema and preserves its role application ID", () => {
-    const database = openedV2Database();
-    try {
-      expect(organizationControlBaselineSha256V2()).toBe(
-        ORGANIZATION_CONTROL_BASELINE_SHA256_V2,
-      );
-      expect(database.pragma("application_id", { simple: true })).toBe(
-        ORGANIZATION_CONTROL_BASELINE_APPLICATION_ID_V2,
-      );
-      expect(database.pragma("user_version", { simple: true })).toBe(
-        ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-      );
-      expect(database.pragma("foreign_key_check")).toEqual([]);
-    } finally {
-      database.close();
-    }
-  });
-
-  it("refuses in-place installation into a nonempty database", () => {
-    const database = openedV2Database();
-    try {
-      expect(() => applyOrganizationControlBaselineV2(database)).toThrow(
-        /completely empty database/,
-      );
-    } finally {
-      database.close();
-    }
-  });
-
   it("stores the immutable pending contract and exact Slack card binding in one staged row", () => {
-    const database = openedV2Database();
+    const database = openedCurrentDatabase();
     try {
       const columns = database
         .prepare("SELECT name FROM pragma_table_info('organization_private_approval_pending_contracts_v2') ORDER BY cid")

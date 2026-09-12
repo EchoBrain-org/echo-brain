@@ -3,7 +3,7 @@ import { PRIVATE_APPROVAL_PENDING_KIND } from "../../src/organization-control-pl
 import { type PendingPrivateApprovalV1 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
 import { type PrivateApprovalSlackCardBindingV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV4 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/private-approval/resolve-private-slack-approval-reviewer-target-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1, type PrivateApprovalCandidateCommitmentV1 } from "../../src/private-approval/sqlite-private-slack-approval-assignment-state-v1.js";
@@ -39,7 +39,7 @@ function fixture(): {
   readonly card: PrivateApprovalSlackCardBindingV1;
 } {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV4(database);
+  applyAuthorityBaselineV5(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(

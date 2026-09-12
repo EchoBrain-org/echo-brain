@@ -4,7 +4,7 @@ import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnecti
 import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
 import { SLACK_DM_APPROVAL_REQUIRED_SCOPES, resolveCurrentSlackDmApprovalReviewerTargetV1, type CurrentSlackDmApprovalReviewerV1, type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
-import { applyOrganizationControlBaselineV1 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
+import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 
 const CONNECTION_ID = "con_00000000-0000-4000-8000-000000000001";
 const APPROVAL_CHANNEL_ID = "C_APPROVAL";
@@ -50,7 +50,7 @@ function scopes(without?: string): readonly string[] {
 
 function openDatabase(): Database.Database {
   const database = new Database(":memory:");
-  applyOrganizationControlBaselineV1(database);
+  applyOrganizationControlBaselineV3(database);
   databases.push(database);
   return database;
 }

@@ -47,7 +47,7 @@
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
-    "baselines/**"
+    "baselines/organization-control-plane-baseline-v3.sql"
   ],
   "scripts": {
     "build": "tsc -b",

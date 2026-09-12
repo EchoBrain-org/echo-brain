@@ -18,13 +18,13 @@ import type { JsonValue } from "@echo-brain/federation-protocol";
 import {
   STATE_LINEAGE_DATABASE_MANIFEST_V1_KIND,
   STATE_LINEAGE_MANIFEST_TABLE,
-  STATE_LINEAGE_ROLES_V1,
+  STATE_LINEAGE_ROLES_V2,
   STATE_LINEAGE_ROLE_APPLICATION_IDS_V1,
-  STATE_LINEAGE_ROOT_MANIFEST_FILENAME,
-  STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
-  stateLineageDatabaseSlotsV1,
+  STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME,
+  STATE_LINEAGE_ROOT_MANIFEST_V2_KIND,
+  stateLineageDatabaseSlotsV2,
 } from "../../src/state-lineage/state-lineage-manifest-v1.js";
-import type { StateLineageRoleV1 } from "../../src/state-lineage/state-lineage-manifest-v1.js";
+import type { StateLineageRoleV2 } from "../../src/state-lineage/state-lineage-manifest-v1.js";
 import {
   StateLineagePreopenRefusal,
   verifyStateLineageBeforeOpen,
@@ -64,7 +64,7 @@ interface FixtureOverrides {
 }
 
 function databaseManifestBody(
-  role: StateLineageRoleV1,
+  role: StateLineageRoleV2,
   binding: FixtureOverrides["binding"] = {},
 ): Record<string, unknown> {
   return {
@@ -83,7 +83,7 @@ function databaseManifestBody(
 
 function writeLineageDatabase(
   path: string,
-  role: StateLineageRoleV1,
+  role: StateLineageRoleV2,
   options: {
     readonly binding?: FixtureOverrides["binding"];
     readonly applicationId?: number;
@@ -150,12 +150,12 @@ function rootManifestBody(
   binding: FixtureOverrides["binding"] = {},
 ): Record<string, unknown> {
   return {
-    schema_version: 1,
-    kind: STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
+    schema_version: 2,
+    kind: STATE_LINEAGE_ROOT_MANIFEST_V2_KIND,
     authority_id: binding?.authority_id ?? AUTHORITY_ID,
     organization_id: binding?.organization_id ?? ORGANIZATION_ID,
     state_lineage_id: binding?.state_lineage_id ?? STATE_LINEAGE_ID,
-    databases: stateLineageDatabaseSlotsV1().map((slot) => ({
+    databases: stateLineageDatabaseSlotsV2().map((slot) => ({
       role: slot.role,
       location:
         slot.location.kind === "state_file"
@@ -176,10 +176,10 @@ function buildFixture(overrides: FixtureOverrides = {}): string {
   const root = mkdtempSync(join(tmpdir(), "echo-lineage-guard-"));
   temporaryRoots.push(root);
   writeFileSync(
-    join(root, STATE_LINEAGE_ROOT_MANIFEST_FILENAME),
+    join(root, STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME),
     canonicalJson(rootManifestBody(overrides.binding) as unknown as JsonValue),
   );
-  for (const slot of stateLineageDatabaseSlotsV1()) {
+  for (const slot of stateLineageDatabaseSlotsV2()) {
     if (slot.location.kind !== "state_file") continue;
     writeLineageDatabase(join(root, slot.location.filename), slot.role, {
       binding: overrides.binding,
@@ -218,7 +218,7 @@ function buildFixture(overrides: FixtureOverrides = {}): string {
           "lexical.sqlite": "retrieval-lexical",
           "content.sqlite": "retrieval-content",
         } as const
-      )[filename] as StateLineageRoleV1;
+      )[filename] as StateLineageRoleV2;
       writeLineageDatabase(join(segmentDir, filename), role, {
         binding: overrides.binding,
       });
@@ -236,7 +236,7 @@ function expectation(stateDirectory: string): StateLineagePreopenExpectationV1 {
       state_lineage_id: STATE_LINEAGE_ID,
     },
     expected_schemas: Object.fromEntries(
-      STATE_LINEAGE_ROLES_V1.map((role) => [
+      STATE_LINEAGE_ROLES_V2.map((role) => [
         role,
         { database_schema_version: 1, schema_sha256: SCHEMA_SHA256 },
       ]),
@@ -262,11 +262,28 @@ function expectRefusal(
 }
 
 describe("state-lineage pre-open guard", () => {
+  it.each(["state-lineage-root.v1.json", "record-derived.sqlite"])(
+    "refuses retired state %s alongside current state without changing files",
+    (filename) => {
+      const root = buildFixture();
+      const retired = join(root, filename);
+      writeFileSync(retired, "retired-state-sentinel");
+      const paths = [retired, join(root, STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME),
+        ...stateLineageDatabaseSlotsV2()
+          .filter(slot => slot.location.kind === "state_file")
+          .map(slot => join(root, slot.location.filename))];
+      const before = paths.map(path => readFileSync(path));
+      expectRefusal(() => verifyStateLineageBeforeOpen(expectation(root)),
+        "legacy_state", /unsupported|retired/);
+      expect(paths.map(path => readFileSync(path))).toEqual(before);
+    },
+  );
+
   it("verifies a coherent state directory without a retrieval tree", () => {
     const root = buildFixture();
     const result = verifyStateLineageBeforeOpen(expectation(root));
     expect(result.root.state_lineage_id).toBe(STATE_LINEAGE_ID);
-    expect(result.databases).toHaveLength(4);
+    expect(result.databases).toHaveLength(3);
     expect(result.retrieval).toEqual({
       present: false,
       generation_count: 0,
@@ -281,7 +298,7 @@ describe("state-lineage pre-open guard", () => {
       withPointerRow: true,
     });
     const result = verifyStateLineageBeforeOpen(expectation(root));
-    expect(result.databases).toHaveLength(7);
+    expect(result.databases).toHaveLength(6);
     expect(result.retrieval).toEqual({
       present: true,
       generation_count: 1,
@@ -303,11 +320,11 @@ describe("state-lineage pre-open guard", () => {
 
   it("refuses a missing root manifest, database, or manifest row", () => {
     const noRoot = buildFixture();
-    rmSync(join(noRoot, STATE_LINEAGE_ROOT_MANIFEST_FILENAME));
+    rmSync(join(noRoot, STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME));
     expectRefusal(
       () => verifyStateLineageBeforeOpen(expectation(noRoot)),
       "missing_manifest",
-      /has no state-lineage-root\.v1\.json/,
+      /has no state-lineage-root\.v2\.json/,
     );
 
     const noDatabase = buildFixture();
@@ -334,7 +351,7 @@ describe("state-lineage pre-open guard", () => {
     const root = buildFixture();
     const body = rootManifestBody();
     writeFileSync(
-      join(root, STATE_LINEAGE_ROOT_MANIFEST_FILENAME),
+      join(root, STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME),
       `${canonicalJson(body as unknown as JsonValue)}\n`,
     );
     expectRefusal(
@@ -359,10 +376,10 @@ describe("state-lineage pre-open guard", () => {
 
   it("refuses duplicated manifest rows", () => {
     const root = buildFixture();
-    rmSync(join(root, "record-derived.sqlite"));
+    rmSync(join(root, "integrations.sqlite"));
     writeLineageDatabase(
-      join(root, "record-derived.sqlite"),
-      "record-derived",
+      join(root, "integrations.sqlite"),
+      "control-plane",
       {
         duplicateManifestRow: true,
       },
@@ -378,28 +395,28 @@ describe("state-lineage pre-open guard", () => {
     const wrongRole = buildFixture();
     rmSync(join(wrongRole, "record-log.sqlite"));
     writeLineageDatabase(join(wrongRole, "record-log.sqlite"), "record-log", {
-      manifestBody: databaseManifestBody("record-derived"),
+      manifestBody: databaseManifestBody("control-plane"),
       applicationId: STATE_LINEAGE_ROLE_APPLICATION_IDS_V1["record-log"],
     });
     expectRefusal(
       () => verifyStateLineageBeforeOpen(expectation(wrongRole)),
       "wrong_role",
-      /carries a record-derived manifest where record-log is required/,
+      /carries a control-plane manifest where record-log is required/,
     );
 
     const swapped = buildFixture();
     rmSync(join(swapped, "record-log.sqlite"));
-    rmSync(join(swapped, "record-derived.sqlite"));
-    writeLineageDatabase(join(swapped, "record-log.sqlite"), "record-derived", {
-      applicationId: STATE_LINEAGE_ROLE_APPLICATION_IDS_V1["record-derived"],
+    rmSync(join(swapped, "integrations.sqlite"));
+    writeLineageDatabase(join(swapped, "record-log.sqlite"), "control-plane", {
+      applicationId: STATE_LINEAGE_ROLE_APPLICATION_IDS_V1["control-plane"],
     });
-    writeLineageDatabase(join(swapped, "record-derived.sqlite"), "record-log", {
+    writeLineageDatabase(join(swapped, "integrations.sqlite"), "record-log", {
       applicationId: STATE_LINEAGE_ROLE_APPLICATION_IDS_V1["record-log"],
     });
     expectRefusal(
       () => verifyStateLineageBeforeOpen(expectation(swapped)),
       "wrong_role",
-      /carries a record-derived manifest where record-log is required/,
+      /carries a record-log manifest where control-plane is required/,
     );
   });
 
@@ -506,7 +523,7 @@ describe("state-lineage pre-open guard", () => {
 
     for (const filename of [
       ".integrations.sqlite.installing-abc123",
-      ".record-derived.sqlite.rebuilding-def456",
+      ".integrations.sqlite.rebuilding-def456",
     ]) {
       const preparedFileDebris = buildFixture();
       writeFileSync(join(preparedFileDebris, filename), "");
@@ -647,8 +664,7 @@ describe("state-lineage pre-open guard", () => {
       join(root, "authority.sqlite"),
       join(root, "integrations.sqlite"),
       join(root, "record-log.sqlite"),
-      join(root, "record-derived.sqlite"),
-      join(root, STATE_LINEAGE_ROOT_MANIFEST_FILENAME),
+      join(root, STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME),
     ];
     const before = paths.map((path) => readFileSync(path));
     const first = verifyStateLineageBeforeOpen(expectation(root));

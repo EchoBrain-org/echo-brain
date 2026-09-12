@@ -31,14 +31,10 @@ export class StateLineageContractError extends Error {
   }
 }
 
-export const STATE_LINEAGE_ROOT_MANIFEST_V1_KIND =
-  'echo-state-lineage-root-manifest-v1' as const;
 export const STATE_LINEAGE_DATABASE_MANIFEST_V1_KIND =
   'echo-state-lineage-database-manifest-v1' as const;
 
 /** Root manifest filename inside a state directory. */
-export const STATE_LINEAGE_ROOT_MANIFEST_FILENAME =
-  'state-lineage-root.v1.json' as const;
 export const STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME = 'state-lineage-root.v2.json' as const;
 export const STATE_LINEAGE_ROOT_MANIFEST_V2_KIND = 'echo-state-lineage-root-manifest-v2' as const;
 
@@ -54,51 +50,40 @@ export const STATE_LINEAGE_MANIFEST_ROW_KEYS = [
   'manifest_sha256',
 ] as const;
 
-export type StateLineageRoleV1 =
+export type StateLineageRoleV2 =
   | 'authority'
   | 'control-plane'
   | 'record-log'
-  | 'record-derived'
   | 'retrieval-facts'
   | 'retrieval-lexical'
   | 'retrieval-content';
 
-/** Canonical role order. Every seven-slot array is compared against it. */
-export const STATE_LINEAGE_ROLES_V1 = Object.freeze([
+/** Canonical role order. Every six-slot array is compared against it. */
+export const STATE_LINEAGE_ROLES_V2 = Object.freeze([
   'authority',
   'control-plane',
   'record-log',
-  'record-derived',
   'retrieval-facts',
   'retrieval-lexical',
   'retrieval-content',
 ] as const);
-export type StateLineageRoleV2 = Exclude<StateLineageRoleV1, 'record-derived'>;
-export const STATE_LINEAGE_ROLES_V2: readonly StateLineageRoleV2[] = Object.freeze(
-  STATE_LINEAGE_ROLES_V1.filter((role): role is StateLineageRoleV2 => role !== 'record-derived'),
-);
-
-export function stateLineageDatabaseSlotsV2(): readonly StateLineageDatabaseSlotV1[] {
-  return Object.freeze(stateLineageDatabaseSlotsV1().filter(slot => slot.role !== 'record-derived'));
-}
 
 /**
  * SQLite header `application_id` per role. The IDs are role-stable: they
  * discriminate which role's file this is, while lineage, Authority, and
  * organization identity is carried only by the manifests.
  *
- * All seven values are shipped and must not be reassigned. Authority and
+ * These shipped values must not be reassigned. Authority and
  * control-plane baselines stamp their role IDs; record and retrieval IDs are
  * defined in their persistence/database-definition modules. A schema change
  * does not change a database role's application_id.
  */
 export const STATE_LINEAGE_ROLE_APPLICATION_IDS_V1: Readonly<
-  Record<StateLineageRoleV1, number>
+  Record<StateLineageRoleV2, number>
 > = Object.freeze({
   authority: 0x45434155,
   'control-plane': 0x45434f50,
   'record-log': 0x4543524c,
-  'record-derived': 0x45435244,
   'retrieval-facts': 0x45524654,
   'retrieval-lexical': 0x45524c58,
   'retrieval-content': 0x45524354,
@@ -126,7 +111,7 @@ export type StateLineageLocationV1 =
 export const STATE_LINEAGE_RETRIEVAL_DIRECTORY = 'record-retrieval' as const;
 
 const ROLE_LOCATIONS: Readonly<
-  Record<StateLineageRoleV1, StateLineageLocationV1>
+  Record<StateLineageRoleV2, StateLineageLocationV1>
 > = Object.freeze({
   authority: Object.freeze({
     kind: 'state_file' as const,
@@ -139,10 +124,6 @@ const ROLE_LOCATIONS: Readonly<
   'record-log': Object.freeze({
     kind: 'state_file' as const,
     filename: 'record-log.sqlite',
-  }),
-  'record-derived': Object.freeze({
-    kind: 'state_file' as const,
-    filename: 'record-derived.sqlite',
   }),
   'retrieval-facts': Object.freeze({
     kind: 'retrieval_segment_tree' as const,
@@ -162,14 +143,14 @@ const ROLE_LOCATIONS: Readonly<
 });
 
 export interface StateLineageDatabaseSlotV1 {
-  readonly role: StateLineageRoleV1;
+  readonly role: StateLineageRoleV2;
   readonly location: StateLineageLocationV1;
   readonly application_id: number;
 }
 
-export interface StateLineageRootManifestV1 {
-  readonly schema_version: 1;
-  readonly kind: typeof STATE_LINEAGE_ROOT_MANIFEST_V1_KIND;
+export interface StateLineageRootManifestV2 {
+  readonly schema_version: 2;
+  readonly kind: typeof STATE_LINEAGE_ROOT_MANIFEST_V2_KIND;
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -181,7 +162,7 @@ export interface StateLineageRootManifestV1 {
 export interface StateLineageDatabaseManifestV1 {
   readonly schema_version: 1;
   readonly kind: typeof STATE_LINEAGE_DATABASE_MANIFEST_V1_KIND;
-  readonly role: StateLineageRoleV1;
+  readonly role: StateLineageRoleV2;
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -190,12 +171,6 @@ export interface StateLineageDatabaseManifestV1 {
   readonly created_at: string;
   readonly creating_artifact_revision: string;
 }
-
-export interface StateLineageRootManifestV2 extends Omit<StateLineageRootManifestV1, 'schema_version' | 'kind'> {
-  readonly schema_version: 2;
-  readonly kind: typeof STATE_LINEAGE_ROOT_MANIFEST_V2_KIND;
-}
-export type StateLineageRootManifest = StateLineageRootManifestV1 | StateLineageRootManifestV2;
 
 export interface StoredStateLineageDatabaseManifestV1 {
   readonly body: StateLineageDatabaseManifestV1;
@@ -365,10 +340,10 @@ function assertBoundedText(
 function assertRole(
   value: unknown,
   label: string,
-): asserts value is StateLineageRoleV1 {
+): asserts value is StateLineageRoleV2 {
   if (
     typeof value !== 'string' ||
-    !STATE_LINEAGE_ROLES_V1.includes(value as StateLineageRoleV1)
+    !STATE_LINEAGE_ROLES_V2.includes(value as StateLineageRoleV2)
   ) {
     fail(`${label} is not a supported state-lineage role`);
   }
@@ -389,10 +364,10 @@ function boundedDocument<T>(value: T, label: string): T {
   return JSON.parse(bytes.toString('utf8')) as T;
 }
 
-/** The canonical seven slots, in role order, with their pinned identities. */
-export function stateLineageDatabaseSlotsV1(): readonly StateLineageDatabaseSlotV1[] {
+/** The canonical six slots, in role order, with their pinned identities. */
+export function stateLineageDatabaseSlotsV2(): readonly StateLineageDatabaseSlotV1[] {
   return Object.freeze(
-    STATE_LINEAGE_ROLES_V1.map((role) =>
+    STATE_LINEAGE_ROLES_V2.map((role) =>
       Object.freeze({
         role,
         location: ROLE_LOCATIONS[role],
@@ -404,7 +379,7 @@ export function stateLineageDatabaseSlotsV1(): readonly StateLineageDatabaseSlot
 
 function validateLocation(
   value: unknown,
-  role: StateLineageRoleV1,
+  role: StateLineageRoleV2,
   label: string,
 ): StateLineageLocationV1 {
   const expected = ROLE_LOCATIONS[role];
@@ -426,7 +401,7 @@ function validateLocation(
 
 function validateSlot(
   value: unknown,
-  expectedRole: StateLineageRoleV1,
+  expectedRole: StateLineageRoleV2,
   label: string,
 ): StateLineageDatabaseSlotV1 {
   const record = exactObject(value, SLOT_KEYS, label);
@@ -451,39 +426,28 @@ function validateSlot(
 function validateSlots(
   value: unknown,
   label: string,
-  roles: readonly StateLineageRoleV1[],
 ): readonly StateLineageDatabaseSlotV1[] {
   assertPlainJsonData(value, label);
   if (!Array.isArray(value)) fail(`${label} must be a plain array`);
-  if (value.length !== roles.length) {
+  if (value.length !== STATE_LINEAGE_ROLES_V2.length) {
     fail(`${label} must contain every state-lineage role exactly once`);
   }
   return Object.freeze(
-    roles.map((role, index) =>
+    STATE_LINEAGE_ROLES_V2.map((role, index) =>
       validateSlot(value[index], role, `${label}[${String(index)}]`),
     ),
   );
-}
-
-export function validateStateLineageRootManifestV1(
-  value: unknown,
-): StateLineageRootManifestV1 {
-  return validateRootManifest(value, 1) as StateLineageRootManifestV1;
-}
-
-export function validateStateLineageRootManifestV2(value: unknown): StateLineageRootManifestV2 {
-  return validateRootManifest(value, 2) as StateLineageRootManifestV2;
 }
 
 export function stateLineageRootManifestSha256V2(value: unknown): Sha256Digest {
   return canonicalSha256(validateStateLineageRootManifestV2(value) as unknown as JsonValue);
 }
 
-function validateRootManifest(value: unknown, version: 1 | 2): StateLineageRootManifest {
-  const label = `State lineage root manifest v${version}`;
-  const kind = version === 1 ? STATE_LINEAGE_ROOT_MANIFEST_V1_KIND : STATE_LINEAGE_ROOT_MANIFEST_V2_KIND;
+export function validateStateLineageRootManifestV2(value: unknown): StateLineageRootManifestV2 {
+  const label = "State lineage root manifest v2";
+  const kind = STATE_LINEAGE_ROOT_MANIFEST_V2_KIND;
   const record = exactObject(value, ROOT_MANIFEST_KEYS, label);
-  if (record.schema_version !== version) {
+  if (record.schema_version !== 2) {
     fail(`${label} schema_version is unsupported`);
   }
   if (record.kind !== kind) {
@@ -492,7 +456,7 @@ function validateRootManifest(value: unknown, version: 1 | 2): StateLineageRootM
   assertId(record.authority_id, 'oau', `${label} authority_id`);
   assertId(record.organization_id, 'org', `${label} organization_id`);
   assertBoundedText(record.state_lineage_id, `${label} state_lineage_id`, 128);
-  const databases = validateSlots(record.databases, `${label} databases`, version === 1 ? STATE_LINEAGE_ROLES_V1 : STATE_LINEAGE_ROLES_V2);
+  const databases = validateSlots(record.databases, `${label} databases`);
   assertTimestamp(record.created_at, `${label} created_at`);
   assertBoundedText(
     record.creating_artifact_revision,
@@ -502,7 +466,7 @@ function validateRootManifest(value: unknown, version: 1 | 2): StateLineageRootM
   return Object.freeze(
     boundedDocument(
       {
-        schema_version: version,
+        schema_version: 2 as const,
         kind,
         authority_id: record.authority_id,
         organization_id: record.organization_id,
@@ -513,12 +477,6 @@ function validateRootManifest(value: unknown, version: 1 | 2): StateLineageRootM
       },
       label,
     ),
-  ) as StateLineageRootManifest;
-}
-
-export function stateLineageRootManifestSha256V1(value: unknown): Sha256Digest {
-  return canonicalSha256(
-    validateStateLineageRootManifestV1(value) as unknown as JsonValue,
   );
 }
 

@@ -3,7 +3,7 @@ import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { createPersonRecordReadRouteV1, type CreatePersonRecordReadRouteV1Options } from "../src/composition/person-record-read-route.js";
@@ -40,7 +40,7 @@ function setup(
   overrides: Partial<CreatePersonRecordReadRouteV1Options> = {},
 ) {
   const authority = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV1(authority);
+  applyAuthorityBaselineV5(authority);
   let authenticateCalls = 0;
   const inputs: unknown[] = [];
   const route = createPersonRecordReadRouteV1({

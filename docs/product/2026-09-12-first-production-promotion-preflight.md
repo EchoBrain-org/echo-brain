@@ -104,13 +104,12 @@ descriptor was not used to establish pin provenance.
 The next executable step is a reviewed production inventory, not `stage` or
 `promote`. No production compatibility or deployment success is claimed here.
 
-The subsequent [database cleanup](2026-09-12-database-migration-cleanup.md)
-implements new Authority V5/control V3/log V3 baselines and a six-role root,
-retiring 22 tables and a redundant index. Its offline converter accepts only
-the exact staging-era predecessor, not the unverified August 23 production
-lineage. This changes the candidate: build and qualify new artifacts in staging
-before including it in production. The earlier staging approval above applies
-only to `2f33855`, and production compatibility remains unverified.
+The subsequent schema cleanup (merged source `4cd9401`) introduced Authority
+V5/control V3/log V3 baselines and a six-role root, retiring 22 tables and a
+redundant index. The one-off converter and predecessor schemas are retained
+only in Git history. Production's August 23 lineage remains unverified; the
+staging rehearsal does not establish production compatibility. Qualify each
+candidate's exact artifacts and inspect production before planning a cutover.
 
 Validation: canonical release validation, all three copied artifact hashes and
 their staging-closeout bindings, and `npm run check:docs` passed. No runtime code
