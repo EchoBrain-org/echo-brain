@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Offline conversion of an independently stopped/restored copy. No live activation.
 import { createHash } from 'node:crypto';
-import { constants, chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { constants, chmodSync, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -52,7 +52,13 @@ function copyPrivateFile(source, target) {
     readPrivateFile(source, chunk => {
       for (let offset = 0; offset < chunk.length;) offset += writeSync(fd, chunk, offset, chunk.length - offset);
     });
+    fsyncSync(fd);
   } finally { closeSync(fd); }
+}
+
+function syncDirectory(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
 /** Files are hashed internally; neither file contents nor private names are returned. */
@@ -81,7 +87,9 @@ function inventory(path) {
 }
 
 function schema(db) {
-  return db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND name != ? ORDER BY type, name").all(manifestTable);
+  // GLOB makes the underscore literal; only the manifest table is exempt,
+  // never a trigger that happens to share its name.
+  return db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' AND NOT (type = 'table' AND name = ?) ORDER BY type, name").all(manifestTable);
 }
 
 function referenceSchema(sql) {
@@ -105,6 +113,13 @@ function rowProof(db, tables) {
     }
     return { table, rows: count, sha256: hash.digest('hex') };
   });
+}
+
+function requireEmptyTables(db, tables) {
+  for (const table of tables) {
+    const name = '"' + table.replaceAll('"', '""') + '"';
+    if (db.prepare(`SELECT 1 FROM ${name} LIMIT 1`).get()) refuse('retired_table_not_empty');
+  }
 }
 
 function sourceSchemas() {
@@ -133,7 +148,7 @@ function inspect(source) {
       verifyDatabase(db, expected);
       const tables = expected.filter(object => object.type === 'table').map(object => object.name);
       const retired = role.role === 'record-derived' ? tables.filter(table => !['organization_derived_metadata', 'organization_derived_cursor'].includes(table)) : role.retired;
-      if (rowProof(db, retired).some(proof => proof.rows !== 0)) refuse('retired_table_not_empty');
+      requireEmptyTables(db, retired);
       if (role.role === 'record-derived') {
         const metadata = db.prepare('SELECT * FROM organization_derived_metadata').all();
         const cursor = db.prepare('SELECT * FROM organization_derived_cursor').all();
@@ -188,17 +203,24 @@ export function convertAuthoritySchemaCleanup({ source, output, expectedSourceIn
     rmSync(join(staging, 'record-derived.sqlite'));
     rmSync(join(staging, 'state-lineage-root.v1.json'));
     const root = validateStateLineageRootManifestV2({ ...checked.root, schema_version: 2, kind: 'echo-state-lineage-root-manifest-v2', databases: stateLineageDatabaseSlotsV2(), creating_artifact_revision: artifactSourceSha });
-    writeFileSync(join(staging, 'state-lineage-root.v2.json'), canonicalJson(root), { mode: 0o600, flag: 'wx' });
+    writeFileSync(join(staging, 'state-lineage-root.v2.json'), canonicalJson(root), { mode: 0o600, flag: 'wx', flush: true });
     verifyAuthorityStateLineage(staging);
     if (inventory(source).sha256 !== checked.before.sha256) refuse('source_changed');
     const after = inventory(staging);
     const changed = new Set([...roles.map(role => role.file), 'state-lineage-root.v1.json', 'state-lineage-root.v2.json']);
     if (JSON.stringify(checked.before.entries.filter(([name]) => !changed.has(name))) !== JSON.stringify(after.entries.filter(([name]) => !changed.has(name)))) refuse('retained_files_changed');
+    // SQLite FULL commits flush the converted databases; copied files and the
+    // new root were flushed above. Persist child directory entries before rename.
+    for (const [name, identity] of [...after.entries].reverse()) {
+      if (identity === 'directory') syncDirectory(join(staging, name));
+    }
+    syncDirectory(staging);
     const receipt = { kind: 'echo-authority-schema-cleanup-receipt-v1', source_inventory_sha256: checked.before.sha256,
       output_inventory_sha256: after.sha256, artifact_source_sha: artifactSourceSha, source_unchanged: true, retained_rows_unchanged: true, root_manifest_sha256: canonicalSha256(root), retired_tables: 22 };
     // Reserve without replacing an existing destination, then publish by rename.
     mkdirSync(output, { mode: 0o700 }); reserved = lstatSync(output);
     renameSync(staging, output); reserved = undefined;
+    syncDirectory(dirname(output));
     return Object.freeze(receipt);
   } catch (error) {
     if (reserved && existsSync(output)) {

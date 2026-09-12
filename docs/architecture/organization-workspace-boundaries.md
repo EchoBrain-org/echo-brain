@@ -109,9 +109,12 @@ The server uses separate databases with explicit responsibilities:
   processing state including raw meeting and decision documents;
 - the control-plane database owns verified provider identity, opaque
   connection handles, adapter bindings, grants, and integration audit;
-- `record-log.sqlite` is the append-only organization record;
-- `record-derived.sqlite` is rebuilt deterministically from that log; and
+- `record-log.sqlite` is the append-only organization record; and
 - retrieval generations are immutable projections built from record state.
+
+The unused `record-derived.sqlite` role is retired from the six-role V2
+lineage. Its frozen SQL remains only for explicit historical conversion and
+compatibility fixtures; no runtime materializer or initializer owns it.
 
 The Authority database stores bounded pre-record meeting and decision content,
 but no embeddings and no canonical approved organization-record truth. The

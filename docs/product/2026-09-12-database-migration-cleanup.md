@@ -47,7 +47,7 @@ No VACUUM or historical-generation pruning is performed.
 | --- | --- | --- |
 | Authority | 4 of 22 tables | No shipped reader/writer references; no retained foreign key or trigger depends on them. |
 | Control plane | 9 of 20 tables | Retired reaction-approval/activation persistence; current private DM approval uses separate tables. No retained foreign key or trigger depends on these nine. |
-| Record derived | All 9 tables and the database file | Bootstrap initializes metadata/cursor; the other seven tables have no shipped readers/writers. Current reads/search use the canonical log and permission facts. |
+| Record derived | All 9 tables and the database file | Historical bootstrap initialized metadata/cursor; the other seven tables have no shipped readers/writers. Current reads/search use the canonical log and permission facts. |
 | Record log | One redundant index | Its exact columns, order and collation are already covered by a UNIQUE constraint's index. Preserve every log table and record. |
 
 Authority removal set:
@@ -145,7 +145,26 @@ hot journals, existing outputs, and interrupted conversion followed by retry.
 New baselines and the V2 manifest have pinned golden digests. Recovery coverage
 checks the new primary count and published retrieval databases. `npm run check`
 passed: architecture boundaries, documentation, lint, build, type checking and
-182 test files (2,079 tests passed; one existing test skipped).
+182 test files (2,079 tests passed; one existing test skipped) before the follow-up
+scan below. Three additional schema-refusal regressions cover that scan's fix.
+
+The follow-up scan reproduced two metadata-name exclusions that were too broad:
+SQL `LIKE` treated the underscore in `sqlite_%` as a wildcard, and a trigger
+sharing the manifest table's name was also omitted. Inspection now exempts only
+the literal reserved SQLite prefix and the manifest table itself. Retired-table
+emptiness uses a bounded existence query instead of hashing rejected contents.
+Copied files, the new root and directory entries are flushed before returning
+success; an injected flush failure proves no partial output is published.
+Stale runtime ownership and release-version documentation is corrected.
+
+The installed staging updater has no database conversion or state-cutover action.
+Its ordinary `stage` preflight must refuse this candidate against the old root.
+The offline converter alone is not a live migration procedure: quiescence,
+snapshot qualification, candidate/data activation and schema-aware rollback must
+be supplied by a reviewed operator operation before retaining the current
+staging organization on the new schema. Rehearsal replacement remains a separate
+human-only destructive path; neither a merge nor a staging request authorizes
+silently discarding the existing organization.
 
 Production's exact installed schema is still unknown. Obtain it through the
 reviewed operator lane, qualify an isolated restored copy, and extend the

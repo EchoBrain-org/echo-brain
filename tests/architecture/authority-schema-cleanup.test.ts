@@ -1,4 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
@@ -15,7 +17,7 @@ const roots: string[] = [];
 const repo = resolve(import.meta.dirname, "../..");
 const now = "2026-09-12T00:00:00.000Z";
 const artifact = "a".repeat(40);
-afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); syncBuiltinESMExports(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 // Exact pre-cleanup schemas. These immutable assets remain conversion fixtures.
 function fixture() {
@@ -103,6 +105,19 @@ it("refuses drift and never publishes a partial output or changes the source", (
   expect(readdirSync(parent)).toEqual(["source"]);
 });
 
+it.each([
+  "CREATE TABLE sqliteXunregistered (payload TEXT)",
+  "CREATE INDEX sqliteXunregistered ON authority_memberships(status)",
+  "CREATE TRIGGER echo_state_lineage_manifest AFTER UPDATE ON authority_memberships BEGIN SELECT 1; END",
+])("refuses schema objects whose names resemble exempt metadata: %s", (sql) => {
+  const { source, output } = fixture();
+  const db = new Database(join(source, "authority.sqlite"));
+  db.exec(sql);
+  db.close();
+  expect(() => inspectAuthoritySchemaCleanup(source)).toThrow("schema_drift");
+  expect(existsSync(output)).toBe(false);
+});
+
 it("refuses historical contents in a retired table instead of deleting them", () => {
   const { source, output } = fixture();
   const db = new Database(join(source, "record-derived.sqlite"));
@@ -136,6 +151,16 @@ it("discards an interrupted output and allows a retry against the unchanged sour
   expect(readdirSync(parent)).toEqual(["source"]);
   expect(inspectAuthoritySchemaCleanup(source)).toEqual(checked);
   expect(convert()).toMatchObject({ retained_rows_unchanged: true });
+});
+
+it("does not publish output when copied bytes cannot be flushed", () => {
+  const { source, output, parent } = fixture();
+  const checked = inspectAuthoritySchemaCleanup(source);
+  vi.spyOn(fs, "fsyncSync").mockImplementationOnce(() => { throw new Error("injected-flush-failure"); });
+  syncBuiltinESMExports();
+  expect(() => convertAuthoritySchemaCleanup({ source, output, expectedSourceInventorySha256: checked.source_inventory_sha256, artifactSourceSha: artifact })).toThrow("injected-flush-failure");
+  expect(readdirSync(parent)).toEqual(["source"]);
+  expect(inspectAuthoritySchemaCleanup(source)).toEqual(checked);
 });
 
 it("rejects unknown lineage, symlinks, hot journals and existing destinations", () => {

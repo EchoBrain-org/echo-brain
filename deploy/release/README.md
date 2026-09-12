@@ -49,7 +49,8 @@ They contain table counts and digests, never file contents. The artifact SHA is
 a caller-supplied provenance label, not a signature or release authorization.
 The source remains unchanged and readable with its matching old release.
 Conversion verifies retained rows and unchanged files before publishing output;
-no live path or accepted-release pointer is changed. A caught failure removes
+copied bytes and directory entries are flushed before reporting success. No
+live path or accepted-release pointer is changed. A caught failure removes
 the partial output; a killed process may leave a private `.schema-cleanup-*`
 directory to discard after confirming no converter still owns it.
 
@@ -280,8 +281,8 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
 migration is not eligible for this loop; make an explicit migration decision
-instead. If persisted state is older or otherwise not that exact V4/V2/V2
-lineage, `stage` refuses before activating or recording the candidate. It does
+instead. If persisted state lacks the candidate's exact V5/V3/V3 databases and
+V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
 
 ### Environment drift before staging
