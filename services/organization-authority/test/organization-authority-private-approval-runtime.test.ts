@@ -185,7 +185,7 @@ async function completeFounderReonboarding(input: {
   readonly state_directory: string;
   readonly parent: string;
   readonly owner_membership_id: string;
-}): Promise<string> {
+}): Promise<{ pkce_key_file: string; owner_access_token: string }> {
   const credentials = initializePersonSessionCredentials({
     state_directory: input.state_directory,
   });
@@ -235,14 +235,14 @@ async function completeFounderReonboarding(input: {
       login_grant: invitation.login_grant,
     });
     provider.buildAuthorizationUrl(begun);
-    await sessions.completeOidcLogin({
+    const session = await sessions.completeOidcLogin({
       state: begun.state,
       authorization_code: "founder-code",
     });
+    return { pkce_key_file: pkce, owner_access_token: session.access_token };
   } finally {
     authority.close();
   }
-  return pkce;
 }
 
 /** Seed only the connection and verified owner identity needed for a private DM. */
@@ -538,7 +538,7 @@ async function admittedFixture(input: {
     created_at: "2026-08-22T11:00:00.000Z",
     creating_artifact_revision: "organization-authority-runtime-test",
   });
-  const pkce_key_file = await completeFounderReonboarding({
+  const { pkce_key_file, owner_access_token } = await completeFounderReonboarding({
     state_directory: initialized.state_directory,
     parent,
     owner_membership_id: initialized.owner_membership_id,
@@ -629,6 +629,7 @@ async function admittedFixture(input: {
   };
   return {
     initialized,
+    owner_access_token,
     config,
     source,
     processorIdentity,
@@ -1514,6 +1515,23 @@ describe("Organization Authority runtime private approval lane", () => {
         authority,
         record,
       });
+      // Real signed approval -> permission-filtered reader -> configured
+      // projection -> current directory, through the service's HTTP runtime.
+      const recordsUrl = `http://127.0.0.1:${String(fixture.runtime.address.port)}/v1/person/records`;
+      const headers = { authorization: `Bearer ${fixture.owner_access_token}` };
+      const legacyRead = await fetch(recordsUrl, { headers });
+      expect(legacyRead.status).toBe(200);
+      const legacyRecords = await legacyRead.json() as { records: readonly { envelope: unknown }[] };
+      expect(legacyRecords.records).toHaveLength(1);
+      expect(legacyRecords.records[0]).not.toHaveProperty("source_metadata");
+      const enrichedRead = await fetch(recordsUrl, {
+        headers: { ...headers, "x-echo-person-record-version": "2" },
+      });
+      expect(enrichedRead.status).toBe(200);
+      const enrichedRecords = await enrichedRead.json() as { records: readonly { envelope: unknown; source_metadata: unknown }[] };
+      expect(enrichedRecords.records).toHaveLength(1);
+      expect(enrichedRecords.records[0]?.source_metadata).toEqual({ record_approved_by: { display_name: "Founder" } });
+      expect(enrichedRecords.records[0]?.envelope).toEqual(legacyRecords.records[0]?.envelope);
       expect(teamAnswers.owner).toMatchObject({
         answer: "Ship the clean live migration.",
         citations: [

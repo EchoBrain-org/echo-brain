@@ -1,5 +1,6 @@
 import { sha256Digest } from "@echo-brain/federation-protocol";
-import type { Sha256Digest } from "@echo-brain/federation-protocol";
+import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
+import type { RecordApproverV1 } from "../../../application/record-approver-projection-v1.js";
 import { derivedAtomIdentity } from "../../../application/atom-identity.js";
 import type {
   RecordPolicyFactEnvelopeV1,
@@ -12,7 +13,7 @@ import {
   type PersonPolicyFactProjectionV2,
   type PersonPolicyFactRowV2,
   type PersonPolicyIdV2,
-} from "../../../application/person-policy-facts-v2.js";
+} from "../../../application/person-policy-fact-contracts-v2.js";
 
 /**
  * D3 adapter projector for the private Slack Block Kit approval protocol. This is
@@ -297,4 +298,38 @@ export function createPrivateSlackBlockApprovalPolicyProjectorV1(): RecordPolicy
     },
   };
   return Object.freeze(projector);
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+}
+
+/** Optional historical actor projection; the caller has already authorized the record. */
+export function projectPrivateSlackBlockApprovalApproverV1(
+  envelope: JsonObject,
+): RecordApproverV1 | undefined {
+  const body = object(envelope.body);
+  if (body === undefined || object(body.event)?.kind !== "approved") return undefined;
+  try {
+    // Reuse the exact frozen protocol validator, including kind and version.
+    const resolution = ref(body.human_act_resolution_ref);
+    if (
+      resolution.action !== "approve" ||
+      body.authority_id !== resolution.authority_id ||
+      body.organization_id !== resolution.organization_id ||
+      body.state_lineage_id !== resolution.state_lineage_id
+    ) return undefined;
+    return Object.freeze({
+      authority_id: resolution.authority_id,
+      organization_id: resolution.organization_id,
+      state_lineage_id: resolution.state_lineage_id,
+      approval_id: resolution.approval_id,
+      principal_id: resolution.final_approver.principal_id,
+      membership_id: resolution.final_approver.membership_id,
+    });
+  } catch (error) {
+    if (error instanceof PrivateSlackBlockApprovalPolicyFactProjectionV1Error) return undefined;
+    throw error;
+  }
 }

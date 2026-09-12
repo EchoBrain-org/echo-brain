@@ -2,6 +2,7 @@ import {
   createRecordPolicyFactProjectorRegistryV1,
   createPersonPolicyFactProjectorV2,
   createPrivateSlackBlockApprovalPolicyProjectorV1,
+  projectPrivateSlackBlockApprovalApproverV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   openOrganizationAuthorityRuntime,
@@ -128,6 +129,8 @@ export async function openOrganizationAuthorityService(
         };
   const apiDependencies = {
     ...dependencies.api,
+    record_approver:
+      dependencies.api?.record_approver ?? projectPrivateSlackBlockApprovalApproverV1,
     external_identity_runtime_bundle:
       dependencies.api?.external_identity_runtime_bundle ??
       createSlackPersonExternalIdentityRuntimeBundleV1({

@@ -14,6 +14,13 @@ restricted-reviewer policy behavior.
 Provider-neutral policy-fact registry contracts remain in `application`. The
 Private Slack Block Kit policy projector is an adapter under
 `adapters/record-policy-projection/slack`; the public API retains its exports.
+Shared derived-fact contracts are separate from the kernel and registry so
+adapters do not depend on the kernel. The record-owned approver projection
+port returns only a derived identity from an already permission-filtered
+envelope. Composition selects the protocol decoder; the read route checks
+its coordinates and resolves a current display name. Unknown references, and
+generic HumanAct references without an actor, have no optional approver
+metadata. No derived metadata is added to canonical records.
 
 Fresh log and derived stores are created only from the two byte-pinned SQL
 baselines. Historical migrations, broad append and maintenance barrels,

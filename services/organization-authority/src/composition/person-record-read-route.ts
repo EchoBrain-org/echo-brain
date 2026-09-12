@@ -6,6 +6,7 @@ import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonReadableRecordV1,
   PersonRecordReaderV1Input,
+  RecordApproverProjectorV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { AuthorityOperationError } from "../domain/errors.js";
 import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
@@ -35,6 +36,7 @@ export interface CreatePersonRecordReadRouteV1Options {
   readonly sessions: CurrentPersonSessions;
   readonly records: PersonRecordReader;
   readonly audit: SqlitePersonRecordReadAuditV1;
+  readonly record_approver?: RecordApproverProjectorV1;
   /** Resolves only the actor named by a record already released to this reader. */
   readonly memberships?: {
     membership(id: string): {
@@ -46,28 +48,18 @@ export interface CreatePersonRecordReadRouteV1Options {
   };
 }
 
-function object(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown> : undefined;
-}
-
 function sourceMetadata(
   record: PersonReadableRecordV1,
   options: CreatePersonRecordReadRouteV1Options,
 ): PersonRecordSourceMetadataV1 {
-  const body = object(record.envelope.body);
-  const ref = object(body?.human_act_resolution_ref);
-  const actor = object(ref?.final_approver);
+  const actor = options.record_approver?.(record.envelope);
   if (
-    body?.authority_id !== options.authority_id ||
-    body.organization_id !== options.organization_id ||
-    body.state_lineage_id !== options.state_lineage_id ||
-    object(body.event)?.kind !== "approved" ||
-    typeof ref?.kind !== "string" ||
-    ref.action !== "approve" ||
-    ref.approval_id !== record.approval_id ||
-    ref.organization_id !== options.organization_id ||
-    typeof actor?.principal_id !== "string" ||
+    actor === undefined ||
+    actor.authority_id !== options.authority_id ||
+    actor.organization_id !== options.organization_id ||
+    actor.state_lineage_id !== options.state_lineage_id ||
+    actor.approval_id !== record.approval_id ||
+    typeof actor.principal_id !== "string" ||
     typeof actor.membership_id !== "string"
   ) return Object.freeze({});
   const membership = options.memberships?.membership(actor.membership_id);

@@ -2,7 +2,7 @@ import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonPolicyFactProjectionV2,
   PersonPolicyIdV2,
-} from "./person-policy-facts-v2.js";
+} from "./person-policy-fact-contracts-v2.js";
 
 export type RecordResolutionActionV1 = "approve" | "reject";
 export type RecordResolutionEventKindV1 = "approved" | "rejected";

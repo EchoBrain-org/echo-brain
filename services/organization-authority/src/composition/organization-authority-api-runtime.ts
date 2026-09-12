@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   PersonRecordReaderV1,
   openOrganizationRecordDatabase,
+  type RecordApproverProjectorV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { expandReadableSearchRelatedAtomsV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type { AddressInfo } from "node:net";
@@ -56,6 +57,8 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 }
 
 export interface OrganizationAuthorityApiRuntimeDependencies {
+  /** Historical record protocol projection, independent of live ingress. */
+  readonly record_approver?: RecordApproverProjectorV1;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
@@ -208,6 +211,7 @@ export async function startOrganizationAuthorityApiRuntime(
         state_lineage_id: lineage.root.state_lineage_id,
         sessions,
         records: new PersonRecordReaderV1(recordDatabase),
+        record_approver: dependencies.record_approver,
         memberships: {
           membership: (id) => repository.read((transaction) => transaction.membership(id)),
         },

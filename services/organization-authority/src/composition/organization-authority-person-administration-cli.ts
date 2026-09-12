@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { canonicalJson } from "@echo-brain/federation-protocol";
+import { projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import type { PersonSessionOidcConfiguration } from "../application/ports/person-session-dependencies.js";
 import {
@@ -211,6 +212,7 @@ export async function runOrganizationAuthorityPersonAdministrationCli(
         privateReference(required(parsed, "--pkce-key-file")),
       ),
     }, {
+      record_approver: projectPrivateSlackBlockApprovalApproverV1,
       external_identity_runtime_bundle:
         createSlackPersonExternalIdentityRuntimeBundleV1({
           // The public V1 flag keeps its compatibility-bound legacy name.

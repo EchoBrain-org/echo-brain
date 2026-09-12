@@ -47,12 +47,14 @@ import {
   verifyOrganizationRecordReceiptV2,
 } from "../../../packages/organization-protocol/src/organization-record-receipt-v2.js";
 import {
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonHumanActActionV2,
-  type PersonPolicyIdV2,
   type RevalidatedPersonPolicyAuthorizationWitnessV2,
 } from "../src/application/person-policy-facts-v2.js";
+import {
+  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  type PersonPolicyIdV2,
+} from "../src/application/person-policy-fact-contracts-v2.js";
 import {
   OrganizationRecordAppenderV4,
   V4RecordIdempotencyConflictError,
