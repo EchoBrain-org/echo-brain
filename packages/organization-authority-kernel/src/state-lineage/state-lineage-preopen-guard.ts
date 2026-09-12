@@ -8,19 +8,15 @@ import {
   STATE_LINEAGE_MANIFEST_TABLE,
   STATE_LINEAGE_RETRIEVAL_DIRECTORY,
   STATE_LINEAGE_ROLE_APPLICATION_IDS_V1,
-  STATE_LINEAGE_ROOT_MANIFEST_FILENAME,
   STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME,
-  stateLineageDatabaseSlotsV1,
   stateLineageDatabaseSlotsV2,
-  validateStateLineageRootManifestV1,
   validateStateLineageRootManifestV2,
   validateStoredStateLineageDatabaseManifestV1,
 } from "./state-lineage-manifest-v1.js";
 import type {
   StateLineageDatabaseManifestV1,
-  StateLineageRoleV1,
   StateLineageRoleV2,
-  StateLineageRootManifest,
+  StateLineageRootManifestV2,
 } from "./state-lineage-manifest-v1.js";
 
 /**
@@ -78,18 +74,15 @@ export interface StateLineageExpectedSchemaV1 {
 }
 
 export interface StateLineagePreopenExpectationV1 {
-  /** V1 is supported only for explicit historical validation/conversion. */
-  readonly root_manifest_version?: 1 | 2;
   readonly state_directory: string;
   readonly expected_binding: StateLineageExpectedBindingV1;
   readonly expected_schemas: Readonly<
-    Record<StateLineageRoleV2, StateLineageExpectedSchemaV1> &
-    Partial<Record<"record-derived", StateLineageExpectedSchemaV1>>
+    Record<StateLineageRoleV2, StateLineageExpectedSchemaV1>
   >;
 }
 
 export interface VerifiedStateLineageDatabaseV1 {
-  readonly role: StateLineageRoleV1;
+  readonly role: StateLineageRoleV2;
   readonly path: string;
   readonly manifest: StateLineageDatabaseManifestV1;
 }
@@ -101,7 +94,7 @@ export interface VerifiedStateLineageRetrievalTreeV1 {
 }
 
 export interface StateLineagePreopenResultV1 {
-  readonly root: StateLineageRootManifest;
+  readonly root: StateLineageRootManifestV2;
   readonly databases: readonly VerifiedStateLineageDatabaseV1[];
   readonly retrieval: VerifiedStateLineageRetrievalTreeV1;
 }
@@ -135,9 +128,6 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 function validatedExpectation(
   expectation: StateLineagePreopenExpectationV1,
 ): void {
-  if (expectation.root_manifest_version !== undefined && expectation.root_manifest_version !== 1 && expectation.root_manifest_version !== 2) {
-    refuse("invalid_input", "unsupported root manifest version");
-  }
   const binding = expectation.expected_binding as unknown;
   if (
     binding === null ||
@@ -156,7 +146,7 @@ function validatedExpectation(
   if (schemas === null || typeof schemas !== "object") {
     refuse("invalid_input", "expected_schemas must cover every role");
   }
-  const slots = expectation.root_manifest_version === 2 ? stateLineageDatabaseSlotsV2() : stateLineageDatabaseSlotsV1();
+  const slots = stateLineageDatabaseSlotsV2();
   if (Object.keys(schemas).some(role => !slots.some(slot => slot.role === role))) {
     refuse("invalid_input", "expected_schemas contains a retired or unknown role");
   }
@@ -191,7 +181,7 @@ function statEntry(path: string, label: string): Stats {
 /** Opens SQLite read-only and never creates, migrates, checkpoints, or writes. */
 function inspectDatabase(
   databasePath: string,
-  role: StateLineageRoleV1,
+  role: StateLineageRoleV2,
   label: string,
 ): InspectedDatabase {
   let database: Database.Database;
@@ -296,7 +286,7 @@ function inspectDatabase(
 
 function verifyDatabase(
   inspected: InspectedDatabase,
-  role: StateLineageRoleV1,
+  role: StateLineageRoleV2,
   expectation: StateLineagePreopenExpectationV1,
   label: string,
 ): StateLineageDatabaseManifestV1 {
@@ -369,11 +359,10 @@ function checkCoherence(
   }
 }
 
-function readRootManifest(stateDirectory: string, version: 1 | 2): StateLineageRootManifest {
-  const filename = version === 2 ? STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME : STATE_LINEAGE_ROOT_MANIFEST_FILENAME;
-  const other = version === 2 ? STATE_LINEAGE_ROOT_MANIFEST_FILENAME : STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME;
-  if (existsSync(join(stateDirectory, other))) refuse("legacy_state", "state root version differs from the expected runtime; use an explicit offline transition");
-  if (version === 2 && existsSync(join(stateDirectory, "record-derived.sqlite"))) refuse("legacy_state", "retired derived database remains in V2 state");
+function readRootManifest(stateDirectory: string): StateLineageRootManifestV2 {
+  const filename = STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME;
+  if (existsSync(join(stateDirectory, "state-lineage-root.v1.json"))) refuse("legacy_state", "state root version is unsupported by this runtime");
+  if (existsSync(join(stateDirectory, "record-derived.sqlite"))) refuse("legacy_state", "retired derived database remains in V2 state");
   const rootPath = join(stateDirectory, filename);
   if (!existsSync(rootPath)) {
     refuse(
@@ -395,7 +384,7 @@ function readRootManifest(stateDirectory: string, version: 1 | 2): StateLineageR
   }
   let root;
   try {
-    root = version === 2 ? validateStateLineageRootManifestV2(parsed) : validateStateLineageRootManifestV1(parsed);
+    root = validateStateLineageRootManifestV2(parsed);
   } catch (error) {
     refuse(
       "missing_manifest",
@@ -456,7 +445,7 @@ function scanRetrievalTree(
   const generationIds = new Set<string>();
   const databases: VerifiedStateLineageDatabaseV1[] = [];
   let segmentCount = 0;
-  const retrievalSlots = stateLineageDatabaseSlotsV1().filter(
+  const retrievalSlots = stateLineageDatabaseSlotsV2().filter(
     (slot) => slot.location.kind === "retrieval_segment_tree",
   );
   for (const entry of readdirSync(generationsRoot)) {
@@ -544,7 +533,7 @@ export function verifyStateLineageBeforeOpen(
     refuse("missing_database", "state directory does not exist");
   }
   scanStateRootDebris(stateDirectory);
-  const root = readRootManifest(stateDirectory, expectation.root_manifest_version ?? 1);
+  const root = readRootManifest(stateDirectory);
   const bindings: Array<{
     label: string;
     authority_id: string;

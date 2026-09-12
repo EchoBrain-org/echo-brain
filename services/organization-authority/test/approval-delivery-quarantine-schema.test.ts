@@ -1,4 +1,3 @@
-import { historicalAuthorityV3 } from "../../../tests/support/historical-authority-baselines.js";
 import { describe, expect, it } from "vitest";
 import {
   applyAuthorityBaselineV5,
@@ -215,7 +214,7 @@ describe("Authority approval-delivery-quarantine schema", () => {
     }
   });
 
-  it("refuses to relabel current or historical state as a fresh V5 database", () => {
+  it("refuses to relabel occupied state as a fresh V5 database", () => {
     const database = openedCurrentDatabase();
     try {
       expect(() => applyAuthorityBaselineV5(database)).toThrow(
@@ -224,14 +223,6 @@ describe("Authority approval-delivery-quarantine schema", () => {
     } finally {
       database.close();
     }
-    const v3 = openAuthorityDatabase(":memory:");
-    try {
-      historicalAuthorityV3.apply(v3);
-      expect(() => applyAuthorityBaselineV5(v3)).toThrow(
-        /completely empty database/,
-      );
-    } finally {
-      v3.close();
-    }
+
   });
 });

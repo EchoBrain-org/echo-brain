@@ -5,21 +5,18 @@ import type { JsonValue } from "@echo-brain/federation-protocol";
 import {
   STATE_LINEAGE_DATABASE_MANIFEST_V1_KIND,
   STATE_LINEAGE_MANIFEST_TABLE,
-  STATE_LINEAGE_ROLES_V1,
+  STATE_LINEAGE_ROLES_V2,
   STATE_LINEAGE_ROLE_APPLICATION_IDS_V1,
-  STATE_LINEAGE_ROOT_MANIFEST_FILENAME,
-  STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
+  STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME,
+  STATE_LINEAGE_ROOT_MANIFEST_V2_KIND,
   stateLineageDatabaseManifestSha256V1,
-  stateLineageDatabaseSlotsV1,
   stateLineageDatabaseSlotsV2,
-  stateLineageRootManifestSha256V1,
   stateLineageRootManifestSha256V2,
   validateStateLineageDatabaseManifestV1,
-  validateStateLineageRootManifestV1,
   validateStateLineageRootManifestV2,
   validateStoredStateLineageDatabaseManifestV1,
 } from "../../src/state-lineage/state-lineage-manifest-v1.js";
-import type { StateLineageRoleV1 } from "../../src/state-lineage/state-lineage-manifest-v1.js";
+import type { StateLineageRoleV2 } from "../../src/state-lineage/state-lineage-manifest-v1.js";
 
 const AUTHORITY_ID = "oau_11111111-1111-4111-8111-111111111111";
 const ORGANIZATION_ID = "org_22222222-2222-4222-8222-222222222222";
@@ -28,43 +25,18 @@ const CREATED_AT = "2026-08-21T00:00:00.000Z";
 const ARTIFACT_REVISION = "42dd37a0000000000000000000000000000000aa";
 
 const ROOT_MANIFEST_SHA256 =
-  "sha256:98d89794f60ecc414cd9ee79b681b72493300b7bfb04877f6dcb5743f6988a1e";
+  "sha256:cec1c3a2f923fa568bb1a595a9589fa8c22b12d4b2d91365113f0872c4509f57";
 const DATABASE_MANIFEST_SHA256 =
   "sha256:286138c1afb64727afb40b2be70297ee3edc32171cafa4e71ca3f4670002f9c9";
 
-describe("six-role root manifest v2", () => {
-  const body = () => ({ ...goldenRootManifest(), schema_version: 2,
-    kind: "echo-state-lineage-root-manifest-v2", databases: stateLineageDatabaseSlotsV2() });
-
-  it("pins the new identity without changing historical V1 bytes", () => {
-    const root = validateStateLineageRootManifestV2(body());
-    expect(Object.isFrozen(root)).toBe(true);
-    expect(root.databases).toEqual(stateLineageDatabaseSlotsV1().filter(slot => slot.role !== "record-derived"));
-    expect(stateLineageRootManifestSha256V2(body())).toBe("sha256:cec1c3a2f923fa568bb1a595a9589fa8c22b12d4b2d91365113f0872c4509f57");
-    expect(stateLineageRootManifestSha256V1(goldenRootManifest())).toBe(ROOT_MANIFEST_SHA256);
-  });
-
-  it("refuses cross-version roots, retired slots, missing slots, and altered bindings", () => {
-    expect(() => validateStateLineageRootManifestV1(body())).toThrow();
-    expect(() => validateStateLineageRootManifestV2(goldenRootManifest())).toThrow();
-    for (const mutation of [
-      { databases: stateLineageDatabaseSlotsV1() },
-      { databases: stateLineageDatabaseSlotsV2().slice(1) },
-      { databases: [...stateLineageDatabaseSlotsV2()].reverse() },
-      { databases: stateLineageDatabaseSlotsV2().map(slot => ({ ...slot, application_id: 1 })) },
-      { organization_id: "unknown" }, { extra: true },
-    ]) expect(() => validateStateLineageRootManifestV2({ ...body(), ...mutation })).toThrow();
-  });
-});
-
 function goldenRootManifest(): Record<string, unknown> {
   return {
-    schema_version: 1,
-    kind: STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
+    schema_version: 2,
+    kind: STATE_LINEAGE_ROOT_MANIFEST_V2_KIND,
     authority_id: AUTHORITY_ID,
     organization_id: ORGANIZATION_ID,
     state_lineage_id: STATE_LINEAGE_ID,
-    databases: stateLineageDatabaseSlotsV1().map((slot) => ({
+    databases: stateLineageDatabaseSlotsV2().map((slot) => ({
       role: slot.role,
       location:
         slot.location.kind === "state_file"
@@ -82,7 +54,7 @@ function goldenRootManifest(): Record<string, unknown> {
 }
 
 function goldenDatabaseManifest(
-  role: StateLineageRoleV1 = "authority",
+  role: StateLineageRoleV2 = "authority",
 ): Record<string, unknown> {
   return {
     schema_version: 1,
@@ -99,23 +71,23 @@ function goldenDatabaseManifest(
   };
 }
 
-describe("private state-lineage manifest v1 contracts", () => {
+describe("state-lineage manifest contracts", () => {
   it("freezes the canonical root manifest and golden digest", () => {
-    const body = validateStateLineageRootManifestV1(goldenRootManifest());
+    const body = validateStateLineageRootManifestV2(goldenRootManifest());
     expect(Object.isFrozen(body)).toBe(true);
-    expect(body.databases).toHaveLength(7);
+    expect(body.databases).toHaveLength(6);
     expect(body.databases.map((slot) => slot.role)).toEqual([
-      ...STATE_LINEAGE_ROLES_V1,
+      ...STATE_LINEAGE_ROLES_V2,
     ]);
-    expect(stateLineageRootManifestSha256V1(goldenRootManifest())).toBe(
+    expect(stateLineageRootManifestSha256V2(goldenRootManifest())).toBe(
       ROOT_MANIFEST_SHA256,
     );
-    expect(STATE_LINEAGE_ROOT_MANIFEST_FILENAME).toBe(
-      "state-lineage-root.v1.json",
+    expect(STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME).toBe(
+      "state-lineage-root.v2.json",
     );
   });
 
-  it("pins the seven role identities, locations, and application IDs", () => {
+  it("pins the six role identities, locations, and application IDs", () => {
     const ascii = (value: number): string =>
       Buffer.from([
         (value >>> 24) & 0xff,
@@ -129,7 +101,6 @@ describe("private state-lineage manifest v1 contracts", () => {
       authority: 0x45434155,
       "control-plane": 0x45434f50,
       "record-log": 0x4543524c,
-      "record-derived": 0x45435244,
       "retrieval-facts": 0x45524654,
       "retrieval-lexical": 0x45524c58,
       "retrieval-content": 0x45524354,
@@ -144,12 +115,11 @@ describe("private state-lineage manifest v1 contracts", () => {
       authority: "ECAU",
       "control-plane": "ECOP",
       "record-log": "ECRL",
-      "record-derived": "ECRD",
       "retrieval-facts": "ERFT",
       "retrieval-lexical": "ERLX",
       "retrieval-content": "ERCT",
     });
-    const slots = stateLineageDatabaseSlotsV1();
+    const slots = stateLineageDatabaseSlotsV2();
     expect(
       slots
         .filter((slot) => slot.location.kind === "state_file")
@@ -158,7 +128,6 @@ describe("private state-lineage manifest v1 contracts", () => {
       ["authority", "authority.sqlite"],
       ["control-plane", "integrations.sqlite"],
       ["record-log", "record-log.sqlite"],
-      ["record-derived", "record-derived.sqlite"],
     ]);
     for (const slot of slots) {
       if (slot.location.kind === "retrieval_segment_tree") {
@@ -192,11 +161,11 @@ describe("private state-lineage manifest v1 contracts", () => {
     expect(() =>
       validateStateLineageDatabaseManifestV1({
         ...goldenDatabaseManifest(),
-        kind: STATE_LINEAGE_ROOT_MANIFEST_V1_KIND,
+        kind: STATE_LINEAGE_ROOT_MANIFEST_V2_KIND,
       }),
     ).toThrowError(/kind is unsupported/);
     expect(() =>
-      validateStateLineageRootManifestV1({
+      validateStateLineageRootManifestV2({
         ...goldenRootManifest(),
         kind: STATE_LINEAGE_DATABASE_MANIFEST_V1_KIND,
       }),
@@ -245,18 +214,18 @@ describe("private state-lineage manifest v1 contracts", () => {
       const missing = { ...base };
       delete (missing as Record<string, unknown>)[key];
       expect(
-        () => validateStateLineageRootManifestV1(missing),
+        () => validateStateLineageRootManifestV2(missing),
         `missing ${key}`,
       ).toThrowError();
     }
     expect(() =>
-      validateStateLineageRootManifestV1({ ...base, extra: true }),
+      validateStateLineageRootManifestV2({ ...base, extra: true }),
     ).toThrowError(/unexpected shape/);
     expect(() =>
-      validateStateLineageRootManifestV1({ ...base, schema_version: 2 }),
+      validateStateLineageRootManifestV2({ ...base, schema_version: 1 }),
     ).toThrowError(/schema_version is unsupported/);
     expect(() =>
-      validateStateLineageRootManifestV1({
+      validateStateLineageRootManifestV2({
         ...base,
         creating_artifact_revision: null,
       }),
@@ -265,17 +234,20 @@ describe("private state-lineage manifest v1 contracts", () => {
     const slots = (goldenRootManifest().databases as unknown[]).slice();
     const swapped = goldenRootManifest();
     swapped.databases = [slots[1], slots[0], ...slots.slice(2)];
-    expect(() => validateStateLineageRootManifestV1(swapped)).toThrowError(
+    expect(() => validateStateLineageRootManifestV2(swapped)).toThrowError(
       /out of canonical order/,
     );
     const duplicated = goldenRootManifest();
     duplicated.databases = [slots[0], slots[0], ...slots.slice(2)];
-    expect(() => validateStateLineageRootManifestV1(duplicated)).toThrowError(
+    expect(() => validateStateLineageRootManifestV2(duplicated)).toThrowError(
       /out of canonical order/,
     );
+    const retired = goldenRootManifest();
+    retired.databases = [...slots, { role: "record-derived", location: { kind: "state_file", filename: "record-derived.sqlite" }, application_id: 0x45435244 }];
+    expect(() => validateStateLineageRootManifestV2(retired)).toThrowError(/every state-lineage role exactly once/);
     const short = goldenRootManifest();
-    short.databases = slots.slice(0, 6);
-    expect(() => validateStateLineageRootManifestV1(short)).toThrowError(
+    short.databases = slots.slice(0, 5);
+    expect(() => validateStateLineageRootManifestV2(short)).toThrowError(
       /every state-lineage role exactly once/,
     );
     const wrongId = goldenRootManifest();
@@ -284,7 +256,7 @@ describe("private state-lineage manifest v1 contracts", () => {
       application_id: 0x45434f50,
     };
     wrongId.databases = [wrongIdSlot, ...slots.slice(1)];
-    expect(() => validateStateLineageRootManifestV1(wrongId)).toThrowError(
+    expect(() => validateStateLineageRootManifestV2(wrongId)).toThrowError(
       /application_id does not match/,
     );
     const wrongFile = goldenRootManifest();
@@ -293,7 +265,7 @@ describe("private state-lineage manifest v1 contracts", () => {
       location: { kind: "state_file", filename: "integrations.sqlite" },
     };
     wrongFile.databases = [wrongFileSlot, ...slots.slice(1)];
-    expect(() => validateStateLineageRootManifestV1(wrongFile)).toThrowError(
+    expect(() => validateStateLineageRootManifestV2(wrongFile)).toThrowError(
       /does not match the canonical location/,
     );
 
@@ -301,22 +273,22 @@ describe("private state-lineage manifest v1 contracts", () => {
     const hostile = Object.defineProperty(goldenRootManifest(), "kind", {
       get() {
         getterCalls += 1;
-        return STATE_LINEAGE_ROOT_MANIFEST_V1_KIND;
+        return STATE_LINEAGE_ROOT_MANIFEST_V2_KIND;
       },
       enumerable: true,
       configurable: true,
     });
-    expect(() => validateStateLineageRootManifestV1(hostile)).toThrowError(
+    expect(() => validateStateLineageRootManifestV2(hostile)).toThrowError(
       /enumerable data properties/,
     );
     expect(getterCalls).toBe(0);
     const symboled = goldenRootManifest();
     (symboled as Record<PropertyKey, unknown>)[Symbol("x")] = 1;
-    expect(() => validateStateLineageRootManifestV1(symboled)).toThrowError(
+    expect(() => validateStateLineageRootManifestV2(symboled)).toThrowError(
       /symbol properties/,
     );
     expect(() =>
-      validateStateLineageRootManifestV1(
+      validateStateLineageRootManifestV2(
         Object.assign(Object.create({ inherited: true }), goldenRootManifest()),
       ),
     ).toThrowError(/plain object/);
@@ -324,31 +296,31 @@ describe("private state-lineage manifest v1 contracts", () => {
 
   it("rejects non-canonical text, timestamps, and version bounds", () => {
     expect(() =>
-      validateStateLineageRootManifestV1({
+      validateStateLineageRootManifestV2({
         ...goldenRootManifest(),
         state_lineage_id: " padded",
       }),
     ).toThrowError(/bounded canonical text/);
     expect(() =>
-      validateStateLineageRootManifestV1({
+      validateStateLineageRootManifestV2({
         ...goldenRootManifest(),
         state_lineage_id: "a".repeat(129),
       }),
     ).toThrowError(/bounded canonical text/);
     expect(() =>
-      validateStateLineageRootManifestV1({
+      validateStateLineageRootManifestV2({
         ...goldenRootManifest(),
         state_lineage_id: "control\u0007char",
       }),
     ).toThrowError(/bounded canonical text/);
     expect(() =>
-      validateStateLineageRootManifestV1({
+      validateStateLineageRootManifestV2({
         ...goldenRootManifest(),
         created_at: "2026-08-21T00:00:00Z",
       }),
     ).toThrowError();
     expect(() =>
-      validateStateLineageRootManifestV1({
+      validateStateLineageRootManifestV2({
         ...goldenRootManifest(),
         created_at: "2026-08-21T00:00:00.000+00:00",
       }),
@@ -387,10 +359,17 @@ describe("private state-lineage manifest v1 contracts", () => {
 
   it("keeps every role's database manifest digest distinct", () => {
     const digests = new Set(
-      STATE_LINEAGE_ROLES_V1.map((role) =>
+      STATE_LINEAGE_ROLES_V2.map((role) =>
         stateLineageDatabaseManifestSha256V1(goldenDatabaseManifest(role)),
       ),
     );
-    expect(digests.size).toBe(7);
+    expect(digests.size).toBe(6);
+  });
+
+  it("refuses the retired derived role in a database manifest", () => {
+    expect(() => validateStateLineageDatabaseManifestV1({
+      ...goldenDatabaseManifest(),
+      role: "record-derived",
+    })).toThrowError(/not a supported state-lineage role/);
   });
 });

@@ -1,4 +1,3 @@
-import { historicalControlV1 } from "../../../../../../tests/support/historical-authority-baselines.js";
 import {
   chmodSync,
   mkdtempSync,
@@ -105,8 +104,8 @@ function setupOrganizationControlState(baseline: "v1" | "v3" = "v3"): string {
     join(directory, "integrations.sqlite"),
   );
   try {
-    if (baseline === "v3") applyOrganizationControlBaselineV3(database);
-    else historicalControlV1.apply(database);
+    applyOrganizationControlBaselineV3(database);
+    if (baseline !== "v3") database.pragma("user_version = 1");
     database
       .prepare(
         `INSERT INTO organization_control_plane_metadata
@@ -129,11 +128,11 @@ function setupOrganizationControlState(baseline: "v1" | "v3" = "v3"): string {
       database_schema_version:
         baseline === "v3"
           ? ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3
-          : historicalControlV1.version,
+          : 1,
       schema_sha256:
         baseline === "v3"
           ? organizationControlBaselineSha256V3()
-          : historicalControlV1.sha256(),
+          : `sha256:${"a".repeat(64)}`,
       created_at: "2026-08-22T00:00:00.000Z",
       creating_artifact_revision: "test",
     };

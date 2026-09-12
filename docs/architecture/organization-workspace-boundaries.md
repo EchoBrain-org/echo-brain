@@ -105,16 +105,16 @@ The server uses separate databases with explicit responsibilities:
 
 - `authority.sqlite` owns Authority metadata, principals, memberships,
   Person/OIDC identity and sessions, authorization/audit state, integration
-  anchors, retained V1 enrollment/access compatibility, and bounded pre-record
+  anchors, and bounded pre-record
   processing state including raw meeting and decision documents;
 - the control-plane database owns verified provider identity, opaque
-  connection handles, adapter bindings, grants, and integration audit;
+  connection handles, Person identity links, and private approval evidence;
 - `record-log.sqlite` is the append-only organization record; and
 - retrieval generations are immutable projections built from record state.
 
-The unused `record-derived.sqlite` role is retired from the six-role V2
-lineage. Its frozen SQL remains only for explicit historical conversion and
-compatibility fixtures; no runtime materializer or initializer owns it.
+The V2 root manifest binds six roles: Authority, control plane, record log,
+and retrieval facts, lexical, and content. Each database carries a V1 database
+manifest and its stable role application ID.
 
 The Authority database stores bounded pre-record meeting and decision content,
 but no embeddings and no canonical approved organization-record truth. The

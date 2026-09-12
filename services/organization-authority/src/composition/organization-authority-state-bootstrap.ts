@@ -41,7 +41,7 @@ import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organ
 import { assertDisplayName } from "@echo-brain/organization-authority-kernel/domain/rules";
 import {
   initializeAuthorityStateLineageV2,
-  type InitializedAuthorityStateLineageV1,
+  type InitializedAuthorityStateLineageV2,
   type StagedAuthorityStateV1,
 } from "../state-lineage/authority-state-lineage-initializer.js";
 import {
@@ -298,7 +298,7 @@ function prepareAuthorityState(
 }
 
 function manifestEvidence(
-  initialized: InitializedAuthorityStateLineageV1,
+  initialized: InitializedAuthorityStateLineageV2,
 ): AuthorityStateManifestEvidenceV1 {
   const databaseManifests = Object.fromEntries(
     initialized.verification.databases.map((database) => [

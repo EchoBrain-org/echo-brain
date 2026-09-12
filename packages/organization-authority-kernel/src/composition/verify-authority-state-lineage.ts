@@ -26,7 +26,7 @@ import { validateStateLineageRootManifestV2 } from "../state-lineage/state-linea
 
 function rootForState(stateDirectory: string) {
   if (existsSync(join(stateDirectory, "state-lineage-root.v1.json"))) {
-    throw new StateLineagePreopenRefusal("legacy_state", "Authority state requires the explicit offline schema-cleanup transition");
+    throw new StateLineagePreopenRefusal("legacy_state", "Authority state has an unsupported root manifest version");
   }
   const path = join(stateDirectory, "state-lineage-root.v2.json");
   try {
@@ -45,7 +45,6 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
   const root = rootForState(stateDirectory);
   return verifyStateLineageBeforeOpen({
     state_directory: stateDirectory,
-    root_manifest_version: 2,
     expected_binding: {
       authority_id: root.authority_id,
       organization_id: root.organization_id,

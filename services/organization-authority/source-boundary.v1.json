@@ -77,7 +77,7 @@
       {
         "name": "Authority state-lineage initializer",
         "path": "services/organization-authority/src/state-lineage/authority-state-lineage-initializer.ts",
-        "export": "initializeAuthorityStateLineageV1"
+        "export": "initializeAuthorityStateLineageV2"
       },
       {
         "name": "Organization Authority state bootstrap",

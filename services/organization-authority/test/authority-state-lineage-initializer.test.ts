@@ -1,4 +1,3 @@
-import { historicalAuthorityV1, historicalControlV1, historicalFactsV1, historicalRecordDerivedV1, historicalRecordLogV1 } from "../../../tests/support/historical-authority-baselines.js";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,22 +6,24 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   STATE_LINEAGE_MANIFEST_TABLE,
-  STATE_LINEAGE_ROOT_MANIFEST_FILENAME,
+  STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME,
   STATE_LINEAGE_ROLE_APPLICATION_IDS_V1,
 } from "@echo-brain/organization-authority-kernel/state-lineage/state-lineage-manifest-v1";
 import {
-  initializeAuthorityStateLineageV1,
-  type InitializeAuthorityStateLineageV1Input,
+  initializeAuthorityStateLineageV2,
+  type InitializeAuthorityStateLineageV2Input,
 } from "../src/state-lineage/authority-state-lineage-initializer.js";
 
+import { applyAuthorityBaselineV5, AUTHORITY_BASELINE_SCHEMA_VERSION_V5, authorityBaselineSha256V5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import {
-  openOrganizationControlDatabase,
+  openOrganizationControlDatabase, applyOrganizationControlBaselineV3, ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3, organizationControlBaselineSha256V3,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  openOrganizationRecordDatabase,
+  openOrganizationRecordDatabase, applyOrganizationRecordLogBaselineV3, ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3, organizationRecordLogBaselineSha256V3,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
+  READABLE_SEARCH_FACTS_BASELINE_V2, READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2, readableSearchPlaneBaselineSha256,
   READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
@@ -49,8 +50,8 @@ function fixtureRoot(): string {
 
 function input(
   stateDirectory: string,
-  overrides: Partial<InitializeAuthorityStateLineageV1Input> = {},
-): InitializeAuthorityStateLineageV1Input {
+  overrides: Partial<InitializeAuthorityStateLineageV2Input> = {},
+): InitializeAuthorityStateLineageV2Input {
   const schemas = Object.fromEntries(
     Object.keys(STATE_LINEAGE_ROLE_APPLICATION_IDS_V1).map((role) => [
       role,
@@ -59,7 +60,7 @@ function input(
         schema_sha256: `sha256:${"a".repeat(64)}` as Sha256Digest,
       },
     ]),
-  ) as InitializeAuthorityStateLineageV1Input["schemas"];
+  ) as InitializeAuthorityStateLineageV2Input["schemas"];
   return {
     state_directory: stateDirectory,
     binding: {
@@ -104,17 +105,6 @@ function input(
           database.pragma("user_version = 1");
         },
       },
-      "record-derived": {
-        apply: (database) => {
-          database.exec(
-            "CREATE TABLE record_derived_v1 (singleton INTEGER PRIMARY KEY) STRICT",
-          );
-          database.pragma(
-            `application_id = ${STATE_LINEAGE_ROLE_APPLICATION_IDS_V1["record-derived"]}`,
-          );
-          database.pragma("user_version = 1");
-        },
-      },
     },
     open_writable_database: (path) => new Database(path),
     ...overrides,
@@ -123,34 +113,29 @@ function input(
 
 function realBaselineInput(
   stateDirectory: string,
-): InitializeAuthorityStateLineageV1Input {
+): InitializeAuthorityStateLineageV2Input {
   return {
     ...input(stateDirectory),
     schemas: {
       authority: {
-        database_schema_version: historicalAuthorityV1.version,
-        schema_sha256: historicalAuthorityV1.sha256(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
+        schema_sha256: authorityBaselineSha256V5(),
       },
       "control-plane": {
         database_schema_version:
-          historicalControlV1.version,
-        schema_sha256: historicalControlV1.sha256(),
+          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
+        schema_sha256: organizationControlBaselineSha256V3(),
       },
       "record-log": {
         database_schema_version:
-          historicalRecordLogV1.version,
-        schema_sha256: historicalRecordLogV1.sha256(),
-      },
-      "record-derived": {
-        database_schema_version:
-          historicalRecordDerivedV1.version,
-        schema_sha256: historicalRecordDerivedV1.sha256(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
+        schema_sha256: organizationRecordLogBaselineSha256V3(),
       },
       "retrieval-facts": {
         database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          historicalFactsV1,
+          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+        schema_sha256: readableSearchPlaneBaselineSha256(
+          READABLE_SEARCH_FACTS_BASELINE_V2,
         ),
       },
       "retrieval-lexical": {
@@ -169,10 +154,9 @@ function realBaselineInput(
       },
     },
     top_level_appliers: {
-      authority: { apply: historicalAuthorityV1.apply },
-      "control-plane": { apply: historicalControlV1.apply },
-      "record-log": { apply: historicalRecordLogV1.apply },
-      "record-derived": { apply: historicalRecordDerivedV1.apply },
+      authority: { apply: applyAuthorityBaselineV5 },
+      "control-plane": { apply: applyOrganizationControlBaselineV3 },
+      "record-log": { apply: applyOrganizationRecordLogBaselineV3 },
     },
     open_writable_database: (path, role) => {
       if (role === "authority") return openAuthorityDatabase(path);
@@ -184,23 +168,23 @@ function realBaselineInput(
 }
 
 describe("Authority state-lineage initializer", () => {
-  it("publishes and verifies the actual four top-level baseline set", () => {
+  it("publishes and verifies the actual three top-level baseline set", () => {
     const parent = fixtureRoot();
     const stateDirectory = join(parent, "state");
-    const result = initializeAuthorityStateLineageV1(
+    const result = initializeAuthorityStateLineageV2(
       realBaselineInput(stateDirectory),
     );
 
     expect(
       result.verification.databases.map((database) => database.role),
-    ).toEqual(["authority", "control-plane", "record-log", "record-derived"]);
+    ).toEqual(["authority", "control-plane", "record-log"]);
     expect(result.verification.retrieval.present).toBe(false);
   });
 
   it("publishes all top-level roles, stamps manifests, and verifies the absent retrieval tree", () => {
     const parent = fixtureRoot();
     const stateDirectory = join(parent, "state");
-    const result = initializeAuthorityStateLineageV1(input(stateDirectory));
+    const result = initializeAuthorityStateLineageV2(input(stateDirectory));
 
     expect(result.state_directory).toBe(stateDirectory);
     expect(result.verification.retrieval).toEqual({
@@ -211,15 +195,13 @@ describe("Authority state-lineage initializer", () => {
     expect(readdirSync(stateDirectory).sort()).toEqual([
       "authority.sqlite",
       "integrations.sqlite",
-      "record-derived.sqlite",
       "record-log.sqlite",
-      STATE_LINEAGE_ROOT_MANIFEST_FILENAME,
+      STATE_LINEAGE_ROOT_MANIFEST_V2_FILENAME,
     ]);
     for (const databaseName of [
       "authority.sqlite",
       "integrations.sqlite",
       "record-log.sqlite",
-      "record-derived.sqlite",
     ]) {
       const database = new Database(join(stateDirectory, databaseName), {
         readonly: true,
@@ -254,7 +236,7 @@ describe("Authority state-lineage initializer", () => {
       },
     });
 
-    expect(() => initializeAuthorityStateLineageV1(failing)).toThrow(
+    expect(() => initializeAuthorityStateLineageV2(failing)).toThrow(
       "record-log baseline failed",
     );
     expect(existsSync(stateDirectory)).toBe(false);
@@ -271,10 +253,10 @@ describe("Authority state-lineage initializer", () => {
       schemas: {
         ...base.schemas,
         "record-log": undefined,
-      } as unknown as InitializeAuthorityStateLineageV1Input["schemas"],
+      } as unknown as InitializeAuthorityStateLineageV2Input["schemas"],
     });
 
-    expect(() => initializeAuthorityStateLineageV1(missing)).toThrow(
+    expect(() => initializeAuthorityStateLineageV2(missing)).toThrow(
       "Authority state schemas must give the record-log role a schema",
     );
     expect(existsSync(stateDirectory)).toBe(false);
@@ -286,9 +268,9 @@ describe("Authority state-lineage initializer", () => {
   it("refuses an occupied target before opening a new database", () => {
     const parent = fixtureRoot();
     const stateDirectory = join(parent, "state");
-    const first = initializeAuthorityStateLineageV1(input(stateDirectory));
-    expect(first.verification.databases).toHaveLength(4);
-    expect(() => initializeAuthorityStateLineageV1(input(stateDirectory))).toThrow(
+    const first = initializeAuthorityStateLineageV2(input(stateDirectory));
+    expect(first.verification.databases).toHaveLength(3);
+    expect(() => initializeAuthorityStateLineageV2(input(stateDirectory))).toThrow(
       "must not already exist",
     );
   });

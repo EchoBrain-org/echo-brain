@@ -1,8 +1,7 @@
 # Identity and onboarding
 
 **Status:** Current — the shipped machine identity is an Authority-issued
-Person session. Installation enrollment and access leases remain server-side
-V1 compatibility only.
+Person session. The current Authority exposes Person-authenticated access.
 
 ECHO processes organization meeting data on the organization Authority. A
 person's machine owns only its private Authority origin and rotating Person
@@ -22,8 +21,6 @@ credentials, processing state, and revocation.
   External identity links bind a provider-observed human, such as a Slack user,
   to one exact principal and membership.
 - Meeting participants remain source observations until explicitly resolved.
-- Installation and enrollment rows describe the retained V1 protocol. They are
-  not a second current machine identity mode.
 
 [INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md)
 makes the provider/adapter-to-ECHO chain load-bearing. A verified provider
@@ -53,8 +50,8 @@ and integration-link request rechecks the current session, membership, and
 revocation state on the Authority.
 
 Organization-tool onboarding remains an Authority administrator operation. An
-owner supplies the organization Slack bot credential and a temporary public
-initial-owner identity-link channel. The Authority verifies the workspace, app, bot,
+owner supplies the organization Slack bot credential and a public channel
+for verifying bot access. The Authority verifies the workspace, app, bot,
 scopes, and channel before storing the secret in its private credential store.
 SQLite receives only an opaque secret handle and verified public identity. The
 legacy field name `slack_approval_channel_id` is transitional naming debt: that
@@ -70,21 +67,6 @@ signed Block Kit DMs. The visibility selector defaults to **Only me**
 (`restricted-reviewer-person-v2`); the owner may select **Team**
 (`organization-member-readable-person-v2`) before clicking Approve. The
 selected policy binds only at approval; Reject creates no V4 record.
-
-## Retained V1 compatibility
-
-The Authority still implements installation enrollment, installation-signed
-access leases, V1 permission checks, and V1 record ingest because existing
-server-side record and approval schemas still refer to those identities.
-Historical migrations and rows remain immutable. The old machine runtime,
-installation signer, enrollment CLI, local database, and lease-renewal daemon
-have been deleted, so no current product artifact can create or refresh that
-state.
-
-These compatibility routes are not the onboarding path for a new Person and
-must not be presented as one. They can be retired only after Person-bound
-approval and record-writer contracts replace the surviving server call sites
-and retained rows have a defined historical treatment.
 
 ## Evidence boundary
 

@@ -12,20 +12,20 @@ import { organizationRecordLogBaselineSha256V3 } from "@echo-brain/organization-
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-it("pins the new standalone baseline bytes", () => {
+it("pins the current baseline bytes", () => {
   expect(authorityBaselineSha256V5()).toBe("sha256:0c11226af116345f5d2eafe6bd833a421e4dcb3ccb5728642ab1134da09bd9ea");
   expect(organizationControlBaselineSha256V3()).toBe("sha256:9aa161419d77355058151d2dd41283594802fe6da62f62f4aa92dbce01029c69");
   expect(organizationRecordLogBaselineSha256V3()).toBe("sha256:af089bff08b84aef53d4323084264d06d4620e9e0dc28a505f30ca4d7324221b");
 });
 
 it("initializes only the active storage roles and tables", () => {
-  const root = mkdtempSync(join(tmpdir(), "echo-schema-cleanup-"));
+  const root = mkdtempSync(join(tmpdir(), "echo-current-storage-"));
   chmodSync(root, 0o700);
   roots.push(root);
   const state = join(root, "state");
   bootstrapOrganizationAuthorityState({ state_directory: state,
     organization_display_name: "Schema fixture", owner_display_name: "Owner",
-    created_at: "2026-09-12T00:00:00.000Z", creating_artifact_revision: "schema-cleanup-test" });
+    created_at: "2026-09-12T00:00:00.000Z", creating_artifact_revision: "current-storage-test" });
   const verification = verifyAuthorityStateLineage(state);
   expect(verification.root.schema_version).toBe(2);
   expect(verification.root.databases).toHaveLength(6);

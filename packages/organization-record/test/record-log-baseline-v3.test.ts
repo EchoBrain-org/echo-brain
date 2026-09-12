@@ -1,4 +1,3 @@
-import { historicalRecordLogV1 } from "../../../tests/support/historical-authority-baselines.js";
 import { describe, expect, it } from "vitest";
 import {
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
@@ -23,10 +22,11 @@ describe("organization record log baseline V3", () => {
     }
   });
 
-  it("refuses to relabel an existing V1 file as the current V3 lineage", () => {
+  it("refuses to relabel an occupied file as the current V3 lineage", () => {
     const database = openOrganizationRecordDatabase(":memory:");
     try {
-      historicalRecordLogV1.apply(database);
+      database.exec("CREATE TABLE occupied (id INTEGER PRIMARY KEY)");
+      database.pragma("user_version = 1");
       expect(() => applyOrganizationRecordLogBaselineV3(database)).toThrow(
         "completely empty database",
       );

@@ -1,4 +1,3 @@
-import { historicalAuthorityV3, historicalControlV2, historicalFactsV1, historicalRecordDerivedV1, historicalRecordLogV2 } from "../support/historical-authority-baselines.js";
 import {
   chmodSync,
   copyFileSync,
@@ -10,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  renameSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -18,23 +18,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  openOrganizationControlDatabase,
-} from "@echo-brain/organization-control-plane/organization-control-database-v1";
-import {
-  openOrganizationRecordDatabase,
-} from "@echo-brain/organization-record/organization-record-api-v1";
-import {
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-  readableSearchPlaneBaselineSha256V1,
-} from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
-import { initializeAuthorityStateLineageV1 } from "../../services/organization-authority/src/state-lineage/authority-state-lineage-initializer.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TOOL = join(REPO, "tools", "clean-v1-release.mjs");
@@ -261,44 +248,6 @@ function installActiveTuple(
   writeFileSync(environmentFile, environment, { mode: 0o600 });
 }
 
-function writeCurrentStateLineage(stateDirectory: string) {
-  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
-  const roles = [
-    "authority",
-    "control-plane",
-    "record-log",
-    "record-derived",
-    "retrieval-facts",
-    "retrieval-lexical",
-    "retrieval-content",
-  ];
-  writeFileSync(
-    join(stateDirectory, "state-lineage-root.v1.json"),
-    JSON.stringify({
-      schema_version: 1,
-      kind: "echo-state-lineage-root-manifest-v1",
-      databases: roles.map((role) => ({ role })),
-    }),
-  );
-  const created = spawnSync(
-    "python3",
-    [
-      "-c",
-      [
-        "import pathlib, sqlite3, sys",
-        "root = pathlib.Path(sys.argv[1])",
-        "for name, version in {'authority.sqlite': 3, 'integrations.sqlite': 2, 'record-log.sqlite': 2, 'record-derived.sqlite': 1}.items():",
-        "  connection = sqlite3.connect(root / name)",
-        "  connection.execute(f'PRAGMA user_version = {version}')",
-        "  connection.commit()",
-        "  connection.close()",
-      ].join("\n"),
-      stateDirectory,
-    ],
-    { encoding: "utf8" },
-  );
-  expect(created.status).toBe(0);
-}
 
 function environmentDriftFixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-environment-drift-"));
@@ -358,73 +307,20 @@ function environmentDriftFixture() {
   };
 }
 
-function writeValidAuthorityV3Lineage(stateDirectory: string): void {
-  initializeAuthorityStateLineageV1({
+function writeUnsupportedRootState(stateDirectory: string): void {
+  bootstrapOrganizationAuthorityState({
     state_directory: stateDirectory,
-    binding: {
-      authority_id: "oau_00000000-0000-4000-8000-000000000003",
-      organization_id: "org_00000000-0000-4000-8000-000000000003",
-      state_lineage_id: "lineage-00000000-0000-4000-8000-000000000003",
-    },
+    organization_display_name: "Unsupported root fixture",
+    owner_display_name: "Owner",
     created_at: "2026-08-22T00:00:00.000Z",
-    creating_artifact_revision: "authority-v3-fixture",
-    schemas: {
-      authority: {
-        database_schema_version: historicalAuthorityV3.version,
-        schema_sha256: historicalAuthorityV3.sha256(),
-      },
-      "control-plane": {
-        database_schema_version:
-          historicalControlV2.version,
-        schema_sha256: historicalControlV2.sha256(),
-      },
-      "record-log": {
-        database_schema_version:
-          historicalRecordLogV2.version,
-        schema_sha256: historicalRecordLogV2.sha256(),
-      },
-      "record-derived": {
-        database_schema_version:
-          historicalRecordDerivedV1.version,
-        schema_sha256: historicalRecordDerivedV1.sha256(),
-      },
-      "retrieval-facts": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          historicalFactsV1,
-        ),
-      },
-      "retrieval-lexical": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_LEXICAL_BASELINE_V1,
-        ),
-      },
-      "retrieval-content": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_CONTENT_BASELINE_V1,
-        ),
-      },
-    },
-    top_level_appliers: {
-      authority: { apply: historicalAuthorityV3.apply },
-      "control-plane": { apply: historicalControlV2.apply },
-      "record-log": { apply: historicalRecordLogV2.apply },
-      "record-derived": { apply: historicalRecordDerivedV1.apply },
-    },
-    open_writable_database: (path, role) => {
-      if (role === "authority") return openAuthorityDatabase(path);
-      if (role === "control-plane") return openOrganizationControlDatabase(path);
-      return openOrganizationRecordDatabase(path);
-    },
+    creating_artifact_revision: "unsupported-root-fixture",
   });
+  // The old root marker must refuse before any database is opened or rewritten.
+  renameSync(join(stateDirectory, "state-lineage-root.v2.json"),
+    join(stateDirectory, "state-lineage-root.v1.json"));
 }
 
-function writeValidAuthorityV4LineageWithLegacyProcessorAdmission(
+function writeStateWithLegacyProcessorAdmission(
   stateDirectory: string,
 ): void {
   const createdAt = "2026-08-22T00:00:00.000Z";
@@ -1844,11 +1740,17 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
         },
       }),
     );
-    mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
-    // Its root has the old partial shape but all SQLite user_versions match.
-    // The updater must delegate that malformed lineage to the candidate image,
-    // rather than treating a version-only mirror as sufficient.
-    writeCurrentStateLineage(stateDirectory);
+    bootstrapOrganizationAuthorityState({
+      state_directory: stateDirectory,
+      organization_display_name: "Release fixture",
+      owner_display_name: "Owner",
+      created_at: "2026-09-12T00:00:00.000Z",
+      creating_artifact_revision: "release-fixture",
+    });
+    // Database versions match, but the root is incomplete. Only the candidate's
+    // complete lineage validation can reject this before activation.
+    writeFileSync(join(stateDirectory, "state-lineage-root.v2.json"),
+      JSON.stringify({ schema_version: 2, kind: "echo-state-lineage-root-manifest-v2" }));
     mkdirSync(bin);
     writeFileSync(
       docker,
@@ -1859,7 +1761,11 @@ if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
   printf '%s\\n' '${"a".repeat(40)}'
   exit 0
 fi
-if [[ "$1" == run ]]; then touch "${verifier}"; exit 1; fi
+if [[ "$1" == run ]]; then
+  touch "${verifier}"
+  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "${stateDirectory}"
+  exit $?
+fi
 if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
   touch "${activation}"
 fi
@@ -1919,7 +1825,7 @@ fi
     );
   });
 
-  it("rejects a valid Authority V3 lineage before staging the current candidate and explains the pre-live rehearsal replacement path", () => {
+  it("rejects an unsupported root lineage before staging the current candidate and explains the pre-live rehearsal replacement path", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-v3-lineage-"));
     roots.push(root);
     const envFile = join(root, ".env.clean-v1");
@@ -1931,7 +1837,7 @@ fi
     const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
     const candidate = writeRecord(releaseWithRuntimeProfile(profile));
-    writeValidAuthorityV3Lineage(stateDirectory);
+    writeUnsupportedRootState(stateDirectory);
     mkdirSync(bin);
     writeFileSync(
       docker,
@@ -1976,7 +1882,7 @@ fi
     expect(result.stderr).toContain(
       "candidate Authority image rejected persisted state lineage",
     );
-    expect(result.stderr).toContain("explicit offline schema-cleanup transition");
+    expect(result.stderr).toContain("unsupported root manifest version");
     expect(result.stderr).toContain(
       "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
     );
@@ -1999,7 +1905,7 @@ fi
     const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
     const candidate = writeRecord(releaseWithRuntimeProfile(profile));
-    writeValidAuthorityV4LineageWithLegacyProcessorAdmission(stateDirectory);
+    writeStateWithLegacyProcessorAdmission(stateDirectory);
     mkdirSync(bin);
     writeFileSync(
       docker,
