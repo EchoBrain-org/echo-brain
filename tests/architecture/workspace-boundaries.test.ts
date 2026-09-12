@@ -1394,7 +1394,87 @@ describe("workspace source boundaries", () => {
     }
     writeFixtureJson(fixture, "product/source-boundary.v1.json", product);
     result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain(
+      "provider source must belong to a registered workspace package: providers/fixture-surface/src/client.ts",
+    );
+
+    // Provider ownership alone must not admit source that the workspace
+    // checker never sees. The package and both registries are required.
+    const workspace = "providers/fixture-surface";
+    const packagePath = `${workspace}/package.json`;
+    writeFixtureJson(fixture, packagePath, {
+      name: "@echo-brain/fixture-surface",
+      version: "0.0.0-dev.0",
+      type: "module",
+      exports: { ".": "./dist/client.js" },
+    });
+    writeFixtureJson(fixture, `${workspace}/tsconfig.json`, {
+      extends: "../../tsconfig.build.json",
+      compilerOptions: { composite: true, rootDir: "src", outDir: "dist" },
+      include: ["src/**/*.ts"],
+    });
+    const rootPackage = readFixtureJson<{ workspaces: string[] }>(fixture, "package.json");
+    rootPackage.workspaces.push(workspace);
+    writeFixtureJson(fixture, "package.json", rootPackage);
+    result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain(
+      "provider source must belong to a registered workspace package: providers/fixture-surface/src/client.ts",
+    );
+
+    const registry = readFixtureJson<Registry>(fixture, REGISTRY);
+    const manifestPath = `${workspace}/source-boundary.v1.json`;
+    registry.manifests.push(manifestPath);
+    writeFixtureJson(fixture, REGISTRY, registry);
+    writeFixtureJson(fixture, manifestPath, {
+      boundary_version: 1,
+      kind: "echo-workspace-source-boundary",
+      name: "@echo-brain/fixture-surface",
+      workspace: true,
+      boundary_root: workspace,
+      source_root: `${workspace}/src`,
+      package_json: packagePath,
+      entry_points: [`${workspace}/src/client.ts`],
+      owned_source_paths: [`${workspace}/src/**`],
+      allowed_internal_paths: [`${workspace}/src/**`],
+      allowed_workspace_packages: [],
+      allowed_external_packages: [],
+      allowed_node_builtins: [],
+      component_index_contract: {
+        canonical_components: [{ name: "Fixture", path: `${workspace}/src/client.ts`, export: "marker" }],
+        retired_source_paths: [],
+        compatibility_entrypoints: [],
+      },
+      layer_rules: [{
+        name: "fixture-is-pure",
+        from: `${workspace}/src/**`,
+        allowed_imports: [],
+        allowed_workspace_packages: [],
+        allowed_external_packages: [],
+        allowed_node_builtins: [],
+      }],
+    });
+    result = runBoundary(fixture);
     expect(result.status, result.stdout + result.stderr).toBe(0);
+
+    rootPackage.workspaces.pop();
+    writeFixtureJson(fixture, "package.json", rootPackage);
+    result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain(
+      "provider source must belong to a registered workspace package: providers/fixture-surface/src/client.ts",
+    );
+    rootPackage.workspaces.push(workspace);
+    writeFixtureJson(fixture, "package.json", rootPackage);
+
+    // An unregistered nested package cannot inherit its parent's admission.
+    writeFixtureJson(fixture, `${workspace}/src/package.json`, { type: "module" });
+    result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain(
+      "provider source must belong to a registered workspace package: providers/fixture-surface/src/client.ts",
+    );
   });
 
   it("classifies mixed-provider CLIs as bootstrap without hiding their dependencies", () => {

@@ -879,6 +879,24 @@ function checkWorkspaceBoundaries(tree, errors) {
 
   for (const [path] of tree) {
     if (!SOURCE_FILE_RE.test(path)) continue;
+    if (path.startsWith('providers/')) {
+      // A provider declaration is not workspace admission. Use the nearest
+      // package so a nested, unregistered package cannot borrow its parent's
+      // registration and bypass that package's checked source boundary.
+      let packageRoot = posix.dirname(path);
+      while (isWithin(packageRoot, 'providers') && !tree.has(`${packageRoot}/package.json`)) {
+        packageRoot = posix.dirname(packageRoot);
+      }
+      if (
+        !isWithin(packageRoot, 'providers') ||
+        !declaredWorkspaces.includes(packageRoot) ||
+        !workspaceBoundaries.some(({ manifest }) =>
+          manifest.boundary_root === packageRoot &&
+          manifest.package_json === `${packageRoot}/package.json`)
+      ) {
+        errors.push(`provider source must belong to a registered workspace package: ${path}`);
+      }
+    }
     const owners = boundaries.filter(({ manifest }) =>
       manifest.owned_source_paths.some((pattern) => matchesGlob(path, pattern)),
     );

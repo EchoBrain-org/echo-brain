@@ -22,8 +22,12 @@ code within a provider root only when their artifact/dependency closures require
 it; the Person artifact must not acquire Authority or native SQLite dependencies.
 No provider workspace has been introduced yet. The reserved parent and the
 existing composition/provider parent already reject undeclared JavaScript and
-TypeScript source files. Swift and runtime-asset ownership need separate checks
-as those surfaces migrate.
+TypeScript source files. Under repository-root `providers/`, the nearest package
+must also be registered in root `workspaces` and the checked boundary registry;
+even a declared provider root cannot bypass that registration. This check does
+not establish test discovery or shipped artifact inclusion: those inputs must
+still be updated and verified when the first provider workspace is introduced.
+Swift and runtime-asset ownership need separate checks as those surfaces migrate.
 
 ## Workspace graph
 

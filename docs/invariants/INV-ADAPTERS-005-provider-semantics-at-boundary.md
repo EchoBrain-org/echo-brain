@@ -74,7 +74,11 @@ implementation or an undeclared JavaScript/TypeScript source file under
 `services/organization-authority/src/processing/adapters/`,
 `services/organization-authority/src/composition/providers/`, or the reserved
 repository-root `providers/` tree. Folder coverage does not depend on a known
-vendor name or an `implements` declaration. The typed
+vendor name or an `implements` declaration. JavaScript/TypeScript under the
+repository-root `providers/` tree must also have a nearest `package.json`
+registered in both root `workspaces` and the checked workspace-boundary registry.
+A provider-root declaration alone does not admit an unregistered package,
+including one nested inside a registered workspace. The typed
 `LLM_PROVIDER_IDS` source is checked against the registered transport-provider
 set; provider-client declarations not represented there fail, while the
 separately registered `deepseek` model namespace remains lexical evidence for
@@ -82,8 +86,11 @@ the fixed OpenRouter answer-composition model selection. Stale evidence and
 identifier leaks also fail the gate. Architecture tests include a bland
 three-hop composition bridge. Workspace imports and re-exports are resolved
 to their declaring source with TypeScript, including aliases, type imports,
-namespace exports, and literal dynamic imports. A coupled exception may own
-its implementation but cannot hide a provider declaration it re-exports.
+namespace exports, and literal dynamic imports. Direct provider re-exports
+through a coupled exception are rejected. Local value, function, and namespace
+wrappers can still hide provider behavior behind an exception; this remains an
+open enforcement gap until its consumers migrate and the exception mechanism
+is removed.
 Checks use the source worktree rather than potentially stale build output.
 The source path stores generic source identity and opaque cursors,
 and the shared runtime receives explicit source, processor, Layer 4, approval,
