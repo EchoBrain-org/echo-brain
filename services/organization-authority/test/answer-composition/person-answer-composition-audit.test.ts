@@ -1,7 +1,7 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -9,7 +9,7 @@ const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 describe("answer composition audit", () => {
   it("uses the existing immutable audit table without persisting question, prompt, or answer", () => {
     const database = openAuthorityDatabase(":memory:");
-    applyAuthorityBaselineV1(database);
+    applyAuthorityBaselineV5(database);
     const writer = new SqlitePersonAnswerCompositionAuditV1(database);
     writer.append({
       authority_id: "oau_clean",

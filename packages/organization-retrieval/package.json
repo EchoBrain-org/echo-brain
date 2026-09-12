@@ -15,7 +15,9 @@
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
-    "baselines/**"
+    "baselines/readable-search-content-baseline-v1.sql",
+    "baselines/readable-search-facts-baseline-v2.sql",
+    "baselines/readable-search-lexical-baseline-v1.sql"
   ],
   "scripts": {
     "build": "tsc -b",

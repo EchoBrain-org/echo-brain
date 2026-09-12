@@ -123,7 +123,7 @@
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
-    "baselines/*.sql"
+    "baselines/authority-baseline-v5.sql"
   ],
   "scripts": {
     "build": "tsc -b",

@@ -57,8 +57,7 @@ import {
 } from "../../src/log/record-log-v4-append.js";
 import { openOrganizationRecordDatabase } from "../../src/persistence/open-organization-record-database.js";
 import {
-  applyOrganizationRecordLogBaselineV1,
-  applyOrganizationRecordLogBaselineV2,
+  applyOrganizationRecordLogBaselineV3,
 } from "../../src/persistence/record-log-baseline.js";
 
 export const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1]);
@@ -111,10 +110,9 @@ export function protocolAuthority(): ProtocolAuthority {
   };
 }
 
-export function database(baseline: 1 | 2 = 1): ReturnType<typeof openOrganizationRecordDatabase> {
+export function database(): ReturnType<typeof openOrganizationRecordDatabase> {
   const value = openOrganizationRecordDatabase(":memory:");
-  if (baseline === 1) applyOrganizationRecordLogBaselineV1(value);
-  else applyOrganizationRecordLogBaselineV2(value);
+  applyOrganizationRecordLogBaselineV3(value);
   value
     .prepare(
       `INSERT INTO organization_record_log_metadata (

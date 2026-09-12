@@ -19,6 +19,21 @@ const now = "2026-09-12T00:00:00.000Z";
 const artifact = "a".repeat(40);
 afterEach(() => { vi.restoreAllMocks(); syncBuiltinESMExports(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+it("keeps the historical recovery SQL byte-pinned outside runtime artifacts", () => {
+  for (const [path, expected] of [
+    ["packages/organization-authority-kernel/baselines/authority-approval-delivery-quarantine-v4.sql", "sha256:8b794b37802f8ec4b07b16bb86cd9b50e289c49ee1da3a157b871c46a386b022"],
+    ["packages/organization-authority-kernel/baselines/authority-baseline-v1.sql", "sha256:007a1498dd1db87d03ba2876086c5ec6b6c655f77e5c25691abafd18451465d6"],
+    ["packages/organization-authority-kernel/baselines/authority-meeting-processing-v3.sql", "sha256:fa9f46b6b6e5ecffb1908e46899894addb5bb42ff1e0f10ddb65d9a0de4c46e8"],
+    ["packages/organization-authority-kernel/baselines/authority-private-approval-v2.sql", "sha256:28bdc61d6536040e589af11754b3d4fe2faee46c482ea15a407741d03722b4d7"],
+    ["packages/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql", "sha256:90eb0939f930d3dbd8abc51b98d2af42eb3d75471ff244f026fd52aff7d8d030"],
+    ["packages/organization-control-plane/baselines/organization-control-plane-private-approval-v2.sql", "sha256:23b791c1b8f6a89f4913b41795f2be551ba7b221072caa690579d7cd6017b5bb"],
+    ["packages/organization-record/baselines/organization-record-derived-baseline-v1.sql", "sha256:06f5ac7ee52a3a6be7583743db99c7d75c32923b559388e2b7a52bf26d76d99d"],
+    ["packages/organization-record/baselines/organization-record-log-baseline-v1.sql", "sha256:4362ff17a61c2896f8825c2788287503355c5c9be9470464f23315dc058c33f9"],
+    ["packages/organization-record/baselines/organization-record-log-baseline-v2.sql", "sha256:7cecee2317e76aad6a7f4c0155e0da7e7018e4ebe9c5fc6e1c587ad9f6ed38a9"],
+    ["packages/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql", "sha256:86ae26a03c4b2b38cc2c2e27833127188a609b2e4396a0dbf121d9db6b53e74e"],
+  ]) expect(sha256Digest(readFileSync(join(repo, path!), "utf8"))).toBe(expected);
+});
+
 // Exact pre-cleanup schemas. These immutable assets remain conversion fixtures.
 function fixture() {
   const parent = mkdtempSync(join(realpathSync(tmpdir()), "echo-offline-schema-")); chmodSync(parent, 0o700); roots.push(parent);

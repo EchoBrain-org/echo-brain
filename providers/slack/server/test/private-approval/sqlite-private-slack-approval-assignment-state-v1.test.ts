@@ -3,7 +3,7 @@ import { RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256, RESTRICTED_REVIEWER_PERS
 import { type PrivateApprovalResolutionV1 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV3,
+  applyAuthorityBaselineV5,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/private-approval/resolve-private-slack-approval-reviewer-target-v1.js";
@@ -22,7 +22,7 @@ const LINK_CONTRACT_SHA256 = canonicalSha256({ link: "contract" });
 
 function fixture() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV3(database);
+  applyAuthorityBaselineV5(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(

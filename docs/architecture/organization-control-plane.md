@@ -13,7 +13,7 @@ no HTTP listener. The Authority composes it through five entry points:
 | `slack-connection-setup-v1` | The owner-attributed Slack connection ceremony and its CLI |
 | `slack-external-identity-integration-v1` | Slack identity provider, external human-link contracts, and the secret store |
 | `slack-approval-integration-v1` | Private DM approval policy resolution, reviewer targeting, and approval persistence |
-| `organization-control-database-v1` | Opening the control database and applying the frozen baselines |
+| `organization-control-database-v1` | Opening the control database and applying the current V3 baseline |
 | `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy contracts consumed by approval resolution |
 
 ## Current behaviors

@@ -28,8 +28,9 @@ nine-table derived database is retired from fresh initialization and the V2
 six-role state-lineage contract. The log's redundant member-readable lookup
 index is also removed; its UNIQUE constraint still supplies the same index.
 
-Historical baseline bytes and compatibility fixtures remain for explicit source
-validation. The derived initializer and database definition are removed from
+Historical baseline bytes remain in the checkout for explicit source validation;
+they are excluded from published packages and runtime images. Only the current
+V3 applier is exported; old-schema construction lives in test fixtures. The derived initializer and database definition are removed from
 runtime source and the public API; only a test fixture can create that old role. Existing V1-root state cannot be opened by the current runtime:
 the [offline schema-cleanup converter](../../docs/product/2026-09-12-database-migration-cleanup.md)
 accepts only the exact supported predecessor, preserves retained records and

@@ -36,19 +36,10 @@ export type ReadableSearchPlaneBaseline =
   | ReadableSearchPlaneBaselineV1
   | ReadableSearchPlaneBaselineV2;
 
-export const READABLE_SEARCH_FACTS_BASELINE_V1: ReadableSearchPlaneBaselineV1 = {
-  plane: 'facts',
-  application_id: READABLE_SEARCH_FACTS_DATABASE.application_id,
-  baseline_sql_url: new URL(
-    '../../baselines/readable-search-facts-baseline-v1.sql',
-    import.meta.url,
-  ),
-};
-
 /**
  * Facts-plane v2 adds only the disposable, segment-local related-atom pairs.
- * V1 remains pinned for historical artifact inspection; builders always create
- * fresh v2 facts planes and never attempt an in-place upgrade.
+ * Builders create fresh V2 facts planes and never upgrade an existing plane.
+ * Historical SQL is retained in the checkout for recovery fixtures only.
  */
 export const READABLE_SEARCH_FACTS_BASELINE_V2: ReadableSearchPlaneBaselineV2 = {
   plane: 'facts',

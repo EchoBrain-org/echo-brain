@@ -1,8 +1,4 @@
-import {
-  applyOrganizationRecordDerivedBaselineV1,
-  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-  organizationRecordDerivedBaselineSha256V1,
-} from "../../../packages/organization-record/test/fixtures/derived-baseline-v1.js";
+import { historicalAuthorityV1, historicalControlV1, historicalFactsV1, historicalRecordDerivedV1, historicalRecordLogV1 } from "../../../tests/support/historical-authority-baselines.js";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,27 +14,16 @@ import {
   initializeAuthorityStateLineageV1,
   type InitializeAuthorityStateLineageV1Input,
 } from "../src/state-lineage/authority-state-lineage-initializer.js";
-import {
-  applyAuthorityBaselineV1,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
-  authorityBaselineSha256V1,
-} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import {
-  applyOrganizationControlBaselineV1,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-  organizationControlBaselineSha256V1,
   openOrganizationControlDatabase,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  applyOrganizationRecordLogBaselineV1,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
-  organizationRecordLogBaselineSha256V1,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   readableSearchPlaneBaselineSha256V1,
@@ -143,29 +128,29 @@ function realBaselineInput(
     ...input(stateDirectory),
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: authorityBaselineSha256V1(),
+        database_schema_version: historicalAuthorityV1.version,
+        schema_sha256: historicalAuthorityV1.sha256(),
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationControlBaselineSha256V1(),
+          historicalControlV1.version,
+        schema_sha256: historicalControlV1.sha256(),
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordLogBaselineSha256V1(),
+          historicalRecordLogV1.version,
+        schema_sha256: historicalRecordLogV1.sha256(),
       },
       "record-derived": {
         database_schema_version:
-          ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordDerivedBaselineSha256V1(),
+          historicalRecordDerivedV1.version,
+        schema_sha256: historicalRecordDerivedV1.sha256(),
       },
       "retrieval-facts": {
         database_schema_version:
           READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
         schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_FACTS_BASELINE_V1,
+          historicalFactsV1,
         ),
       },
       "retrieval-lexical": {
@@ -184,10 +169,10 @@ function realBaselineInput(
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV1 },
-      "control-plane": { apply: applyOrganizationControlBaselineV1 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV1 },
-      "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },
+      authority: { apply: historicalAuthorityV1.apply },
+      "control-plane": { apply: historicalControlV1.apply },
+      "record-log": { apply: historicalRecordLogV1.apply },
+      "record-derived": { apply: historicalRecordDerivedV1.apply },
     },
     open_writable_database: (path, role) => {
       if (role === "authority") return openAuthorityDatabase(path);

@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import {
@@ -113,7 +113,7 @@ function setup(input: {
   readonly query_hit_counts?: readonly number[];
 }) {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV1(database);
+  applyAuthorityBaselineV5(database);
   const events: string[] = [];
   const witness = release();
   const search: PersonRecordSearchBatchApplicationV1 = {

@@ -9,7 +9,7 @@ import {
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import {
-  applyOrganizationRecordLogBaselineV1,
+  applyOrganizationRecordLogBaselineV3,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
@@ -38,7 +38,7 @@ import {
   ANSWER_COMPOSITION_MAX_CONTEXT_UTF8_BYTES,
   type StructuredGenerationInput,
 } from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
-import { applyAuthorityBaselineV1 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -252,7 +252,7 @@ afterEach(() => {
 
 function setup(pointer = true) {
   const authority = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV1(authority);
+  applyAuthorityBaselineV5(authority);
   authority
     .prepare(
       `INSERT INTO authority_metadata
@@ -268,7 +268,7 @@ function setup(pointer = true) {
       "2026-08-22T11:00:00.000Z",
     );
   const record = openOrganizationRecordDatabase(":memory:");
-  applyOrganizationRecordLogBaselineV1(record);
+  applyOrganizationRecordLogBaselineV3(record);
   if (pointer) {
     authority
       .prepare(

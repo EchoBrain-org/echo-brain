@@ -14,7 +14,9 @@ permission checks against current Authority membership. The earlier Slack
 reaction approval path, its owner-attributed activation command, and its
 `echo-organization-control-plane-activate-person-slack-*` binaries were removed
 on 2026-09-06. The standalone V3 baseline now retires their nine tables.
-Historical V1/V2 baseline bytes remain unchanged for compatibility validation.
+Historical V1/V2 SQL remains byte-identical in the checkout for offline source
+validation. It is excluded from runtime packages and images; historical
+appliers now exist only in explicit test fixtures.
 
 `record-visibility-policy-contracts-v1` is provider-neutral, and so is
 `application/private-approval-policy-resolution-core-v1`: the durable command

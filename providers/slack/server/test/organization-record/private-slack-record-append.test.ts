@@ -225,7 +225,7 @@ function privateSlackBlockAppendInput(input: {
 }
 describe("Private Slack V4 record append", () => {
   it("append-atomically projects a signed private Block Kit approval and retries it without a second envelope", async () => {
-    const db = database(2);
+    const db = database();
     try {
       const authority = protocolAuthority();
       const app = privateApprovalAppend(db);
@@ -268,7 +268,7 @@ describe("Private Slack V4 record append", () => {
   });
 
   it("append-atomically records a signed private Block Kit rejection without Person facts", async () => {
-    const db = database(2);
+    const db = database();
     try {
       const authority = protocolAuthority();
       const app = privateApprovalAppend(db);

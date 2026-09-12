@@ -1,25 +1,25 @@
+import { historicalAuthorityV3 } from "../../../tests/support/historical-authority-baselines.js";
 import { describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV3,
-  applyAuthorityBaselineV4,
-  AUTHORITY_BASELINE_APPLICATION_ID_V4,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
-  authorityBaselineSha256V4,
+  applyAuthorityBaselineV5,
+  AUTHORITY_BASELINE_APPLICATION_ID_V1,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
+  authorityBaselineSha256V5,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 
-const AUTHORITY_BASELINE_SHA256_V4 =
-  "sha256:70778da965c467d04be350bd36cc73b711ba783310077c6d0c04c85777b76512";
+const AUTHORITY_BASELINE_SHA256_V5 =
+  "sha256:0c11226af116345f5d2eafe6bd833a421e4dcb3ccb5728642ab1134da09bd9ea";
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const NOW = "2026-08-30T00:00:00.000Z";
 
-function openedV4Database() {
+function openedCurrentDatabase() {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV4(database);
+  applyAuthorityBaselineV5(database);
   return database;
 }
 
-function seedCandidate(database: ReturnType<typeof openedV4Database>): void {
+function seedCandidate(database: ReturnType<typeof openedCurrentDatabase>): void {
   database
     .prepare(
       `INSERT INTO authority_metadata (
@@ -125,16 +125,16 @@ function seedCandidate(database: ReturnType<typeof openedV4Database>): void {
     .run(NOW);
 }
 
-describe("Authority approval-delivery-quarantine baseline v4", () => {
-  it("is a pinned fresh-only V3-plus-quarantine schema while preserving V3 bytes", () => {
-    const database = openedV4Database();
+describe("Authority approval-delivery-quarantine schema", () => {
+  it("retains the current quarantine schema and its role headers", () => {
+    const database = openedCurrentDatabase();
     try {
-      expect(authorityBaselineSha256V4()).toBe(AUTHORITY_BASELINE_SHA256_V4);
+      expect(authorityBaselineSha256V5()).toBe(AUTHORITY_BASELINE_SHA256_V5);
       expect(database.pragma("application_id", { simple: true })).toBe(
-        AUTHORITY_BASELINE_APPLICATION_ID_V4,
+        AUTHORITY_BASELINE_APPLICATION_ID_V1,
       );
       expect(database.pragma("user_version", { simple: true })).toBe(
-        AUTHORITY_BASELINE_SCHEMA_VERSION_V4,
+        AUTHORITY_BASELINE_SCHEMA_VERSION_V5,
       );
       expect(
         database
@@ -149,7 +149,7 @@ describe("Authority approval-delivery-quarantine baseline v4", () => {
   });
 
   it("makes quarantine immutable and fences a quarantined outbox to supersession", () => {
-    const database = openedV4Database();
+    const database = openedCurrentDatabase();
     try {
       seedCandidate(database);
       database
@@ -215,10 +215,10 @@ describe("Authority approval-delivery-quarantine baseline v4", () => {
     }
   });
 
-  it("refuses to turn an existing V3 or V4 file into a V4 lineage", () => {
-    const database = openedV4Database();
+  it("refuses to relabel current or historical state as a fresh V5 database", () => {
+    const database = openedCurrentDatabase();
     try {
-      expect(() => applyAuthorityBaselineV4(database)).toThrow(
+      expect(() => applyAuthorityBaselineV5(database)).toThrow(
         /completely empty database/,
       );
     } finally {
@@ -226,8 +226,8 @@ describe("Authority approval-delivery-quarantine baseline v4", () => {
     }
     const v3 = openAuthorityDatabase(":memory:");
     try {
-      applyAuthorityBaselineV3(v3);
-      expect(() => applyAuthorityBaselineV4(v3)).toThrow(
+      historicalAuthorityV3.apply(v3);
+      expect(() => applyAuthorityBaselineV5(v3)).toThrow(
         /completely empty database/,
       );
     } finally {

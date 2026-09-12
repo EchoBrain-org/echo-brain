@@ -139,8 +139,12 @@ This is a reduction in active storage, not a net source-line deletion. The
 predecessor's primary bootstrap SQL totals 3,076 lines; the new three primary
 baselines total 2,144, a reduction of 932. The historical SQL remains alongside
 the new baselines for conversion and historical fixtures, so repository size
-increases during the transition. Historical appliers still have test callers;
-their presence is not evidence that current startup accepts those schemas.
+increases during the transition. Historical initialization now lives only in
+explicit test fixtures. Runtime
+packages expose only Authority V5, control V3, log V3 and the current retrieval
+plane definitions. The package file lists, boundary asset declarations and
+Authority image COPY instructions include only those six SQL files; historical
+SQL stays in the checkout for offline conversion and incompatible-state proofs.
 
 ## Validation and remaining release work
 
@@ -187,3 +191,23 @@ recovery window; retired search generations remain separate follow-up work.
 The underlying pattern was retirement of runtime features without retirement of
 their frozen storage contracts. This change connects removal to explicit lineage
 versioning, preservation checks and a bounded offline transition.
+
+## Runtime compatibility cleanup
+
+Behavior tests now initialize the current schemas, including processing,
+private approval, signed-record append/replay and permission-aware reads. Tests
+for the retired provider-human evidence table and superseded V2 Authority
+private-approval tables are removed. Historical state construction is isolated
+in `tests/support/historical-authority-baselines.ts`; the converter's populated
+parity and refusal tests remain. Historical SQL bytes have their own pinned
+checks independently of runtime packaging. No SQL baseline bytes or persisted
+schema version change in this cleanup.
+
+This removes historical appliers and assets from new runtime releases, not the
+offline transition from the repository. Keep the converter and historical SQL
+until supported installations are migrated or retired and version-matched
+recovery is available for every retained old backup. Production's installed
+lineage and its recovery requirements remain unverified. A disposable staging
+reset validates fresh initialization, not conversion of an existing organization.
+Complete the fresh synthetic approval, publication, search and permission proof
+before release acceptance; this source cleanup does not stand in for that proof.

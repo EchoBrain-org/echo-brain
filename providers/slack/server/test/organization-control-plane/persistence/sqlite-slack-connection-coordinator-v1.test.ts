@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type OrganizationSecretReference, type OrganizationSecretStore } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES, type VerifiedSlackChannel, type VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
-import { applyOrganizationControlBaselineV1 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
+import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../../../../../../packages/organization-control-plane/src/persistence/open-organization-control-database.js";
 import { SlackConnectionConflictError, connectSlackConnectionV1, runSlackConnectionSetupCommandV1, type SlackConnectionVerifierV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
 import { FileOrganizationSecretStore } from "../../../../../../packages/organization-control-plane/src/security/file-secret-store.js";
@@ -44,7 +44,7 @@ function setup(): {
   const database = openOrganizationControlDatabase(
     join(stateDirectory, "integrations.sqlite"),
   );
-  applyOrganizationControlBaselineV1(database);
+  applyOrganizationControlBaselineV3(database);
   database
     .prepare(
       `INSERT INTO organization_control_plane_metadata

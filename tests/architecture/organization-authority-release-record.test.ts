@@ -1,8 +1,4 @@
-import {
-  applyOrganizationRecordDerivedBaselineV1,
-  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-  organizationRecordDerivedBaselineSha256V1,
-} from "../../packages/organization-record/test/fixtures/derived-baseline-v1.js";
+import { historicalAuthorityV3, historicalControlV2, historicalFactsV1, historicalRecordDerivedV1, historicalRecordLogV2 } from "../support/historical-authority-baselines.js";
 import {
   chmodSync,
   copyFileSync,
@@ -23,30 +19,19 @@ import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  applyOrganizationControlBaselineV2,
   openOrganizationControlDatabase,
-  ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-  organizationControlBaselineSha256V2,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  applyOrganizationRecordLogBaselineV2,
   openOrganizationRecordDatabase,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
-  organizationRecordLogBaselineSha256V2,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   readableSearchPlaneBaselineSha256V1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  applyAuthorityBaselineV3,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
-  authorityBaselineSha256V3,
-} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import { initializeAuthorityStateLineageV1 } from "../../services/organization-authority/src/state-lineage/authority-state-lineage-initializer.js";
@@ -385,29 +370,29 @@ function writeValidAuthorityV3Lineage(stateDirectory: string): void {
     creating_artifact_revision: "authority-v3-fixture",
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: authorityBaselineSha256V3(),
+        database_schema_version: historicalAuthorityV3.version,
+        schema_sha256: historicalAuthorityV3.sha256(),
       },
       "control-plane": {
         database_schema_version:
-          ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V2,
-        schema_sha256: organizationControlBaselineSha256V2(),
+          historicalControlV2.version,
+        schema_sha256: historicalControlV2.sha256(),
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V2,
-        schema_sha256: organizationRecordLogBaselineSha256V2(),
+          historicalRecordLogV2.version,
+        schema_sha256: historicalRecordLogV2.sha256(),
       },
       "record-derived": {
         database_schema_version:
-          ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: organizationRecordDerivedBaselineSha256V1(),
+          historicalRecordDerivedV1.version,
+        schema_sha256: historicalRecordDerivedV1.sha256(),
       },
       "retrieval-facts": {
         database_schema_version:
           READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
         schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_FACTS_BASELINE_V1,
+          historicalFactsV1,
         ),
       },
       "retrieval-lexical": {
@@ -426,10 +411,10 @@ function writeValidAuthorityV3Lineage(stateDirectory: string): void {
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV3 },
-      "control-plane": { apply: applyOrganizationControlBaselineV2 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV2 },
-      "record-derived": { apply: applyOrganizationRecordDerivedBaselineV1 },
+      authority: { apply: historicalAuthorityV3.apply },
+      "control-plane": { apply: historicalControlV2.apply },
+      "record-log": { apply: historicalRecordLogV2.apply },
+      "record-derived": { apply: historicalRecordDerivedV1.apply },
     },
     open_writable_database: (path, role) => {
       if (role === "authority") return openAuthorityDatabase(path);
