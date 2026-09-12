@@ -81,7 +81,7 @@ function moduleReferences(path, source) {
     true,
     path.endsWith('.tsx') || path.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
-  return collectModuleReferences(sourceFile);
+  return collectModuleReferences(sourceFile, { includeTypeQueries: true });
 }
 
 function resolveRelative(tree, importer, spec) {

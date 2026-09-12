@@ -1145,6 +1145,13 @@ describe("workspace source boundaries", () => {
       expect(result.status, source).not.toBe(0);
       expect(result.stdout + result.stderr).toContain("neutral module reaches provider");
     }
+    for (const source of [
+      "export type FileStats = import('node:fs').Stats;",
+      "export type Database = import('better-sqlite3').Database;",
+    ]) {
+      writeFileSync(entry, source);
+      expect(runBoundary(fixture).status, source).not.toBe(0);
+    }
     writeFileSync(entry, `export const documentation = 'Slack, Granola, OpenRouter and an unknown future vendor';\n`);
     expect(runBoundary(fixture).status).toBe(0);
   });
