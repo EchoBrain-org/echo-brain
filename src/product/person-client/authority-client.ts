@@ -1,3 +1,4 @@
+import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { canonicalJson } from "@echo-brain/federation-protocol";
@@ -303,37 +304,19 @@ function validatePersonRecordSearchRequest(value: unknown): {
 } {
   const request = asPlainRecord(value, "record search request is invalid");
   const keys = Object.keys(request).sort();
-  const queryTerms =
-    typeof request.query === "string"
-      ? new Set(
-          (request.query.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
-            term.toLowerCase().normalize("NFC"),
-          ),
-        )
-      : new Set<string>();
+  const query = validatePersonQueryText(request.query);
   if (
-    keys.length < 1 ||
-    keys.length > 2 ||
-    !keys.includes("query") ||
-    keys.some((key) => key !== "query" && key !== "limit") ||
-    typeof request.query !== "string" ||
-    request.query.length === 0 ||
-    request.query !== request.query.normalize("NFC") ||
-    request.query.trim() !== request.query ||
-    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(request.query) ||
-    [...request.query].length > 240 ||
-    queryTerms.size < 1 ||
-    queryTerms.size > 32 ||
-    [...queryTerms].some((term) => Buffer.byteLength(term, "utf8") > 64) ||
+    keys.length < 1 || keys.length > 2 || !keys.includes("query") ||
+    keys.some(key => key !== "query" && key !== "limit") ||
     (request.limit !== undefined &&
       (!Number.isSafeInteger(request.limit) ||
         (request.limit as number) < 1 ||
         (request.limit as number) > 10))
   ) {
-    throw new Error("record search request is invalid");
+    throw new PersonQueryInputError("invalid_limit", "Search --limit must be an integer from 1 to 10");
   }
   return Object.freeze({
-    query: request.query,
+    query,
     ...(request.limit === undefined
       ? {}
       : { limit: request.limit as number }),
@@ -345,28 +328,7 @@ function validatePersonAnswerRequest(value: unknown): {
 } {
   const request = asPlainRecord(value, "ask request is invalid");
   exactKeys(request, ["question"], "ask request is invalid");
-  const questionTerms =
-    typeof request.question === "string"
-      ? new Set(
-          (request.question.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
-            term.toLowerCase().normalize("NFC"),
-          ),
-        )
-      : new Set<string>();
-  if (
-    typeof request.question !== "string" ||
-    request.question.length === 0 ||
-    request.question !== request.question.normalize("NFC") ||
-    request.question.trim() !== request.question ||
-    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(request.question) ||
-    [...request.question].length > 240 ||
-    questionTerms.size < 1 ||
-    questionTerms.size > 32 ||
-    [...questionTerms].some((term) => Buffer.byteLength(term, "utf8") > 64)
-  ) {
-    throw new Error("ask request is invalid");
-  }
-  return Object.freeze({ question: request.question });
+  return Object.freeze({ question: validatePersonQueryText(request.question) });
 }
 
 function validatePersonRecordSearch(
@@ -915,7 +877,7 @@ export class PersonAuthorityClient {
       limit !== undefined &&
       (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
     ) {
-      throw new Error("Person record limit must be an integer from 1 to 100");
+      throw new PersonQueryInputError("invalid_limit", "Person record limit must be an integer from 1 to 100");
     }
     if (
       recordSha256 !== undefined &&

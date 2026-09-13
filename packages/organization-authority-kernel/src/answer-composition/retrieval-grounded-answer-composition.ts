@@ -1,3 +1,4 @@
+import { validatePersonQueryText } from "@echo-brain/organization-api";
 import { observeCoreRuntimeSyncV1, observeCoreRuntimeV1 } from "../shared/core-runtime-observation-v1.js";
 import {
   canonicalJson,
@@ -355,33 +356,10 @@ function hasExactKeys(
   );
 }
 
-function nonEmpty(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new RetrievalGroundedAnswerCompositionError(`${label} is invalid`);
-  }
-  return value;
-}
-
-/** Mirrors the public released-retrieval query contract without importing its runtime. */
+/** Uses the neutral public rules without importing an Authority implementation. */
 export function validateReleasedRetrievalQuery(value: unknown): string {
-  const query = nonEmpty(value, "query");
-  const terms = new Set(
-    (query.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
-      term.toLowerCase().normalize("NFC"),
-    ),
-  );
-  if (
-    query !== query.normalize("NFC") ||
-    query.trim() !== query ||
-    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query) ||
-    [...query].length > 240 ||
-    terms.size < 1 ||
-    terms.size > 32 ||
-    [...terms].some((term) => Buffer.byteLength(term, "utf8") > 64)
-  ) {
-    throw new RetrievalGroundedAnswerCompositionError("query is not retrieval compatible");
-  }
-  return query;
+  try { return validatePersonQueryText(value); }
+  catch { throw new RetrievalGroundedAnswerCompositionError("query is not retrieval compatible"); }
 }
 
 function opaqueIdentifier(

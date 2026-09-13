@@ -25,6 +25,8 @@ describe("Person client help", () => {
   });
 
   it("documents sign-in, reads, session commands, and nested employee commands", async () => {
+    await expect(help(["tools", "--help"])).resolves.toContain("echo-brain person tools");
+    await expect(help(["slack-link", "--help"])).resolves.toContain("echo-brain person slack-link");
     await expect(help(["start", "--help"])).resolves.toContain(
       "echo-brain person start --invitation <path>",
     );

@@ -1,3 +1,4 @@
+import { validatePersonQueryText } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
@@ -404,28 +405,12 @@ function recordSearchInput(value: unknown): {
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  const queryTerms =
-    typeof record.query === "string"
-      ? new Set(
-          (record.query.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
-            term.toLowerCase().normalize("NFC"),
-          ),
-        )
-      : new Set<string>();
+  let query: string;
+  try { query = validatePersonQueryText(record.query); }
+  catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
   if (
-    keys.length < 1 ||
-    keys.length > 2 ||
-    !keys.includes("query") ||
-    keys.some((key) => key !== "query" && key !== "limit") ||
-    typeof record.query !== "string" ||
-    record.query.length === 0 ||
-    record.query !== record.query.normalize("NFC") ||
-    record.query.trim() !== record.query ||
-    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(record.query) ||
-    [...record.query].length > 240 ||
-    queryTerms.size < 1 ||
-    queryTerms.size > 32 ||
-    [...queryTerms].some((term) => Buffer.byteLength(term, "utf8") > 64) ||
+    keys.length < 1 || keys.length > 2 || !keys.includes("query") ||
+    keys.some(key => key !== "query" && key !== "limit") ||
     (record.limit !== undefined &&
       (!Number.isSafeInteger(record.limit) ||
         (record.limit as number) < 1 ||
@@ -434,7 +419,7 @@ function recordSearchInput(value: unknown): {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   return Object.freeze({
-    query: record.query,
+    query,
     ...(record.limit === undefined
       ? {}
       : { limit: record.limit as number }),
@@ -446,30 +431,11 @@ function answerInput(value: unknown): { readonly question: string } {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   const record = value as Record<string, unknown>;
-  const question = record.question;
-  const terms =
-    typeof question === "string"
-      ? new Set(
-          (question.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
-            term.toLowerCase().normalize("NFC"),
-          ),
-        )
-      : new Set<string>();
-  if (
-    Object.keys(record).length !== 1 ||
-    typeof question !== "string" ||
-    question.length === 0 ||
-    question !== question.normalize("NFC") ||
-    question.trim() !== question ||
-    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(question) ||
-    [...question].length > 240 ||
-    terms.size < 1 ||
-    terms.size > 32 ||
-    [...terms].some((term) => Buffer.byteLength(term, "utf8") > 64)
-  ) {
+  if (Object.keys(record).length !== 1 || !Object.hasOwn(record, "question")) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
-  return Object.freeze({ question });
+  try { return Object.freeze({ question: validatePersonQueryText(record.question) }); }
+  catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
 }
 
 /** The Organization Authority Person API surface, with no machine routes. */

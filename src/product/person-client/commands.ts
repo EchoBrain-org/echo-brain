@@ -1,3 +1,4 @@
+import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -128,17 +129,18 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 
 Shows the installed version, sign-in state, membership type, and Authority origin.
 `,
+  tools: `usage: echo-brain person tools\n\nShows organization tools and your current link status. Provider command help remains available through each command.\n`,
   logout: `usage: echo-brain person logout
 
 Removes the local session. A revoked session is also removed locally.
 `,
   ask: `usage: echo-brain person ask --question <text>
 
-Ask one bounded question. ECHO searches only records you may read and returns a cited answer.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. ECHO searches only records you may read and returns a cited answer.
 `,
   records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex>]
 
-Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
+Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
 `,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
@@ -240,7 +242,7 @@ function optionalRecordLimit(
     !/^[1-9][0-9]{0,2}$/.test(value) ||
     Number(value) > maximum
   ) {
-    throw new Error(`--limit must be an integer from 1 to ${maximum}`);
+    throw new PersonQueryInputError("invalid_limit", `--limit must be an integer from 1 to ${maximum}`);
   }
   return Number(value);
 }
@@ -462,8 +464,18 @@ export async function runPersonClientCli(
 
   let values: Record<Option, string | boolean | undefined>;
   try {
+    const args = [...argv.slice(employeeAction === undefined ? 1 : 2)];
+    // Accept a negative integer as a limit value so the existing bounds explain
+    // it. Other dash-prefixed values retain parseArgs' strict option behavior.
+    if (action === "records") {
+      for (let i = 0; i < args.length; i += 1) {
+        if (args[i] === "--limit" && /^-[0-9]+$/.test(args[i + 1] ?? "")) {
+          args.splice(i, 2, `--limit=${args[i + 1]}`);
+        } else if (args[i] === "--query" || args[i] === "--record-sha256") { i += 1; }
+      }
+    }
     values = parseArgs({
-      args: [...argv.slice(employeeAction === undefined ? 1 : 2)],
+      args,
       strict: true,
       allowPositionals: false,
       options: { ...OPTIONS, ...toolCommand?.options },
@@ -662,6 +674,7 @@ export async function runPersonClientCli(
         print(stdout, { ok: true });
         break;
       case "ask":
+        validatePersonQueryText(values.question);
         print(stdout, {
           ok: true,
           result: await client.ask(requiredText(values, "question")),
@@ -670,29 +683,15 @@ export async function runPersonClientCli(
       case "records": {
         const query = values.query;
         const recordSha256 = values["record-sha256"];
-        try {
-          print(stdout, {
-            ok: true,
-            result: await client.records(
-              optionalRecordLimit(values, query === undefined ? 100 : 10),
-              typeof query === "string" ? query : undefined,
-              typeof recordSha256 === "string"
-                ? (recordSha256 as `sha256:${string}`)
-                : undefined,
-            ),
-          });
-        } catch (error) {
-          if (
-            typeof query === "string" &&
-            error instanceof PersonAuthorityClientError &&
-            error.code === "unavailable"
-          ) {
-            throw new Error(
-              "Search is catching up to the latest records; retry after the next worker cycle.",
-            );
-          }
-          throw error;
-        }
+        if (query !== undefined) validatePersonQueryText(query);
+        print(stdout, {
+          ok: true,
+          result: await client.records(
+            optionalRecordLimit(values, query === undefined ? 100 : 10),
+            typeof query === "string" ? query : undefined,
+            typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
+          ),
+        });
         break;
       }
       case "exclusions":
@@ -762,7 +761,11 @@ export async function runPersonClientCli(
     print(stderr, {
       ok: false,
       action,
-      error: (error as Error).message,
+      error: error instanceof PersonAuthorityClientError || error instanceof PersonQueryInputError ||
+        error instanceof PersonClientSessionUnavailableError || (action !== "ask" && action !== "records")
+        ? (error as Error).message : "Person request could not be completed",
+      ...(error instanceof PersonAuthorityClientError ? { code: error.code, status: error.status } : {}),
+      ...(error instanceof PersonQueryInputError ? { code: error.code } : {}),
       ...(error instanceof EmployeeMutationError
         ? { code: error.code, mutation_outcome: error.mutation_outcome }
         : {}),
