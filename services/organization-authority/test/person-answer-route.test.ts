@@ -1,5 +1,6 @@
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../tests/support/telemetry-fixture-vocabulary-v1.js";
 import { once } from "node:events";
+import { createOpenRouterStructuredGenerationAdapter } from "../../../providers/openrouter/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
@@ -698,6 +699,7 @@ describe("Person answer route", () => {
   it.each([
     {
       name: "the provider fails during planning",
+      code: "unavailable",
       model: { generate: vi.fn(async () => { throw new Error("provider timeout"); }) },
       modelCalls: 1,
       searchCalls: 0,
@@ -705,6 +707,7 @@ describe("Person answer route", () => {
     },
     {
       name: "the planner throws an authority-shaped error",
+      code: "unavailable",
       model: {
         generate: vi.fn(async () => {
           throw new AuthorityOperationError(
@@ -719,6 +722,7 @@ describe("Person answer route", () => {
     },
     {
       name: "the planner returns malformed output",
+      code: "invalid_output",
       model: { generate: vi.fn(async () => ({ queries: ["   "] })) },
       modelCalls: 1,
       searchCalls: 0,
@@ -726,6 +730,7 @@ describe("Person answer route", () => {
     },
     {
       name: "the answer cites an atom Layer 3 did not release",
+      code: "invalid_output",
       model: {
         generate: vi
           .fn()
@@ -738,6 +743,7 @@ describe("Person answer route", () => {
     },
     {
       name: "the answer provider fails after retrieval",
+      code: "unavailable",
       model: {
         generate: vi
           .fn()
@@ -748,7 +754,7 @@ describe("Person answer route", () => {
       searchCalls: 1,
       revalidationCalls: 0,
     },
-  ])("returns no answer or audit when $name", async ({ model, modelCalls, searchCalls, revalidationCalls }) => {
+  ])("returns no answer or audit when $name", async ({ model, modelCalls, searchCalls, revalidationCalls, code }) => {
     const value = setup({ model });
     try {
       await expect(
@@ -756,7 +762,7 @@ describe("Person answer route", () => {
           access_token: "bearer-only-token",
           question: "When is the launch?",
         }),
-      ).rejects.toMatchObject({ code: "unavailable" });
+      ).rejects.toMatchObject({ code });
       expect(model.generate).toHaveBeenCalledTimes(modelCalls);
       expect(value.search.searchBatch).toHaveBeenCalledTimes(searchCalls);
       expect(value.search.revalidateBatchRelease).toHaveBeenCalledTimes(
@@ -768,7 +774,7 @@ describe("Person answer route", () => {
     }
   });
 
-  it("reports one redacted answer failure while keeping the public error generic", async () => {
+  it("reports one redacted answer failure with a sanitized invalid-output error", async () => {
     const question = "QUESTION-DO-NOT-LOG-79a3067";
     const source = "SOURCE-DO-NOT-LOG-79a3067";
     const providerSecret = "PROVIDER-SECRET-DO-NOT-LOG-79a3067";
@@ -792,8 +798,8 @@ describe("Person answer route", () => {
           question,
         }),
       ).rejects.toMatchObject({
-        code: "unavailable",
-        message: "answer composition is unavailable",
+        code: "invalid_output",
+        message: "answer composition output is invalid",
       });
 
       expect(failures).toHaveLength(1);
@@ -939,6 +945,71 @@ async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
 }
 
 describe("Person answer HTTP mount", () => {
+  it.each([
+    { name: "uncited abstention with a 63-byte term", termBytes: 63, output: { answer: { text: "No information is supplied.", citations: [] } }, status: 502, code: "invalid_output" },
+    { name: "uncited abstention with a 64-byte term", termBytes: 64, output: { answer: { text: "No information is supplied.", citations: [] } }, status: 502, code: "invalid_output" },
+    { name: "unreleased citation", output: { answer: { text: "Tuesday.", citations: ["a99"] } }, status: 502, code: "invalid_output" },
+    { name: "missing citations", output: { answer: { text: "Tuesday." } }, status: 502, code: "invalid_output" },
+    { name: "invalid JSON", raw: "private invalid model output", status: 502, code: "invalid_output" },
+    { name: "invalid provider envelope", envelope: {}, status: 502, code: "invalid_output" },
+    { name: "transport failure", failure: new TypeError("private network detail"), status: 503, code: "unavailable" },
+    { name: "body transport failure", bodyFailure: new TypeError("private interrupted body"), status: 503, code: "unavailable" },
+    { name: "timeout", failure: new DOMException("private timeout detail", "TimeoutError"), status: 503, code: "unavailable" },
+    { name: "provider outage", providerStatus: 503, envelope: { error: { message: "private provider detail" } }, status: 503, code: "unavailable" },
+    { name: "provider refusal", envelope: { choices: [{ message: { refusal: "private refusal" } }] }, status: 503, code: "unavailable" },
+    { name: "canonical null", output: { answer: null }, status: 200 },
+    { name: "supported answer", output: { answer: { text: "The launch is Tuesday.", citations: ["a1"] } }, status: 200 },
+    { name: "65-byte input", termBytes: 65, status: 400, code: "invalid_request" },
+  ])("classifies $name through the provider, kernel, route and HTTP boundary", async (testCase) => {
+    const calls: Record<string, unknown>[] = [];
+    const failures: AnswerCompositionFailureEventV1[] = [];
+    const model = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "offline-fixture", credential_resolver: () => "offline-fixture",
+      fetch_impl: async (_url, init) => {
+        calls.push(JSON.parse(init!.body as string));
+        if (calls.length === 2 && testCase.failure) throw testCase.failure;
+        if (calls.length === 2 && testCase.bodyFailure) {
+          return new Response(new ReadableStream({ start(controller) { controller.error(testCase.bodyFailure); } }));
+        }
+        const envelope = calls.length === 2 && testCase.envelope
+          ? testCase.envelope
+          : { choices: [{ finish_reason: "stop", message: { content: calls.length === 1
+              ? '{"queries":[]}' : testCase.raw ?? JSON.stringify(testCase.output) } }] };
+        return new Response(JSON.stringify(envelope), { status: calls.length === 2 ? testCase.providerStatus ?? 200 : 200 });
+      },
+    });
+    const value = setup({ model, generation: STAGING_GENERATION, on_failure: (event) => failures.push(event) });
+    const server = await startServer(value.route);
+    try {
+      const response = await fetch(`${server.url}/v1/person/ask`, {
+        method: "POST", headers: { authorization: "Bearer offline-fixture", "content-type": "application/json" },
+        body: JSON.stringify({ question: `What about ${"x".repeat(testCase.termBytes ?? 10)} here?` }),
+      });
+      const body = await response.json();
+      expect(response.status).toBe(testCase.status);
+      const validInput = testCase.termBytes !== 65;
+      expect(calls).toHaveLength(validInput ? 2 : 0);
+      expect(value.search.searchBatch).toHaveBeenCalledTimes(validInput ? 1 : 0);
+      expect(value.search.revalidateBatchRelease).toHaveBeenCalledTimes(testCase.status === 200 ? 1 : 0);
+      expect(value.append).toHaveBeenCalledTimes(testCase.status === 200 ? 1 : 0);
+      if (testCase.status === 200) {
+        expect(body).toMatchObject({ schema_version: 2, kind: "echo-clean-person-answer-v2",
+          answer: testCase.output?.answer?.text ?? "Insufficient accessible evidence to answer this question." });
+        expect(value.append).toHaveBeenCalledWith(expect.objectContaining({
+          outcome: testCase.output?.answer === null ? "insufficient_evidence" : "answered",
+          response_sha256: canonicalSha256(body),
+        }));
+        expect(failures).toHaveLength(0);
+      } else {
+        expect(body).toEqual({ error: { code: testCase.code, message: "request failed" } });
+        expect(failures).toHaveLength(validInput ? 1 : 0);
+      }
+    } finally {
+      await server.close();
+      value.database.close();
+    }
+  });
+
   it("returns one current private shape regardless of the retired outcome header", async () => {
     const application: PersonAnswerHttpApplicationV1 = {
       ask: vi.fn(async () => Object.freeze({

@@ -119,6 +119,8 @@ function classifyFailure(
         return { failure_class: "rate_limited", retryable: true };
       case "unavailable":
         return { failure_class: "unavailable", retryable: true };
+      case "invalid_output":
+        return { failure_class: "invalid_contract", retryable: false };
       case "invalid_request":
         return { failure_class: "invalid_request", retryable: false };
       case "conflict":

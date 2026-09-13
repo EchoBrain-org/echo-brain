@@ -764,7 +764,10 @@ export async function runPersonClientCli(
     print(stderr, {
       ok: false,
       action,
-      error: error instanceof PersonAuthorityClientError || error instanceof PersonQueryInputError ||
+      error: action === "ask" && error instanceof PersonAuthorityClientError &&
+        error.code === "invalid_output" && error.status === 502
+        ? "Answer generation returned an invalid response."
+        : error instanceof PersonAuthorityClientError || error instanceof PersonQueryInputError ||
         error instanceof PersonClientSessionUnavailableError || (action !== "ask" && action !== "records")
         ? (error as Error).message : "Person request could not be completed",
       ...(error instanceof PersonAuthorityClientError ? { code: error.code, status: error.status } : {}),

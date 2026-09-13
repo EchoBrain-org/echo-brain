@@ -353,7 +353,7 @@ export function createOpenRouterStructuredGenerationAdapter(
           failure_class: isTimeoutFailure(error)
             ? "adapter_timeout"
             : response.ok
-              ? "adapter_response"
+              ? "adapter_transport"
               : "adapter_http",
           response,
           provider_latency_ms: elapsed(providerStartedAt, nowMs),

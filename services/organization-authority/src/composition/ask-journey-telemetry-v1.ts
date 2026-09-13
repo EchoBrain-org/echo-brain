@@ -144,6 +144,8 @@ export function classifyAskJourneyFailureV1(
   }
   if (error instanceof AuthorityOperationError) {
     switch (error.code) {
+      case "invalid_output":
+        return { failure_class: "invalid_contract", retryable: false };
       case "invalid_request":
         return { failure_class: "invalid_request", retryable: false };
       case "unauthorized":

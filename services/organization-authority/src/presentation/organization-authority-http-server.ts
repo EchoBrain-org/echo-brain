@@ -760,11 +760,13 @@ export function createOrganizationAuthorityHttpServer(
               ? 404
               : error.code === "conflict"
                 ? 409
-                : error.code === "unavailable"
-                  ? 503
-                  : error.code === "rate_limited"
-                    ? 429
-                    : 400;
+                : error.code === "invalid_output"
+                  ? 502
+                  : error.code === "unavailable"
+                    ? 503
+                    : error.code === "rate_limited"
+                      ? 429
+                      : 400;
         fail(response, status, error.code);
         return;
       }

@@ -65,7 +65,9 @@ describe("OpenRouter structured generation", () => {
     expect(JSON.parse(request?.body as string)).toMatchObject({
       stream: false,
       max_tokens: 300,
-      response_format: { type: "json_schema" },
+      response_format: { type: "json_schema", json_schema: {
+        name: "echo_layer4", strict: true, schema: structuredRequest.schema,
+      } },
       provider: { require_parameters: true, data_collection: "deny" },
     });
   });
@@ -353,7 +355,10 @@ describe("OpenRouter structured generation", () => {
     expect(JSON.stringify(error)).not.toContain("secret-not-in-errors");
   });
 
-  it("classifies a timeout while reading an HTTP 200 body", async () => {
+  it.each([
+    { error: new DOMException("private stalled body", "TimeoutError"), failure_class: "adapter_timeout" },
+    { error: new TypeError("private stalled body"), failure_class: "adapter_transport" },
+  ])("classifies $failure_class while reading an HTTP 200 body", async (testCase) => {
     const adapter = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "openrouter-production",
       credential_resolver: () => "secret-not-in-errors",
@@ -363,7 +368,7 @@ describe("OpenRouter structured generation", () => {
           status: 200,
           headers: new Headers(),
           text: async () => {
-            throw new DOMException("private stalled body", "TimeoutError");
+            throw testCase.error;
           },
         }) as unknown as Response) as typeof fetch,
     });
@@ -371,7 +376,7 @@ describe("OpenRouter structured generation", () => {
     const error = await caught(adapter);
 
     expect(error.diagnostic).toEqual({
-      failure_class: "adapter_timeout",
+      failure_class: testCase.failure_class,
       http_status: 200,
       adapter_id: "openrouter",
       finish_reason: null,

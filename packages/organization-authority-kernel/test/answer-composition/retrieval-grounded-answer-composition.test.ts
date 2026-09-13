@@ -1169,6 +1169,20 @@ describe("answer reliability with already released facts", () => {
     expect(request.system_prompt).toContain("Keep each task paired with its own deadline");
   });
 
+  it("states the null-or-cited output choice before answer-writing instructions", async () => {
+    const f = fixture({ answer: null });
+    await f.composition.answer({ question: "What is the unknown project?" });
+    const { system_prompt: prompt, schema } = f.answerer.generate.mock.calls[0]![0];
+    // This checks the generation request, not live model compliance.
+    expect(prompt).toContain('An answer object with an empty citations array is invalid');
+    expect(prompt.indexOf('return exactly {"answer":null}')).toBeLessThan(prompt.indexOf("Address each requested part"));
+    expect(prompt).toContain("Do not write an answer object merely to explain that evidence is missing");
+    expect(schema).toMatchObject({ properties: { answer: { anyOf: [
+      { type: "null", description: expect.stringContaining("abstention") },
+      { type: "object", properties: { citations: { minItems: 1 } } },
+    ] } } });
+  });
+
   it.each(["What special price did the customer receive?", "What is the second customer's schedule?", "x".repeat(63), "x".repeat(64)])("keeps unsupported or private-only questions neutral: %s", async (question) => {
     const f = fixture({ answer: null });
     const result = await f.composition.answer({ question });

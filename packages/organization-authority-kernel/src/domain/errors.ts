@@ -1,6 +1,7 @@
 export type AuthorityErrorCode =
   | 'conflict'
   | 'invalid_request'
+  | 'invalid_output'
   | 'not_found'
   | 'stale_access_state'
   | 'unauthorized'
