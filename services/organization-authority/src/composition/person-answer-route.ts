@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   createRetrievalGroundedAnswerComposition,
+  AnswerCompositionOutputError,
   RetrievalGroundedAnswerCompositionError,
   validateReleasedRetrievalQuery,
   validateReleasedRetrievalBatchV1,
@@ -335,6 +336,9 @@ export function createPersonAnswerRouteV1(
           error.original instanceof AuthorityOperationError
         ) {
           throw error.original;
+        }
+        if (error instanceof AnswerCompositionOutputError) {
+          throw new AuthorityOperationError("invalid_output", "answer composition output is invalid");
         }
         unavailable();
       }

@@ -759,7 +759,7 @@ describe("Person client", () => {
       await new PersonClient({ home_directory: home, now: () => NOW,
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
-      for (const [code, httpStatus] of [["unavailable", 503], ["unauthorized", 401], ["invalid_request", 400]] as const) {
+      for (const [code, httpStatus] of [["invalid_output", 502], ["unavailable", 503], ["unauthorized", 401], ["invalid_request", 400]] as const) {
         let stdout = "", stderr = "";
         const status = await runPersonClientCli(argv, {
           home_directory: home, now: () => NOW,
@@ -771,6 +771,9 @@ describe("Person client", () => {
         expect(stdout).toBe("");
         expect(JSON.parse(stderr)).toMatchObject({ ok: false, code, status: httpStatus });
         expect(stderr).not.toMatch(/private provider body|catching up/);
+        if (argv[0] === "ask" && code === "invalid_output") {
+          expect(JSON.parse(stderr).error).toBe("Answer generation returned an invalid response.");
+        }
       }
     });
   });

@@ -88,6 +88,14 @@ Account changes cancel pending answer/source reads and clear the displayed
 conversation. People mutations block a simultaneous account transition while
 their outcome is pending. Browser login can be cancelled from the Account menu.
 
+Ask distinguishes invalid generated output (`invalid_output`, HTTP 502) from
+availability failures (`unavailable`, HTTP 503). Both use the existing sanitized
+error envelope. The CLI preserves code/status, exits nonzero, and gives the
+native app a fixed message for invalid output; it never displays model or
+provider bodies. A valid model `answer: null` remains a successful canonical
+insufficient-evidence response. Malformed output is never converted to null or
+retried automatically.
+
 Ask retains validated citations, groups them by record digest, and loads source
 cards through `person records --record-sha256 <digest>` while the panel has focus.
 Each readable card appears as its sequential read completes; a failed read does

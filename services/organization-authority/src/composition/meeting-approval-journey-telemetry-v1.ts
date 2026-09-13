@@ -121,6 +121,7 @@ function classifyFailure(
         return { failure_class: "unavailable", retryable: true };
       case "invalid_request":
         return { failure_class: "invalid_request", retryable: false };
+      case "invalid_output":
       case "conflict":
       case "not_found":
       case "stale_access_state":

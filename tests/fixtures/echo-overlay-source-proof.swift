@@ -12,6 +12,20 @@ private enum EchoOverlaySourceFixtureMain {
         let mode = CommandLine.arguments.dropFirst().first ?? ""
         let passed: Bool
         switch mode {
+        case "invalid-output-failure":
+            guard let executable = shellSourceCLI("""
+            printf '%s' '{"ok":false,"action":"ask","code":"invalid_output","status":502,"error":"Answer generation returned an invalid response."}' >&2
+            exit 1
+            """) else { Darwin.exit(EXIT_FAILURE) }
+            defer { try? FileManager.default.removeItem(at: executable) }
+            let probe = AskFailureProbe()
+            let running = CliRunner(executable: executable).ask(question: "What happened?") { probe.finish($0) }
+            let deadline = Date().addingTimeInterval(3)
+            while !probe.completed && Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            running.cancel()
+            passed = probe.message == "ECHO could not answer that question. Answer generation returned an invalid response."
         case "valid-answer":
             if case .success(let answer) = CliRunner.parseSuccess(answerData(citations: [citation()])), answer.sources.count == 1 {
                 passed = true
@@ -385,6 +399,24 @@ private enum EchoOverlaySourceFixtureMain {
         body["event"] = event; envelope["body"] = body; records[0]["envelope"] = envelope
         result["records"] = records; root["result"] = result
         return data(root)
+    }
+}
+
+private final class AskFailureProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: AskOutcome?
+    func finish(_ outcome: AskOutcome) {
+        lock.lock(); defer { lock.unlock() }
+        result = outcome
+    }
+    var completed: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return result != nil
+    }
+    var message: String? {
+        lock.lock(); defer { lock.unlock() }
+        if case .failure(let message) = result { return message }
+        return nil
     }
 }
 
