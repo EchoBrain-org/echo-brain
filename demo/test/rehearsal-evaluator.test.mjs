@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -51,9 +52,14 @@ const spans = {
 const pair = { record_generation_id: "generation-1", release_head: "db5153e-synthetic-release" };
 const heroId = "after-team-approval-rollout-question";
 
-function processCapture(answerText) {
+const digest = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
+
+function processCapture(answer, records) {
+  const citations = records.filter(record => answer.citation_meeting_ids.includes(record.meeting_id))
+    .map(record => ({ atom_id: record.atom_ids[0], record_sha256: record.record_sha256,
+      policy_id: record.policy === "team" ? "organization-member-readable-person-v2" : "restricted-reviewer-person-v2" }));
   return { exit_code: 0, signal: null, launch_error_code: null, stderr: "",
-    stdout: JSON.stringify({ ok: true, result: { answer: answerText } }) };
+    stdout: JSON.stringify({ ok: true, result: { schema_version: 2, kind: "echo-clean-person-answer-v2", answer: answer.answer_text, citations } }) };
 }
 
 function passingResult() {
@@ -61,6 +67,8 @@ function passingResult() {
   const records = meetings.map((meeting, index) => ({
     meeting_id: meeting.meeting_id,
     record_id: `v4-record-${index + 1}`,
+    record_sha256: digest(`record-${index + 1}`),
+    atom_ids: [digest(`atom-${index + 1}`), digest(`second-atom-${index + 1}`)],
     approved: true,
     publication: "approved_v4_reconciled",
     policy: meeting.approval_policy
@@ -85,7 +93,7 @@ function passingResult() {
       ...pair
     };
   });
-  for (const answer of answers) answer.process_capture = processCapture(answer.answer_text);
+  for (const answer of answers) answer.process_capture = processCapture(answer, records);
   return {
     schema_version: 1,
     document_type: "echo-synthetic-customer-demo-rehearsal-result",
@@ -233,7 +241,7 @@ function capture(result, id = heroId) {
 }
 
 function syncTrials(result, id) {
-  capture(result, id).process_capture = processCapture(capture(result, id).answer_text);
+  capture(result, id).process_capture = processCapture(capture(result, id), result.approved_records);
   const run = result.determinism.find((run) => run.case_id === id);
   run.trials = run.trials.map((trial) => ({ ...structuredClone(capture(result, id)), trial_id: trial.trial_id }));
 }
@@ -769,4 +777,63 @@ test("does not count a launch failure mislabeled unavailable as an Authority out
   const report = rejects(result, "13");
   assert.equal(report.repeatability[0].unavailable_count, 0);
   assert.equal(report.repeatability[0].status_503_count, 0);
+});
+
+function mutateStdout(answer, mutate) {
+  const envelope = JSON.parse(answer.process_capture.stdout);
+  mutate(envelope);
+  answer.process_capture.stdout = JSON.stringify(envelope);
+}
+
+for (const [name, mutate] of [
+  ["private citation", (envelope, result) => {
+    const record = result.approved_records[3];
+    envelope.result.citations = [{ atom_id: record.atom_ids[0], record_sha256: record.record_sha256, policy_id: "restricted-reviewer-person-v2" }];
+  }],
+  ["retired record head", envelope => { envelope.result.record_head = { position: 9, record_sha256: digest("hidden") }; }],
+  ["retired generation", envelope => { envelope.result.generation_id = digest("hidden-generation"); }],
+  ["wrong schema", envelope => { envelope.result.schema_version = 1; }],
+  ["wrong kind", envelope => { envelope.result.kind = "echo-clean-person-answer-v1"; }],
+  ["missing citations", envelope => { delete envelope.result.citations; }],
+  ["unexpected envelope metadata", envelope => { envelope.hidden = "extra"; }],
+  ["contradictory authorship outcome", envelope => { envelope.result.outcome = "authorship_unsupported"; }],
+]) {
+  test(`rejects ${name} in actual employee stdout even when summary fields look safe`, () => {
+    const result = passingResult();
+    mutateStdout(capture(result, "team-member-private-price-question"), envelope => mutate(envelope, result));
+    assert.equal(evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths }).passed, false);
+  });
+}
+
+for (const mutation of ["wrong record", "wrong atom", "wrong policy", "duplicate atom", "extra citation field", "missing citation", "missing record hash", "missing atom evidence"]) {
+  test(`rejects ${mutation} instead of trusting mapped citation summaries`, () => {
+    const result = passingResult();
+    if (mutation === "missing record hash") delete result.approved_records[0].record_sha256;
+    else if (mutation === "missing atom evidence") delete result.approved_records[0].atom_ids;
+    else mutateStdout(capture(result), envelope => {
+      const citation = envelope.result.citations[0];
+      if (mutation === "wrong record") citation.record_sha256 = digest("uncaptured-record");
+      if (mutation === "wrong atom") citation.atom_id = digest("uncaptured-atom");
+      if (mutation === "wrong policy") citation.policy_id = "restricted-reviewer-person-v2";
+      if (mutation === "duplicate atom") envelope.result.citations.push({ ...citation });
+      if (mutation === "extra citation field") citation.hidden = "extra";
+      if (mutation === "missing citation") envelope.result.citations.pop();
+    });
+    assert.equal(evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths }).passed, false);
+  });
+}
+
+test("rejects altered actual citations in a repeated trial with unchanged summaries", () => {
+  const result = passingResult();
+  mutateStdout(result.determinism[0].trials[0], envelope => { envelope.result.citations[0].record_sha256 = digest("uncaptured-record"); });
+  rejects(result, "13");
+});
+
+test("actual citation changes within one approved record break exact repeatability", () => {
+  const result = passingResult();
+  mutateStdout(result.determinism[0].trials[0], envelope => {
+    const citation = envelope.result.citations[0];
+    citation.atom_id = result.approved_records.find(record => record.record_sha256 === citation.record_sha256).atom_ids[1];
+  });
+  rejects(result, "13");
 });

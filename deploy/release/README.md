@@ -837,11 +837,12 @@ identifies the Authority actually serving a request. Status makes no network cal
 Use the existing operator lane's release/image evidence and correlated request
 audit or telemetry to identify that Authority independently.
 
-The candidate implements the proposed [ADR-0012](../../docs/decisions/ADR-0012-person-public-response-privacy.md).
+The candidate implements [ADR-0012](../../docs/decisions/ADR-0012-person-public-response-privacy.md).
 Its matching clients decode `echo-clean-person-record-search-v2` and
 `echo-clean-person-answer-v2` (schema 2); older exact-shape clients are incompatible.
 Select clients by committed source and tarball SHA-256, not a reused product version.
-The proposal still needs decision review and coordinated live qualification.
+The implementation contract is accepted; coordinated live qualification and
+the exact candidate's release decision remain required.
 
 For both native targets, build from the same committed source and feed the
 existing smoke helper the same canonical release and tarball:

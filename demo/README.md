@@ -116,7 +116,19 @@ on stderr. A launch exception such as `ERR_INVALID_ARG_VALUE` (NUL argv) or
 `E2BIG` has null exit and its launch code; it cannot qualify an answer or be
 counted as an Authority outage. The evaluator prints fixed diagnostics only.
 
-For proposed ADR-0012 candidates, public search/Ask V2 responses contain no
+Successful stdout must contain the complete V2 response, including schema/kind
+and citations. Missing or extra fields, retired global metadata, and a mismatch
+between the actual response and its mapped answer/outcome fail qualification.
+Each existing `approved_records` entry must include its captured canonical
+`record_sha256` and the `atom_ids` belonging to that approved record, alongside
+the existing record ID, meeting ID and policy. Obtain these through authorized
+record/retrieval evidence; never construct them from the answer being evaluated.
+The evaluator binds actual citations to those records, atoms, policies and the
+captured retrieval, then compares their source meetings to the oracle. Neutral
+answers require zero actual citations. Repeated answers must retain the same
+actual citation identities, even when their summary fields remain unchanged.
+
+For ADR-0012 candidates, public search/Ask V2 responses contain no
 global generation/head. The existing `record_generation_id` and `release_head`
 fields are operator evidence from the serving Authority's correlated audit and
 release/telemetry records, not fields to recover from public JSON or installed

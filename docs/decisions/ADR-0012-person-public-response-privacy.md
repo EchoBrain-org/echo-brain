@@ -9,8 +9,8 @@ component_ids:
   - CMP-IDENTITY-ACCESS
 created_at: 2026-09-13
 reviewed_at: 2026-09-13
-reviewed_ref: 7e49c3dea153b3860bd468546ac9d55fcd0da19b
-status: proposed
+reviewed_ref: ff7cbf7d88f566f324c656e0efe5aa2982031c43
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -22,12 +22,15 @@ updates:
 
 ## Disposition
 
-Proposed for explicit contract review. The Person contract sprint authorizes
-implementation and offline proof of this proposal, not acceptance or release.
-ADR-0006 remains accepted and its historical rationale is unchanged. Accepting
-this proposal would replace only its requirement to publish global generation
-and record-head identity in ordinary Person search/Ask responses. Its exact
-internal freshness, authorization and audit requirements remain in force.
+Accepted for implementation on 2026-09-13 when the founder authorized correction
+of the reviewed sprint's evaluator gap and driving the sprint to merge.
+`reviewed_ref` identifies the reviewed runtime implementation; the follow-up
+correction binds qualification to the full captured response. This decision
+does not accept a staging candidate or authorize a production deployment.
+ADR-0006's historical rationale is unchanged. This decision replaces its
+requirement to publish global generation and record-head identity in ordinary
+Person search/Ask responses. Its exact internal freshness, authorization and
+audit requirements remain in force.
 
 ## Replacement contract
 
@@ -69,7 +72,7 @@ changing opaque token cannot substitute for serving-Authority evidence.
 ## Answer contract refinement
 
 ADR-0007's one planner, one released batch and at most one answer call remain.
-For model output, propose `{ "answer": null }` for abstention, with standard
+For model output, use `{ "answer": null }` for abstention, with standard
 insufficient-evidence text rendered by the application. Otherwise `answer` is
 an object with nonempty `text` and nonempty request-local `citations`. The schema
 and parser reject extra fields; the redundant model-authored status is retired.
@@ -82,6 +85,6 @@ remain failures; no repair retry or outage-to-abstention conversion is authorize
 Whole-response employee regressions include a restricted latest record and
 empty results. Preserve owner/employee content controls, stale-head rejection,
 final authorization, audit failure and exact returned-response digest tests.
-Native decoders and exact client artifacts must pass offline checks. Decision
-acceptance and exact-candidate employee repetitions plus owner controls remain
-human/live qualification work before deployment.
+Native decoders and exact client artifacts must pass offline checks. Exact-candidate
+employee repetitions, owner controls and the final release decision remain
+human/live qualification work in the existing operator lane.
