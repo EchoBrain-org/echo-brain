@@ -56,11 +56,7 @@ function answerResponse(userPrompt) {
   // corpus map, response fixture, or caller-controlled citation path.
   const answer = first.text.slice(0, 4_000).trim();
   if (answer.length === 0) throw new Error("deterministic answerer received empty released evidence");
-  return Object.freeze({
-    status: "answered",
-    answer,
-    citations: [first.citation_id],
-  });
+  return Object.freeze({ answer: { text: answer, citations: [first.citation_id] } });
 }
 
 /**

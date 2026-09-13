@@ -388,7 +388,7 @@ describe("Person Layer 2 route", () => {
         model: { generate: async input => {
           modelInputs.push(input);
           return modelInputs.length === 1 ? { queries: request.queries.slice(1) }
-            : { status: "insufficient_evidence", answer: "", citations: [] };
+            : { answer: null };
         } },
         generation: { generation_adapter_id: "test-structured-output", planner_model: "test-planner", answer_model: "test-answer", timeout_ms: 60_000 },
         audit: new SqlitePersonAnswerCompositionAuditV1(value.authority),

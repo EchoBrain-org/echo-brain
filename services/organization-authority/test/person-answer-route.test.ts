@@ -157,11 +157,7 @@ function setup(input: {
         modelInputs.push(request);
         return modelInputs.length === 1
           ? { queries: ["launch date", "launch owner"] }
-          : {
-              status: "answered",
-              answer: "Tuesday, owned by the product team.",
-              citations: ["a1", "a2"],
-            };
+          : { answer: { text: "Tuesday, owned by the product team.", citations: ["a1", "a2"] } };
       },
     ),
   };
@@ -286,11 +282,7 @@ describe("Person answer route", () => {
           value:
             observedCalls === 1
               ? { queries: ["launch date", "launch owner"] }
-              : {
-                  status: "answered",
-                  answer: "Tuesday, owned by the product team.",
-                  citations: ["a1", "a2"],
-                },
+              : { answer: { text: "Tuesday, owned by the product team.", citations: ["a1", "a2"] } },
           usage:
             observedCalls === 1
               ? {
@@ -739,11 +731,7 @@ describe("Person answer route", () => {
         generate: vi
           .fn()
           .mockResolvedValueOnce({ queries: [] })
-          .mockResolvedValueOnce({
-            status: "answered",
-            answer: "Unsupported.",
-            citations: ["a99"],
-          }),
+          .mockResolvedValueOnce({ answer: { text: "Unsupported.", citations: ["a99"] } }),
       },
       modelCalls: 2,
       searchCalls: 1,
@@ -793,11 +781,7 @@ describe("Person answer route", () => {
         generate: vi
           .fn()
           .mockResolvedValueOnce({ queries: [] })
-          .mockResolvedValueOnce({
-            status: "answered",
-            answer: `${providerSecret} ${prompt} ${reasoning}`,
-            citations: ["a99"],
-          }),
+          .mockResolvedValueOnce({ answer: { text: `${providerSecret} ${prompt} ${reasoning}`, citations: ["a99"] } }),
       },
       on_failure: (event) => failures.push(event),
       source_text: source,
@@ -1112,11 +1096,7 @@ it("routes the question and raw output to the staging content observer while sta
         value:
           observedCalls === 1
             ? { queries: ["launch date"] }
-            : {
-                status: "answered",
-                answer: "Tuesday, owned by the product team.",
-                citations: ["a1", "a2"],
-              },
+            : { answer: { text: "Tuesday, owned by the product team.", citations: ["a1", "a2"] } },
         usage: {
           input_tokens: 1,
           output_tokens: 1,

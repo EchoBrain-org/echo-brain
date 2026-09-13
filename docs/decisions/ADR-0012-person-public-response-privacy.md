@@ -69,9 +69,11 @@ changing opaque token cannot substitute for serving-Authority evidence.
 ## Answer contract refinement
 
 ADR-0007's one planner, one released batch and at most one answer call remain.
-For model output, propose an explicit empty abstention payload, with standard
-insufficient-evidence text rendered by the application. The schema must enforce
-status/text/citation consistency. Malformed abstention, substantive text marked
+For model output, propose `{ "answer": null }` for abstention, with standard
+insufficient-evidence text rendered by the application. Otherwise `answer` is
+an object with nonempty `text` and nonempty request-local `citations`. The schema
+and parser reject extra fields; the redundant model-authored status is retired.
+This removes independently generated status/text/citation combinations. Malformed abstention, substantive text marked
 insufficient, missing/duplicate/unreleased citations and contradictory claims
 remain failures; no repair retry or outage-to-abstention conversion is authorized.
 
