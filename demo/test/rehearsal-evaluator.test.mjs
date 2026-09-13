@@ -51,6 +51,11 @@ const spans = {
 const pair = { record_generation_id: "generation-1", release_head: "db5153e-synthetic-release" };
 const heroId = "after-team-approval-rollout-question";
 
+function processCapture(answerText) {
+  return { exit_code: 0, signal: null, launch_error_code: null, stderr: "",
+    stdout: JSON.stringify({ ok: true, result: { answer: answerText } }) };
+}
+
 function passingResult() {
   const meetings = expectations.meeting_expectations;
   const records = meetings.map((meeting, index) => ({
@@ -80,6 +85,7 @@ function passingResult() {
       ...pair
     };
   });
+  for (const answer of answers) answer.process_capture = processCapture(answer.answer_text);
   return {
     schema_version: 1,
     document_type: "echo-synthetic-customer-demo-rehearsal-result",
@@ -227,6 +233,7 @@ function capture(result, id = heroId) {
 }
 
 function syncTrials(result, id) {
+  capture(result, id).process_capture = processCapture(capture(result, id).answer_text);
   const run = result.determinism.find((run) => run.case_id === id);
   run.trials = run.trials.map((trial) => ({ ...structuredClone(capture(result, id)), trial_id: trial.trial_id }));
 }
@@ -431,7 +438,7 @@ test("does not demand byte-identical answers across different paraphrases or cas
 });
 
 function unavailable(trialId) {
-  return { trial_id: trialId, ...pair, outcome: "unavailable", http_status: 503, reason_code: "unavailable" };
+  return { trial_id: trialId, ...pair, outcome: "unavailable", http_status: 503, reason_code: "unavailable", process_capture: { exit_code: 1, signal: null, launch_error_code: null, stdout: "", stderr: JSON.stringify({ ok: false, code: "unavailable", status: 503 }) } };
 }
 
 test("reports all attempts and 503 reasons separately from a stable successful subset", () => {
@@ -740,3 +747,16 @@ test("a neutral paraphrase cannot change the primary retrieval allowance", () =>
   result.answers.push({ ...structuredClone(capture(result, primary.id)), case_id: id });
   rejects(result, "15", oracle);
 });
+
+for (const [name, process_capture] of [
+  ["stderr Authority failure", { exit_code: 1, signal: null, launch_error_code: null, stdout: "", stderr: JSON.stringify({ ok: false, code: "unavailable", status: 503 }) }],
+  ["NUL argv launch failure", { exit_code: null, signal: null, launch_error_code: "ERR_INVALID_ARG_VALUE", stdout: "", stderr: "" }],
+  ["oversized argv launch failure", { exit_code: null, signal: null, launch_error_code: "E2BIG", stdout: "", stderr: "" }],
+  ["stdout alone with failed exit", { exit_code: 1, signal: null, launch_error_code: null, stdout: JSON.stringify({ ok: true }), stderr: "" }],
+]) {
+  test(`does not qualify an answer from ${name}`, () => {
+    const result = passingResult();
+    capture(result).process_capture = process_capture;
+    assert.equal(evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths }).passed, false);
+  });
+}

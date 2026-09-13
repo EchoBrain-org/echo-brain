@@ -1,5 +1,6 @@
 import { SlackPersonClient } from '@echo-brain/provider-slack-client/person/slack-person-client';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
+import * as packageIdentity from "../../src/product/person-client/package-identity.js";
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import {
@@ -15,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
@@ -99,6 +101,34 @@ async function withHome(run: (home: string) => Promise<void>): Promise<void> {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Person client", () => {
+  it.each([false, true])("distinguishes same-version client builds in status (signed in: %s)", async (signedIn) => {
+    await withHome(async (home) => {
+      if (signedIn) await new PersonClient({ home_directory: home, now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authorityDescriptor() }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      const readIdentity = packageIdentity.readPackagedPersonClientBuildIdentity;
+      for (const [source_sha, source_kind] of [["a".repeat(40), "materialized-commit"], ["b".repeat(40), "worktree-head-unverified"]] as const) {
+        const packageRoot = join(home, source_sha);
+        mkdirSync(join(packageRoot, "dist"), { recursive: true });
+        writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-internal.6" }));
+        writeFileSync(join(packageRoot, "dist/build-identity.v1.json"), JSON.stringify({
+          schema_version: 1, kind: "echo-packaged-build-identity", product_version: "0.1.0-internal.6", source_sha, source_kind,
+        }));
+        const identity = readIdentity(pathToFileURL(join(packageRoot, "dist/package-identity.js")).href);
+        vi.spyOn(packageIdentity, "readPackagedPersonClientBuildIdentity").mockReturnValue(identity);
+        let stdout = "";
+        const fetch = vi.fn();
+        expect(await runPersonClientCli(["status"], { home_directory: home, fetch,
+          stdout: { write: value => ((stdout += String(value)), true) }, stderr: { write: () => true },
+        })).toBe(0);
+        const status = JSON.parse(stdout);
+        expect(status).toMatchObject({ signed_in: signedIn, installed_version: "0.1.0-internal.6", client_build: { source_sha, source_kind } });
+        expect(status).not.toHaveProperty("authority_build");
+        expect(fetch).not.toHaveBeenCalled();
+      }
+    });
+  });
+
   it("reports disconnected status without a network call or private paths", async () => {
     await withHome(async (home) => {
       let networkCalled = false;

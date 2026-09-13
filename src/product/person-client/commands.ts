@@ -108,7 +108,7 @@ const HELP: Readonly<Record<string, string>> = {
 Commands:
   start       Complete invitation sign-in and verify that ECHO is ready.
   login       Sign in with an invitation or existing Authority identity.
-  status      Show installed version and sign-in state.
+  status      Show client build identity and sign-in state.
   logout      Remove the local session.
   ask         Ask a question over records you may read.
   records     List records or search the current generation.
@@ -127,7 +127,8 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 `,
   status: `usage: echo-brain person status
 
-Shows the installed version, sign-in state, membership type, and Authority origin.
+Shows installed_version, client_build source_sha/source_kind, sign-in state, membership type, and Authority origin.
+Client provenance does not identify the Authority build serving requests. Status is local and makes no network request.
 `,
   tools: `usage: echo-brain person tools\n\nShows organization tools and your current link status. Provider command help remains available through each command.\n`,
   logout: `usage: echo-brain person logout
@@ -644,6 +645,7 @@ export async function runPersonClientCli(
             schema_version: 1,
             kind: "echo-person-client-status-v1",
             installed_version: identity.product_version,
+            client_build: { source_sha: identity.source_sha, source_kind: identity.source_kind },
             signed_in: true,
             display_name: session.display_name,
             membership_id: session.membership_id,
@@ -658,6 +660,7 @@ export async function runPersonClientCli(
             schema_version: 1,
             kind: "echo-person-client-status-v1",
             installed_version: identity.product_version,
+            client_build: { source_sha: identity.source_sha, source_kind: identity.source_kind },
             signed_in: false,
             display_name: null,
             membership_type: null,

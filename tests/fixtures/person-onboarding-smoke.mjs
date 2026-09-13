@@ -16,7 +16,9 @@ chmodSync(root, 0o700);
 
 function run(command, args, env = process.env, status = 0) {
   const result = spawnSync(command, args, { cwd: repo, env, encoding: 'utf8', timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
-  assert.equal(result.status, status, `${command}: ${result.error ?? result.stderr}\n${result.stdout}`);
+  assert.equal(result.error, undefined, `${command}: process launch failed (${result.error?.code})`);
+  assert.equal(result.signal, null, `${command}: process terminated by ${result.signal}`);
+  assert.equal(result.status, status, `${command}: ${result.stderr}\n${result.stdout}`);
   return result.stdout.trim();
 }
 function node(script, ...args) {
@@ -35,13 +37,20 @@ try {
     const release = JSON.parse(readFileSync(join(kit, 'release.json')));
     packed = { version: release.person_client.version, source_sha: release.source_sha };
   } else {
-    assert.equal(process.argv.length, 2);
-    packed = JSON.parse(node('tools/pack-person-client.mjs', root));
+    const supplied = process.argv[2] === '--release' && process.argv[4] === '--artifact' && process.argv.length === 6;
+    assert.ok(supplied || process.argv.length === 2, 'Use --kit-root KIT or --release RELEASE --artifact TARBALL, or no arguments for a local smoke build');
+    if (supplied) {
+      const release = JSON.parse(readFileSync(resolve(process.argv[3])));
+      packed = { package: release.person_client.package, version: release.person_client.version,
+        source_sha: release.source_sha, artifact_sha256: release.person_client.artifact_sha256,
+        artifact_path: resolve(process.argv[5]) };
+      assert.equal(sha(packed.artifact_path), packed.artifact_sha256);
+    } else packed = JSON.parse(node('tools/pack-person-client.mjs', root));
     const profile = join(root, 'runtime-profile.json');
     node('tools/clean-v1-runtime-profile.mjs', 'create', join(repo, 'deploy/organization-authority'), profile);
-    const release = join(root, 'release.json');
+    const release = supplied ? resolve(process.argv[3]) : join(root, 'release.json');
     // These offline fixture URLs and image digest are never deployed or fetched.
-    writeFileSync(release, `${canonicalJson({
+    if (!supplied) writeFileSync(release, `${canonicalJson({
       schema_version: 1,
       kind: 'echo-clean-v1-release',
       release_id: `clean-v1-offline-proof-${packed.source_sha.slice(0, 12)}`,
@@ -98,6 +107,9 @@ try {
   assert.equal(run(cli, ['--version'], env), packed.version);
   const status = JSON.parse(run(cli, ['person', 'status'], env));
   assert.equal(status.signed_in, false);
+  assert.equal(status.installed_version, packed.version);
+  assert.deepEqual(status.client_build, { source_sha: packed.source_sha, source_kind: 'materialized-commit' });
+  assert.equal(Object.hasOwn(status, 'authority_build'), false);
   const wrapper = readFileSync(cli, 'utf8');
   run('/bin/bash', [start, '--install-only'], env);
   assert.equal(readFileSync(cli, 'utf8'), wrapper);
@@ -110,7 +122,7 @@ try {
     assert.equal(readFileSync(cli, 'utf8'), wrapper);
     assert.equal(run(cli, ['--version'], env), packed.version);
   } finally { writeFileSync(join(kit, 'person-client.tgz'), originalClient); }
-  process.stdout.write(`${JSON.stringify({ ok: true, source_sha: packed.source_sha, platform: process.platform, architecture: process.arch, runtime: process.version, checks: ['real-archive', 'restricted-tool-path', 'temporary-home-with-spaces-and-unicode', 'install', 'signed-out-status', 'reinstall', 'arguments', 'tamper-preserves-install'] })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, qualification: false, client_build: status.client_build, person_client_artifact_sha256: sha(join(kit, 'person-client.tgz')), release_record_sha256: sha(join(kit, 'release.json')), release_id: JSON.parse(readFileSync(join(kit, 'release.json'))).release_id, serving_authority: 'not-observed-offline', platform: process.platform, architecture: process.arch, runtime: process.version, checks: ['real-archive', 'restricted-tool-path', 'temporary-home-with-spaces-and-unicode', 'install', 'signed-out-status', 'reinstall', 'arguments', 'tamper-preserves-install'] })}\n`);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

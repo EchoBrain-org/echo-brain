@@ -34,12 +34,13 @@ else if(process.argv[2] !== 'validate') process.exit(1);
   writeFileSync(join(kit, "kit-manifest.v1.json"), "{}\n");
   writeFileSync(join(kit, "build-identity.v1.json"), "{}\n");
   function prepare(release: number) {
-    const version = `0.1.${release}`;
+    const version = "0.1.1";
+    const sourceSha = String(release).repeat(40);
     const releaseId = `clean-v1-linux-${release}`;
     writeFileSync(join(kit, "release.json"), JSON.stringify({ "release-id": releaseId, "client-version": version }));
     const packageRoot = join(root, "package");
     mkdirSync(join(packageRoot, "dist"), { recursive: true });
-    writeFileSync(join(packageRoot, "dist", "main.js"), `const args=process.argv.slice(2); if(args[0] === '--version') console.log('${version}'); else if(args[0] === 'person' && args[1] === 'status') console.log(JSON.stringify({kind:'echo-person-client-status-v1',signed_in:process.env.SIGNED_IN === 'yes'})); else if(args[0] === 'person' && args[1] === 'login') console.log(JSON.stringify(args));\n`);
+    writeFileSync(join(packageRoot, "dist", "main.js"), `const args=process.argv.slice(2); if(args[0] === '--version') console.log('${version}'); else if(args[0] === 'person' && args[1] === 'status') console.log(JSON.stringify({kind:'echo-person-client-status-v1',client_build:{source_sha:'${sourceSha}',source_kind:'materialized-commit'},signed_in:process.env.SIGNED_IN === 'yes'})); else if(args[0] === 'person' && args[1] === 'login') console.log(JSON.stringify(args));\n`);
     execFileSync("tar", ["-czf", join(kit, "person-client.tgz"), "package"], { cwd: root });
   }
   let preparedRelease: number | undefined;
@@ -65,7 +66,12 @@ describe("Linux x64 Person onboarding installer", () => {
     expect(execFileSync("bash", [wrapper, "--version"], { encoding: "utf8" }).trim()).toBe("0.1.1");
     const reinstalled = subject.run(1);
     expect(reinstalled.status, reinstalled.stderr).toBe(0);
+    const firstStatus = JSON.parse(execFileSync("bash", [wrapper, "person", "status"], { encoding: "utf8" }));
     expect(subject.run(2).status).toBe(0);
+    expect(execFileSync("bash", [wrapper, "--version"], { encoding: "utf8" }).trim()).toBe("0.1.1");
+    const second = JSON.parse(execFileSync("bash", [wrapper, "person", "status"], { encoding: "utf8" }));
+    expect(firstStatus.client_build.source_sha).toBe("1".repeat(40));
+    expect(second.client_build.source_sha).toBe("2".repeat(40));
     const releases = join(subject.home, ".local/share/echo/person/releases");
     expect(existsSync(join(releases, "clean-v1-linux-1"))).toBe(true);
     expect(existsSync(join(releases, "clean-v1-linux-2"))).toBe(true);

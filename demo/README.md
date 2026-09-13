@@ -107,6 +107,22 @@ The runtime receives only the four meeting files. `expectations.json` is applied
 afterward by the evaluator and is never available to extraction, retrieval, or
 answer composition.
 
+Every answer and repeatability trial must include `process_capture` with
+`stdout`, `stderr`, `exit_code`, `signal`, and `launch_error_code`. Use null for
+an absent signal/launch error. Preserve both streams exactly in local evidence.
+A successful capture needs exit 0 and matching Person answer JSON on stdout;
+an unavailable trial needs exit 1 and matching structured Authority error JSON
+on stderr. A launch exception such as `ERR_INVALID_ARG_VALUE` (NUL argv) or
+`E2BIG` has null exit and its launch code; it cannot qualify an answer or be
+counted as an Authority outage. The evaluator prints fixed diagnostics only.
+
+For proposed ADR-0012 candidates, public search/Ask V2 responses contain no
+global generation/head. The existing `record_generation_id` and `release_head`
+fields are operator evidence from the serving Authority's correlated audit and
+release/telemetry records, not fields to recover from public JSON or installed
+client status. Keep the exact response digest and client tarball provenance
+alongside that local capture. See the [candidate qualification procedure](../deploy/release/README.md#person-contract-candidate-qualification).
+
 ## Fixture boundary
 
 Each meeting is a complete canonical `MeetingDocument` v1, described in

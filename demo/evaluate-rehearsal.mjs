@@ -105,9 +105,35 @@ function validateAnsweredClaims(require, answer, expected, groups, label) {
   for (const id of expected.material_group_ids) require(seen.has(id), `${label} is missing group ${id}`);
 }
 
+// Captured subprocess evidence stays local; reports expose only fixed diagnostics.
+// A launch exception (including NUL/E2BIG) is not an Authority response.
+function validateProcessCapture(require, answer, label) {
+  const capture = answer?.process_capture;
+  require(isObject(capture), `${label} lacks stdout/stderr and process-exit evidence`);
+  if (!isObject(capture)) return;
+  require(capture.launch_error_code === null && capture.signal === null, `${label} process did not complete normally`);
+  require(typeof capture.stdout === "string" && typeof capture.stderr === "string", `${label} lacks both process streams`);
+  const unavailable = answer?.outcome === "unavailable";
+  require(capture.exit_code === (unavailable ? 1 : 0), `${label} process exit disagrees with the captured outcome`);
+  try {
+    if (unavailable) {
+      const error = JSON.parse(capture.stderr);
+      require(capture.stdout === "" && error.ok === false && error.code === "unavailable" && error.status === answer.http_status,
+        `${label} lacks a matching structured Authority failure on stderr`);
+    } else {
+      const response = JSON.parse(capture.stdout);
+      require(capture.stderr === "" && response.ok === true && response.result?.answer === answer.answer_text,
+        `${label} lacks a matching successful answer on stdout`);
+    }
+  } catch {
+    require(false, `${label} process output is not a structured Person result`);
+  }
+}
+
 function validateAnswer(require, answer, expected, groups) {
   const label = expected.id;
   require(isObject(answer), `${label} capture is missing`);
+  validateProcessCapture(require, answer, label);
   require(answer?.principal === expected.principal, `${label} used the wrong principal`);
   require(answer?.approval_state === expected.approval_state, `${label} used the wrong approval state`);
   require(answer?.outcome === expected.expected_outcome, `${label} has the wrong outcome`);
@@ -433,6 +459,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
           const samePair = trial?.record_generation_id === run.record_generation_id && trial?.release_head === run.release_head;
           requireTrial(samePair, `${expected.id} trial changed generation or release/head`);
           if (trial?.outcome === "unavailable") {
+            validateProcessCapture(requireTrial, trial, expected.id);
             summary.unavailable_count += 1;
             if (trial.http_status === 503) summary.status_503_count += 1;
             requireTrial(Number.isInteger(trial.http_status) && trial.http_status >= 400 && trial.http_status <= 599, `${expected.id} unavailable trial lacks error status`);
