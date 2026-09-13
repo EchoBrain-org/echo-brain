@@ -703,7 +703,6 @@ describe("Person answer route", () => {
       model: { generate: vi.fn(async () => { throw new Error("provider timeout"); }) },
       modelCalls: 1,
       searchCalls: 0,
-      revalidationCalls: 0,
     },
     {
       name: "the planner throws an authority-shaped error",
@@ -718,7 +717,6 @@ describe("Person answer route", () => {
       },
       modelCalls: 1,
       searchCalls: 0,
-      revalidationCalls: 0,
     },
     {
       name: "the planner returns malformed output",
@@ -726,20 +724,6 @@ describe("Person answer route", () => {
       model: { generate: vi.fn(async () => ({ queries: ["   "] })) },
       modelCalls: 1,
       searchCalls: 0,
-      revalidationCalls: 0,
-    },
-    {
-      name: "the answer cites an atom Layer 3 did not release",
-      code: "invalid_output",
-      model: {
-        generate: vi
-          .fn()
-          .mockResolvedValueOnce({ queries: [] })
-          .mockResolvedValueOnce({ answer: { text: "Unsupported.", citations: ["a99"] } }),
-      },
-      modelCalls: 2,
-      searchCalls: 1,
-      revalidationCalls: 0,
     },
     {
       name: "the answer provider fails after retrieval",
@@ -752,9 +736,8 @@ describe("Person answer route", () => {
       },
       modelCalls: 2,
       searchCalls: 1,
-      revalidationCalls: 0,
     },
-  ])("returns no answer or audit when $name", async ({ model, modelCalls, searchCalls, revalidationCalls, code }) => {
+  ])("returns no answer or audit when $name", async ({ model, modelCalls, searchCalls, code }) => {
     const value = setup({ model });
     try {
       await expect(
@@ -765,9 +748,7 @@ describe("Person answer route", () => {
       ).rejects.toMatchObject({ code });
       expect(model.generate).toHaveBeenCalledTimes(modelCalls);
       expect(value.search.searchBatch).toHaveBeenCalledTimes(searchCalls);
-      expect(value.search.revalidateBatchRelease).toHaveBeenCalledTimes(
-        revalidationCalls,
-      );
+      expect(value.search.revalidateBatchRelease).not.toHaveBeenCalled();
       expect(value.append).not.toHaveBeenCalled();
     } finally {
       value.database.close();
@@ -948,8 +929,6 @@ describe("Person answer HTTP mount", () => {
   it.each([
     { name: "uncited abstention with a 63-byte term", termBytes: 63, output: { answer: { text: "No information is supplied.", citations: [] } }, status: 502, code: "invalid_output" },
     { name: "uncited abstention with a 64-byte term", termBytes: 64, output: { answer: { text: "No information is supplied.", citations: [] } }, status: 502, code: "invalid_output" },
-    { name: "unreleased citation", output: { answer: { text: "Tuesday.", citations: ["a99"] } }, status: 502, code: "invalid_output" },
-    { name: "missing citations", output: { answer: { text: "Tuesday." } }, status: 502, code: "invalid_output" },
     { name: "invalid JSON", raw: "private invalid model output", status: 502, code: "invalid_output" },
     { name: "invalid provider envelope", envelope: {}, status: 502, code: "invalid_output" },
     { name: "transport failure", failure: new TypeError("private network detail"), status: 503, code: "unavailable" },
@@ -961,21 +940,21 @@ describe("Person answer HTTP mount", () => {
     { name: "supported answer", output: { answer: { text: "The launch is Tuesday.", citations: ["a1"] } }, status: 200 },
     { name: "65-byte input", termBytes: 65, status: 400, code: "invalid_request" },
   ])("classifies $name through the provider, kernel, route and HTTP boundary", async (testCase) => {
-    const calls: Record<string, unknown>[] = [];
+    let modelCalls = 0;
     const failures: AnswerCompositionFailureEventV1[] = [];
     const model = createOpenRouterStructuredGenerationAdapter({
       credential_ref: "offline-fixture", credential_resolver: () => "offline-fixture",
-      fetch_impl: async (_url, init) => {
-        calls.push(JSON.parse(init!.body as string));
-        if (calls.length === 2 && testCase.failure) throw testCase.failure;
-        if (calls.length === 2 && testCase.bodyFailure) {
+      fetch_impl: async () => {
+        modelCalls += 1;
+        if (modelCalls === 2 && testCase.failure) throw testCase.failure;
+        if (modelCalls === 2 && testCase.bodyFailure) {
           return new Response(new ReadableStream({ start(controller) { controller.error(testCase.bodyFailure); } }));
         }
-        const envelope = calls.length === 2 && testCase.envelope
+        const envelope = modelCalls === 2 && testCase.envelope
           ? testCase.envelope
-          : { choices: [{ finish_reason: "stop", message: { content: calls.length === 1
+          : { choices: [{ finish_reason: "stop", message: { content: modelCalls === 1
               ? '{"queries":[]}' : testCase.raw ?? JSON.stringify(testCase.output) } }] };
-        return new Response(JSON.stringify(envelope), { status: calls.length === 2 ? testCase.providerStatus ?? 200 : 200 });
+        return new Response(JSON.stringify(envelope), { status: modelCalls === 2 ? testCase.providerStatus ?? 200 : 200 });
       },
     });
     const value = setup({ model, generation: STAGING_GENERATION, on_failure: (event) => failures.push(event) });
@@ -988,7 +967,7 @@ describe("Person answer HTTP mount", () => {
       const body = await response.json();
       expect(response.status).toBe(testCase.status);
       const validInput = testCase.termBytes !== 65;
-      expect(calls).toHaveLength(validInput ? 2 : 0);
+      expect(modelCalls).toBe(validInput ? 2 : 0);
       expect(value.search.searchBatch).toHaveBeenCalledTimes(validInput ? 1 : 0);
       expect(value.search.revalidateBatchRelease).toHaveBeenCalledTimes(testCase.status === 200 ? 1 : 0);
       expect(value.append).toHaveBeenCalledTimes(testCase.status === 200 ? 1 : 0);

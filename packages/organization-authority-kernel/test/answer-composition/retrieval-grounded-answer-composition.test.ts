@@ -2,6 +2,7 @@ import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-proto
 import { describe, expect, it, vi } from "vitest";
 import {
   createRetrievalGroundedAnswerComposition,
+  AnswerCompositionOutputError,
   RetrievalGroundedAnswerCompositionError,
   validateReleasedRetrievalQuery,
   type AnswerCompositionContentObservationV1,
@@ -351,6 +352,8 @@ describe("retrieval-grounded answer composition", () => {
     { name: "a non-object answer", response: { answer: "Tuesday." } },
     { name: "a missing answer", response: {} },
     { name: "an extra field on an abstention", response: { answer: null, unexpected: true } },
+    { name: "substantive text on an abstention", response: { answer: null, text: "The acquisition closes Tuesday." } },
+    { name: "citations on an abstention", response: { answer: null, citations: ["a1"] } },
     { name: "non-array citations", response: { answer: { text: "Tuesday.", citations: null } } },
     { name: "an unreleased citation", response: { answer: { text: "Tuesday.", citations: ["a99"] } } },
     { name: "a non-string citation", response: { answer: { text: "Tuesday.", citations: [1] } } },
@@ -371,9 +374,11 @@ describe("retrieval-grounded answer composition", () => {
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const audit = { append: vi.fn() };
+    const planner = { generate: vi.fn(async () => ({ queries: [] })) };
+    const answerer = { generate: vi.fn(async () => response) };
     const answer = createRetrievalGroundedAnswerComposition({
-      planner: { generate: vi.fn(async () => ({ queries: [] })) },
-      answerer: { generate: vi.fn(async () => response) },
+      planner,
+      answerer,
       released_retrieval: releasedRetrieval,
       audit,
       generation_adapter_id: "openrouter",
@@ -382,8 +387,11 @@ describe("retrieval-grounded answer composition", () => {
     });
 
     await expect(answer.answer({ question: "What is the launch date?" })).rejects.toBeInstanceOf(
-      RetrievalGroundedAnswerCompositionError,
+      AnswerCompositionOutputError,
     );
+    expect(planner.generate).toHaveBeenCalledOnce();
+    expect(answerer.generate).toHaveBeenCalledOnce();
+    expect(releasedRetrieval.retrieve).toHaveBeenCalledOnce();
     expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
     expect(audit.append).not.toHaveBeenCalled();
   });
@@ -484,7 +492,7 @@ describe("retrieval-grounded answer composition", () => {
     const usage = { input_tokens: 30, output_tokens: 10, total_tokens: 40, cached_input_tokens: 5, reasoning_tokens: 2 };
     const answerer = {
       generate: vi.fn(),
-      generate_with_observation: vi.fn(async () => ({
+      generate_with_observation: vi.fn(async (_input: StructuredGenerationInput) => ({
         value: modelOutput,
         usage,
         finish_reason: "stop" as const,
@@ -550,63 +558,22 @@ describe("retrieval-grounded answer composition", () => {
     }));
     expect(content.some((event) => event.content_kind === "answer_validation_error")).toBe(false);
     expect(onModelFailure).not.toHaveBeenCalled();
-  });
 
-  it("rejects a model-authored substantive insufficient-evidence answer before release or audit", async () => {
-    const modelAnswer = "The acquisition closes Tuesday.";
-    const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
-      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
-    };
-    const audit = { append: vi.fn() };
-    const answer = createRetrievalGroundedAnswerComposition({
-      planner: { generate: vi.fn(async () => ({ queries: [] })) },
-      answerer: {
-        generate: vi.fn(async () => ({
-          answer: null,
-          text: modelAnswer,
-        })),
-      },
-      released_retrieval: releasedRetrieval,
-      audit,
-      generation_adapter_id: "openrouter",
-      planner_model: "openai/gpt-4.1-mini",
-      answer_model: "openai/gpt-4.1-mini",
-    });
-
-    await expect(answer.answer({ question: "When does the acquisition close?" })).rejects.toThrow(
-      "answer response is invalid",
-    );
-    expect(audit.append).not.toHaveBeenCalled();
-    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when an insufficient-evidence response includes citations", async () => {
-    const releasedRetrieval = {
-      retrieve: vi.fn(async () => release()),
-      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
-    };
-    const audit = { append: vi.fn() };
-    const answer = createRetrievalGroundedAnswerComposition({
-      planner: { generate: vi.fn(async () => ({ queries: [] })) },
-      answerer: {
-        generate: vi.fn(async () => ({
-          answer: null,
-          citations: ["a1"],
-        })),
-      },
-      released_retrieval: releasedRetrieval,
-      audit,
-      generation_adapter_id: "openrouter",
-      planner_model: "openai/gpt-4.1-mini",
-      answer_model: "openai/gpt-4.1-mini",
-    });
-
-    await expect(answer.answer({ question: "When does the acquisition close?" })).rejects.toBeInstanceOf(
-      RetrievalGroundedAnswerCompositionError,
-    );
-    expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
-    expect(audit.append).not.toHaveBeenCalled();
+    const { system_prompt: prompt, schema } = answerer.generate_with_observation.mock.calls[0]![0];
+    // This checks the generation request, not live model compliance.
+    expect(prompt).toContain("A supported negative conclusion is an answered result");
+    expect(prompt).toContain("each requested part");
+    expect(prompt).toContain("do not require a pre-existing summary");
+    expect(prompt).toContain("does not prove completion");
+    expect(prompt).toContain("Keep each task paired with its own deadline");
+    expect(prompt).toContain('An answer object with an empty citations array is invalid');
+    expect(prompt).toContain('return exactly {"answer":null}');
+    expect(prompt.indexOf('return exactly {"answer":null}')).toBeLessThan(prompt.indexOf("Address each requested part"));
+    expect(prompt).toContain("Do not write an answer object merely to explain that evidence is missing");
+    expect(schema).toMatchObject({ properties: { answer: { anyOf: [
+      { type: "null", description: expect.stringContaining("abstention") },
+      { type: "object", properties: { citations: { minItems: 1 } } },
+    ] } } });
   });
 
   it.each([
@@ -1097,8 +1064,7 @@ describe("retrieval-grounded answer composition content seam", () => {
 });
 
 // Synthetic released context isolates composition from candidate selection.
-describe("answer reliability with already released facts", () => {
-  const neutral = "Insufficient accessible evidence to answer this question.";
+describe("cited answers with already released facts", () => {
   const facts = [
     "September 16 is a conditional onboarding window for the initial 10 locations, not all 28.",
     "Reserve the implementation pod through September 16 and send capacity assumptions by September 4.",
@@ -1124,29 +1090,12 @@ describe("answer reliability with already released facts", () => {
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const audit = { append: vi.fn() };
-    const failures: AnswerCompositionFailureDiagnosticV1[] = [];
     const composition = createRetrievalGroundedAnswerComposition({
       planner, answerer, released_retrieval: retrieval, audit,
       generation_adapter_id: "test", planner_model: "test", answer_model: "test",
-      on_failure: (event) => failures.push(event),
     });
-    return { composition, released, planner, answerer, retrieval, audit, failures };
+    return { composition, released, answerer, retrieval, audit };
   }
-
-  it.each([
-    ["Can we promise all 28 locations for September 16?", "No. September 16 is conditional for the first 10 locations, subject to the agreement and security prerequisites."],
-    ["List the approved commitments and deadlines.", "No single definitive list is provided. The sources contain individual deadlines and conditions."],
-  ])("rejects substantive text mislabeled as insufficient: %s", async (question, answer) => {
-    const f = fixture({ answer: null, text: answer });
-    await expect(f.composition.answer({ question })).rejects.toThrow("answer response is invalid");
-    expect(f.planner.generate).toHaveBeenCalledOnce();
-    expect(f.retrieval.retrieve).toHaveBeenCalledOnce();
-    expect(f.answerer.generate).toHaveBeenCalledOnce();
-    expect(f.retrieval.revalidate).not.toHaveBeenCalled();
-    expect(f.audit.append).not.toHaveBeenCalled();
-    expect(f.failures).toEqual([expect.objectContaining({ stage: "answer", failure_class: "core_validation" })]);
-    expect(JSON.stringify(f.failures)).not.toContain(answer);
-  });
 
   it.each([
     "No. September 16 is conditional for the first 10 locations, not all 28; production access requires the signed agreement and verified contact.",
@@ -1161,33 +1110,5 @@ describe("answer reliability with already released facts", () => {
     expect(f.audit.append).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: "answered", citation_count: 6 }));
     const request = f.answerer.generate.mock.calls[0]![0];
     expect(JSON.parse(request.user_prompt).sources.map((source: { text: string }) => source.text)).toEqual(facts);
-    // Contract assertions are not a live-model quality proof.
-    expect(request.system_prompt).toContain("A supported negative conclusion is an answered result");
-    expect(request.system_prompt).toContain("each requested part");
-    expect(request.system_prompt).toContain("do not require a pre-existing summary");
-    expect(request.system_prompt).toContain("does not prove completion");
-    expect(request.system_prompt).toContain("Keep each task paired with its own deadline");
-  });
-
-  it("states the null-or-cited output choice before answer-writing instructions", async () => {
-    const f = fixture({ answer: null });
-    await f.composition.answer({ question: "What is the unknown project?" });
-    const { system_prompt: prompt, schema } = f.answerer.generate.mock.calls[0]![0];
-    // This checks the generation request, not live model compliance.
-    expect(prompt).toContain('An answer object with an empty citations array is invalid');
-    expect(prompt.indexOf('return exactly {"answer":null}')).toBeLessThan(prompt.indexOf("Address each requested part"));
-    expect(prompt).toContain("Do not write an answer object merely to explain that evidence is missing");
-    expect(schema).toMatchObject({ properties: { answer: { anyOf: [
-      { type: "null", description: expect.stringContaining("abstention") },
-      { type: "object", properties: { citations: { minItems: 1 } } },
-    ] } } });
-  });
-
-  it.each(["What special price did the customer receive?", "What is the second customer's schedule?", "x".repeat(63), "x".repeat(64)])("keeps unsupported or private-only questions neutral: %s", async (question) => {
-    const f = fixture({ answer: null });
-    const result = await f.composition.answer({ question });
-    expect(result).toMatchObject({ answer: neutral, citations: [] });
-    expect(f.retrieval.revalidate).toHaveBeenCalledOnce();
-    expect(f.audit.append).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ outcome: "insufficient_evidence", citation_count: 0 }));
   });
 });

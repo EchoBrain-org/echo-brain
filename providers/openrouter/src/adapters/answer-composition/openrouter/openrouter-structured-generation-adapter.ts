@@ -1,6 +1,5 @@
 import { observeCoreModelMetadataV1, annotateCoreRuntimeV1, captureCoreRuntimeContentV1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
-  type StructuredGenerationJsonSchema,
   type StructuredGenerationInput,
   type StructuredGenerationObservedResultV1,
   type StructuredGenerationPort,
@@ -486,5 +485,3 @@ export function createOpenRouterStructuredGenerationAdapter(
     generate_with_observation: generateWithObservation,
   });
 }
-
-export type { StructuredGenerationJsonSchema };
