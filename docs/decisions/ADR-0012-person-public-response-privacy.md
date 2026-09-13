@@ -9,7 +9,7 @@ component_ids:
   - CMP-IDENTITY-ACCESS
 created_at: 2026-09-13
 reviewed_at: 2026-09-13
-reviewed_ref: ff7cbf7d88f566f324c656e0efe5aa2982031c43
+reviewed_ref: a608e0743b3afe53afccc43bdb35331f7dad5669
 status: accepted
 supersedes: []
 superseded_by: []
