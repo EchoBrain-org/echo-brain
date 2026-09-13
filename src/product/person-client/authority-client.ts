@@ -45,14 +45,9 @@ export interface PersonRecordListItemV1 {
   };
 }
 
-export interface PersonRecordSearchV1 {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-person-record-search-v1";
-  readonly generation_id: `sha256:${string}`;
-  readonly record_head: {
-    readonly position: number;
-    readonly record_sha256: `sha256:${string}` | null;
-  };
+export interface PersonRecordSearchV2 {
+  readonly schema_version: 2;
+  readonly kind: "echo-clean-person-record-search-v2";
   readonly items: readonly PersonRecordSearchItemV1[];
 }
 
@@ -66,14 +61,9 @@ export interface PersonRecordSearchItemV1 {
     | "restricted-reviewer-person-v2";
 }
 
-export interface PersonAnswerV1 {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-person-answer-v1";
-  readonly generation_id: `sha256:${string}`;
-  readonly record_head: {
-    readonly position: number;
-    readonly record_sha256: `sha256:${string}` | null;
-  };
+export interface PersonAnswerV2 {
+  readonly schema_version: 2;
+  readonly kind: "echo-clean-person-answer-v2";
   readonly answer: string;
   readonly citations: readonly PersonAnswerCitationV1[];
   readonly outcome?: "authorship_unsupported";
@@ -333,32 +323,18 @@ function validatePersonAnswerRequest(value: unknown): {
 
 function validatePersonRecordSearch(
   value: unknown,
-): PersonRecordSearchV1 {
+): PersonRecordSearchV2 {
   const response = asPlainRecord(value, "record search response is invalid");
   exactKeys(
     response,
-    ["schema_version", "kind", "generation_id", "record_head", "items"],
+    ["schema_version", "kind", "items"],
     "record search response is invalid",
   );
   if (
-    response.schema_version !== 1 ||
-    response.kind !== "echo-clean-person-record-search-v1" ||
-    typeof response.generation_id !== "string" ||
-    !/^sha256:[a-f0-9]{64}$/.test(response.generation_id) ||
+    response.schema_version !== 2 ||
+    response.kind !== "echo-clean-person-record-search-v2" ||
     !Array.isArray(response.items) ||
     response.items.length > 10
-  ) {
-    throw new Error("record search response is invalid");
-  }
-  const recordHead = asPlainRecord(response.record_head, "record search response is invalid");
-  exactKeys(recordHead, ["position", "record_sha256"], "record search response is invalid");
-  if (
-    !Number.isSafeInteger(recordHead.position) ||
-    (recordHead.position as number) < 0 ||
-    (((recordHead.position as number) === 0) !== (recordHead.record_sha256 === null)) ||
-    (recordHead.record_sha256 !== null &&
-      (typeof recordHead.record_sha256 !== "string" ||
-        !/^sha256:[a-f0-9]{64}$/.test(recordHead.record_sha256)))
   ) {
     throw new Error("record search response is invalid");
   }
@@ -394,24 +370,17 @@ function validatePersonRecordSearch(
     });
   });
   return Object.freeze({
-    schema_version: 1,
-    kind: "echo-clean-person-record-search-v1",
-    generation_id: response.generation_id as `sha256:${string}`,
-    record_head: Object.freeze({
-      position: recordHead.position as number,
-      record_sha256: recordHead.record_sha256 as `sha256:${string}` | null,
-    }),
+    schema_version: 2,
+    kind: "echo-clean-person-record-search-v2",
     items: Object.freeze(items),
   });
 }
 
-function validatePersonAnswer(value: unknown): PersonAnswerV1 {
+function validatePersonAnswer(value: unknown): PersonAnswerV2 {
   const response = asPlainRecord(value, "ask response is invalid");
   const answerKeys = [
     "schema_version",
     "kind",
-    "generation_id",
-    "record_head",
     "answer",
     "citations",
   ];
@@ -421,10 +390,8 @@ function validatePersonAnswer(value: unknown): PersonAnswerV1 {
     "ask response is invalid",
   );
   if (
-    response.schema_version !== 1 ||
-    response.kind !== "echo-clean-person-answer-v1" ||
-    typeof response.generation_id !== "string" ||
-    !/^sha256:[a-f0-9]{64}$/.test(response.generation_id) ||
+    response.schema_version !== 2 ||
+    response.kind !== "echo-clean-person-answer-v2" ||
     typeof response.answer !== "string" ||
     response.answer.length === 0 ||
     response.answer.trim() !== response.answer ||
@@ -432,18 +399,6 @@ function validatePersonAnswer(value: unknown): PersonAnswerV1 {
     !Array.isArray(response.citations) ||
     response.citations.length > 16 ||
     (response.outcome !== undefined && response.outcome !== "authorship_unsupported")
-  ) {
-    throw new Error("ask response is invalid");
-  }
-  const recordHead = asPlainRecord(response.record_head, "ask response is invalid");
-  exactKeys(recordHead, ["position", "record_sha256"], "ask response is invalid");
-  if (
-    !Number.isSafeInteger(recordHead.position) ||
-    (recordHead.position as number) < 0 ||
-    (((recordHead.position as number) === 0) !== (recordHead.record_sha256 === null)) ||
-    (recordHead.record_sha256 !== null &&
-      (typeof recordHead.record_sha256 !== "string" ||
-        !/^sha256:[a-f0-9]{64}$/.test(recordHead.record_sha256)))
   ) {
     throw new Error("ask response is invalid");
   }
@@ -474,13 +429,8 @@ function validatePersonAnswer(value: unknown): PersonAnswerV1 {
     }) as PersonAnswerCitationV1;
   });
   return Object.freeze({
-    schema_version: 1,
-    kind: "echo-clean-person-answer-v1",
-    generation_id: response.generation_id as `sha256:${string}`,
-    record_head: Object.freeze({
-      position: recordHead.position as number,
-      record_sha256: recordHead.record_sha256 as `sha256:${string}` | null,
-    }),
+    schema_version: 2,
+    kind: "echo-clean-person-answer-v2",
     answer: response.answer,
     citations: Object.freeze(citations),
     ...(response.outcome === undefined ? {} : { outcome: response.outcome }),
@@ -903,7 +853,7 @@ export class PersonAuthorityClient {
     accessToken: string,
     query: string,
     limit?: number,
-  ): Promise<PersonRecordSearchV1> {
+  ): Promise<PersonRecordSearchV2> {
     return this.json({
       path: PERSON_RECORDS_PATH_V1,
       body: {
@@ -917,7 +867,7 @@ export class PersonAuthorityClient {
     });
   }
 
-  ask(accessToken: string, question: string): Promise<PersonAnswerV1> {
+  ask(accessToken: string, question: string): Promise<PersonAnswerV2> {
     return this.json({
       path: PERSON_ANSWER_PATH_V1,
       body: { question },
@@ -926,7 +876,6 @@ export class PersonAuthorityClient {
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       timeout_ms: ASK_TIMEOUT_MS,
-      headers: { "x-echo-person-answer-version": "2" },
     });
   }
 

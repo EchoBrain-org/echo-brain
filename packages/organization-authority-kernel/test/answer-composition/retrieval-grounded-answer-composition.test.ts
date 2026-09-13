@@ -111,9 +111,8 @@ describe("retrieval-grounded answer composition", () => {
     expect(answerer.generate).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["retrieve", "answer", "revalidate"]);
     expect(result).toMatchObject({
-      schema_version: 1,
-      kind: "echo-clean-person-answer-v1",
-      generation_id: release().generation_id,
+      schema_version: 2,
+      kind: "echo-clean-person-answer-v2",
     });
     expect(result.citations).toEqual([
       expect.objectContaining({ atom_id: release().released_atoms[0]?.atom_id }),
@@ -519,10 +518,8 @@ describe("retrieval-grounded answer composition", () => {
 
     expect(answerer.generate_with_observation).toHaveBeenCalledOnce();
     expect(result).toEqual({
-      schema_version: 1,
-      kind: "echo-clean-person-answer-v1",
-      generation_id: released.generation_id,
-      record_head: released.record_head,
+      schema_version: 2,
+      kind: "echo-clean-person-answer-v2",
       answer: "Insufficient accessible evidence to answer this question.",
       citations: [],
     });

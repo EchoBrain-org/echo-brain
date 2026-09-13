@@ -5,9 +5,9 @@ import {
   PersonAuthorityClient,
   PersonAuthorityClientError,
   type EmployeeRosterV1,
-  type PersonAnswerV1,
+  type PersonAnswerV2,
   type PersonRecordListV1,
-  type PersonRecordSearchV1,
+  type PersonRecordSearchV2,
 } from "./authority-client.js";
 import {
   createPersonMeetingIngestionExclusionChangeRequest,
@@ -366,7 +366,7 @@ export class PersonClient {
     limit?: number,
     query?: string,
     recordSha256?: `sha256:${string}`,
-  ): Promise<PersonRecordListV1 | PersonRecordSearchV1> {
+  ): Promise<PersonRecordListV1 | PersonRecordSearchV2> {
     const stored = await this.accessSession();
     if (query !== undefined) {
       return await this.authority(stored.authority_origin).searchRecords(
@@ -382,7 +382,7 @@ export class PersonClient {
     );
   }
 
-  async ask(question: string): Promise<PersonAnswerV1> {
+  async ask(question: string): Promise<PersonAnswerV2> {
     const stored = await this.accessSession();
     return await this.authority(stored.authority_origin).ask(
       stored.session.access_token,

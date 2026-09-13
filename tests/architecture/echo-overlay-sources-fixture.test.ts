@@ -53,6 +53,7 @@ afterAll(() => rmSync(temporaryRoot, { recursive: true, force: true }));
 
   it.each([
     "valid-answer",
+    "retired-global-metadata",
     "duplicate-atom",
     "grouped-record",
     "inconsistent-policy",

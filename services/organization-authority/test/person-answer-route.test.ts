@@ -28,7 +28,7 @@ import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type {
   PersonAnswerHttpApplicationV1,
-  PersonAnswerResponseV1,
+  PersonAnswerResponseV2,
 } from "../src/presentation/person-answer-http-application.js";
 
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
@@ -80,10 +80,8 @@ function release(): PersonRecordSearchBatchReleaseV1 {
 
 function searchResponse() {
   return Object.freeze({
-    schema_version: 1 as const,
-    kind: "echo-clean-person-record-search-v1" as const,
-    generation_id: digest("generation"),
-    record_head: Object.freeze({ position: 7, record_sha256: digest("head") }),
+    schema_version: 2 as const,
+    kind: "echo-clean-person-record-search-v2" as const,
     items: Object.freeze([
       Object.freeze({
         atom_id: digest("atom-one"),
@@ -240,10 +238,8 @@ describe("Person answer route", () => {
       expect(value.events).toEqual(["batch", "revalidate", "audit"]);
       expect(value.append).toHaveBeenCalledOnce();
       expect(response).toEqual({
-        schema_version: 1,
-        kind: "echo-clean-person-answer-v1",
-        generation_id: digest("generation"),
-        record_head: { position: 7, record_sha256: digest("head") },
+        schema_version: 2,
+        kind: "echo-clean-person-answer-v2",
         answer: "Tuesday, owned by the product team.",
         citations: [
           {
@@ -259,6 +255,9 @@ describe("Person answer route", () => {
         ],
       });
       expect(response).not.toHaveProperty("status");
+      expect(response).not.toHaveProperty("generation_id");
+      expect(response).not.toHaveProperty("record_head");
+      expect(value.append.mock.calls[0]?.[0]).toMatchObject({ generation_id: digest("generation"), record_head: { position: 7, record_sha256: digest("head") } });
       expect(response.citations[0]).not.toHaveProperty("citation_id");
       expect(value.append.mock.calls[0]?.[0].response_sha256).toBe(
         canonicalSha256(response as never),
@@ -854,13 +853,13 @@ describe("Person answer route", () => {
     const model: StructuredGenerationPort = { generate: vi.fn() };
     const value = setup({ model });
     try {
-      await expect(
-        value.route.ask({
-          access_token: "bearer-only-token",
-          question: "Which decisions did I make?",
-          accept_outcome_v2: true,
-        }),
-      ).resolves.toMatchObject({
+      const response = await value.route.ask({
+        access_token: "bearer-only-token",
+        question: "Which decisions did I make?",
+      });
+      expect(value.append.mock.calls[0]?.[0].response_sha256).toBe(canonicalSha256(response as never));
+      expect(Object.keys(response).sort()).toEqual(["answer", "citations", "kind", "outcome", "schema_version"]);
+      expect(response).toMatchObject({
         outcome: "authorship_unsupported",
         citations: [],
       });
@@ -940,16 +939,14 @@ async function startServer(person_answer?: PersonAnswerHttpApplicationV1) {
 }
 
 describe("Person answer HTTP mount", () => {
-  it("keeps legacy requests on the exact V1 shape and exposes outcomes only after V2 negotiation", async () => {
+  it("returns one current private shape regardless of the retired outcome header", async () => {
     const application: PersonAnswerHttpApplicationV1 = {
-      ask: vi.fn(async (input) => Object.freeze({
-        schema_version: 1 as const,
-        kind: "echo-clean-person-answer-v1" as const,
-        generation_id: digest("generation"),
-        record_head: Object.freeze({ position: 7, record_sha256: digest("head") }),
+      ask: vi.fn(async () => Object.freeze({
+        schema_version: 2 as const,
+        kind: "echo-clean-person-answer-v2" as const,
         answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
         citations: Object.freeze([]),
-        ...(input.accept_outcome_v2 === true ? { outcome: "authorship_unsupported" as const } : {}),
+        outcome: "authorship_unsupported" as const,
       })),
     };
     const server = await startServer(application);
@@ -960,11 +957,11 @@ describe("Person answer HTTP mount", () => {
         body: JSON.stringify({ question: "What did I decide?" }),
       });
       const legacy = await request({});
-      expect(Object.keys(await legacy.json()).sort()).toEqual(["answer", "citations", "generation_id", "kind", "record_head", "schema_version"]);
+      expect(Object.keys(await legacy.json()).sort()).toEqual(["answer", "citations", "kind", "outcome", "schema_version"]);
       const v2 = await request({ "x-echo-person-answer-version": "2" });
       expect(await v2.json()).toMatchObject({ outcome: "authorship_unsupported" });
       expect(application.ask).toHaveBeenNthCalledWith(1, { access_token: "bearer-only-token", question: "What did I decide?" });
-      expect(application.ask).toHaveBeenNthCalledWith(2, { access_token: "bearer-only-token", question: "What did I decide?", accept_outcome_v2: true });
+      expect(application.ask).toHaveBeenNthCalledWith(2, { access_token: "bearer-only-token", question: "What did I decide?" });
     } finally {
       await server.close();
     }
@@ -972,11 +969,9 @@ describe("Person answer HTTP mount", () => {
 
   it("mounts POST /v1/person/ask as a bearer-only application call", async () => {
     const ask = vi.fn(
-      async (): Promise<PersonAnswerResponseV1> => ({
-        schema_version: 1,
-        kind: "echo-clean-person-answer-v1",
-        generation_id: digest("generation"),
-        record_head: { position: 7, record_sha256: digest("head") },
+      async (): Promise<PersonAnswerResponseV2> => ({
+        schema_version: 2,
+        kind: "echo-clean-person-answer-v2",
         answer: "Tuesday.",
         citations: [],
       }),
@@ -1000,8 +995,7 @@ describe("Person answer HTTP mount", () => {
         question: "When is the launch?",
       });
       expect(await response.json()).toMatchObject({
-        kind: "echo-clean-person-answer-v1",
-        generation_id: digest("generation"),
+        kind: "echo-clean-person-answer-v2",
       });
       const maximumQuestion = Array.from(
         { length: 32 },

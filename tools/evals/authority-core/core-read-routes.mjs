@@ -72,7 +72,7 @@ export function createCoreDeterministicStructuredGenerationPort() {
         throw new Error("deterministic structured generation input is invalid");
       }
       if (Object.hasOwn(properties, "queries")) return plannerResponse(input.user_prompt);
-      if (Object.hasOwn(properties, "status") && Object.hasOwn(properties, "citations")) {
+      if (Object.hasOwn(properties, "answer")) {
         return answerResponse(input.user_prompt);
       }
       if (Object.hasOwn(properties, "relationships")) {

@@ -296,8 +296,10 @@ against one candidate.
    search, cannot read another person's restricted-reviewer content, and loses
    both read paths after membership revocation. The founder's allowed paths
    continue to work.
-7. Layer 2-backed Layer 3 search responses retain request-level generation/head
-   metadata and per-item atom, record, and policy identity. Layer 1 listing
+7. The proposed [ADR-0012](../decisions/ADR-0012-person-public-response-privacy.md)
+   revision uses V2 search/Ask responses with authorized item/citation identity.
+   Exact generation/head metadata remains internal to release and audit. This
+   coordinated contract change awaits decision review and live qualification. Layer 1 listing
    retains its existing record envelope, position, and record-hash contract.
    Layer 2 remains append/startup driven and is never built by a query.
 8. Invitation email mismatch, expiry, reuse, foreign Authority, and revoked

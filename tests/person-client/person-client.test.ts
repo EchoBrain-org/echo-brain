@@ -481,10 +481,8 @@ describe("Person client", () => {
           `Bearer ${ROTATED_SESSION.access_token}`,
         );
         return json({
-          schema_version: 1,
-          kind: "echo-clean-person-record-search-v1",
-          generation_id: `sha256:${"a".repeat(64)}`,
-          record_head: { position: 1, record_sha256: `sha256:${"b".repeat(64)}` },
+          schema_version: 2,
+          kind: "echo-clean-person-record-search-v2",
           items: [
             {
               atom_id: `sha256:${"c".repeat(64)}`,
@@ -520,7 +518,7 @@ describe("Person client", () => {
       expect(JSON.parse(stdout)).toMatchObject({
         ok: true,
         result: {
-          kind: "echo-clean-person-record-search-v1",
+          kind: "echo-clean-person-record-search-v2",
           items: [{ text: "Use simple pricing." }],
         },
       });
@@ -573,13 +571,8 @@ describe("Person client", () => {
               `Bearer ${ROTATED_SESSION.access_token}`,
             );
             return json({
-              schema_version: 1,
-              kind: "echo-clean-person-answer-v1",
-              generation_id: `sha256:${"a".repeat(64)}`,
-              record_head: {
-                position: 1,
-                record_sha256: `sha256:${"b".repeat(64)}`,
-              },
+              schema_version: 2,
+              kind: "echo-clean-person-answer-v2",
               answer: "Use simple pricing.",
               citations: [
                 {
@@ -600,13 +593,8 @@ describe("Person client", () => {
       expect(JSON.parse(stdout)).toEqual({
         ok: true,
         result: {
-          schema_version: 1,
-          kind: "echo-clean-person-answer-v1",
-          generation_id: `sha256:${"a".repeat(64)}`,
-          record_head: {
-            position: 1,
-            record_sha256: `sha256:${"b".repeat(64)}`,
-          },
+          schema_version: 2,
+          kind: "echo-clean-person-answer-v2",
           answer: "Use simple pricing.",
           citations: [
             {
@@ -633,13 +621,8 @@ describe("Person client", () => {
           }
           asks += 1;
           return json({
-            schema_version: 1,
-            kind: "echo-clean-person-answer-v1",
-            generation_id: `sha256:${"a".repeat(64)}`,
-            record_head: {
-              position: 1,
-              record_sha256: `sha256:${"b".repeat(64)}`,
-            },
+            schema_version: 2,
+            kind: "echo-clean-person-answer-v2",
             answer: "Bounded answer.",
             citations: [],
           });
@@ -657,6 +640,20 @@ describe("Person client", () => {
     });
   });
 
+  it.each(["ask", "search"])("rejects retired global metadata in a %s response", async (mode) => {
+    await withHome(async (home) => {
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input) => {
+        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
+        return json({ schema_version: 2, ...(mode === "ask"
+          ? { kind: "echo-clean-person-answer-v2", answer: "Insufficient accessible evidence to answer this question.", citations: [] }
+          : { kind: "echo-clean-person-record-search-v2", items: [] }),
+        generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } });
+      } });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(mode === "ask" ? client.ask("pricing") : client.records(undefined, "pricing")).rejects.toThrow("response is invalid");
+    });
+  });
+
   it("rejects invalid questions and malformed answer bindings before any answer is released", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
@@ -670,13 +667,8 @@ describe("Person client", () => {
           }
           asks += 1;
           return json({
-            schema_version: 1,
-            kind: "echo-clean-person-answer-v1",
-            generation_id: `sha256:${"a".repeat(64)}`,
-            record_head: {
-              position: 1,
-              record_sha256: `sha256:${"b".repeat(64)}`,
-            },
+            schema_version: 2,
+            kind: "echo-clean-person-answer-v2",
             answer: "Use simple pricing.",
             citations: [
               {
@@ -710,15 +702,10 @@ describe("Person client", () => {
           if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
             return json({ authority_descriptor: authority });
           }
-          expect(new Headers(init?.headers).get("x-echo-person-answer-version")).toBe("2");
+          expect(new Headers(init?.headers).get("x-echo-person-answer-version")).toBeNull();
           return json({
-            schema_version: 1,
-            kind: "echo-clean-person-answer-v1",
-            generation_id: `sha256:${"a".repeat(64)}`,
-            record_head: {
-              position: 1,
-              record_sha256: `sha256:${"b".repeat(64)}`,
-            },
+            schema_version: 2,
+            kind: "echo-clean-person-answer-v2",
             answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
             citations: [],
             outcome: "authorship_unsupported",
@@ -872,7 +859,7 @@ describe("Person client", () => {
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
-        if (path === "/v1/person/ask") return json({ schema_version: 1, kind: "echo-clean-person-answer-v1", generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 0, record_sha256: null }, answer: "No approved records.", citations: [] });
+        if (path === "/v1/person/ask") return json({ schema_version: 2, kind: "echo-clean-person-answer-v2", answer: "No approved records.", citations: [] });
         expect(path).toBe("/v3/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
         return json({ schema_version: 3, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });

@@ -70,21 +70,17 @@ private struct CliCitation: Decodable {
 private struct CliAnswer: Decodable {
     let schema_version: Int
     let kind: String
-    let generation_id: String
-    let record_head: CliRecordHead
     let answer: String
     let citations: [CliCitation]
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: DynamicCodingKey.self)
-        let base: Set<String> = ["schema_version", "kind", "generation_id", "record_head", "answer", "citations"]
+        let base: Set<String> = ["schema_version", "kind", "answer", "citations"]
         guard hasExactCodingKeys(values.allKeys, base) || hasExactCodingKeys(values.allKeys, base.union(["outcome"])) else {
             throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("answer"), in: values, debugDescription: "Unexpected answer fields")
         }
         schema_version = try values.decode(Int.self, forKey: DynamicCodingKey("schema_version"))
         kind = try values.decode(String.self, forKey: DynamicCodingKey("kind"))
-        generation_id = try values.decode(String.self, forKey: DynamicCodingKey("generation_id"))
-        record_head = try values.decode(CliRecordHead.self, forKey: DynamicCodingKey("record_head"))
         answer = try values.decode(String.self, forKey: DynamicCodingKey("answer"))
         citations = try values.decode([CliCitation].self, forKey: DynamicCodingKey("citations"))
         let outcome = DynamicCodingKey("outcome")
@@ -93,20 +89,6 @@ private struct CliAnswer: Decodable {
                 throw DecodingError.dataCorruptedError(forKey: outcome, in: values, debugDescription: "Unsupported answer outcome")
             }
         }
-    }
-}
-
-private struct CliRecordHead: Decodable {
-    let position: Int
-    let record_sha256: String?
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
-        guard hasExactCodingKeys(values.allKeys, ["position", "record_sha256"]) else {
-            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("position"), in: values, debugDescription: "Unexpected record head fields")
-        }
-        position = try values.decode(Int.self, forKey: DynamicCodingKey("position"))
-        record_sha256 = try values.decodeIfPresent(String.self, forKey: DynamicCodingKey("record_sha256"))
     }
 }
 
@@ -322,14 +304,10 @@ private final class CliRunner: @unchecked Sendable {
     fileprivate static func parseSuccess(_ data: Data) -> AskOutcome {
         guard let envelope = try? JSONDecoder().decode(CliSuccessEnvelope.self, from: data),
               envelope.ok,
-              envelope.result.schema_version == 1,
-              envelope.result.kind == "echo-clean-person-answer-v1",
+              envelope.result.schema_version == 2,
+              envelope.result.kind == "echo-clean-person-answer-v2",
               !envelope.result.answer.isEmpty,
-              envelope.result.answer.unicodeScalars.count <= maximumAnswerScalars,
-              isSha256(envelope.result.generation_id),
-              envelope.result.record_head.position >= 0,
-              (envelope.result.record_head.position == 0) == (envelope.result.record_head.record_sha256 == nil),
-              envelope.result.record_head.record_sha256.map(isSha256) ?? true
+              envelope.result.answer.unicodeScalars.count <= maximumAnswerScalars
         else {
             return .failure("The installed ECHO client returned an invalid response.")
         }

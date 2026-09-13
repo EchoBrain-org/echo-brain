@@ -16,6 +16,13 @@ private enum EchoOverlaySourceFixtureMain {
             if case .success(let answer) = CliRunner.parseSuccess(answerData(citations: [citation()])), answer.sources.count == 1 {
                 passed = true
             } else { passed = false }
+        case "retired-global-metadata":
+            var envelope = try! JSONSerialization.jsonObject(with: answerData()) as! [String: Any]
+            var result = envelope["result"] as! [String: Any]
+            result["generation_id"] = atomHash
+            result["record_head"] = ["position": 9, "record_sha256": otherRecordHash]
+            envelope["result"] = result
+            if case .failure = CliRunner.parseSuccess(data(envelope)) { passed = true } else { passed = false }
         case "duplicate-atom":
             let duplicate = citation()
             if case .failure = CliRunner.parseSuccess(answerData(citations: [duplicate, duplicate])) {
@@ -296,10 +303,8 @@ private enum EchoOverlaySourceFixtureMain {
         data([
             "ok": true,
             "result": [
-                "schema_version": 1,
-                "kind": "echo-clean-person-answer-v1",
-                "generation_id": "sha256:" + String(repeating: "a", count: 64),
-                "record_head": ["position": 1, "record_sha256": recordHash],
+                "schema_version": 2,
+                "kind": "echo-clean-person-answer-v2",
                 "answer": answer,
                 "citations": citations,
             ],

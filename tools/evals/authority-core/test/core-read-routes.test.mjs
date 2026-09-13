@@ -3,7 +3,7 @@ import test from "node:test";
 import { createCoreDeterministicStructuredGenerationPort } from "../core-read-routes.mjs";
 
 const answerSchema = Object.freeze({
-  properties: Object.freeze({ status: Object.freeze({}), citations: Object.freeze({}) }),
+  properties: Object.freeze({ answer: Object.freeze({}) }),
 });
 const plannerSchema = Object.freeze({
   properties: Object.freeze({ queries: Object.freeze({}) }),

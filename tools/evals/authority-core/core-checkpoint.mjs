@@ -146,9 +146,8 @@ function verifyStoppedState(stateDirectory, input, response, answers, policy) {
     assert.equal(record.prepare("SELECT COUNT(*) AS n FROM organization_record_log").get().n, 1);
     assert.equal(record.prepare("SELECT COUNT(*) AS n FROM organization_record_signed_receipt").get().n, 1);
     const log = record.prepare("SELECT position, record_sha256 FROM organization_record_log").get();
-    assert.deepEqual(log, response.record_head);
+    assert.deepEqual(Object.keys(response).sort(), ["items", "kind", "schema_version"]);
     const pointer = authority.prepare("SELECT generation_id, record_head_position, record_head_hash FROM authority_readable_search_active_generation").get();
-    assert.equal(pointer.generation_id, response.generation_id);
     assert.equal(pointer.record_head_position, log.position);
     assert.equal(pointer.record_head_hash, log.record_sha256);
     const facts = record.prepare(`SELECT atom_id, policy_id FROM organization_record_${policy === POLICIES[0] ? "member_readable" : "restricted_reviewer"}_person_fact`).all();
@@ -161,7 +160,7 @@ function verifyStoppedState(stateDirectory, input, response, answers, policy) {
         audit.principal_id === member.principal_id && audit.membership_id === member.membership_id &&
         audit.response_sha256 === canonicalSha256(answer));
       assert.equal(matches.length, 1, `${actor} answer has no unique persisted release audit`);
-      assert.equal(matches[0].generation_id, response.generation_id);
+      assert.equal(matches[0].generation_id, pointer.generation_id);
       assert.deepEqual(matches[0].record_head, log);
       assert.equal(matches[0].citation_count, answer.citations.length);
     }

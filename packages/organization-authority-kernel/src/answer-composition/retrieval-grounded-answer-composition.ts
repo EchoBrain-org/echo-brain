@@ -296,10 +296,8 @@ export interface RetrievalGroundedAnswerCompositionOptions {
 }
 
 export interface RetrievalGroundedAnswerCompositionResult {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-person-answer-v1";
-  readonly generation_id: Sha256Digest;
-  readonly record_head: ReleasedRetrievalBatch["record_head"];
+  readonly schema_version: 2;
+  readonly kind: "echo-clean-person-answer-v2";
   readonly answer: string;
   readonly citations: readonly {
     readonly atom_id: Sha256Digest;
@@ -1275,10 +1273,8 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
       });
       validateReleasedRetrievalRevalidationV1(finalAuthorization);
       const result: RetrievalGroundedAnswerCompositionResult = Object.freeze({
-        schema_version: 1,
-        kind: "echo-clean-person-answer-v1",
-        generation_id: release.generation_id,
-        record_head: Object.freeze({ ...release.record_head }),
+        schema_version: 2,
+        kind: "echo-clean-person-answer-v2",
         answer: parsed.answer,
         citations: Object.freeze(
           parsed.citations.map((atom) =>

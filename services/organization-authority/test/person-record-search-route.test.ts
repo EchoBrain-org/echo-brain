@@ -375,8 +375,8 @@ describe("Person Layer 2 route", () => {
       const contextBytes = packet.response.items.reduce((bytes, { atom_id, record_sha256, policy_id, text }) =>
         bytes + Buffer.byteLength(canonicalJson({ atom_id, record_sha256, policy_id, text }), "utf8"), 0);
       expect(contextBytes).toBeLessThanOrEqual(ANSWER_COMPOSITION_MAX_CONTEXT_UTF8_BYTES);
-      expect(packet.response.generation_id).toBe(active_generation.generation_id);
-      expect(packet.response.record_head).toEqual({ position: exact_head.position, record_sha256: exact_head.record_sha256 });
+      expect(packet.release.active_pointer.generation_id).toBe(active_generation.generation_id);
+      expect(packet.release.active_pointer.record_head).toEqual({ position: exact_head.position, record_sha256: exact_head.record_sha256 });
       expect(route.searchBatch({ ...request, include_related_atom_packet: true }).response).toEqual(packet.response);
 
       // Exercise the actual Layer 4 adapter/context bound with an in-process
@@ -557,10 +557,8 @@ describe("Person Layer 2 route", () => {
           query: "unlogged-query-phrase",
         }),
       ).toEqual({
-        schema_version: 1,
-        kind: "echo-clean-person-record-search-v1",
-        generation_id: digest("generation"),
-        record_head: { position: 0, record_sha256: null },
+        schema_version: 2,
+        kind: "echo-clean-person-record-search-v2",
         items: [
           {
             atom_id: digest("atom"),
@@ -728,10 +726,7 @@ describe("Person Layer 2 route", () => {
         fourQueryRequestMilliseconds: requestMilliseconds,
         eventLoopDelayMilliseconds,
       });
-      expect(owner).toMatchObject({
-        generation_id: built.manifest.generation_id,
-        record_head: { position: 2, record_sha256: restrictedRecordHash },
-      });
+      expect(Object.keys(owner).sort()).toEqual(["items", "kind", "schema_version"]);
       expect(owner.items).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -765,6 +760,14 @@ describe("Person Layer 2 route", () => {
           policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
         }),
       ]);
+
+      expect(employee).not.toHaveProperty("generation_id");
+      expect(employee).not.toHaveProperty("record_head");
+      expect(JSON.stringify(employee)).not.toContain(restrictedRecordHash);
+      const emptyEmployee = route.search({ access_token: "employee-bearer", query: "absentneedle" });
+      expect(emptyEmployee.items).toEqual([]);
+      expect(Object.keys(emptyEmployee).sort()).toEqual(["items", "kind", "schema_version"]);
+      expect(JSON.stringify(emptyEmployee)).not.toContain(restrictedRecordHash);
 
       const replacementOwner = route.search({
         access_token: "replacement-owner-bearer",

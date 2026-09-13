@@ -20,7 +20,7 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import type {
   PersonAnswerHttpApplicationV1,
   PersonAnswerPolicyV1,
-  PersonAnswerResponseV1,
+  PersonAnswerResponseV2,
 } from "../presentation/person-answer-http-application.js";
 import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import {
@@ -75,13 +75,10 @@ function publicResponse(
   value: Awaited<
     ReturnType<ReturnType<typeof createRetrievalGroundedAnswerComposition>["answer"]>
   >,
-  acceptOutcomeV2: boolean,
-): PersonAnswerResponseV1 {
+): PersonAnswerResponseV2 {
   return Object.freeze({
-    schema_version: 1,
-    kind: "echo-clean-person-answer-v1",
-    generation_id: value.generation_id,
-    record_head: Object.freeze({ ...value.record_head }),
+    schema_version: 2,
+    kind: "echo-clean-person-answer-v2",
     answer: value.answer,
     citations: Object.freeze(
       value.citations.map((citation) =>
@@ -92,7 +89,7 @@ function publicResponse(
         }),
       ),
     ),
-    ...(value.outcome === undefined || !acceptOutcomeV2 ? {} : { outcome: value.outcome }),
+    ...(value.outcome === undefined ? {} : { outcome: value.outcome }),
   });
 }
 
@@ -108,8 +105,7 @@ export function createPersonAnswerRouteV1(
     async ask(input: {
       readonly access_token: string;
       readonly question: string;
-      readonly accept_outcome_v2?: boolean;
-    }): Promise<PersonAnswerResponseV1> {
+      }): Promise<PersonAnswerResponseV2> {
       const journey = options.ask_journey_telemetry?.start();
       if (journey?.journey_id) annotateCoreRuntimeV1({ linked_journey_ids: [journey.journey_id] });
       const journeyStartedAt = journey?.startTimer() ?? 0;
@@ -197,10 +193,10 @@ export function createPersonAnswerRouteV1(
               principal_id: authorization.principal_id,
               membership_id: authorization.membership_id,
               session_family_id: authorization.session_family_id,
-              generation_id: batch.response.generation_id as Sha256Digest,
+              generation_id: batch.release.active_pointer.generation_id as Sha256Digest,
               record_head: Object.freeze({
-                position: batch.response.record_head.position,
-                record_sha256: batch.response.record_head
+                position: batch.release.active_pointer.record_head.position,
+                record_sha256: batch.release.active_pointer.record_head
                   .record_sha256 as Sha256Digest | null,
               }),
               released_atoms: Object.freeze(
@@ -319,7 +315,6 @@ export function createPersonAnswerRouteV1(
         const result = await composition.answer({ question: input.question });
         const response = publicResponse(
           result,
-          input.accept_outcome_v2 === true,
         );
         journey?.complete(
           result.outcome ??
