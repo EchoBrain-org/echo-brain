@@ -937,11 +937,7 @@ function answerModel(): StructuredGenerationPort {
       if (properties !== undefined && Object.hasOwn(properties, "queries")) {
         return { queries: [] };
       }
-      return {
-        status: "answered",
-        answer: "Ship the clean live migration.",
-        citations: ["a1"],
-      };
+      return { answer: { text: "Ship the clean live migration.", citations: ["a1"] } };
     },
   };
 }

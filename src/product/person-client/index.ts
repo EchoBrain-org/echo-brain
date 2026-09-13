@@ -3,11 +3,11 @@ export {
   PersonAuthorityClientError,
   type PersonAuthorityClientOptions,
   type PersonAnswerCitationV1,
-  type PersonAnswerV1,
+  type PersonAnswerV2,
   type PersonRecordListItemV1,
   type PersonRecordListV1,
   type PersonRecordSearchItemV1,
-  type PersonRecordSearchV1,
+  type PersonRecordSearchV2,
 } from "./authority-client.js";
 export {
   EmployeeMutationError,

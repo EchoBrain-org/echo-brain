@@ -52,6 +52,16 @@ final class AccountRequestGate {
     func accepts(_ candidate: Int) -> Bool { candidate == generation }
 }
 
+private struct AccountClientBuild: Decodable {
+    let source_sha: String
+    let source_kind: String
+
+    var valid: Bool {
+        source_sha.range(of: "^[0-9a-f]{40}$", options: .regularExpression) != nil &&
+        ["materialized-commit", "worktree-head-unverified"].contains(source_kind)
+    }
+}
+
 private struct AccountStatusResponse: Decodable {
     let schema_version: Int
     let kind: String
@@ -60,6 +70,7 @@ private struct AccountStatusResponse: Decodable {
     let membership_type: String?
     let connected_authority: String?
     let installed_version: String?
+    let client_build: AccountClientBuild
     let membership_id: String?
 }
 
@@ -211,7 +222,8 @@ final class AccountClient: @unchecked Sendable {
         guard let output = runStatus(running) else { return .unavailable }
         guard let response = try? JSONDecoder().decode(AccountStatusResponse.self, from: output),
               response.schema_version == 1,
-              response.kind == "echo-person-client-status-v1"
+              response.kind == "echo-person-client-status-v1",
+              response.client_build.valid
         else { return .unavailable }
         guard response.signed_in else { return .signedOut }
         guard let displayName = response.display_name,

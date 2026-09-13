@@ -56,11 +56,7 @@ function answerResponse(userPrompt) {
   // corpus map, response fixture, or caller-controlled citation path.
   const answer = first.text.slice(0, 4_000).trim();
   if (answer.length === 0) throw new Error("deterministic answerer received empty released evidence");
-  return Object.freeze({
-    status: "answered",
-    answer,
-    citations: [first.citation_id],
-  });
+  return Object.freeze({ answer: { text: answer, citations: [first.citation_id] } });
 }
 
 /**
@@ -76,7 +72,7 @@ export function createCoreDeterministicStructuredGenerationPort() {
         throw new Error("deterministic structured generation input is invalid");
       }
       if (Object.hasOwn(properties, "queries")) return plannerResponse(input.user_prompt);
-      if (Object.hasOwn(properties, "status") && Object.hasOwn(properties, "citations")) {
+      if (Object.hasOwn(properties, "answer")) {
         return answerResponse(input.user_prompt);
       }
       if (Object.hasOwn(properties, "relationships")) {

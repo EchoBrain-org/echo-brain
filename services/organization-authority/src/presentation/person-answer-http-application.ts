@@ -6,21 +6,16 @@ export type PersonAnswerPolicyV1 =
   | "restricted-reviewer-person-v2";
 export type PersonAnswerOutcomeV1 = "authorship_unsupported";
 
-export interface PersonAnswerResponseV1 {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-person-answer-v1";
-  readonly generation_id: PersonAnswerDigestV1;
-  readonly record_head: {
-    readonly position: number;
-    readonly record_sha256: PersonAnswerDigestV1 | null;
-  };
+export interface PersonAnswerResponseV2 {
+  readonly schema_version: 2;
+  readonly kind: "echo-clean-person-answer-v2";
   readonly answer: string;
   readonly citations: readonly {
     readonly atom_id: PersonAnswerDigestV1;
     readonly record_sha256: PersonAnswerDigestV1;
     readonly policy_id: PersonAnswerPolicyV1;
   }[];
-  /** Omitted for ordinary answers so existing clients retain their response shape. */
+  /** Present when personal authorship cannot be established from accessible records. */
   readonly outcome?: PersonAnswerOutcomeV1;
 }
 
@@ -29,6 +24,5 @@ export interface PersonAnswerHttpApplicationV1 {
   ask(input: {
     readonly access_token: string;
     readonly question: string;
-    readonly accept_outcome_v2?: boolean;
-  }): Promise<PersonAnswerResponseV1>;
+  }): Promise<PersonAnswerResponseV2>;
 }

@@ -176,7 +176,11 @@ all cases and the following evidence before they can pass:
 - Each answer includes its exact `principal` and `approval_state`, plus
   `record_generation_id` and `release_head` for answered cases. `release_head`
   is the exact release/source-head identifier used for that capture, not the
-  evaluator's current checkout.
+  evaluator's current checkout or installed client. Under proposed ADR-0012,
+  public V2 search/Ask JSON supplies neither field. Obtain the generation and
+  serving release from existing operator-authorized audit/telemetry evidence,
+  correlated to the exact public-response digest. Keep that evidence separate
+  from the caller capture; never restore global metadata to public responses.
 - The existing `claims` array now uses stable `group_id` mappings instead of
   positional `fact_index`. Each mapping includes `outcome`, `observed_text`,
   and `citation_meeting_ids`. An answered span must appear in the answer,

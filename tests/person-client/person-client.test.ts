@@ -1,5 +1,6 @@
 import { SlackPersonClient } from '@echo-brain/provider-slack-client/person/slack-person-client';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
+import * as packageIdentity from "../../src/product/person-client/package-identity.js";
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import {
@@ -15,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
@@ -99,6 +101,34 @@ async function withHome(run: (home: string) => Promise<void>): Promise<void> {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Person client", () => {
+  it.each([false, true])("distinguishes same-version client builds in status (signed in: %s)", async (signedIn) => {
+    await withHome(async (home) => {
+      if (signedIn) await new PersonClient({ home_directory: home, now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authorityDescriptor() }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      const readIdentity = packageIdentity.readPackagedPersonClientBuildIdentity;
+      for (const [source_sha, source_kind] of [["a".repeat(40), "materialized-commit"], ["b".repeat(40), "worktree-head-unverified"]] as const) {
+        const packageRoot = join(home, source_sha);
+        mkdirSync(join(packageRoot, "dist"), { recursive: true });
+        writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-internal.6" }));
+        writeFileSync(join(packageRoot, "dist/build-identity.v1.json"), JSON.stringify({
+          schema_version: 1, kind: "echo-packaged-build-identity", product_version: "0.1.0-internal.6", source_sha, source_kind,
+        }));
+        const identity = readIdentity(pathToFileURL(join(packageRoot, "dist/package-identity.js")).href);
+        vi.spyOn(packageIdentity, "readPackagedPersonClientBuildIdentity").mockReturnValue(identity);
+        let stdout = "";
+        const fetch = vi.fn();
+        expect(await runPersonClientCli(["status"], { home_directory: home, fetch,
+          stdout: { write: value => ((stdout += String(value)), true) }, stderr: { write: () => true },
+        })).toBe(0);
+        const status = JSON.parse(stdout);
+        expect(status).toMatchObject({ signed_in: signedIn, installed_version: "0.1.0-internal.6", client_build: { source_sha, source_kind } });
+        expect(status).not.toHaveProperty("authority_build");
+        expect(fetch).not.toHaveBeenCalled();
+      }
+    });
+  });
+
   it("reports disconnected status without a network call or private paths", async () => {
     await withHome(async (home) => {
       let networkCalled = false;
@@ -481,10 +511,8 @@ describe("Person client", () => {
           `Bearer ${ROTATED_SESSION.access_token}`,
         );
         return json({
-          schema_version: 1,
-          kind: "echo-clean-person-record-search-v1",
-          generation_id: `sha256:${"a".repeat(64)}`,
-          record_head: { position: 1, record_sha256: `sha256:${"b".repeat(64)}` },
+          schema_version: 2,
+          kind: "echo-clean-person-record-search-v2",
           items: [
             {
               atom_id: `sha256:${"c".repeat(64)}`,
@@ -520,7 +548,7 @@ describe("Person client", () => {
       expect(JSON.parse(stdout)).toMatchObject({
         ok: true,
         result: {
-          kind: "echo-clean-person-record-search-v1",
+          kind: "echo-clean-person-record-search-v2",
           items: [{ text: "Use simple pricing." }],
         },
       });
@@ -573,13 +601,8 @@ describe("Person client", () => {
               `Bearer ${ROTATED_SESSION.access_token}`,
             );
             return json({
-              schema_version: 1,
-              kind: "echo-clean-person-answer-v1",
-              generation_id: `sha256:${"a".repeat(64)}`,
-              record_head: {
-                position: 1,
-                record_sha256: `sha256:${"b".repeat(64)}`,
-              },
+              schema_version: 2,
+              kind: "echo-clean-person-answer-v2",
               answer: "Use simple pricing.",
               citations: [
                 {
@@ -600,13 +623,8 @@ describe("Person client", () => {
       expect(JSON.parse(stdout)).toEqual({
         ok: true,
         result: {
-          schema_version: 1,
-          kind: "echo-clean-person-answer-v1",
-          generation_id: `sha256:${"a".repeat(64)}`,
-          record_head: {
-            position: 1,
-            record_sha256: `sha256:${"b".repeat(64)}`,
-          },
+          schema_version: 2,
+          kind: "echo-clean-person-answer-v2",
           answer: "Use simple pricing.",
           citations: [
             {
@@ -633,13 +651,8 @@ describe("Person client", () => {
           }
           asks += 1;
           return json({
-            schema_version: 1,
-            kind: "echo-clean-person-answer-v1",
-            generation_id: `sha256:${"a".repeat(64)}`,
-            record_head: {
-              position: 1,
-              record_sha256: `sha256:${"b".repeat(64)}`,
-            },
+            schema_version: 2,
+            kind: "echo-clean-person-answer-v2",
             answer: "Bounded answer.",
             citations: [],
           });
@@ -652,10 +665,22 @@ describe("Person client", () => {
       await expect(client.ask(question(32))).resolves.toMatchObject({
         answer: "Bounded answer.",
       });
-      await expect(client.ask(question(33))).rejects.toThrow(
-        "ask request is invalid",
-      );
+      await expect(client.ask(question(33))).rejects.toMatchObject({ code: "query_term_count" });
       expect(asks).toBe(1);
+    });
+  });
+
+  it.each(["ask", "search"])("rejects retired global metadata in a %s response", async (mode) => {
+    await withHome(async (home) => {
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input) => {
+        if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
+        return json({ schema_version: 2, ...(mode === "ask"
+          ? { kind: "echo-clean-person-answer-v2", answer: "Insufficient accessible evidence to answer this question.", citations: [] }
+          : { kind: "echo-clean-person-record-search-v2", items: [] }),
+        generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } });
+      } });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(mode === "ask" ? client.ask("pricing") : client.records(undefined, "pricing")).rejects.toThrow("response is invalid");
     });
   });
 
@@ -672,13 +697,8 @@ describe("Person client", () => {
           }
           asks += 1;
           return json({
-            schema_version: 1,
-            kind: "echo-clean-person-answer-v1",
-            generation_id: `sha256:${"a".repeat(64)}`,
-            record_head: {
-              position: 1,
-              record_sha256: `sha256:${"b".repeat(64)}`,
-            },
+            schema_version: 2,
+            kind: "echo-clean-person-answer-v2",
             answer: "Use simple pricing.",
             citations: [
               {
@@ -693,9 +713,7 @@ describe("Person client", () => {
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
 
-      await expect(client.ask(" pricing")).rejects.toThrow(
-        "ask request is invalid",
-      );
+      await expect(client.ask(" pricing")).rejects.toMatchObject({ code: "query_whitespace" });
       expect(asks).toBe(0);
       await expect(client.ask("pricing")).rejects.toThrow(
         "ask citation is invalid",
@@ -714,15 +732,10 @@ describe("Person client", () => {
           if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
             return json({ authority_descriptor: authority });
           }
-          expect(new Headers(init?.headers).get("x-echo-person-answer-version")).toBe("2");
+          expect(new Headers(init?.headers).get("x-echo-person-answer-version")).toBeNull();
           return json({
-            schema_version: 1,
-            kind: "echo-clean-person-answer-v1",
-            generation_id: `sha256:${"a".repeat(64)}`,
-            record_head: {
-              position: 1,
-              record_sha256: `sha256:${"b".repeat(64)}`,
-            },
+            schema_version: 2,
+            kind: "echo-clean-person-answer-v2",
             answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
             citations: [],
             outcome: "authorship_unsupported",
@@ -736,35 +749,85 @@ describe("Person client", () => {
     });
   });
 
-  it("gives a safe retry instruction while a queried generation is unavailable", async () => {
-    await withHome(async (home) => {
+  it.each([
+    ["ask", "--question", "What happened?"], ["records"],
+    ["records", "--query", "pricing"],
+    ["records", "--record-sha256", `sha256:${"a".repeat(64)}`],
+  ])("preserves typed Authority failures through the composed CLI: %j", async (...argv) => {
+    await withHome(async home => {
       const authority = authorityDescriptor();
-      await new PersonClient({
-        home_directory: home,
-        now: () => NOW,
+      await new PersonClient({ home_directory: home, now: () => NOW,
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
-      let stdout = "";
+      for (const [code, httpStatus] of [["unavailable", 503], ["unauthorized", 401], ["invalid_request", 400]] as const) {
+        let stdout = "", stderr = "";
+        const status = await runPersonClientCli(argv, {
+          home_directory: home, now: () => NOW,
+          stdout: { write: value => ((stdout += String(value)), true) },
+          stderr: { write: value => ((stderr += String(value)), true) },
+          fetch: async () => json({ error: { code, message: "private provider body" } }, httpStatus),
+        });
+        expect(status).toBe(1);
+        expect(stdout).toBe("");
+        expect(JSON.parse(stderr)).toMatchObject({ ok: false, code, status: httpStatus });
+        expect(stderr).not.toMatch(/private provider body|catching up/);
+      }
+    });
+  });
+
+  it("keeps malformed Authority bodies and unknown failures out of CLI errors", async () => {
+    await withHome(async home => {
+      const authority = authorityDescriptor();
+      await new PersonClient({ home_directory: home, now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
       let stderr = "";
-      const status = await runPersonClientCli(["records", "--query", "pricing"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: (value) => ((stderr += String(value)), true) },
+      const options = { home_directory: home, now: () => NOW,
+        stderr: { write: (value: string) => ((stderr += String(value)), true) },
+        stdout: { write: () => { throw new Error("no success expected"); } },
+        fetch: async () => new Response("private provider body", { status: 503 }),
+      };
+      expect(await runPersonClientCli(["ask", "--question", "What happened?"], options)).toBe(1);
+      expect(JSON.parse(stderr)).toMatchObject({ code: "invalid_response", status: 503 });
+      expect(stderr).not.toContain("private provider body");
+      const spy = vi.spyOn(PersonClient.prototype, "ask").mockRejectedValueOnce(new Error("private internal detail"));
+      try {
+        stderr = "";
+        expect(await runPersonClientCli(["ask", "--question", "What happened?"], options)).toBe(1);
+        expect(JSON.parse(stderr).error).toBe("Person request could not be completed");
+      } finally { spy.mockRestore(); }
+    });
+  });
+
+  it("reports actionable bounded query rules without echoing input or calling transport", async () => {
+    await withHome(async home => {
+    for (const [text, code] of [
+      ["", "query_empty"], [" x", "query_whitespace"], ["e\u0301", "query_normalization"],
+      ["x\ny", "query_controls"], ["x ".repeat(121).trim(), "query_too_long"],
+      ["!!!", "query_term_count"], [Array.from({ length: 33 }, (_, i) => `t${i}`).join(" "), "query_term_count"],
+      ["é".repeat(33), "query_term_too_long"],
+    ]) {
+      for (const argv of [["ask", "--question", text], ["records", "--query", text]]) {
+        let stderr = "";
+        const status = await runPersonClientCli(argv, {
+          home_directory: home,
+          stderr: { write: value => ((stderr += String(value)), true) },
+          stdout: { write: () => { throw new Error("no success output expected"); } },
+          fetch: async () => { throw new Error("must not reach transport"); },
+        });
+        expect(status).toBe(1);
+        expect(JSON.parse(stderr)).toMatchObject({ code });
+      }
+    }
+    for (const limit of ["-1", "0", "101"]) {
+      let stderr = "";
+      expect(await runPersonClientCli(["records", "--limit", limit], {
         home_directory: home,
-        now: () => NOW,
-        fetch: async (input) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/person/records") {
-            return json({ error: { code: "unavailable", message: "request failed" } }, 503);
-          }
-          return json({ authority_descriptor: authority });
-        },
-      });
-      expect(status).toBe(1);
-      expect(stdout).toBe("");
-      expect(JSON.parse(stderr)).toMatchObject({
-        action: "records",
-        error: "Search is catching up to the latest records; retry after the next worker cycle.",
-      });
+        stderr: { write: value => ((stderr += String(value)), true) },
+      })).toBe(1);
+      expect(JSON.parse(stderr)).toMatchObject({ code: "invalid_limit" });
+      expect(stderr).toContain("1 to 100");
+    }
     });
   });
 
@@ -826,7 +889,7 @@ describe("Person client", () => {
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
-        if (path === "/v1/person/ask") return json({ schema_version: 1, kind: "echo-clean-person-answer-v1", generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 0, record_sha256: null }, answer: "No approved records.", citations: [] });
+        if (path === "/v1/person/ask") return json({ schema_version: 2, kind: "echo-clean-person-answer-v2", answer: "No approved records.", citations: [] });
         expect(path).toBe("/v3/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
         return json({ schema_version: 3, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });

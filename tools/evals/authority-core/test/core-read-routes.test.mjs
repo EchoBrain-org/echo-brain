@@ -3,7 +3,7 @@ import test from "node:test";
 import { createCoreDeterministicStructuredGenerationPort } from "../core-read-routes.mjs";
 
 const answerSchema = Object.freeze({
-  properties: Object.freeze({ status: Object.freeze({}), citations: Object.freeze({}) }),
+  properties: Object.freeze({ answer: Object.freeze({}) }),
 });
 const plannerSchema = Object.freeze({
   properties: Object.freeze({ queries: Object.freeze({}) }),
@@ -20,16 +20,8 @@ test("deterministic answer output is grounded in the current released evidence a
   const port = createCoreDeterministicStructuredGenerationPort();
   const first = await answer(port, [{ citation_id: "a1", text: "Use the durable checkpoint." }]);
   const second = await answer(port, [{ citation_id: "a7", text: "Use the active release fence." }]);
-  assert.deepEqual(first, {
-    status: "answered",
-    answer: "Use the durable checkpoint.",
-    citations: ["a1"],
-  });
-  assert.deepEqual(second, {
-    status: "answered",
-    answer: "Use the active release fence.",
-    citations: ["a7"],
-  });
+  assert.deepEqual(first, { answer: { text: "Use the durable checkpoint.", citations: ["a1"] } });
+  assert.deepEqual(second, { answer: { text: "Use the active release fence.", citations: ["a7"] } });
   assert.notDeepEqual(first, second);
 });
 

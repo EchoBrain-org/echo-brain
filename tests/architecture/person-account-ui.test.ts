@@ -216,7 +216,7 @@ fs.appendFileSync(root + "/calls.jsonl", JSON.stringify(args) + "\\n");
 const mode = fs.readFileSync(root + "/mode", "utf8");
 if (args[1] === "status") {
   const signedIn = fs.readFileSync(root + "/signed-in", "utf8") === "true";
-  console.log(JSON.stringify({schema_version:1,kind:"echo-person-client-status-v1",signed_in:signedIn,display_name:signedIn ? "Person" : null,membership_type:signedIn ? "employee" : null,connected_authority:signedIn ? "https://authority.example.test" : null,installed_version:"1.2.3"}));
+  console.log(JSON.stringify({schema_version:1,kind:"echo-person-client-status-v1",signed_in:signedIn,display_name:signedIn ? "Person" : null,membership_type:signedIn ? "employee" : null,connected_authority:signedIn ? "https://authority.example.test" : null,installed_version:"1.2.3",client_build:{source_sha:"a".repeat(40),source_kind:"materialized-commit"}}));
 } else if (args[1] === "login") {
   if (mode === "cancel") setInterval(() => {}, 1000);
   else fs.writeFileSync(root + "/signed-in", "true");

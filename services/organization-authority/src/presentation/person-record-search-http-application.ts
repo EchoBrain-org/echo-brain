@@ -5,14 +5,9 @@ export type PersonRecordSearchPolicyV1 =
   | "organization-member-readable-person-v2"
   | "restricted-reviewer-person-v2";
 
-export interface PersonRecordSearchResponseV1 {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-person-record-search-v1";
-  readonly generation_id: PersonRecordSearchDigestV1;
-  readonly record_head: {
-    readonly position: number;
-    readonly record_sha256: PersonRecordSearchDigestV1 | null;
-  };
+export interface PersonRecordSearchResponseV2 {
+  readonly schema_version: 2;
+  readonly kind: "echo-clean-person-record-search-v2";
   readonly items: readonly {
     readonly atom_id: PersonRecordSearchDigestV1;
     readonly record_sha256: PersonRecordSearchDigestV1;
@@ -28,5 +23,5 @@ export interface PersonRecordSearchHttpApplicationV1 {
     readonly access_token: string;
     readonly query: string;
     readonly limit?: number;
-  }): PersonRecordSearchResponseV1;
+  }): PersonRecordSearchResponseV2;
 }

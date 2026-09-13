@@ -62,6 +62,14 @@ function uniqueStrings(value) {
   return strings(value) && value.every(nonempty) && new Set(value).size === value.length;
 }
 
+function exactKeys(value, keys) {
+  return isObject(value) && sameStringSet(Object.keys(value), keys);
+}
+
+const isDigest = value => typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value);
+const publicPolicy = policy => policy === "team" ? "organization-member-readable-person-v2"
+  : policy === "only_me" ? "restricted-reviewer-person-v2" : null;
+
 function validateAnsweredClaims(require, answer, expected, groups, label) {
   require(Array.isArray(answer?.claims), `${label} claims must be an array`);
   require(answer?.claims?.length === expected.material_group_ids.length, `${label} requires exactly one mapping per material group`);
@@ -105,9 +113,81 @@ function validateAnsweredClaims(require, answer, expected, groups, label) {
   for (const id of expected.material_group_ids) require(seen.has(id), `${label} is missing group ${id}`);
 }
 
-function validateAnswer(require, answer, expected, groups) {
+// Captured subprocess evidence stays local; reports expose only fixed diagnostics.
+// A launch exception (including NUL/E2BIG) is not an Authority response.
+function validateProcessCapture(require, answer, label, approvedRecords = []) {
+  let valid = true;
+  const check = (condition, message) => {
+    if (!condition) valid = false;
+    require(condition, message);
+  };
+  const capture = answer?.process_capture;
+  check(isObject(capture), `${label} lacks stdout/stderr and process-exit evidence`);
+  if (!isObject(capture)) return false;
+  check(capture.launch_error_code === null && capture.signal === null, `${label} process did not complete normally`);
+  check(typeof capture.stdout === "string" && typeof capture.stderr === "string", `${label} lacks both process streams`);
+  const unavailable = answer?.outcome === "unavailable";
+  check(capture.exit_code === (unavailable ? 1 : 0), `${label} process exit disagrees with the captured outcome`);
+  try {
+    if (unavailable) {
+      const error = JSON.parse(capture.stderr);
+      check(capture.stdout === "" && error.ok === false && error.code === "unavailable" && error.status === answer.http_status,
+        `${label} lacks a matching structured Authority failure on stderr`);
+    } else {
+      const response = JSON.parse(capture.stdout);
+      check(capture.stderr === "" && exactKeys(response, ["ok", "result"]) && response.ok === true,
+        `${label} lacks a matching successful answer on stdout`);
+      const value = response?.result;
+      const keys = ["schema_version", "kind", "answer", "citations"];
+      const shape = exactKeys(value, keys) || exactKeys(value, [...keys, "outcome"]);
+      check(shape, `${label} public answer contains missing or unexpected fields`);
+      if (!shape) return false;
+      check(value.schema_version === 2 && value.kind === "echo-clean-person-answer-v2",
+        `${label} public answer is not the current V2 contract`);
+      check(nonempty(value.answer) && value.answer.trim() === value.answer && [...value.answer].length <= 12_000 && value.answer === answer.answer_text,
+        `${label} public answer text is invalid or differs from its summary`);
+      check(!Object.hasOwn(value, "outcome") || value.outcome === "authorship_unsupported",
+        `${label} public answer outcome is invalid`);
+      const citationsValid = Array.isArray(value.citations) && value.citations.length <= 16;
+      check(citationsValid, `${label} public citations are missing or exceed the bound`);
+      if (!citationsValid) return false;
+      const outcome = value.outcome ?? (value.citations.length ? "answered" : "insufficient_approved_information");
+      check(outcome === answer.outcome, `${label} public outcome disagrees with its summary`);
+      if (outcome !== "answered") check(value.citations.length === 0, `${label} neutral response contains citations`);
+      const atomIds = new Set();
+      const meetingIds = new Set();
+      for (const citation of value.citations) {
+        const validCitation = exactKeys(citation, ["atom_id", "record_sha256", "policy_id"]) &&
+          isDigest(citation.atom_id) && isDigest(citation.record_sha256) &&
+          ["organization-member-readable-person-v2", "restricted-reviewer-person-v2"].includes(citation.policy_id);
+        check(validCitation, `${label} public citation is malformed`);
+        if (!validCitation) continue;
+        check(!atomIds.has(citation.atom_id), `${label} public citations repeat an atom`);
+        atomIds.add(citation.atom_id);
+        const matches = approvedRecords.filter(record => record?.record_sha256 === citation.record_sha256);
+        check(matches.length === 1, `${label} public citation has no unique approved-record mapping`);
+        if (matches.length !== 1) continue;
+        const record = matches[0];
+        check(record.approved === true && record.publication === "approved_v4_reconciled" &&
+          Array.isArray(record.atom_ids) && record.atom_ids.includes(citation.atom_id) &&
+          publicPolicy(record.policy) === citation.policy_id,
+        `${label} public citation disagrees with approved atom or policy evidence`);
+        check(answer.retrieved_record_ids?.includes(record.record_id), `${label} public citation was not in the captured retrieval`);
+        check(answer.principal === "exact_owner_approver" || record.policy === "team", `${label} public citation is outside the caller policy`);
+        meetingIds.add(record.meeting_id);
+      }
+      check(sameStringSet([...meetingIds], answer.citation_meeting_ids), `${label} actual citations disagree with mapped source meetings`);
+    }
+  } catch {
+    check(false, `${label} process output is not a structured Person result`);
+  }
+  return valid;
+}
+
+function validateAnswer(require, answer, expected, groups, approvedRecords) {
   const label = expected.id;
   require(isObject(answer), `${label} capture is missing`);
+  validateProcessCapture(require, answer, label, approvedRecords);
   require(answer?.principal === expected.principal, `${label} used the wrong principal`);
   require(answer?.approval_state === expected.approval_state, `${label} used the wrong approval state`);
   require(answer?.outcome === expected.expected_outcome, `${label} has the wrong outcome`);
@@ -140,7 +220,9 @@ function digestTrial(trial) {
         citation_meeting_ids: [...claim.citation_meeting_ids].sort()
       })).sort((a, b) => a.group_id.localeCompare(b.group_id)),
       citation_meeting_ids: [...trial.citation_meeting_ids].sort(),
-      retrieved_record_ids: [...trial.retrieved_record_ids].sort()
+      retrieved_record_ids: [...trial.retrieved_record_ids].sort(),
+      public_citations: JSON.parse(trial.process_capture.stdout).result.citations
+        .map(citation => [citation.atom_id, citation.record_sha256, citation.policy_id]).sort((a, b) => a[0].localeCompare(b[0]))
     }))
     .digest("hex");
 }
@@ -319,7 +401,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
   check("07", "Before approval, the main question returns no facts or citations.", (require) => {
     const expected = cases.find((item) => item.id === "before-approval-rollout-question");
     const answer = result?.answers?.find((item) => item?.case_id === expected?.id);
-    validateAnswer(require, answer, expected, groups);
+    validateAnswer(require, answer, expected, groups, result?.approved_records);
   });
 
   check("08", "After Team approval, the main answer contains every required proposition.", (require) => {
@@ -328,7 +410,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     require(isObject(answer) && isObject(expected), "missing post-approval answer capture or expectation");
     require(answer?.principal === expected?.principal, "post-approval answer used the wrong principal");
     require(answer?.outcome === "answered", "post-approval outcome is not answered");
-    validateAnswer(require, answer, expected, groups);
+    validateAnswer(require, answer, expected, groups, result?.approved_records);
     const maximumWords = expectations?.quality_gate?.maximum_target_words_for_rollout_answer;
     if (Number.isInteger(maximumWords)) require(answer.answer_text.trim().split(/\s+/).length <= maximumWords, `post-approval answer exceeds ${maximumWords} words`);
   });
@@ -356,15 +438,19 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
           require(retrieval.released_atom_count === 0, `${expected.id} captured retrieval counts contradict its expected outcome`);
         }
       }
-      validateAnswer(require, answer, expected, groups);
+      validateAnswer(require, answer, expected, groups, result?.approved_records);
     }
   });
 
   check("10", "No answer uses an unapproved transcript or fixture-only retrieval atom.", (require) => {
     require(Array.isArray(result?.approved_records), "approved_records must be an array");
+    const recordDigests = new Set();
     for (const record of result?.approved_records ?? []) {
       require(isObject(record) && expectedById.has(record.meeting_id), "approved record has unexpected meeting");
       require(typeof record?.record_id === "string" && record.record_id.length > 0, "approved record id is missing");
+      require(isDigest(record?.record_sha256) && !recordDigests.has(record.record_sha256), "approved record digest is missing, malformed or duplicated");
+      recordDigests.add(record?.record_sha256);
+      require(uniqueStrings(record?.atom_ids) && record.atom_ids.length > 0 && record.atom_ids.every(isDigest), "approved record atom evidence is missing or malformed");
       require(record?.publication === "approved_v4_reconciled", `${record?.meeting_id} was not confirmed through V4 reconciliation`);
       require(record?.approved === true, `${record?.meeting_id} is not approved`);
       require(record?.policy === expectedById.get(record.meeting_id)?.approval_policy, `${record?.meeting_id} policy does not match expectation`);
@@ -393,7 +479,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     require(isObject(answer) && isObject(expected), "missing team private-price answer capture");
     require(result?.operator_checks?.answer_identities_verified === true, "operator did not confirm the Ask ECHO identities");
     require(answer?.principal === expected?.principal, "team private-price answer used the wrong principal");
-    validateAnswer(require, answer, expected, groups);
+    validateAnswer(require, answer, expected, groups, result?.approved_records);
   });
 
   check("12", "The exact Only-me approver can retrieve the private price.", (require) => {
@@ -403,7 +489,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
     require(result?.operator_checks?.answer_identities_verified === true, "operator did not confirm the Ask ECHO identities");
     require(answer?.principal === expected?.principal, "approver price answer did not use the exact owner/approver principal");
     require(answer?.outcome === "answered", "approver private-price outcome is not answered");
-    validateAnswer(require, answer, expected, groups);
+    validateAnswer(require, answer, expected, groups, result?.approved_records);
     require(strings(answer?.citation_meeting_ids) && answer.citation_meeting_ids.includes("synthetic-demo-northstar-commercial-exception-2026-08-29"), "approver answer lacks commercial citation");
     const commercialRecordIds = new Set((result?.approved_records ?? []).filter((record) => record?.meeting_id === "synthetic-demo-northstar-commercial-exception-2026-08-29").map((record) => record.record_id));
     require(strings(answer?.retrieved_record_ids) && answer.retrieved_record_ids.length > 0 && answer.retrieved_record_ids.every((recordId) => commercialRecordIds.has(recordId)), "approver price answer did not use only the commercial record");
@@ -433,6 +519,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
           const samePair = trial?.record_generation_id === run.record_generation_id && trial?.release_head === run.release_head;
           requireTrial(samePair, `${expected.id} trial changed generation or release/head`);
           if (trial?.outcome === "unavailable") {
+            if (!validateProcessCapture(requireTrial, trial, expected.id)) continue;
             summary.unavailable_count += 1;
             if (trial.http_status === 503) summary.status_503_count += 1;
             requireTrial(Number.isInteger(trial.http_status) && trial.http_status >= 400 && trial.http_status <= 599, `${expected.id} unavailable trial lacks error status`);
@@ -444,7 +531,7 @@ export function evaluateRehearsal(result, expectations, meetingDocuments, option
             continue;
           }
           summary.success_count += 1;
-          validateAnswer(requireTrial, trial, expected, groups);
+          validateAnswer(requireTrial, trial, expected, groups, result?.approved_records);
           requireTrial(trial?.case_id === expected.id, `${expected.id} trial used another case`);
           // Never compare text or records across a changed pair.
           if (samePair && run.record_generation_id === captured?.record_generation_id && run.release_head === captured?.release_head) {

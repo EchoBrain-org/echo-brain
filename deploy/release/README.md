@@ -827,6 +827,55 @@ source SHA, archive checksum, OS/CPU/libc, native vs emulated environment and
 browser/read outcome for each new manual rehearsal. No fixture success marks a
 candidate accepted; release authority stays in the operator playbook.
 
+### Person contract candidate qualification
+
+`person status` reports local `installed_version` and
+`client_build: { source_sha, source_kind }` in either sign-in state. Only
+`materialized-commit` identifies a committed package; `worktree-head-unverified`
+explicitly does not. Neither the version, installed path nor client source SHA
+identifies the Authority actually serving a request. Status makes no network call.
+Use the existing operator lane's release/image evidence and correlated request
+audit or telemetry to identify that Authority independently.
+
+The candidate implements [ADR-0012](../../docs/decisions/ADR-0012-person-public-response-privacy.md).
+Its matching clients decode `echo-clean-person-record-search-v2` and
+`echo-clean-person-answer-v2` (schema 2); older exact-shape clients are incompatible.
+Select clients by committed source and tarball SHA-256, not a reused product version.
+The implementation contract is accepted; coordinated live qualification and
+the exact candidate's release decision remain required.
+
+For both native targets, build from the same committed source and feed the
+existing smoke helper the same canonical release and tarball:
+
+```sh
+node tests/fixtures/person-onboarding-smoke.mjs \
+  --release /absolute/private/candidate.clean-v1.json \
+  --artifact /absolute/private/person-client.tgz
+```
+
+This builds the host's kit and installs into disposable user state. Its receipt
+contains the release-record and tarball hashes, client source/kind, platform,
+and `serving_authority: "not-observed-offline"`. Compare both platforms' exact
+hashes. `--kit-root` verifies an already-built kit instead. The no-argument mode
+is a local smoke build; independent invocations are not evidence of one shared
+release or tarball. Native Linux execution is still owed when working on a Mac.
+
+Retire the one-off Mac-pinned stress checker as a qualification workflow; keep
+its old evidence outside Git. Use this smoke path plus the existing
+`demo/evaluate-rehearsal.mjs` captured-result gate. Capture stdout, stderr, exit
+code, termination signal and launch errors separately. NUL argv and `E2BIG`
+fail at process launch; do not label them HTTP/input-validation failures or add
+another stdin/file question path. Successful JSON is on stdout; structured
+Authority failures are on stderr with a nonzero exit.
+
+After offline proof, the owner control must run on the owner device and bounded
+Q4/63-byte/64-byte employee repetitions on the employee device, retaining failed
+attempts as well as successes. Keep exact internal generation/head and serving
+image correlation in operator-only evidence, with the returned-response digest.
+No session copying, owner substitution or client-SHA inference qualifies the
+employee journey. Offline fixtures do not prove model reliability or release
+acceptance.
+
 ### Linux x64 terminal kit
 
 The Linux kit supports glibc x86_64 machines (Ubuntu 22.04+ / Debian 12+ class).

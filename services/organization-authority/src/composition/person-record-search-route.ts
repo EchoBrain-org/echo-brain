@@ -22,7 +22,7 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type {
   PersonRecordSearchHttpApplicationV1,
-  PersonRecordSearchResponseV1,
+  PersonRecordSearchResponseV2,
 } from "../presentation/person-record-search-http-application.js";
 
 interface CurrentPersonSessions {
@@ -116,7 +116,7 @@ export interface PersonRecordSearchBatchReleaseV1 {
 }
 
 export interface PersonRecordSearchBatchResultV1 {
-  readonly response: PersonRecordSearchResponseV1;
+  readonly response: PersonRecordSearchResponseV2;
   readonly release: PersonRecordSearchBatchReleaseV1;
   /** Ordered per-query result counts, kept server-side for answer auditing only. */
   readonly query_hit_counts: readonly number[];
@@ -278,18 +278,11 @@ function unavailable(): never {
 }
 
 function asResponse(input: {
-  readonly generation_id: Sha256Digest;
-  readonly record_head: RecordHead;
   readonly items: readonly ReadableSearchResultItemV1[];
-}): PersonRecordSearchResponseV1 {
+}): PersonRecordSearchResponseV2 {
   return Object.freeze({
-    schema_version: 1,
-    kind: "echo-clean-person-record-search-v1",
-    generation_id: input.generation_id,
-    record_head: Object.freeze({
-      position: input.record_head.position,
-      record_sha256: input.record_head.record_sha256,
-    }),
+    schema_version: 2,
+    kind: "echo-clean-person-record-search-v2",
     items: Object.freeze(
       input.items.map((item) =>
         Object.freeze({
@@ -565,8 +558,6 @@ export function createPersonRecordSearchRouteV1(
           );
     const selectedItems = exactItems.length === 0 ? items : exactItems;
     const response = asResponse({
-      generation_id: pointer.generation_id,
-      record_head: head,
       items:
         input.include_related_atom_packet === true
           ? selectedItems.slice(0, RELATED_ATOM_PACKET_MAX_ITEMS_V1)
@@ -613,7 +604,7 @@ export function createPersonRecordSearchRouteV1(
       readonly access_token: string;
       readonly query: string;
       readonly limit?: number;
-    }): PersonRecordSearchResponseV1 {
+    }): PersonRecordSearchResponseV2 {
       return searchBatch({
         access_token: input.access_token,
         queries: [input.query],

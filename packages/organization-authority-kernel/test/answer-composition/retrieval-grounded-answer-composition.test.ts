@@ -71,7 +71,7 @@ describe("retrieval-grounded answer composition", () => {
       generate: vi.fn(async (input: StructuredGenerationInput) => {
         answerRequest = input;
         events.push("answer");
-        return { status: "answered", answer: "Tuesday, owned by the product team.", citations: ["a1", "a2"] };
+        return { answer: { text: "Tuesday, owned by the product team.", citations: ["a1", "a2"] } };
       }),
     };
     let retrieveCount = 0;
@@ -111,9 +111,8 @@ describe("retrieval-grounded answer composition", () => {
     expect(answerer.generate).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["retrieve", "answer", "revalidate"]);
     expect(result).toMatchObject({
-      schema_version: 1,
-      kind: "echo-clean-person-answer-v1",
-      generation_id: release().generation_id,
+      schema_version: 2,
+      kind: "echo-clean-person-answer-v2",
     });
     expect(result.citations).toEqual([
       expect.objectContaining({ atom_id: release().released_atoms[0]?.atom_id }),
@@ -165,11 +164,7 @@ describe("retrieval-grounded answer composition", () => {
     const answerer: StructuredGenerationPort = {
       generate: vi.fn(),
       generate_with_observation: vi.fn(async () => ({
-        value: {
-          status: "answered",
-          answer: "Tuesday, owned by the product team.",
-          citations: ["a1", "a2"],
-        },
+        value: { answer: { text: "Tuesday, owned by the product team.", citations: ["a1", "a2"] } },
         usage: {
           input_tokens: 30,
           output_tokens: 10,
@@ -286,11 +281,7 @@ describe("retrieval-grounded answer composition", () => {
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: {
-        generate: vi.fn(async () => ({
-          status: "answered",
-          answer: "Tuesday.",
-          citations: ["a1"],
-        })),
+        generate: vi.fn(async () => ({ answer: { text: "Tuesday.", citations: ["a1"] } })),
       },
       released_retrieval: {
         retrieve: vi.fn(async (input) => release(true, input.queries.length)),
@@ -323,11 +314,7 @@ describe("retrieval-grounded answer composition", () => {
       answerer: {
         generate: vi.fn(async (input: StructuredGenerationInput) => {
           answerRequest = input;
-          return {
-            status: "answered",
-            answer: "Anika Patel decided to ship the customer dashboard on Tuesday.",
-            citations: ["a1"],
-          };
+          return { answer: { text: "Anika Patel decided to ship the customer dashboard on Tuesday.", citations: ["a1"] } };
         }),
       },
       released_retrieval: {
@@ -359,35 +346,24 @@ describe("retrieval-grounded answer composition", () => {
   });
 
   it.each([
-    { name: "an empty answered response", response: { status: "answered", answer: "", citations: ["a1"] } },
-    { name: "whitespace-only answered text", response: { status: "answered", answer: " \n", citations: ["a1"] } },
-    { name: "whitespace-only insufficient-evidence text", response: { status: "insufficient_evidence", answer: " \n", citations: [] } },
-    { name: "a non-string insufficient-evidence answer", response: { status: "insufficient_evidence", answer: null, citations: [] } },
-    { name: "an invalid status", response: { status: "unknown", answer: "", citations: [] } },
-    { name: "missing answer text", response: { status: "insufficient_evidence", citations: [] } },
-    { name: "an extra field on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: [], unexpected: true } },
-    { name: "non-array citations", response: { status: "insufficient_evidence", answer: "", citations: null } },
-    { name: "citations on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: ["a1"] } },
-    { name: "an unreleased citation on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: ["a99"] } },
-    { name: "a non-string citation on an empty neutral response", response: { status: "insufficient_evidence", answer: "", citations: [1] } },
-    { name: "empty citations on an answered response", response: { status: "answered", answer: "Tuesday.", citations: [] } },
-    { name: "missing citations on an answered response", response: { status: "answered", answer: "Tuesday." } },
+    { name: "an empty answered response", response: { answer: { text: "", citations: ["a1"] } } },
+    { name: "whitespace-only answered text", response: { answer: { text: " \n", citations: ["a1"] } } },
+    { name: "a non-object answer", response: { answer: "Tuesday." } },
+    { name: "a missing answer", response: {} },
+    { name: "an extra field on an abstention", response: { answer: null, unexpected: true } },
+    { name: "non-array citations", response: { answer: { text: "Tuesday.", citations: null } } },
+    { name: "an unreleased citation", response: { answer: { text: "Tuesday.", citations: ["a99"] } } },
+    { name: "a non-string citation", response: { answer: { text: "Tuesday.", citations: [1] } } },
+    { name: "the retired status contract", response: { status: "insufficient_evidence", answer: "", citations: [] } },
+    { name: "empty citations on an answered response", response: { answer: { text: "Tuesday.", citations: [] } } },
+    { name: "missing citations on an answered response", response: { answer: { text: "Tuesday." } } },
     {
       name: "duplicate citations",
-      response: {
-        status: "answered",
-        answer: "Unsupported",
-        citations: ["a1", "a1"],
-      },
+      response: { answer: { text: "Unsupported", citations: ["a1", "a1"] } },
     },
     {
       name: "an undeclared property",
-      response: {
-        status: "answered",
-        answer: "Tuesday.",
-        citations: ["a1"],
-        unexpected: true,
-      },
+      response: { answer: { text: "Tuesday.", citations: ["a1"], unexpected: true } },
     },
   ])("rejects an answer with $name before final revalidation", async ({ response }) => {
     const releasedRetrieval = {
@@ -413,7 +389,7 @@ describe("retrieval-grounded answer composition", () => {
   });
 
   it("does not call the answer model when released retrieval has no usable atoms, but revalidates and audits", async () => {
-    const answerer = { generate: vi.fn(async () => ({ status: "answered", answer: "wrong", citations: ["a1"] })) };
+    const answerer = { generate: vi.fn(async () => ({ answer: { text: "wrong", citations: ["a1"] } })) };
     const releasedRetrieval = {
       retrieve: vi.fn(async (input) => release(false, input.queries.length)),
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
@@ -482,7 +458,7 @@ describe("retrieval-grounded answer composition", () => {
 
   it("treats possessive first-person decision questions as unsupported without overmatching readable-decision questions", async () => {
     const planner = { generate: vi.fn(async () => ({ queries: [] })) };
-    const answerer = { generate: vi.fn(async () => ({ status: "insufficient_evidence", answer: "Insufficient accessible evidence to answer this question.", citations: [] })) };
+    const answerer = { generate: vi.fn(async () => ({ answer: null })) };
     const retrieval = { retrieve: vi.fn(async (input) => release(true, input.queries.length)), revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })) };
     const answer = createRetrievalGroundedAnswerComposition({ planner, answerer, released_retrieval: retrieval, audit: { append: vi.fn() }, generation_adapter_id: "openrouter", planner_model: "test", answer_model: "test" });
     await expect(answer.answer({ question: "What are my decisions?" })).resolves.toMatchObject({ outcome: "authorship_unsupported" });
@@ -503,8 +479,8 @@ describe("retrieval-grounded answer composition", () => {
     expect(answerer.generate).not.toHaveBeenCalled();
   });
 
-  it("normalizes an empty insufficient-evidence answer while preserving revalidation, audit, and observations", async () => {
-    const modelOutput = { status: "insufficient_evidence", answer: "", citations: [] };
+  it("renders an explicit abstention while preserving revalidation, audit, and observations", async () => {
+    const modelOutput = { answer: null };
     const usage = { input_tokens: 30, output_tokens: 10, total_tokens: 40, cached_input_tokens: 5, reasoning_tokens: 2 };
     const answerer = {
       generate: vi.fn(),
@@ -542,10 +518,8 @@ describe("retrieval-grounded answer composition", () => {
 
     expect(answerer.generate_with_observation).toHaveBeenCalledOnce();
     expect(result).toEqual({
-      schema_version: 1,
-      kind: "echo-clean-person-answer-v1",
-      generation_id: released.generation_id,
-      record_head: released.record_head,
+      schema_version: 2,
+      kind: "echo-clean-person-answer-v2",
       answer: "Insufficient accessible evidence to answer this question.",
       citations: [],
     });
@@ -589,9 +563,8 @@ describe("retrieval-grounded answer composition", () => {
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: {
         generate: vi.fn(async () => ({
-          status: "insufficient_evidence",
-          answer: modelAnswer,
-          citations: [],
+          answer: null,
+          text: modelAnswer,
         })),
       },
       released_retrieval: releasedRetrieval,
@@ -602,7 +575,7 @@ describe("retrieval-grounded answer composition", () => {
     });
 
     await expect(answer.answer({ question: "When does the acquisition close?" })).rejects.toThrow(
-      "answer response has invalid insufficient-evidence text",
+      "answer response is invalid",
     );
     expect(audit.append).not.toHaveBeenCalled();
     expect(releasedRetrieval.revalidate).not.toHaveBeenCalled();
@@ -618,8 +591,7 @@ describe("retrieval-grounded answer composition", () => {
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: {
         generate: vi.fn(async () => ({
-          status: "insufficient_evidence",
-          answer: "The acquisition closes Tuesday.",
+          answer: null,
           citations: ["a1"],
         })),
       },
@@ -678,11 +650,7 @@ describe("retrieval-grounded answer composition", () => {
       revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
     };
     const answerer = {
-      generate: vi.fn(async () => ({
-        status: "answered",
-        answer: "Tuesday.",
-        citations: ["a1"],
-      })),
+      generate: vi.fn(async () => ({ answer: { text: "Tuesday.", citations: ["a1"] } })),
     };
     const audit = { append: vi.fn() };
     const answer = createRetrievalGroundedAnswerComposition({
@@ -765,11 +733,7 @@ describe("retrieval-grounded answer composition", () => {
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: [] })) },
       answerer: {
-        generate: vi.fn(async () => ({
-          status: "answered",
-          answer: "Answer text that must not appear in the diagnostic",
-          citations: ["a1", "a1"],
-        })),
+        generate: vi.fn(async () => ({ answer: { text: "Answer text that must not appear in the diagnostic", citations: ["a1", "a1"] } })),
       },
       released_retrieval: releasedRetrieval,
       audit: { append: vi.fn() },
@@ -858,7 +822,7 @@ describe("retrieval-grounded answer composition", () => {
     };
     const answer = createRetrievalGroundedAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
-      answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "Tuesday.", citations: ["a1"] })) },
+      answerer: { generate: vi.fn(async () => ({ answer: { text: "Tuesday.", citations: ["a1"] } })) },
       released_retrieval: releasedRetrieval,
       audit: { append: vi.fn() },
       generation_adapter_id: "openrouter",
@@ -1047,7 +1011,7 @@ describe("retrieval-grounded answer composition content seam", () => {
       ...(on_stage === undefined ? {} : { on_stage }),
     });
   }
-  const answered = { status: "answered", answer: "Tuesday.", citations: ["a1"] };
+  const answered = { answer: { text: "Tuesday.", citations: ["a1"] } };
 
   it("emits the question, prompts, context atoms, and raw outputs only to on_content", async () => {
     const content: AnswerCompositionContentObservationV1[] = [];
@@ -1102,7 +1066,7 @@ describe("retrieval-grounded answer composition content seam", () => {
   it("emits the exact validation message when schema-valid model output violates the answer contract", async () => {
     const content: AnswerCompositionContentObservationV1[] = [];
     const composition = compose(
-      ports({ status: "answered", answer: "Tuesday.", citations: [] }),
+      ports({ answer: { text: "Tuesday.", citations: [] } }),
       (event) => content.push(event),
     );
     await expect(
@@ -1173,8 +1137,8 @@ describe("answer reliability with already released facts", () => {
     ["Can we promise all 28 locations for September 16?", "No. September 16 is conditional for the first 10 locations, subject to the agreement and security prerequisites."],
     ["List the approved commitments and deadlines.", "No single definitive list is provided. The sources contain individual deadlines and conditions."],
   ])("rejects substantive text mislabeled as insufficient: %s", async (question, answer) => {
-    const f = fixture({ status: "insufficient_evidence", answer, citations: [] });
-    await expect(f.composition.answer({ question })).rejects.toThrow("answer response has invalid insufficient-evidence text");
+    const f = fixture({ answer: null, text: answer });
+    await expect(f.composition.answer({ question })).rejects.toThrow("answer response is invalid");
     expect(f.planner.generate).toHaveBeenCalledOnce();
     expect(f.retrieval.retrieve).toHaveBeenCalledOnce();
     expect(f.answerer.generate).toHaveBeenCalledOnce();
@@ -1189,7 +1153,7 @@ describe("answer reliability with already released facts", () => {
     "Reserve the pod through September 16; send assumptions by September 4. Verify the route by September 8. Send preferred details on August 26. Publish the dashboard by September 11.",
     "The first 10 have a conditional September 16 window. There is insufficient accessible evidence for the second customer's schedule.",
   ])("releases a cited supported negative, synthesis, or partial answer: %s", async (answer) => {
-    const f = fixture({ status: "answered", answer, citations: ["a1", "a2", "a3", "a4", "a5", "a6"] });
+    const f = fixture({ answer: { text: answer, citations: ["a1", "a2", "a3", "a4", "a5", "a6"] } });
     const result = await f.composition.answer({ question: "Summarize the commitments and deadlines." });
     expect(result.answer).toBe(answer);
     expect(result.citations).toEqual(f.released.released_atoms.map(({ text: _text, ...citation }) => citation));
@@ -1205,8 +1169,8 @@ describe("answer reliability with already released facts", () => {
     expect(request.system_prompt).toContain("Keep each task paired with its own deadline");
   });
 
-  it.each(["What special price did the customer receive?", "What is the second customer's schedule?"])("keeps unsupported or private-only questions neutral: %s", async (question) => {
-    const f = fixture({ status: "insufficient_evidence", answer: neutral, citations: [] });
+  it.each(["What special price did the customer receive?", "What is the second customer's schedule?", "x".repeat(63), "x".repeat(64)])("keeps unsupported or private-only questions neutral: %s", async (question) => {
+    const f = fixture({ answer: null });
     const result = await f.composition.answer({ question });
     expect(result).toMatchObject({ answer: neutral, citations: [] });
     expect(f.retrieval.revalidate).toHaveBeenCalledOnce();
