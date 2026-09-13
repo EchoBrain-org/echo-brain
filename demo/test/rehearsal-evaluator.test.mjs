@@ -760,3 +760,13 @@ for (const [name, process_capture] of [
     assert.equal(evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths }).passed, false);
   });
 }
+
+test("does not count a launch failure mislabeled unavailable as an Authority outage", () => {
+  const result = passingResult();
+  const trial = unavailable("failed-launch");
+  trial.process_capture = { exit_code: null, signal: null, launch_error_code: "E2BIG", stdout: "", stderr: "" };
+  result.determinism[0].trials.unshift(trial);
+  const report = rejects(result, "13");
+  assert.equal(report.repeatability[0].unavailable_count, 0);
+  assert.equal(report.repeatability[0].status_503_count, 0);
+});
