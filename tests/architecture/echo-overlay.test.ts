@@ -53,6 +53,7 @@ function overlayFixture() {
   copyFileSync(SOURCE, join(sourceRoot, "product", "echo-overlay", "main.swift"));
   copyFileSync(resolve(REPO, "product/echo-overlay/people.swift"), join(sourceRoot, "product", "echo-overlay", "people.swift"));
   copyFileSync(resolve(REPO, "product/echo-overlay/account.swift"), join(sourceRoot, "product", "echo-overlay", "account.swift"));
+  copyFileSync(resolve(REPO, "product/echo-overlay/uploads.swift"), join(sourceRoot, "product", "echo-overlay", "uploads.swift"));
   copyFileSync(PLIST, join(sourceRoot, "product", "echo-overlay", "Info.plist"));
   for (const relative of ["product/echo-overlay/ui-support.swift", "product/echo-overlay/source-assembly.v1.json", "providers/slack/client/swift/slack-connected-tools.swift", "tools/lib/swift-source-assembly.mjs"]) {
     mkdirSync(dirname(join(sourceRoot, relative)), { recursive: true });

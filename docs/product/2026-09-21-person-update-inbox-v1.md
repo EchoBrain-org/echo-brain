@@ -99,7 +99,9 @@ echo-brain person updates read --context-id <id>
 The current carrier accepts one explicit regular UTF-8 file up to 8 KiB and a
 nonblank title up to 200 UTF-8 bytes. These bounds are implementation limits,
 not the final size or shape for all personal context. Binary files, attachments,
-URLs, directories, and a native compose window are not supported in this PR.
+URLs, directories, and a native compose editor are not supported. The follow-up
+native **Uploads…** window wraps this file carrier with a file picker, title,
+Only me/Team selector, status, search, and original-text reader.
 Accepted title/text bytes are preserved. Unsupported controls, invalid UTF-8,
 unknown fields, oversized escaped JSON, and malformed IDs are rejected.
 

@@ -686,6 +686,15 @@ sign-in, sign-out, and switching accounts. **Sources** on an answer opens its
 cited records through a fresh permission-aware read; **Back to answer** returns
 to the answer. These controls use the release-installed Person client.
 
+**Uploads…** in the menu bar opens original context uploads for owners and
+employees. Choose a UTF-8 text file up to 8 KiB, enter a title, select **Only me**
+or **Team**, and choose **Upload**. No Slack approval is needed. Search the saved
+originals in this window and select a result to read its full text. **Check upload
+status** also checks optional search metadata; the original is searchable while
+that metadata is pending or unavailable. Ask and approved Sources currently use
+approved records and do not include these uploads. This window requires a
+matching app/client kit and an Authority with the Person-upload V6 contract.
+
 **Account → Connected tools…** shows tools enabled by the organization. Choose
 **Connect Slack**, complete Slack sign-in in the browser, and keep the panel
 open while it finishes automatically. Once linked, **Disconnect Slack** removes

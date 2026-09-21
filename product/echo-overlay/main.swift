@@ -1957,6 +1957,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var controller: OverlayController?
     private var statusItem: NSStatusItem?
     private var people: PeopleController?
+    private var uploads: UploadsController?
     private var account: AccountController?
     private var peopleMenuItem: NSMenuItem?
     private var hotKey: EventHotKeyRef?
@@ -1967,16 +1968,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         people = PeopleController { [weak self] available in
             self?.peopleMenuItem?.isHidden = !available
         }
+        uploads = UploadsController()
         account = AccountController(
             makeToolsController: { SlackConnectedToolsController(client: $0) },
             onSessionWillChange: { [weak self] in
                 self?.controller?.accountWillChange()
                 self?.people?.conceal()
+                self?.uploads?.accountWillChange()
             },
             mayChangeSession: { [weak self] in
-                !(self?.people?.hasOutstandingMutation ?? false)
+                !(self?.people?.hasOutstandingMutation ?? false) && !(self?.uploads?.hasOutstandingMutation ?? false)
             },
-            changed: { [weak self] in self?.people?.checkAccess() }
+            changed: { [weak self] in self?.people?.checkAccess(); self?.uploads?.refreshIdentity() }
         )
         configureStatusItem()
         people?.checkAccess()
@@ -1993,6 +1996,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     func applicationWillTerminate(_ notification: Notification) {
         controller?.shutdown()
         people?.shutdown()
+        uploads?.shutdown()
         account?.shutdown()
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
@@ -2008,11 +2012,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     func applicationDidBecomeActive(_ notification: Notification) {
         people?.checkAccess()
+        uploads?.refreshIdentity()
         account?.refresh()
     }
 
     func applicationDidResignActive(_ notification: Notification) {
         people?.conceal()
+        uploads?.conceal()
         controller?.applicationDidDeactivate()
     }
 
@@ -2023,6 +2029,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     @objc private func showPeople() {
         people?.show()
+    }
+
+    @objc private func showUploads() {
+        uploads?.show()
     }
 
     @objc private func quit() {
@@ -2039,6 +2049,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let ask = NSMenuItem(title: "Ask ECHO  ⌘E", action: #selector(askEcho), keyEquivalent: "")
         ask.target = self
         menu.addItem(ask)
+        let uploadsItem = NSMenuItem(title: "Uploads…", action: #selector(showUploads), keyEquivalent: "")
+        uploadsItem.target = self
+        menu.addItem(uploadsItem)
         if let account { menu.addItem(account.menuItem) }
         let organization = NSMenuItem(title: "Organization", action: nil, keyEquivalent: "")
         let organizationMenu = NSMenu()

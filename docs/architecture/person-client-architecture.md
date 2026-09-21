@@ -192,3 +192,27 @@ The current bounded text carrier does not decide the context taxonomy. Optional
 LLM search hints remain derived metadata. Existing records/Ask/native Sources
 continue to use approved decision records; connecting uploads to those surfaces
 awaits a source contract. See the [current upload scope](../product/2026-09-21-person-update-inbox-v1.md).
+
+The native menu bar's **Uploads…** window wraps these four commands through
+the release-installed Person client. Owners and employees can choose a file,
+enter its title, select Only me or Team, and explicitly upload it. Search results
+open through a fresh permission-aware `read`, and **Check upload status** shows
+whether the original is saved and optional metadata is ready. The window states
+that Ask currently uses approved records.
+
+The window snapshots the selected file into a temporary private directory and
+keeps a single request ID, title, visibility, and original for explicit retries.
+It never automatically retries a submission. A content-free last-attempt locator
+is retained per Authority/membership in app preferences so status can be checked
+after restart; original text and search results are not persisted there. Temporary
+snapshots are removed when the attempt is released or on orderly shutdown. An
+unclean process termination may leave a private temporary file for OS cleanup.
+Starting another upload after an unconfirmed attempt requires an explicit choice.
+Starting a new upload clears the prior locator for that account, including on restart.
+No background uploader or local queue is introduced.
+
+Each operation checks the exact membership and Authority before and after the
+CLI call. Account changes and deactivation clear fetched content and invalidate
+read callbacks. A submitted upload finishes while the window is hidden, with its
+outcome retained, and blocks simultaneous in-app account switching. Provider
+diagnostics and credentials never enter the native upload window.
