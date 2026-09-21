@@ -1,6 +1,6 @@
--- Authority baseline V6: source-keyed processing and durable Person updates.
+-- Authority baseline V6 candidate: raw Person uploads and optional search enrichment.
 -- Frozen once released. Fresh initialization only; existing state uses the
--- explicit offline V5-to-V6 copy, never this file as an upgrade.
+-- explicit offline schema-cleanup transition, never this file as an upgrade.
 
 CREATE TABLE authority_metadata (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -547,42 +547,13 @@ CREATE TABLE authority_live_source_progress_v2 (
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL)
 ) STRICT;
 
-CREATE TABLE authority_processing_sources_v1 (
-  semantic_input_sha256 TEXT PRIMARY KEY CHECK (semantic_input_sha256 LIKE 'sha256:%'),
-  source_adapter_id TEXT NOT NULL,
-  source_adapter_instance_id TEXT NOT NULL,
-  source_adapter_version TEXT NOT NULL,
-  cutoff_at TEXT NOT NULL CHECK (unixepoch(cutoff_at) IS NOT NULL),
-  processor_adapter_id TEXT NOT NULL,
-  processor_instance_id TEXT NOT NULL,
-  processor_adapter_version TEXT NOT NULL,
-  processor_configuration_sha256 TEXT NOT NULL CHECK (processor_configuration_sha256 LIKE 'sha256:%'),
-  UNIQUE(source_adapter_id, source_adapter_instance_id)
-) STRICT;
-
-CREATE TRIGGER authority_processing_sources_v1_immutable
-BEFORE UPDATE ON authority_processing_sources_v1
-BEGIN SELECT RAISE(ABORT, 'processing source is immutable'); END;
-CREATE TRIGGER authority_processing_sources_v1_delete_denied
-BEFORE DELETE ON authority_processing_sources_v1
-BEGIN SELECT RAISE(ABORT, 'processing source deletion is denied'); END;
-CREATE TRIGGER authority_live_source_admission_v2_register
-AFTER INSERT ON authority_live_source_admission_v2
-BEGIN
-  INSERT INTO authority_processing_sources_v1 VALUES (
-    NEW.semantic_input_sha256, NEW.source_adapter_id, NEW.source_adapter_instance_id,
-    NEW.source_adapter_version, NEW.cutoff_at, NEW.processor_adapter_id,
-    NEW.processor_instance_id, NEW.processor_adapter_version, NEW.processor_configuration_sha256
-  );
-END;
-
 CREATE TABLE authority_live_source_candidates_v2 (
   candidate_id TEXT PRIMARY KEY CHECK (candidate_id GLOB 'cnd_*'),
   candidate_semantic_sha256 TEXT NOT NULL UNIQUE CHECK (
     length(candidate_semantic_sha256) = 71 AND substr(candidate_semantic_sha256, 1, 7) = 'sha256:'
   ),
   admission_semantic_input_sha256 TEXT NOT NULL
-    REFERENCES authority_processing_sources_v1(semantic_input_sha256),
+    REFERENCES authority_live_source_admission_v2(semantic_input_sha256),
   review_lineage_id TEXT NOT NULL CHECK (review_lineage_id GLOB 'rli_*'),
   review_input_sha256 TEXT NOT NULL CHECK (review_input_sha256 LIKE 'sha256:%'),
   review_semantic_sha256 TEXT NOT NULL CHECK (review_semantic_sha256 LIKE 'sha256:%'),
@@ -1430,50 +1401,53 @@ WHEN EXISTS (
   AND NOT (OLD.state <> 'superseded' AND NEW.state = 'superseded')
 BEGIN SELECT RAISE(ABORT, 'quarantined approval outbox only permits supersession'); END;
 
--- Immutable Person submissions remain pending Authority custody until review.
+-- The upload carrier records original text and explicit access, with no context taxonomy.
 CREATE TABLE authority_person_updates_v1 (
   organization_id TEXT NOT NULL,
   principal_id TEXT NOT NULL,
   membership_id TEXT NOT NULL,
   membership_type TEXT NOT NULL CHECK (membership_type IN ('owner', 'employee')),
   request_id TEXT NOT NULL,
+  context_id TEXT NOT NULL UNIQUE,
   payload_sha256 TEXT NOT NULL CHECK (payload_sha256 LIKE 'sha256:%'),
   title TEXT NOT NULL CHECK (length(CAST(title AS BLOB)) BETWEEN 1 AND 200),
   text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) BETWEEN 1 AND 8192),
+  visibility TEXT NOT NULL CHECK (visibility IN ('only_me', 'team')),
   received_at TEXT NOT NULL CHECK (unixepoch(received_at) IS NOT NULL),
   PRIMARY KEY (organization_id, membership_id, request_id),
   FOREIGN KEY (membership_id, organization_id, principal_id, membership_type)
     REFERENCES authority_memberships(membership_id, organization_id, principal_id, membership_type)
 ) STRICT;
 CREATE TABLE authority_person_update_work_v1 (
-  organization_id TEXT NOT NULL,
-  membership_id TEXT NOT NULL,
-  request_id TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('received', 'processing', 'awaiting_approval', 'resolved', 'no_signals', 'blocked', 'failed')),
-  reason TEXT CHECK (reason IN ('reviewer_unavailable', 'temporarily_unavailable', 'processing_rejected', 'approval_delivery_quarantined')),
-  outcome TEXT CHECK (outcome IN ('approved', 'rejected', 'partially_approved')),
+  context_id TEXT PRIMARY KEY REFERENCES authority_person_updates_v1(context_id),
+  state TEXT NOT NULL CHECK (state IN ('pending', 'processing', 'ready', 'unavailable')),
+  search_hints TEXT NOT NULL DEFAULT '' CHECK (length(CAST(search_hints AS BLOB)) <= 4096),
+  enrichment_sha256 TEXT CHECK (enrichment_sha256 LIKE 'sha256:%'),
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-  retry_at TEXT NOT NULL CHECK (unixepoch(retry_at) IS NOT NULL),
-  candidate_id TEXT UNIQUE REFERENCES authority_live_source_candidates_v2(candidate_id),
-  PRIMARY KEY (organization_id, membership_id, request_id),
-  FOREIGN KEY (organization_id, membership_id, request_id)
-    REFERENCES authority_person_updates_v1(organization_id, membership_id, request_id),
-  CHECK ((state = 'resolved') = (outcome IS NOT NULL)),
-  CHECK ((state IN ('blocked', 'failed')) = (reason IS NOT NULL))
+  retry_at TEXT NOT NULL CHECK (unixepoch(retry_at) IS NOT NULL)
 ) STRICT;
-CREATE INDEX authority_person_update_work_v1_pending
-ON authority_person_update_work_v1(state, retry_at);
+CREATE INDEX authority_person_update_work_v1_pending ON authority_person_update_work_v1(state, retry_at);
+CREATE TABLE authority_person_upload_read_audit_v1 (
+  row_sha256 TEXT PRIMARY KEY,
+  body_json TEXT NOT NULL CHECK (json_valid(body_json)),
+  recorded_at TEXT NOT NULL CHECK (unixepoch(recorded_at) IS NOT NULL)
+) STRICT;
 CREATE TRIGGER authority_person_updates_v1_immutable
 BEFORE UPDATE ON authority_person_updates_v1
-BEGIN SELECT RAISE(ABORT, 'Person update is immutable'); END;
+BEGIN SELECT RAISE(ABORT, 'Person upload is immutable'); END;
 CREATE TRIGGER authority_person_updates_v1_delete_denied
 BEFORE DELETE ON authority_person_updates_v1
-BEGIN SELECT RAISE(ABORT, 'Person update deletion is denied'); END;
+BEGIN SELECT RAISE(ABORT, 'Person upload deletion is denied'); END;
 CREATE TRIGGER authority_person_update_work_v1_identity_immutable
 BEFORE UPDATE ON authority_person_update_work_v1
-WHEN NEW.organization_id != OLD.organization_id OR NEW.membership_id != OLD.membership_id
-  OR NEW.request_id != OLD.request_id OR (OLD.candidate_id IS NOT NULL AND NEW.candidate_id IS NOT OLD.candidate_id)
-BEGIN SELECT RAISE(ABORT, 'Person update work identity is immutable'); END;
+WHEN NEW.context_id != OLD.context_id
+BEGIN SELECT RAISE(ABORT, 'Person upload work identity is immutable'); END;
 CREATE TRIGGER authority_person_update_work_v1_delete_denied
 BEFORE DELETE ON authority_person_update_work_v1
-BEGIN SELECT RAISE(ABORT, 'Person update work deletion is denied'); END;
+BEGIN SELECT RAISE(ABORT, 'Person upload work deletion is denied'); END;
+CREATE TRIGGER authority_person_upload_read_audit_v1_immutable
+BEFORE UPDATE ON authority_person_upload_read_audit_v1
+BEGIN SELECT RAISE(ABORT, 'Person upload read audit is immutable'); END;
+CREATE TRIGGER authority_person_upload_read_audit_v1_delete_denied
+BEFORE DELETE ON authority_person_upload_read_audit_v1
+BEGIN SELECT RAISE(ABORT, 'Person upload read audit deletion is denied'); END;

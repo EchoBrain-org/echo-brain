@@ -1,3 +1,4 @@
+import { validatePersonUploadSearchV1, validatePersonUploadContextId, type PersonUploadSearchV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateSubmitV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
@@ -373,6 +374,18 @@ export class PersonClient {
     validatePersonUpdateRequestId(requestId);
     const stored = await this.accessSession();
     return this.authority(stored.authority_origin).updateStatus(stored.session.access_token, requestId);
+  }
+
+  async readUpload(contextId: string) {
+    validatePersonUploadContextId(contextId);
+    const stored = await this.accessSession();
+    return this.authority(stored.authority_origin).readUpload(stored.session.access_token, contextId);
+  }
+
+  async searchUploads(input: PersonUploadSearchV1) {
+    const request = validatePersonUploadSearchV1(input);
+    const stored = await this.accessSession();
+    return this.authority(stored.authority_origin).searchUploads(stored.session.access_token, request);
   }
 
   async records(

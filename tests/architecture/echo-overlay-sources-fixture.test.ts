@@ -65,8 +65,6 @@ afterAll(() => rmSync(temporaryRoot, { recursive: true, force: true }));
     "progressive-source-delivery",
     "cancelled-source-batch",
     "valid-source",
-    "person-update-source",
-    "person-title-does-not-select-source",
     "optional-source-metadata",
     "absent-source-metadata",
     "source-card-layout",

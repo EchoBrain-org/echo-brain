@@ -1,3 +1,4 @@
+import { validatePersonUploadContentV1, validatePersonUploadSearchV1, validatePersonUploadSearchResultV1, validatePersonUploadContextId, type PersonUploadContentV1, type PersonUploadSearchV1, type PersonUploadSearchResultV1 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, validatePersonUpdateSubmitV1, validatePersonUpdateReceiptV1, validatePersonUpdateStatusV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1, type PersonUpdateReceiptV1, type PersonUpdateStatusV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
@@ -707,7 +708,7 @@ export class PersonAuthorityClient {
       const receipt = await this.json({ path: PERSON_UPDATES_PATH_V1, body: request,
         validate_request: validatePersonUpdateSubmitV1, validate_response: validatePersonUpdateReceiptV1,
         access_token: accessToken, expected_status: 202, maximum_response_bytes: 4096 });
-      if (receipt.request_id !== request.request_id) throw new PersonAuthorityClientError('invalid_response', 202, 'Person Authority returned a different receipt');
+      if (receipt.request_id !== request.request_id || receipt.visibility !== request.visibility) throw new PersonAuthorityClientError('invalid_response', 202, 'Person Authority returned a different receipt');
       return receipt;
     } catch (error) {
       if (error instanceof PersonAuthorityClientError && ['invalid_request', 'unauthorized', 'conflict', 'rate_limited', 'not_found'].includes(error.code) && error.status !== null && error.status >= 400 && error.status < 500) throw error;
@@ -721,6 +722,17 @@ export class PersonAuthorityClient {
     const status = await this.getJson({ path: `${PERSON_UPDATES_PATH_V1}/${requestId}`, access_token: accessToken, validate_response: validatePersonUpdateStatusV1, maximum_response_bytes: 4096 });
     if (status.request_id !== requestId) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a different receipt');
     return status;
+  }
+
+  async readUpload(accessToken: string, contextId: string): Promise<PersonUploadContentV1> {
+    validatePersonUploadContextId(contextId);
+    const response = await this.getJson({ path: `${PERSON_UPDATES_PATH_V1}/content/${contextId}`, access_token: accessToken, validate_response: validatePersonUploadContentV1, maximum_response_bytes: 24 * 1024 });
+    if (response.context_id !== contextId) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a different upload');
+    return response;
+  }
+
+  async searchUploads(accessToken: string, input: PersonUploadSearchV1): Promise<PersonUploadSearchResultV1> {
+    return this.json({ path: `${PERSON_UPDATES_PATH_V1}/search`, body: validatePersonUploadSearchV1(input), validate_request: validatePersonUploadSearchV1, validate_response: validatePersonUploadSearchResultV1, access_token: accessToken, expected_status: 200, maximum_response_bytes: 24 * 1024 });
   }
 
   async descriptor(): Promise<OrganizationAuthorityDescriptorResponseV1> {

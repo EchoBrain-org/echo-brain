@@ -657,6 +657,18 @@ export function createOrganizationAuthorityHttpServer(
           json(response, 202, options.person_updates.submit(token, requestBody));
           return;
         }
+        if (method === 'POST' && url.pathname === `${PERSON_UPDATES_PATH_V1}/search`) {
+          const token = accessToken(request.headers.authorization);
+          let requestBody: unknown;
+          try { requestBody = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES))); }
+          catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
+          json(response, 200, options.person_updates.search(token, requestBody));
+          return;
+        }
+        if (method === 'GET' && url.pathname.startsWith(`${PERSON_UPDATES_PATH_V1}/content/`)) {
+          json(response, 200, options.person_updates.content(accessToken(request.headers.authorization), url.pathname.slice(PERSON_UPDATES_PATH_V1.length + '/content/'.length)));
+          return;
+        }
         if (method === 'GET' && url.pathname.startsWith(`${PERSON_UPDATES_PATH_V1}/`)) {
           json(response, 200, options.person_updates.status(accessToken(request.headers.authorization), url.pathname.slice(PERSON_UPDATES_PATH_V1.length + 1)));
           return;

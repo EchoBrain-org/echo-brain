@@ -3,7 +3,6 @@ import type Database from "better-sqlite3";
 import { personLoginGrantExpectedEmailSha256 } from "@echo-brain/organization-authority-kernel/domain/person-email-binding";
 import { isCanonicalPersonEmail } from "@echo-brain/organization-authority-kernel/domain/person-session-rules";
 import type { MeetingDocument } from "@echo-brain/organization-processing/core/contracts/meeting";
-import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 
 export interface PrivateSlackApprovalReviewerV1 {
   readonly principal_id: string;
@@ -44,20 +43,6 @@ interface AuthorityMetadataRow {
 }
 
 type ReviewerRow = PrivateSlackApprovalReviewerV1;
-
-/** Submission identity comes from the authenticated durable receipt, never from prose/email. */
-export function resolveVerifiedActorPrivateSlackApprovalReviewerV1(
-  input: Omit<PrivateSlackApprovalReviewerTargetResolverInputV1, 'meeting'> & { readonly actor: AuthorityPersonMembershipBinding },
-): PrivateSlackApprovalReviewerTargetV1 | undefined {
-  const actor = input.actor;
-  if (actor.organization_id !== input.coordinates.organization_id) return undefined;
-  const current = input.authority_database.prepare(`SELECT 1 FROM authority_memberships AS member JOIN authority_metadata AS metadata ON metadata.organization_id = member.organization_id WHERE metadata.authority_id = ? AND member.organization_id = ? AND member.principal_id = ? AND member.membership_id = ? AND member.membership_type = ? AND member.status = 'active'`)
-    .get(input.coordinates.authority_id, actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type);
-  if (current === undefined) return undefined;
-  const reviewer = { principal_id: actor.principal_id, membership_id: actor.membership_id, membership_type: actor.membership_type };
-  const target = resolveCurrentSlackDmApprovalReviewerTargetV1(input.control_plane_database, input.coordinates, input.connection_id, reviewer);
-  return target === undefined ? undefined : { reviewer, slack_target: target };
-}
 
 function canonicalEmail(value: string): string | undefined {
   const normalized = value.trim().toLowerCase();

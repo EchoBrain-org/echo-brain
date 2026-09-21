@@ -49,7 +49,6 @@ export function copyAuthorityV5ToV6(source: Database.Database, target: Database.
         for (const row of rows) insert.run(...columns.map(column => row[column]));
         if (canonicalJson(target.prepare(`SELECT * FROM "${name}"`).all()) !== canonicalJson(rows)) throw new Error('offline transition data preservation failed');
       }
-      target.exec(`INSERT INTO authority_processing_sources_v1 SELECT semantic_input_sha256, source_adapter_id, source_adapter_instance_id, source_adapter_version, cutoff_at, processor_adapter_id, processor_instance_id, processor_adapter_version, processor_configuration_sha256 FROM authority_live_source_admission_v2`);
       for (const trigger of triggers) target.exec(trigger.sql);
       if ((target.pragma('foreign_key_check') as unknown[]).length !== 0) throw new Error('offline transition foreign-key preservation failed');
     }).immediate();

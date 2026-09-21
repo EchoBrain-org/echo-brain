@@ -1,3 +1,5 @@
+import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
+import { SqlitePersonUpdateInboxV1 } from '../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { AdapterError } from '@echo-brain/organization-processing/core';
 import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
@@ -650,7 +652,7 @@ async function activeFixture() {
   };
 }
 
-async function approvalSeamFixture(provider: "slack" | "fixture", interruptions: Pick<Parameters<typeof persistedApprovalWorkflowFixtureV1>[0], "stop_after_present" | "stop_before_receipt"> = {}, options: { person_update?: boolean; fail_append?: () => boolean } = {}) {
+async function approvalSeamFixture(provider: "slack" | "fixture", interruptions: Pick<Parameters<typeof persistedApprovalWorkflowFixtureV1>[0], "stop_after_present" | "stop_before_receipt"> = {}) {
   const fixture = await admittedFixture({ seed_private_slack_connection: provider === "slack" });
   const path = join(fixture.initialized.state_directory, "fixture-approvals.json");
   const contexts: ApprovalWorkflowContextV1[] = [];
@@ -660,9 +662,7 @@ async function approvalSeamFixture(provider: "slack" | "fixture", interruptions:
       signing_secret_file: fixture.config.slack_signing_secret_file, connection_id: fixture.config.slack_connection_id, poster: fixture.poster }) : alternate().bundle;
     const approval_workflow_bundle: ApprovalWorkflowBundleV1 = {
       async assert_existing_presentations_owned(context) { contexts.push(context); await selected.assert_existing_presentations_owned(context); },
-      async load(context) { contexts.push(context); return selected.load(options.fail_append === undefined ? context : {
-        ...context, record_append: { async append(input) { if (options.fail_append?.()) throw new Error('fixture interrupted before V4 append'); return context.record_append.append(input); } },
-      }); },
+      async load(context) { contexts.push(context); return selected.load(context); },
     };
     return openOrganizationAuthorityRuntime({ ...fixture.config, port: await availablePort(), approval_workflow_bundle, record_input_codecs: RECORD_INPUT_CODECS,
       staging_meeting_approval_journey_telemetry_enabled: true,
@@ -671,7 +671,7 @@ async function approvalSeamFixture(provider: "slack" | "fixture", interruptions:
       meeting_source_bundle: {
         source_cursor_policy: { source_adapter_id: fixture.source.identity.adapter_id, assert_live_cursor(cursor) { expect(cursor.length).toBeGreaterThan(0); } },
         assert_admission_commitments(commitments) { expect(commitments.source.adapter_id).toBe(fixture.source.identity.adapter_id); },
-        create_source(admission) { expect(admission.source.adapter_id).toBe(fixture.source.identity.adapter_id); return options.person_update ? fakeSource(fixture.source.identity, 0) : fixture.source; },
+        create_source(admission) { expect(admission.source.adapter_id).toBe(fixture.source.identity.adapter_id); return fixture.source; },
       },
       decision_processor_bundle: { processor_adapter_id: fixture.processorIdentity.adapter_id,
         assert_admission_commitments(commitments) { expect(commitments.processor.adapter_id).toBe(fixture.processorIdentity.adapter_id); },
@@ -1757,77 +1757,67 @@ describe("Organization Authority runtime private approval lane", () => {
 });
 
 
-describe('Person update inbox through the real Authority workflow', () => {
-  it.each([
-    ['approve', RESTRICTED_REVIEWER_PERSON_POLICY_ID],
-    ['approve', ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID],
-    ['reject', RESTRICTED_REVIEWER_PERSON_POLICY_ID],
-  ] as const)('recovers an accepted update after client/server exit and %s under %s', async (action, policy) => {
-    const fixture = await admittedFixture({ seed_private_slack_connection: true });
-    const source = fakeSource(fixture.source.identity, 0);
-    const overrides = { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster };
-    let runtime = await openOrganizationAuthorityService({ ...fixture.config, worker_interval_ms: 60_000 }, { processing_adapter_overrides: overrides });
-    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
-    const record = openOrganizationRecordDatabase(join(fixture.initialized.state_directory, 'record-log.sqlite'), { fileMustExist: true });
-    const request = { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: randomUUID(), title: 'Release decision', text: 'Ship the clean live migration.' };
+
+describe('original Person upload context', () => {
+  it('saves and searches an original memo without a Slack connection, model, or worker, across restart', async () => {
+    const fixture = await admittedFixture();
+    const open = async () => startOrganizationAuthorityApiRuntime({ state_directory: fixture.config.state_directory, host: '127.0.0.1', port: await availablePort(), authority_url: fixture.config.authority_url, oidc: fixture.config.oidc, client_authentication: fixture.config.client_authentication, pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(`file:${fixture.config.pkce_key_file}`) }, { oidc_provider: new TestPersonOidcProvider() });
+    let runtime = await open();
     const headers = { authorization: `Bearer ${fixture.owner_access_token}`, 'content-type': 'application/json' };
-    const url = () => `http://127.0.0.1:${runtime.address.port}/v1/person/updates`;
+    const base = () => `http://127.0.0.1:${runtime.address.port}/v1/person/updates`;
+    const request = { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: randomUUID(), title: 'Client memo', text: 'Acme prefers a phone call before lunch.\n' };
+    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
+    try {
+      expect((await fetch(base(), { method: 'POST', body: JSON.stringify(request) })).status).toBe(401);
+      for (const forged of [{ reviewer: 'owner@example.com' }, { metadata: { visibility: 'team' } }, { organization_id: 'forged' }, { visibility: 'public' }]) {
+        expect((await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, ...forged }) })).status).toBe(400);
+      }
+      expect((await fetch(base(), { method: 'POST', headers, body: Buffer.from([0x7b, 0xc3, 0x28, 0x7d]) })).status).toBe(400);
+      const escaped = JSON.stringify({ ...request, text: 'x'.repeat(8192) }).replace('x'.repeat(8192), '\\u0078'.repeat(8192));
+      expect((await fetch(base(), { method: 'POST', headers, body: escaped })).status).toBe(400);
+      const replies = await Promise.all(Array.from({ length: 4 }, () => fetch(base(), { method: 'POST', headers, body: JSON.stringify(request) })));
+      expect(replies.map(reply => reply.status)).toEqual([202, 202, 202, 202]);
+      const receipts = await Promise.all(replies.map(reply => reply.json()));
+      expect(receipts.every(receipt => canonicalJson(receipt) === canonicalJson(receipts[0]))).toBe(true);
+      const receipt = receipts[0] as { context_id: string };
+      expect((await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, visibility: 'team' }) })).status).toBe(409);
+      await runtime.close(); runtime = await open();
+      expect(await (await fetch(`${base()}/${request.request_id}`, { headers })).json()).toMatchObject({ status: 'stored', visibility: 'only_me' });
+      const search = await fetch(`${base()}/search`, { method: 'POST', headers, body: JSON.stringify({ query: 'Acme' }) });
+      expect(search.status).toBe(200);
+      expect(await search.json()).toMatchObject({ results: [{ context_id: receipt.context_id, title: request.title, visibility: 'only_me' }] });
+      expect(await (await fetch(`${base()}/content/${receipt.context_id}`, { headers })).json()).toMatchObject({ text: request.text });
+      const sharedReply = await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, request_id: randomUUID(), title: 'Shared work note', visibility: 'team' }) });
+      expect(sharedReply.status).toBe(202);
+      const shared = await sharedReply.json() as { context_id: string; visibility: string }; expect(shared.visibility).toBe('team');
+      expect(await (await fetch(`${base()}/content/${shared.context_id}`, { headers })).json()).toMatchObject({ text: request.text, visibility: 'team' });
+      expect(authority.prepare('SELECT count(*) AS n FROM authority_person_updates_v1').get()).toEqual({ n: 2 });
+      expect(authority.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
+      expect(authority.prepare('SELECT count(*) AS n FROM authority_person_upload_read_audit_v1').get()).toEqual({ n: 3 });
+      expect(fixture.poster.published).toHaveLength(0);
+      authority.exec(`CREATE TRIGGER fixture_read_audit_failure BEFORE INSERT ON authority_person_upload_read_audit_v1 BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END`);
+      const denied = await fetch(`${base()}/content/${receipt.context_id}`, { headers });
+      expect(denied.status).toBe(500); expect(await denied.text()).not.toContain(request.text);
+    } finally { await runtime.close(); authority.close(); }
+  });
+
+  it('enriches one original upload while an unavailable meeting source cannot force extraction or approval', async () => {
+    const fixture = await admittedFixture({ seed_private_slack_connection: true });
+    const source = fakeSource(fixture.source.identity, 0); source.pull = async () => { throw new AdapterError('temporarily_unavailable', 'source unavailable', true); };
+    const processor = fakeProcessor(fixture.processorIdentity); const extract = vi.spyOn(processor, 'extract');
+    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
+    const inbox = new SqlitePersonUpdateInboxV1(authority);
+    const receipt = inbox.submit({ organization_id: fixture.initialized.organization_id, principal_id: fixture.initialized.owner_principal_id, membership_id: fixture.initialized.owner_membership_id, membership_type: 'owner' }, { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: randomUUID(), title: 'Client reminder', text: 'Call Acme before lunch.', visibility: 'team' });
+    const runtime = await openOrganizationAuthorityService({ ...fixture.config, worker_interval_ms: 60_000 }, { api: { answer_composition_generation: { generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 }, structured_output: { generate: async () => ({ search_hints: 'customer telephone' }) } } }, processing_adapter_overrides: { source, processor, private_approval_card_poster: fixture.poster } });
     try {
       await runtime.drain(AbortSignal.timeout(5000));
-      expect((await fetch(url(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) })).status).toBe(401);
-      expect((await fetch(url(), { method: 'POST', headers, body: JSON.stringify({ ...request, reviewer: 'forged@example.com' }) })).status).toBe(400);
-      expect((await fetch(url(), { method: 'POST', headers, body: Buffer.from([0x7b, 0xc3, 0x28, 0x7d]) })).status).toBe(400);
-      const escaped = JSON.stringify({ ...request, text: 'x'.repeat(8192) }).replace('x'.repeat(8192), '\\u0078'.repeat(8192));
-      expect((await fetch(url(), { method: 'POST', headers, body: escaped })).status).toBe(400);
-      const replies = await Promise.all(Array.from({ length: 4 }, () => fetch(url(), { method: 'POST', headers, body: JSON.stringify(request) })));
-      expect(replies.map(response => response.status)).toEqual([202, 202, 202, 202]);
-      const receipts = await Promise.all(replies.map(response => response.json()));
-      expect(receipts.every(receipt => canonicalJson(receipt) === canonicalJson(receipts[0]))).toBe(true);
-      expect((await fetch(url(), { method: 'POST', headers, body: JSON.stringify({ ...request, text: 'different' }) })).status).toBe(409);
-      expect(record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: 0 });
-      expect(fixture.poster.published).toHaveLength(0);
-      await runtime.close();
-      if (policy === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID) source.pull = async () => { throw new AdapterError('temporarily_unavailable', 'source unavailable', true); };
-      runtime = await openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: overrides });
-      await waitFor(() => fixture.errors.length > 0 || fixture.poster.published.length === 1, 'Person update private card');
-      if (fixture.errors[0]) throw fixture.errors[0];
-      const card = fixture.poster.published[0]!;
-      expect(JSON.stringify(card.card)).toContain('Person update');
-      expect(JSON.stringify(card.card)).not.toContain('Approve meeting');
-      expect(await (await fetch(`${url()}/${request.request_id}`, { headers })).json()).toMatchObject({ status: 'awaiting_approval' });
-      const pendingRead = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/records`, { headers });
-      expect(await pendingRead.json()).toMatchObject({ records: [] });
-      expect((await clickCard({ fixture: { ...fixture, runtime }, card, action, policy_id: policy, comment: 'Reviewed update.' })).status).toBe(200);
-      await waitFor(() => fixture.errors.length > 0 || (authority.prepare(`SELECT state FROM authority_person_update_work_v1 WHERE request_id = ?`).get(request.request_id) as { state: string }).state === 'resolved', 'Person terminal outcome');
-      if (fixture.errors[0]) throw fixture.errors[0];
-      const status = await (await fetch(`${url()}/${request.request_id}`, { headers })).json();
-      expect(status).toMatchObject({ status: 'resolved', outcome: action === 'approve' ? 'approved' : 'rejected' });
-      expect(JSON.stringify(status)).not.toContain(request.text);
-      expect(await (await fetch(url(), { method: 'POST', headers, body: JSON.stringify(request) })).json()).toEqual(receipts[0]);
-      expect(authority.prepare('SELECT count(*) AS n FROM authority_person_updates_v1').get()).toEqual({ n: 1 });
-      expect(authority.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 1 });
-      expect(record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: action === 'approve' ? 1 : 0 });
-      if (action === 'approve') {
-        await waitFor(() => (authority.prepare('SELECT record_head_position AS n FROM authority_readable_search_active_generation').get() as { n: number } | undefined)?.n === 1, 'update search publication');
-        const records = await (await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/records`, { headers })).json() as { records: { envelope: { body: { source_provenance: { source_adapter_id: string; external_id: string }; event: { approved_snapshot: { approved_payload: { brief: { meeting: unknown } } } } } } }[] };
-        const body = records.records[0]!.envelope.body;
-        expect(body.source_provenance.source_adapter_id).toBe('person-update-inbox-v1');
-        expect(JSON.parse(body.source_provenance.external_id)).toMatchObject({ membership_id: fixture.initialized.owner_membership_id, principal_id: fixture.initialized.owner_principal_id, request_id: request.request_id });
-        expect(body.event.approved_snapshot.approved_payload.brief.meeting).toMatchObject({ title: request.title, participants: [] });
-        expect(body.event.approved_snapshot.approved_payload.brief.meeting).not.toHaveProperty('time');
-        const answers = await answerAsOwnerAndMember({ fixture: { ...fixture, runtime }, authority, record });
-        expect(answers.owner.citations).toHaveLength(1);
-        expect(answers.member.citations).toHaveLength(policy === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID ? 1 : 0);
-      }
-      await runtime.close();
-      runtime = await openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: overrides });
-      await runtime.drain(AbortSignal.timeout(5000));
-      expect(fixture.poster.published).toHaveLength(1);
-      expect(record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: action === 'approve' ? 1 : 0 });
-    } finally { await runtime.close(); authority.close(); record.close(); }
+      expect(extract).not.toHaveBeenCalled(); expect(fixture.poster.published).toHaveLength(0);
+      expect((authority.prepare('SELECT state FROM authority_person_update_work_v1 WHERE context_id = ?').get(receipt.context_id) as { state: string }).state).toBe('ready');
+      expect(inbox.content({ organization_id: fixture.initialized.organization_id, principal_id: fixture.initialized.owner_principal_id, membership_id: fixture.initialized.owner_membership_id, membership_type: 'owner' }, receipt.context_id)).toMatchObject({ text: 'Call Acme before lunch.', visibility: 'team' });
+      expect(authority.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
+    } finally { await runtime.close(); authority.close(); }
   });
 });
-
 
 it('runs submit/status from the exact packed Person CLI against a disposable Authority', async () => {
   const parent = root();
@@ -1856,8 +1846,12 @@ it('runs submit/status from the exact packed Person CLI against a disposable Aut
     expect(await cli.runPersonClientCli(['updates', 'submit', '--request-id', requestId, '--title', 'Release', '--file', path], dependencies), errors).toBe(0);
     expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-receipt-v1', state: 'received', request_id: requestId }); output = '';
     expect(await cli.runPersonClientCli(['updates', 'status', '--request-id', requestId], dependencies), errors).toBe(0);
-    expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-status-v1', status: 'received', request_id: requestId });
-    expect(output).not.toContain('We agreed'); expect(errors).toBe('');
+    expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-status-v1', status: 'stored', request_id: requestId });
+    expect(output).not.toContain('We agreed'); output = '';
+    expect(await cli.runPersonClientCli(['updates', 'search', '--query', 'release'], dependencies), errors).toBe(0);
+    const found = JSON.parse(output).results[0]; expect(found.title).toBe('Release'); output = '';
+    expect(await cli.runPersonClientCli(['updates', 'read', '--context-id', found.context_id], dependencies), errors).toBe(0);
+    expect(JSON.parse(output).text).toBe('We agreed to ship the release.\n'); expect(errors).toBe('');
   } finally { await runtime.close(); }
 });
 
@@ -1909,64 +1903,4 @@ it('transitions a stopped V5 fixture with sessions, signed records, pending and 
     const records = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/records`, { headers: { authorization: `Bearer ${fixture.owner_access_token}` } });
     expect(records.status).toBe(200); expect(await records.json()).toMatchObject({ records: [expect.anything()] });
   } finally { await runtime.close(); }
-});
-
-
-it('reconciles an ambiguous Person card after restart without reposting and denies a revoked submitter action', async () => {
-  const fixture = await admittedFixture({ seed_private_slack_connection: true });
-  const source = fakeSource(fixture.source.identity, 0);
-  const post = fixture.poster.postMarker.bind(fixture.poster);
-  fixture.poster.postMarker = async input => { await post(input); return { kind: 'uncertain' }; };
-  const processor = fakeProcessor(fixture.processorIdentity); const extraction = vi.spyOn(processor, 'extract');
-  const overrides = { source, processor, private_approval_card_poster: fixture.poster };
-  let runtime = await openOrganizationAuthorityService(fixture.config, { processing_adapter_overrides: overrides });
-  const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
-  const record = openOrganizationRecordDatabase(join(fixture.initialized.state_directory, 'record-log.sqlite'), { fileMustExist: true });
-  const requestId = randomUUID();
-  try {
-    const submitted = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/updates`, { method: 'POST', headers: { authorization: `Bearer ${fixture.owner_access_token}`, 'content-type': 'application/json' }, body: JSON.stringify({ schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId, title: 'Review update', text: 'Ship the clean live migration.' }) });
-    expect(submitted.status).toBe(202);
-    await waitFor(() => fixture.errors.length > 0 || fixture.poster.markers.length === 1, 'ambiguous Person marker');
-    if (fixture.errors[0]) throw fixture.errors[0];
-    await runtime.close();
-    expect(fixture.poster.published).toHaveLength(0);
-    expect(authority.prepare('SELECT state FROM authority_live_approval_outbox_v2').get()).toEqual({ state: 'posting' });
-    fixture.poster.reconcileMarker = async () => ({ kind: 'posted', provider_message_ts: '1724112000.000001' });
-    runtime = await openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: overrides });
-    await waitFor(() => fixture.errors.length > 0 || fixture.poster.published.length === 1, 'reconciled Person card');
-    if (fixture.errors[0]) throw fixture.errors[0];
-    expect(fixture.poster.markers).toHaveLength(1); expect(extraction).toHaveBeenCalledTimes(1);
-    authority.prepare(`UPDATE authority_memberships SET status = 'revoked', revoked_at = ?, revocation_reason = 'fixture_revocation' WHERE membership_id = ?`).run(new Date().toISOString(), fixture.initialized.owner_membership_id);
-    await clickCard({ fixture: { ...fixture, runtime }, card: fixture.poster.published[0]!, action: 'approve', policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID });
-    await runtime.drain(AbortSignal.timeout(5000));
-    expect(record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: 0 });
-    expect(extraction).toHaveBeenCalledTimes(1); expect(fixture.poster.markers).toHaveLength(1);
-    expect((await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/updates/${requestId}`, { headers: { authorization: `Bearer ${fixture.owner_access_token}` } })).status).toBe(401);
-  } finally { await runtime.close(); authority.close(); record.close(); }
-});
-
-
-it('recovers a Person approval finalized before record append exactly once', async () => {
-  let interrupted = true;
-  const seam = await approvalSeamFixture('slack', {}, { person_update: true, fail_append: () => interrupted });
-  let runtime = await seam.open();
-  const record = openOrganizationRecordDatabase(join(seam.fixture.initialized.state_directory, 'record-log.sqlite'), { fileMustExist: true });
-  const control = openOrganizationControlDatabase(join(seam.fixture.initialized.state_directory, 'integrations.sqlite'), { fileMustExist: true });
-  const requestId = randomUUID();
-  try {
-    expect((await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/updates`, { method: 'POST', headers: { authorization: `Bearer ${seam.fixture.owner_access_token}`, 'content-type': 'application/json' }, body: JSON.stringify({ schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId, title: 'Finalized update', text: 'Ship the clean live migration.' }) })).status).toBe(202);
-    await waitFor(seam.presented, 'Person approval before append interruption');
-    expect((await seam.approve(runtime, String(Math.floor(Date.now() / 1000)))).status).toBe(200);
-    await waitFor(() => seam.fixture.errors.some(error => error.message === 'fixture interrupted before V4 append'), 'interrupted Person append');
-    expect(control.prepare('SELECT count(*) AS n FROM organization_private_approval_terminal_evidence_v2').get()).toEqual({ n: 1 });
-    expect(record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: 0 });
-    await runtime.close(); interrupted = false;
-    runtime = await seam.open(); await runtime.drain(AbortSignal.timeout(5000));
-    expect(record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: 1 });
-    expect(seam.presentationCount()).toBe(1);
-    const status = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/updates/${requestId}`, { headers: { authorization: `Bearer ${seam.fixture.owner_access_token}` } });
-    expect(await status.json()).toMatchObject({ status: 'resolved', outcome: 'approved' });
-    await runtime.close(); runtime = await seam.open(); await runtime.drain(AbortSignal.timeout(5000));
-    expect(record.prepare('SELECT count(*) AS n FROM organization_record_log').get()).toEqual({ n: 1 }); expect(seam.presentationCount()).toBe(1);
-  } finally { await runtime.close(); control.close(); record.close(); }
 });

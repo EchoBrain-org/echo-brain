@@ -4,8 +4,9 @@
 initialization, Person OIDC sessions, initial-owner Slack identity linking,
 admitted meeting processing, approval finalization, immutable V4 records, and
 permission-aware Person reads and answer composition. Authority V6 also owns the
-durable Person text inbox. Runtime opening never migrates state. The explicit
-[offline V5-to-V6 compatibility copy](../../docs/product/2026-09-21-person-update-inbox-v1.md#implemented-source-custody-and-compatibility-mapping)
+durable original-text upload store, explicit visibility, audited read/search, and
+optional search enrichment. Uploads do not require Slack approval. Runtime opening never migrates state. The explicit
+[offline V5-to-V6 compatibility copy](../../docs/product/2026-09-21-person-update-inbox-v1.md#compatibility-and-custody)
 preserves an exact stopped V5 snapshot; unsupported older state remains refused.
 
 For any deployed staging initial-owner setup, do not run the lower-level setup

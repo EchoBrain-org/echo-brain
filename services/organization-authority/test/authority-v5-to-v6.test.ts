@@ -51,5 +51,5 @@ it('refuses unsupported versions and altered V5 schemas before writing the outpu
 
 it('keeps the pinned V5 hash and pins the new V6 artifact separately', () => {
   expect(authorityBaselineSha256V5()).toBe('sha256:0c11226af116345f5d2eafe6bd833a421e4dcb3ccb5728642ab1134da09bd9ea');
-  expect(authorityBaselineSha256V6()).toBe('sha256:4d292bb69d53a862e40c1045b18f05b6db4f03c96075036eb112d64d2e4f8c63');
+  expect(authorityBaselineSha256V6()).toBe('sha256:f710c722038d56712e7fe35df08db31d50aecb44578fcf12fb51ce2e45f6895d');
 });

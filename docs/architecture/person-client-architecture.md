@@ -178,13 +178,17 @@ status contract. Provider commands and native actions are composed at explicit
 entrypoints. Supported v2 routes remain in the Slack provider for existing
 clients; the native disconnect action decodes that retained response there.
 
-## Deliberate text updates
+## Deliberate context uploads
 
-`echo-brain person updates submit --request-id <uuid> --title <title> --file <path>`
-uploads one bounded UTF-8 file to the organization's durable pending inbox for
-private review. `person updates status --request-id <uuid>` reads only the
-current membership's receipt and safe processing outcome. Keep the original
-request ID and exact payload after an unknown transport outcome; use status or
-an explicit matching retry. The CLI prints no submitted content, creates no
-local queue, and performs no automatic submission retry. Session refresh uses
-the existing rules. Approval completion and search freshness remain separate.
+`person updates submit` saves one explicitly selected UTF-8 file unchanged,
+with `--visibility only-me|team` (default Only me). `status` returns the durable
+receipt and optional enrichment progress. `search` and `read` retrieve original
+uploads under current membership and stored visibility, without Slack approval
+or a model dependency. Content/search releases revalidate the session and audit
+before returning. Unknown submissions require the same request ID and exact
+file, title, and visibility on retry; no local queue or automatic upload exists.
+
+The current bounded text carrier does not decide the context taxonomy. Optional
+LLM search hints remain derived metadata. Existing records/Ask/native Sources
+continue to use approved decision records; connecting uploads to those surfaces
+awaits a source contract. See the [current upload scope](../product/2026-09-21-person-update-inbox-v1.md).

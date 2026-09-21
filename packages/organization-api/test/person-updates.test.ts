@@ -4,24 +4,24 @@ import { validatePersonUpdateSubmitV1, validatePersonUpdateReceiptV1, validatePe
 const request = { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: '00000000-0000-4000-8000-000000000001', title: 'Release update', text: 'We agreed to pause the rollout.\n' };
 describe('Person update wire contracts', () => {
   it('preserves accepted whitespace and UTF-8 text exactly', () => {
-    expect(validatePersonUpdateSubmitV1(request)).toEqual(request);
+    expect(validatePersonUpdateSubmitV1(request)).toEqual({ ...request, visibility: 'only_me' });
     expect(validatePersonUpdateSubmitV1({ ...request, title: 'é'.repeat(100), text: '😀'.repeat(2048) }).text).toBe('😀'.repeat(2048));
   });
   it.each([
     { title: 'é'.repeat(101) }, { text: '😀'.repeat(2049) }, { text: '\0' }, { text: '\ud800' },
     { text: 'x\u0085y' }, { text: ' ' }, { title: '  ' }, { title: 'line\nbreak' }, { text: '\n'.repeat(8191) + 'a' },
-    { request_id: 'not-a-uuid' }, { schema_version: 2 }, { kind: 'update' }, { organization_id: 'org_forged' }, { reviewer: 'owner@example.com' },
+    { request_id: 'not-a-uuid' }, { schema_version: 2 }, { kind: 'update' }, { organization_id: 'org_forged' }, { reviewer: 'owner@example.com' }, { visibility: 'public' }, { visibility: null }, { metadata: { visibility: 'team' } },
   ])('rejects malformed/oversized/forged input %j', (override) => {
     expect(() => validatePersonUpdateSubmitV1({ ...request, ...override })).toThrow();
   });
   it('admits only content-free immutable receipts and safe status combinations', () => {
-    const receipt = { schema_version: 1, kind: 'echo-person-update-receipt-v1', request_id: request.request_id, received_at: '2026-09-21T00:00:00.000Z', state: 'received' };
+    const receipt = { schema_version: 1, kind: 'echo-person-update-receipt-v1', request_id: request.request_id, context_id: `ctx_${'a'.repeat(64)}`, visibility: 'only_me', received_at: '2026-09-21T00:00:00.000Z', state: 'received' };
     expect(validatePersonUpdateReceiptV1(receipt)).toEqual(receipt);
     expect(() => validatePersonUpdateReceiptV1({ ...receipt, state: 'processing' })).toThrow();
     expect(() => validatePersonUpdateReceiptV1({ ...receipt, text: request.text })).toThrow();
-    const status = { schema_version: 1, kind: 'echo-person-update-status-v1', request_id: request.request_id, received_at: receipt.received_at, status: 'blocked', reason: 'reviewer_unavailable' };
+    const status = { schema_version: 1, kind: 'echo-person-update-status-v1', request_id: request.request_id, context_id: `ctx_${'a'.repeat(64)}`, visibility: 'only_me', received_at: receipt.received_at, status: 'stored', metadata: 'pending' };
     expect(validatePersonUpdateStatusV1(status)).toEqual(status);
-    expect(() => validatePersonUpdateStatusV1({ ...status, reason: request.text })).toThrow();
+    expect(() => validatePersonUpdateStatusV1({ ...status, metadata: request.text })).toThrow();
     expect(() => validatePersonUpdateStatusV1({ ...status, queue_depth: 2 })).toThrow();
     expect(() => validatePersonUpdateStatusV1({ ...status, status: 'resolved' })).toThrow();
   });

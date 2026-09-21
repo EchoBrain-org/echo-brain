@@ -43,7 +43,6 @@ export interface PrivateSlackApprovalBlockKitCardInputV1 {
   readonly schema_version: 1;
   readonly approval_id: string;
   readonly meeting_title: string;
-  readonly source_kind?: 'person-update';
   readonly decision_groups: readonly PrivateSlackApprovalDecisionGroupV1[];
   readonly ungrouped_actions?: readonly PrivateSlackApprovalActionItemV1[];
   readonly ungrouped_rationales?: readonly PrivateSlackApprovalReviewItemV1[];
@@ -174,10 +173,9 @@ function validateInput(input: PrivateSlackApprovalBlockKitCardInputV1): void {
   exactObject(
     input,
     ["schema_version", "approval_id", "meeting_title", "decision_groups"],
-    ["ungrouped_actions", "ungrouped_rationales", "source_kind"],
+    ["ungrouped_actions", "ungrouped_rationales"],
     "input",
   );
-  if (input.source_kind !== undefined && input.source_kind !== 'person-update') invalid('source_kind is unsupported');
   if (input.schema_version !== 1) invalid("schema_version must equal 1");
   identifier(input.approval_id, "approval_id");
   boundedText(input.meeting_title, MAX_TITLE, "meeting_title", PLAIN_CONTROLS);
@@ -377,8 +375,8 @@ function meetingFollowUp(
   const title = hasActions
     ? hasContext
       ? "Next steps and context"
-      : (input.source_kind === "person-update" ? "Next steps from this update" : "Next steps from this meeting")
-    : (input.source_kind === "person-update" ? "Additional update context" : "Additional meeting context");
+      : "Next steps from this meeting"
+    : "Additional meeting context";
   return {
     type: "container",
     block_id: blockId(input, "other-meeting-items"),
@@ -392,8 +390,8 @@ function meetingFollowUp(
 
 function fallback(input: PrivateSlackApprovalBlockKitCardInputV1): string {
   const lines = [
-    input.source_kind === "person-update" ? "Private Person update approval requested." : "Private meeting-owner approval requested.",
-    `${input.source_kind === "person-update" ? "Person update" : "Meeting"}: ${input.meeting_title}`,
+    "Private meeting-owner approval requested.",
+    `Meeting: ${input.meeting_title}`,
     "Frozen review:",
   ];
   for (const [index, group] of input.decision_groups.entries()) {
@@ -410,14 +408,14 @@ function fallback(input: PrivateSlackApprovalBlockKitCardInputV1): string {
     }
   }
   if (input.ungrouped_actions !== undefined) {
-    lines.push(input.source_kind === "person-update" ? "Next steps from this update:" : "Next steps from this meeting:");
+    lines.push("Next steps from this meeting:");
   }
   for (const action of input.ungrouped_actions ?? []) {
     lines.push(`Next step: ${action.text}`);
     lines.push(`Evidence: ${action.evidence_reference}`);
   }
   if (input.ungrouped_rationales !== undefined) {
-    lines.push(input.source_kind === "person-update" ? "Additional update context:" : "Additional meeting context:");
+    lines.push("Additional meeting context:");
   }
   for (const rationale of input.ungrouped_rationales ?? []) {
     lines.push(
@@ -426,7 +424,7 @@ function fallback(input: PrivateSlackApprovalBlockKitCardInputV1): string {
     );
   }
   lines.push(
-    input.source_kind === "person-update" ? "Raw submitted text and rejected suggestions are not released." : NON_RELEASE_TEXT,
+    NON_RELEASE_TEXT,
     "Visibility: Only me (default) or Team.",
     "Optionally add a comment, then choose Approve or Reject.",
   );
@@ -468,7 +466,7 @@ export function buildPrivateSlackApprovalBlockKitCardV1(
     {
       type: "header",
       block_id: blockId(input, "title"),
-      text: plainText(input.source_kind === "person-update" ? `Person update: ${input.meeting_title}`.slice(0, MAX_TITLE) : input.meeting_title),
+      text: plainText(input.meeting_title),
     },
     {
       type: "context",
@@ -530,7 +528,7 @@ export function buildPrivateSlackApprovalBlockKitCardV1(
             PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
           ),
           style: "primary",
-          text: plainText(input.source_kind === "person-update" ? "Approve update" : "Approve meeting"),
+          text: plainText("Approve meeting"),
           value: actionValue(input.approval_id),
         },
         {
@@ -549,7 +547,7 @@ export function buildPrivateSlackApprovalBlockKitCardV1(
       type: "context",
       block_id: blockId(input, "footer"),
       elements: [
-        plainText(input.source_kind === "person-update" ? "One visibility policy applies to the entire Person update record." : "One visibility policy applies to the entire meeting record."),
+        plainText("One visibility policy applies to the entire meeting record."),
       ],
     },
   );

@@ -1,5 +1,3 @@
-import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
-import type { MeetingDocument } from '../core/contracts/meeting.js';
 import type { OrganizationAuthoritySigner } from "@echo-brain/organization-authority-kernel/application/ports/organization-authority-signer";
 import type { AppendV4RecordInput, AppendedV4Record } from "@echo-brain/organization-record/organization-record-api-v1";
 import type { ApprovalWorkflowStagerV1 } from "../admitted-meeting-processing/meeting-processing-cycle-v1.js";
@@ -17,8 +15,6 @@ export interface ApprovalWorkflowProcessingV1 {
 /** Generic Authority resources made available to the selected approval surface. */
 export interface ApprovalWorkflowContextV1 {
   readonly state: ApprovalWorkflowStateV1;
-  /** Immutable authenticated source author; unavailable fails closed, undefined uses source ownership. */
-  readonly verified_source_actor?: (document: MeetingDocument) => AuthorityPersonMembershipBinding | 'unavailable' | undefined;
   readonly record_append: { append(input: AppendV4RecordInput): Promise<AppendedV4Record> };
   readonly signer: OrganizationAuthoritySigner;
   readonly coordinates: {
@@ -43,8 +39,6 @@ export interface ApprovalWorkflowComponentsV1 {
   /** Release adapter-owned resources after ingress and the worker have stopped. */
   close?(): void;
   readonly stager: ApprovalWorkflowStagerV1;
-  readonly can_review_as?: (actor: AuthorityPersonMembershipBinding) => boolean;
-  readonly read_terminal_outcome?: (approvalId: string) => 'approved' | 'rejected' | 'partially_approved' | undefined;
   readonly processing: ApprovalWorkflowProcessingV1;
   /** Omitted only for an approval surface with no inbound interaction route. */
   readonly interaction_ingress?: ProviderHttpApplicationV1;
