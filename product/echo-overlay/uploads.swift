@@ -118,6 +118,9 @@ struct UploadRecovery: Codable, Equatable {
         guard belongs(to: identity), let data = try? JSONEncoder().encode(self) else { return }
         defaults.set(data, forKey: Self.key(identity))
     }
+    static func clear(for identity: AccountIdentity, defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: key(identity))
+    }
     static func load(for identity: AccountIdentity, defaults: UserDefaults = .standard) -> UploadRecovery? {
         guard let data = defaults.data(forKey: key(identity)), data.count <= 4096,
               let result = try? JSONDecoder().decode(Self.self, from: data), result.belongs(to: identity),
@@ -440,7 +443,7 @@ final class UploadsController: NSObject, NSWindowDelegate, NSTableViewDataSource
         uploadStatus.stringValue = "Checking the saved upload…"; run(.status(recovery))
     }
     @objc private func newUpload() {
-        guard active == nil else { return }
+        guard active == nil, let identity else { return }
         if recovery != nil && receipt == nil {
             let alert = NSAlert(); alert.messageText = "Start another upload?"
             alert.informativeText = "The previous attempt may already be saved. Check its status or search first to avoid a duplicate."
@@ -448,6 +451,7 @@ final class UploadsController: NSObject, NSWindowDelegate, NSTableViewDataSource
             choosing = true; let answer = alert.runModal(); choosing = false
             guard answer == .alertFirstButtonReturn else { return }
         }
+        UploadRecovery.clear(for: identity, defaults: defaults)
         bytes = nil; draft = nil; receipt = nil; recovery = nil
         titleField.stringValue = ""; visibility.selectItem(at: 0); permissionChanged()
         fileLabel.stringValue = "Choose a UTF-8 text file, up to 8 KiB."; uploadStatus.stringValue = ""

@@ -93,6 +93,11 @@ enum UploadProof {
             require(UploadRecovery.load(for: other, defaults: defaults) == nil)
             let keys = Set((try! JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as! [String: Any]).keys)
             require(keys == Set(["authority", "membershipID", "requestID", "visibility"]))
+            let otherReceipt = UploadRecovery(identity: other, requestID: UUID().uuidString.lowercased(), visibility: .onlyMe)!
+            otherReceipt.save(for: other, defaults: defaults)
+            UploadRecovery.clear(for: identity, defaults: defaults)
+            require(UploadRecovery.load(for: identity, defaults: defaults) == nil)
+            require(UploadRecovery.load(for: other, defaults: defaults) == otherReceipt)
         case "switch-before", "switch-after":
             guard case .unavailable = execute(.read(contextID)) else { fatalError("account switch disclosed content") }
         case "submit-switch-after":
@@ -150,6 +155,7 @@ enum UploadProof {
             require(!choose.isEnabled)
             new.performClick(nil)
             require(choose.isEnabled && !check.isEnabled && !open.isEnabled)
+            require(UploadRecovery.load(for: identity, defaults: UserDefaults(suiteName: suite)!) == nil, "abandoned recovery returned after restart")
             controller.shutdown(); window.orderOut(nil); return
         }
         if mode == "window-account-change" {

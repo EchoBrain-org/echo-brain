@@ -208,6 +208,7 @@ after restart; original text and search results are not persisted there. Tempora
 snapshots are removed when the attempt is released or on orderly shutdown. An
 unclean process termination may leave a private temporary file for OS cleanup.
 Starting another upload after an unconfirmed attempt requires an explicit choice.
+Starting a new upload clears the prior locator for that account, including on restart.
 No background uploader or local queue is introduced.
 
 Each operation checks the exact membership and Authority before and after the
