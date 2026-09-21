@@ -539,7 +539,7 @@ final class AccountController: NSObject {
 
     private func allowSessionChange() -> Bool {
         guard mayChangeSession() else {
-            showMessage("Finish the People change first", detail: "Wait for the pending People update to finish before changing accounts.")
+            showMessage("Finish the current change first", detail: "Wait for the pending upload or People update to finish before changing accounts.")
             return false
         }
         guard !(toolsController?.hasOutstandingMutation ?? false) else {
