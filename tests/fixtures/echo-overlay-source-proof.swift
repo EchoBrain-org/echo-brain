@@ -185,6 +185,12 @@ private enum EchoOverlaySourceFixtureMain {
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.prohibited)
             passed = OverlayController.proveUncitedAnswerLayout()
+        case "person-update-source":
+            let detail = CliRunner.parseSourceRecord(sourceData(sourceAdapter: "person-update-inbox-v1"), source: source())
+            passed = detail?.title == "Person update: Quarterly planning" && detail?.date == nil && detail?.participants.isEmpty == true
+        case "person-title-does-not-select-source":
+            let detail = CliRunner.parseSourceRecord(sourceData(meeting: ["id": "fixture", "title": "Person update"]), source: source())
+            passed = detail?.title == "Person update"
         case "untitled-source":
             let detail = CliRunner.parseSourceRecord(sourceData(meeting: ["id": "meeting-fixture"]), source: source())
             passed = detail?.title == "Untitled meeting"
@@ -330,7 +336,8 @@ private enum EchoOverlaySourceFixtureMain {
         policyID: String = policy,
         decisionText: String = "Keep the current plan.",
         meeting: [String: Any] = ["id": "meeting-fixture", "title": "Quarterly planning"],
-        records: [[String: Any]]? = nil
+        records: [[String: Any]]? = nil,
+        sourceAdapter: String = "fixture-source"
     ) -> Data {
         let record: [String: Any] = [
             "position": 1,
@@ -339,6 +346,7 @@ private enum EchoOverlaySourceFixtureMain {
             "envelope": [
                 "record_sha256": hash,
                 "body": [
+                    "source_provenance": ["source_adapter_id": sourceAdapter],
                     "event": [
                         "kind": "approved",
                         "policy_id": policyID,

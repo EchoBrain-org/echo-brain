@@ -159,7 +159,7 @@ final class SlackConnectedToolsController: NSObject, NSWindowDelegate, Connected
         cancelButton.isEnabled = slackAttemptID != nil
         let client = self.client
         let expectedIdentity = self.identity
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
             var output: Data? = nil
             if case .signedIn(let before) = client.readStatus(operation), before == expectedIdentity {
                 output = client.runCaptured(arguments, timeout: 80, running: operation)

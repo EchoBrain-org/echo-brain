@@ -1,3 +1,5 @@
+import { readUpdateFile } from './update-file.js';
+import { validatePersonUpdateSubmitV1, validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
@@ -19,7 +21,6 @@ const MAXIMUM_INPUT_BYTES = 64 * 1024;
 interface Output {
   write(value: string): unknown;
 }
-
 export interface PersonClientCliDependencies {
   readonly tool_commands?: readonly PersonToolCommandV1[];
   readonly stdout?: Output;
@@ -35,6 +36,9 @@ export interface PersonClientCliDependencies {
 }
 
 const OPTIONS = {
+  "request-id": { type: "string" },
+  title: { type: "string" },
+  file: { type: "string" },
   "authority-url": { type: "string" },
   invitation: { type: "string" },
   question: { type: "string" },
@@ -55,6 +59,8 @@ type Option = string;
 const RULES: Readonly<
   Record<string, { accepts?: readonly Option[]; requires?: readonly Option[] }>
 > = {
+  "updates-submit": { accepts: ["request-id", "title", "file"], requires: ["request-id", "title", "file"] },
+  "updates-status": { accepts: ["request-id"], requires: ["request-id"] },
   login: {
     accepts: ["invitation", "authority-url", "open-browser"],
   },
@@ -112,6 +118,7 @@ Commands:
   logout      Remove the local session.
   ask         Ask a question over records you may read.
   records     List records or search the current generation.
+  updates     Submit a text update for organizational review or check its status.
   employee    List, invite, reissue, or revoke an employee.
   tools       Read organization tools and your current link status.
 
@@ -143,6 +150,18 @@ Ask one question using at most 240 Unicode code points, 1–32 distinct normaliz
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
 `,
+  updates: `usage: echo-brain person updates <submit|status> [options]
+
+Submission uploads the file to your organization for private review. Submission is not approval.
+`,
+  "updates-submit": `usage: echo-brain person updates submit --request-id <uuid> --title <title> --file <utf8-text-file>
+
+Uploads this file (at most 8 KiB) to your organization for private review. Keep the request ID: after an unknown outcome, check status or retry the exact payload with the same ID. No automatic upload or mutation retry occurs.
+`,
+  "updates-status": `usage: echo-brain person updates status --request-id <uuid>
+
+Shows your submission's processing outcome. Approval resolution does not promise search-index readiness.
+`,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
 Run \`echo-brain person employee <command> --help\` for required options.
@@ -167,6 +186,7 @@ Shows each employee's name, canonical email, membership state, and invitation st
 
 /** Returns supported human CLI help without constructing a client or session. */
 function personClientCliHelp(argv: readonly string[], commands: readonly PersonToolCommandV1[]): string | undefined {
+  if (argv.length === 3 && argv[0] === 'updates' && argv[2] === '--help') return HELP[`updates-${argv[1]}`];
   const tool = commands.find(command => command.name === argv[0]);
   if (tool && argv.length === 2 && argv[1] === '--help') {
     return `usage: echo-brain person ${tool.name}${Object.keys(tool.options).map(option => ' --' + option + ' <value>').join('')}\n\n${tool.description}\n`;
@@ -455,7 +475,8 @@ export async function runPersonClientCli(
           argv[1] as "invite" | "reissue" | "revoke" | "list"
         ]
       : undefined;
-  const action = employeeAction ?? (argv[0] ?? "");
+  const updateAction = argv[0] === 'updates' && (argv[1] === 'submit' || argv[1] === 'status') ? `updates-${argv[1]}` : undefined;
+  const action = updateAction ?? employeeAction ?? (argv[0] ?? "");
   const toolCommand = registered.get(action);
   const rule = RULES[action] ?? (toolCommand === undefined ? undefined : { accepts: Object.keys(toolCommand.options), requires: toolCommand.requires });
   if (rule === undefined) {
@@ -465,7 +486,7 @@ export async function runPersonClientCli(
 
   let values: Record<Option, string | boolean | undefined>;
   try {
-    const args = [...argv.slice(employeeAction === undefined ? 1 : 2)];
+    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined ? 1 : 2)];
     // Accept a negative integer as a limit value so the existing bounds explain
     // it. Other dash-prefixed values retain parseArgs' strict option behavior.
     if (action === "records") {
@@ -560,6 +581,15 @@ export async function runPersonClientCli(
       return 0;
     }
     switch (action) {
+      case 'updates-submit': {
+        const requestId = validatePersonUpdateRequestId(requiredText(values, 'request-id'));
+        const request = validatePersonUpdateSubmitV1({ schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId, title: requiredText(values, 'title'), text: readUpdateFile(requiredText(values, 'file')) });
+        print(stdout, await client.submitUpdate(request));
+        break;
+      }
+      case 'updates-status':
+        print(stdout, await client.updateStatus(requiredText(values, 'request-id')));
+        break;
       case "login": {
         requireSignedOut(client);
         const invitation =

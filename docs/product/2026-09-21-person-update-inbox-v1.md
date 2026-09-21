@@ -1,6 +1,6 @@
 # Person updates through a durable Authority inbox
 
-Status: Implementation brief; runtime behavior is not implemented.
+Status: Implemented on `feat/person-updates-inbox-v1`; offline verification and PR review are required before separate live qualification.
 
 Prepared: 2026-09-21. Baseline: `origin/main` at
 `7f86b29577afa33806a61a71c2617437aee712e0`.
@@ -306,6 +306,69 @@ Document their actual retention; do not imply new deletion guarantees. Keep
 receipt/idempotency evidence for the supported replay lifetime. A new retention
 scheduler or organization-record purge is outside V1.
 
+## Implemented source, custody, and compatibility mapping
+
+The Person source uses `person-update-inbox-v1`, version `1`, with one stable
+`person-inbox-<organization digest>` instance per organization. Its immutable
+external ID is canonical JSON containing the server-verified organization,
+principal, membership ID, membership type, and caller request ID. V4 signs that
+exact external ID, so the submitter remains distinct from the final approver.
+The canonical/source revision is the validated request digest; the normalizer
+is `person-update-note-v1`; the single evidence block is `person-update-text`.
+No event date, organizer, calendar, or participants are introduced. Receipt
+time is only `observed_at`. The existing model input supplies null event-date
+anchors and treats note text as evidence, with no approval authority.
+
+Compatibility finding: the existing `MeetingDocument`, brief `meeting`, and
+V4 `meeting-source` capability containers already admit authored notes with
+empty participants and absent time. They round-trip this source without a new
+signed field or widened validator. The distinct signed adapter ID selects
+**Person update** in approval and Sources presentation. Old V4 codecs, hashes,
+and golden bytes remain unchanged. Verified reviewer lookup reads the immutable
+inbox submission and exact current membership; it never infers an actor from
+this external ID or uploaded prose alone. The current approval surface has no
+partial-review or delegation action: it resolves the whole update as approved
+or rejected. The public status codec reserves `partially_approved` for an
+existing surface that can supply that durable outcome; V1 does not invent one.
+
+Authority V6 adds a source-keyed immutable processing-source registry and two
+Person submission/work tables. The existing meeting admission and cursor stay
+intact; its insert trigger registers its unchanged semantic identity. Frozen
+candidates reference the registry. Inbox progress is per submission, using
+that stable source's fixed `source-keyed-v1` cursor. The shared extraction,
+freezing, evidence validation, staging, and approval recovery cycle is reused.
+The inbox consumes at most one eligible item per tick, with 1–256 second
+exponential retry delays (bounded by the 300-second server ceiling). Blocked
+and awaiting-approval items consume pending capacity. Provider failures use
+fixed safe status codes. Integrity failures remain visible worker failures.
+Inbox model calls suppress content telemetry while retaining operational
+measurements; no submitted text is logged by intake or emitted in status.
+
+Pending and completed submitted text, receipts, payload digests, work links,
+and frozen candidates are retained indefinitely in protected Authority state
+and inherit its backup custody. There is no new deletion promise or retention
+scheduler. Exact replay remains supported while that Authority lineage and
+submission evidence are retained. No pending text enters `integrations.sqlite`
+or the approved record; approved evidence and signals use the existing
+permission-aware publication path.
+
+For a **stopped disposable snapshot**, after building, the explicit compatibility
+artifact can be produced with:
+
+```sh
+node tools/copy-authority-v5-to-v6.mjs /snapshot/authority.sqlite /output/authority-v6.sqlite
+```
+
+This command requires the exact pinned V5 schema and a new output path. It opens
+the input read-only, copies every existing row, preserves candidate and receipt
+identities, and updates only the output Authority lineage schema binding. The
+other databases, root lineage, and signed record bytes remain untouched. Ordinary
+open/startup performs no transition. V5 code/state and V6 code/state must match;
+rollback restores the complete matching stopped code/state snapshot, not a
+single database after newer writes. Real-host conversion, backups, deployment,
+and acceptance remain in the existing operator playbook and are not authorized
+by this implementation document.
+
 ## Implementation slices
 
 | Slice | Deliverable | Exit proof |
@@ -370,8 +433,7 @@ npm run check
 
 Use repository-defined packaging/architecture checks for the exact Person
 artifact. Build the native decoder when its source presentation changes.
-Record commands, outcomes, and any platform-limited checks in the PR. This
-documentation-only preparation does not establish a green runtime baseline.
+Record commands, outcomes, and any platform-limited checks in the PR. The implementation PR records the final verification outcomes.
 
 ## Definition of done and operating boundary
 

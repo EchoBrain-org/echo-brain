@@ -156,6 +156,11 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
      */
     expectedProcessorAdapterId: string,
     now: () => string = () => new Date().toISOString(),
+    private readonly sourceBinding?: {
+      readonly semantic_input_sha256: string;
+      readonly assert_active: () => void;
+    },
+    private readonly additionalCursorPolicies: readonly AdmittedMeetingSourceCursorPolicyV1[] = [],
   ) {
     if (expectedProcessorAdapterId.trim().length === 0) {
       throw new Error(
@@ -171,6 +176,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       const admission = this.admission();
       if (admission.membership_status !== "active") {
         throw new AuthorityMeetingProcessingRevokedError();
+      }
+      if (this.sourceBinding !== undefined) {
+        return admissionFrom(admission, { cursor: admission.cursor }, this.sourceCursorPolicy, this.expectedProcessorAdapterId);
       }
       this.database
         .prepare(
@@ -768,7 +776,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
                 admission.processor_adapter_version,
                 admission.processor_configuration_sha256
            FROM authority_live_source_candidates_v2 AS candidate
-           JOIN authority_live_source_admission_v2 AS admission
+           JOIN authority_processing_sources_v1 AS admission
              ON admission.semantic_input_sha256 = candidate.admission_semantic_input_sha256
           WHERE candidate.candidate_id = ?`,
       )
@@ -838,7 +846,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     } else {
       assertAdmissionSnapshot(
         admission,
-        this.sourceCursorPolicy,
+        [this.sourceCursorPolicy, ...this.additionalCursorPolicies].find(policy => policy.source_adapter_id === admission.source.adapter_id) ?? this.sourceCursorPolicy,
         this.expectedProcessorAdapterId,
       );
       assertCanonicalMeetingDocument(meeting, {
@@ -1161,6 +1169,12 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   }
 
   private admission(): AdmissionRow {
+    if (this.sourceBinding !== undefined) {
+      this.sourceBinding.assert_active();
+      const row = this.database.prepare(`SELECT *, source_adapter_instance_id AS source_instance_id, 'source-keyed-v1' AS cursor, cutoff_at AS admitted_at, 'active' AS membership_status FROM authority_processing_sources_v1 WHERE semantic_input_sha256 = ?`).get(this.sourceBinding.semantic_input_sha256) as AdmissionRow | undefined;
+      if (row === undefined) throw new Error('processing source has not been admitted');
+      return row;
+    }
     const admission = this.database
       .prepare(
         `SELECT source_adapter_id,
@@ -1187,6 +1201,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   }
 
   private progress(admissionSemanticSha256: string): ProgressRow {
+    if (this.sourceBinding !== undefined) return { cursor: 'source-keyed-v1' };
     const progress = this.database
       .prepare(
         `SELECT cursor

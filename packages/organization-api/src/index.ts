@@ -92,3 +92,5 @@ export { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV
 export type { PersonToolJsonRequestV1, PersonToolGetRequestV1, PersonToolTransportV1, PersonToolSessionV1, PersonToolHostV1, PersonToolCommandV1 } from './person-tool-client.js';
 
 export { PersonQueryInputError, validatePersonQueryText } from "./person-query.js";
+
+export * from './person-updates.js';

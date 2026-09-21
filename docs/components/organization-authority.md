@@ -100,3 +100,12 @@ Authority boundary.
 
 Deployment, backup, migration, and rollback must treat the Authority image and
 its complete compatible state generation as one qualification boundary.
+
+## Person pending custody
+
+Authority V6 accepts authenticated immutable text updates in its durable inbox.
+It commits a content-free receipt before processing and uses the submitting
+membership tenure for private approval. Pending payloads are retained in
+Authority custody and backups; only approved signals/evidence reach the record.
+The [Person update brief](../product/2026-09-21-person-update-inbox-v1.md) documents
+the source mapping, indefinite retention, and explicit offline V5-to-V6 copy.

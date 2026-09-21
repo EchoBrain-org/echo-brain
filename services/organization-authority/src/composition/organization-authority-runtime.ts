@@ -1,3 +1,7 @@
+import { SqlitePersonUpdateInboxV1 } from '../adapters/persistence/sqlite/person-update-inbox-v1.js';
+import { PersonUpdateProcessingV1, verifiedPersonUpdateActorV1 } from './person-update-processing-v1.js';
+import { personUpdateCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/person-update-source-v1';
+import { AdapterError } from '@echo-brain/organization-processing/core';
 import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -17,7 +21,7 @@ import { AdmittedMeetingProcessingCycleV1 } from "@echo-brain/organization-proce
 import {
   readAdmittedMeetingProcessingCommitmentsV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
-import { SqliteAuthorityMeetingProcessingStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1";
+import { AuthorityMeetingProcessingRevokedError, SqliteAuthorityMeetingProcessingStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1";
 import type {
   ApprovalWorkflowProcessingV1,
   ApprovalWorkflowComponentsV1,
@@ -192,6 +196,7 @@ class OrganizationAuthorityProcessingCoordinator
     private readonly source: AdmittedMeetingProcessingCycleV1,
     private readonly approvals: ApprovalWorkflowProcessingV1,
     private readonly readableSearch: ReadableSearchReconcilerV1,
+    private readonly updates: PersonUpdateProcessingV1,
     private readonly journeyTelemetry?: MeetingApprovalJourneyTelemetryPortV1,
   ) {}
 
@@ -204,15 +209,21 @@ class OrganizationAuthorityProcessingCoordinator
   }
 
   async pollAndStageAdmittedMeetings(signal: AbortSignal): Promise<void> {
-    await this.source.runOnce(signal);
+    try { await this.source.runOnce(signal); }
+    catch (error) {
+      if (signal.aborted || (!(error instanceof AdapterError) && !(error instanceof AuthorityMeetingProcessingRevokedError))) throw error;
+    }
+    signal.throwIfAborted();
+    await this.updates.runOnce(signal);
   }
 
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void> {
     return this.approvals.observeAndFinalizePendingApprovals(signal);
   }
 
-  appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void> {
-    return this.approvals.appendFinalizedApprovalsToV4(signal);
+  async appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void> {
+    await this.approvals.appendFinalizedApprovalsToV4(signal);
+    this.updates.refreshOutcomes();
   }
 
   async reconcileReadableSearchGeneration(signal: AbortSignal): ReturnType<OrganizationAuthorityProcessingCycleV1["reconcileReadableSearchGeneration"]> {
@@ -353,6 +364,7 @@ export async function openOrganizationAuthorityRuntime(
       authority,
       config.meeting_source_bundle.source_cursor_policy,
       config.decision_processor_bundle.processor_adapter_id,
+      undefined, undefined, [personUpdateCursorPolicyV1],
     );
     const commitments = readAdmittedMeetingProcessingCommitmentsV1(authority);
     config.meeting_source_bundle.assert_admission_commitments(commitments);
@@ -391,7 +403,9 @@ export async function openOrganizationAuthorityRuntime(
     // periodic cycle still publishes anything queued in that window.
     let requestApprovalPublication: (() => void) | undefined;
     const recordAppend = new OrganizationRecordAppenderV4(record, coordinates, config.record_policy_fact_projectors);
+    const inbox = new SqlitePersonUpdateInboxV1(authority);
     const approvalContext = Object.freeze({
+      verified_source_actor: (document: Parameters<typeof verifiedPersonUpdateActorV1>[1]) => verifiedPersonUpdateActorV1(inbox, document),
       on_terminal_action_queued: () => requestApprovalPublication?.(),
       state: bindApprovalWorkflowStateV1(sourceState, () => {
         if (authority.inTransaction) throw new Error("approval state owner transaction must be idle");
@@ -445,6 +459,7 @@ export async function openOrganizationAuthorityRuntime(
           sourceCycle,
           approvals.processing,
           readableSearch,
+          new PersonUpdateProcessingV1(inbox, coordinates.organization_id, admission, processor, approvals),
           meetingApprovalJourneyTelemetry,
         ),
         api: {

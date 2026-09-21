@@ -38,7 +38,8 @@
     "buffer"
   ],
   "runtime_assets": [
-    "packages/organization-authority-kernel/baselines/authority-baseline-v5.sql"
+    "packages/organization-authority-kernel/baselines/authority-baseline-v5.sql",
+    "packages/organization-authority-kernel/baselines/authority-baseline-v6.sql"
   ],
   "layer_rules": [
     {

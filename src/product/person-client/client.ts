@@ -1,3 +1,4 @@
+import { validatePersonUpdateSubmitV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
 import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonMeetingIngestionExclusionSelectorV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
@@ -360,6 +361,18 @@ export class PersonClient {
     } finally {
       this.store.finishLogout();
     }
+  }
+
+  async submitUpdate(value: PersonUpdateSubmitV1) {
+    const request = validatePersonUpdateSubmitV1(value);
+    const stored = await this.accessSession();
+    return this.authority(stored.authority_origin).submitUpdate(stored.session.access_token, request);
+  }
+
+  async updateStatus(requestId: string) {
+    validatePersonUpdateRequestId(requestId);
+    const stored = await this.accessSession();
+    return this.authority(stored.authority_origin).updateStatus(stored.session.access_token, requestId);
   }
 
   async records(

@@ -1,3 +1,5 @@
+import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
+import type { PersonUpdatesApplicationV1 } from '../application/person-updates.js';
 import { validatePersonQueryText } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
@@ -62,6 +64,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_EMPLOYEES_PATH_V1}`,
   `PUT ${PERSON_EMPLOYEES_PATH_V1}`,
   `DELETE ${PERSON_EMPLOYEES_PATH_V1}`,
+  `POST ${PERSON_UPDATES_PATH_V1}`,
   `GET ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V1}`,
@@ -95,6 +98,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_employees?: PersonEmployeeHttpApplication;
   /** Optional until the active Organization Authority runtime has a configured answer model. */
   readonly person_answer?: PersonAnswerHttpApplicationV1;
+  readonly person_updates?: PersonUpdatesApplicationV1;
   /** Optional until an active private-approval surface is fully composed. */
   readonly private_approval_interaction_ingress?:
     ProviderHttpApplicationV1;
@@ -117,7 +121,7 @@ function providerIngressRoutes(
       ) throw new Error("invalid provider ingress route");
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
-      if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key)) {
+      if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) || route.path === PERSON_UPDATES_PATH_V1 || route.path.startsWith(`${PERSON_UPDATES_PATH_V1}/`)) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
       if (mounted.has(key)) {
@@ -320,13 +324,13 @@ function fail(response: ServerResponse, status: number, code: string): void {
   json(response, status, { error: { code, message: "request failed" } });
 }
 
-async function rawBody(request: IncomingMessage): Promise<Buffer> {
+async function rawBody(request: IncomingMessage, maximum = MAXIMUM_BODY_BYTES): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.byteLength;
-    if (size > MAXIMUM_BODY_BYTES)
+    if (size > maximum)
       throw new AuthorityOperationError(
         "invalid_request",
         "request body is too large",
@@ -642,6 +646,21 @@ export function createOrganizationAuthorityHttpServer(
         });
         noContent(response);
         return;
+      }
+      if (options.person_updates !== undefined && url.search === '') {
+        if (method === 'POST' && url.pathname === PERSON_UPDATES_PATH_V1) {
+          const token = accessToken(request.headers.authorization);
+          // Reject malformed UTF-8 instead of replacing bytes before validation.
+          let requestBody: unknown;
+          try { requestBody = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES))); }
+          catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
+          json(response, 202, options.person_updates.submit(token, requestBody));
+          return;
+        }
+        if (method === 'GET' && url.pathname.startsWith(`${PERSON_UPDATES_PATH_V1}/`)) {
+          json(response, 200, options.person_updates.status(accessToken(request.headers.authorization), url.pathname.slice(PERSON_UPDATES_PATH_V1.length + 1)));
+          return;
+        }
       }
       if (
         options.person_employees !== undefined &&

@@ -1,5 +1,6 @@
 import { coreRuntimeIdentityV1, annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import {
+  AdapterError,
   assertCanonicalDecisionSet,
   assertCanonicalMeetingBatch,
   assertCanonicalMeetingDocument,
@@ -412,7 +413,14 @@ export class AdmittedMeetingProcessingCycleV1 {
   private async run(
     signal: AbortSignal | undefined,
   ): Promise<AdmittedMeetingProcessingCycleResultV1> {
-    const result = await this.processSource(signal);
+    let result: AdmittedMeetingProcessingCycleResultV1;
+    try { result = await this.processSource(signal); }
+    catch (error) {
+      if (error instanceof AdapterError && signal?.aborted !== true) {
+        await this.options.stager.reconcilePendingDeliveries(signal === undefined ? undefined : { signal });
+      }
+      throw error;
+    }
     // Delivery recovery is deliberately after source work. A broken or
     // provider-ambiguous older card can fail visibly, but it cannot prevent
     // this cycle from durably admitting the next unrelated meeting first.

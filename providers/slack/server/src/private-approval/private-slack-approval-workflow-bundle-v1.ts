@@ -1,3 +1,4 @@
+import { resolveVerifiedActorPrivateSlackApprovalReviewerV1 } from './resolve-private-slack-approval-reviewer-target-v1.js';
 import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
@@ -153,7 +154,12 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
           assignments,
           control_plane: controlPlane,
           poster,
-          resolve_reviewer_target: resolveMeetingOwnerPrivateSlackApprovalReviewerV1,
+          resolve_reviewer_target: (input) => {
+            const actor = context.verified_source_actor?.(input.meeting);
+            if (actor === 'unavailable') return undefined;
+            return actor === undefined ? resolveMeetingOwnerPrivateSlackApprovalReviewerV1(input)
+              : resolveVerifiedActorPrivateSlackApprovalReviewerV1({ ...input, actor });
+          },
           ...(context.journey_telemetry === undefined
             ? {}
             : { journey_telemetry: context.journey_telemetry }),
@@ -197,6 +203,8 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
         return Object.freeze({
           close: () => persistence.close(),
           stager,
+          can_review_as: (actor: Parameters<typeof resolveVerifiedActorPrivateSlackApprovalReviewerV1>[0]['actor']) => resolveVerifiedActorPrivateSlackApprovalReviewerV1({ actor, authority_database: persistence.authority_database, control_plane_database: persistence.control_plane_database, coordinates: context.coordinates, connection_id: slack.connection_id }) !== undefined,
+          read_terminal_outcome: (approvalId: string) => assignments.readTerminal(approvalId)?.outcome,
           processing,
           interaction_ingress:
             createPrivateSlackApprovalHttpAdapterV1(interactions),

@@ -463,7 +463,10 @@ private final class CliRunner: @unchecked Sendable {
               let actions = safeSourceSignals(brief["actions"], kind: "action"),
               let rationales = safeSourceSignals(brief["rationales"], kind: "rationale")
         else { return nil }
-        let title = safeSourceText(meeting["title"] as? String) ?? "Untitled meeting"
+        let provenance = body["source_provenance"] as? [String: Any]
+        let isPersonUpdate = provenance?["source_adapter_id"] as? String == "person-update-inbox-v1"
+        let rawTitle = safeSourceText(meeting["title"] as? String) ?? (isPersonUpdate ? "Untitled update" : "Untitled meeting")
+        let title = isPersonUpdate ? "Person update: \(rawTitle)" : rawTitle
         let visibility = source.policyID == "organization-member-readable-person-v2"
             ? "Visible to active organization members"
             : "Only the approver"

@@ -177,3 +177,14 @@ The neutral client and account shell use `/v3/person/tools`, a bounded generic
 status contract. Provider commands and native actions are composed at explicit
 entrypoints. Supported v2 routes remain in the Slack provider for existing
 clients; the native disconnect action decodes that retained response there.
+
+## Deliberate text updates
+
+`echo-brain person updates submit --request-id <uuid> --title <title> --file <path>`
+uploads one bounded UTF-8 file to the organization's durable pending inbox for
+private review. `person updates status --request-id <uuid>` reads only the
+current membership's receipt and safe processing outcome. Keep the original
+request ID and exact payload after an unknown transport outcome; use status or
+an explicit matching retry. The CLI prints no submitted content, creates no
+local queue, and performs no automatic submission retry. Session refresh uses
+the existing rules. Approval completion and search freshness remain separate.

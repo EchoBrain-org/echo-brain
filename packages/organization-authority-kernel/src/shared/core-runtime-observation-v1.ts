@@ -91,6 +91,13 @@ export function captureCoreRuntimeContentV1(content_kind: CoreRuntimeContentV1["
   const current = context.getStore();
   if (current?.content_observer) safe(() => current.content_observer!({ operation_id: current.detail.operation_id, span_id: current.detail.span_id, content_kind, content }));
 }
+/** Keep operational timings while excluding pending-custody payloads from content telemetry. */
+export function withoutCoreRuntimeContentV1<T>(operation: () => T): T {
+  const current = context.getStore();
+  if (current === undefined) return operation();
+  const { content_observer: _contentObserver, ...contentFree } = current;
+  return context.run(contentFree, operation);
+}
 function begin(phase: CoreRuntimePhaseV1, scope?: CoreRuntimeObservationScopeV1): { current: Context; finish: (event: "succeeded" | "failed", error?: unknown) => void } | null {
   const parent = context.getStore();
   const observer = scope?.observer ?? parent?.observer;

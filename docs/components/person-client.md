@@ -53,3 +53,9 @@ integration policy, and the organization record.
 Client status and failed requests must not create session state, print tokens,
 or imply that server-side provider processing is ready. See
 `INV-PERMISSIONS-013` and `FP-PERMISSIONS-001`.
+
+The `person updates submit` and `person updates status` commands transfer only
+one explicitly selected UTF-8 file and inspect its durable receipt. They add
+no background upload, local queue, provider code, or canonical-record authoring
+capability. Submission is a transfer into organizational pending custody, not
+approval. See the [Person update contract](../product/2026-09-21-person-update-inbox-v1.md).

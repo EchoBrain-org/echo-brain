@@ -3,9 +3,10 @@
 `organization-authority` is the Organization Authority service. It owns state
 initialization, Person OIDC sessions, initial-owner Slack identity linking,
 admitted meeting processing, approval finalization, immutable V4 records, and
-permission-aware Person reads and answer composition. It has no compatibility runtime for a prior
-Authority state: start with a new state directory and do not reuse legacy
-state, credentials, or volumes.
+permission-aware Person reads and answer composition. Authority V6 also owns the
+durable Person text inbox. Runtime opening never migrates state. The explicit
+[offline V5-to-V6 compatibility copy](../../docs/product/2026-09-21-person-update-inbox-v1.md#implemented-source-custody-and-compatibility-mapping)
+preserves an exact stopped V5 snapshot; unsupported older state remains refused.
 
 For any deployed staging initial-owner setup, do not run the lower-level setup
 commands in this service reference. Start with the

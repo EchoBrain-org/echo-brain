@@ -179,3 +179,21 @@ and
   instance IDs describe the V1 initial-owner bootstrap contract. Runtime
   components must not reuse that cohort name; replacing the persisted/operator
   vocabulary requires an explicit versioned bootstrap migration.
+
+## Explicit Person updates
+
+The Authority V6 inbox is the edge buffer for deliberate Person text submission.
+`person-update-inbox-v1` normalizes one immutable note and enters the shared
+frozen-candidate workflow alongside the admitted meeting source. The
+source-keyed registry preserves the original meeting admission/cursor; each
+inbox work row supplies independent progress. The serialized worker consumes
+at most one eligible inbox item per cycle. Provider failures remain retryable
+with bounded backoff; database/integrity failures remain failures.
+
+Pending submitted text is an explicit organizational custody exception: it is
+stored in Authority SQLite, never on a client queue or directly in the approved
+record. Receipt acceptance grants no read policy. Private review resolves the
+exact submitting membership and current Slack link, defaults to Only me, and
+publishes through the existing signed record and search path. The signed
+source identity preserves the author tenure independently of the approver.
+See the [implementation mapping and offline compatibility contract](../product/2026-09-21-person-update-inbox-v1.md#implemented-source-custody-and-compatibility-mapping).

@@ -96,6 +96,10 @@
     "./admitted-meeting-processing/review-lineage-semantics": {
       "types": "./dist/admitted-meeting-processing/review-lineage-semantics.d.ts",
       "import": "./dist/admitted-meeting-processing/review-lineage-semantics.js"
+    },
+    "./admitted-meeting-processing/person-update-source-v1": {
+      "types": "./dist/admitted-meeting-processing/person-update-source-v1.d.ts",
+      "import": "./dist/admitted-meeting-processing/person-update-source-v1.js"
     }
   },
   "files": [

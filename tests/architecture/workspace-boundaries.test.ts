@@ -557,10 +557,11 @@ describe("workspace source boundaries", () => {
       .not.toContain("/migrations");
   });
 
-  it("ships only the six current Authority state baseline SQL assets", () => {
+  it("ships the current Authority baselines and the explicit V5 compatibility input", () => {
     const expectedByRoot: Record<string, string[]> = {
       "packages/organization-authority-kernel": [
         "authority-baseline-v5.sql",
+        "authority-baseline-v6.sql",
       ],
       "packages/organization-control-plane": [
         "organization-control-plane-baseline-v3.sql",

@@ -1,3 +1,4 @@
+import { PERSON_UPDATE_SOURCE_ADAPTER_V1 } from '@echo-brain/organization-processing/admitted-meeting-processing/person-update-source-v1';
 /**
  * Private Slack DM delivery for admitted meeting-processing candidates.
  *
@@ -100,18 +101,20 @@ function isExactDisplayText(value: unknown): value is string {
 
 function evidenceReferenceText(
   signal: ReviewSignal,
+  evidenceLabel = "Transcript",
 ): string | undefined {
   const evidence = signal.evidence[0];
   if (evidence === undefined || !isExactDisplayText(evidence.block_id)) {
     return undefined;
   }
-  return `Transcript block ${evidence.block_id}`;
+  return `${evidenceLabel} block ${evidence.block_id}`;
 }
 
 function reviewItem(
   signal: ReviewSignal,
+  evidenceLabel = "Transcript",
 ): PrivateSlackApprovalReviewItemV1 | undefined {
-  const evidence_reference = evidenceReferenceText(signal);
+  const evidence_reference = evidenceReferenceText(signal, evidenceLabel);
   if (!isExactDisplayText(signal.text) || evidence_reference === undefined) {
     return undefined;
   }
@@ -120,6 +123,7 @@ function reviewItem(
 
 function frozenReview(
   brief: CompiledDecisionBrief,
+  evidenceLabel = "Transcript",
 ): {
   readonly decision_groups: readonly PrivateSlackApprovalDecisionGroupV1[];
   readonly ungrouped_actions?: readonly PrivateSlackApprovalActionItemV1[];
@@ -129,12 +133,12 @@ function frozenReview(
   const decision_groups: PrivateSlackApprovalDecisionGroupV1[] = [];
 
   for (const [index, decision] of brief.decisions.entries()) {
-    const item = reviewItem(decision);
+    const item = reviewItem(decision, evidenceLabel);
     if (item === undefined) return undefined;
     const rationales: PrivateSlackApprovalReviewItemV1[] = [];
     for (const rationale of brief.rationales) {
       if (!rationale.supports_signal_ids.includes(decision.id)) continue;
-      const rationaleItem = reviewItem(rationale);
+      const rationaleItem = reviewItem(rationale, evidenceLabel);
       if (rationaleItem === undefined) return undefined;
       rationales.push(rationaleItem);
     }
@@ -147,7 +151,7 @@ function frozenReview(
 
   const ungrouped_actions: PrivateSlackApprovalActionItemV1[] = [];
   for (const action of brief.actions) {
-    const item = reviewItem(action);
+    const item = reviewItem(action, evidenceLabel);
     if (item === undefined) return undefined;
     ungrouped_actions.push(item);
   }
@@ -155,7 +159,7 @@ function frozenReview(
   const ungrouped_rationales: PrivateSlackApprovalReviewItemV1[] = [];
   for (const rationale of brief.rationales) {
     if (rationale.supports_signal_ids.some((id) => decisionIds.has(id))) continue;
-    const item = reviewItem(rationale);
+    const item = reviewItem(rationale, evidenceLabel);
     if (item === undefined) return undefined;
     ungrouped_rationales.push(item);
   }
@@ -184,13 +188,15 @@ export function projectPrivateSlackApprovalCardV1(
     input.meeting,
     input.decisions,
   );
-  const review = frozenReview(brief);
+  const personUpdate = input.meeting.provenance.source.adapter_id === PERSON_UPDATE_SOURCE_ADAPTER_V1;
+  const review = frozenReview(brief, personUpdate ? "Update text" : "Transcript");
   if (review === undefined) return undefined;
   try {
     return buildPrivateSlackApprovalBlockKitCardV1({
       schema_version: 1,
       approval_id: input.approval_id,
       meeting_title: legacyMeetingTitle(input.meeting.title),
+      ...(personUpdate ? { source_kind: "person-update" as const } : {}),
       ...review,
     });
   } catch (error) {

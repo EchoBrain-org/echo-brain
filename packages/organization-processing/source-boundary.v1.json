@@ -136,6 +136,11 @@
         "name": "Approval workflow bundle",
         "path": "packages/organization-processing/src/ports/approval-workflow-bundle-v1.ts",
         "export": "ApprovalWorkflowBundleV1"
+      },
+      {
+        "name": "Person update note normalization",
+        "path": "packages/organization-processing/src/admitted-meeting-processing/person-update-source-v1.ts",
+        "export": "normalizePersonUpdateV1"
       }
     ],
     "compatibility_entrypoints": [],
