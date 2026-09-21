@@ -57,21 +57,57 @@ function fixture() {
   const reviewedLegacy = new Set(['be71eef5d3678957ef5f086a2ed42baeeb548687', '2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a']);
   const readSource = (commit: string, path: string) => reviewedLegacy.has(commit)
     ? execFileSync('git', ['-C', REPO, 'show', `${commit}:${path}`])
-    : commit === OLD && path !== 'tools/authority-staging-release-host.py'
+    : commit === OLD && path === 'deploy/organization-authority/update-clean-v1.sh'
       ? Buffer.from(`old-reviewed-tool:${path}\n`)
       : readFileSync(join(REPO, path));
   const dependencies = { aws, readSource, runtime: () => COMMIT, now: () => 1788640000000 };
   return { directory, options, calls, state, request, outcome, dependencies };
 }
 
+function fillToolBytes(request: any, readSource: (commit: string, path: string) => Buffer) {
+  for (const [name, entry] of Object.entries(request.files) as [string, any][]) {
+    if (name === 'candidate.json' || name === 'runtime-profile.json') continue;
+    const path = name.startsWith('release/') ? `deploy/${name}` : `deploy/organization-authority/${name}`;
+    entry.base64 = readSource(request.tooling_source, path).toString('base64');
+  }
+}
+
 afterEach(() => { for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 function inventoryOutcome(f: ReturnType<typeof fixture>): any {
   const request = f.request();
-  return { ...f.outcome(), diagnostic: { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(request.old_tool_hashes).map(([name, sha256]) => [name, { state: 'old', sha256 }])) } };
+  return { ...f.outcome(), diagnostic: { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(request.old_tool_hashes).map(([name, sha256]) => [name, { state: sha256 === request.files[name].sha256 ? 'new' : 'old', sha256 }])) } };
 }
 
 describe('bounded staging release operator', () => {
+  it('plans the explicit V5-to-V6 stage with installed-tool hash witnesses and no remote mutation', () => {
+    const f = fixture();
+    const options = { ...f.options, action: 'stage-v5-to-v6' as const };
+    expect(planStagingRelease(options, f.dependencies).state).toBe('planned');
+    const request = f.request();
+    expect(request).toMatchObject({ schema_version: 4, kind: 'echo-staging-release-request-v4', action: 'stage-v5-to-v6' });
+    expect(Object.keys(request.files['update-clean-v1.sh'])).toEqual(['sha256']);
+    expect(request.files['candidate.json'].base64).toBeDefined();
+    expect(f.state.submissions).toBe(0);
+    expect(Buffer.byteLength(JSON.stringify(releaseSsmParameters(request, f.dependencies.readSource)))).toBeLessThan(60 * 1024);
+    expect(() => validateReleaseRequest({ ...request, schema_version: 2, kind: 'echo-staging-release-request-v2' }, f.dependencies.readSource)).toThrow();
+    expect(() => validateReleaseRequest({ ...request, files: { ...request.files, 'candidate.json': { sha256: request.files['candidate.json'].sha256 } } }, f.dependencies.readSource)).toThrow();
+  });
+
+  it('sends only changed install bytes and rejects missing required artifacts', () => {
+    const f = fixture();
+    planStagingRelease({ ...f.options, action: 'install' }, f.dependencies);
+    const request = f.request();
+    expect(request.files['update-clean-v1.sh'].base64).toBeDefined();
+    expect(request.files['onboard-clean-v1.sh'].base64).toBeUndefined();
+    for (const name of ['update-clean-v1.sh', 'candidate.json', 'runtime-profile.json']) {
+      const changed = structuredClone(request); delete changed.files[name].base64;
+      expect(() => validateReleaseRequest(changed, f.dependencies.readSource), name).toThrow();
+    }
+    const unknown = structuredClone(request); unknown.files['onboard-clean-v1.sh'].sha256 = '0'.repeat(64);
+    expect(() => validateReleaseRequest(unknown, f.dependencies.readSource)).toThrow();
+  });
+
   it('exposes validated protocol results without losing their types', () => {
     expectTypeOf<ReturnType<typeof stagingReleaseTarget>>().not.toBeAny();
     expectTypeOf<ReturnType<typeof validateReleaseRequest>>().not.toBeAny();
@@ -121,7 +157,7 @@ describe('bounded staging release operator', () => {
     expect(Buffer.byteLength(JSON.stringify(parameters))).toBeLessThan(60 * 1024);
     expect(parameters.executionTimeout).toEqual(['1200']);
     expect(parameters.commands).toHaveLength(1);
-    expect(parameters.commands[0]).toContain('b85decode');
+    expect(parameters.commands[0]).toContain('b64decode');
     expect(f.calls.every(args => !['s3api', 'iam', 'secretsmanager'].includes(args[0]))).toBe(true);
   });
 
@@ -136,7 +172,7 @@ describe('bounded staging release operator', () => {
     expect(new Set(rendered)).toEqual(new Set([rendered[0]]));
   });
 
-  it('uses a new request version only for the exact named install migration', () => {
+  it('binds the exact named legacy install migration in the compact request', () => {
     const f = fixture();
     // @ts-expect-error Untrusted JS/CLI callers still require action validation.
     expect(() => planStagingRelease({ ...f.options, action: 'status', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies)).toThrow('tooling_migration_invalid');
@@ -144,10 +180,10 @@ describe('bounded staging release operator', () => {
     expect(() => planStagingRelease({ ...f.options, action: 'install', toolingMigration: 'anything-else' }, f.dependencies)).toThrow('tooling_migration_invalid');
     planStagingRelease({ ...f.options, action: 'install', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies);
     const request = validateReleaseRequest(f.request(), f.dependencies.readSource);
-    if (request.schema_version !== 3) throw new Error('Expected the named migration to produce a V3 request');
+    if (request.schema_version !== 4) throw new Error('Expected a V4 request');
     expect(request).toMatchObject({
-      schema_version: 3,
-      kind: 'echo-staging-release-request-v3',
+      schema_version: 4,
+      kind: 'echo-staging-release-request-v4',
       action: 'install',
       tooling_migration: 'legacy-staging-host-v1',
     });
@@ -418,7 +454,7 @@ describe('bounded staging release operator', () => {
   it('round-trips the compressed reviewed runner and request without calling AWS', () => {
     const f = fixture(); planStagingRelease(f.options, f.dependencies);
     const request = f.request();
-    const source = `def main(payload, expected):\n import base64,gzip,hashlib,json\n body=gzip.decompress(base64.b64decode(payload))\n assert hashlib.sha256(body).hexdigest()==expected\n value=json.loads(body)\n assert value['schema_version']==2\n assert len(value['files'])==8\n print('verified-offline-wire')\n`;
+    const source = `def main(payload, expected):\n import base64,gzip,hashlib,json\n body=gzip.decompress(base64.b64decode(payload))\n assert hashlib.sha256(body).hexdigest()==expected\n value=json.loads(body)\n assert value['schema_version']==4\n assert len(value['files'])==8\n print('verified-offline-wire')\n`;
     const readSource = (commit: string, path: string) => path === 'tools/authority-staging-release-host.py' ? Buffer.from(source) : f.dependencies.readSource(commit, path);
     const parameters = releaseSsmParameters(request, readSource);
     const result = spawnSync('sh', ['-c', parameters.commands[0]], { encoding: 'utf8', timeout: 10000 });
@@ -448,7 +484,12 @@ describe('bounded staging release operator', () => {
     const dependencies = { ...f.dependencies, readSource };
     planStagingRelease(f.options, dependencies);
     const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
+    receipt.request.schema_version = 2;
+    receipt.request.kind = 'echo-staging-release-request-v2';
+    fillToolBytes(receipt.request, readSource);
+    receipt.request_sha256 = digest(canonical(receipt.request) + '\n');
     const parameters = releaseSsmParameters(receipt.request, readSource);
+    receipt.parameters_sha256 = digest(canonical(parameters) + '\n');
     expect(parameters.commands[0]).toContain('b64decode(');
     expect(parameters.commands[0]).toContain('validate=True');
     expect(parameters.commands[0]).not.toContain('b85decode');
@@ -466,6 +507,7 @@ describe('bounded staging release operator', () => {
     const f = fixture(); planStagingRelease(f.options, f.dependencies);
     const dependencies = { ...f.dependencies, readSource: (commit: string, path: string) => path === 'tools/authority-staging-release-host.py' ? Buffer.from('# legacy reviewed runner fixture\n') : f.dependencies.readSource(commit, path) };
     const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
+    fillToolBytes(receipt.request, dependencies.readSource);
     receipt.request.schema_version = 1;
     receipt.request.kind = 'echo-staging-release-request-v1';
     for (const name of ['onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh']) {

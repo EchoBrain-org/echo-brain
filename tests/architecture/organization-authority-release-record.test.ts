@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import Database from "better-sqlite3";
+import { applyAuthorityBaselineV5, authorityBaselineSha256V5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
@@ -249,11 +251,11 @@ function installActiveTuple(
 }
 
 
-function environmentDriftFixture() {
-  const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-environment-drift-"));
+function environmentDriftFixture(stateName = "release-state") {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-clean-v1-environment-drift-")));
   roots.push(root);
   const envFile = join(root, ".env.clean-v1");
-  const state = join(root, "release-state");
+  const state = join(root, stateName);
   const profile = writeRuntimeProfile();
   const accepted = releaseWithRuntimeProfile(profile);
   const runtimeConfig = prepareRuntimeConfig(root, profile);
@@ -305,6 +307,43 @@ function environmentDriftFixture() {
     runtimeConfig, log, failStart, environment,
     execute: (...args: string[]) => run("bash", [UPDATE, ...args], environment),
   };
+}
+
+function migrationFixture() {
+  const f = environmentDriftFixture('release');
+  chmodSync(f.state, 0o700); chmodSync(f.acceptedPath, 0o600);
+  const environment = f.original + `ECHO_CLEAN_AUTHORITY_UID=${process.getuid!()}\nECHO_CLEAN_AUTHORITY_GID=${process.getgid!()}\n`;
+  writeFileSync(f.envFile, environment); writeFileSync(f.snapshot, environment);
+  const state = join(f.root, 'state');
+  bootstrapOrganizationAuthorityState({ state_directory: state, organization_display_name: 'Preserved staging', owner_display_name: 'Owner', created_at: '2026-09-21T00:00:00.000Z', creating_artifact_revision: 'migration-fixture' });
+  const path = join(state, 'authority.sqlite');
+  const current = new Database(path, { readonly: true });
+  const oldPath = join(f.root, 'old.sqlite'); const old = new Database(oldPath); applyAuthorityBaselineV5(old);
+  old.transaction(() => {
+    const triggers = old.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger'").all() as { name: string; sql: string }[];
+    for (const trigger of triggers) old.exec(`DROP TRIGGER ${trigger.name}`);
+    for (const { name } of old.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all() as { name: string }[]) {
+      for (const row of current.prepare(`SELECT * FROM ${name}`).all() as Record<string, unknown>[]) {
+        const columns = Object.keys(row);
+        old.prepare(`INSERT INTO ${name} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map(column => row[column]));
+      }
+    }
+    const manifest = { ...JSON.parse(current.prepare('SELECT manifest_json FROM echo_state_lineage_manifest').pluck().get() as string), database_schema_version: 5, schema_sha256: authorityBaselineSha256V5() };
+    old.exec(current.prepare("SELECT sql FROM sqlite_master WHERE name='echo_state_lineage_manifest'").pluck().get() as string);
+    old.prepare('INSERT INTO echo_state_lineage_manifest VALUES (1, ?, ?)').run(canonical(manifest), `sha256:${createHash('sha256').update(canonical(manifest)).digest('hex')}`);
+    for (const trigger of triggers) old.exec(trigger.sql);
+  })();
+  current.close(); old.close(); renameSync(oldPath, path); chmodSync(path, 0o600);
+  const snapshot = (directory: string): Record<string, string> => Object.fromEntries(readdirSync(directory, { recursive: true }).map(String).filter(name => statSync(join(directory, name)).isFile()).map(name => [name, createHash('sha256').update(readFileSync(join(directory, name))).digest('hex')]));
+  const before = snapshot(state);
+  const candidate = releaseWithRuntimeProfile(f.profile, { release_id: 'clean-v1-migration-candidate', authority_image: { reference: f.accepted.authority_image.reference.replace(/b{64}/, 'f'.repeat(64)) } });
+  const candidatePath = writeRecord(candidate); chmodSync(candidatePath, 0o600);
+  const docker = join(f.root, 'bin/docker'); renameSync(docker, join(f.root, 'bin/docker-fallback'));
+  copyFileSync(join(REPO, 'tests/fixtures/staging-migration-docker.py'), docker); chmodSync(docker, 0o755);
+  const env = { ...f.environment, ECHO_CLEAN_STATE_DIR: state, ECHO_TEST_MIGRATION_ROOT: f.root, ECHO_TEST_ACCEPTED_IMAGE: f.accepted.authority_image.reference };
+  const execute = (...args: string[]) => run('bash', [UPDATE, ...args], env);
+  const stage = (action = 'stage-v5-to-v6') => execute(action, '--release', candidatePath, '--runtime-profile', f.profile);
+  return { ...f, stateDirectory: state, before, snapshot, candidate, candidatePath, execute, stage, operation: join(f.state, 'state-v5-to-v6', candidate.release_id) };
 }
 
 function writeUnsupportedRootState(stateDirectory: string): void {
@@ -399,6 +438,57 @@ afterEach(() => {
 });
 
 describe("Organization Authority clean-v1 release record", () => {
+  it('preserves all state through the explicit V5-to-V6 stage and archives candidate writes on rollback', () => {
+    const f = migrationFixture();
+    const staged = f.stage(); expect(staged.status, staged.stderr + staged.stdout).toBe(0);
+    expect(f.snapshot(join(f.operation, 'accepted-state'))).toEqual(f.before);
+    for (const [name, hash] of Object.entries(f.before)) {
+      if (!name.startsWith('authority.sqlite')) expect(f.snapshot(f.stateDirectory)[name], name).toBe(hash);
+    }
+    const db = new Database(join(f.stateDirectory, 'authority.sqlite'), { readonly: true });
+    try { expect(db.pragma('user_version', { simple: true })).toBe(6); } finally { db.close(); }
+    expect(f.execute('status').status).toBe(0);
+    writeFileSync(join(f.stateDirectory, 'synthetic-candidate-write'), 'retained upload', { mode: 0o600 });
+    const rolledBack = f.execute('rollback'); expect(rolledBack.status, rolledBack.stderr + rolledBack.stdout).toBe(0);
+    expect(f.snapshot(f.stateDirectory)).toEqual(f.before);
+    expect(readFileSync(join(f.operation, 'failed-state/synthetic-candidate-write'), 'utf8')).toBe('retained upload');
+    expect(f.execute('status').status).toBe(0);
+  });
+
+  it('refuses rollback before activating V5 if the migration journal directory is replaced', () => {
+    const f = migrationFixture(); expect(f.stage().status).toBe(0);
+    renameSync(f.operation, `${f.operation}-retained`);
+    symlinkSync(join(f.root, 'absent-journal'), f.operation);
+    const result = f.execute('rollback'); expect(result.status).not.toBe(0);
+    expect(readFileSync(f.envFile, 'utf8')).toContain(`ECHO_CLEAN_RELEASE_ID=${f.candidate.release_id}`);
+    expect(existsSync(join(f.state, 'candidate.clean-v1.json'))).toBe(true);
+    const db = new Database(join(f.stateDirectory, 'authority.sqlite'), { readonly: true });
+    try { expect(db.pragma('user_version', { simple: true })).toBe(6); } finally { db.close(); }
+  });
+
+  it.each(['fail-conversion', 'fail-candidate-verify', 'fail-candidate-start'])('restores and verifies V5 when %s occurs', failure => {
+    const f = migrationFixture(); writeFileSync(join(f.root, failure), 'failure');
+    const staged = f.stage(); expect(staged.status).not.toBe(0);
+    expect(staged.stderr).toContain('previous accepted release tuple was restored and verified');
+    expect(f.snapshot(f.stateDirectory)).toEqual(f.before);
+    expect(existsSync(join(f.state, 'candidate.clean-v1.json'))).toBe(false);
+    expect(f.execute('status').status).toBe(0);
+  });
+
+  it('still refuses V5 through ordinary stage before publishing a candidate or changing state', () => {
+    const f = migrationFixture(); const staged = f.stage('stage');
+    expect(staged.status).not.toBe(0);
+    expect(f.snapshot(f.stateDirectory)).toEqual(f.before);
+    expect(existsSync(join(f.state, 'candidate.clean-v1.json'))).toBe(false);
+    expect(existsSync(f.operation)).toBe(false);
+  });
+
+  it('recovers filesystem interruption windows without losing either state directory', () => {
+    const result = spawnSync('python3', ['-B', join(REPO, 'tests/fixtures/staging-state-migration-test.py'), UPDATE], { encoding: 'utf8', timeout: 10000 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain('OK');
+  });
+
   it.each([
     ['', 0, false],
     ['not JSON', 0, false],

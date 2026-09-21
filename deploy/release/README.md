@@ -1,8 +1,8 @@
 # Organization Authority release and update procedure
 
 This directory contains the small release boundary used after the first live
-organization release. It is deliberately an artifact-selection process, not a
-schema migration or client fleet-management system.
+organization release. It selects exact artifacts and provides one explicit, state-preserving
+V5-to-V6 staging transition. It does not manage client fleets.
 
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
@@ -11,11 +11,12 @@ current Authority V6, private-approval control-plane V3, record-log V3, and
 six-role V2 root lineage. For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
-mutation. While there are no live users,
+mutation. The named [V5-to-V6 staging migration](#state-preserving-v5-to-v6-staging-migration)
+preserves an accepted V5 organization. Other incompatible baselines require an
+explicit migration design or an authorized reset. For an authorized reset with no live users,
 run `onboard-clean-v1.sh
 replace-rehearsal --confirm-no-live-users`, then prepare the organization again
-with the new release record and matching profile. Do not point this updater at
-the older accepted record.
+with the new release record and matching profile. Ordinary `stage` never migrates an older baseline.
 
 ## Release record
 
@@ -237,10 +238,63 @@ recovery as unconfirmed.
 `./update-clean-v1.sh status` inspects the actual running Authority container
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
-migration is not eligible for this loop; make an explicit migration decision
-instead. If persisted state lacks the candidate's exact V6/V3/V3 databases and
+migration requires a separately named operation. The only implemented schema
+transition is the V5-to-V6 staging migration below. If persisted state lacks the candidate's exact V6/V3/V3 databases and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
+
+### State-preserving V5-to-V6 staging migration
+
+Use `plan --action stage-v5-to-v6` through the reviewed release CLI after
+installing the merged migration tooling. Supply the same accepted release,
+candidate release and candidate runtime-profile inputs as `stage`. Optional
+`--content-telemetry` has the same meaning. The installed host action is:
+
+```sh
+./update-clean-v1.sh stage-v5-to-v6 \
+  --release /absolute/private/candidate-release.json \
+  --runtime-profile /absolute/private/candidate-runtime-profile.json
+```
+
+This action is restricted to an already accepted, healthy
+`authority-staging.echobrain.org`. It preserves the organization, identities,
+sessions, records, pending approvals, keys, provider configuration and telemetry.
+It verifies the accepted tuple and lineage, stops Authority and proxy, and
+copies the stopped state. The exact candidate image's existing offline
+`copyAuthorityV5ToV6` copier rebuilds only `authority.sqlite`; the other five
+roles, root manifest, keys and sidecars are copied unchanged. The input database
+is read-only. The copier requires the exact pinned V5 schema, and the candidate's
+complete lineage and processor-admission verifiers must accept the copied state
+before it becomes active. Ordinary `stage` still refuses V5.
+
+The filesystem step allows at most 4,096 entries and 1 GiB of source files,
+requires twice the source size plus 64 MiB of free space, and refuses symlinks,
+hardlinks, special files, writable-by-others files, different filesystems or
+unexpected ownership. The stopped service UID/GID comes from the validated
+accepted environment. A root-owned, release-bound journal under
+`clean-data/release/state-v5-to-v6/<candidate-release-id>/` records the original
+and converted directory identities. Atomic renames retain the original as
+`accepted-state` and activate the verified copy. No state directory is deleted.
+
+After successful activation, follow the normal canary, human Slack approval,
+exact candidate-client reads, human final release decision and promotion gates.
+Promotion retains the original snapshot. The migration does not authorize a
+reset, infrastructure change, production transition or final release decision.
+
+On a confirmed conversion or startup failure, the wrapper stops the candidate,
+restores the original directory and accepted tuple, and checks the accepted
+runtime before reporting recovery. Explicit `rollback` uses the same path.
+**Rollback restores the pre-migration state:** writes made while testing V6 are
+retained in `failed-state` for inspection, but are not merged back into V5.
+Do not admit normal user traffic while evaluating this staging candidate.
+
+An incomplete journal blocks successful status, canary and promotion. Keep the
+candidate marker and recover with `rollback` after confirming the previous
+remote command has ended and following the existing operation-lock recovery
+procedure. Both rename interruption windows are recoverable by recorded inode
+identity; unknown replacements are refused. Never delete or edit a journal,
+state snapshot or lock to force progress. If accepted runtime recovery remains
+unconfirmed, stop and retain all evidence. Snapshot cleanup is separate work.
 
 ### Environment drift before staging
 
@@ -502,7 +556,8 @@ is installed; the new installed tools must match the executing reviewed source.
 | `diagnose` | Returns the fixed secret-safe diagnostic; no runtime-health claim. |
 | `repair` | Requires accepted-only eligible telemetry drift or its exact pending repair; restores the saved environment and verifies the accepted runtime. May temporarily disable telemetry. |
 | `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
-| `stage` | No staged candidate; uses exact candidate/profile. Add `--content-telemetry true` or `false` to this plan only. |
+| `stage` | No staged candidate; uses exact candidate/profile. Optional `--content-telemetry true` or `false`. |
+| `stage-v5-to-v6` | Explicit stopped-state copy and migration on the accepted V5 staging host; retains original state for rollback. Same inputs and telemetry option as `stage`. |
 | `canary` | Requires the exact staged candidate; stops for the human to approve its private Slack card. `delivery_pending` is safe to retry with a new canary operation after the first invocation has definitively completed. |
 | `rollback` | Requires the exact staged candidate and unchanged accepted record; existing wrapper recovery semantics apply. |
 | `promote` | Requires the exact staged candidate, its stored canary receipt, successful exact-client checks, and the separate final founder authorization below. |
@@ -519,15 +574,19 @@ is `unconfirmed`, not proof that the runtime stopped or recovery succeeded.
 These semantics follow the [Run Command API](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html)
 and [invocation status contract](https://docs.aws.amazon.com/cli/latest/reference/ssm/get-command-invocation.html).
 
-Ordinary new plans use request version 2; only the explicit named tooling
-migration uses version 3. Both use a checksum-bound XZ-compressed text bundle
-containing the exact reviewed runner and non-secret files. The fixed loader
+New plans use request version 4, including the named legacy tooling install.
+They use a checksum-bound XZ-compressed text bundle containing the exact reviewed
+runner and non-secret artifacts. Installed tools travel as checksum witnesses;
+`install` carries bytes for changed tools, and witnesses for unchanged tools.
+The named legacy install always carries the possibly absent backup helper.
+Every installed file still passes owner, mode and old/new hash checks before
+any action. Candidate records and profiles always include their exact bytes. The fixed loader
 checks its digest and size, reconstructs the canonical request and checks its
 digest before invoking the runner. Compression uses the existing operator
 Python 3 standard-library `lzma` module with a fixed preset; decoding is bounded
 by both output size and memory. No third-party package or manual courier is
 needed. The 60-KiB command cap is unchanged. Old
-version-1 and version-2 receipts can still be polled with their original transport binding;
+version-1, version-2 and version-3 receipts can still be polled with their original transport binding;
 unsubmitted version-1 plans cannot execute in the new CLI. Preserve old receipts
 and reconcile any unfinished command before planning a new operation.
 
