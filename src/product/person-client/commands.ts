@@ -1,3 +1,5 @@
+import { readUpdateFile } from './update-file.js';
+import { validatePersonUpdateSubmitV1, validatePersonUpdateRequestId, validatePersonUploadVisibilityV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
@@ -19,7 +21,6 @@ const MAXIMUM_INPUT_BYTES = 64 * 1024;
 interface Output {
   write(value: string): unknown;
 }
-
 export interface PersonClientCliDependencies {
   readonly tool_commands?: readonly PersonToolCommandV1[];
   readonly stdout?: Output;
@@ -35,6 +36,11 @@ export interface PersonClientCliDependencies {
 }
 
 const OPTIONS = {
+  "request-id": { type: "string" },
+  "context-id": { type: "string" },
+  visibility: { type: "string" },
+  title: { type: "string" },
+  file: { type: "string" },
   "authority-url": { type: "string" },
   invitation: { type: "string" },
   question: { type: "string" },
@@ -55,6 +61,10 @@ type Option = string;
 const RULES: Readonly<
   Record<string, { accepts?: readonly Option[]; requires?: readonly Option[] }>
 > = {
+  "updates-submit": { accepts: ["request-id", "title", "file", "visibility"], requires: ["request-id", "title", "file"] },
+  "updates-status": { accepts: ["request-id"], requires: ["request-id"] },
+  "updates-search": { accepts: ["query", "limit"], requires: ["query"] },
+  "updates-read": { accepts: ["context-id"], requires: ["context-id"] },
   login: {
     accepts: ["invitation", "authority-url", "open-browser"],
   },
@@ -112,6 +122,7 @@ Commands:
   logout      Remove the local session.
   ask         Ask a question over records you may read.
   records     List records or search the current generation.
+  updates     Upload, search, and read original context with your chosen visibility.
   employee    List, invite, reissue, or revoke an employee.
   tools       Read organization tools and your current link status.
 
@@ -143,6 +154,26 @@ Ask one question using at most 240 Unicode code points, 1–32 distinct normaliz
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
 `,
+  updates: `usage: echo-brain person updates <submit|status|search|read> [options]
+
+Uploads preserve the original text. Only me is the default; Team explicitly shares it with current organization members. No Slack approval or decision extraction is required.
+`,
+  "updates-submit": `usage: echo-brain person updates submit --request-id <uuid> --title <title> --file <utf8-text-file> [--visibility <only-me|team>]
+
+Saves this UTF-8 file (at most 8 KiB) unchanged in your organization. Only me is the default; Team makes it readable to current organization members immediately. It is searchable without waiting for optional metadata. Keep the request ID: after an unknown outcome, check status or retry the exact file, title, and visibility with the same ID.
+`,
+  "updates-status": `usage: echo-brain person updates status --request-id <uuid>
+
+Shows your saved receipt, selected visibility, and optional search-metadata progress. Metadata failure does not prevent reading or searching the original.
+`,
+  "updates-search": `usage: echo-brain person updates search --query <text> [--limit <1-10>]
+
+Find original uploads you may read. Optional search hints help matching; excerpts come from the original text.
+`,
+  "updates-read": `usage: echo-brain person updates read --context-id <id>
+
+Open the original uploaded text under its current access checks.
+`,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
 Run \`echo-brain person employee <command> --help\` for required options.
@@ -167,6 +198,7 @@ Shows each employee's name, canonical email, membership state, and invitation st
 
 /** Returns supported human CLI help without constructing a client or session. */
 function personClientCliHelp(argv: readonly string[], commands: readonly PersonToolCommandV1[]): string | undefined {
+  if (argv.length === 3 && argv[0] === 'updates' && argv[2] === '--help') return HELP[`updates-${argv[1]}`];
   const tool = commands.find(command => command.name === argv[0]);
   if (tool && argv.length === 2 && argv[1] === '--help') {
     return `usage: echo-brain person ${tool.name}${Object.keys(tool.options).map(option => ' --' + option + ' <value>').join('')}\n\n${tool.description}\n`;
@@ -433,7 +465,7 @@ export async function runPersonClientCli(
   const toolCommands = dependencies.tool_commands ?? [];
   const registered = new Map<string, PersonToolCommandV1>();
   for (const command of toolCommands) {
-    if (registered.has(command.name) || Object.hasOwn(RULES, command.name) || !/^[a-z][a-z0-9-]*$/.test(command.name) ||
+    if (registered.has(command.name) || command.name === 'updates' || Object.hasOwn(RULES, command.name) || !/^[a-z][a-z0-9-]*$/.test(command.name) ||
         command.requires?.some(name => !Object.hasOwn(command.options, name))) {
       throw new Error('Person tool command registration is invalid or duplicated');
     }
@@ -455,7 +487,8 @@ export async function runPersonClientCli(
           argv[1] as "invite" | "reissue" | "revoke" | "list"
         ]
       : undefined;
-  const action = employeeAction ?? (argv[0] ?? "");
+  const updateAction = argv[0] === 'updates' && ['submit', 'status', 'search', 'read'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
+  const action = updateAction ?? employeeAction ?? (argv[0] ?? "");
   const toolCommand = registered.get(action);
   const rule = RULES[action] ?? (toolCommand === undefined ? undefined : { accepts: Object.keys(toolCommand.options), requires: toolCommand.requires });
   if (rule === undefined) {
@@ -465,7 +498,7 @@ export async function runPersonClientCli(
 
   let values: Record<Option, string | boolean | undefined>;
   try {
-    const args = [...argv.slice(employeeAction === undefined ? 1 : 2)];
+    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined ? 1 : 2)];
     // Accept a negative integer as a limit value so the existing bounds explain
     // it. Other dash-prefixed values retain parseArgs' strict option behavior.
     if (action === "records") {
@@ -560,6 +593,21 @@ export async function runPersonClientCli(
       return 0;
     }
     switch (action) {
+      case 'updates-submit': {
+        const requestId = validatePersonUpdateRequestId(requiredText(values, 'request-id'));
+        const request = validatePersonUpdateSubmitV1({ schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId, title: requiredText(values, 'title'), text: readUpdateFile(requiredText(values, 'file')), visibility: validatePersonUploadVisibilityV1(values.visibility === undefined || values.visibility === 'only-me' ? 'only_me' : values.visibility) });
+        print(stdout, await client.submitUpdate(request));
+        break;
+      }
+      case 'updates-search':
+        print(stdout, await client.searchUploads({ query: requiredText(values, 'query'), ...(values.limit === undefined ? {} : { limit: Number(values.limit) }) }));
+        break;
+      case 'updates-read':
+        print(stdout, await client.readUpload(requiredText(values, 'context-id')));
+        break;
+      case 'updates-status':
+        print(stdout, await client.updateStatus(requiredText(values, 'request-id')));
+        break;
       case "login": {
         requireSignedOut(client);
         const invitation =

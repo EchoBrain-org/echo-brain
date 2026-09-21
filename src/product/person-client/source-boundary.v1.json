@@ -223,6 +223,19 @@
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
+    },
+    {
+      "name": "person-update-file-reads-explicit-bounded-input",
+      "from": "src/product/person-client/update-file.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "fs",
+        "buffer"
+      ]
     }
   ]
 }

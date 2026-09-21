@@ -7,7 +7,7 @@ schema migration or client fleet-management system.
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V5, private-approval control-plane V3, record-log V3, and
+current Authority V6, private-approval control-plane V3, record-log V3, and
 six-role V2 root lineage. For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
@@ -238,7 +238,7 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
 migration is not eligible for this loop; make an explicit migration decision
-instead. If persisted state lacks the candidate's exact V5/V3/V3 databases and
+instead. If persisted state lacks the candidate's exact V6/V3/V3 databases and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
 

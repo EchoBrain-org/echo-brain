@@ -1,23 +1,33 @@
+import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
+import { SqlitePersonUpdateInboxV1 } from '../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
+import { AdapterError } from '@echo-brain/organization-processing/core';
+import Database from 'better-sqlite3';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { createCoherentWorktreeSnapshot } from '../../../tests/fixtures/coherent-worktree.js';
+import { applyAuthorityBaselineV5, authorityBaselineSha256V5 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { copyAuthorityV5ToV6 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/authority-v5-to-v6';
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
 const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
 import { persistedApprovalWorkflowFixtureV1 } from "./fixtures/persisted-approval-workflow-v1.js";
 import { createPrivateSlackApprovalWorkflowBundleV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-workflow-bundle-v1";
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../tests/support/telemetry-fixture-vocabulary-v1.js";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   canonicalJson,
   canonicalSha256,
@@ -33,7 +43,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeContentV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
-import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
+import type { BegunPersonOidcLogin, IssuedPersonSession } from "../src/application/person-identity-sessions.js";
 import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
 import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqlitePersonSessionRepository } from "../src/adapters/persistence/sqlite/sqlite-person-session-repository.js";
@@ -171,7 +181,7 @@ async function completeFounderReonboarding(input: {
   readonly state_directory: string;
   readonly parent: string;
   readonly owner_membership_id: string;
-}): Promise<{ pkce_key_file: string; owner_access_token: string }> {
+}): Promise<{ pkce_key_file: string; owner_access_token: string; owner_session: IssuedPersonSession }> {
   const credentials = initializePersonSessionCredentials({
     state_directory: input.state_directory,
   });
@@ -225,7 +235,7 @@ async function completeFounderReonboarding(input: {
       state: begun.state,
       authorization_code: "founder-code",
     });
-    return { pkce_key_file: pkce, owner_access_token: session.access_token };
+    return { pkce_key_file: pkce, owner_access_token: session.access_token, owner_session: session };
   } finally {
     authority.close();
   }
@@ -524,7 +534,7 @@ async function admittedFixture(input: {
     created_at: "2026-08-22T11:00:00.000Z",
     creating_artifact_revision: "organization-authority-runtime-test",
   });
-  const { pkce_key_file, owner_access_token } = await completeFounderReonboarding({
+  const { pkce_key_file, owner_access_token, owner_session } = await completeFounderReonboarding({
     state_directory: initialized.state_directory,
     parent,
     owner_membership_id: initialized.owner_membership_id,
@@ -616,6 +626,7 @@ async function admittedFixture(input: {
   return {
     initialized,
     owner_access_token,
+    owner_session,
     config,
     source,
     processorIdentity,
@@ -1743,4 +1754,153 @@ describe("Organization Authority runtime private approval lane", () => {
       await fixture.runtime.close();
     }
   });
+});
+
+
+
+describe('original Person upload context', () => {
+  it('saves and searches an original memo without a Slack connection, model, or worker, across restart', async () => {
+    const fixture = await admittedFixture();
+    const open = async () => startOrganizationAuthorityApiRuntime({ state_directory: fixture.config.state_directory, host: '127.0.0.1', port: await availablePort(), authority_url: fixture.config.authority_url, oidc: fixture.config.oidc, client_authentication: fixture.config.client_authentication, pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(`file:${fixture.config.pkce_key_file}`) }, { oidc_provider: new TestPersonOidcProvider() });
+    let runtime = await open();
+    const headers = { authorization: `Bearer ${fixture.owner_access_token}`, 'content-type': 'application/json' };
+    const base = () => `http://127.0.0.1:${runtime.address.port}/v1/person/updates`;
+    const request = { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: randomUUID(), title: 'Client memo', text: 'Acme prefers a phone call before lunch.\n' };
+    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
+    try {
+      expect((await fetch(base(), { method: 'POST', body: JSON.stringify(request) })).status).toBe(401);
+      for (const forged of [{ reviewer: 'owner@example.com' }, { metadata: { visibility: 'team' } }, { organization_id: 'forged' }, { visibility: 'public' }]) {
+        expect((await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, ...forged }) })).status).toBe(400);
+      }
+      expect((await fetch(base(), { method: 'POST', headers, body: Buffer.from([0x7b, 0xc3, 0x28, 0x7d]) })).status).toBe(400);
+      const escaped = JSON.stringify({ ...request, text: 'x'.repeat(8192) }).replace('x'.repeat(8192), '\\u0078'.repeat(8192));
+      expect((await fetch(base(), { method: 'POST', headers, body: escaped })).status).toBe(400);
+      const replies = await Promise.all(Array.from({ length: 4 }, () => fetch(base(), { method: 'POST', headers, body: JSON.stringify(request) })));
+      expect(replies.map(reply => reply.status)).toEqual([202, 202, 202, 202]);
+      const receipts = await Promise.all(replies.map(reply => reply.json()));
+      expect(receipts.every(receipt => canonicalJson(receipt) === canonicalJson(receipts[0]))).toBe(true);
+      const receipt = receipts[0] as { context_id: string };
+      expect((await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, visibility: 'team' }) })).status).toBe(409);
+      await runtime.close(); runtime = await open();
+      expect(await (await fetch(`${base()}/${request.request_id}`, { headers })).json()).toMatchObject({ status: 'stored', visibility: 'only_me' });
+      const search = await fetch(`${base()}/search`, { method: 'POST', headers, body: JSON.stringify({ query: 'Acme' }) });
+      expect(search.status).toBe(200);
+      expect(await search.json()).toMatchObject({ results: [{ context_id: receipt.context_id, title: request.title, visibility: 'only_me' }] });
+      expect(await (await fetch(`${base()}/content/${receipt.context_id}`, { headers })).json()).toMatchObject({ text: request.text });
+      const sharedReply = await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, request_id: randomUUID(), title: 'Shared work note', visibility: 'team' }) });
+      expect(sharedReply.status).toBe(202);
+      const shared = await sharedReply.json() as { context_id: string; visibility: string }; expect(shared.visibility).toBe('team');
+      expect(await (await fetch(`${base()}/content/${shared.context_id}`, { headers })).json()).toMatchObject({ text: request.text, visibility: 'team' });
+      expect(authority.prepare('SELECT count(*) AS n FROM authority_person_updates_v1').get()).toEqual({ n: 2 });
+      expect(authority.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
+      expect(authority.prepare('SELECT count(*) AS n FROM authority_person_upload_read_audit_v1').get()).toEqual({ n: 3 });
+      expect(fixture.poster.published).toHaveLength(0);
+      authority.exec(`CREATE TRIGGER fixture_read_audit_failure BEFORE INSERT ON authority_person_upload_read_audit_v1 BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END`);
+      const denied = await fetch(`${base()}/content/${receipt.context_id}`, { headers });
+      expect(denied.status).toBe(500); expect(await denied.text()).not.toContain(request.text);
+    } finally { await runtime.close(); authority.close(); }
+  });
+
+  it('enriches one original upload while an unavailable meeting source cannot force extraction or approval', async () => {
+    const fixture = await admittedFixture({ seed_private_slack_connection: true });
+    const source = fakeSource(fixture.source.identity, 0); source.pull = async () => { throw new AdapterError('temporarily_unavailable', 'source unavailable', true); };
+    const processor = fakeProcessor(fixture.processorIdentity); const extract = vi.spyOn(processor, 'extract');
+    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
+    const inbox = new SqlitePersonUpdateInboxV1(authority);
+    const receipt = inbox.submit({ organization_id: fixture.initialized.organization_id, principal_id: fixture.initialized.owner_principal_id, membership_id: fixture.initialized.owner_membership_id, membership_type: 'owner' }, { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: randomUUID(), title: 'Client reminder', text: 'Call Acme before lunch.', visibility: 'team' });
+    const runtime = await openOrganizationAuthorityService({ ...fixture.config, worker_interval_ms: 60_000 }, { api: { answer_composition_generation: { generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 }, structured_output: { generate: async () => ({ search_hints: 'customer telephone' }) } } }, processing_adapter_overrides: { source, processor, private_approval_card_poster: fixture.poster } });
+    try {
+      await runtime.drain(AbortSignal.timeout(5000));
+      expect(extract).not.toHaveBeenCalled(); expect(fixture.poster.published).toHaveLength(0);
+      expect((authority.prepare('SELECT state FROM authority_person_update_work_v1 WHERE context_id = ?').get(receipt.context_id) as { state: string }).state).toBe('ready');
+      expect(inbox.content({ organization_id: fixture.initialized.organization_id, principal_id: fixture.initialized.owner_principal_id, membership_id: fixture.initialized.owner_membership_id, membership_type: 'owner' }, receipt.context_id)).toMatchObject({ text: 'Call Acme before lunch.', visibility: 'team' });
+      expect(authority.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
+    } finally { await runtime.close(); authority.close(); }
+  });
+});
+
+it('runs submit/status from the exact packed Person CLI against a disposable Authority', async () => {
+  const parent = root();
+  const repository = createCoherentWorktreeSnapshot(resolve(import.meta.dirname, '../../..'), parent);
+  const run = (command: string, args: string[], cwd = repository) => {
+    const result = spawnSync(command, args, { cwd, encoding: 'utf8', timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
+    expect(result.status, result.stderr || result.stdout).toBe(0); return result.stdout;
+  };
+  run('git', ['add', '.']);
+  run('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'core.hooksPath=/dev/null', 'commit', '--allow-empty', '-qm', 'Person artifact fixture']);
+  const artifact = (JSON.parse(run(process.execPath, ['tools/pack-person-client.mjs', parent])) as { artifact_path: string }).artifact_path;
+  const listing = run('tar', ['-tzf', artifact]);
+  expect(listing).not.toMatch(/node_modules\/(?:@echo-brain\/(?:organization-processing|organization-authority(?:-kernel)?)|better-sqlite3)\//);
+  const install = join(parent, 'installed'); mkdirSync(install);
+  run('tar', ['-xzf', artifact, '-C', install]);
+  const cli = await import(pathToFileURL(join(install, 'package/dist/index.js')).href) as typeof import('../../../src/product/person-client/index.js');
+  const fixture = await admittedFixture({ seed_private_slack_connection: true });
+  const runtime = await openOrganizationAuthorityService({ ...fixture.config, worker_interval_ms: 60_000 }, { processing_adapter_overrides: { source: fakeSource(fixture.source.identity, 0), processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } });
+  const home = join(parent, 'person-home'); mkdirSync(home);
+  try {
+    const origin = `http://127.0.0.1:${runtime.address.port}`;
+    await new cli.PersonClient({ home_directory: home, allow_insecure_loopback: true }).installSession(origin, fixture.owner_session);
+    const path = join(home, 'update.txt'); writeFileSync(path, 'We agreed to ship the release.\n');
+    const requestId = randomUUID(); let output = ''; let errors = '';
+    const dependencies = { home_directory: home, allow_insecure_loopback: true, stdout: { write: (value: string) => { output += value; } }, stderr: { write: (value: string) => { errors += value; } } };
+    expect(await cli.runPersonClientCli(['updates', 'submit', '--request-id', requestId, '--title', 'Release', '--file', path], dependencies), errors).toBe(0);
+    expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-receipt-v1', state: 'received', request_id: requestId }); output = '';
+    expect(await cli.runPersonClientCli(['updates', 'status', '--request-id', requestId], dependencies), errors).toBe(0);
+    expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-status-v1', status: 'stored', request_id: requestId });
+    expect(output).not.toContain('We agreed'); output = '';
+    expect(await cli.runPersonClientCli(['updates', 'search', '--query', 'release'], dependencies), errors).toBe(0);
+    const found = JSON.parse(output).results[0]; expect(found.title).toBe('Release'); output = '';
+    expect(await cli.runPersonClientCli(['updates', 'read', '--context-id', found.context_id], dependencies), errors).toBe(0);
+    expect(JSON.parse(output).text).toBe('We agreed to ship the release.\n'); expect(errors).toBe('');
+  } finally { await runtime.close(); }
+});
+
+it('transitions a stopped V5 fixture with sessions, signed records, pending and ambiguous approval work', async () => {
+  const fixture = await admittedFixture({ seed_private_slack_connection: true });
+  const source = fakeSource(fixture.source.identity, 3);
+  const originalPost = fixture.poster.postMarker.bind(fixture.poster);
+  fixture.poster.postMarker = async input => { const result = await originalPost(input); return fixture.poster.markers.length === 3 ? { kind: 'uncertain' } : result; };
+  let runtime = await openOrganizationAuthorityService(fixture.config, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } });
+  const path = join(fixture.initialized.state_directory, 'authority.sqlite');
+  try {
+    await waitFor(() => fixture.errors.length > 0 || fixture.poster.markers.length === 3, 'mixed legacy work');
+    if (fixture.errors[0]) throw fixture.errors[0];
+    expect((await clickCard({ fixture: { ...fixture, runtime }, card: fixture.poster.published[0]!, action: 'approve', policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID })).status).toBe(200);
+    await waitFor(() => fixture.poster.terminal.length === 1, 'legacy signed append');
+    await runtime.close();
+    const current = new Database(path, { readonly: true });
+    const legacyPath = join(root(), 'v5.sqlite'); const legacy = new Database(legacyPath); applyAuthorityBaselineV5(legacy);
+    // Build a genuine pinned V5 fixture using the unchanged V5 table shapes.
+    legacy.transaction(() => {
+      const triggers = legacy.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger'`).all() as { name: string; sql: string }[];
+      for (const trigger of triggers) legacy.exec(`DROP TRIGGER ${trigger.name}`);
+      for (const { name } of legacy.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid`).all() as { name: string }[]) {
+        const rows = current.prepare(`SELECT * FROM ${name}`).all() as Record<string, unknown>[];
+        for (const row of rows) { const columns = (legacy.pragma(`table_info(${name})`) as { name: string }[]).map(column => column.name); legacy.prepare(`INSERT INTO ${name} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map(column => row[column])); }
+      }
+      const manifest = current.prepare('SELECT manifest_json FROM echo_state_lineage_manifest').pluck().get() as string;
+      const old = { ...JSON.parse(manifest), database_schema_version: 5, schema_sha256: authorityBaselineSha256V5() };
+      legacy.exec(current.prepare(`SELECT sql FROM sqlite_master WHERE name = 'echo_state_lineage_manifest'`).pluck().get() as string);
+      legacy.prepare('INSERT INTO echo_state_lineage_manifest VALUES (1, ?, ?)').run(canonicalJson(old), canonicalSha256(old));
+      for (const trigger of triggers) legacy.exec(trigger.sql);
+    })();
+    const oldRows = new Map((legacy.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'echo_state_lineage_manifest'`).all() as { name: string }[]).map(({ name }) => [name, legacy.prepare(`SELECT * FROM ${name}`).all()]));
+    expect(oldRows.get('authority_person_session_families')!.length).toBeGreaterThan(0);
+    expect(oldRows.get('authority_live_approval_outbox_v2')).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'posting' }), expect.objectContaining({ state: 'staged' })]));
+    expect(oldRows.get('authority_private_approval_terminal_receipts_v3')!.length).toBe(1);
+    current.close(); legacy.close();
+    const recordPath = join(fixture.initialized.state_directory, 'record-log.sqlite'); const recordBefore = readFileSync(recordPath);
+    const controlPath = join(fixture.initialized.state_directory, 'integrations.sqlite'); const controlBefore = readFileSync(controlPath);
+    const previous = new Database(legacyPath, { readonly: true }); const nextPath = join(root(), 'v6.sqlite'); const next = new Database(nextPath);
+    try { copyAuthorityV5ToV6(previous, next); for (const [name, rows] of oldRows) expect(next.prepare(`SELECT * FROM ${name}`).all(), name).toEqual(rows); }
+    finally { previous.close(); next.close(); }
+    expect(readFileSync(recordPath)).toEqual(recordBefore); expect(readFileSync(controlPath)).toEqual(controlBefore);
+    renameSync(nextPath, path); chmodSync(path, 0o600);
+    const count = fixture.poster.markers.length;
+    runtime = await openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } });
+    await runtime.drain(AbortSignal.timeout(5000));
+    expect(fixture.poster.markers).toHaveLength(count);
+    const records = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/records`, { headers: { authorization: `Bearer ${fixture.owner_access_token}` } });
+    expect(records.status).toBe(200); expect(await records.json()).toMatchObject({ records: [expect.anything()] });
+  } finally { await runtime.close(); }
 });

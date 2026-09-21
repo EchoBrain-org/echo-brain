@@ -88,6 +88,16 @@
         "name": "Readable-search generation composition",
         "path": "services/organization-authority/src/composition/readable-search-generation-composition.ts",
         "export": "createReadableSearchGenerationReconcilerV1"
+      },
+      {
+        "name": "Person update intake",
+        "path": "services/organization-authority/src/application/person-updates.ts",
+        "export": "PersonUpdatesApplicationV1"
+      },
+      {
+        "name": "Person upload search enrichment",
+        "path": "services/organization-authority/src/composition/person-update-processing-v1.ts",
+        "export": "PersonUpdateProcessingV1"
       }
     ],
     "compatibility_entrypoints": [

@@ -3048,3 +3048,86 @@ describe("Person client status recovery", () => {
     });
   });
 });
+
+
+describe('Person updates CLI', () => {
+  const requestId = '00000000-0000-4000-8000-000000000001';
+  const contextId = `ctx_${'a'.repeat(64)}`;
+  const receipt = { schema_version: 1, kind: 'echo-person-update-receipt-v1', request_id: requestId, context_id: contextId, visibility: 'only_me', received_at: NOW, state: 'received' };
+  it('uploads only the explicit bounded file, preserves receipts/status, and refreshes the existing session', async () => {
+    await withHome(async home => {
+      await new PersonClient({ home_directory: home, now: () => NOW, fetch: async () => json({ authority_descriptor: authorityDescriptor() }) }).installSession('https://authority.example', SESSION);
+      const file = join(home, 'update.txt'); writeFileSync(file, 'We agreed to ship.\n');
+      const calls: string[] = []; let output = ''; let errors = '';
+      const network: typeof fetch = async (url, init) => {
+        const path = new URL(String(url)).pathname; calls.push(`${init?.method} ${path}`);
+        if (path === '/v2/session/refresh') return json(ROTATED_SESSION);
+        expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
+        if (init?.method === 'POST') {
+          expect(JSON.parse(String(init.body))).toEqual({ schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId, title: 'Release', text: 'We agreed to ship.\n', visibility: 'only_me' });
+          return json(receipt, 202);
+        }
+        return json({ schema_version: 1, kind: 'echo-person-update-status-v1', request_id: requestId, context_id: contextId, visibility: 'only_me', received_at: NOW, status: 'stored', metadata: 'pending' });
+      };
+      const deps = { home_directory: home, now: () => NOW, fetch: network, stdout: { write: (value: string) => { output += value; } }, stderr: { write: (value: string) => { errors += value; } } };
+      expect(await runPersonClientCli(['updates', 'submit', '--request-id', requestId, '--title', 'Release', '--file', file], deps)).toBe(0);
+      expect(JSON.parse(output)).toEqual(receipt); output = '';
+      expect(await runPersonClientCli(['updates', 'status', '--request-id', requestId], deps)).toBe(0);
+      expect(JSON.parse(output)).toMatchObject({ status: 'stored', metadata: 'pending' });
+      expect(calls).toEqual(['POST /v2/session/refresh', 'POST /v1/person/updates', `GET /v1/person/updates/${requestId}`]);
+      expect(errors).toBe('');
+    });
+  });
+  it.each(['lost', 'malformed', 'conflict'] as const)('handles %s without a mutation retry or payload leakage', async mode => {
+    await withHome(async home => {
+      await new PersonClient({ home_directory: home, now: () => NOW, fetch: async () => json({ authority_descriptor: authorityDescriptor() }) }).installSession('https://authority.example', ROTATED_SESSION);
+      const file = join(home, 'update.txt'); writeFileSync(file, 'private submitted content'); let errors = '';
+      const network = vi.fn<typeof fetch>(async () => { if (mode === 'lost') throw new Error('private transport data'); if (mode === 'malformed') return json({ ...receipt, text: 'private response content' }, 202); return json({ error: { code: 'conflict', message: 'private error content' } }, 409); });
+      expect(await runPersonClientCli(['updates', 'submit', '--request-id', requestId, '--title', 'Release', '--file', file], { home_directory: home, now: () => NOW, fetch: network, stdout: { write: () => {} }, stderr: { write: value => { errors += value; } } })).toBe(1);
+      expect(network).toHaveBeenCalledTimes(1);
+      expect(errors).not.toContain('private');
+      if (mode === 'conflict') expect(JSON.parse(errors)).toMatchObject({ code: 'conflict', status: 409 });
+      else { expect(errors).toContain('outcome is unknown'); expect(errors).toContain('same request ID'); }
+    });
+  });
+  it.each([Buffer.alloc(8193, 'x'), Buffer.from([0xc3, 0x28]), Buffer.from('text\0nul')])('refuses invalid input files before any network request', async bytes => {
+    await withHome(async home => {
+      const file = join(home, 'update.txt'); writeFileSync(file, bytes); const network = vi.fn();
+      expect(await runPersonClientCli(['updates', 'submit', '--request-id', requestId, '--title', 'Release', '--file', file], { home_directory: home, fetch: network, stdout: { write: () => {} }, stderr: { write: () => {} } })).toBe(1);
+      expect(network).not.toHaveBeenCalled();
+    });
+  });
+  it('requires a request ID and explains organizational custody in help', async () => {
+    let help = ''; const network = vi.fn();
+    expect(await runPersonClientCli(['updates', 'submit', '--help'], { fetch: network, stdout: { write: value => { help += value; } } })).toBe(0);
+    expect(help).toContain('Saves this UTF-8 file'); expect(help).toContain('Team makes it readable'); expect(help).toContain('same ID');
+    expect(await runPersonClientCli(['updates', 'submit', '--title', 'Release', '--file', '/unused'], { fetch: network, stderr: { write: () => {} } })).toBe(2);
+    expect(network).not.toHaveBeenCalled();
+  });
+  it('uses an explicit Team selection and reads/searches only validated upload responses', async () => {
+    await withHome(async home => {
+      await new PersonClient({ home_directory: home, now: () => NOW, fetch: async () => json({ authority_descriptor: authorityDescriptor() }) }).installSession('https://authority.example', ROTATED_SESSION);
+      const file = join(home, 'memo.md'); writeFileSync(file, 'Client prefers a morning call.'); let output = ''; let errors = '';
+      const calls: string[] = [];
+      const network: typeof fetch = async (url, init) => {
+        const path = new URL(String(url)).pathname; calls.push(path);
+        if (path.endsWith('/search')) {
+          expect(JSON.parse(String(init?.body))).toEqual({ query: 'client', limit: 3 });
+          return json({ schema_version: 1, kind: 'echo-person-upload-search-v1', results: [{ context_id: contextId, received_at: NOW, visibility: 'team', title: 'Memo', excerpt: 'Client prefers a morning call.' }] });
+        }
+        if (path.includes('/content/')) return json({ schema_version: 1, kind: 'echo-person-upload-content-v1', context_id: contextId, received_at: NOW, visibility: 'team', title: 'Memo', text: 'Client prefers a morning call.' });
+        expect(JSON.parse(String(init?.body)).visibility).toBe('team');
+        return json({ ...receipt, visibility: 'team' }, 202);
+      };
+      const dependencies = { home_directory: home, now: () => NOW, fetch: network, stdout: { write: (value: string) => { output += value; } }, stderr: { write: (value: string) => { errors += value; } } };
+      expect(await runPersonClientCli(['updates', 'submit', '--request-id', requestId, '--title', 'Memo', '--file', file, '--visibility', 'team'], dependencies), errors).toBe(0); output = '';
+      expect(await runPersonClientCli(['updates', 'search', '--query', 'client', '--limit', '3'], dependencies), errors).toBe(0);
+      expect(JSON.parse(output).results[0].context_id).toBe(contextId); output = '';
+      expect(await runPersonClientCli(['updates', 'read', '--context-id', contextId], dependencies), errors).toBe(0);
+      expect(JSON.parse(output).text).toBe('Client prefers a morning call.');
+      expect(calls).toEqual(['/v1/person/updates', '/v1/person/updates/search', `/v1/person/updates/content/${contextId}`]);
+      expect(errors).toBe('');
+    });
+  });
+
+});

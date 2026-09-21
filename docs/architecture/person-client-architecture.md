@@ -177,3 +177,18 @@ The neutral client and account shell use `/v3/person/tools`, a bounded generic
 status contract. Provider commands and native actions are composed at explicit
 entrypoints. Supported v2 routes remain in the Slack provider for existing
 clients; the native disconnect action decodes that retained response there.
+
+## Deliberate context uploads
+
+`person updates submit` saves one explicitly selected UTF-8 file unchanged,
+with `--visibility only-me|team` (default Only me). `status` returns the durable
+receipt and optional enrichment progress. `search` and `read` retrieve original
+uploads under current membership and stored visibility, without Slack approval
+or a model dependency. Content/search releases revalidate the session and audit
+before returning. Unknown submissions require the same request ID and exact
+file, title, and visibility on retry; no local queue or automatic upload exists.
+
+The current bounded text carrier does not decide the context taxonomy. Optional
+LLM search hints remain derived metadata. Existing records/Ask/native Sources
+continue to use approved decision records; connecting uploads to those surfaces
+awaits a source contract. See the [current upload scope](../product/2026-09-21-person-update-inbox-v1.md).

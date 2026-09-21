@@ -1,3 +1,5 @@
+import { validatePersonUploadContentV1, validatePersonUploadSearchV1, validatePersonUploadSearchResultV1, validatePersonUploadContextId, type PersonUploadContentV1, type PersonUploadSearchV1, type PersonUploadSearchResultV1 } from '@echo-brain/organization-api';
+import { PERSON_UPDATES_PATH_V1, validatePersonUpdateSubmitV1, validatePersonUpdateReceiptV1, validatePersonUpdateStatusV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1, type PersonUpdateReceiptV1, type PersonUpdateStatusV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
@@ -567,6 +569,7 @@ export class PersonAuthorityClient {
     readonly access_token?: string;
     readonly maximum_response_bytes?: number;
     readonly require_canonical_response?: boolean;
+    readonly expected_status?: number;
     readonly timeout_ms?: number;
     readonly method?: "POST" | "PUT";
     readonly headers?: Readonly<Record<string, string>>;
@@ -624,6 +627,9 @@ export class PersonAuthorityClient {
         response.status,
         "Person Authority rejected the request",
       );
+    }
+    if (input.expected_status !== undefined && response.status !== input.expected_status) {
+      throw new PersonAuthorityClientError('invalid_response', response.status, 'Person Authority returned an unexpected status');
     }
     if (
       input.require_canonical_response === true &&
@@ -694,6 +700,39 @@ export class PersonAuthorityClient {
         "Person Authority returned a malformed response",
       );
     }
+  }
+
+  async submitUpdate(accessToken: string, value: PersonUpdateSubmitV1): Promise<PersonUpdateReceiptV1> {
+    const request = validatePersonUpdateSubmitV1(value);
+    try {
+      const receipt = await this.json({ path: PERSON_UPDATES_PATH_V1, body: request,
+        validate_request: validatePersonUpdateSubmitV1, validate_response: validatePersonUpdateReceiptV1,
+        access_token: accessToken, expected_status: 202, maximum_response_bytes: 4096 });
+      if (receipt.request_id !== request.request_id || receipt.visibility !== request.visibility) throw new PersonAuthorityClientError('invalid_response', 202, 'Person Authority returned a different receipt');
+      return receipt;
+    } catch (error) {
+      if (error instanceof PersonAuthorityClientError && ['invalid_request', 'unauthorized', 'conflict', 'rate_limited', 'not_found'].includes(error.code) && error.status !== null && error.status >= 400 && error.status < 500) throw error;
+      throw new PersonAuthorityClientError(error instanceof PersonAuthorityClientError ? error.code : 'outcome_unknown', error instanceof PersonAuthorityClientError ? error.status : null,
+        'Submission outcome is unknown. Check updates status with the same request ID, or retry the exact file and title with the same request ID.');
+    }
+  }
+
+  async updateStatus(accessToken: string, requestId: string): Promise<PersonUpdateStatusV1> {
+    validatePersonUpdateRequestId(requestId);
+    const status = await this.getJson({ path: `${PERSON_UPDATES_PATH_V1}/${requestId}`, access_token: accessToken, validate_response: validatePersonUpdateStatusV1, maximum_response_bytes: 4096 });
+    if (status.request_id !== requestId) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a different receipt');
+    return status;
+  }
+
+  async readUpload(accessToken: string, contextId: string): Promise<PersonUploadContentV1> {
+    validatePersonUploadContextId(contextId);
+    const response = await this.getJson({ path: `${PERSON_UPDATES_PATH_V1}/content/${contextId}`, access_token: accessToken, validate_response: validatePersonUploadContentV1, maximum_response_bytes: 24 * 1024 });
+    if (response.context_id !== contextId) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a different upload');
+    return response;
+  }
+
+  async searchUploads(accessToken: string, input: PersonUploadSearchV1): Promise<PersonUploadSearchResultV1> {
+    return this.json({ path: `${PERSON_UPDATES_PATH_V1}/search`, body: validatePersonUploadSearchV1(input), validate_request: validatePersonUploadSearchV1, validate_response: validatePersonUploadSearchResultV1, access_token: accessToken, expected_status: 200, maximum_response_bytes: 24 * 1024 });
   }
 
   async descriptor(): Promise<OrganizationAuthorityDescriptorResponseV1> {

@@ -53,3 +53,10 @@ integration policy, and the organization record.
 Client status and failed requests must not create session state, print tokens,
 or imply that server-side provider processing is ready. See
 `INV-PERMISSIONS-013` and `FP-PERMISSIONS-001`.
+
+The `person updates` commands submit, inspect, search, and read original text
+uploads. `--visibility only-me|team` selects access at upload; Only me is the
+default. No Slack approval, provider code, background upload, or local queue is
+required. Search and exact reads return only authorized originals; submit/status
+remain content-free. The carrier and optional metadata do not settle the final
+context shape. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).

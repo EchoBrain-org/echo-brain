@@ -179,3 +179,17 @@ and
   instance IDs describe the V1 initial-owner bootstrap contract. Runtime
   components must not reuse that cohort name; replacing the persisted/operator
   vocabulary requires an explicit versioned bootstrap migration.
+
+## Explicit Person uploads
+
+Person uploads preserve original text and selected visibility in Authority V6.
+They do not normalize through `MeetingDocument`, run decision extraction, create
+frozen meeting candidates, or require Slack approval. The existing meeting
+admission, cursor, approval, and signed record path remain separate.
+
+The serialized worker can enrich at most one saved upload per tick using the
+existing generation port. Its bounded free-text search hints are optional,
+replaceable metadata. They cannot change the original or its access policy.
+Model failure/cancellation preserves source readability; integrity failures
+remain visible. Handled source failures do not starve enrichment or already
+queued approval publication. See the [upload scope and compatibility](../product/2026-09-21-person-update-inbox-v1.md).
