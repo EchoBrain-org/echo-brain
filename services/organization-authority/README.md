@@ -362,7 +362,7 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses Authority V5, control-plane V3, record-log V3, retrieval
+Current state uses Authority V6, control-plane V3, record-log V3, retrieval
 facts V2, and retrieval lexical/content V1. The V2 root binds exactly these six
 roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
@@ -373,12 +373,20 @@ The immutable approval-delivery quarantine fences unrepresentable approval
 packages before any provider post and retains them for audit. A temporarily
 missing reviewer identity leaves its durable outbox queued for reconciliation.
 
-The current checkout contains only these active baselines. Historical schema
-assets and the one-off converter remain in Git history. Routine releases use
-baseline-preserving image replacements through the
-[release procedure](../../deploy/release/README.md). An older installation
-requires separate compatibility assessment before any release; image rollback
-alone cannot reverse a schema change.
+The checkout also retains the exact pinned Authority V5 baseline and the
+explicit [offline V5-to-V6 copier](../../tools/copy-authority-v5-to-v6.mjs).
+It reads a stopped V5 snapshot and writes a separate V6 database, preserving
+existing rows and updating only the Authority database's schema binding.
+It does not activate a release or replace live state. Earlier historical
+baselines and converters remain in Git history.
+
+Routine releases use baseline-preserving image replacements through the
+[release procedure](../../deploy/release/README.md); that updater refuses
+schema changes. A V5 installation requires a separately coordinated stopped
+snapshot, conversion, verification, and activation under the
+[upload compatibility contract](../../docs/product/2026-09-21-person-update-inbox-v1.md#compatibility-and-custody).
+Rollback must restore the complete matching code/state snapshot; image rollback
+alone cannot reverse the schema change.
 
 ## Verification
 
