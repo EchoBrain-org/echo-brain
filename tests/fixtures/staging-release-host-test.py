@@ -24,6 +24,13 @@ host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
 base = json.loads(pathlib.Path(receipt_path).read_text())['request']
 accepted_bytes = pathlib.Path(accepted_path).read_bytes()
+# Most existing proofs exercise the full-byte compatibility protocol. Keep that
+# fixture; separate tests below exercise V4 references through the same runner.
+repo = pathlib.Path(runner_path).parent.parent
+for name in host.TOOLS:
+    source = repo / ('deploy/' if name.startswith('release/') else 'deploy/organization-authority/') / name
+    base['files'][name]['base64'] = host.base64.b64encode(source.read_bytes()).decode()
+
 
 
 class HostProtocol(unittest.TestCase):
@@ -66,7 +73,7 @@ class HostProtocol(unittest.TestCase):
         self.write('.env.clean-v1', b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\nPRIVATE_FIXTURE=never-print-this-value\n')
         paths = {name: ('deploy/' if name.startswith('release/') else 'deploy/organization-authority/') + name for name in host.TOOLS}
         for name, source in paths.items():
-            self.write(name, f'old-reviewed-tool:{source}\n'.encode(), 0o755)
+            self.write(name, f'old-reviewed-tool:{source}\n'.encode() if name == 'update-clean-v1.sh' else host.base64.b64decode(base['files'][name]['base64']), 0o755)
         # Production enforces every root-owned ancestor; the macOS test fixture
         # necessarily sits beneath a shared temporary directory.
         original = host.directory
@@ -108,6 +115,32 @@ class HostProtocol(unittest.TestCase):
 
     def candidate(self):
         self.write('clean-data/release/candidate.clean-v1.json', host.base64.b64decode(base['files']['candidate.json']['base64']))
+
+    def test_v4_hash_witnesses_still_require_installed_reviewed_bytes(self):
+        self.install()
+        request = self.request('stage-v5-to-v6')
+        for name in host.TOOLS:
+            del request['files'][name]['base64']
+        result = self.execute(request)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(self.calls[-1][0], 'stage-v5-to-v6')
+        for mutation in ('unknown', 'missing'):
+            request['operation_id'] = str(uuid.uuid4())
+            path = self.root / host.TOOLS[0]
+            if mutation == 'unknown': self.write(host.TOOLS[0], b'unknown tool bytes', 0o755)
+            else: path.unlink()
+            result = self.execute(request)
+            self.assertFalse(result['ok'])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_v4_install_cannot_omit_changed_or_candidate_bytes(self):
+        for name in ('update-clean-v1.sh', 'candidate.json', 'runtime-profile.json'):
+            request = self.request('install')
+            del request['files'][name]['base64']
+            with self.assertRaises(host.Refused): host.validate_request(request)
+        request = self.request('install')
+        for name in host.TOOLS[1:]: del request['files'][name]['base64']
+        self.assertTrue(self.execute(request)['ok'])
 
     def test_install_is_exact_and_idempotent_without_runtime_mutation(self):
         request = self.request('install')
@@ -253,7 +286,7 @@ class HostProtocol(unittest.TestCase):
             'kind': 'echo-staging-release-install-inspection-v2',
             'category': 'ready',
             'tool': None,
-            'inventory': {name: {'state': 'old', 'sha256': host.sha(data)} for name, data in before.items()},
+            'inventory': {name: {'state': 'new' if host.sha(data) == base['files'][name]['sha256'] else 'old', 'sha256': host.sha(data)} for name, data in before.items()},
         })
         self.assertEqual(self.calls, [])
         self.assertEqual({name: (self.root / name).read_bytes() for name in host.TOOLS}, before)
@@ -276,7 +309,7 @@ class HostProtocol(unittest.TestCase):
         self.assertEqual((result['diagnostic']['category'], result['diagnostic']['tool']), ('tool_hash_unknown', host.TOOLS[0]))
         inventory = result['diagnostic']['inventory']
         self.assertEqual(set(inventory), set(host.TOOLS))
-        self.assertEqual([inventory[name]['state'] for name in host.TOOLS], ['unknown', 'new', 'old', 'invalid', 'old', 'missing'])
+        self.assertEqual([inventory[name]['state'] for name in host.TOOLS], ['unknown', 'new', 'new', 'invalid', 'new', 'missing'])
         self.assertEqual(inventory[host.TOOLS[0]]['sha256'], host.sha(b'private-marker unknown fixture'))
         self.assertIsNone(inventory[host.TOOLS[3]]['sha256'])
         self.assertIsNone(inventory[host.TOOLS[5]]['sha256'])

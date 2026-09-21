@@ -1,5 +1,5 @@
 export type StagingReleaseAction =
-  | 'install' | 'inspect-install' | 'diagnose' | 'repair' | 'stage'
+  | 'install' | 'inspect-install' | 'diagnose' | 'repair' | 'stage' | 'stage-v5-to-v6'
   | 'canary' | 'status' | 'rollback' | 'promote';
 
 export type StagingReleaseCode =
@@ -39,13 +39,13 @@ type RequestAction =
       action: 'promote'; approval: StagingReleaseAuthorization; content_telemetry: null;
     }>
   | Readonly<{
-      action: 'stage'; approval: null; content_telemetry: 'true' | 'false' | null;
+      action: 'stage' | 'stage-v5-to-v6'; approval: null; content_telemetry: 'true' | 'false' | null;
     }>
   | Readonly<{
-      action: Exclude<StagingReleaseAction, 'promote' | 'stage'>;
+      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'stage-v5-to-v6'>;
       approval: null; content_telemetry: null;
     }>;
-type RequestFields<Tool extends StagingReleaseTool> = Readonly<{
+type RequestFields<Tool extends StagingReleaseTool, Artifact = ReleaseArtifact> = Readonly<{
   operation_id: string;
   created_at: number;
   expires_at: number;
@@ -58,25 +58,33 @@ type RequestFields<Tool extends StagingReleaseTool> = Readonly<{
     sha256: string;
     person_client_sha256: string;
   }>;
-  files: Readonly<Record<Tool | 'candidate.json' | 'runtime-profile.json', ReleaseArtifact>>;
+  files: Readonly<Record<Tool, Artifact> & Record<'candidate.json' | 'runtime-profile.json', ReleaseArtifact>>;
   old_tool_hashes: Readonly<Record<Tool, string>>;
 }> & RequestAction;
 
-/** V1 receipts remain readable; V2 and named V3 migration plans may be submitted. */
+/** V1-V3 receipts retain their wire binding; new plans use compact V4. */
 export type StagingReleaseRequest =
   | (RequestFields<LegacyTool> & Readonly<{
       schema_version: 1; kind: 'echo-staging-release-request-v1';
+      action: Exclude<StagingReleaseAction, 'stage-v5-to-v6'>;
       tooling_migration?: never;
     }>)
   | (RequestFields<StagingReleaseTool> & Readonly<{
       schema_version: 2; kind: 'echo-staging-release-request-v2';
+      action: Exclude<StagingReleaseAction, 'stage-v5-to-v6'>;
       tooling_migration?: never;
     }>)
   | (RequestFields<StagingReleaseTool> & Readonly<{
       schema_version: 3; kind: 'echo-staging-release-request-v3';
       action: 'install' | 'inspect-install';
       tooling_migration: 'legacy-staging-host-v1';
-    }>);
+    }>)
+  | (RequestFields<StagingReleaseTool, Readonly<{ sha256: string; base64?: string }>> & Readonly<{
+      schema_version: 4; kind: 'echo-staging-release-request-v4';
+    }> & (Readonly<{ tooling_migration?: never }> | Readonly<{
+      action: 'install' | 'inspect-install';
+      tooling_migration: 'legacy-staging-host-v1';
+    }>));
 
 export type StagingReleaseInspectionCategory =
   | 'ready' | 'identity_invalid' | 'retained_mount_invalid'
@@ -174,14 +182,14 @@ export type StagingReleasePlanOptions = Readonly<{
   previousToolingSource?: string;
 }> & (
   | Readonly<{ action: 'promote'; approval: string; contentTelemetry?: never; toolingMigration?: never }>
-  | Readonly<{ action: 'stage'; approval?: never; contentTelemetry?: 'true' | 'false'; toolingMigration?: never }>
+  | Readonly<{ action: 'stage' | 'stage-v5-to-v6'; approval?: never; contentTelemetry?: 'true' | 'false'; toolingMigration?: never }>
   | Readonly<{
       action: 'install' | 'inspect-install';
       approval?: never; contentTelemetry?: never;
       toolingMigration?: 'legacy-staging-host-v1';
     }>
   | Readonly<{
-      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'install' | 'inspect-install'>;
+      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'stage-v5-to-v6' | 'install' | 'inspect-install'>;
       approval?: never; contentTelemetry?: never; toolingMigration?: never;
     }>
 );
