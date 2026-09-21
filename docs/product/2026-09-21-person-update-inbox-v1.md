@@ -1,8 +1,9 @@
 # Person uploads: original context with optional search enrichment
 
-Status: Revised in `feat/person-updates-inbox-v1` and PR #196. The final context
-shape is deliberately undecided. This implementation uses a bounded text
-carrier; it does not establish a taxonomy or canonical business-context schema.
+Status: Accepted by the founder for v1 in `feat/person-updates-inbox-v1` and
+PR #196. Original title/text, uploader identity, selected permission, and
+separate optional search hints are the v1 shape. Additional content types or
+templates can follow when demand establishes their requirements.
 
 Prepared: 2026-09-21. Original baseline: `origin/main` at
 `7f86b29577afa33806a61a71c2617437aee712e0`.
@@ -18,17 +19,19 @@ superseded by these instructions:
 - Uploaded material may be uncaptured meeting notes, notes or a text artifact
   from a work session, a memo, or a reminder from a client interaction.
 - Preserve the original material without requiring it to contain a decision
-  or action. The context shape has not been selected yet.
+  or action. The bounded original-text upload shape is accepted for v1.
 - An LLM may populate auxiliary metadata to help later search. Its output must
   not replace the source, grant access, or establish approved business facts.
 - No Slack approval is required for uploads. The person selects the permission
   mode when uploading. The saved context is immediately searchable under that
   permission, without waiting for metadata.
 - Make the changes in this worktree and the existing PR.
+- Drive the accepted v1 through green CI, merge, and the staging operator lane.
+  Expand supported content types or introduce templates later when needed.
 
-The following describes the current bounded implementation and its limits,
-not an accepted general context model. Future changes to content types,
-metadata fields, authoring surfaces, or publication must be decided explicitly.
+The following describes the accepted v1 implementation and its limits. Future
+changes to content types, templates, metadata fields, authoring surfaces, or
+publication must be decided explicitly.
 
 ## User behavior
 
