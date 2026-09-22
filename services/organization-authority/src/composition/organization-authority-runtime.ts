@@ -1,5 +1,7 @@
 import { SqlitePersonUpdateInboxV1 } from '../adapters/persistence/sqlite/person-update-inbox-v1.js';
-import { PersonUpdateProcessingV1 } from './person-update-processing-v1.js';
+import { createPersonUpdateProcessingV1, type PersonUpdateProcessingBindingV1 } from './person-update-processing-v1.js';
+import { SqlitePersonUpdateEnrichmentWorkV2 } from '../adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
+import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../adapters/persistence/sqlite/project-upload-enrichment-v1.js';
 import { AdapterError } from '@echo-brain/organization-processing/core';
 import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
@@ -195,7 +197,7 @@ class OrganizationAuthorityProcessingCoordinator
     private readonly source: AdmittedMeetingProcessingCycleV1,
     private readonly approvals: ApprovalWorkflowProcessingV1,
     private readonly readableSearch: ReadableSearchReconcilerV1,
-    private readonly updates: PersonUpdateProcessingV1,
+    private readonly updates: PersonUpdateProcessingBindingV1,
     private readonly journeyTelemetry?: MeetingApprovalJourneyTelemetryPortV1,
   ) {}
 
@@ -455,7 +457,10 @@ export async function openOrganizationAuthorityRuntime(
           sourceCycle,
           approvals.processing,
           readableSearch,
-          new PersonUpdateProcessingV1(inbox, answerGeneration),
+          createPersonUpdateProcessingV1(
+            inbox, answerGeneration,
+            new SqlitePersonUpdateEnrichmentWorkV2(authority, new SqliteProjectUploadEnrichmentAuthorizationV1(authority)),
+          ),
           meetingApprovalJourneyTelemetry,
         ),
         api: {
