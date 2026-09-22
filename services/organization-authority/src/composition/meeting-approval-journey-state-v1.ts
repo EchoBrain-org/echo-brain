@@ -600,8 +600,10 @@ export class MeetingApprovalJourneyStateV1 {
             WHERE journey_id = ?`,
         )
         .get(id) as { readonly marked_at: string; readonly completed_at: string | null } | undefined;
-      if (existing?.completed_at === null) return canonicalTimestamp(existing.marked_at, "marked_at");
-      if (existing !== undefined) throw new Error("approved record search publication is already complete");
+      // Recovery may observe an already-published receipt again. The marker is
+      // a durable fact, so retain its original time whether publication is
+      // still pending or already complete; never reopen a completed row.
+      if (existing !== undefined) return canonicalTimestamp(existing.marked_at, "marked_at");
       this.database
         .prepare(
           `INSERT INTO meeting_approval_awaiting_search_v1 (journey_id, marked_at)

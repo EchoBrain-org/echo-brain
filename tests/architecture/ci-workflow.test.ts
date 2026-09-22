@@ -166,4 +166,16 @@ describe("CI workflow", () => {
       'test "$authority_node_version" = "v$PRODUCT_NODE_VERSION"',
     );
   });
+
+  it("runs the native Projects proof in the macOS Person-client job", () => {
+    const source = workflow();
+    const personClientJob = source.slice(
+      source.indexOf("  person-client-package:"),
+      source.indexOf("  authority-container:"),
+    );
+
+    expect(personClientJob).toContain(
+      "tests/architecture/echo-projects.test.ts",
+    );
+  });
 });
