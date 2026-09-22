@@ -818,6 +818,11 @@ export class PersonAuthorityClient {
       const value = parsedContextJson(text, status);
       if (!response.ok) {
         const error = validateSuccess(value, status, validateOrganizationApiError);
+        // The generic API envelope permits extension codes; this frozen
+        // project/V2 family is closed and cannot infer rejection from one.
+        if (!['invalid_request', 'conflict', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'unavailable'].includes(error.error.code)) {
+          throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned a noncanonical error');
+        }
         if (input.request_id !== undefined && status >= 400 && status < 500) {
           throw new PersonContextMutationError(error.error.code, status, 'Person Authority rejected the request', input.request_id, 'not_submitted');
         }
