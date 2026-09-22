@@ -2,8 +2,12 @@
 
 Status: synthetic checkpoint and local real-layer integration are implemented,
 including default API composition with real Person sessions and native clients
-calling the real CLI. Live capability evidence remains unexecuted. This directory records PC-06 results and
-candidate-specific evidence requirements; the existing
+calling the real CLI. This reconciliation candidate retains the latest committed
+PC-05 native robustness and CLI assertions, PC-06's real CLI/HTTP proof, and
+PC-04's service-owned transport proof. It is not yet fully qualified: focused
+verification is required on this merge candidate, and live capability evidence
+remains unexecuted. This directory records PC-06 results and candidate-specific
+evidence requirements; the existing
 [Authority operator playbook](../PB-OPERATIONS-001-authority-operator-lane.md)
 remains the sole operator router.
 
@@ -50,8 +54,8 @@ result here. A foundation-only head is not an implementation checkpoint.
 | --- | --- | --- |
 | PC-02 | `37b6e557f3898bb4af30159f8ce70a5d1fffb047` | Application/worker and adversarial tests imported through `95de82c` |
 | PC-03 | `67a2c42e8686fcf4be163ec351a7b319c674c058` | HTTP adapter and real default runtime/worker wiring imported through `af03657` |
-| PC-04 | `066db491ece28329c8e7f6584efe2527b73aca77` | CLI/transport and adversarial proofs imported through `1ae5713` |
-| PC-05 | `fbfd85cc7f38b88eec1ebcc4a8572c86c169fe68` | Native feature `7730e5b48f4afb77cdb7e3093a2d1660218ee0b4` imported as `786829e`, earlier home `e44adf9` as `8ef8bcd`; equivalent CLI commit already integrated |
+| PC-04 | `63159d0fd9b605054203c61c32d48d05507bd262` | CLI/transport and adversarial proofs; the owner test is retained at `services/organization-authority/test/project-context-person-transport.test.ts` |
+| PC-05 | `b6ba283dfabb59283f7895c08cd03f258ae630ab` | Native feature and subsequent robustness commit `fc84419`, including per-account replay state, uncertain subprocess handling, access-loss propagation and CLI bridge assertions |
 
 The final local gate combines real application/worker + HTTP composition + CLI
 transport + native CLI-bound UI, then the complete repository check. The PR
@@ -94,7 +98,7 @@ path arguments. `npm run build:workspaces` passed before every successful row.
 | PC-03 HTTP `77e1b75` | `services/organization-authority/test/project-context-integration services/organization-authority/test/project-context-http.test.ts services/organization-authority/test/organization-authority-api-runtime.test.ts services/organization-authority/test/project-update-enrichment-adversarial-v2.test.ts` | 5 files / 87 passed |
 | PC-04 CLI `67a4119` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts` | 3 files / 57 passed |
 | PC-03 runtime `67a2c42` | `services/organization-authority/test/project-context-integration services/organization-authority/test/organization-authority-api-runtime.test.ts` | 5 files / 35 passed |
-| PC-04 transport `066db49` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts tests/person-client/project-context-transport.test.ts` | 6 files / 160 passed |
+| PC-04 transport `63159d0` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts services/organization-authority/test/project-context-person-transport.test.ts` | Historical lane proof: 6 files / 160 passed before this reconciliation |
 | PC-05 native `7730e5b` | `services/organization-authority/test/project-context-integration tests/architecture/echo-projects.test.ts tests/architecture/echo-uploads.test.ts tests/architecture/echo-overlay-sources-fixture.test.ts tests/architecture/echo-overlay.test.ts` | 8 files / 102 passed |
 
 The new [CLI/HTTP integration](../../../services/organization-authority/test/project-context-integration/cli-http.test.ts)
@@ -145,8 +149,10 @@ passed using:
 
 Result: one passed, 21 unrelated tests skipped by the focused name filter.
 The initial full run overlapped subsequent integrations and is retained only
-as failure evidence, not a final-source qualification. Final full-check results
-belong to the unchanged committed PR head.
+as failure evidence, not a final-source qualification. This reconciliation must
+pass its focused native, CLI/HTTP integration and test-layer boundary proofs
+before it can be offered for the aggregate full check; that aggregate check
+remains pending and is the only final local qualification claim.
 
 ## Rollout preparation
 

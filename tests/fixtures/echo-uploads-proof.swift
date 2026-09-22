@@ -143,7 +143,7 @@ enum UploadProof {
             while !ready() && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
             require(ready(), "UI operation timed out: \(label)")
         }
-        session.refreshIdentity(); wait("identity") { !session.busy && session.identity != nil }
+        session.refreshIdentity(); wait("identity") { !session.busy && session.identity != nil && !controller.projects.busy }
         require(!button("New project · Not live yet", in: root).isEnabled)
         require(!views(root).compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue.contains("Lumen") || $0.stringValue.contains("Harbor") }))
         if mode == "window-recovery" {
