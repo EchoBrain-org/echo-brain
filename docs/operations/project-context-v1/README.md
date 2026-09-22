@@ -1,8 +1,8 @@
 # Project context V1 integration evidence
 
-Status: synthetic checkpoint plus real application/worker/HTTP/CLI integration
-with fixture Person authentication and model output. Full runtime/native UI qualification and live
-capability evidence are pending. This directory records PC-06 results and
+Status: synthetic checkpoint and local real-layer integration are implemented,
+including default API composition with real Person sessions and native clients
+calling the real CLI. Live capability evidence remains unexecuted. This directory records PC-06 results and
 candidate-specific evidence requirements; the existing
 [Authority operator playbook](../PB-OPERATIONS-001-authority-operator-lane.md)
 remains the sole operator router.
@@ -49,13 +49,15 @@ result here. A foundation-only head is not an implementation checkpoint.
 | Lane | Observed committed SHA | Qualification status |
 | --- | --- | --- |
 | PC-02 | `37b6e557f3898bb4af30159f8ce70a5d1fffb047` | Application/worker and adversarial tests imported through `95de82c` |
-| PC-03 | `77e1b75f4fe96c35f83d0334de3fe04458bdd789` | HTTP adapter imported as `8e8e406`; default runtime composition pending |
-| PC-04 | `67a4119b8a12b65ca6bd0931175bc90c143b9e08` | CLI/transport imported as `a379dfb`; real loopback requests covered |
-| PC-05 | `e44adf9e599a17732efdf92578027cbccba5d35d` | Prior home snapshot only; CLI-bound project UI pending |
+| PC-03 | `67a2c42e8686fcf4be163ec351a7b319c674c058` | HTTP adapter and real default runtime/worker wiring imported through `af03657` |
+| PC-04 | `066db491ece28329c8e7f6584efe2527b73aca77` | CLI/transport and adversarial proofs imported through `1ae5713` |
+| PC-05 | `fbfd85cc7f38b88eec1ebcc4a8572c86c169fe68` | Native feature `7730e5b48f4afb77cdb7e3093a2d1660218ee0b4` imported as `786829e`, earlier home `e44adf9` as `8ef8bcd`; equivalent CLI commit already integrated |
 
-The final gate requires real application/worker + HTTP composition + CLI
-transport + native CLI-bound UI, then the complete repository check. Synthetic
-green alone cannot satisfy it.
+The final local gate combines real application/worker + HTTP composition + CLI
+transport + native CLI-bound UI, then the complete repository check. The PR
+records that final check's exact source SHA and result. Synthetic green alone
+cannot satisfy it. Local integration is separate from exact deployed-artifact
+qualification and the two-Person live worksheet below.
 
 ### PC-02 application checkpoint result
 
@@ -91,28 +93,60 @@ path arguments. `npm run build:workspaces` passed before every successful row.
 | PC-02 through `37b6e55` | `services/organization-authority/test/project-context-integration services/organization-authority/test/project-context-application-v1.test.ts services/organization-authority/test/project-context-application-adversarial-v1.test.ts services/organization-authority/test/project-update-enrichment-worker-v2.test.ts services/organization-authority/test/project-update-enrichment-lifecycle-v2.test.ts` | 5 files / 62 passed; final path was an absent filter (the actual adversarial worker file is covered in the next row) |
 | PC-03 HTTP `77e1b75` | `services/organization-authority/test/project-context-integration services/organization-authority/test/project-context-http.test.ts services/organization-authority/test/organization-authority-api-runtime.test.ts services/organization-authority/test/project-update-enrichment-adversarial-v2.test.ts` | 5 files / 87 passed |
 | PC-04 CLI `67a4119` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts` | 3 files / 57 passed |
+| PC-03 runtime `67a2c42` | `services/organization-authority/test/project-context-integration services/organization-authority/test/organization-authority-api-runtime.test.ts` | 5 files / 35 passed |
+| PC-04 transport `066db49` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts tests/person-client/project-context-transport.test.ts` | 6 files / 160 passed |
+| PC-05 native `7730e5b` | `services/organization-authority/test/project-context-integration tests/architecture/echo-projects.test.ts tests/architecture/echo-uploads.test.ts tests/architecture/echo-overlay-sources-fixture.test.ts tests/architecture/echo-overlay.test.ts` | 8 files / 102 passed |
 
 The new [CLI/HTTP integration](../../../services/organization-authority/test/project-context-integration/cli-http.test.ts)
 uses real CLI parsing/session storage/transport/decoding, a loopback HTTP server,
 the real application/repository and real V2 worker. Only the transport origin
 is remapped; HTTP response bodies are not fabricated. Person authentication
-and model output are controlled fixtures. The six cases cover visibility,
+and model output are controlled fixtures. The six transport/worker cases cover visibility,
 cursor/identifier misuse, no project Ask dispatch, unsupported routes, lost
 HTTP delivery followed by restart/replay, and original access during worker
-success/failure/revocation. This does not yet prove default runtime wiring or
-the native UI and is not live capability evidence.
+success/failure/revocation. This seam alone does not prove default runtime
+wiring or the native UI and is not live capability evidence.
 
 The [default-runtime test](../../../services/organization-authority/test/project-context-integration/runtime.test.ts)
 uses real Person sessions (synthetic OIDC provider) and deliberately supplies no
-project application override. Before PC-03 default composition is committed,
-it reproduces a projects-create 404. This gate remains enabled; an injected
-application cannot substitute for its result.
+project application override. It first reproduced projects-create 404, then
+passed after importing PC-03 `67a2c42`: create, project-audience submit, API
+restart, original read, receipt reconciliation and revoked-session denial.
+OIDC is synthetic; current session resolution, authorization and application
+selection are real. This gate remains enabled; an injected application cannot
+substitute for its result.
 
-The initial full `npm run check` reached the test suite and reproduced a second
-integration gap in the existing packed-client runtime test: its two expected
-receipt/status kinds still name V1, whereas PC-04 sends V2. The PC-06 brief
-requires a named owner for shared fixture edits; assignment was requested.
-Neither this fixture nor a feature owner's code is silently patched here.
+The native subprocess case compiles
+[`native-cli-proof.swift`](../../../tests/fixtures/project-context-integration/native-cli-proof.swift)
+with the real `ProjectSession`, `ProjectClient`, `ProjectCLI` and `UploadClient`.
+Its executable runs this worktree's built CLI, including real account status,
+request parsing and response decoding, against the loopback server. Alice and
+Carol exercise overlapping/disjoint discovery, feed/search/roster/original
+read, project audience different from destination, inaccessible-read clearing,
+account-change clearing and unsupported-list handling. No canned CLI JSON is
+returned. The native UI control/disabled-Ask assertions remain in PC-05's
+compiled controller fixtures, which intentionally use canned CLI responses.
+Together these prove bounded local cross-layer behavior, not a GUI-to-live-host
+rehearsal or real provider/model execution.
+
+After adding that case, `cli-http.test.ts` passed all 7 tests on macOS.
+
+The initial full `npm run check` completed with 202 files passing and one
+failing (2,411 passed, one failed, one skipped). Its packed-client runtime
+failure was the missing V2 route before PC-03 default composition landed.
+Inspection also found two stale V1 receipt/status expectations in that shared
+test. The user explicitly assigned this bounded update to PC-06; only those
+two kind expectations were changed to V2. The exact packed-client test then
+passed using:
+
+```sh
+./node_modules/.bin/vitest run --config vitest.config.ts services/organization-authority/test/organization-authority-private-approval-runtime.test.ts -t 'runs submit/status from the exact packed Person CLI'
+```
+
+Result: one passed, 21 unrelated tests skipped by the focused name filter.
+The initial full run overlapped subsequent integrations and is retained only
+as failure evidence, not a final-source qualification. Final full-check results
+belong to the unchanged committed PR head.
 
 ## Rollout preparation
 
