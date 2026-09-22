@@ -53,10 +53,10 @@ result here. A foundation-only head is not an implementation checkpoint.
 | Lane | Observed committed SHA | Qualification status |
 | --- | --- | --- |
 | PC-02 | `37b6e557f3898bb4af30159f8ce70a5d1fffb047` | Application/worker and adversarial tests imported through `95de82c` |
-| PC-03 | `6ccb8f7dcbfb3796ff078d92db3bbba6ca99fc34` | Current HTTP adapter, default runtime/worker wiring and mapped internal-failure response correction |
-| PC-04 | `97d2c54cbbecdf73059c815501ec3cee8f8e6d5e` | Current CLI/transport proof; the owner transport test remains at `services/organization-authority/test/project-context-person-transport.test.ts` |
-| PC-05 | `f9a3411d714f43c0842795af3b4f0aeaf4309c38` | Native robustness, duplicate-JSON rejection and CLI bridge assertions, including its merged PC-04 dependency |
-| PC-06 | `aad979314d316d8e0f300a55290ebb4de0b9c9a4` | Real native CLI-to-loopback-HTTP proof and V2 packed-client qualification |
+| PC-03 | `6ccb8f7dcbfb3796ff078d92db3bbba6ca99fc34` | Current HTTP/default runtime/worker source, including error-contract correction `7377318cb16a72849c32fa7a90e6f58b24ffbc55` as `4668ae5` |
+| PC-04 | `97d2c54cbbecdf73059c815501ec3cee8f8e6d5e` | Current CLI/transport proof; the service-owned transport test is `services/organization-authority/test/project-context-person-transport.test.ts` |
+| PC-05 | `f9a3411d714f43c0842795af3b4f0aeaf4309c38` | Native robustness, duplicate-JSON rejection and CLI bridge assertions, including merged PC-04 dependency |
+| PC-06 | `e83ba7e7a191ec5a2b682a51dc62ebb7cc61b3c0` | Real native CLI-to-loopback-HTTP proof, V2 packed-client qualification and committed evidence ledger |
 
 The final local gate combines real application/worker + HTTP composition + CLI
 transport + native CLI-bound UI, then the complete repository check. The PR
@@ -101,6 +101,9 @@ path arguments. `npm run build:workspaces` passed before every successful row.
 | PC-03 runtime `67a2c42` | `services/organization-authority/test/project-context-integration services/organization-authority/test/organization-authority-api-runtime.test.ts` | 5 files / 35 passed |
 | PC-04 transport `97d2c54` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts services/organization-authority/test/project-context-person-transport.test.ts` | Current owner-lane focused proof: 198 passed |
 | PC-05 native `7730e5b` | `services/organization-authority/test/project-context-integration tests/architecture/echo-projects.test.ts tests/architecture/echo-uploads.test.ts tests/architecture/echo-overlay-sources-fixture.test.ts tests/architecture/echo-overlay.test.ts` | 8 files / 102 passed |
+| PC-04 test ownership `63159d0` | `services/organization-authority/test/project-context-integration services/organization-authority/test/project-context-person-transport.test.ts` | 5 files / 32 passed |
+| PC-05 native hardening `fc84419` | `services/organization-authority/test/project-context-integration tests/architecture/echo-projects.test.ts tests/architecture/echo-uploads.test.ts` | 6 files / 68 passed |
+| PC-03 error contract `7377318` | `services/organization-authority/test/project-context-integration services/organization-authority/test/project-context-http.test.ts services/organization-authority/test/organization-authority-api-runtime.test.ts tests/architecture/test-layer-ownership.test.ts` | 7 files / 120 passed |
 
 The new [CLI/HTTP integration](../../../services/organization-authority/test/project-context-integration/cli-http.test.ts)
 uses real CLI parsing/session storage/transport/decoding, a loopback HTTP server,
@@ -130,7 +133,8 @@ Carol exercise overlapping/disjoint discovery, feed/search/roster/original
 read, project audience different from destination, inaccessible-read clearing,
 account-change clearing and unsupported-list handling. No canned CLI JSON is
 returned. The native UI control/disabled-Ask assertions remain in PC-05's
-compiled controller fixtures, which intentionally use canned CLI responses.
+compiled controller fixtures. These include both canned CLI responses and,
+after `fc84419`, real CLI execution with controlled fixture HTTP responses.
 Together these prove bounded local cross-layer behavior, not a GUI-to-live-host
 rehearsal or real provider/model execution.
 
@@ -150,11 +154,16 @@ passed using:
 
 Result: one passed, 21 unrelated tests skipped by the focused name filter.
 The initial full run overlapped subsequent integrations and is retained only
-as failure evidence, not a final-source qualification. The current
-reconciliation passed `npm run build`, 32 real integration/transport tests,
-87 native tests, 18 test-layer ownership tests and the architecture-boundary
-check. The aggregate `npm run check` remains pending and is the only final
-local qualification claim.
+as failure evidence, not a final-source qualification. A second full check at
+unchanged `b15b3f57366354f24842ab3c7f82697ec54b4847` passed architecture,
+documentation, lint, build and type checks, then reported 205 test files
+passing and one failing: test-layer ownership rejected PC-04's then-stale
+`tests/person-client/` location. PC-04's committed `63159d0` moved that
+repository-backed test into Authority service tests. The current reconciliation
+passed `npm run build`, 32 real integration/transport tests, 87 native tests,
+18 test-layer ownership tests and the architecture-boundary check. The
+aggregate `npm run check` remains pending and is the only final local
+qualification claim.
 
 ## Rollout preparation
 
