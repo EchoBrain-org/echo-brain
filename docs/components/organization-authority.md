@@ -105,10 +105,13 @@ its complete compatible state generation as one qualification boundary.
 
 ## Original Person upload custody
 
-Authority V6 saves authenticated original text with the selected Only me/Team
+Authority V7 retains authenticated V1 original-text uploads with the selected Only me/Team
 visibility and an immutable receipt. Upload-specific read/search verifies the
 current reader, enforces that visibility, and audits before release. Optional
 search enrichment cannot change permissions or source text. Uploads remain in
 protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits, indefinite retention, and the offline V5 copy.
+The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
+describes the fresh V7 project/V2 storage. Project routes and client operations
+are not live yet; the historical V5-to-V6 copy does not initialize V7.

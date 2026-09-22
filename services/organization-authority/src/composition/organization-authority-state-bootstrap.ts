@@ -32,9 +32,9 @@ import {
   readableSearchPlaneBaselineSha256V1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  applyAuthorityBaselineV6,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V6,
-  authorityBaselineSha256V6,
+  applyAuthorityBaselineV7,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V7,
+  authorityBaselineSha256V7,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
@@ -229,6 +229,13 @@ function seedAuthority(
         seed.owner_principal_id,
         state.created_at,
       );
+    database
+      .prepare(
+        `INSERT INTO authority_project_authorization_state_v1
+         (organization_id, revision, updated_at)
+         VALUES (?, 0, ?)`,
+      )
+      .run(seed.organization_id, state.created_at);
     database.exec("COMMIT");
   } catch (error) {
     try {
@@ -340,8 +347,8 @@ export function bootstrapOrganizationAuthorityState(
     creating_artifact_revision: input.creating_artifact_revision,
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V6,
-        schema_sha256: authorityBaselineSha256V6(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V7,
+        schema_sha256: authorityBaselineSha256V7(),
       },
       "control-plane": {
         database_schema_version:
@@ -376,7 +383,7 @@ export function bootstrapOrganizationAuthorityState(
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV6 },
+      authority: { apply: applyAuthorityBaselineV7 },
       "control-plane": { apply: applyOrganizationControlBaselineV3 },
       "record-log": { apply: applyOrganizationRecordLogBaselineV3 },
     },

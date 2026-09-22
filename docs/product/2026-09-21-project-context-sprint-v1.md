@@ -1,8 +1,8 @@
 # Project context: sprint tasks and file ownership
 
-Status: PC-00 contracts implemented and verified locally on
-`feat/project-context-pc00`, 2026-09-21. PC-01 through PC-07 remain planned;
-project persistence, routes and client operations are not live. The installed
+Status: PC-00 contracts and PC-01 persistence are implemented locally on
+`feat/project-context-pc00-pc01`, based directly on main. PC-02 through PC-07
+remain planned; project routes and client operations are not live. The installed
 desktop UI remains build `9f28656`, with unsupported features labeled
 “Not live yet.”
 
@@ -16,6 +16,9 @@ qualification; those require the later stateful and integration tasks.
 
 Related scope: [CLI wiring and contract gaps](2026-09-21-projects-cli-wiring-and-contract-gaps.md)
 and the frozen [PC-00 project context V1 contract](2026-09-21-project-context-v1-contract.md).
+The [PC-01 persistence handoff](2026-09-21-project-context-pc01-persistence.md)
+describes the V7 schema, repository integration and explicit reset boundary.
+The separate native UI implementation is excluded from this combined branch.
 
 ## Current Write path
 
@@ -110,8 +113,8 @@ task plan.
 
 ## Task map
 
-PC-00 is implemented in the isolated worktree and has passed its checks; it
-has not been merged or deployed. PC-01 through PC-07 remain planned. Paths
+PC-00 and PC-01 are implemented in the isolated worktree; they have not been
+merged or deployed. PC-02 through PC-07 remain planned. Paths
 marked “new” in those later tasks are proposed file locations. PC-00's public
 API and CLI contracts are fixed by its checked-in codecs and fixtures.
 
@@ -200,6 +203,13 @@ the same request/response examples. Clients must never turn an unsupported
 project audience into organization-wide sharing.
 
 ## PC-01: fresh database schema and persistence
+
+Implemented: fresh Authority V7 bootstrap/pre-open identity, project SQLite
+repository, transaction-scoped authorization witnesses, immutable originals and
+replay receipts, minimized audited reads, and the enrichment eligibility
+adapter. The current V1 upload runtime remains supported on fresh V7 while
+project/V2 runtime wiring waits for PC-02/PC-03. See the
+[persistence handoff](2026-09-21-project-context-pc01-persistence.md).
 
 Own:
 

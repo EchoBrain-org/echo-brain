@@ -18,8 +18,8 @@ import {
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V6,
-  authorityBaselineSha256V6,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V7,
+  authorityBaselineSha256V7,
 } from "../adapters/persistence/sqlite/baseline.js";
 import { StateLineagePreopenRefusal, verifyStateLineageBeforeOpen } from "../state-lineage/state-lineage-preopen-guard.js";
 import { validateStateLineageRootManifestV2 } from "../state-lineage/state-lineage-manifest-v1.js";
@@ -52,8 +52,8 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
     },
     expected_schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V6,
-        schema_sha256: authorityBaselineSha256V6(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V7,
+        schema_sha256: authorityBaselineSha256V7(),
       },
       "control-plane": {
         database_schema_version:

@@ -11,7 +11,7 @@ component_ids:
   - CMP-PROTOCOLS-CRYPTO
 created_at: 2026-09-21
 reviewed_at: 2026-09-21
-reviewed_ref: 9f28656b4cc39731ae593dd86825ac51b7978cb2
+reviewed_ref: 84c86985a72801c3c00da8937c52156602252a9e
 status: accepted
 supersedes: []
 superseded_by: []

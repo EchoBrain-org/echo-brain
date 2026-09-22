@@ -1,8 +1,9 @@
 # ECHO home: supported CLI wiring and project contract gaps
 
-Prepared 2026-09-21. Implementation starts from main `0857095` and the in-progress
-native Projects design. This change does not add an Authority baseline or deploy
-an application.
+Prepared 2026-09-21. The UI work described here is the separate native change
+based on main `0857095`, previously installed as build `9f28656`. The combined
+PC-00/PC-01 branch includes this scope reference and the project persistence
+foundation, but does not include that UI implementation or deploy an application.
 
 UI reference: the founder-supplied `ECHO Projects v1.html` export, containing
 nine boards for home, project updates, write, capture, drop, creation, created
@@ -94,6 +95,9 @@ per original. A second association conflicts until the first is explicitly
 removed. The full selected policy and wire boundary are in the
 [project context V1 contract](2026-09-21-project-context-v1-contract.md).
 Unread badges, broader attachments, and Undo can follow this core journey.
+PC-01 now implements the fresh V7 storage and repository ports in the
+[persistence handoff](2026-09-21-project-context-pc01-persistence.md).
+Project HTTP routes, CLI operations and native project controls remain not live.
 
 ### Scope relative to the current runtime
 
