@@ -1,3 +1,5 @@
+import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
+import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import { PersonUpdatesApplicationV1 } from '../application/person-updates.js';
 import { SqlitePersonUpdateInboxV1 } from '../adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { createPersonToolsHttpApplicationV3 } from '../presentation/person-tools-http-application-v3.js';
@@ -243,6 +245,10 @@ export async function startOrganizationAuthorityApiRuntime(
                 : { on_failure: dependencies.answer_failure }),
             }),
           }),
+      project_context: createProjectContextApplicationV1({
+        authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
+        repository: new SqliteProjectContextRepositoryV1(database),
+      }),
       person_updates: new PersonUpdatesApplicationV1((accessToken) => sessions.authenticateAccess({ access_token: accessToken }), new SqlitePersonUpdateInboxV1(database)),
       person_employees: createPersonEmployeeHttpApplication(
         new PersonEmployeeLifecycleApplication(sessions, {

@@ -4,28 +4,27 @@ import Darwin
 import Foundation
 
 enum UploadVisibility: String, Codable {
-    case onlyMe = "only_me", team
-    var label: String { self == .onlyMe ? "Only me" : "Team" }
-    var argument: String { self == .onlyMe ? "only-me" : "team" }
+    case onlyMe = "only_me", team, project
+    var label: String { switch self { case .onlyMe: return "Only me"; case .team: return "Everyone in my organization"; case .project: return "Project members" } }
+    var argument: String { self == .onlyMe ? "only-me" : rawValue }
 }
-
-private func uploadText(_ value: String, maximum: Int, multiline: Bool = false) -> Bool {
-    !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.utf8.count <= maximum &&
-    value.unicodeScalars.allSatisfy {
-        let n = $0.value
-        return !(n < 32 || (127...159).contains(n)) || (multiline && [9, 10, 13].contains(n))
+struct UploadAudience: Codable, Equatable {
+    let kind: UploadVisibility
+    let project_id: String?
+    init(_ kind: UploadVisibility, projectID: String? = nil) { self.kind = kind; project_id = projectID }
+    var valid: Bool { kind == .project ? ProjectWire.id(project_id ?? "", prefix: "prj_") : project_id == nil }
+    var label: String { kind.label }
+    static func validObject(_ object: Any?) -> Bool {
+        guard let o = object as? [String: Any], let kind = o["kind"] as? String,
+              let visibility = UploadVisibility(rawValue: kind) else { return false }
+        return ProjectWire.keys(o, visibility == .project ? ["kind", "project_id"] : ["kind"]) &&
+            UploadAudience(visibility, projectID: o["project_id"] as? String).valid
     }
 }
-
-private func uploadID(_ value: String) -> Bool {
-    value.range(of: "^ctx_[0-9a-f]{64}$", options: .regularExpression) != nil
+private func uploadText(_ value: String, maximum: Int, multiline: Bool = false) -> Bool {
+    ProjectWire.text(value, max: maximum, multiline: multiline)
 }
-
-private func uploadDate(_ value: String) -> Date? {
-    let format = ISO8601DateFormatter()
-    format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return format.date(from: value)
-}
+private func uploadID(_ value: String) -> Bool { value.range(of: "^ctx_[0-9a-f]{64}$", options: .regularExpression) != nil }
 
 func uploadQuery(_ source: String) -> String? {
     let text = source.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
@@ -46,14 +45,15 @@ struct UploadReceipt: Decodable {
     let request_id: String
     let context_id: String
     let received_at: String
-    let visibility: UploadVisibility
+    let audience: UploadAudience
+    let project_id: String?
     let state: String?
     let status: String?
     let metadata: String?
-
+    var visibility: UploadVisibility { audience.kind }
     var valid: Bool {
-        schema_version == 1 && uploadID(context_id) && uploadDate(received_at) != nil &&
-        request_id.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil
+        schema_version == 2 && uploadID(context_id) && ProjectWire.date(received_at) && audience.valid &&
+        (project_id == nil || ProjectWire.id(project_id!, prefix: "prj_")) && ProjectWire.id(request_id, prefix: "")
     }
     var message: String {
         let enrichment: String
@@ -62,32 +62,39 @@ struct UploadReceipt: Decodable {
         case "unavailable": enrichment = "Extra search metadata is unavailable; your original is still searchable."
         default: enrichment = "Extra search metadata is being prepared."
         }
-        return "Saved · \(visibility.label). Available in search now. \(enrichment)"
+        return "Saved · \(audience.label). Available in search now. \(enrichment)"
     }
 }
-
 struct UploadMatch: Decodable {
     let context_id: String
     let received_at: String
-    let visibility: UploadVisibility
+    let audience: UploadAudience
     let title: String
     let excerpt: String
-    var valid: Bool {
-        uploadID(context_id) && uploadDate(received_at) != nil && uploadText(title, maximum: 200) &&
-        excerpt.unicodeScalars.count <= 300 && uploadText(excerpt, maximum: 1200, multiline: true)
+    var visibility: UploadVisibility { audience.kind }
+    static func validObject(_ o: [String: Any]) -> Bool {
+        guard ProjectWire.keys(o, ["context_id", "received_at", "audience", "title", "excerpt"]),
+              let excerpt = o["excerpt"] as? String else { return false }
+        return uploadID(o["context_id"] as? String ?? "") && ProjectWire.date(o["received_at"] as? String ?? "") &&
+            UploadAudience.validObject(o["audience"]) && uploadText(o["title"] as? String ?? "", maximum: 200) &&
+            excerpt.unicodeScalars.count <= 300 && uploadText(excerpt, maximum: 1200, multiline: true)
     }
 }
-
 struct UploadContent: Decodable {
     let schema_version: Int
     let kind: String
     let context_id: String
     let received_at: String
-    let visibility: UploadVisibility
+    let audience: UploadAudience
     let title: String
     let text: String
+    var visibility: UploadVisibility { audience.kind }
+    static func validFields(_ o: [String: Any]) -> Bool {
+        uploadID(o["context_id"] as? String ?? "") && ProjectWire.date(o["received_at"] as? String ?? "") &&
+        UploadAudience.validObject(o["audience"]) && uploadText(o["title"] as? String ?? "", maximum: 200) &&
+        uploadText(o["text"] as? String ?? "", maximum: 8192, multiline: true)
+    }
 }
-
 private struct UploadSearchResponse: Decodable {
     let schema_version: Int
     let kind: String
@@ -100,12 +107,16 @@ struct UploadRecovery: Codable, Equatable {
     let authority: String
     let membershipID: String
     let requestID: String
-    let visibility: UploadVisibility
+    let audience: UploadAudience
+    let projectID: String?
+    var visibility: UploadVisibility { audience.kind }
 
-    init?(identity: AccountIdentity, requestID: String, visibility: UploadVisibility) {
+    init?(identity: AccountIdentity, requestID: String, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil) {
+        let audience = UploadAudience(visibility, projectID: audienceProjectID)
+        guard audience.valid, projectID == nil || ProjectWire.id(projectID!, prefix: "prj_") else { return nil }
         guard let member = identity.membershipID, !member.isEmpty else { return nil }
         authority = identity.authority; membershipID = member
-        self.requestID = requestID; self.visibility = visibility
+        self.requestID = requestID; self.audience = audience; self.projectID = projectID
     }
     func belongs(to identity: AccountIdentity) -> Bool {
         authority == identity.authority && membershipID == identity.membershipID
@@ -123,7 +134,8 @@ struct UploadRecovery: Codable, Equatable {
     }
     static func load(for identity: AccountIdentity, defaults: UserDefaults = .standard) -> UploadRecovery? {
         guard let data = defaults.data(forKey: key(identity)), data.count <= 4096,
-              let result = try? JSONDecoder().decode(Self.self, from: data), result.belongs(to: identity),
+              let result = try? JSONDecoder().decode(Self.self, from: data), result.belongs(to: identity), result.audience.valid,
+              result.projectID == nil || ProjectWire.id(result.projectID!, prefix: "prj_"),
               result.requestID.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil
         else { return nil }
         return result
@@ -133,15 +145,19 @@ struct UploadRecovery: Codable, Equatable {
 final class UploadDraft {
     let requestID: String
     let title: String
-    let visibility: UploadVisibility
+    let audience: UploadAudience
+    let projectID: String?
+    var visibility: UploadVisibility { audience.kind }
     let file: URL
     private let directory: URL
 
-    init(title: String, bytes: Data, visibility: UploadVisibility) throws {
+    init(title: String, bytes: Data, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil) throws {
+        let audience = UploadAudience(visibility, projectID: audienceProjectID)
+        guard audience.valid, projectID == nil || ProjectWire.id(projectID!, prefix: "prj_") else { throw CocoaError(.validationMissingMandatoryProperty) }
         guard uploadText(title, maximum: 200), bytes.count <= 8192,
               let text = String(data: bytes, encoding: .utf8), uploadText(text, maximum: 8192, multiline: true)
         else { throw CocoaError(.fileReadCorruptFile) }
-        self.title = title; self.visibility = visibility; requestID = UUID().uuidString.lowercased()
+        self.title = title; self.audience = audience; self.projectID = projectID; requestID = UUID().uuidString.lowercased()
         var template = Array(FileManager.default.temporaryDirectory.appendingPathComponent("echo-upload-XXXXXXXX").path.utf8CString)
         guard let path = mkdtemp(&template) else { throw CocoaError(.fileWriteUnknown) }
         directory = URL(fileURLWithPath: String(cString: path), isDirectory: true)
@@ -185,22 +201,28 @@ enum UploadCommand {
         switch self {
         case .submit(let draft): return base + ["submit", "--request-id", draft.requestID, "--title", draft.title,
                                               "--file", draft.file.path, "--visibility", draft.visibility.argument]
+                + (draft.audience.project_id.map { ["--audience-project-id", $0] } ?? [])
+                + (draft.projectID.map { ["--project-id", $0] } ?? [])
         case .status(let receipt): return base + ["status", "--request-id", receipt.requestID]
         case .search(let query): return base + ["search", "--query", query, "--limit", "10"]
         case .read(let context): return base + ["read", "--context-id", context]
         }
+    }
+    var action: String {
+        switch self { case .submit: return "updates-submit"; case .status: return "updates-status"; case .search: return "updates-search"; case .read: return "updates-read" }
     }
     var mutates: Bool { if case .submit = self { return true }; return false }
 }
 
 enum UploadResult {
     case saved(UploadReceipt), matches([UploadMatch]), content(UploadContent)
-    case unavailable, failed, unconfirmed, unconfirmedAccount
+    case unavailable, failed, unconfirmed, unconfirmedAccount, rejected(ProjectFailure)
 }
 
 final class UploadClient: @unchecked Sendable {
-    let account: AccountClient
-    init(account: AccountClient = AccountClient()) { self.account = account }
+    let cli: ProjectCLI
+    var account: AccountClient { cli.account }
+    init(cli: ProjectCLI = ProjectCLI()) { self.cli = cli }
 
     func perform(_ command: UploadCommand, identity: AccountIdentity,
                  completion: @escaping @MainActor (UploadResult) -> Void) -> AccountRunning {
@@ -214,375 +236,199 @@ final class UploadClient: @unchecked Sendable {
 
     func execute(_ command: UploadCommand, identity: AccountIdentity, running: AccountRunning) -> UploadResult {
         if case .status(let recovery) = command, !recovery.belongs(to: identity) { return .unavailable }
-        guard identity.membershipID?.isEmpty == false,
-              case .signedIn(let before) = account.readStatus(running), before == identity else { return .unavailable }
-        let bytes = account.runCaptured(command.arguments, timeout: 45, running: running)
-        // Never display a previous membership's private text after account change.
-        guard case .signedIn(let after) = account.readStatus(running), after == identity else {
-            return command.mutates ? .unconfirmedAccount : .unavailable
+        switch cli.execute(command.arguments, identity: identity, running: running) {
+        case .output(let bytes, let success):
+            if !success {
+                let requestID: String? = { if case .submit(let draft) = command { return draft.requestID }; return nil }()
+                guard let failure = ProjectFailure.parse(bytes, action: command.action, requestID: requestID) else {
+                    return command.mutates ? .unconfirmed : .failed
+                }
+                return failure.unknown ? .unconfirmed : .rejected(failure)
+            }
+            let result = Self.parse(bytes, command: command)
+            if command.mutates, case .failed = result { return .unconfirmed }
+            return result
+        case .unavailable: return .unavailable
+        case .accountChanged: return command.mutates ? .unconfirmedAccount : .unavailable
+        case .failed: return command.mutates ? .unconfirmed : .failed
         }
-        guard let bytes else { return command.mutates ? .unconfirmed : .failed }
-        let result = Self.parse(bytes, command: command)
-        if command.mutates, case .failed = result { return .unconfirmed }
-        return result
     }
 
     static func parse(_ bytes: Data, command: UploadCommand) -> UploadResult {
         let decoder = JSONDecoder()
-        guard let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { return .failed }
-        func keys(_ expected: [String]) -> Bool { Set(object.keys) == Set(expected) }
+        guard let object = ProjectWire.object(bytes) else { return .failed }
+        func keys(_ expected: [String]) -> Bool { ProjectWire.keys(object, expected) }
+        func receipt(_ request: String, _ audience: UploadAudience, _ projectID: String?, status: Bool) -> UploadResult {
+            guard keys(["schema_version", "kind", "request_id", "context_id", "received_at", "audience", "project_id"] + (status ? ["status", "metadata"] : ["state"])),
+                  ProjectWire.header(object, version: 2, kind: status ? "echo-person-update-status-v2" : "echo-person-update-receipt-v2"),
+                  UploadAudience.validObject(object["audience"]), object["project_id"] is NSNull || object["project_id"] is String,
+                  let r = try? decoder.decode(UploadReceipt.self, from: bytes), r.valid,
+                  r.request_id == request, r.audience == audience, r.project_id == projectID else { return .failed }
+            guard status ? (r.status == "stored" && ["pending", "processing", "ready", "unavailable"].contains(r.metadata ?? "")) : r.state == "received" else { return .failed }
+            return .saved(r)
+        }
         switch command {
-        case .submit(let draft):
-            guard keys(["schema_version", "kind", "request_id", "context_id", "received_at", "visibility", "state"]),
-                  let r = try? decoder.decode(UploadReceipt.self, from: bytes), r.valid,
-                  r.kind == "echo-person-update-receipt-v1", r.state == "received",
-                  r.request_id == draft.requestID, r.visibility == draft.visibility else { return .failed }
-            return .saved(r)
-        case .status(let expected):
-            guard keys(["schema_version", "kind", "request_id", "context_id", "received_at", "visibility", "status", "metadata"]),
-                  let r = try? decoder.decode(UploadReceipt.self, from: bytes), r.valid,
-                  r.kind == "echo-person-update-status-v1", r.status == "stored",
-                  ["pending", "processing", "ready", "unavailable"].contains(r.metadata ?? ""),
-                  r.request_id == expected.requestID, r.visibility == expected.visibility else { return .failed }
-            return .saved(r)
+        case .submit(let draft): return receipt(draft.requestID, draft.audience, draft.projectID, status: false)
+        case .status(let expected): return receipt(expected.requestID, expected.audience, expected.projectID, status: true)
         case .search:
             guard keys(["schema_version", "kind", "results"]),
-                  let r = try? decoder.decode(UploadSearchResponse.self, from: bytes), r.schema_version == 1,
-                  r.kind == "echo-person-upload-search-v1", r.results.count <= 10,
-                  r.results.allSatisfy({ $0.valid }), Set(r.results.map(\.context_id)).count == r.results.count,
-                  let entries = object["results"] as? [[String: Any]],
-                  entries.allSatisfy({ Set($0.keys) == Set(["context_id", "received_at", "visibility", "title", "excerpt"]) }) else { return .failed }
+                  ProjectWire.header(object, version: 2, kind: "echo-person-upload-search-v2"),
+                  let entries = object["results"] as? [[String: Any]], entries.count <= 10, entries.allSatisfy(UploadMatch.validObject),
+                  let r = try? decoder.decode(UploadSearchResponse.self, from: bytes),
+                  Set(r.results.map(\.context_id)).count == r.results.count else { return .failed }
             return .matches(r.results)
         case .read(let id):
-            guard keys(["schema_version", "kind", "context_id", "received_at", "visibility", "title", "text"]),
-                  let r = try? decoder.decode(UploadContent.self, from: bytes), r.schema_version == 1,
-                  r.kind == "echo-person-upload-content-v1", uploadID(r.context_id), r.context_id == id,
-                  uploadDate(r.received_at) != nil, uploadText(r.title, maximum: 200),
-                  uploadText(r.text, maximum: 8192, multiline: true) else { return .failed }
+            guard keys(["schema_version", "kind", "context_id", "received_at", "audience", "title", "text"]),
+                  ProjectWire.header(object, version: 2, kind: "echo-person-upload-content-v2"), UploadContent.validFields(object),
+                  let r = try? decoder.decode(UploadContent.self, from: bytes), r.context_id == id else { return .failed }
             return .content(r)
         }
     }
 }
 
-private final class UploadWindow: NSWindow {
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-           let editor = firstResponder as? NSTextView {
-            switch event.charactersIgnoringModifiers {
-            case "a": editor.selectAll(nil)
-            case "c": editor.copy(nil)
-            case "x": editor.cut(nil)
-            case "v": editor.paste(nil)
-            case "z": editor.undoManager?.undo()
-            default: return super.performKeyEquivalent(with: event)
-            }
-            return true
-        }
-        return super.performKeyEquivalent(with: event)
-    }
-}
-
+// Shared UI state for the supported upload commands. Content stays in memory;
+// only the account-scoped receipt locator survives a restart.
 @MainActor
-final class UploadsController: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
-    private let client: UploadClient
+final class UploadSession {
+    let client: UploadClient
     private let defaults: UserDefaults
     private let isForeground: @MainActor () -> Bool
-    private let window = UploadWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 740),
-                                     styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-    private let identityLabel = NSTextField(labelWithString: "Checking your account…")
-    private let titleField = NSTextField()
-    private let fileLabel = NSTextField(labelWithString: "Choose a UTF-8 text file, up to 8 KiB.")
-    private let visibility = NSPopUpButton()
-    private let permissionLabel = NSTextField(wrappingLabelWithString: "Only you can search and read this upload.")
-    private let choose = NSButton(title: "Choose file…", target: nil, action: nil)
-    private let submit = NSButton(title: "Upload", target: nil, action: nil)
-    private let check = NSButton(title: "Check upload status", target: nil, action: nil)
-    private let startNew = NSButton(title: "New upload", target: nil, action: nil)
-    private let openSaved = NSButton(title: "Open saved upload", target: nil, action: nil)
-    private let uploadStatus = NSTextField(wrappingLabelWithString: "")
-    private let query = NSSearchField()
-    private let search = NSButton(title: "Search", target: nil, action: nil)
-    private let searchStatus = NSTextField(wrappingLabelWithString: "Search titles, original text, and available search metadata.")
-    private let table = NSTableView()
-    private let detailTitle = NSTextField(labelWithString: "Select a result to read its original text.")
-    private let original = NSTextView()
-    private var identity: AccountIdentity?
-    private var bytes: Data?
-    private var draft: UploadDraft?
-    private var recovery: UploadRecovery?
-    private var receipt: UploadReceipt?
-    private var rows: [UploadMatch] = []
+    var onChange: (() -> Void)?
+    var onProjectAccessChanged: (() -> Void)?
+    private(set) var identity: AccountIdentity?
+    private(set) var matches: [UploadMatch] = []
+    private(set) var content: UploadContent?
+    private(set) var receipt: UploadReceipt?
+    private(set) var recovery: UploadRecovery?
+    private(set) var draft: UploadDraft?
+    private(set) var status = ""
+    private(set) var busy = false
+    private(set) var hasOutstandingMutation = false
     private var active: AccountRunning?
     private var generation = UUID()
-    private var choosing = false
-    private(set) var hasOutstandingMutation = false
+    private var concealed = false
+    private var activeContentRead = false
 
     init(client: UploadClient = UploadClient(), defaults: UserDefaults = .standard,
          isForeground: @escaping @MainActor () -> Bool = { NSApp.isActive }) {
         self.client = client; self.defaults = defaults; self.isForeground = isForeground
-        super.init(); configure()
     }
-
-    func show() {
-        window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate()
-        refreshIdentity()
-    }
+    var canCompose: Bool { identity != nil && !busy && recovery == nil && draft == nil }
     func refreshIdentity() {
-        guard window.isVisible, isForeground(), active == nil, !choosing else { return }
-        clearFetched()
-        let id = UUID(); generation = id
+        concealed = false
+        guard !busy else { return }
+        matches = []; content = nil
+        let id = UUID(); generation = id; busy = true
         active = client.account.status { [weak self] result in
             guard let self, self.generation == id else { return }
-            self.active = nil
+            self.active = nil; self.busy = false
             guard case .signedIn(let account) = result, account.membershipID?.isEmpty == false else {
-                self.resetAccount(); self.identityLabel.stringValue = "Sign in from ECHO’s Account menu to use uploads."
-                return
+                self.reset(); self.status = "Sign in from Account to save and find context."
+                self.onChange?(); return
             }
             if self.identity != account {
-                self.resetAccount(); self.identity = account
+                self.reset(); self.identity = account
                 self.recovery = UploadRecovery.load(for: account, defaults: self.defaults)
-                self.uploadStatus.stringValue = self.recovery == nil ? "" : "A previous upload attempt is available. Check its status or search before starting another."
+                self.status = self.recovery == nil ? "" : "Check the previous save before starting another."
             }
-            self.identityLabel.stringValue = "\(account.displayName) · \(account.authority)"
-            self.updateControls()
+            self.onChange?()
         }
-        updateControls()
+        onChange?()
+    }
+    func submit(title: String, text: String, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil) {
+        guard canCompose, let identity else { return }
+        do { draft = try UploadDraft(title: title, bytes: Data(text.utf8), visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID) }
+        catch { status = "Use a title up to 200 UTF-8 bytes and nonempty text up to 8 KiB."; onChange?(); return }
+        guard let draft, let recovery = UploadRecovery(identity: identity, requestID: draft.requestID, visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID) else { return }
+        self.recovery = recovery; recovery.save(for: identity, defaults: defaults)
+        status = "Saving your original text…"; run(.submit(draft))
+    }
+    // Losing project authorization clears the draft bytes, never its receipt
+    // locator or immutable audience/association coordinates.
+    func projectAccessChanged() {
+        matches = []; content = nil
+        if draft?.projectID != nil || draft?.audience.kind == .project { draft = nil }
+        if activeContentRead { active?.cancel(); active = nil; generation = UUID(); busy = false; activeContentRead = false }
+        onChange?()
+    }
+    func retry() {
+        guard !busy, receipt == nil, let draft else { return }
+        status = "Retrying the same save…"; run(.submit(draft))
+    }
+    func checkStatus() {
+        guard !busy, let recovery else { return }
+        status = "Checking the saved context…"; run(.status(recovery))
+    }
+    // Caller explicitly confirms abandoning an uncertain receipt. This does not
+    // delete a saved upload, withdraw its audience, or generate a fresh retry.
+    func startAnother() {
+        guard !busy, let identity else { return }
+        UploadRecovery.clear(for: identity, defaults: defaults)
+        draft = nil; receipt = nil; recovery = nil; status = ""; onChange?()
+    }
+    func search(_ source: String) {
+        guard !busy, identity != nil else { return }
+        guard let query = uploadQuery(source) else {
+            status = "Search with up to 240 characters and 32 distinct words."; onChange?(); return
+        }
+        matches = []; content = nil; status = "Searching saved context…"; run(.search(query))
+    }
+    func read(_ id: String) {
+        guard !busy, identity != nil else { return }
+        content = nil; status = "Loading original text…"; run(.read(id))
     }
     func conceal() {
-        clearFetched()
-        guard !choosing else { return }
-        if !hasOutstandingMutation { active?.cancel(); active = nil; generation = UUID() }
-        updateControls()
+        concealed = true; matches = []; content = nil
+        if !hasOutstandingMutation { active?.cancel(); active = nil; generation = UUID(); busy = false }
+        onChange?()
     }
     func accountWillChange() {
-        // A write may already be committed. Let it settle, but discard its UI
-        // result after clearing this account. Its locator remains account-scoped.
-        if !hasOutstandingMutation { active?.cancel(); active = nil; generation = UUID() }
-        resetAccount()
+        if !hasOutstandingMutation { active?.cancel(); active = nil; generation = UUID(); busy = false }
+        reset(); onChange?()
     }
-    func shutdown() { active?.cancel(); draft = nil }
-    func windowDidBecomeKey(_ notification: Notification) { refreshIdentity() }
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard !hasOutstandingMutation else { return false }
-        conceal(); window.orderOut(nil); return false
-    }
-    private func clearFetched() {
-        rows = []; table.reloadData(); original.string = ""
-        detailTitle.stringValue = "Select a result to read its original text."
-    }
-    private func resetAccount() {
-        clearFetched(); identity = nil; bytes = nil; draft = nil; recovery = nil; receipt = nil
-        identityLabel.stringValue = "Checking your account…"
-        searchStatus.stringValue = "Search titles, original text, and available search metadata."
-        titleField.stringValue = ""; query.stringValue = ""
-        fileLabel.stringValue = "Choose a UTF-8 text file, up to 8 KiB."
-        uploadStatus.stringValue = ""; visibility.selectItem(at: 0); permissionChanged()
-        updateControls()
-    }
-    private func updateControls() {
-        let ready = identity != nil && active == nil
-        let canCompose = ready && draft == nil && receipt == nil && recovery == nil
-        choose.isEnabled = canCompose
-        titleField.isEnabled = canCompose
-        visibility.isEnabled = canCompose
-        submit.isEnabled = ready && (bytes != nil || draft != nil) && receipt == nil
-        submit.title = draft == nil ? "Upload" : "Retry same upload"
-        startNew.isEnabled = ready && (draft != nil || recovery != nil || bytes != nil)
-        check.isEnabled = ready && recovery != nil
-        openSaved.isEnabled = ready && receipt != nil
-        search.isEnabled = ready; query.isEnabled = ready
-        table.isEnabled = ready
-    }
-    @objc private func permissionChanged() {
-        permissionLabel.stringValue = visibility.indexOfSelectedItem == 1
-            ? "Everyone currently in your organization can search and read this upload."
-            : "Only you can search and read this upload."
-    }
-    @objc private func chooseFile() {
-        guard active == nil, draft == nil else { return }
-        let panel = NSOpenPanel(); panel.title = "Upload text to ECHO"
-        panel.message = "Choose notes, a memo, or another UTF-8 text file up to 8 KiB."
-        panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-        choosing = true; defer { choosing = false }
-        guard panel.runModal() == .OK, let file = panel.url else { return }
-        selectFile(file)
-    }
-    func selectFile(_ file: URL) {
-        guard active == nil, identity != nil, draft == nil, receipt == nil, recovery == nil else { return }
-        do {
-            bytes = try UploadDraft.readFile(file)
-            fileLabel.stringValue = "\(file.lastPathComponent) · \(bytes!.count) bytes"
-            if titleField.stringValue.isEmpty {
-                let suggested = file.deletingPathExtension().lastPathComponent
-                if uploadText(suggested, maximum: 200) { titleField.stringValue = suggested }
-            }
-            uploadStatus.stringValue = "File ready. Choose who can read it, then upload."
-        } catch {
-            bytes = nil; fileLabel.stringValue = "No file selected."
-            uploadStatus.stringValue = "Choose a nonempty UTF-8 text file up to 8 KiB. Binary files and folders are not supported."
-        }
-        updateControls()
-    }
-    @objc private func upload() {
-        guard active == nil, let identity else { return }
-        if draft == nil {
-            guard let bytes, uploadText(titleField.stringValue, maximum: 200) else {
-                uploadStatus.stringValue = "Choose a text file and enter a title up to 200 UTF-8 bytes."; return
-            }
-            do { draft = try UploadDraft(title: titleField.stringValue, bytes: bytes,
-                                         visibility: visibility.indexOfSelectedItem == 1 ? .team : .onlyMe) }
-            catch { uploadStatus.stringValue = "Could not prepare this file for upload."; return }
-        }
-        guard let draft, let recovery = UploadRecovery(identity: identity, requestID: draft.requestID, visibility: draft.visibility) else { return }
-        self.recovery = recovery; recovery.save(for: identity, defaults: defaults)
-        self.bytes = nil; uploadStatus.stringValue = "Saving your original text…"
-        run(.submit(draft))
-    }
-    @objc private func checkUpload() {
-        guard let recovery else { return }
-        uploadStatus.stringValue = "Checking the saved upload…"; run(.status(recovery))
-    }
-    @objc private func newUpload() {
-        guard active == nil, let identity else { return }
-        if recovery != nil && receipt == nil {
-            let alert = NSAlert(); alert.messageText = "Start another upload?"
-            alert.informativeText = "The previous attempt may already be saved. Check its status or search first to avoid a duplicate."
-            alert.addButton(withTitle: "Start another upload"); alert.addButton(withTitle: "Cancel")
-            choosing = true; let answer = alert.runModal(); choosing = false
-            guard answer == .alertFirstButtonReturn else { return }
-        }
-        UploadRecovery.clear(for: identity, defaults: defaults)
-        bytes = nil; draft = nil; receipt = nil; recovery = nil
-        titleField.stringValue = ""; visibility.selectItem(at: 0); permissionChanged()
-        fileLabel.stringValue = "Choose a UTF-8 text file, up to 8 KiB."; uploadStatus.stringValue = ""
-        updateControls()
-    }
-    @objc private func searchUploads() {
-        guard let text = uploadQuery(query.stringValue) else {
-            searchStatus.stringValue = "Use one line, up to 240 characters and 32 distinct words. Split very long words."; return
-        }
-        clearFetched(); searchStatus.stringValue = "Searching uploads…"; run(.search(text))
-    }
-    @objc private func openSavedUpload() { if let receipt { read(receipt.context_id) } }
-    private func read(_ id: String) {
-        original.string = ""; detailTitle.stringValue = "Loading original text…"; run(.read(id))
+    func shutdown() { active?.cancel(); generation = UUID(); draft = nil }
+    private func reset() {
+        identity = nil; matches = []; content = nil; receipt = nil; recovery = nil; draft = nil; status = ""
     }
     private func run(_ command: UploadCommand) {
-        guard active == nil, let identity else { return }
-        let id = UUID(); generation = id; hasOutstandingMutation = command.mutates
+        guard !busy, let identity else { return }
+        let id = UUID(); generation = id; busy = true; hasOutstandingMutation = command.mutates
+        switch command { case .read, .search: activeContentRead = true; default: activeContentRead = false }
         active = client.perform(command, identity: identity) { [weak self] result in
             guard let self, self.generation == id else { return }
-            self.active = nil; self.hasOutstandingMutation = false
+            self.active = nil; self.busy = false; self.hasOutstandingMutation = false; self.activeContentRead = false
             guard self.identity == identity else {
-                self.resetAccount()
-                self.identityLabel.stringValue = "Account access changed. Reopen Uploads after signing in."
-                if command.mutates { self.uploadStatus.stringValue = "The upload may already be saved. Check its status from the original account." }
-                return
+                self.reset(); self.status = command.mutates
+                    ? "The save may have completed. Check its status from the original account."
+                    : "Your account changed. Reopen ECHO after signing in."
+                self.onChange?(); return
             }
             switch result {
-            case .saved(let value):
-                self.receipt = value; self.draft = nil
-                self.uploadStatus.stringValue = value.message
-            case .unconfirmed:
-                self.clearFetched()
-                self.uploadStatus.stringValue = "The upload may already be saved. Check its status first. Retrying uses the same original and upload ID."
-            case .unconfirmedAccount:
-                self.resetAccount()
-                self.identityLabel.stringValue = "Account access could not be confirmed. Reopen Uploads after signing in."
-                self.uploadStatus.stringValue = "The upload may already be saved. Check its status from the original account."
-            case .unavailable:
-                self.resetAccount(); self.identityLabel.stringValue = "Your account changed or sign-in is required. Reopen Uploads after signing in."
-            case .failed:
-                self.clearFetched()
-                if case .status = command {
-                    self.uploadStatus.stringValue = "Could not confirm this upload. Check your connection and sign-in, then check again or search."
-                } else { self.searchStatus.stringValue = "Could not read uploads. Check your connection and sign-in, then try again." }
+            case .saved(let receipt):
+                self.receipt = receipt; self.draft = nil; self.status = receipt.message
             case .matches(let matches):
-                guard self.window.isVisible, self.isForeground() else { self.clearFetched(); self.updateControls(); return }
-                self.rows = matches; self.table.reloadData()
-                self.searchStatus.stringValue = matches.isEmpty ? "No matching uploads you can read." : "\(matches.count) matching uploads. Select one to read the original."
+                if !self.concealed && self.isForeground() { self.matches = matches }
+                self.status = matches.isEmpty ? "No matching context you can read." : "Select a result to read the original."
             case .content(let content):
-                guard self.window.isVisible, self.isForeground() else { self.clearFetched(); self.updateControls(); return }
-                self.detailTitle.stringValue = "\(content.title) · \(content.visibility.label)"
-                self.original.string = content.text; self.original.scrollRangeToVisible(NSRange(location: 0, length: 0))
+                if !self.concealed && self.isForeground() { self.content = content }
+                self.status = ""
+            case .unconfirmed:
+                self.matches = []; self.content = nil
+                self.status = "The save may have completed. Check its status before retrying."
+            case .unconfirmedAccount:
+                self.reset(); self.status = "The save may have completed. Check its status from the original account."
+            case .unavailable:
+                self.reset(); self.status = "Sign in from Account to continue."
+            case .rejected(let failure):
+                self.matches = []; self.content = nil
+                if failure.losesAccess { self.draft = nil; self.onProjectAccessChanged?() }
+                self.status = self.recovery == nil ? failure.message : "The current attempt was rejected. An earlier save may exist; keep checking its original status."
+            case .failed:
+                self.matches = []; self.content = nil
+                self.status = "Could not confirm the result. Check your connection and sign-in, then try again."
             }
-            self.updateControls()
+            self.onChange?()
         }
-        updateControls()
-    }
-    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        guard active == nil, rows.indices.contains(table.selectedRow) else { return }
-        read(rows[table.selectedRow].context_id)
-    }
-    func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
-        guard rows.indices.contains(row) else { return nil }
-        let item = rows[row]
-        let value = column?.identifier.rawValue == "visibility" ? item.visibility.label : item.title
-        let cell = NSTextField(labelWithString: value); cell.textColor = EchoTheme.text
-        cell.lineBreakMode = .byTruncatingTail; cell.toolTip = item.excerpt
-        return cell
-    }
-    private func configure() {
-        window.title = "Uploads"; window.delegate = self; window.isReleasedWhenClosed = false
-        window.contentMinSize = NSSize(width: 760, height: 720)
-        window.appearance = NSAppearance(named: .darkAqua); window.backgroundColor = EchoTheme.ink
-        let heading = NSTextField(labelWithString: "Uploads")
-        heading.font = .systemFont(ofSize: 26, weight: .semibold)
-        let intro = NSTextField(wrappingLabelWithString: "Save notes, memos, and text artifacts in their original wording. Search them here; Ask currently uses approved records.")
-        visibility.addItems(withTitles: ["Only me", "Team"])
-        visibility.target = self; visibility.action = #selector(permissionChanged)
-        visibility.setAccessibilityLabel("Who can read this upload")
-        titleField.placeholderString = "Title"; titleField.setAccessibilityLabel("Upload title")
-        query.placeholderString = "Search uploads"; query.setAccessibilityLabel("Search uploads")
-        query.sendsWholeSearchString = true
-        query.target = self; query.action = #selector(searchUploads)
-        for (button, action) in [(choose, #selector(chooseFile)), (submit, #selector(upload)), (check, #selector(checkUpload)),
-                                 (startNew, #selector(newUpload)), (openSaved, #selector(openSavedUpload)), (search, #selector(searchUploads))] {
-            button.target = self; button.action = action; button.bezelStyle = .rounded
-        }
-        for label in [heading, identityLabel, intro, fileLabel, permissionLabel, uploadStatus, searchStatus, detailTitle] {
-            label.textColor = label === heading ? EchoTheme.text : EchoTheme.mutedText
-            label.isSelectable = true
-        }
-        fileLabel.lineBreakMode = .byTruncatingMiddle; detailTitle.lineBreakMode = .byTruncatingTail
-        let fileRow = NSStackView(views: [choose, fileLabel]); fileRow.spacing = 12
-        let formRow = NSStackView(views: [titleField, visibility, submit]); formRow.spacing = 12
-        let receiptRow = NSStackView(views: [check, openSaved, startNew]); receiptRow.spacing = 12
-        let searchRow = NSStackView(views: [query, search]); searchRow.spacing = 12
-        for (id, name, width) in [("title", "Title", 610.0), ("visibility", "Visibility", 125.0)] {
-            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id)); column.title = name; column.width = width
-            table.addTableColumn(column)
-        }
-        table.delegate = self; table.dataSource = self; table.rowHeight = 30
-        table.usesAlternatingRowBackgroundColors = true; table.setAccessibilityLabel("Upload search results")
-        let results = NSScrollView(); results.documentView = table; results.hasVerticalScroller = true; results.borderType = .bezelBorder
-        original.isEditable = false; original.isRichText = false; original.isSelectable = true
-        original.font = .systemFont(ofSize: 14); original.textColor = EchoTheme.text; original.backgroundColor = EchoTheme.surface
-        original.textContainerInset = NSSize(width: 12, height: 12); original.isVerticallyResizable = true
-        original.isHorizontallyResizable = false; original.autoresizingMask = [.width]
-        original.textContainer?.widthTracksTextView = true
-        original.setAccessibilityLabel("Original uploaded text")
-        let content = NSScrollView(); content.documentView = original; content.hasVerticalScroller = true; content.borderType = .bezelBorder
-        let stack = NSStackView(views: [heading, identityLabel, intro, fileRow, formRow, permissionLabel,
-                                        receiptRow, uploadStatus, searchRow, searchStatus, results, detailTitle, content])
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        guard let root = window.contentView else { return }; root.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -24),
-            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
-            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20),
-            titleField.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
-            visibility.widthAnchor.constraint(equalToConstant: 130),
-            results.heightAnchor.constraint(equalToConstant: 140),
-            content.heightAnchor.constraint(greaterThanOrEqualToConstant: 160),
-        ])
-        for view in [intro, fileRow, formRow, permissionLabel, uploadStatus, searchRow, searchStatus, results, detailTitle, content] {
-            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
-        let spring = content.heightAnchor.constraint(equalToConstant: 10_000); spring.priority = NSLayoutConstraint.Priority(1); spring.isActive = true
-        updateControls()
+        onChange?()
     }
 }
