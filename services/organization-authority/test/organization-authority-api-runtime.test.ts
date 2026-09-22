@@ -1314,7 +1314,7 @@ describe("Organization Authority API runtime", () => {
         } finally { clock.mockRestore(); }
         inspection.exec("CREATE TRIGGER fixture_project_audit_failure BEFORE INSERT ON authority_project_read_audit_v1 BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END");
         try {
-          expect(await get(`/v2/person/updates/content/${context_id}`, 500)).toEqual({ error: { code: "internal", message: "request failed" } });
+          expect(await get(`/v2/person/updates/content/${context_id}`, 503)).toEqual({ error: { code: "unavailable", message: "request failed" } });
           expect(auditCount()).toEqual(before);
         } finally { inspection.exec("DROP TRIGGER fixture_project_audit_failure"); }
         expect(inspection.prepare("SELECT count(*) AS n FROM authority_live_source_candidates_v2").get()).toEqual({ n: 0 });

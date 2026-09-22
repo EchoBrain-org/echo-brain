@@ -4,10 +4,65 @@ import Foundation
 // Closed, bounded CLI replies. Authority remains responsible for permission;
 // a local project selection is never a read grant.
 enum ProjectWire {
+    // JSONSerialization accepts duplicate object members and retains only one
+    // value. Scan the bounded bytes first so closed reply validation sees no
+    // ambiguous root or nested fields, including escaped-equivalent names.
+    private static func hasUniqueObjectMembers(_ payload: Data) -> Bool {
+        guard let text = String(data: payload, encoding: .utf8) else { return false }
+        let scalars = Array(text.unicodeScalars)
+        var containers: [Set<String>?] = []
+        var index = 0
+        while index < scalars.count {
+            switch scalars[index].value {
+            case 34: // `"`
+                let start = index
+                index += 1
+                while index < scalars.count {
+                    let scalar = scalars[index].value
+                    if scalar < 32 { return false }
+                    if scalar == 92 { // `\\`
+                        index += 1
+                        guard index < scalars.count else { return false }
+                    } else if scalar == 34 {
+                        break
+                    }
+                    index += 1
+                }
+                guard index < scalars.count else { return false }
+                let end = index
+                var after = end + 1
+                while after < scalars.count, [9, 10, 13, 32].contains(scalars[after].value) {
+                    after += 1
+                }
+                if after < scalars.count, scalars[after].value == 58 { // `:`
+                    let literal = String(String.UnicodeScalarView(scalars[start...end]))
+                    guard let key = try? JSONDecoder().decode(String.self, from: Data(literal.utf8)),
+                          !containers.isEmpty,
+                          var keys = containers[containers.count - 1],
+                          keys.insert(key).inserted else { return false }
+                    containers[containers.count - 1] = keys
+                }
+            case 123: // `{`
+                containers.append(Set<String>())
+            case 91: // `[`
+                containers.append(nil)
+            case 125, 93: // `}`, `]`
+                guard !containers.isEmpty else { return false }
+                containers.removeLast()
+            default:
+                break
+            }
+            index += 1
+        }
+        return containers.isEmpty
+    }
+
     static func object(_ bytes: Data) -> [String: Any]? {
         let payload = bytes.last == 10 ? bytes.dropLast() : bytes[...]
         guard payload.count <= 32 * 1024 else { return nil }
-        return (try? JSONSerialization.jsonObject(with: Data(payload))) as? [String: Any]
+        let data = Data(payload)
+        guard hasUniqueObjectMembers(data) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
     static func keys(_ value: [String: Any], _ names: [String]) -> Bool { Set(value.keys) == Set(names) }
     static func id(_ value: String, prefix: String) -> Bool {
