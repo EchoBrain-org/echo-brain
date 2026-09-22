@@ -193,6 +193,13 @@ describe('frozen project/V2 HTTP transport', () => {
     await failure(await fetch(`${origin}/v1/person/projects`, { headers }), status, code);
   });
 
+  it.each(fixtures)('sanitizes unexpected application failures as unavailable: $id', async row => {
+    const origin = await start(fake({
+      [operations[row.id]!]() { throw new Error('SQLITE_IOERR: private persistence diagnostic'); },
+    }));
+    await failure(await send(origin, row), 503, 'unavailable');
+  });
+
   it('rejects invalid application output and permits a full 8 KiB original response', async () => {
     const row = fixture('projects-read-context');
     const large = { ...row.http.response, text: '\t'.repeat(8191) + 'x' };
