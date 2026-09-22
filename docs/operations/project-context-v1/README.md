@@ -4,10 +4,10 @@ Status: synthetic checkpoint and local real-layer integration are implemented,
 including default API composition with real Person sessions and native clients
 calling the real CLI. This reconciliation candidate retains the latest committed
 PC-05 native robustness and CLI assertions, PC-06's real CLI/HTTP proof, and
-PC-04's service-owned transport proof. It is not yet fully qualified: focused
-verification is required on this merge candidate, and live capability evidence
-remains unexecuted. This directory records PC-06 results and candidate-specific
-evidence requirements; the existing
+PC-04's service-owned transport proof. Focused local verification of the
+reconciled sources passed; the aggregate `npm run check` remains pending, and
+live capability evidence remains unexecuted. This directory records PC-06
+results and candidate-specific evidence requirements; the existing
 [Authority operator playbook](../PB-OPERATIONS-001-authority-operator-lane.md)
 remains the sole operator router.
 
@@ -53,9 +53,10 @@ result here. A foundation-only head is not an implementation checkpoint.
 | Lane | Observed committed SHA | Qualification status |
 | --- | --- | --- |
 | PC-02 | `37b6e557f3898bb4af30159f8ce70a5d1fffb047` | Application/worker and adversarial tests imported through `95de82c` |
-| PC-03 | `67a2c42e8686fcf4be163ec351a7b319c674c058` | HTTP adapter and real default runtime/worker wiring imported through `af03657` |
-| PC-04 | `63159d0fd9b605054203c61c32d48d05507bd262` | CLI/transport and adversarial proofs; the owner test is retained at `services/organization-authority/test/project-context-person-transport.test.ts` |
-| PC-05 | `b6ba283dfabb59283f7895c08cd03f258ae630ab` | Native feature and subsequent robustness commit `fc84419`, including per-account replay state, uncertain subprocess handling, access-loss propagation and CLI bridge assertions |
+| PC-03 | `6ccb8f7dcbfb3796ff078d92db3bbba6ca99fc34` | Current HTTP adapter, default runtime/worker wiring and mapped internal-failure response correction |
+| PC-04 | `97d2c54cbbecdf73059c815501ec3cee8f8e6d5e` | Current CLI/transport proof; the owner transport test remains at `services/organization-authority/test/project-context-person-transport.test.ts` |
+| PC-05 | `f9a3411d714f43c0842795af3b4f0aeaf4309c38` | Native robustness, duplicate-JSON rejection and CLI bridge assertions, including its merged PC-04 dependency |
+| PC-06 | `aad979314d316d8e0f300a55290ebb4de0b9c9a4` | Real native CLI-to-loopback-HTTP proof and V2 packed-client qualification |
 
 The final local gate combines real application/worker + HTTP composition + CLI
 transport + native CLI-bound UI, then the complete repository check. The PR
@@ -98,7 +99,7 @@ path arguments. `npm run build:workspaces` passed before every successful row.
 | PC-03 HTTP `77e1b75` | `services/organization-authority/test/project-context-integration services/organization-authority/test/project-context-http.test.ts services/organization-authority/test/organization-authority-api-runtime.test.ts services/organization-authority/test/project-update-enrichment-adversarial-v2.test.ts` | 5 files / 87 passed |
 | PC-04 CLI `67a4119` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts` | 3 files / 57 passed |
 | PC-03 runtime `67a2c42` | `services/organization-authority/test/project-context-integration services/organization-authority/test/organization-authority-api-runtime.test.ts` | 5 files / 35 passed |
-| PC-04 transport `63159d0` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts services/organization-authority/test/project-context-person-transport.test.ts` | Historical lane proof: 6 files / 160 passed before this reconciliation |
+| PC-04 transport `97d2c54` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts services/organization-authority/test/project-context-person-transport.test.ts` | Current owner-lane focused proof: 198 passed |
 | PC-05 native `7730e5b` | `services/organization-authority/test/project-context-integration tests/architecture/echo-projects.test.ts tests/architecture/echo-uploads.test.ts tests/architecture/echo-overlay-sources-fixture.test.ts tests/architecture/echo-overlay.test.ts` | 8 files / 102 passed |
 
 The new [CLI/HTTP integration](../../../services/organization-authority/test/project-context-integration/cli-http.test.ts)
@@ -149,10 +150,11 @@ passed using:
 
 Result: one passed, 21 unrelated tests skipped by the focused name filter.
 The initial full run overlapped subsequent integrations and is retained only
-as failure evidence, not a final-source qualification. This reconciliation must
-pass its focused native, CLI/HTTP integration and test-layer boundary proofs
-before it can be offered for the aggregate full check; that aggregate check
-remains pending and is the only final local qualification claim.
+as failure evidence, not a final-source qualification. The current
+reconciliation passed `npm run build`, 32 real integration/transport tests,
+87 native tests, 18 test-layer ownership tests and the architecture-boundary
+check. The aggregate `npm run check` remains pending and is the only final
+local qualification claim.
 
 ## Rollout preparation
 
