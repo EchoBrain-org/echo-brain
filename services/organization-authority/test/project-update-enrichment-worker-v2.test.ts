@@ -25,12 +25,13 @@ function fixture() {
     structured_output: { generate: vi.fn(async () => ({ search_hints: 'customer telephone preference' })) },
     generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1_000 },
   };
+  const inbox = new SqlitePersonUpdateInboxV1(database, () => PROJECT_CONTEXT_NOW);
   const worker = () => new PersonUpdateProcessingV1(
-    new SqlitePersonUpdateInboxV1(database, () => PROJECT_CONTEXT_NOW),
+    inbox,
     generation,
     new SqlitePersonUpdateEnrichmentWorkV2(database, new SqliteProjectUploadEnrichmentAuthorizationV1(database), () => PROJECT_CONTEXT_NOW),
   );
-  return { database, application, generation, worker };
+  return { database, application, generation, inbox, worker };
 }
 
 function setupProject(f: ReturnType<typeof fixture>) {
@@ -45,6 +46,53 @@ function setupProject(f: ReturnType<typeof fixture>) {
 }
 
 describe('V2 project upload enrichment in the serialized Person worker', () => {
+  it('serves due V2 work on the next run despite a continuing V1 backlog', async () => {
+    const f = fixture(); const projectId = setupProject(f); const worker = f.worker();
+    f.inbox.submit(OWNER, {
+      schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId(90),
+      title: 'Legacy note', text: 'The legacy queue remains busy.',
+    });
+    const receipt = f.application.submitUpload('owner', {
+      schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(91),
+      title: 'Project note', text: 'The project queue must not starve.', project_id: projectId,
+      audience: { kind: 'project', project_id: projectId },
+    });
+
+    await worker.runOnce(new AbortController().signal);
+    f.inbox.submit(OWNER, {
+      schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId(92),
+      title: 'Later legacy note', text: 'Sustained legacy input must remain serialized.',
+    });
+    await worker.runOnce(new AbortController().signal);
+
+    expect(f.database.prepare('SELECT state FROM authority_person_update_work_v2 WHERE context_id = ?').get(receipt.context_id))
+      .toEqual({ state: 'ready' });
+    expect(f.generation.structured_output.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a visibly corrupt V1 item starve due V2 work', async () => {
+    const f = fixture(); const projectId = setupProject(f); const worker = f.worker();
+    const legacy = f.inbox.submit(OWNER, {
+      schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId(93),
+      title: 'Legacy note', text: 'This source will be corrupted.',
+    });
+    const receipt = f.application.submitUpload('owner', {
+      schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(94),
+      title: 'Project note', text: 'The project queue must still progress.', project_id: projectId,
+      audience: { kind: 'project', project_id: projectId },
+    });
+    f.database.exec('DROP TRIGGER authority_person_updates_v1_immutable');
+    f.database.prepare('UPDATE authority_person_updates_v1 SET text = ? WHERE context_id = ?')
+      .run('corrupt', legacy.context_id);
+
+    await expect(worker.runOnce(new AbortController().signal)).rejects.toThrow('integrity');
+    await worker.runOnce(new AbortController().signal);
+
+    expect(f.database.prepare('SELECT state FROM authority_person_update_work_v2 WHERE context_id = ?').get(receipt.context_id))
+      .toEqual({ state: 'ready' });
+    expect(f.generation.structured_output.generate).toHaveBeenCalledTimes(1);
+  });
+
   it('validates immutable V2 source bytes, captures eligibility before generation, and persists optional hints', async () => {
     const f = fixture(); const projectId = setupProject(f);
     const receipt = f.application.submitUpload('owner', {
