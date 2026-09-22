@@ -46,6 +46,13 @@ all new operations. Exact retries return their committed receipts; they do
 not restore subsequently removed project members or associations, or enqueue
 another enrichment job. A changed operation or payload conflicts.
 
+Each mutation also has its own SQLite savepoint. If an application callback
+catches a mutation error and continues, none of that failed operation's rows
+or authorization-revision changes can commit. A failed savepoint cleanup
+forces the outer transaction to roll back. Repository reads validate their
+request codecs as well: empty searches and invalid page limits fail with
+`invalid_request` before candidate selection.
+
 `SqliteProjectUploadEnrichmentAuthorizationV1` supplies the existing worker's
 future V2 eligibility checks. It requires the exact active uploader tenure
 and, for project audience, a current grant to that audience project. Capture
@@ -94,3 +101,11 @@ the current uploader tenure and audience-project grant before completion.
 
 The combined change uses `npm run check` as its repository-wide gate. Live
 two-Person verification and matched-artifact release remain PC-06 work.
+
+The pre-parallel adversarial round reproduced partial writes after caught
+database errors and read-input validation bypasses before fixing them.
+Dedicated storage, query and authorization adversarial tests cover these
+cases, hidden corrupt private rows, separate audience/association grants,
+and forged snapshots. Follow the
+[parallel implementation handoff](2026-09-21-project-context-parallel-handoff.md)
+for lane ownership and integration order.

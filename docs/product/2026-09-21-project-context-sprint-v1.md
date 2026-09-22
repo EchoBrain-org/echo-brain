@@ -19,6 +19,9 @@ and the frozen [PC-00 project context V1 contract](2026-09-21-project-context-v1
 The [PC-01 persistence handoff](2026-09-21-project-context-pc01-persistence.md)
 describes the V7 schema, repository integration and explicit reset boundary.
 The separate native UI implementation is excluded from this combined branch.
+The [parallel implementation handoff](2026-09-21-project-context-parallel-handoff.md)
+assigns the next worktrees, exact shared-file ownership, worker bridge, and
+integration gates for PC-02 through PC-06.
 
 ## Current Write path
 
