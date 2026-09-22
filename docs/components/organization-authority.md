@@ -21,6 +21,7 @@ decision_ids:
   - ADR-0008
   - ADR-0010
   - ADR-0011
+  - ADR-0013
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -93,6 +94,7 @@ Authority boundary.
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
 - [Permission release-boundary invariant](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
+- [Project context V1 contract](../decisions/ADR-0013-project-context-v1-contract.md)
 - [`services/organization-authority/`](../../services/organization-authority)
 - [`packages/organization-control-plane/`](../../packages/organization-control-plane)
 - [`packages/organization-record/`](../../packages/organization-record)

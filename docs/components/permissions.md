@@ -20,6 +20,7 @@ decision_ids:
   - ADR-0007
   - ADR-0010
   - ADR-0011
+  - ADR-0013
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-IDENTITY-005
@@ -61,6 +62,7 @@ with a particular action or content boundary.
 - [Invariant registry](../product/2026-08-11-architecture-invariant-registry.md)
 - [Reviewer permission V1](../product/2026-08-11-reviewer-permission-v1-log-facts-design.md)
 - [Permission-aware searchable Layer 2](../product/2026-08-11-trusted-permission-aware-searchable-layer-2-design.md)
+- [Project context V1 contract](../decisions/ADR-0013-project-context-v1-contract.md)
 
 ## Documentation rule
 

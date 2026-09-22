@@ -18,6 +18,7 @@ decision_ids:
   - ADR-0005
   - ADR-0006
   - ADR-0007
+  - ADR-0013
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -70,6 +71,7 @@ that belongs to [permissions](permissions.md).
 
 - [Identity and onboarding](../architecture/identity-and-onboarding.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
+- [Project context V1 contract](../decisions/ADR-0013-project-context-v1-contract.md)
 - Person-client boundary: [`src/product/person-client/`](../../src/product/person-client)
 - Authority: [`services/organization-authority/`](../../services/organization-authority)
 - Control plane: [`packages/organization-control-plane/`](../../packages/organization-control-plane)
