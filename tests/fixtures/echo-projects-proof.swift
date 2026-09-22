@@ -80,11 +80,11 @@ enum ProjectProof {
 """#
             guard case .failure = ProjectClient.parse(Data(duplicateRoot.utf8), command: .list(nil)) else { fatalError("duplicate root key") }
             let duplicateNested = #"""
-{"schema_version":1,"kind":"echo-project-context-feed-v1","project_id":"prj_11111111-1111-4111-8111-111111111111","items":[{"context_id":"ctx_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","received_at":"2026-09-21T22:01:00.000Z","title":"Apollo","excerpt":"note","audience":{"kind":"project","k\u0069nd":"team","project_id":"prj_11111111-1111-4111-8111-111111111111"}}],"next_cursor":null}
+{"schema_version":1,"kind":"echo-project-context-feed-v1","project_id":"prj_11111111-1111-4111-8111-111111111111","items":[{"context_id":"ctx_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","received_at":"2026-09-21T22:01:00.000Z","title":"Apollo","excerpt":"note","audience":{"kind":"project","k\u0069nd":"project","project_id":"prj_11111111-1111-4111-8111-111111111111"}}],"next_cursor":null}
 """#
             guard case .failure = ProjectClient.parse(Data(duplicateNested.utf8), command: commands[9]) else { fatalError("duplicate nested key") }
             let duplicateError = #"""
-{"ok":false,"action":"projects-member-set","error":"Request failed","code":"conflict","c\u006fde":"invalid_request","status":409,"request_id":"00000000-0000-4000-8000-000000000002","mutation_outcome":"not_submitted"}
+{"ok":false,"action":"projects-member-set","error":"Request failed","code":"conflict","c\u006fde":"conflict","status":409,"request_id":"00000000-0000-4000-8000-000000000002","mutation_outcome":"not_submitted","mutation_\u006futcome":"not_submitted"}
 """#
             guard ProjectFailure.parse(Data(duplicateError.utf8), action: "projects-member-set", requestID: "00000000-0000-4000-8000-000000000002") == nil else { fatalError("duplicate error key") }
         } else if mode == "independent-recovery" {
