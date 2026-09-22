@@ -1,3 +1,17 @@
+import {
+  PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
+  validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
+  validateProjectPageRequestV1, validateProjectIdV1, validateProjectSummaryV1,
+  validateProjectContextBrowseV1, validateProjectMembersV1,
+  validateProjectDirectorySearchV1, validateProjectDirectoryV1,
+  validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
+  validateProjectContextAssociateV1, validateProjectContextDissociateV1,
+  validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectContextSearchResultV1,
+  validateProjectContextReadV1, validatePersonUploadContextId, validatePersonUpdateRequestId,
+  validatePersonUpdateSubmitV2, validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2,
+  validatePersonUploadSearchV2, validatePersonUploadSearchResultV2, validatePersonUploadContentV2,
+} from '@echo-brain/organization-api';
+import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
 import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
 import type { PersonUpdatesApplicationV1 } from '../application/person-updates.js';
 import { validatePersonQueryText } from "@echo-brain/organization-api";
@@ -99,6 +113,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Optional until the active Organization Authority runtime has a configured answer model. */
   readonly person_answer?: PersonAnswerHttpApplicationV1;
   readonly person_updates?: PersonUpdatesApplicationV1;
+  /** Mounted only when the project application and V2 worker binding are composed. */
+  readonly project_context?: ProjectContextApplicationV1;
   /** Optional until an active private-approval surface is fully composed. */
   readonly private_approval_interaction_ingress?:
     ProviderHttpApplicationV1;
@@ -121,7 +137,9 @@ function providerIngressRoutes(
       ) throw new Error("invalid provider ingress route");
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
-      if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) || route.path === PERSON_UPDATES_PATH_V1 || route.path.startsWith(`${PERSON_UPDATES_PATH_V1}/`)) {
+      if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
+        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_PROJECTS_PATH_V1]
+          .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
       if (mounted.has(key)) {
@@ -442,6 +460,132 @@ function answerInput(value: unknown): { readonly question: string } {
   catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
 }
 
+/** Validate transport input without exposing codec diagnostics to the caller. */
+function projectInput<T>(validate: (value: unknown) => T, value: unknown): T {
+  try { return validate(value); }
+  catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
+}
+
+async function projectBody(request: IncomingMessage): Promise<unknown> {
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(
+      await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES),
+    );
+    const value: unknown = JSON.parse(text);
+    // JSON.parse accepts duplicate members. Scan the already-valid JSON tokens
+    // so escaped equivalent names and duplicates in nested objects also fail.
+    const objects: (Set<string> | undefined)[] = [];
+    for (const token of text.matchAll(/"(?:[^"\\]|\\[\s\S])*"(\s*:)?|[{}[\]]/g)) {
+      if (token[0] === '{') objects.push(new Set());
+      else if (token[0] === '[') objects.push(undefined);
+      else if (token[0] === '}' || token[0] === ']') objects.pop();
+      else if (token[1] !== undefined) {
+        const key = JSON.parse(token[0].slice(0, -token[1].length)) as string;
+        const keys = objects.at(-1)!;
+        if (keys.has(key)) throw new Error('duplicate JSON member');
+        keys.add(key);
+      }
+    }
+    return value;
+  } catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
+}
+
+function projectPage(url: URL): unknown {
+  const page: Record<string, unknown> = {};
+  for (const [key, value] of url.searchParams) {
+    if ((key !== 'limit' && key !== 'cursor') || Object.hasOwn(page, key)) {
+      throw new AuthorityOperationError('invalid_request', 'request failed');
+    }
+    if (key === 'limit' && !/^(?:[1-9]|10)$/.test(value)) {
+      throw new AuthorityOperationError('invalid_request', 'request failed');
+    }
+    page[key] = key === 'limit' ? Number(value) : value;
+  }
+  return projectInput(validateProjectPageRequestV1, page);
+}
+
+function projectResponse(response: ServerResponse, status: number, value: unknown, validate: (value: unknown) => unknown): void {
+  try {
+    validate(value);
+    if (Buffer.byteLength(JSON.stringify(value), 'utf8') > PROJECT_CONTEXT_RESPONSE_MAX_BYTES) {
+      throw new Error('project response is too large');
+    }
+  } catch { throw new AuthorityOperationError('invalid_output', 'request failed'); }
+  // Send the application's exact committed/audited response, not a normalized
+  // replacement returned by a codec. There is no await after application release.
+  json(response, status, value);
+}
+
+type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1,
+  'listProjects' | 'readProject' | 'readContext' | 'uploadStatus' | 'readUpload'>;
+const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
+  readonly operation: ProjectBodyOperation;
+  readonly request: (value: unknown) => unknown;
+  readonly response: (value: unknown) => unknown;
+  readonly status: number;
+}> = new Map([
+  [PERSON_PROJECTS_PATH_V1, { operation: 'createProject', request: validateProjectCreateV1, response: validateProjectCreateReceiptV1, status: 201 }],
+  [`${PERSON_PROJECTS_PATH_V1}/members`, { operation: 'listMembers', request: validateProjectContextBrowseV1, response: validateProjectMembersV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V1}/directory`, { operation: 'searchDirectory', request: validateProjectDirectorySearchV1, response: validateProjectDirectoryV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V1}/members/set`, { operation: 'setMember', request: validateProjectMemberSetV1, response: validateProjectMutationReceiptV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V1}/context/feed`, { operation: 'feed', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V1}/context/search`, { operation: 'search', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV1, status: 200 }],
+  [PERSON_UPDATES_PATH_V2, { operation: 'submitUpload', request: validatePersonUpdateSubmitV2, response: validatePersonUpdateReceiptV2, status: 202 }],
+  [`${PERSON_UPDATES_PATH_V2}/search`, { operation: 'searchUploads', request: validatePersonUploadSearchV2, response: validatePersonUploadSearchResultV2, status: 200 }],
+]);
+
+/** Route selection returns a synchronous release callback after all input I/O. */
+async function projectRoute(
+  request: IncomingMessage, url: URL, application: ProjectContextApplicationV1,
+): Promise<((response: ServerResponse) => void) | undefined> {
+  const method = request.method ?? 'GET';
+  const route = PROJECT_BODY_ROUTES.get(url.pathname);
+  if (method === 'POST' && route !== undefined) {
+    const token = accessToken(request.headers.authorization);
+    if (url.search !== '') throw new AuthorityOperationError('invalid_request', 'request failed');
+    const input = projectInput(route.request, await projectBody(request));
+    return response => projectResponse(response, route.status, application[route.operation](token, input), route.response);
+  }
+  if (method !== 'GET') return undefined;
+  // Static POST paths cannot be misinterpreted as project/request identifiers.
+  if (route !== undefined && url.pathname !== PERSON_PROJECTS_PATH_V1) return undefined;
+  const projectPath = url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V1}/`)
+    ? url.pathname.slice(PERSON_PROJECTS_PATH_V1.length + 1).split('/') : [];
+  const uploadPath = url.pathname.startsWith(`${PERSON_UPDATES_PATH_V2}/`)
+    ? url.pathname.slice(PERSON_UPDATES_PATH_V2.length + 1).split('/') : [];
+  const list = url.pathname === PERSON_PROJECTS_PATH_V1;
+  const readProject = projectPath.length === 1;
+  const readContext = projectPath.length === 3 && projectPath[1] === 'context';
+  const status = uploadPath.length === 1;
+  const readUpload = uploadPath.length === 2 && uploadPath[0] === 'content';
+  if (!list && !readProject && !readContext && !status && !readUpload) return undefined;
+  const token = accessToken(request.headers.authorization);
+  if ((!list && url.search !== '') || (await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES)).length !== 0) {
+    throw new AuthorityOperationError('invalid_request', 'request failed');
+  }
+  if (list) {
+    const page = projectPage(url);
+    return response => projectResponse(response, 200, application.listProjects(token, page), validateProjectListV1);
+  }
+  if (readProject || readContext) {
+    const project = projectInput(validateProjectIdV1, projectPath[0]);
+    if (readContext) {
+      const context = projectInput(validatePersonUploadContextId, projectPath[2]);
+      return response => projectResponse(response, 200, application.readContext(token, project, context), validateProjectContextReadV1);
+    }
+    return response => projectResponse(response, 200, application.readProject(token, project), validateProjectSummaryV1);
+  }
+  if (readUpload) {
+    const context = projectInput(validatePersonUploadContextId, uploadPath[1]);
+    return response => projectResponse(response, 200, application.readUpload(token, context), validatePersonUploadContentV2);
+  }
+  const id = projectInput(validatePersonUpdateRequestId, uploadPath[0]);
+  return response => projectResponse(response, 200, application.uploadStatus(token, id), validatePersonUpdateStatusV2);
+}
+
 /** The Organization Authority Person API surface, with no machine routes. */
 export function createOrganizationAuthorityHttpServer(
   options: OrganizationAuthorityHttpServerOptions,
@@ -646,6 +790,10 @@ export function createOrganizationAuthorityHttpServer(
         });
         noContent(response);
         return;
+      }
+      if (options.project_context !== undefined) {
+        const release = await projectRoute(request, url, options.project_context);
+        if (release !== undefined) { release(response); return; }
       }
       if (options.person_updates !== undefined && url.search === '') {
         if (method === 'POST' && url.pathname === PERSON_UPDATES_PATH_V1) {

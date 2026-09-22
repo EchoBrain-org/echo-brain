@@ -1,3 +1,4 @@
+import type { ProjectContextApplicationV1 } from '../src/application/ports/project-context-v1.js';
 import {
   chmodSync,
   mkdirSync,
@@ -122,6 +123,36 @@ afterEach(() => {
 });
 
 describe("Organization Authority API runtime", () => {
+  it("mounts the frozen project application adapter only when supplied", async () => {
+    const initialized = bootstrapOrganizationAuthorityState({
+      state_directory: join(root(), "state"), organization_display_name: "Fixture Organization",
+      owner_display_name: "Fixture Owner", created_at: new Date(Date.now() - 1000).toISOString(),
+      creating_artifact_revision: "pc03-http-checkpoint",
+    });
+    const credentials = initializePersonSessionCredentials({ state_directory: initialized.state_directory });
+    const config = {
+      state_directory: initialized.state_directory, host: "127.0.0.1" as const, port: 19994,
+      authority_url: "https://authority.example",
+      oidc: { issuer: "https://issuer.example", client_id: "founder-client", redirect_uri: "https://authority.example/v2/session/oidc/callback", tenant: { kind: "issuer" as const }, id_token_algorithms: ["RS256"] },
+      client_authentication: { method: "none" as const },
+      pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(credentials.pkce_sealing_key_reference),
+    };
+    const response = { schema_version: 1 as const, kind: "echo-project-list-v1" as const, items: [], next_cursor: null };
+    const calls: unknown[][] = [];
+    const application = { listProjects(...args: unknown[]) { calls.push(args); return response; } } as unknown as ProjectContextApplicationV1;
+    for (const enabled of [false, true]) {
+      const runtime = await startOrganizationAuthorityApiRuntime(config, {
+        oidc_provider: new MockOidcProvider(), ...(enabled ? { project_context: application } : {}),
+      });
+      try {
+        const result = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/projects`, { headers: { authorization: "Bearer synthetic-fixture-session" } });
+        expect(result.status).toBe(enabled ? 200 : 404);
+        expect(await result.json()).toEqual(enabled ? response : { error: { code: "not_found", message: "request failed" } });
+      } finally { await runtime.close(); }
+    }
+    expect(calls).toEqual([["synthetic-fixture-session", { limit: 10 }]]);
+  });
+
   it("wires an injected external-identity application without selecting a provider", async () => {
     const parent = root();
     const initialized = bootstrapOrganizationAuthorityState({
