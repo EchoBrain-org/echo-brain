@@ -49,9 +49,9 @@ result here. A foundation-only head is not an implementation checkpoint.
 | Lane | Observed committed SHA | Qualification status |
 | --- | --- | --- |
 | PC-02 | `37b6e557f3898bb4af30159f8ce70a5d1fffb047` | Application/worker and adversarial tests imported through `95de82c` |
-| PC-03 | `67a2c42e8686fcf4be163ec351a7b319c674c058` | HTTP adapter and real default runtime/worker wiring imported through `af03657` |
-| PC-04 | `066db491ece28329c8e7f6584efe2527b73aca77` | CLI/transport and adversarial proofs imported through `1ae5713` |
-| PC-05 | `fbfd85cc7f38b88eec1ebcc4a8572c86c169fe68` | Native feature `7730e5b48f4afb77cdb7e3093a2d1660218ee0b4` imported as `786829e`, earlier home `e44adf9` as `8ef8bcd`; equivalent CLI commit already integrated |
+| PC-03 | `6ccb8f7dcbfb3796ff078d92db3bbba6ca99fc34` | HTTP/default runtime/worker wiring imported through `af03657`; error-contract correction `7377318cb16a72849c32fa7a90e6f58b24ffbc55` as `4668ae5`; merged PC-02 changes already imported |
+| PC-04 | `97d2c54cbbecdf73059c815501ec3cee8f8e6d5e` | CLI/transport through `1ae5713`; test ownership correction `63159d0fd9b605054203c61c32d48d05507bd262` as `9a5286d`; merged PC-03 changes already imported |
+| PC-05 | `b6ba283dfabb59283f7895c08cd03f258ae630ab` | Native feature `7730e5b48f4afb77cdb7e3093a2d1660218ee0b4` as `786829e`, earlier home `e44adf9` as `8ef8bcd`, hardening `fc84419901a24ecceb94a48522620719ddb3d627` as `aad9793`; equivalent dependency commits already imported |
 
 The final local gate combines real application/worker + HTTP composition + CLI
 transport + native CLI-bound UI, then the complete repository check. The PR
@@ -96,6 +96,9 @@ path arguments. `npm run build:workspaces` passed before every successful row.
 | PC-03 runtime `67a2c42` | `services/organization-authority/test/project-context-integration services/organization-authority/test/organization-authority-api-runtime.test.ts` | 5 files / 35 passed |
 | PC-04 transport `066db49` | `services/organization-authority/test/project-context-integration tests/person-client/project-context-cli.test.ts tests/person-client/project-context-transport.test.ts` | 6 files / 160 passed |
 | PC-05 native `7730e5b` | `services/organization-authority/test/project-context-integration tests/architecture/echo-projects.test.ts tests/architecture/echo-uploads.test.ts tests/architecture/echo-overlay-sources-fixture.test.ts tests/architecture/echo-overlay.test.ts` | 8 files / 102 passed |
+| PC-04 test ownership `63159d0` | `services/organization-authority/test/project-context-integration services/organization-authority/test/project-context-person-transport.test.ts` | 5 files / 32 passed |
+| PC-05 native hardening `fc84419` | `services/organization-authority/test/project-context-integration tests/architecture/echo-projects.test.ts tests/architecture/echo-uploads.test.ts` | 6 files / 68 passed |
+| PC-03 error contract `7377318` | `services/organization-authority/test/project-context-integration services/organization-authority/test/project-context-http.test.ts services/organization-authority/test/organization-authority-api-runtime.test.ts tests/architecture/test-layer-ownership.test.ts` | 7 files / 120 passed |
 
 The new [CLI/HTTP integration](../../../services/organization-authority/test/project-context-integration/cli-http.test.ts)
 uses real CLI parsing/session storage/transport/decoding, a loopback HTTP server,
@@ -125,7 +128,8 @@ Carol exercise overlapping/disjoint discovery, feed/search/roster/original
 read, project audience different from destination, inaccessible-read clearing,
 account-change clearing and unsupported-list handling. No canned CLI JSON is
 returned. The native UI control/disabled-Ask assertions remain in PC-05's
-compiled controller fixtures, which intentionally use canned CLI responses.
+compiled controller fixtures. These include both canned CLI responses and,
+after `fc84419`, real CLI execution with controlled fixture HTTP responses.
 Together these prove bounded local cross-layer behavior, not a GUI-to-live-host
 rehearsal or real provider/model execution.
 
@@ -145,8 +149,17 @@ passed using:
 
 Result: one passed, 21 unrelated tests skipped by the focused name filter.
 The initial full run overlapped subsequent integrations and is retained only
-as failure evidence, not a final-source qualification. Final full-check results
-belong to the unchanged committed PR head.
+as failure evidence, not a final-source qualification.
+
+A second full check at unchanged `b15b3f57366354f24842ab3c7f82697ec54b4847`
+passed architecture/documentation checks, lint, build and type checks, then
+reported 205 test files passing and one failing (2,517 passed, one failed,
+one skipped). The test-layer ownership gate rejected PC-04's repository-backed
+test under `tests/person-client/`. PC-04's committed `63159d0` moved it into
+the Authority service tests and independently contained the same two V2 kind
+expectation changes already assigned to PC-06. Its import changed only the
+test location/imports because the expectation updates were already present.
+Final full-check results belong to the unchanged committed PR head.
 
 ## Rollout preparation
 
